@@ -70,6 +70,22 @@ async fn source_media_ids(
     (audio_media_id, camera_media_id)
 }
 
+fn spillover_room_manager(local_router_count: usize) -> RoomManager {
+    RoomManager::for_test_with_config(super::super::RoomManagerConfig::new(
+        local_router_count,
+        super::super::RoomRuntimePolicy::new(
+            super::super::RoomAdmissionPolicy::new(100),
+            crate::RuntimeFeatureFlags::default(),
+            super::super::rtp_capabilities::router_rtp_capabilities(
+                crate::MediaCodecFlags::default(),
+            ),
+        )
+        .with_room_sharding_policy(crate::RoomShardingPolicy::bounded_local_spillover(
+            local_router_count,
+        )),
+    ))
+}
+
 fn assert_consumer_packet_selection_update(
     events: &[FakeWebRtcEvent],
     consumer_user_id: &UserId,
@@ -158,6 +174,231 @@ async fn room_manager_assigns_media_workers_explicitly() {
     assert_eq!(first.test_api().inspect().media_worker_id(), 0);
     assert_eq!(second.test_api().inspect().media_worker_id(), 1);
     assert_eq!(third.test_api().inspect().media_worker_id(), 0);
+}
+
+#[tokio::test]
+async fn room_spillover_policy_places_user_transport_on_local_workers() {
+    let manager = spillover_room_manager(2);
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+
+    let first_key = room.transport_user_key(&UserId::Integer(10), ConnectionId::from_raw(0));
+    let second_key = room.transport_user_key(&UserId::Integer(20), ConnectionId::from_raw(1));
+
+    assert_eq!(first_key.media_worker_id(), 0);
+    assert_eq!(second_key.media_worker_id(), 1);
+}
+
+#[tokio::test]
+async fn room_replacement_join_rehomes_topology_and_transport_together() {
+    let manager = spillover_room_manager(2);
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+    let adapter = RuntimeTransportAdapter::fake_for_testing();
+    let user_id = UserId::Integer(10);
+    let (first_tx, _first_rx) = test_sender();
+    let first_join = room
+        .test_api()
+        .lifecycle()
+        .join_session_without_transport_cleanup(
+            user_id.clone(),
+            None,
+            UserPermissions::default(),
+            first_tx,
+            &adapter,
+        )
+        .await;
+    assert!(first_join.is_ok());
+    let Some(first_connection) = first_join.ok() else {
+        return;
+    };
+    assert_eq!(
+        room.test_api()
+            .inspect()
+            .topology_home_router_id(&user_id)
+            .await,
+        Some(RouterId(0))
+    );
+    assert_eq!(
+        room.transport_user_key(&user_id, first_connection)
+            .media_worker_id(),
+        0
+    );
+
+    let (replacement_tx, _replacement_rx) = test_sender();
+    let replacement_join = room
+        .test_api()
+        .lifecycle()
+        .join_session_without_transport_cleanup(
+            user_id.clone(),
+            None,
+            UserPermissions::default(),
+            replacement_tx,
+            &adapter,
+        )
+        .await;
+    assert!(replacement_join.is_ok());
+    let Some(replacement_connection) = replacement_join.ok() else {
+        return;
+    };
+
+    assert_eq!(
+        room.test_api()
+            .inspect()
+            .topology_home_router_id(&user_id)
+            .await,
+        Some(RouterId(1))
+    );
+    assert_eq!(
+        room.transport_user_key(&user_id, replacement_connection)
+            .media_worker_id(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn room_spillover_diagnostics_reports_each_users_transport_worker() {
+    let manager = spillover_room_manager(2);
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+    let first_user_id = UserId::Integer(10);
+    let second_user_id = UserId::Integer(20);
+    for user_id in [first_user_id.clone(), second_user_id.clone()] {
+        let (tx, _rx) = test_sender();
+        let joined = room
+            .test_api()
+            .lifecycle()
+            .join_user(user_id, None, UserPermissions::default(), tx)
+            .await;
+        assert!(joined.is_ok());
+    }
+    let adapter = RuntimeTransportAdapter::fake_for_testing();
+
+    let diagnostics = room.diagnostics_user_views(&adapter).await;
+    let first_transport = diagnostics
+        .iter()
+        .find(|view| view.user_id == first_user_id)
+        .map(|view| view.transport.clone());
+    let second_transport = diagnostics
+        .iter()
+        .find(|view| view.user_id == second_user_id)
+        .map(|view| view.transport.clone());
+
+    assert_eq!(
+        first_transport.map(|transport| transport.media_worker_id),
+        Some(0)
+    );
+    assert_eq!(
+        second_transport.map(|transport| transport.media_worker_id),
+        Some(1)
+    );
+}
+
+#[tokio::test]
+async fn room_spillover_publish_subscribe_and_leave_cleanup_stay_aligned() {
+    let manager = spillover_room_manager(2);
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+    let (adapter, fake) = fake_adapter();
+    let publisher_id = UserId::Integer(10);
+    let subscriber_id = UserId::Integer(20);
+    let (publisher_tx, _publisher_rx) = test_sender();
+    let (subscriber_tx, _subscriber_rx) = test_sender();
+
+    let publisher_join = room
+        .test_api()
+        .lifecycle()
+        .join_user(
+            publisher_id.clone(),
+            None,
+            UserPermissions::default(),
+            publisher_tx,
+        )
+        .await;
+    assert!(publisher_join.is_ok());
+    let subscriber_join = room
+        .test_api()
+        .lifecycle()
+        .join_user(
+            subscriber_id.clone(),
+            None,
+            UserPermissions::default(),
+            subscriber_tx,
+        )
+        .await;
+    assert!(subscriber_join.is_ok());
+    let Some(subscriber_connection) = subscriber_join.ok() else {
+        return;
+    };
+    make_session_ready(&room, &publisher_id).await;
+    make_session_ready(&room, &subscriber_id).await;
+
+    assert!(
+        room.test_api()
+            .media()
+            .publish_track(
+                &publisher_id,
+                StreamType::Camera,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &adapter,
+            )
+            .await
+            .is_some()
+    );
+    wait_for_fake_event(&fake, |event| {
+        matches!(
+            event,
+            FakeWebRtcEvent::ConsumeMediaRequested {
+                consumer_user_id,
+                source_user_id,
+                media_kind: MediaKind::Video,
+            } if consumer_user_id == &subscriber_id && source_user_id == &publisher_id
+        )
+    })
+    .await;
+
+    assert_eq!(
+        room.test_api()
+            .inspect()
+            .topology_home_router_id(&publisher_id)
+            .await,
+        Some(RouterId(0))
+    );
+    assert_eq!(
+        room.test_api()
+            .inspect()
+            .topology_home_router_id(&subscriber_id)
+            .await,
+        Some(RouterId(1))
+    );
+    assert_eq!(room.test_api().inspect().consumer_count().await, 1);
+    assert_eq!(room.test_api().inspect().topology_router_count().await, 2);
+
+    assert!(
+        room.test_api()
+            .lifecycle()
+            .leave_session_without_transport_cleanup(
+                &subscriber_id,
+                subscriber_connection,
+                &adapter
+            )
+            .await
+    );
+
+    assert_eq!(room.test_api().inspect().consumer_count().await, 0);
+    assert_eq!(
+        room.test_api()
+            .inspect()
+            .topology_home_router_id(&subscriber_id)
+            .await,
+        None
+    );
+    assert_eq!(room.test_api().inspect().topology_router_count().await, 1);
 }
 
 #[tokio::test]

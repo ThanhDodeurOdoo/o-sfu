@@ -180,7 +180,8 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
                 RoomAdmissionPolicy::new(options.room.max_users),
                 options.feature_flags(),
                 router_rtp_capabilities(options.core.codecs.flags),
-            ),
+            )
+            .with_room_sharding_policy(options.core.routing.room_sharding_policy),
         ),
         RoomManagerDeps {
             recording_media_tap: Arc::clone(&services.recording_media_tap),

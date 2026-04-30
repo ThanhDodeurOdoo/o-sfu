@@ -246,6 +246,26 @@ where
 
 type RelaySourceRegistration = RelayTargetRegistry<RelayTargetId, RelayTargetTransport>;
 
+/// Source-indexed relay destinations owned by one packet loop.
+///
+/// A source worker keeps this registry beside its normal local route table. For
+/// every source packet, the forwarding planner can add local sends and relay
+/// sends from the same source media id:
+///
+/// ```text
+/// W0 RelayRegistry
+///
+///   source_media_id A
+///        |
+///        +--> local W0 consumers
+///        |
+///        +--> W1 RelayPacketMailbox
+///        |
+///        +--> W2 RelayPacketMailbox
+/// ```
+///
+/// Relay sends use bounded `try_send`; overload drops are counted at the
+/// packet-loop forwarding boundary instead of blocking the source worker.
 pub(super) struct RelayRegistry {
     any_active: AtomicBool,
     active_sources: RwLock<BTreeMap<TransportMediaId, RelaySourceRegistration>>,

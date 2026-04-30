@@ -4,20 +4,50 @@ use o_sfu_router::RouterId;
 
 use super::{RoomRouterObserverFactory, RoomTopology};
 use crate::{
-    MediaCodecFlags,
+    MediaCodecFlags, RoomShardingPolicy,
     runtime::{
         RoomInstanceId, UserId,
         metrics::RuntimeMetrics,
         recording::{MediaSource, MediaTap, RecordingService},
-        room::rtp_capabilities::router_rtp_capabilities,
+        room::{
+            LocalRoomRouterPlacements, LocalRouterRuntimeContext,
+            rtp_capabilities::router_rtp_capabilities,
+        },
     },
 };
 
 impl RoomTopology {
     pub(in crate::runtime::room) fn new(primary_router_id: RouterId) -> Self {
-        let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
-        Self::new_with_recording_observer_factory(
+        Self::new_with_policy(
             primary_router_id,
+            RoomShardingPolicy::strict_single_router(),
+            1,
+        )
+    }
+
+    pub(in crate::runtime::room) fn new_with_policy(
+        primary_router_id: RouterId,
+        room_sharding_policy: RoomShardingPolicy,
+        local_router_count: usize,
+    ) -> Self {
+        let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
+        let primary = LocalRouterRuntimeContext {
+            router: primary_router_id,
+            media_worker: 0,
+        };
+        let spillover = (1..local_router_count.max(1))
+            .map(|offset| LocalRouterRuntimeContext {
+                router: RouterId(
+                    primary_router_id
+                        .0
+                        .saturating_add(u64::try_from(offset).unwrap_or(u64::MAX)),
+                ),
+                media_worker: offset,
+            })
+            .collect::<Vec<_>>();
+        Self::new_with_recording_observer_factory(
+            LocalRoomRouterPlacements::new(primary, spillover),
+            room_sharding_policy,
             router_rtp_capabilities(MediaCodecFlags::default()),
             &RoomRouterObserverFactory::new(Arc::new(RecordingService::new(
                 RoomInstanceId::from_raw(0),
@@ -27,11 +57,23 @@ impl RoomTopology {
         )
     }
 
+    pub(in crate::runtime::room) fn new_with_bounded_spillover(
+        primary_router_id: RouterId,
+        local_router_count: usize,
+    ) -> Self {
+        Self::new_with_policy(
+            primary_router_id,
+            RoomShardingPolicy::bounded_local_spillover(local_router_count),
+            local_router_count,
+        )
+    }
+
     pub(in crate::runtime::room) fn user_count(&self) -> u64 {
-        self.routers
-            .values()
-            .map(super::super::router_state::RoomRouterState::user_count)
-            .sum()
+        u64::try_from(self.session_home_router.len()).unwrap_or(u64::MAX)
+    }
+
+    pub(in crate::runtime::room) fn router_count(&self) -> usize {
+        self.routers.len()
     }
 
     pub(in crate::runtime::room) fn home_router_id_for_user(

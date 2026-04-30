@@ -253,6 +253,7 @@ fn build_room_runtime_policy(options: &RuntimeOptions) -> RoomRuntimePolicy {
             options.core.codecs.preferences,
         ),
     )
+    .with_room_sharding_policy(options.core.routing.room_sharding_policy)
 }
 
 fn build_room_manager(

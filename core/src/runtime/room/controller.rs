@@ -34,7 +34,7 @@
 
 use std::{
     collections::BTreeMap,
-    fmt,
+    fmt, iter,
     sync::{Arc, Mutex as StdMutex},
 };
 
@@ -50,7 +50,7 @@ use super::{
     state::{ConsumerRouteState, RemoteTrackBootstrap, RoomState},
 };
 use crate::{
-    RuntimeFeatureFlags,
+    RoomShardingPolicy, RuntimeFeatureFlags,
     runtime::{
         AvailableFeatures, ConnectionId, PeerSnapshot, RecordingState, RoomInstanceId, StreamType,
         UserId,
@@ -224,7 +224,7 @@ impl RoomAdmissionPolicy {
     }
 }
 
-/// Stable runtime placement chosen when the chanel is created.
+/// Stable runtime placement chosen when the room is created.
 ///
 /// These values identify where the room lives inside the current process.
 /// Unlike room identity, they are runtime-local and mainly matter for routing,
@@ -232,22 +232,151 @@ impl RoomAdmissionPolicy {
 ///
 /// Callers outside the runtime should generally care more about `issuer` and
 /// `uuid` than about this placement data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoomRuntimeContext {
     /// Unique live instance id used to correlate runtime events and health.
     ///
     /// A recreated room with the same issuer still gets a fresh instance id.
-    pub instance: RoomInstanceId,
-    /// Worker that owns the transport users for this room.
+    instance: RoomInstanceId,
+    /// Reserved local router and worker placements that this room may use.
     ///
-    /// Chanel-level transport keys include this so observability and command
-    /// paths can address the correct worker directly.
-    pub media_worker: usize,
-    /// Pure router instance backing this chanel's topology.
-    ///
-    /// The room topology stays distinct from signaling identity, so router
-    /// placement can evolve without changing the outward room contract.
+    /// The placement bundle is non-empty by construction. Its first entry is
+    /// the primary placement and the rest are spillover candidates.
+    local_routers: LocalRoomRouterPlacements,
+}
+
+/// One room-local router placement and its owning media worker.
+///
+/// This is runtime-local metadata. It is never sent to clients and it is not
+/// a distributed owner identity. A placement says which pure router can model
+/// routing state for a subset of users and which local media worker owns those
+/// users' transport sessions.
+///
+/// The room factory reserves these placements before publishing the room. The
+/// topology can then attach or detach the router state for a placement without
+/// changing the room's immutable transport placement contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalRouterRuntimeContext {
+    /// Pure router id used inside the room topology.
     pub router: RouterId,
+    /// Local RTC media worker that owns transport sessions placed here.
+    pub media_worker: usize,
+}
+
+/// Non-empty router placement set reserved for one live room.
+///
+/// This is the shared placement contract consumed by both `RoomDefinition` and
+/// `RoomTopology`. Keeping the primary placement inside this validated value
+/// avoids a public API where one field can disagree with the placement list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalRoomRouterPlacements {
+    primary: LocalRouterRuntimeContext,
+    spillover: Vec<LocalRouterRuntimeContext>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalRoomRouterPlacementsError {
+    Empty,
+}
+
+impl LocalRoomRouterPlacements {
+    #[must_use]
+    pub fn new(
+        primary: LocalRouterRuntimeContext,
+        spillover: Vec<LocalRouterRuntimeContext>,
+    ) -> Self {
+        Self { primary, spillover }
+    }
+
+    pub fn try_from_vec(
+        placements: Vec<LocalRouterRuntimeContext>,
+    ) -> Result<Self, LocalRoomRouterPlacementsError> {
+        let mut placements = placements.into_iter();
+        let Some(primary) = placements.next() else {
+            return Err(LocalRoomRouterPlacementsError::Empty);
+        };
+        Ok(Self::new(primary, placements.collect()))
+    }
+
+    #[must_use]
+    pub const fn primary(&self) -> LocalRouterRuntimeContext {
+        self.primary
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.spillover.len().saturating_add(1)
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<LocalRouterRuntimeContext> {
+        if index == 0 {
+            return Some(self.primary);
+        }
+        self.spillover.get(index.checked_sub(1)?).copied()
+    }
+
+    #[must_use]
+    pub fn contains_router(&self, router_id: RouterId) -> bool {
+        self.primary.router == router_id
+            || self
+                .spillover
+                .iter()
+                .any(|placement| placement.router == router_id)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = LocalRouterRuntimeContext> + '_ {
+        iter::once(self.primary).chain(self.spillover.iter().copied())
+    }
+}
+
+impl RoomRuntimeContext {
+    #[must_use]
+    pub fn new(
+        instance: RoomInstanceId,
+        primary: LocalRouterRuntimeContext,
+        spillover: Vec<LocalRouterRuntimeContext>,
+    ) -> Self {
+        Self {
+            instance,
+            local_routers: LocalRoomRouterPlacements::new(primary, spillover),
+        }
+    }
+
+    pub fn try_from_placements(
+        instance: RoomInstanceId,
+        placements: Vec<LocalRouterRuntimeContext>,
+    ) -> Result<Self, LocalRoomRouterPlacementsError> {
+        Ok(Self {
+            instance,
+            local_routers: LocalRoomRouterPlacements::try_from_vec(placements)?,
+        })
+    }
+
+    #[must_use]
+    pub const fn instance(&self) -> RoomInstanceId {
+        self.instance
+    }
+
+    #[must_use]
+    pub const fn media_worker(&self) -> usize {
+        self.local_routers.primary().media_worker
+    }
+
+    #[must_use]
+    pub const fn primary_router(&self) -> RouterId {
+        self.local_routers.primary().router
+    }
+
+    #[must_use]
+    pub const fn local_routers(&self) -> &LocalRoomRouterPlacements {
+        &self.local_routers
+    }
 }
 
 /// Stable runtime policy bundle shared by the room and its state model.
@@ -271,6 +400,13 @@ pub struct RoomRuntimePolicy {
     /// The chanel consumes router-native capabilities here so signaling code
     /// does not have to leak wire-shaped capability bags into room state.
     pub router_rtp_capabilities: o_sfu_router::MediaCapabilities,
+    /// Same-room local sharding policy selected at runtime boot.
+    ///
+    /// The policy is copied into each room so topology decisions stay stable
+    /// for the room lifetime even if a future runtime reload changes process
+    /// defaults. It is a cold-path room-placement policy, not a packet-loop
+    /// routing rule.
+    pub room_sharding_policy: RoomShardingPolicy,
 }
 
 impl RoomRuntimePolicy {
@@ -284,7 +420,19 @@ impl RoomRuntimePolicy {
             admission_policy,
             feature_flags,
             router_rtp_capabilities,
+            room_sharding_policy: RoomShardingPolicy::strict_single_router(),
         }
+    }
+
+    /// Return a room policy that uses the provided same-room sharding policy.
+    ///
+    /// This is used by server startup after config validation. Tests can also
+    /// use it to build a room with explicit spillover behavior while keeping
+    /// admission, features and RTP capabilities unchanged.
+    #[must_use]
+    pub fn with_room_sharding_policy(mut self, room_sharding_policy: RoomShardingPolicy) -> Self {
+        self.room_sharding_policy = room_sharding_policy;
+        self
     }
 }
 
@@ -491,7 +639,7 @@ impl Room {
         reason = "room construction keeps runtime identity, policy and shared services explicit at the boundary"
     )]
     pub(crate) fn new(
-        runtime_context: RoomRuntimeContext,
+        runtime_context: &RoomRuntimeContext,
         runtime_policy: RoomRuntimePolicy,
         issuer: String,
         key: Option<String>,
@@ -515,9 +663,10 @@ impl Room {
             cleanup_reconciler: StdMutex::new(CleanupReconciler::default()),
             pending_publish_transactions: Mutex::new(PendingPublishTransactions::default()),
             state: RwLock::new(RoomState::new(
-                runtime_context.router,
+                runtime_context,
                 runtime_policy.admission_policy,
                 runtime_policy.router_rtp_capabilities,
+                runtime_policy.room_sharding_policy,
                 recording_service,
             )),
         }
@@ -765,12 +914,13 @@ impl Room {
         let transport_by_session = session_entries
             .into_iter()
             .map(|(user_id, connection_id)| {
+                let session_key = self.transport_user_key(&user_id, connection_id);
                 let transport = DiagnosticsUserTransport {
                     connection_id: connection_id.as_u64(),
                     health: observability_port
-                        .session_transport_health(&self.transport_user_key(&user_id, connection_id))
+                        .session_transport_health(&session_key)
                         .map(Into::into),
-                    media_worker_id: self.definition.media_worker_id(),
+                    media_worker_id: session_key.media_worker_id(),
                     quality_summary: DiagnosticsQualitySummary {
                         current_incoming_bitrate: incoming_bitrate_by_session
                             .get(&user_id)

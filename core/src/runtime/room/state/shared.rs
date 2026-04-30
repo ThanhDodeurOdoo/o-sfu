@@ -3,9 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use o_sfu_router::{
-    MediaCapabilities, MediaCapabilities as RouterRtpCapabilities, MediaKind, RouterId,
-};
+use o_sfu_router::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities, MediaKind};
 
 use super::{
     super::{
@@ -18,13 +16,16 @@ use super::{
     layout::UserLayout,
     presence::UserPresence,
 };
-use crate::runtime::{
-    ConnectionId, DownloadStates, RecordingState, StreamType, UserId,
-    recording::RecordingService,
-    source_model::{
-        ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId, SourceEncodingId,
+use crate::{
+    RoomShardingPolicy,
+    runtime::{
+        ConnectionId, DownloadStates, RecordingState, StreamType, UserId,
+        recording::RecordingService,
+        source_model::{
+            ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId, SourceEncodingId,
+        },
+        transport_adapter::TransportMediaId,
     },
-    transport_adapter::TransportMediaId,
 };
 
 /// Core mutable state for a single SFU room (room).
@@ -171,9 +172,10 @@ pub(in crate::runtime::room) struct TransportMediaRemoval {
 
 impl RoomState {
     pub(in crate::runtime::room) fn new(
-        router_id: RouterId,
+        runtime_context: &super::super::RoomRuntimeContext,
         admission_policy: RoomAdmissionPolicy,
         router_rtp_capabilities: MediaCapabilities,
+        room_sharding_policy: RoomShardingPolicy,
         recording_service: Arc<RecordingService>,
     ) -> Self {
         Self {
@@ -203,7 +205,8 @@ impl RoomState {
             consumer_keys_by_user: BTreeMap::new(),
             consumer_keys_by_source: BTreeMap::new(),
             topology: RoomTopology::new_with_recording_observer_factory(
-                router_id,
+                runtime_context.local_routers().clone(),
+                room_sharding_policy,
                 router_rtp_capabilities,
                 &RoomRouterObserverFactory::new(recording_service),
             ),

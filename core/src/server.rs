@@ -30,9 +30,10 @@ pub mod room {
     //! Room orchestration facade used by HTTP, websocket, and application code.
 
     pub use crate::runtime::room::{
-        ConsumerRouteState, JoinUserRequest, RemoteTrackBootstrap, Room, RoomAdmissionPolicy,
-        RoomConfig, RoomEventMessage, RoomEventRequest, RoomJoinError, RoomManager,
-        RoomManagerConfig, RoomManagerDeps, RoomManagerJoinError, RoomMediaCounts,
+        ConsumerRouteState, JoinUserRequest, LocalRoomRouterPlacements,
+        LocalRoomRouterPlacementsError, LocalRouterRuntimeContext, RemoteTrackBootstrap, Room,
+        RoomAdmissionPolicy, RoomConfig, RoomEventMessage, RoomEventRequest, RoomJoinError,
+        RoomManager, RoomManagerConfig, RoomManagerDeps, RoomManagerJoinError, RoomMediaCounts,
         RoomRuntimeContext, RoomRuntimePolicy, RoomUserPermissions, RoomUserStatsSnapshot,
         RuntimeRoomDirectorySnapshot, RuntimeRoomStatsSnapshot, TrackBindingUpdate,
         UserCloseReason, UserOutbound, rtp_capabilities,

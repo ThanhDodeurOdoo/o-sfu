@@ -90,19 +90,24 @@ impl RoomState {
         is_new: bool,
     ) -> Result<(), RoomJoinError> {
         let mut topology = self.topology.clone();
-        if let Err(error) = topology.apply_client_join(user_id, connection_id.as_u64()) {
-            error!(
-                ?user_id,
-                ?error,
-                "failed to mirror user join into room router"
-            );
-            return Err(RoomJoinError::RouterState);
-        }
         if !is_new && let Err(error) = self.reset_existing_session_routing(&mut topology, user_id) {
             error!(
                 ?user_id,
                 ?error,
                 "failed to reset replaced user routing in room router"
+            );
+            return Err(RoomJoinError::RouterState);
+        }
+        let topology_result = if is_new {
+            topology.apply_client_join(user_id, connection_id.as_u64())
+        } else {
+            topology.replace_client_session(user_id, connection_id.as_u64())
+        };
+        if let Err(error) = topology_result {
+            error!(
+                ?user_id,
+                ?error,
+                "failed to mirror user join into room router"
             );
             return Err(RoomJoinError::RouterState);
         }
@@ -436,7 +441,7 @@ mod tests {
             metrics::RuntimeMetrics,
             recording::{MediaSource, MediaTap, RecordingService},
             room::{
-                RoomAdmissionPolicy,
+                LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext,
                 rtp_capabilities::router_rtp_capabilities,
                 state::{
                     ids::ProducerRuntimeId,
@@ -457,10 +462,19 @@ mod tests {
 
     fn test_state() -> RoomState {
         let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
+        let runtime_context = RoomRuntimeContext::new(
+            RoomInstanceId::from_raw(0),
+            LocalRouterRuntimeContext {
+                router: RouterId(1),
+                media_worker: 0,
+            },
+            Vec::new(),
+        );
         RoomState::new(
-            RouterId(1),
+            &runtime_context,
             RoomAdmissionPolicy::new(4),
             router_rtp_capabilities(MediaCodecFlags::default()),
+            crate::RoomShardingPolicy::strict_single_router(),
             Arc::new(RecordingService::new(
                 RoomInstanceId::from_raw(0),
                 media_source,

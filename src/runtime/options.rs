@@ -86,6 +86,7 @@ impl RuntimeOptions {
             },
             RoutingOptions {
                 media_worker_count: config.transport.rtc_media_worker_count,
+                room_sharding_policy: config.transport.room_sharding_policy,
             },
             CodecOptions {
                 flags: config.codecs.flags,
@@ -133,8 +134,8 @@ mod tests {
     use super::RuntimeOptions;
     use crate::config::{
         AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
-        MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig, TransportConfig,
-        UserConfig, VideoBitrateLimits,
+        MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig,
+        TransportConfig, UserConfig, VideoBitrateLimits,
     };
 
     #[test]
@@ -160,6 +161,7 @@ mod tests {
                 video_bitrate_limits: VideoBitrateLimits::new(4_321_000),
                 rtc_port_range: RtcPortRange::new(50_000, 50_099),
                 rtc_media_worker_count: 4,
+                room_sharding_policy: RoomShardingPolicy::bounded_local_spillover(2),
             },
             codecs: CodecConfig {
                 flags: MediaCodecFlags::default().with_h264(true),
@@ -199,6 +201,14 @@ mod tests {
             config.transport.video_bitrate_limits
         );
         assert_eq!(options.core.routing.media_worker_count, 4);
+        assert_eq!(
+            options
+                .core
+                .routing
+                .room_sharding_policy
+                .max_local_routers(),
+            2
+        );
         assert_eq!(options.core.codecs.flags, config.codecs.flags);
         assert_eq!(options.core.codecs.preferences, config.codecs.preferences);
         assert_eq!(options.http.bind_address, config.http.bind_address);
@@ -236,6 +246,7 @@ mod tests {
                 video_bitrate_limits: VideoBitrateLimits::default(),
                 rtc_port_range: RtcPortRange::new(50_000, 50_099),
                 rtc_media_worker_count: 4,
+                room_sharding_policy: RoomShardingPolicy::strict_single_router(),
             },
             codecs: CodecConfig {
                 flags: MediaCodecFlags::default(),

@@ -12,8 +12,8 @@ use futures_util::{SinkExt, StreamExt};
 use o_sfu::{
     config::{
         AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
-        MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig, TransportConfig,
-        UserConfig, VideoBitrateLimits,
+        MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig,
+        TransportConfig, UserConfig, VideoBitrateLimits,
     },
     testing::{
         auth::{
@@ -60,6 +60,7 @@ pub fn test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
             max_bitrate_out_bps: 10_000_000,
             video_bitrate_limits: VideoBitrateLimits::default(),
             rtc_media_worker_count: 1,
+            room_sharding_policy: RoomShardingPolicy::strict_single_router(),
         },
         codecs: CodecConfig {
             flags: MediaCodecFlags::default(),

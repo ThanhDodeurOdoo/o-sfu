@@ -1,8 +1,22 @@
+//! Immutable room identity and runtime placement.
+//!
+//! A room has two identities:
+//!
+//! ```text
+//! Odoo-facing identity        Runtime-local placement
+//! issuer, uuid, key           instance, router, media worker
+//! ```
+//!
+//! The first identity is visible at the HTTP and websocket edge. The second
+//! identity is process-local and drives transport ownership, diagnostics and
+//! room topology. Keeping them together in `RoomDefinition` gives the room
+//! facade one immutable source of truth after creation.
+
 use uuid::Uuid;
 
-use super::{RoomConfig, RoomRuntimeContext, RoomRuntimePolicy};
+use super::{LocalRoomRouterPlacements, RoomConfig, RoomRuntimeContext, RoomRuntimePolicy};
 use crate::{
-    RuntimeFeatureFlags,
+    RoomShardingPolicy, RuntimeFeatureFlags,
     runtime::{
         AvailableFeatures, ConnectionId, RoomInstanceId, UserId,
         transport_adapter::TransportSessionKey,
@@ -28,8 +42,29 @@ impl RoomIdentity {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RoomDefinition {
+    /// Live room instance id used by runtime diagnostics and transport keys.
+    ///
+    /// Recreating a room for the same issuer allocates a fresh instance id so
+    /// stale transport work cannot be confused with the new room lifetime.
     instance_id: RoomInstanceId,
+    /// Primary media worker selected for the room.
+    ///
+    /// Strict single-router rooms use this for all transport sessions.
+    /// Spillover rooms use it as the fallback when a connection does not map
+    /// onto one of the reserved local placements.
     media_worker_id: usize,
+    /// Immutable local router placements reserved for this room.
+    ///
+    /// This vector is shared with `RoomTopology` through room construction.
+    /// `transport_user_key` uses the same placement order so transport worker
+    /// addressing and topology home-router placement cannot drift.
+    local_routers: LocalRoomRouterPlacements,
+    /// Policy used to interpret `local_routers` for transport placement.
+    ///
+    /// The policy is stored here because transport session keys are derived
+    /// outside the topology lock. The room definition can answer that cold-path
+    /// routing question without borrowing mutable room state.
+    room_sharding_policy: RoomShardingPolicy,
     identity: RoomIdentity,
     config: RoomConfig,
     feature_flags: RuntimeFeatureFlags,
@@ -38,15 +73,17 @@ pub(crate) struct RoomDefinition {
 impl RoomDefinition {
     #[must_use]
     pub(crate) fn new(
-        runtime_context: RoomRuntimeContext,
+        runtime_context: &RoomRuntimeContext,
         runtime_policy: &RoomRuntimePolicy,
         issuer: String,
         key: Option<String>,
         config: RoomConfig,
     ) -> Self {
         Self {
-            instance_id: runtime_context.instance,
-            media_worker_id: runtime_context.media_worker,
+            instance_id: runtime_context.instance(),
+            media_worker_id: runtime_context.media_worker(),
+            local_routers: runtime_context.local_routers().clone(),
+            room_sharding_policy: runtime_policy.room_sharding_policy,
             identity: RoomIdentity::new(issuer, key),
             config,
             feature_flags: runtime_policy.feature_flags,
@@ -86,10 +123,29 @@ impl RoomDefinition {
     ) -> TransportSessionKey {
         TransportSessionKey::new(
             self.instance_id,
-            self.media_worker_id,
+            self.media_worker_id_for_connection(connection_id),
             connection_id,
             user_id.clone(),
         )
+    }
+
+    /// Resolve the media worker that owns one user's transport session.
+    ///
+    /// This mirrors `RoomTopology` home-router placement for local spillover.
+    /// The input is the runtime connection id because reconnects should receive
+    /// a fresh deterministic placement even when the same Odoo user id rejoins.
+    ///
+    /// The method is cold-path control-plane work. It is called while building
+    /// transport commands and diagnostics, not from packet forwarding loops.
+    fn media_worker_id_for_connection(&self, connection_id: ConnectionId) -> usize {
+        let placement_count = self
+            .room_sharding_policy
+            .allowed_local_router_count(self.local_routers.len());
+        let placement_index =
+            usize::try_from(connection_id.as_u64()).unwrap_or(0) % placement_count;
+        self.local_routers
+            .get(placement_index)
+            .map_or(self.media_worker_id, |placement| placement.media_worker)
     }
 
     #[must_use]

@@ -5,16 +5,20 @@
 //! after lookup misses, before the new room is visible to other runtime
 //! entrypoints.
 //!
-//! A factory-created room receives fresh process-local placement, the
-//! immutable runtime policy selected at boot and shared observability,
-//! recording and metrics services. It does not register the room or emit
-//! creation events.
+//! A factory-created room receives fresh process-local placement, the immutable
+//! runtime policy selected at boot plus shared observability, recording and
+//! metrics services. It does not register the room or emit creation events.
+//!
+//! Same-room spillover is intentionally decided here. The factory reserves the
+//! complete local router placement set before the room is visible, while
+//! `RoomTopology` later decides which reserved spillover routers need live
+//! router state.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
 use o_sfu_router::RouterId;
 
-use super::{Room, RoomConfig, RoomRuntimeContext, RoomRuntimePolicy};
+use super::{LocalRouterRuntimeContext, Room, RoomConfig, RoomRuntimeContext, RoomRuntimePolicy};
 use crate::runtime::{
     RoomInstanceId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics, recording::MediaTap,
 };
@@ -60,6 +64,10 @@ impl RoomCreationIntent {
 #[derive(Debug)]
 struct RoomRuntimeAllocator {
     next_room_instance_id: u64,
+    /// Next router id to reserve for room-local topology.
+    ///
+    /// Spillover rooms advance this counter by the number of reserved local
+    /// router placements, not by the number of routers attached at creation.
     next_router_id: u64,
 }
 
@@ -84,11 +92,11 @@ struct RoomRuntimeAllocator {
 /// packet forwarding.
 #[derive(Debug)]
 pub(crate) struct RoomFactory {
-    /// Worker shard count used for deterministic per-room transport
-    /// placement.
+    /// Worker shard count used for deterministic room transport placement.
     ///
     /// This is normalized to at least one at construction so placement never
-    /// needs a zero-worker branch.
+    /// needs a zero-worker branch. A room's local router cap is also bounded
+    /// by this value so each reserved router has one local transport owner.
     media_worker_count: usize,
     /// Runtime-wide room rules cloned into each room.
     ///
@@ -155,7 +163,7 @@ impl RoomFactory {
     pub(crate) fn create(&self, intent: RoomCreationIntent) -> Arc<Room> {
         let runtime_context = self.allocate_runtime_context();
         Arc::new(Room::new(
-            runtime_context,
+            &runtime_context,
             self.runtime_policy.clone(),
             intent.issuer,
             intent.key,
@@ -168,26 +176,46 @@ impl RoomFactory {
 
     /// Reserves runtime-local placement for one new room.
     ///
+    /// The primary placement is always first. Additional placements are local
+    /// spillover candidates, distributed across consecutive media workers from
+    /// the primary worker. `RoomTopology` may attach those routers lazily, but
+    /// their ids and worker ownership are fixed here so transport key
+    /// derivation can stay lock-free with respect to room state.
+    ///
     /// The mutex is poisoned-tolerant because placement allocation has no
     /// partial side effect beyond the counters themselves. Recovering the inner
     /// value keeps later room creation possible after an unrelated panic.
     fn allocate_runtime_context(&self) -> RoomRuntimeContext {
-        let (room_instance_id, router_id) = {
+        let (room_instance_id, primary, spillover_routers) = {
             let mut allocator = self
                 .allocator
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
             let room_instance_id = RoomInstanceId::allocate(&mut allocator.next_room_instance_id);
-            let router_id = RouterId(allocator.next_router_id);
+            let local_router_count = self
+                .runtime_policy
+                .room_sharding_policy
+                .max_local_routers()
+                .min(self.media_worker_count)
+                .max(1);
+            let primary_media_worker = self.media_worker_id_for_room_instance(room_instance_id);
+            let primary = LocalRouterRuntimeContext {
+                router: RouterId(allocator.next_router_id),
+                media_worker: primary_media_worker,
+            };
             allocator.next_router_id = allocator.next_router_id.saturating_add(1);
+            let mut spillover_routers = Vec::with_capacity(local_router_count.saturating_sub(1));
+            for offset in 1..local_router_count {
+                spillover_routers.push(LocalRouterRuntimeContext {
+                    router: RouterId(allocator.next_router_id),
+                    media_worker: (primary_media_worker + offset) % self.media_worker_count,
+                });
+                allocator.next_router_id = allocator.next_router_id.saturating_add(1);
+            }
             drop(allocator);
-            (room_instance_id, router_id)
+            (room_instance_id, primary, spillover_routers)
         };
-        RoomRuntimeContext {
-            instance: room_instance_id,
-            media_worker: self.media_worker_id_for_room_instance(room_instance_id),
-            router: router_id,
-        }
+        RoomRuntimeContext::new(room_instance_id, primary, spillover_routers)
     }
 
     /// Maps room instance ids onto media workers with stable modulo

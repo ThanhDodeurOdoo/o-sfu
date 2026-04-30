@@ -35,6 +35,148 @@ pub struct MediaOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RoutingOptions {
     pub media_worker_count: usize,
+    /// Room-local routing policy used by the room runtime.
+    ///
+    /// This is a cold-path control-plane setting. It decides how many local
+    /// router placements a new room may reserve when the room is created. It
+    /// does not participate in packet forwarding and it does not change the
+    /// transport worker count after startup.
+    pub room_sharding_policy: RoomShardingPolicy,
+}
+
+/// Same-room placement policy for local router spillover.
+///
+/// The policy is part of the public core configuration surface because server
+/// startup has to choose the room topology model before any room exists. It
+/// describes how many process-local router placements a room may use and which
+/// spillover mode should interpret that limit.
+///
+/// # Boundary role
+///
+/// `RoomShardingPolicy` belongs to room orchestration, not to the RTP packet
+/// loop. The room factory reads it once when reserving router and media-worker
+/// placements for a new room. Room state then uses the same policy to decide
+/// whether a user connection can be placed on a spillover router.
+///
+/// The policy deliberately does not expose transport worker ids to callers.
+/// Operators configure an upper bound, while the runtime keeps the concrete
+/// router and worker assignment process-local.
+///
+/// # Invariants
+///
+/// `max_local_routers()` never returns zero. Constructors accept raw values so
+/// outer config layers can normalize or validate operator input in one place,
+/// while core callers still get a safe fallback if a policy is built directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoomShardingPolicy {
+    max_local_routers: usize,
+    spillover: RoomSpilloverMode,
+}
+
+/// How a room interprets its reserved local router placements.
+///
+/// The enum keeps the default single-router behavior explicit instead of
+/// encoding it as a magic limit. That makes strict rooms and opt-in spillover
+/// rooms easy to distinguish in tests, diagnostics and future policy code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoomSpilloverMode {
+    /// Keep all users, producers and consumers on the room's primary router.
+    ///
+    /// This is the default deployment mode. It preserves the historical
+    /// topology shape even when the process has multiple RTC media workers.
+    StrictSingleRouter,
+    /// Allow the room runtime to use the pre-reserved local router set.
+    ///
+    /// Placement is deterministic and bounded by `max_local_routers`. It is not
+    /// an adaptive load-triggered policy; adaptive thresholds will need their own
+    /// measured inputs before they become public API.
+    BoundedLocalSpillover,
+}
+
+impl RoutingOptions {
+    #[must_use]
+    pub const fn new(media_worker_count: usize) -> Self {
+        Self {
+            media_worker_count,
+            room_sharding_policy: RoomShardingPolicy::strict_single_router(),
+        }
+    }
+}
+
+impl RoomShardingPolicy {
+    /// Build the default policy that keeps every room on one local router.
+    ///
+    /// Use this unless the runtime has explicitly opted into same-room
+    /// spillover. It keeps the room topology identical to the historical
+    /// single-router model and is safe with any positive media-worker count.
+    #[must_use]
+    pub const fn strict_single_router() -> Self {
+        Self {
+            max_local_routers: 1,
+            spillover: RoomSpilloverMode::StrictSingleRouter,
+        }
+    }
+
+    /// Build a policy that may place one room across several local routers.
+    ///
+    /// `max_local_routers` is an upper bound for one room. The runtime config
+    /// layer must keep it less than or equal to the RTC media worker count so
+    /// every reserved router has a worker placement. If a caller passes zero,
+    /// [`Self::max_local_routers`] normalizes it to one.
+    ///
+    /// This constructor does not allocate routers. It only records the policy
+    /// consumed by room creation and topology state.
+    #[must_use]
+    pub const fn bounded_local_spillover(max_local_routers: usize) -> Self {
+        Self {
+            max_local_routers,
+            spillover: RoomSpilloverMode::BoundedLocalSpillover,
+        }
+    }
+
+    /// Return the non-zero local router cap for one room.
+    ///
+    /// The cap is the number of room-local router placements the runtime may
+    /// reserve, not a count of currently attached routers. Spillover routers
+    /// can stay detached until a user is placed on them.
+    #[must_use]
+    pub const fn max_local_routers(self) -> usize {
+        if self.max_local_routers == 0 {
+            1
+        } else {
+            self.max_local_routers
+        }
+    }
+
+    /// Return the spillover mode that interprets this policy.
+    ///
+    /// Callers should branch on this value instead of treating
+    /// `max_local_routers() == 1` as the only strict-mode signal. That keeps
+    /// the policy open to future modes that may also use one router at a time.
+    #[must_use]
+    pub const fn spillover(self) -> RoomSpilloverMode {
+        self.spillover
+    }
+
+    /// Return how many reserved local placements may receive home sessions.
+    ///
+    /// Strict mode always uses the primary placement. Bounded spillover uses the
+    /// configured cap, limited by how many placements the room factory reserved.
+    #[must_use]
+    pub fn allowed_local_router_count(self, reserved_local_routers: usize) -> usize {
+        match self.spillover {
+            RoomSpilloverMode::StrictSingleRouter => 1,
+            RoomSpilloverMode::BoundedLocalSpillover => {
+                self.max_local_routers().min(reserved_local_routers).max(1)
+            }
+        }
+    }
+}
+
+impl Default for RoomShardingPolicy {
+    fn default() -> Self {
+        Self::strict_single_router()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

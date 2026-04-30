@@ -1,7 +1,7 @@
 use std::{net::IpAddr, num::NonZeroUsize};
 
 use anyhow::{Context, Result, anyhow, ensure};
-use o_sfu_core::{RtcPortRange, VideoBitrateLimits};
+use o_sfu_core::{RoomShardingPolicy, RtcPortRange, VideoBitrateLimits};
 
 use super::{TransportConfig, parsing::parse_optional_env};
 
@@ -53,39 +53,25 @@ pub(super) fn load_transport_config(
         "RTC_MEDIA_WORKER_COUNT must be a valid usize",
     )?
     .unwrap_or(1);
-    ensure!(
-        rtc_min_port <= rtc_max_port,
-        "RTC_MAX_PORT must be greater than or equal to RTC_MIN_PORT"
-    );
-    ensure!(
-        NonZeroUsize::new(rtc_media_worker_count).is_some(),
-        "RTC_MEDIA_WORKER_COUNT must be greater than zero"
-    );
-    ensure!(
-        max_bitrate_in_bps > 0,
-        "MAX_BITRATE_IN must be greater than zero"
-    );
-    ensure!(
-        max_bitrate_out_bps > 0,
-        "MAX_BITRATE_OUT must be greater than zero"
-    );
-    ensure!(
-        max_video_bitrate_bps > 0,
-        "MAX_VIDEO_BITRATE must be greater than zero"
-    );
+    let room_max_local_routers = parse_optional_env(
+        &mut get_var,
+        "ROOM_MAX_LOCAL_ROUTERS",
+        "ROOM_MAX_LOCAL_ROUTERS must be a valid usize",
+    )?
+    .unwrap_or(1);
     let rtc_port_range = RtcPortRange::new(rtc_min_port, rtc_max_port);
-    ensure!(
-        rtc_media_worker_count <= usize::from(rtc_port_range.port_count()),
-        "RTC_MEDIA_WORKER_COUNT must be less than or equal to the available RTC port count"
-    );
-    ensure!(
-        !public_ip.is_unspecified(),
-        "PUBLIC_IP must be a concrete advertised address"
-    );
-    ensure!(
-        !public_ip.is_multicast(),
-        "PUBLIC_IP cannot be a multicast address"
-    );
+    validate_transport_config(TransportConfigValidation {
+        public_ip,
+        rtc_min_port,
+        rtc_max_port,
+        rtc_media_worker_count,
+        room_max_local_routers,
+        max_bitrate_in_bps,
+        max_bitrate_out_bps,
+        max_video_bitrate_bps,
+        rtc_port_range,
+    })?;
+    let room_sharding_policy = room_sharding_policy(room_max_local_routers);
     Ok(TransportConfig {
         public_ip,
         max_bitrate_in_bps,
@@ -93,14 +79,93 @@ pub(super) fn load_transport_config(
         video_bitrate_limits: VideoBitrateLimits::new(max_video_bitrate_bps),
         rtc_port_range,
         rtc_media_worker_count,
+        room_sharding_policy,
     })
+}
+
+/// Translate the operator local-router cap into the core room policy.
+///
+/// `ROOM_MAX_LOCAL_ROUTERS=1` keeps the strict historical topology. Any larger
+/// value opts rooms into bounded deterministic local spillover, with the numeric
+/// value kept as the per-room local router cap.
+fn room_sharding_policy(room_max_local_routers: usize) -> RoomShardingPolicy {
+    if room_max_local_routers == 1 {
+        return RoomShardingPolicy::strict_single_router();
+    }
+    RoomShardingPolicy::bounded_local_spillover(room_max_local_routers)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TransportConfigValidation {
+    public_ip: IpAddr,
+    rtc_min_port: u16,
+    rtc_max_port: u16,
+    rtc_media_worker_count: usize,
+    /// Maximum number of local router placements a room may reserve.
+    ///
+    /// This must not exceed the worker count because each placement needs one
+    /// concrete media-worker owner for transport session keys.
+    room_max_local_routers: usize,
+    max_bitrate_in_bps: u64,
+    max_bitrate_out_bps: u64,
+    max_video_bitrate_bps: u64,
+    rtc_port_range: RtcPortRange,
+}
+
+fn validate_transport_config(input: TransportConfigValidation) -> Result<()> {
+    ensure!(
+        input.rtc_min_port <= input.rtc_max_port,
+        "RTC_MAX_PORT must be greater than or equal to RTC_MIN_PORT"
+    );
+    ensure!(
+        NonZeroUsize::new(input.rtc_media_worker_count).is_some(),
+        "RTC_MEDIA_WORKER_COUNT must be greater than zero"
+    );
+    ensure!(
+        NonZeroUsize::new(input.room_max_local_routers).is_some(),
+        "ROOM_MAX_LOCAL_ROUTERS must be greater than zero"
+    );
+    ensure!(
+        input.max_bitrate_in_bps > 0,
+        "MAX_BITRATE_IN must be greater than zero"
+    );
+    ensure!(
+        input.max_bitrate_out_bps > 0,
+        "MAX_BITRATE_OUT must be greater than zero"
+    );
+    ensure!(
+        input.max_video_bitrate_bps > 0,
+        "MAX_VIDEO_BITRATE must be greater than zero"
+    );
+    ensure!(
+        input.rtc_media_worker_count <= usize::from(input.rtc_port_range.port_count()),
+        "RTC_MEDIA_WORKER_COUNT must be less than or equal to the available RTC port count"
+    );
+    ensure!(
+        input.room_max_local_routers <= input.rtc_media_worker_count,
+        "ROOM_MAX_LOCAL_ROUTERS must be less than or equal to RTC_MEDIA_WORKER_COUNT"
+    );
+    ensure!(
+        !input.public_ip.is_unspecified(),
+        "PUBLIC_IP must be a concrete advertised address"
+    );
+    ensure!(
+        !input.public_ip.is_multicast(),
+        "PUBLIC_IP cannot be a multicast address"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
-    use super::{RtcPortRange, TransportConfig, VideoBitrateLimits, load_transport_config};
+    use o_sfu_core::RoomSpilloverMode;
+
+    use super::{
+        RoomShardingPolicy, RtcPortRange, TransportConfig, VideoBitrateLimits,
+        load_transport_config,
+    };
 
     #[test]
     fn load_transport_config_accepts_public_ip_and_defaults() {
@@ -117,6 +182,7 @@ mod tests {
                 video_bitrate_limits: VideoBitrateLimits::default(),
                 rtc_port_range: RtcPortRange::new(40_000, 49_999),
                 rtc_media_worker_count: 1,
+                room_sharding_policy: RoomShardingPolicy::strict_single_router(),
             })
         );
     }
@@ -192,6 +258,67 @@ mod tests {
         let config = load_transport_config(|key| match key {
             "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
             "RTC_MEDIA_WORKER_COUNT" => Some("0".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn load_transport_config_accepts_room_spillover_policy() {
+        let config = load_transport_config(|key| match key {
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "RTC_MEDIA_WORKER_COUNT" => Some("3".to_owned()),
+            "ROOM_MAX_LOCAL_ROUTERS" => Some("2".to_owned()),
+            _ => None,
+        });
+
+        assert!(config.is_ok());
+        let Some(config) = config.ok() else {
+            return;
+        };
+        assert_eq!(config.room_sharding_policy.max_local_routers(), 2);
+        assert_eq!(
+            config.room_sharding_policy.spillover(),
+            RoomSpilloverMode::BoundedLocalSpillover
+        );
+    }
+
+    #[test]
+    fn load_transport_config_rejects_zero_room_router_cap() {
+        let config = load_transport_config(|key| match key {
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "RTC_MEDIA_WORKER_COUNT" => Some("2".to_owned()),
+            "ROOM_MAX_LOCAL_ROUTERS" => Some("0".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn load_transport_config_keeps_explicit_single_router_strict() {
+        let config = load_transport_config(|key| match key {
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "RTC_MEDIA_WORKER_COUNT" => Some("2".to_owned()),
+            "ROOM_MAX_LOCAL_ROUTERS" => Some("1".to_owned()),
+            _ => None,
+        });
+
+        assert!(config.is_ok());
+        let Some(config) = config.ok() else {
+            return;
+        };
+        assert_eq!(
+            config.room_sharding_policy,
+            RoomShardingPolicy::strict_single_router()
+        );
+    }
+
+    #[test]
+    fn load_transport_config_rejects_more_room_routers_than_rtc_workers() {
+        let config = load_transport_config(|key| match key {
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "RTC_MEDIA_WORKER_COUNT" => Some("2".to_owned()),
+            "ROOM_MAX_LOCAL_ROUTERS" => Some("3".to_owned()),
             _ => None,
         });
         assert!(config.is_err());

@@ -1,7 +1,7 @@
 use std::net::{IpAddr, SocketAddr};
 
 use super::{
-    CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
+    CodecPreferences, MediaCodecFlags, RoomShardingPolicy, RtcPortRange, VideoBitrateLimits,
     diagnostics::DiagnosticsConfig, feature_flags::RuntimeFeatureFlags, telemetry::TelemetryConfig,
 };
 
@@ -44,6 +44,7 @@ pub struct TransportConfig {
     pub video_bitrate_limits: VideoBitrateLimits,
     pub rtc_port_range: RtcPortRange,
     pub rtc_media_worker_count: usize,
+    pub room_sharding_policy: RoomShardingPolicy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

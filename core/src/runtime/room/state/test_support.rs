@@ -1,4 +1,4 @@
-use o_sfu_router::MediaCapabilities as RouterRtpCapabilities;
+use o_sfu_router::{MediaCapabilities as RouterRtpCapabilities, RouterId};
 
 use super::shared::{RoomState, SourceKey};
 use crate::runtime::{
@@ -45,6 +45,17 @@ impl RoomState {
 
     pub(in crate::runtime::room) fn has_session(&self, user_id: &UserId) -> bool {
         self.users.contains_key(user_id)
+    }
+
+    pub(in crate::runtime::room) fn topology_home_router_id(
+        &self,
+        user_id: &UserId,
+    ) -> Option<RouterId> {
+        self.topology.home_router_id_for_user(user_id)
+    }
+
+    pub(in crate::runtime::room) fn topology_router_count(&self) -> usize {
+        self.topology.router_count()
     }
 
     pub(in crate::runtime::room) fn first_published_transport_media_id(

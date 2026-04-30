@@ -46,6 +46,29 @@ use crate::{
 /// Cloning shard handles is cheap because each shard is stored in an `Arc`.
 /// Operations route to the selected shard and await the shard-owned async work.
 /// The shard set does not hold a global lock across those awaits.
+///
+/// Cross-worker subscriptions use source-to-consumer relay. The pure room
+/// router decides that a consumer route exists; this shard set installs the
+/// worker-local packet bridge that makes the route deliver media:
+///
+/// ```text
+/// Same worker:
+///
+///   producer session W0
+///          |
+///          v
+///   W0 packet loop -> consumer session W0
+///
+/// Cross worker:
+///
+///   producer session W0
+///          |
+///          v
+///   W0 packet loop -> RelayRegistry -> W1 RelayPacketMailbox
+///          |                                      |
+///          |                                      v
+///          +---------------------------> W1 packet loop -> consumer session W1
+/// ```
 #[derive(Debug)]
 pub struct RtcTransportShardSet {
     /// Worker used when there is only one shard or when a media-worker id maps
@@ -464,6 +487,17 @@ impl RtcTransportShardSet {
     /// Relay activation is staged on the source shard before the consumer media
     /// is created. If consumer creation fails, the source-side relay
     /// registration is removed before the error is returned.
+    ///
+    /// The setup order mirrors the packet path:
+    ///
+    /// ```text
+    /// source shard W0:
+    ///   source_media_id -> target W1 relay mailbox
+    ///
+    /// consumer shard W1:
+    ///   source_media_id -> remote source control for W0
+    ///   consumer media  -> local WebRTC send stream
+    /// ```
     pub(super) async fn consume_media(
         &self,
         consumer_session_key: &TransportSessionKey,

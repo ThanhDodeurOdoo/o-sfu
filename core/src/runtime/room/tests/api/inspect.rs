@@ -1,3 +1,5 @@
+use o_sfu_router::RouterId;
+
 use super::super::super::{Room, RoomUserPermissions};
 use crate::runtime::{
     ConnectionId, StreamType, UserId, UserInfo, source_model::SourceEncodingId,
@@ -136,6 +138,18 @@ impl RoomTestInspect<'_> {
 
     pub async fn has_session(self, user_id: &UserId) -> bool {
         self.room.state.read().await.has_session(user_id)
+    }
+
+    pub async fn topology_home_router_id(self, user_id: &UserId) -> Option<RouterId> {
+        self.room
+            .state
+            .read()
+            .await
+            .topology_home_router_id(user_id)
+    }
+
+    pub async fn topology_router_count(self) -> usize {
+        self.room.state.read().await.topology_router_count()
     }
 
     #[must_use]

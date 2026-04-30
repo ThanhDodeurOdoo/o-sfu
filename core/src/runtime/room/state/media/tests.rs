@@ -32,7 +32,7 @@ use crate::{
         metrics::RuntimeMetrics,
         recording::{MediaSource, MediaTap, RecordingService},
         room::{
-            RoomAdmissionPolicy,
+            LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext,
             rtp_capabilities::router_rtp_capabilities,
             topology::{RoutedConsumerId, RoutedProducerId},
             user_negotiation::UserTransportReady,
@@ -48,10 +48,19 @@ use crate::{
 
 fn test_state() -> RoomState {
     let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
+    let runtime_context = RoomRuntimeContext::new(
+        RoomInstanceId::from_raw(0),
+        LocalRouterRuntimeContext {
+            router: RouterId(1),
+            media_worker: 0,
+        },
+        Vec::new(),
+    );
     RoomState::new(
-        RouterId(1),
+        &runtime_context,
         RoomAdmissionPolicy::new(4),
         router_rtp_capabilities(MediaCodecFlags::default()),
+        crate::RoomShardingPolicy::strict_single_router(),
         Arc::new(RecordingService::new(
             RoomInstanceId::from_raw(0),
             media_source,

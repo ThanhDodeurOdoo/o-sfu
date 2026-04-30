@@ -140,6 +140,11 @@ impl ConfigLogView<'_> {
             formatter,
             "    - rtc_media_worker_count={}",
             config.transport.rtc_media_worker_count
+        )?;
+        writeln!(
+            formatter,
+            "    - room_max_local_routers={}",
+            config.transport.room_sharding_policy.max_local_routers()
         )
     }
 
@@ -224,8 +229,8 @@ mod tests {
     use super::ConfigLogView;
     use crate::config::{
         AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
-        MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig, TransportConfig,
-        UserConfig, VideoBitrateLimits,
+        MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig,
+        TransportConfig, UserConfig, VideoBitrateLimits,
     };
 
     fn test_config(bind_address: SocketAddr) -> Config {
@@ -250,6 +255,7 @@ mod tests {
                 video_bitrate_limits: VideoBitrateLimits::default(),
                 rtc_port_range: RtcPortRange::new(40_000, 49_999),
                 rtc_media_worker_count: 1,
+                room_sharding_policy: RoomShardingPolicy::strict_single_router(),
             },
             codecs: CodecConfig {
                 flags: MediaCodecFlags::default(),

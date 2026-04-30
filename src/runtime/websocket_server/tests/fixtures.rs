@@ -23,6 +23,7 @@ pub(super) use tokio_tungstenite::{
     tungstenite::{self, protocol::frame::coding::CloseCode},
 };
 
+use crate::config::RoomShardingPolicy;
 pub(super) use crate::{
     config::{
         AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
@@ -102,6 +103,7 @@ pub(super) fn test_config(
             max_bitrate_out_bps: 10_000_000,
             video_bitrate_limits: VideoBitrateLimits::default(),
             rtc_media_worker_count: 1,
+            room_sharding_policy: RoomShardingPolicy::strict_single_router(),
         },
         codecs: CodecConfig {
             flags: MediaCodecFlags::default(),
@@ -169,7 +171,8 @@ async fn spawn_test_server_impl(
                 RoomAdmissionPolicy::new(config.user.room_size),
                 feature_flags,
                 rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
-            ),
+            )
+            .with_room_sharding_policy(config.transport.room_sharding_policy),
         ),
         RoomManagerDeps {
             recording_media_tap: Arc::new(MediaTap::default()),

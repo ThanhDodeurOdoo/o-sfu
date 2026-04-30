@@ -44,7 +44,8 @@ mod topology;
 mod user_negotiation;
 
 pub use controller::{
-    Room, RoomAdmissionPolicy, RoomConfig, RoomEventRequest, RoomJoinError, RoomManagerJoinError,
+    LocalRoomRouterPlacements, LocalRoomRouterPlacementsError, LocalRouterRuntimeContext, Room,
+    RoomAdmissionPolicy, RoomConfig, RoomEventRequest, RoomJoinError, RoomManagerJoinError,
     RoomMediaCounts, RoomRuntimeContext, RoomRuntimePolicy, RoomUserStatsSnapshot,
     TrackBindingUpdate, UserOutbound,
 };

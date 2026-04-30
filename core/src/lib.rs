@@ -100,8 +100,9 @@ pub mod unstable {
 pub use ids::{ConnectionId, RoomInstanceId};
 pub use options::{
     AudioCodecPreference, CodecOptions, CodecPreferences, CoreOptions, MediaCodecFlags,
-    MediaOptions, ObservabilityOptions, RoutingOptions, RtcPortRange, RuntimeFeatureFlags,
-    SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
+    MediaOptions, ObservabilityOptions, RoomShardingPolicy, RoomSpilloverMode, RoutingOptions,
+    RtcPortRange, RuntimeFeatureFlags, SessionBitrateLimits, VideoBitrateLimits,
+    VideoCodecPreference,
 };
 pub use room::{
     MediaRoom, MediaSessionContext, PublicationActivity, PublicationActivityOutcome,
