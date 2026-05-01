@@ -473,6 +473,7 @@ impl Default for RtcTransportShard {
                 metrics: Arc::new(RuntimeMetrics::default()),
             },
             Arc::new(SourcePolicySignal::default()),
+            0,
         )
     }
 }

@@ -32,6 +32,14 @@ use crate::{
     },
 };
 
+/// Distance between two shard media-id allocation ranges.
+///
+/// The value only needs to be large enough that one worker cannot exhaust its
+/// range during a process lifetime under realistic load. Keeping the gap fixed
+/// lets cross-worker route maps keep using `TransportMediaId` as their source
+/// key while still avoiding collisions between spillover workers.
+const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
+
 /// Process-local collection of RTC transport shards keyed by media-worker id.
 ///
 /// The shard set is the last transport layer that knows about worker
@@ -99,6 +107,7 @@ impl RtcTransportShardSet {
                     config.transport_config(),
                     config.transport_deps(),
                     Arc::clone(&source_policy_signal),
+                    media_id_base_for_shard_index(0),
                 )),
                 extra_shards: Vec::new(),
                 source_policy_signal,
@@ -111,6 +120,7 @@ impl RtcTransportShardSet {
                     config.transport_config(),
                     config.transport_deps(),
                     Arc::clone(&source_policy_signal),
+                    media_id_base_for_shard_index(0),
                 )),
                 extra_shards: Vec::new(),
                 source_policy_signal,
@@ -121,13 +131,16 @@ impl RtcTransportShardSet {
                 &config.shard_config_with_port_range(primary_range),
                 config.transport_deps(),
                 Arc::clone(&source_policy_signal),
+                media_id_base_for_shard_index(0),
             )),
             extra_shards: shard_ranges
-                .map(|range| {
+                .enumerate()
+                .map(|(index, range)| {
                     Arc::new(RtcTransportShard::new(
                         &config.shard_config_with_port_range(range),
                         config.transport_deps(),
                         Arc::clone(&source_policy_signal),
+                        media_id_base_for_shard_index(index + 1),
                     ))
                 })
                 .collect(),
@@ -703,6 +716,18 @@ fn ensure_same_room_instance(
         return Ok(());
     }
     Err(TransportAdapterError::InvalidInput)
+}
+
+/// Returns the first media id reserved for one shard index.
+///
+/// The fallback clamps extreme indexes to the highest representable stride
+/// base. Normal startup validates worker counts long before this point, so the
+/// saturating behavior is only a defensive guard for transitional callers that
+/// bypass the builder.
+fn media_id_base_for_shard_index(shard_index: usize) -> u64 {
+    u64::try_from(shard_index)
+        .unwrap_or(u64::MAX / MEDIA_ID_STRIDE)
+        .saturating_mul(MEDIA_ID_STRIDE)
 }
 
 fn signaling_to_str0m_media_kind(kind: MediaKind) -> Str0mMediaKind {

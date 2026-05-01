@@ -74,8 +74,22 @@ impl fmt::Debug for RtcWorkerHandle {
     }
 }
 
+/// Shard-local RTC transport facade.
+///
+/// A shard owns one packet loop and the process-local services that feed it.
+/// The surrounding shard set decides which transport sessions live here, while
+/// this type keeps the worker state hidden behind negotiation, media, session
+/// and observability facades.
+///
+/// `TransportMediaId` values allocated by a shard must be process-wide
+/// distinct because relay registries, route-control maps and packet gates use
+/// them as source keys across workers. The shard set assigns `media_id_base`
+/// before the packet loop starts so the hot path can keep using the compact
+/// media id key without adding a composite worker key to every packet lookup.
 pub struct RtcTransportShard {
     pub(super) relay_target_id: RelayTargetId,
+    /// First transport media id reserved for this shard's packet loop.
+    pub(super) media_id_base: u64,
     pub(super) public_ip: IpAddr,
     pub(super) max_bitrate_in_bps: u64,
     pub(super) max_bitrate_out_bps: u64,
@@ -116,11 +130,13 @@ impl RtcTransportShard {
         config: &RtcTransportConfig,
         deps: &MediaTransportDeps,
         source_policy_signal: Arc<SourcePolicySignal>,
+        media_id_base: u64,
     ) -> Self {
         Self {
             relay_target_id: RelayTargetId::new(
                 NEXT_RELAY_TARGET_ID.fetch_add(1, Ordering::Relaxed),
             ),
+            media_id_base,
             public_ip: config.public_ip(),
             max_bitrate_in_bps: config.max_bitrate_in_bps(),
             max_bitrate_out_bps: config.max_bitrate_out_bps(),

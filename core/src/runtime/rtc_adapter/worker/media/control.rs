@@ -328,26 +328,45 @@ pub fn drain_due_rid_keyframe_refreshes(
 
 /// Reduces negotiated consumer RTP parameters into the route-level packet gate.
 ///
-/// A single selected RID means this route should forward only that simulcast
-/// layer. Mixed or RID-less encodings stay open so non-simulcast streams and
-/// broader compatibility cases keep the previous behavior.
+/// A selected RID means this route should forward only that simulcast layer.
+///
+/// Simulcast sources are declared as one rid-less downstream browser stream,
+/// so the initial transport route must not open every publisher RID while room
+/// policy catches up. When several RID encodings are present, the route starts
+/// on the lowest advertised bitrate, falling back to declaration order when the
+/// browser did not preserve bitrate metadata. Mixed or RID-less encodings stay
+/// open so non-simulcast streams and broader compatibility cases keep the
+/// previous behavior.
 pub(super) fn consumer_packet_gate(
     consumer_rtp_parameters: &RouterRtpParameters,
 ) -> PacketLayerGate {
-    let mut selected_rid: Option<Rid> = None;
+    let mut first_rid: Option<Rid> = None;
+    let mut lowest_bitrate_rid: Option<(Rid, u64)> = None;
+    let mut all_encodings_have_bitrate = true;
     for encoding in consumer_rtp_parameters.encodings() {
         let Some(rid) = encoding.rid().map(Rid::from) else {
             return PacketLayerGate::Open;
         };
-        if let Some(current_rid) = selected_rid.as_ref() {
-            if current_rid != &rid {
-                return PacketLayerGate::Open;
+        if first_rid.is_none() {
+            first_rid = Some(rid);
+        }
+        let bitrate = encoding.max_bitrate();
+        all_encodings_have_bitrate &= bitrate.is_some();
+        if let Some(bitrate) = bitrate {
+            match lowest_bitrate_rid.as_mut() {
+                Some((selected_rid, selected_bitrate)) if bitrate < *selected_bitrate => {
+                    *selected_rid = rid;
+                    *selected_bitrate = bitrate;
+                }
+                Some(_) => {}
+                None => lowest_bitrate_rid = Some((rid, bitrate)),
             }
-        } else {
-            selected_rid = Some(rid);
         }
     }
-    selected_rid.map_or(PacketLayerGate::Open, PacketLayerGate::Rid)
+    if all_encodings_have_bitrate && let Some((rid, _bitrate)) = lowest_bitrate_rid {
+        return PacketLayerGate::Rid(rid);
+    }
+    first_rid.map_or(PacketLayerGate::Open, PacketLayerGate::Rid)
 }
 
 fn consumer_packet_gate_for_source(
@@ -524,21 +543,55 @@ pub fn refresh_source_packet_gate(
     state: &mut RtcBootstrapState,
     source_transport_media_id: TransportMediaId,
 ) {
-    let local_packet_gate = state
-        .media_route_index
-        .get(&source_transport_media_id)
-        .and_then(local_source_packet_gate);
+    let route_entry = state.media_route_index.get(&source_transport_media_id);
+    let local_packet_gate = route_entry.and_then(local_source_packet_gate);
+    let remote_packet_gate =
+        remote_source_packet_gate_for_route(route_entry, local_packet_gate.clone());
     state
         .route_control
-        .set_local_packet_gate(source_transport_media_id, local_packet_gate.clone());
+        .set_local_packet_gate(source_transport_media_id, local_packet_gate);
     if let Some(remote_source_registration) =
         state.remote_source_registration(source_transport_media_id)
     {
         remote_source_registration.source_control().set_packet_gate(
             remote_source_registration.source_session_key().clone(),
             source_transport_media_id,
-            local_packet_gate.unwrap_or(PacketLayerGate::Block),
+            remote_packet_gate,
         );
+    }
+}
+
+/// Derive the gate sent to the producer worker for a remote source route.
+///
+/// RID and operating-point gates are enforced on the consumer worker. The
+/// producer worker must keep the relay open for those routes because consumer
+/// workers need to observe non-selected RID packets for bootstrap fallback and
+/// stale-layer recovery. A local `Block` is forwarded only when it is a real
+/// block, not when it is the temporary state used while a selected RID is still
+/// pending.
+fn remote_source_packet_gate_for_route(
+    route_entry: Option<&MediaRouteEntry>,
+    local_packet_gate: Option<PacketLayerGate>,
+) -> PacketLayerGate {
+    match (route_entry, local_packet_gate) {
+        (
+            Some(_),
+            Some(
+                PacketLayerGate::Open
+                | PacketLayerGate::Rid(_)
+                | PacketLayerGate::OperatingPoint(_),
+            ),
+        ) => PacketLayerGate::Open,
+        (Some(route_entry), Some(PacketLayerGate::Block))
+            if route_entry
+                .destinations
+                .iter()
+                .any(|destination| destination.pending_packet_gate.is_some()) =>
+        {
+            PacketLayerGate::Open
+        }
+        (_route_entry, Some(packet_gate)) => packet_gate,
+        (None | Some(_), None) => PacketLayerGate::Block,
     }
 }
 

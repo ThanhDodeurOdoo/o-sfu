@@ -19,6 +19,7 @@ pub mod test_support;
 pub struct ForwardedPacket {
     source_session_key: TransportSessionKey,
     source_transport_media_id: Option<TransportMediaId>,
+    resolved_source_rid: Option<Rid>,
     visits_origin_sinks: bool,
     received_at: Instant,
     payload: SharedPayload,
@@ -49,6 +50,7 @@ impl ForwardedPacket {
         Self {
             source_session_key,
             source_transport_media_id: None,
+            resolved_source_rid: None,
             visits_origin_sinks: true,
             received_at: rtp_packet.timestamp,
             payload: SharedPayload::from_vec(take(&mut rtp_packet.payload)),
@@ -68,16 +70,18 @@ impl ForwardedPacket {
         &self.payload
     }
 
-    pub(super) fn route_control_layer_metadata(
-        &self,
+    pub(super) fn resolve_route_control_layer_metadata(
+        &mut self,
         state: &RtcBootstrapState,
     ) -> PacketLayerMetadata {
         let extensions = self.route_control_extension_values();
-        let rid = extensions
-            .rid
-            .or(extensions.rid_repair)
+        let extension_rid = extensions.rid.or(extensions.rid_repair);
+        let temporal_layer_id = extensions.frame_mark.map(frame_mark_temporal_layer_id);
+        let rid = extension_rid
+            .or(self.resolved_source_rid)
             .or_else(|| self.route_control_rid_from_ssrc(state));
-        PacketLayerMetadata::new(rid, extensions.frame_mark.map(frame_mark_temporal_layer_id))
+        self.resolved_source_rid = rid;
+        PacketLayerMetadata::new(rid, temporal_layer_id)
     }
 
     pub(super) fn route_control_audio_level(&self) -> Option<i8> {
@@ -136,6 +140,7 @@ impl ForwardedPacket {
         Self {
             source_session_key: self.source_session_key.clone(),
             source_transport_media_id: Some(source_transport_media_id),
+            resolved_source_rid: self.resolved_source_rid,
             visits_origin_sinks: false,
             received_at: self.received_at,
             payload: self.payload.share(),
@@ -374,7 +379,7 @@ mod tests {
     fn forwarded_packet_projects_rid_and_frame_marking_for_route_control() {
         let session_key = test_transport_session_key(46, 0, 14, UserId::Integer(12));
         let frame_mark = u32::from(frame_marking::TEMPORAL_LAYER_ID_MAX) << 24;
-        let packet = sample_forwarded_packet_with_frame_mark(
+        let mut packet = sample_forwarded_packet_with_frame_mark(
             session_key,
             "cam-up",
             Some("hi"),
@@ -383,7 +388,7 @@ mod tests {
         );
 
         assert_eq!(
-            packet.route_control_layer_metadata(&RtcBootstrapState::default()),
+            packet.resolve_route_control_layer_metadata(&RtcBootstrapState::default()),
             PacketLayerMetadata::new(
                 Some(Rid::from("hi")),
                 Some(frame_marking::TEMPORAL_LAYER_ID_MAX)
@@ -411,10 +416,47 @@ mod tests {
             )
             .with_mid(producer_mid.to_string()),
         );
-        let packet = sample_forwarded_packet_without_mid(session_key, producer_ssrc, b"payload");
+        let mut packet =
+            sample_forwarded_packet_without_mid(session_key, producer_ssrc, b"payload");
 
         assert_eq!(
-            packet.route_control_layer_metadata(&state),
+            packet.resolve_route_control_layer_metadata(&state),
+            PacketLayerMetadata::new(Some(Rid::from("hi")), None)
+        );
+    }
+
+    #[test]
+    fn forwarded_packet_relay_clone_preserves_resolved_rid_from_source_worker() {
+        let session_key = test_transport_session_key(47, 0, 15, UserId::Integer(13));
+        let producer_mid = Mid::from("cam-up");
+        let producer_ssrc = 76_543_u32;
+        let source_transport_media_id = TransportMediaId::new(22);
+        let mut source_state = RtcBootstrapState::default();
+        source_state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: session_key.clone(),
+            mid: producer_mid,
+        });
+        source_state.refresh_producer_ssrc_bindings(
+            &session_key,
+            producer_mid,
+            &RouterRtpParameters::new(
+                vec![],
+                vec![],
+                vec![StreamBinding::new().with_ssrc(producer_ssrc).with_rid("hi")],
+            )
+            .with_mid(producer_mid.to_string()),
+        );
+        let mut packet =
+            sample_forwarded_packet_without_mid(session_key, producer_ssrc, b"payload");
+
+        assert_eq!(
+            packet.resolve_route_control_layer_metadata(&source_state),
+            PacketLayerMetadata::new(Some(Rid::from("hi")), None)
+        );
+        let mut relay_packet = packet.share_for_relay(source_transport_media_id);
+
+        assert_eq!(
+            relay_packet.resolve_route_control_layer_metadata(&RtcBootstrapState::default()),
             PacketLayerMetadata::new(Some(Rid::from("hi")), None)
         );
     }

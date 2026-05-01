@@ -467,6 +467,31 @@ async fn rtc_adapter_shards_room_bootstrap_by_explicit_media_worker() {
 }
 
 #[tokio::test]
+async fn rtc_adapter_allocates_disjoint_media_ids_across_workers() {
+    let adapter = test_rtc_adapter(2, RtcPortRange::new(46_700, 46_799));
+    let first_source = test_session_key(50, 0, 1, UserId::Integer(1));
+    let second_source = test_session_key(50, 1, 2, UserId::Integer(2));
+    let first_rtp_parameters = sample_audio_rtp_parameters("first-aud-up", 71_000);
+    let second_rtp_parameters = sample_audio_rtp_parameters("second-aud-up", 72_000);
+
+    prepare_rtc_sessions(&adapter, &[&first_source, &second_source]).await;
+
+    let Some(first_media_id) = publish_audio(&adapter, &first_source, &first_rtp_parameters).await
+    else {
+        return;
+    };
+    let Some(second_media_id) =
+        publish_audio(&adapter, &second_source, &second_rtp_parameters).await
+    else {
+        return;
+    };
+
+    assert_ne!(first_media_id, second_media_id);
+    assert!(first_media_id.as_u64() < 1_000_000_000);
+    assert!(second_media_id.as_u64() >= 1_000_000_000);
+}
+
+#[tokio::test]
 async fn runtime_transport_semantic_facades_preserve_fake_transport_behavior() {
     let fake = Arc::new(FakeWebRtcAdapter::default());
     let adapter = RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&fake));

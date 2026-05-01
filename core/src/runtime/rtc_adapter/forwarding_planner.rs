@@ -100,7 +100,7 @@ fn populate_forward_routes_for_packet(
     if !has_routed_forward(relay_targets.as_deref(), route_entry) {
         return;
     }
-    let metadata = packet.route_control_layer_metadata(state);
+    let metadata = packet.resolve_route_control_layer_metadata(state);
     if !source_packet_gate_permits(state, metrics, source_transport_media_id, metadata) {
         return;
     }

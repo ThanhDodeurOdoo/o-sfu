@@ -76,6 +76,13 @@ pub struct PacketLoopConfig {
     pub codec_flags: MediaCodecFlags,
     /// Ordered codec preferences used while constructing session offers.
     pub codec_preferences: CodecPreferences,
+    /// First transport media id allocated by this worker.
+    ///
+    /// Media ids are worker-local counters once the loop is running, but the
+    /// values must be unique across workers because cross-worker relay state is
+    /// keyed by the producing media id. The shard set assigns disjoint ranges
+    /// before boot so per-packet routing does not need to carry a wider key.
+    pub media_id_base: u64,
     /// Cold-path diagnostics sink for transport health changes.
     pub diagnostics: Arc<DiagnosticsStore>,
     /// Room-scoped packet sinks such as recording taps.
@@ -141,7 +148,10 @@ pub async fn run_packet_loop(
     mut relay_rx: mpsc::Receiver<super::super::forwarded_packet::ForwardedPacket>,
     shutdown_token: CancellationToken,
 ) {
-    let mut bootstrap_state = RtcBootstrapState::default();
+    let mut bootstrap_state = RtcBootstrapState {
+        next_media_id: config.media_id_base,
+        ..RtcBootstrapState::default()
+    };
     let mut routing_state = PacketLoopRoutingState::new();
     let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
     let mut buffers = PacketLoopBuffers::new();

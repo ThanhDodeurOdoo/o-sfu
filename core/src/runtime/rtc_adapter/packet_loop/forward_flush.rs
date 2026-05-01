@@ -80,7 +80,7 @@ pub(super) fn record_incoming_stats(
                 dirty_source_policy_channel_ids
                     .push(packet.source_session_key().room_instance_id());
             }
-            let metadata = packet.route_control_layer_metadata(state);
+            let metadata = packet.resolve_route_control_layer_metadata(state);
             let activated_selected_rid = metadata.rid().is_some_and(|rid| {
                 observe_source_rid_readiness(
                     state,

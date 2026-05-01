@@ -127,6 +127,7 @@ fn rtc_adapter_for_test(
             metrics: Arc::new(RuntimeMetrics::default()),
         },
         Arc::new(SourcePolicySignal::default()),
+        0,
     )
 }
 

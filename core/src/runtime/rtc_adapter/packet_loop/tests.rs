@@ -406,7 +406,7 @@ fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() 
     );
     assert_eq!(
         packet_without_extensions
-            .route_control_layer_metadata(&state)
+            .resolve_route_control_layer_metadata(&state)
             .rid(),
         Some(Rid::from("hi"))
     );

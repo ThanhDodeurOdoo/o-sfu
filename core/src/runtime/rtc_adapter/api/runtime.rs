@@ -152,6 +152,7 @@ impl RtcTransportShard {
                 rtc_port_range: self.rtc_port_range,
                 codec_flags: self.codec_flags,
                 codec_preferences: self.codec_preferences,
+                media_id_base: self.media_id_base,
                 diagnostics: Arc::clone(&self.diagnostics),
                 packet_sink_registry: Arc::clone(&self.packet_sink_registry),
                 relay_registry: Arc::clone(&self.relay_registry),

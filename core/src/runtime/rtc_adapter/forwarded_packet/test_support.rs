@@ -83,6 +83,7 @@ fn sample_forwarded_packet_with_extensions(
     ForwardedPacket {
         source_session_key,
         source_transport_media_id: None,
+        resolved_source_rid: None,
         visits_origin_sinks: true,
         received_at,
         payload: SharedPayload::from_vec(payload.to_vec()),
@@ -118,6 +119,7 @@ pub fn sample_forwarded_packet_without_mid(
     ForwardedPacket {
         source_session_key,
         source_transport_media_id: None,
+        resolved_source_rid: None,
         visits_origin_sinks: true,
         received_at,
         payload: SharedPayload::from_vec(payload.to_vec()),
