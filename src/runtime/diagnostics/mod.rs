@@ -18,14 +18,15 @@
 //! - HTTP diagnostics routes ask `queries` for summary, room, or user
 //!   views when an operator requests them
 
-mod graph;
 mod queries;
 pub(crate) mod types {
-    pub(crate) use o_sfu_core::server::diagnostics::*;
+    pub(crate) use o_sfu_telemetry::diagnostics::*;
 }
 
-pub(crate) use graph::{build_graph, build_user_graph};
-pub(crate) use o_sfu_core::server::diagnostics::DiagnosticsStore;
+pub(crate) use o_sfu_telemetry::{
+    diagnostics::DiagnosticsStore,
+    graph::{build_graph, build_user_graph},
+};
 pub(crate) use queries::{
     room_detail_response, room_users_response, rooms_response, summary_response,
     user_detail_response,

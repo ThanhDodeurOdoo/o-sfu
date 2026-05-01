@@ -6,7 +6,7 @@ use super::common::{
     download_main_stat, route_state_color, route_state_label, stream_type_color, stream_type_label,
     transport_health_label, user_id_to_string,
 };
-use crate::runtime::diagnostics::types::{
+use crate::diagnostics::types::{
     DiagnosticsIncomingBitrate, DiagnosticsRoomDetail, DiagnosticsRouteState, DiagnosticsSource,
     DiagnosticsSubscription, DiagnosticsUserView,
 };
@@ -281,7 +281,8 @@ fn push_download_entries(
 ///
 /// This function is compatibility-shaped around Grafana's node graph field
 /// names. Domain code should keep using `DiagnosticsRoomDetail`.
-pub(crate) fn build_graph(detail: &DiagnosticsRoomDetail) -> Value {
+#[must_use]
+pub fn build_graph(detail: &DiagnosticsRoomDetail) -> Value {
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
     let source_ids = source_ids(detail);

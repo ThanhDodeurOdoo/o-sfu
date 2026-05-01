@@ -6,9 +6,8 @@
 //! Runtime
 //! |- http_server          -> HTTP control-plane routes and server boot
 //! |- websocket_server     -> WebSocket upgrade, auth handshake, and steady-state socket loop
-//! |- telemetry            -> runtime-owned tracing config and event-name conventions
 //! |- core                 -> room engine, transport adapter, recording, metrics, and diagnostics
-//! `- metrics_export       -> Prometheus export snapshot
+//! `- telemetry crate      -> tracing setup, schemas, diagnostics, metrics, and exporters
 //! ```
 
 use std::{collections::BTreeSet, process, sync::Arc, time::Instant as StdInstant};
@@ -29,10 +28,8 @@ use crate::{
 pub(crate) mod auth;
 pub(crate) mod diagnostics;
 pub(crate) mod http_server;
-mod metrics_export;
 pub(crate) mod options;
 mod request_origin;
-pub(crate) mod telemetry;
 #[doc(hidden)]
 pub mod testing;
 pub(crate) mod websocket_server;
@@ -44,6 +41,8 @@ pub(crate) use o_sfu_core::{
     ConnectionId, RoomInstanceId, SessionBitrateLimits,
     server::{metrics, recording, room, transport as transport_adapter},
 };
+pub(crate) use o_sfu_telemetry as telemetry;
+pub(crate) use o_sfu_telemetry::prometheus;
 use options::{HttpOptions, RuntimeOptions, SocketOptions};
 pub(crate) use recording::MediaTap;
 pub(crate) use request_origin::resolve_remote_address;
@@ -51,7 +50,7 @@ use room::{
     RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy,
     rtp_capabilities,
 };
-use telemetry::init_tracing;
+use telemetry::{init_tracing, schema::event as telemetry_event};
 use transport_adapter::SourcePolicyPort;
 #[cfg(any(test, feature = "testing-transport"))]
 pub use transport_adapter::test_support::test_transport_session_key;
@@ -111,7 +110,7 @@ impl Runtime {
         let room_runtime_policy = build_room_runtime_policy(&options);
         info!("{}", config.log_view(process::id()));
         info!(
-            event = telemetry::schema::event::RUNTIME_BOOT,
+            event = telemetry_event::RUNTIME_BOOT,
             "runtime configuration loaded"
         );
         let room_manager = build_room_manager(&options, room_runtime_policy, &services);

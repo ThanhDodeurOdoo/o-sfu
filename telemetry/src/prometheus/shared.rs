@@ -1,4 +1,4 @@
-use o_sfu_protocol::signaling::WebSocketCloseCode;
+use o_sfu_model::WebSocketCloseCode;
 
 #[derive(Clone, Copy)]
 pub(super) struct LabeledValue {

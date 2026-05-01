@@ -1,22 +1,30 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 use super::shared::{ConsumerKey, RoomState};
 use crate::runtime::{
     ConnectionId, StreamType, UserId,
     diagnostics::{
-        DiagnosticsActiveSpeaker, DiagnosticsIncomingBitrate, DiagnosticsMediaKind,
-        DiagnosticsOverBudgetExceptionReason, DiagnosticsPolicyPauseReason, DiagnosticsPublication,
-        DiagnosticsQualitySummary, DiagnosticsRouteState, DiagnosticsSource,
-        DiagnosticsSourceEncoding, DiagnosticsSourceSelection, DiagnosticsSubscription,
-        DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection,
-        DiagnosticsUserTransport, DiagnosticsUserView, DiagnosticsVideoLayoutRole,
-        DiagnosticsVideoRoutePriority,
+        DiagnosticsActiveSpeaker, DiagnosticsActiveSpeakerReason, DiagnosticsActiveSpeakerState,
+        DiagnosticsIncomingBitrate, DiagnosticsMediaKind, DiagnosticsOverBudgetExceptionReason,
+        DiagnosticsPolicyPauseReason, DiagnosticsPublication, DiagnosticsQualitySummary,
+        DiagnosticsRouteState, DiagnosticsSource, DiagnosticsSourceEncoding,
+        DiagnosticsSourceSelection, DiagnosticsSourceSelectionReason, DiagnosticsSourceSelector,
+        DiagnosticsSubscription, DiagnosticsTemporalLayerMetadata,
+        DiagnosticsTemporalLayerSelection, DiagnosticsUserTransport, DiagnosticsUserView,
+        DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
     },
     source_model::{
-        ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
-        SourceEncodingDescriptor, SourceEncodingId, SourceTemporalLayerId,
+        ConsumerSourceSelection, OverBudgetExceptionReason, PolicyPauseReason,
+        PublishedSourceDescriptor, PublishedSourceId, SourceEncodingDescriptor, SourceEncodingId,
+        SourceRoomPolicySelector, SourceRoutePriority, SourceSelector, SourceTemporalLayerId,
     },
-    transport_adapter::{ActiveSpeakerSourceDiagnostic, TransportMediaId},
+    transport_adapter::{
+        ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSourceDiagnostic,
+        TransportMediaId,
+    },
 };
 
 impl RoomState {
@@ -95,7 +103,7 @@ impl RoomState {
                         .copied()
                         .unwrap_or_default(),
                     encodings,
-                    media_kind: DiagnosticsMediaKind::from(source.media_kind()),
+                    media_kind: diagnostics_media_kind(source.media_kind()),
                     mid: source.mid().map(|mid| mid.as_str().to_owned()),
                     owner_user_id: source.owner().user_id().clone(),
                     source_id: source.source_id().as_u64(),
@@ -156,7 +164,7 @@ impl RoomState {
                         .encodings()
                         .map(|encoding| encoding.encoding_id().as_u64())
                         .collect(),
-                    media_kind: DiagnosticsMediaKind::from(producer.media_kind),
+                    media_kind: diagnostics_media_kind(producer.media_kind),
                     source_id: producer.source_id.as_u64(),
                     stream_type: producer.stream_type,
                     transport_media_id: producer.transport_media_id.map(TransportMediaId::as_u64),
@@ -194,9 +202,9 @@ impl RoomState {
                 Some(DiagnosticsSubscription {
                     consumer_transport_media_id: Some(consumer_state.consumer_media.as_u64()),
                     layout_priority: layout_intent
-                        .map(|intent| DiagnosticsVideoRoutePriority::from(intent.priority())),
+                        .map(|intent| diagnostics_video_route_priority(intent.priority())),
                     layout_role: layout_intent
-                        .map(|intent| DiagnosticsVideoLayoutRole::from(intent.role())),
+                        .map(|intent| diagnostics_video_layout_role(intent.role())),
                     producer_user_id: source.owner().user_id().clone(),
                     selection: diagnostics_source_selection(source, selection),
                     source_id: source.source_id().as_u64(),
@@ -234,9 +242,9 @@ impl RoomState {
             Some(DiagnosticsSubscription {
                 consumer_transport_media_id: None,
                 layout_priority: layout_intent
-                    .map(|intent| DiagnosticsVideoRoutePriority::from(intent.priority())),
+                    .map(|intent| diagnostics_video_route_priority(intent.priority())),
                 layout_role: layout_intent
-                    .map(|intent| DiagnosticsVideoLayoutRole::from(intent.role())),
+                    .map(|intent| diagnostics_video_layout_role(intent.role())),
                 producer_user_id: source.owner().user_id().clone(),
                 selection: diagnostics_source_selection(source, selection),
                 source_id: source.source_id().as_u64(),
@@ -302,14 +310,14 @@ fn diagnostics_source_selection(
         latest_receiver_bandwidth_estimate_bps: budget.latest_receiver_bandwidth_bps(),
         over_budget_exception_reason: budget
             .over_budget_exception_reason()
-            .map(DiagnosticsOverBudgetExceptionReason::from),
+            .map(diagnostics_over_budget_exception_reason),
         policy_allows_delivery: selection.policy_allows_delivery(),
         policy_pause_reason: selection
             .policy_pause_reason()
-            .map(DiagnosticsPolicyPauseReason::from),
+            .map(diagnostics_policy_pause_reason),
         pressure_observations: selection.pressure_observations(),
-        selection_reason: selection.selector().into(),
-        selector: selection.selector().into(),
+        selection_reason: diagnostics_source_selection_reason(selection.selector()),
+        selector: diagnostics_source_selector(selection.selector()),
         selected_estimated_bitrate_bps: selected_encoding_id
             .and_then(|encoding_id| source.encoding(encoding_id))
             .and_then(SourceEncodingDescriptor::max_bitrate),
@@ -341,8 +349,149 @@ fn diagnostics_active_speaker(
         active_speaker_diagnostics_by_media
             .get(&transport_media_id)
             .copied()
-            .map_or_else(DiagnosticsActiveSpeaker::idle, Into::into),
+            .map_or_else(
+                DiagnosticsActiveSpeaker::idle,
+                diagnostics_active_speaker_snapshot,
+            ),
     )
+}
+
+fn diagnostics_media_kind(value: o_sfu_router::MediaKind) -> DiagnosticsMediaKind {
+    match value {
+        o_sfu_router::MediaKind::Audio => DiagnosticsMediaKind::Audio,
+        o_sfu_router::MediaKind::Video => DiagnosticsMediaKind::Video,
+    }
+}
+
+fn diagnostics_source_selector(value: SourceSelector) -> DiagnosticsSourceSelector {
+    match value {
+        SourceSelector::Open => DiagnosticsSourceSelector::Open,
+        SourceSelector::Encoding(_) => DiagnosticsSourceSelector::Encoding,
+        SourceSelector::OperatingPoint(_) => DiagnosticsSourceSelector::OperatingPoint,
+        SourceSelector::RoomPolicy(SourceRoomPolicySelector::Pinned) => {
+            DiagnosticsSourceSelector::RoomPolicyPinned
+        }
+        SourceSelector::RoomPolicy(SourceRoomPolicySelector::Featured) => {
+            DiagnosticsSourceSelector::RoomPolicyFeatured
+        }
+        SourceSelector::RoomPolicy(SourceRoomPolicySelector::ScreenShare) => {
+            DiagnosticsSourceSelector::RoomPolicyScreenShare
+        }
+        SourceSelector::RoomPolicy(SourceRoomPolicySelector::ActiveSpeaker) => {
+            DiagnosticsSourceSelector::RoomPolicyActiveSpeaker
+        }
+        SourceSelector::RoomPolicy(SourceRoomPolicySelector::VisibleThumbnail) => {
+            DiagnosticsSourceSelector::RoomPolicyVisibleThumbnail
+        }
+        SourceSelector::RoomPolicy(SourceRoomPolicySelector::Hidden) => {
+            DiagnosticsSourceSelector::RoomPolicyHidden
+        }
+        SourceSelector::RoomPolicy(SourceRoomPolicySelector::Overflow) => {
+            DiagnosticsSourceSelector::RoomPolicyOverflow
+        }
+    }
+}
+
+fn diagnostics_source_selection_reason(value: SourceSelector) -> DiagnosticsSourceSelectionReason {
+    match value {
+        SourceSelector::Open => DiagnosticsSourceSelectionReason::Open,
+        SourceSelector::Encoding(_) | SourceSelector::OperatingPoint(_) => {
+            DiagnosticsSourceSelectionReason::ReceiverAdaptation
+        }
+        SourceSelector::RoomPolicy(_) => DiagnosticsSourceSelectionReason::RoomPolicy,
+    }
+}
+
+fn diagnostics_over_budget_exception_reason(
+    value: OverBudgetExceptionReason,
+) -> DiagnosticsOverBudgetExceptionReason {
+    match value {
+        OverBudgetExceptionReason::ProtectedRoute => {
+            DiagnosticsOverBudgetExceptionReason::ProtectedRoute
+        }
+    }
+}
+
+fn diagnostics_policy_pause_reason(value: PolicyPauseReason) -> DiagnosticsPolicyPauseReason {
+    match value {
+        PolicyPauseReason::BudgetPressure => DiagnosticsPolicyPauseReason::BudgetPressure,
+        PolicyPauseReason::HiddenTile => DiagnosticsPolicyPauseReason::HiddenTile,
+        PolicyPauseReason::OverflowTile => DiagnosticsPolicyPauseReason::OverflowTile,
+        PolicyPauseReason::MissingUsableLayer => DiagnosticsPolicyPauseReason::MissingUsableLayer,
+    }
+}
+
+fn diagnostics_video_layout_role(value: SourceRoomPolicySelector) -> DiagnosticsVideoLayoutRole {
+    match value {
+        SourceRoomPolicySelector::Pinned => DiagnosticsVideoLayoutRole::Pinned,
+        SourceRoomPolicySelector::Featured => DiagnosticsVideoLayoutRole::Featured,
+        SourceRoomPolicySelector::ScreenShare => DiagnosticsVideoLayoutRole::ScreenShare,
+        SourceRoomPolicySelector::ActiveSpeaker => DiagnosticsVideoLayoutRole::ActiveSpeaker,
+        SourceRoomPolicySelector::VisibleThumbnail => DiagnosticsVideoLayoutRole::VisibleThumbnail,
+        SourceRoomPolicySelector::Hidden => DiagnosticsVideoLayoutRole::Hidden,
+        SourceRoomPolicySelector::Overflow => DiagnosticsVideoLayoutRole::Overflow,
+    }
+}
+
+fn diagnostics_video_route_priority(value: SourceRoutePriority) -> DiagnosticsVideoRoutePriority {
+    match value {
+        SourceRoutePriority::PinnedOrFeatured => DiagnosticsVideoRoutePriority::PinnedOrFeatured,
+        SourceRoutePriority::ScreenShare => DiagnosticsVideoRoutePriority::ScreenShare,
+        SourceRoutePriority::ActiveSpeaker => DiagnosticsVideoRoutePriority::ActiveSpeaker,
+        SourceRoutePriority::VisibleThumbnail => DiagnosticsVideoRoutePriority::VisibleThumbnail,
+        SourceRoutePriority::HiddenOrOverflow => DiagnosticsVideoRoutePriority::HiddenOrOverflow,
+    }
+}
+
+fn diagnostics_active_speaker_snapshot(
+    diagnostic: ActiveSpeakerSourceDiagnostic,
+) -> DiagnosticsActiveSpeaker {
+    DiagnosticsActiveSpeaker {
+        state: diagnostics_active_speaker_state(diagnostic.state()),
+        reason: diagnostics_active_speaker_reason(diagnostic.reason()),
+        last_audio_level_dbov: diagnostic.last_audio_level_dbov(),
+        confidence_observations: diagnostic.confidence_observations(),
+        hold_remaining_ms: diagnostic.hold_remaining().map(duration_millis),
+    }
+}
+
+fn diagnostics_active_speaker_state(
+    state: ActiveSpeakerActivityState,
+) -> DiagnosticsActiveSpeakerState {
+    match state {
+        ActiveSpeakerActivityState::Active => DiagnosticsActiveSpeakerState::Active,
+        ActiveSpeakerActivityState::Idle => DiagnosticsActiveSpeakerState::Idle,
+        ActiveSpeakerActivityState::Blocked => DiagnosticsActiveSpeakerState::Blocked,
+        ActiveSpeakerActivityState::RecentlyExpired => {
+            DiagnosticsActiveSpeakerState::RecentlyExpired
+        }
+    }
+}
+
+fn diagnostics_active_speaker_reason(
+    reason: ActiveSpeakerActivityReason,
+) -> DiagnosticsActiveSpeakerReason {
+    match reason {
+        ActiveSpeakerActivityReason::Vad => DiagnosticsActiveSpeakerReason::Vad,
+        ActiveSpeakerActivityReason::AudioLevel => DiagnosticsActiveSpeakerReason::AudioLevel,
+        ActiveSpeakerActivityReason::AudioLevelWarmup => {
+            DiagnosticsActiveSpeakerReason::AudioLevelWarmup
+        }
+        ActiveSpeakerActivityReason::VadFalse => DiagnosticsActiveSpeakerReason::VadFalse,
+        ActiveSpeakerActivityReason::LowNoise => DiagnosticsActiveSpeakerReason::LowNoise,
+        ActiveSpeakerActivityReason::BelowSpeechThreshold => {
+            DiagnosticsActiveSpeakerReason::BelowSpeechThreshold
+        }
+        ActiveSpeakerActivityReason::MissingAudioMetadata => {
+            DiagnosticsActiveSpeakerReason::MissingAudioMetadata
+        }
+        ActiveSpeakerActivityReason::Expired => DiagnosticsActiveSpeakerReason::Expired,
+        ActiveSpeakerActivityReason::NoMetadata => DiagnosticsActiveSpeakerReason::NoMetadata,
+    }
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

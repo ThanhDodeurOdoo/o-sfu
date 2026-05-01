@@ -1079,9 +1079,6 @@ dependencies = [
  "o-sfu-rfc",
  "o-sfu-router",
  "o-sfu-telemetry",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
  "serde",
  "serde_json",
  "sha2",
@@ -1094,7 +1091,6 @@ dependencies = [
  "tokio-util",
  "tower",
  "tracing",
- "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
 ]
@@ -1116,6 +1112,7 @@ dependencies = [
  "o-sfu-model",
  "o-sfu-rfc",
  "o-sfu-router",
+ "o-sfu-telemetry",
  "serde",
  "serde_json",
  "str0m",
@@ -1175,6 +1172,24 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-telemetry"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "o-sfu-model",
+ "o-sfu-telemetry-macros",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "serde",
+ "serde_json",
+ "time",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "o-sfu-telemetry-macros"
 version = "0.3.0"
 dependencies = [
  "proc-macro2",

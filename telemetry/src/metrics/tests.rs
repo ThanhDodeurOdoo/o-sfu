@@ -1,14 +1,12 @@
 use std::time::Duration;
 
+use o_sfu_model::WebSocketCloseCode;
+
 use super::{
     BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
     RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetrics,
-    RuntimeMetricsSnapshot, TransportIceState, WsSessionLoopExitReason,
-};
-use crate::runtime::{
-    WebSocketCloseCode,
-    rtc_adapter::TransportSessionHealth,
-    source_model::{SourceEncodingId, SourceSelector},
+    RuntimeMetricsSnapshot, SourceSelectionKind, TransportHealthState, TransportIceState,
+    WsSessionLoopExitReason,
 };
 
 fn assert_live_gauges(snapshot: &RuntimeMetricsSnapshot) {
@@ -199,7 +197,7 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     metrics.add_active_subscriptions(4);
     metrics.add_active_recording_rooms(1);
     metrics.add_active_transport_users(1);
-    metrics.record_transport_health_transition(None, Some(TransportSessionHealth::Connected));
+    metrics.record_transport_health_transition(None, Some(TransportHealthState::Connected));
     metrics.record_recording_start_accepted();
     metrics.record_recording_captured_packet();
     metrics.record_recording_captured_stream();
@@ -230,7 +228,7 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
     metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
     metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
-    metrics.record_source_selection_update(SourceSelector::Encoding(SourceEncodingId::from_raw(1)));
+    metrics.record_source_selection_update(SourceSelectionKind::Encoding);
     metrics.record_budget_solver_outcome(BudgetSolverOutcome::Degraded);
     metrics.record_budget_solver_outcome(BudgetSolverOutcome::Paused);
     metrics.record_budget_solver_outcome(BudgetSolverOutcome::Resumed);
@@ -251,12 +249,12 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
 fn transport_health_transition_updates_connected_and_disconnected_gauges() {
     let metrics = RuntimeMetrics::default();
 
-    metrics.record_transport_health_transition(None, Some(TransportSessionHealth::Connected));
+    metrics.record_transport_health_transition(None, Some(TransportHealthState::Connected));
     metrics.record_transport_health_transition(
-        Some(TransportSessionHealth::Connected),
-        Some(TransportSessionHealth::Disconnected),
+        Some(TransportHealthState::Connected),
+        Some(TransportHealthState::Disconnected),
     );
-    metrics.record_transport_health_transition(Some(TransportSessionHealth::Disconnected), None);
+    metrics.record_transport_health_transition(Some(TransportHealthState::Disconnected), None);
 
     let snapshot = metrics.snapshot();
 

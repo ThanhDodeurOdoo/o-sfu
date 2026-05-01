@@ -42,9 +42,7 @@ use tracing_subscriber::{
     util::SubscriberInitExt,
 };
 
-use crate::config::{TelemetryConfig, TelemetryLogFormat};
-
-pub(crate) mod schema;
+use crate::{TelemetryConfig, TelemetryLogFormat, schema};
 
 const DEFAULT_ENV_FILTER: &str = "o_sfu=info,o_sfu_router=info";
 #[cfg(feature = "otel-tracing")]
@@ -55,7 +53,7 @@ const PRODUCTION_TRACE_SAMPLE_RATIO: f64 = 0.05;
 const TRACE_EXPORTER_NAME: &str = "o-sfu.runtime";
 
 #[derive(Debug, Default)]
-pub(crate) struct TelemetryHandle {
+pub struct TelemetryHandle {
     #[cfg(feature = "otel-tracing")]
     tracer_provider: Option<SdkTracerProvider>,
 }
@@ -205,7 +203,11 @@ impl Visit for JsonEventVisitor {
 }
 
 #[cfg(feature = "otel-tracing")]
-pub(crate) fn init_tracing(config: &TelemetryConfig, process_id: u32) -> Result<TelemetryHandle> {
+/// # Errors
+///
+/// Returns an error when subscriber initialization or OTLP exporter
+/// construction fails.
+pub fn init_tracing(config: &TelemetryConfig, process_id: u32) -> Result<TelemetryHandle> {
     let env_filter = default_env_filter();
     let resource = telemetry_resource_fields(config, process_id);
     let tracer_provider = build_tracer_provider(config, &resource)?;
@@ -259,7 +261,10 @@ pub(crate) fn init_tracing(config: &TelemetryConfig, process_id: u32) -> Result<
 }
 
 #[cfg(not(feature = "otel-tracing"))]
-pub(crate) fn init_tracing(config: &TelemetryConfig, process_id: u32) -> Result<TelemetryHandle> {
+/// # Errors
+///
+/// Returns an error when subscriber initialization fails.
+pub fn init_tracing(config: &TelemetryConfig, process_id: u32) -> Result<TelemetryHandle> {
     let env_filter = default_env_filter();
     let resource = telemetry_resource_fields(config, process_id);
     match config.log_format {
@@ -294,7 +299,8 @@ pub(crate) fn init_tracing(config: &TelemetryConfig, process_id: u32) -> Result<
     Ok(TelemetryHandle::disabled())
 }
 
-pub(crate) fn http_request_span(route: &'static str) -> Span {
+#[must_use]
+pub fn http_request_span(route: &'static str) -> Span {
     activated_span(tracing::info_span!(
         "http.request",
         "otel.kind" = "server",
@@ -306,7 +312,8 @@ pub(crate) fn http_request_span(route: &'static str) -> Span {
     ))
 }
 
-pub(crate) fn ws_upgrade_span() -> Span {
+#[must_use]
+pub fn ws_upgrade_span() -> Span {
     activated_span(tracing::info_span!(
         "ws.upgrade",
         room_id = field::Empty,
@@ -316,7 +323,8 @@ pub(crate) fn ws_upgrade_span() -> Span {
     ))
 }
 
-pub(crate) fn ws_handshake_span() -> Span {
+#[must_use]
+pub fn ws_handshake_span() -> Span {
     activated_span(tracing::info_span!(
         "ws.handshake",
         room_id = field::Empty,
@@ -327,13 +335,15 @@ pub(crate) fn ws_handshake_span() -> Span {
 }
 
 #[cfg(feature = "otel-tracing")]
-pub(crate) fn activated_span(span: Span) -> Span {
+#[must_use]
+pub fn activated_span(span: Span) -> Span {
     let _span_context = span.context();
     span
 }
 
 #[cfg(not(feature = "otel-tracing"))]
-pub(crate) fn activated_span(span: Span) -> Span {
+#[must_use]
+pub fn activated_span(span: Span) -> Span {
     span
 }
 
@@ -473,7 +483,7 @@ mod tests {
     use tracing_subscriber::{fmt::MakeWriter, prelude::*};
 
     use super::*;
-    use crate::config::{TelemetryLogFormat, TelemetryResource, TraceExportConfig};
+    use crate::{TelemetryLogFormat, TelemetryResource, TraceExportConfig};
 
     #[derive(Clone, Debug, Default)]
     struct SharedWriter {
@@ -590,7 +600,7 @@ mod tests {
         assert_json_string(&value, "service.instance.id", "test-instance");
         assert_json_string(&value, "deployment.environment", "test");
         assert_json_string(&value, "user_id", "user-1");
-        assert_json_string(&value, "target", "o_sfu::runtime::telemetry::tests");
+        assert_json_string(&value, "target", "o_sfu_telemetry::setup::tests");
         assert!(json_is_string(&value, "timestamp"));
         assert!(json_is_string(&value, "trace_id"));
         assert_ne!(
@@ -642,7 +652,7 @@ mod tests {
         assert_json_string(&value, "service.instance.id", "test-instance");
         assert_json_string(&value, "deployment.environment", "test");
         assert_json_string(&value, "user_id", "user-1");
-        assert_json_string(&value, "target", "o_sfu::runtime::telemetry::tests");
+        assert_json_string(&value, "target", "o_sfu_telemetry::setup::tests");
         assert!(json_is_string(&value, "timestamp"));
         assert!(json_field(&value, "trace_id").is_none());
     }

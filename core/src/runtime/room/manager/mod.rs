@@ -17,7 +17,7 @@ use super::{
 };
 use crate::runtime::{
     ConnectionId, RoomInstanceId, UserId, UserPermissions,
-    diagnostics::{DiagnosticsEventData, DiagnosticsStore},
+    diagnostics::{self, DiagnosticsEventData, DiagnosticsStore},
     metrics::RuntimeMetrics,
     recording::MediaTap,
     telemetry::schema::event as telemetry_event,
@@ -167,8 +167,10 @@ impl RoomManager {
         directory.insert(Arc::clone(&room), remote_address);
         drop(directory);
         self.metrics.add_active_rooms(1);
-        self.diagnostics
-            .register_room_instance(room.instance_id(), room.uuid());
+        self.diagnostics.register_room_instance(
+            diagnostics::diagnostics_room_instance_id(room.instance_id()),
+            room.uuid(),
+        );
         self.diagnostics.record(
             DiagnosticsEventData::for_room(room.uuid(), telemetry_event::ROOM_CREATED)
                 .with_media_worker_id(room.media_worker_id())

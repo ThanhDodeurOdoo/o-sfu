@@ -24,11 +24,12 @@ use crate::runtime::{
         RoomResponse, RoomStatsResponse, STATS_PATH, UsersStatsResponse,
     },
     metrics::HttpRoute,
-    metrics_export::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
     options::HttpOptions,
+    prometheus::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
     request_origin::{resolve_remote_address, trusted_forwarded_header},
     room::{RoomConfig, RuntimeRoomStatsSnapshot},
-    telemetry, websocket_server,
+    telemetry::{self, schema::event as telemetry_event},
+    websocket_server,
 };
 
 const MAX_DISCONNECT_BODY_BYTES: usize = 16 * 1024;
@@ -37,7 +38,7 @@ pub(crate) async fn serve_http(state: RuntimeState) -> Result<()> {
     let listener = TcpListener::bind(state.http_options.bind_address).await?;
     let local_address = listener.local_addr()?;
     info!(
-        event = telemetry::schema::event::HTTP_LISTENER_READY,
+        event = telemetry_event::HTTP_LISTENER_READY,
         bind_address = %state.http_options.bind_address,
         local_address = %local_address,
         trust_proxy_headers = state.http_options.trust_proxy_headers,

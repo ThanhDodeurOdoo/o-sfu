@@ -46,7 +46,7 @@ use super::common::{
     source_by_id, stream_type_color, stream_type_label, transport_health_label, user_by_id,
     user_id_matches, user_id_to_string,
 };
-use crate::runtime::diagnostics::types::{
+use crate::diagnostics::types::{
     DiagnosticsRoomDetail, DiagnosticsSource, DiagnosticsSubscription, DiagnosticsUserView,
 };
 
@@ -308,10 +308,8 @@ fn push_outbound_paths(
 /// the producer user through the producer and receiver workers. It is a
 /// diagnostics projection of the current routing snapshot, not a transport
 /// control API.
-pub(crate) fn build_user_graph(
-    detail: &DiagnosticsRoomDetail,
-    requested_user_id: &str,
-) -> Option<Value> {
+#[must_use]
+pub fn build_user_graph(detail: &DiagnosticsRoomDetail, requested_user_id: &str) -> Option<Value> {
     let selected_user = detail
         .users
         .iter()

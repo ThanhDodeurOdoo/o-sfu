@@ -15,7 +15,7 @@ use super::super::{
     state::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate, RoomState},
 };
 use crate::runtime::{
-    metrics::BudgetSolverOutcome,
+    metrics::{self, BudgetSolverOutcome},
     transport_adapter::{
         ActiveSpeakerSource, ConsumerActivity, ConsumerPacketGateUpdate, MediaPort,
         ReceiverBandwidthSnapshot,
@@ -85,7 +85,9 @@ impl SourcePolicyEffectPlan {
         for update in updates {
             if update.packet_gate().is_some() {
                 room.metrics
-                    .record_source_selection_update(update.selector());
+                    .record_source_selection_update(metrics::source_selection_kind(
+                        update.selector(),
+                    ));
             }
             let outcomes = update.outcomes();
             if outcomes.is_degraded() {

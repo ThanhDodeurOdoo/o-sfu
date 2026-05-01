@@ -6,11 +6,11 @@ mod source;
 mod transport;
 mod websocket;
 
-use super::metrics::{RuntimeMetrics, RuntimeMetricsSnapshot};
+use crate::metrics::{RuntimeMetrics, RuntimeMetricsSnapshot};
 
-pub(super) const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
+pub const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 
-pub(super) fn render_prometheus(metrics: &RuntimeMetrics) -> String {
+pub fn render_prometheus(metrics: &RuntimeMetrics) -> String {
     render_snapshot(&metrics.snapshot())
 }
 
@@ -36,18 +36,14 @@ fn render_snapshot(snapshot: &RuntimeMetricsSnapshot) -> String {
 mod tests {
     use std::time::Duration;
 
+    use o_sfu_model::WebSocketCloseCode;
+
     use super::{PROMETHEUS_CONTENT_TYPE, render_prometheus};
-    use crate::{
-        core::server::{
-            session::WebSocketCloseCode,
-            source_model::{SourceEncodingId, SourceSelector},
-            transport::TransportSessionHealth,
-        },
-        runtime::metrics::{
-            BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
-            RtcRouteControlOutcome, RtpForwardDestinationKind, RuntimeMetrics,
-            TransportCleanupFailureKind, TransportIceState, WsSessionLoopExitReason,
-        },
+    use crate::metrics::{
+        BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
+        RtcRouteControlOutcome, RtpForwardDestinationKind, RuntimeMetrics, SourceSelectionKind,
+        TransportCleanupFailureKind, TransportHealthState, TransportIceState,
+        WsSessionLoopExitReason,
     };
 
     fn assert_http_and_websocket_metrics(rendered: &str) {
@@ -155,7 +151,7 @@ mod tests {
         metrics.add_active_subscriptions(4);
         metrics.add_active_recording_rooms(1);
         metrics.add_active_transport_users(1);
-        metrics.record_transport_health_transition(None, Some(TransportSessionHealth::Connected));
+        metrics.record_transport_health_transition(None, Some(TransportHealthState::Connected));
         metrics.record_recording_start_accepted();
         metrics.record_recording_stop_rejected();
         metrics.record_recording_captured_packet();
@@ -182,9 +178,7 @@ mod tests {
         metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
         metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
         metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
-        metrics.record_source_selection_update(SourceSelector::Encoding(
-            SourceEncodingId::from_raw(1),
-        ));
+        metrics.record_source_selection_update(SourceSelectionKind::Encoding);
         metrics.record_budget_solver_outcome(BudgetSolverOutcome::Degraded);
         metrics.record_budget_solver_outcome(BudgetSolverOutcome::Paused);
         metrics.record_budget_solver_outcome(BudgetSolverOutcome::Resumed);

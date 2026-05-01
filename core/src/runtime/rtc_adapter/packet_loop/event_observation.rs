@@ -19,8 +19,10 @@ use tracing::{debug, trace};
 
 use super::super::state::{RtcSnapshotState, TransportSessionHealth};
 use crate::runtime::{
-    diagnostics::{DiagnosticsStore, health_json_value, maybe_health_json_value},
-    metrics::{RuntimeMetrics, TransportIceState},
+    diagnostics::{
+        DiagnosticsStore, diagnostics_room_instance_id, health_json_value, maybe_health_json_value,
+    },
+    metrics::{self, RuntimeMetrics, TransportIceState},
     telemetry::schema,
     transport_adapter::{SourcePolicySignal, TransportSessionKey},
 };
@@ -90,7 +92,10 @@ pub(super) fn observe_rtc_event(
         return;
     };
     let previous = snapshot_state.set_transport_health(session_key, health);
-    metrics.record_transport_health_transition(previous, Some(health));
+    metrics.record_transport_health_transition(
+        previous.map(metrics::transport_health_state),
+        Some(metrics::transport_health_state(health)),
+    );
     if previous == Some(health) {
         return;
     }
@@ -98,7 +103,7 @@ pub(super) fn observe_rtc_event(
     fields.insert(String::from("from"), maybe_health_json_value(previous));
     fields.insert(String::from("to"), health_json_value(health));
     diagnostics.record_transport_user_event(
-        session_key.room_instance_id(),
+        diagnostics_room_instance_id(session_key.room_instance_id()),
         session_key.user_id(),
         schema::event::TRANSPORT_HEALTH_CHANGED,
         session_key.media_worker_id(),

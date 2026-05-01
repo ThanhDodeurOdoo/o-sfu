@@ -3,7 +3,7 @@ use super::shared::{
     append_histogram, append_labeled_counter_family, append_labeled_counter_family_2,
     append_labeled_gauge_family,
 };
-use crate::runtime::metrics::RuntimeMetricsSnapshot;
+use crate::metrics::RuntimeMetricsSnapshot;
 
 pub(super) fn append_transport_health_gauges(
     output: &mut String,

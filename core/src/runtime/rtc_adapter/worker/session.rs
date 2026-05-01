@@ -23,7 +23,7 @@ use super::{
     media::refresh_source_packet_gate,
 };
 use crate::runtime::{
-    metrics::RuntimeMetrics,
+    metrics::{self, RuntimeMetrics},
     transport_adapter::{TransportAdapterError, TransportMediaId, TransportSessionKey},
 };
 
@@ -91,7 +91,10 @@ fn worker_close_session(
     }
     if let Ok(mut snapshot) = snapshot_state.lock() {
         let previous = snapshot.remove_session(session_key);
-        metrics.record_transport_health_transition(previous, None);
+        metrics.record_transport_health_transition(
+            previous.map(metrics::transport_health_state),
+            None,
+        );
     }
     if let Ok(mut bitrate) = bitrate_state.lock() {
         bitrate.remove_session(session_key);

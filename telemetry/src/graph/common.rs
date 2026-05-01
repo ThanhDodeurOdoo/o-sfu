@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
-use o_sfu_core::server::session::{StreamType, UserId};
+use o_sfu_model::{StreamType, UserId};
 use serde_json::Value;
 
-use crate::runtime::diagnostics::types::{
+use crate::diagnostics::types::{
     DiagnosticsRoomDetail, DiagnosticsRouteState, DiagnosticsSource, DiagnosticsSubscription,
     DiagnosticsTransportHealth, DiagnosticsUserView,
 };

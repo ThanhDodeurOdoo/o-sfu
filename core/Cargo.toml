@@ -16,6 +16,7 @@ futures-util.workspace = true
 o-sfu-rfc.workspace = true
 o-sfu-model.workspace = true
 o-sfu-router.workspace = true
+o-sfu-telemetry.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 str0m.workspace = true

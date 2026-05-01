@@ -42,7 +42,10 @@ use crate::{
     runtime::{
         ConnectionId, RuntimeState,
         auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},
-        telemetry,
+        telemetry::{
+            self,
+            schema::{event as telemetry_event, field as telemetry_field},
+        },
         websocket_server::{MAX_CLIENT_FRAME_BYTES, decode_client_batch},
     },
 };
@@ -373,7 +376,7 @@ async fn authenticate_session(
         Ok(result) => Some(result),
         Err(code) => {
             info!(
-                event = telemetry::schema::event::WS_AUTH_REJECTED,
+                event = telemetry_event::WS_AUTH_REJECTED,
                 close_code = u16::from(code),
                 remote_address,
                 "rejected websocket authentication"
@@ -435,7 +438,7 @@ async fn join_user(
                 user,
             };
             info!(
-                event = telemetry::schema::event::WS_JOIN_SUCCEEDED,
+                event = telemetry_event::WS_JOIN_SUCCEEDED,
                 connection_id = ?joined_user.connection_id,
                 "joined websocket user"
             );
@@ -449,7 +452,7 @@ async fn join_user(
                 }
             };
             warn!(
-                event = telemetry::schema::event::WS_JOIN_FAILED,
+                event = telemetry_event::WS_JOIN_FAILED,
                 ?user_id,
                 remote_address = remote_address.as_ref(),
                 ?error,
@@ -479,11 +482,11 @@ fn record_session_span(
     current_span.record("user_id", field::debug(user_id));
     current_span.record("connection_id", field::debug(connection_id));
     current_span.record(
-        telemetry::schema::field::REMOTE_ADDRESS,
+        telemetry_field::REMOTE_ADDRESS,
         field::display(remote_address),
     );
     info!(
-        event = telemetry::schema::event::WS_USER_ESTABLISHED,
+        event = telemetry_event::WS_USER_ESTABLISHED,
         connection_id = ?connection_id,
         remote_address,
         "websocket user established"
@@ -507,7 +510,7 @@ async fn initialize_user(
         Ok(output) => output,
         Err(_error) => {
             warn!(
-                event = telemetry::schema::event::WS_JOIN_FAILED,
+                event = telemetry_event::WS_JOIN_FAILED,
                 ?user_id,
                 connection_id = ?connection_id,
                 remote_address,
@@ -528,7 +531,7 @@ async fn initialize_user(
         );
         state.metrics.record_ws_startup_send_failure();
         warn!(
-            event = telemetry::schema::event::WS_JOIN_FAILED,
+            event = telemetry_event::WS_JOIN_FAILED,
             user_id = ?user_id,
             connection_id = ?connection_id,
             remote_address,
@@ -569,7 +572,7 @@ async fn reject_handshake<T>(
     state.metrics.record_ws_handshake_rejection(close_code);
     if let Some(code) = close_code {
         info!(
-            event = telemetry::schema::event::WS_HANDSHAKE_REJECTED,
+            event = telemetry_event::WS_HANDSHAKE_REJECTED,
             close_code = u16::from(code),
             remote_address,
             "{message}"

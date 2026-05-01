@@ -14,5 +14,5 @@ mod common;
 mod room;
 mod user;
 
-pub(crate) use room::build_graph;
-pub(crate) use user::build_user_graph;
+pub use room::build_graph;
+pub use user::build_user_graph;

@@ -20,7 +20,7 @@ use crate::{
     MediaCodecFlags, RtcPortRange,
     runtime::{
         diagnostics::DiagnosticsStore,
-        metrics::RuntimeMetrics,
+        metrics::{self, RuntimeMetrics},
         packet_sink_registry::RoomPacketSinkRegistry as MediaTap,
         transport_adapter::{
             AppliedSessionAnswer, MediaTransportDeps, RtcTransportConfig, SessionBitrateLimits,
@@ -189,8 +189,10 @@ impl RtcTransportShard {
             return;
         };
         let previous = snapshot_state.set_transport_health(session_key, health);
-        self.metrics
-            .record_transport_health_transition(previous, Some(health));
+        self.metrics.record_transport_health_transition(
+            previous.map(metrics::transport_health_state),
+            Some(metrics::transport_health_state(health)),
+        );
     }
 
     async fn request_debug_worker<T, F>(&self, build_command: F) -> Option<T>

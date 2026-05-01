@@ -2,9 +2,7 @@ use super::shared::{
     HistogramBucketValue, LabeledGaugeValue, LabeledHistogramValue, LabeledValue, append_counter,
     append_labeled_counter_family, append_labeled_gauge_family, append_labeled_histogram_family,
 };
-use crate::runtime::metrics::{
-    DurationHistogramSnapshot, HttpInflightSnapshot, RuntimeMetricsSnapshot,
-};
+use crate::metrics::{DurationHistogramSnapshot, HttpInflightSnapshot, RuntimeMetricsSnapshot};
 
 pub(super) fn append_http_metrics(output: &mut String, snapshot: &RuntimeMetricsSnapshot) {
     append_http_request_counters(output, snapshot);

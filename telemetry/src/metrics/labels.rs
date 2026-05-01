@@ -1,10 +1,8 @@
 use std::time::Duration;
 
+use o_sfu_model::WebSocketCloseCode;
+
 use super::counter::{HistogramBucketLabel, MetricLabel};
-use crate::runtime::{
-    WebSocketCloseCode,
-    source_model::{SourceRoomPolicySelector, SourceSelector},
-};
 
 macro_rules! impl_metric_label {
     ($label:ty { $($variant:ident => $index:expr),+ $(,)? }) => {
@@ -168,6 +166,12 @@ pub enum TransportIceState {
     Checking,
     Connected,
     Completed,
+    Disconnected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportHealthState {
+    Connected,
     Disconnected,
 }
 
@@ -404,24 +408,3 @@ impl_metric_label!(RecordingActionOutcome {
     StopAccepted => 2,
     StopRejected => 3,
 });
-
-impl From<SourceSelector> for SourceSelectionKind {
-    fn from(value: SourceSelector) -> Self {
-        match value {
-            SourceSelector::Open => Self::Open,
-            SourceSelector::Encoding(_) => Self::Encoding,
-            SourceSelector::OperatingPoint(_) => Self::OperatingPoint,
-            SourceSelector::RoomPolicy(
-                SourceRoomPolicySelector::Pinned
-                | SourceRoomPolicySelector::Featured
-                | SourceRoomPolicySelector::ScreenShare
-                | SourceRoomPolicySelector::ActiveSpeaker,
-            ) => Self::RoomPolicyFeatured,
-            SourceSelector::RoomPolicy(
-                SourceRoomPolicySelector::VisibleThumbnail
-                | SourceRoomPolicySelector::Hidden
-                | SourceRoomPolicySelector::Overflow,
-            ) => Self::RoomPolicyThumbnail,
-        }
-    }
-}

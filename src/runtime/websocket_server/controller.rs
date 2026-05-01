@@ -39,7 +39,14 @@ use super::WsWriter;
 use crate::{
     application::user_session::User,
     core::server::room::{Room, UserOutbound},
-    runtime::{ConnectionId, RuntimeState, request_origin::resolve_remote_address, telemetry},
+    runtime::{
+        ConnectionId, RuntimeState,
+        request_origin::resolve_remote_address,
+        telemetry::{
+            self,
+            schema::{event as telemetry_event, field as telemetry_field},
+        },
+    },
 };
 
 pub(super) type WsReader = SplitStream<WebSocket>;
@@ -78,19 +85,19 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
     async move {
         let current_span = Span::current();
         current_span.record(
-            telemetry::schema::field::REMOTE_ADDRESS,
+            telemetry_field::REMOTE_ADDRESS,
             field::display(remote_address.as_ref()),
         );
         let (mut ws_writer, mut ws_reader) = socket.split();
         state.metrics.record_ws_connection_accepted();
         info!(
-            event = telemetry::schema::event::WS_CONNECTION_ACCEPTED,
+            event = telemetry_event::WS_CONNECTION_ACCEPTED,
             remote_address = remote_address.as_ref(),
             "accepted websocket connection"
         );
         let handshake_span = telemetry::ws_handshake_span();
         handshake_span.record(
-            telemetry::schema::field::REMOTE_ADDRESS,
+            telemetry_field::REMOTE_ADDRESS,
             field::display(remote_address.as_ref()),
         );
         let Some(mut user_session) = super::handshake::establish_user(
@@ -125,7 +132,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
         .await;
         state.metrics.record_ws_user_loop_exit(exit_reason);
         info!(
-            event = telemetry::schema::event::WS_CONNECTION_CLOSED,
+            event = telemetry_event::WS_CONNECTION_CLOSED,
             connection_id = ?user_session.connection_id,
             remote_address = user_session.remote_address.as_ref(),
             ?exit_reason,

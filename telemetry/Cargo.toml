@@ -1,20 +1,35 @@
 [package]
 name = "o-sfu-telemetry"
-description = "Telemetry attribute macros for o-sfu"
+description = "Operator-facing telemetry schemas, metrics, diagnostics, and formatting for o-sfu"
 
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
-[lib]
-proc-macro = true
-test = false
+[features]
+default = ["macros"]
+macros = ["dep:o-sfu-telemetry-macros"]
+otel-tracing = [
+    "dep:opentelemetry",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tracing-opentelemetry",
+]
 
 [dependencies]
-proc-macro2 = "1.0"
-quote = "1.0"
-syn = { version = "2.0", features = ["full", "parsing"] }
+anyhow.workspace = true
+o-sfu-model.workspace = true
+o-sfu-telemetry-macros = { path = "macros", optional = true }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tracing.workspace = true
+tracing-opentelemetry = { workspace = true, optional = true }
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

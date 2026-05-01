@@ -8,6 +8,8 @@
 
 use std::time::Duration;
 
+use o_sfu_model::WebSocketCloseCode;
+
 use super::{
     counter::{
         Counter, CounterFamily, Histogram, HistogramFamily, UpDownCounter, UpDownCounterFamily,
@@ -16,14 +18,11 @@ use super::{
         BudgetSolverOutcome, ControlPlaneDurationBucket, HttpDisconnectResponseStatus,
         HttpRoomResponseStatus, HttpRoute, RecordingActionOutcome, RtcDatagramDropReason,
         RtcDatagramRoutePath, RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind,
-        RtpRelayDropKind, SourceSelectionKind, TransportCleanupFailureKind,
+        RtpRelayDropKind, SourceSelectionKind, TransportCleanupFailureKind, TransportHealthState,
         TransportHealthTransition, TransportIceState, TransportUserLifetimeBucket,
         WsBusClientFrameKind, WsBusDirection, WsBusFailureKind, WsConnectionStage,
         WsSessionLoopExitReason, WsStartupFailureKind,
     },
-};
-use crate::runtime::{
-    WebSocketCloseCode, rtc_adapter::TransportSessionHealth, source_model::SourceSelector,
 };
 
 #[derive(Debug, Default)]
@@ -270,54 +269,50 @@ impl RuntimeMetrics {
 
     pub fn record_transport_health_transition(
         &self,
-        previous: Option<TransportSessionHealth>,
-        next: Option<TransportSessionHealth>,
+        previous: Option<TransportHealthState>,
+        next: Option<TransportHealthState>,
     ) {
         if previous == next {
             return;
         }
         match (previous, next) {
-            (None, Some(TransportSessionHealth::Connected)) => self
+            (None, Some(TransportHealthState::Connected)) => self
                 .transport_health_transitions
                 .increment(TransportHealthTransition::UnsetToConnected),
-            (None, Some(TransportSessionHealth::Disconnected)) => self
+            (None, Some(TransportHealthState::Disconnected)) => self
                 .transport_health_transitions
                 .increment(TransportHealthTransition::UnsetToDisconnected),
-            (
-                Some(TransportSessionHealth::Connected),
-                Some(TransportSessionHealth::Disconnected),
-            ) => self
-                .transport_health_transitions
-                .increment(TransportHealthTransition::ConnectedToDisconnected),
-            (
-                Some(TransportSessionHealth::Disconnected),
-                Some(TransportSessionHealth::Connected),
-            ) => self
-                .transport_health_transitions
-                .increment(TransportHealthTransition::DisconnectedToConnected),
-            (Some(TransportSessionHealth::Connected), None) => self
+            (Some(TransportHealthState::Connected), Some(TransportHealthState::Disconnected)) => {
+                self.transport_health_transitions
+                    .increment(TransportHealthTransition::ConnectedToDisconnected);
+            }
+            (Some(TransportHealthState::Disconnected), Some(TransportHealthState::Connected)) => {
+                self.transport_health_transitions
+                    .increment(TransportHealthTransition::DisconnectedToConnected);
+            }
+            (Some(TransportHealthState::Connected), None) => self
                 .transport_health_transitions
                 .increment(TransportHealthTransition::ConnectedToUnset),
-            (Some(TransportSessionHealth::Disconnected), None) => self
+            (Some(TransportHealthState::Disconnected), None) => self
                 .transport_health_transitions
                 .increment(TransportHealthTransition::DisconnectedToUnset),
             (None, None)
-            | (Some(TransportSessionHealth::Connected), Some(TransportSessionHealth::Connected))
+            | (Some(TransportHealthState::Connected), Some(TransportHealthState::Connected))
             | (
-                Some(TransportSessionHealth::Disconnected),
-                Some(TransportSessionHealth::Disconnected),
+                Some(TransportHealthState::Disconnected),
+                Some(TransportHealthState::Disconnected),
             ) => {}
         }
         match previous {
-            Some(TransportSessionHealth::Connected) => self.connected_transport_users.add(-1),
-            Some(TransportSessionHealth::Disconnected) => {
+            Some(TransportHealthState::Connected) => self.connected_transport_users.add(-1),
+            Some(TransportHealthState::Disconnected) => {
                 self.disconnected_transport_users.add(-1);
             }
             None => {}
         }
         match next {
-            Some(TransportSessionHealth::Connected) => self.connected_transport_users.add(1),
-            Some(TransportSessionHealth::Disconnected) => {
+            Some(TransportHealthState::Connected) => self.connected_transport_users.add(1),
+            Some(TransportHealthState::Disconnected) => {
                 self.disconnected_transport_users.add(1);
             }
             None => {}
@@ -437,8 +432,8 @@ impl RuntimeMetrics {
         self.rtc_route_control.increment(outcome);
     }
 
-    pub fn record_source_selection_update(&self, selector: SourceSelector) {
-        self.source_selection_updates.increment(selector.into());
+    pub fn record_source_selection_update(&self, selector: SourceSelectionKind) {
+        self.source_selection_updates.increment(selector);
     }
 
     pub fn record_budget_solver_outcome(&self, outcome: BudgetSolverOutcome) {

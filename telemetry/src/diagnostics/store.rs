@@ -12,14 +12,24 @@ use std::{
     sync::{Mutex, PoisonError},
 };
 
+use o_sfu_model::UserId;
 use serde_json::{Map, Value};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::types::DiagnosticsEvent;
-use crate::runtime::{RoomInstanceId, UserId};
 
 const GLOBAL_RECENT_EVENT_LIMIT: usize = 64;
 const SCOPE_RECENT_EVENT_LIMIT: usize = 32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DiagnosticsRoomInstanceId(u64);
+
+impl DiagnosticsRoomInstanceId {
+    #[must_use]
+    pub const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct UserScopeKey {
@@ -29,7 +39,7 @@ struct UserScopeKey {
 
 #[derive(Debug, Default)]
 struct DiagnosticsStoreState {
-    room_uuid_by_instance_id: BTreeMap<RoomInstanceId, String>,
+    room_uuid_by_instance_id: BTreeMap<DiagnosticsRoomInstanceId, String>,
     global_recent_events: VecDeque<DiagnosticsEvent>,
     room_recent_events: BTreeMap<String, VecDeque<DiagnosticsEvent>>,
     user_recent_events: BTreeMap<UserScopeKey, VecDeque<DiagnosticsEvent>>,
@@ -90,11 +100,13 @@ impl DiagnosticsEventData {
         self
     }
 
+    #[must_use]
     pub fn insert_field(mut self, key: &str, value: impl Into<Value>) -> Self {
         self.fields.insert(key.to_owned(), value.into());
         self
     }
 
+    #[must_use]
     pub fn insert_fields(mut self, fields: Map<String, Value>) -> Self {
         self.fields.extend(fields);
         self
@@ -102,7 +114,11 @@ impl DiagnosticsEventData {
 }
 
 impl DiagnosticsStore {
-    pub fn register_room_instance(&self, room_instance_id: RoomInstanceId, room_id: &str) {
+    pub fn register_room_instance(
+        &self,
+        room_instance_id: DiagnosticsRoomInstanceId,
+        room_id: &str,
+    ) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state
             .room_uuid_by_instance_id
@@ -239,7 +255,7 @@ impl DiagnosticsStore {
 
     pub fn record_transport_user_event(
         &self,
-        room_instance_id: RoomInstanceId,
+        room_instance_id: DiagnosticsRoomInstanceId,
         user_id: &UserId,
         event: &'static str,
         media_worker_id: usize,
@@ -293,10 +309,13 @@ fn reversed_events(events: &VecDeque<DiagnosticsEvent>) -> Vec<DiagnosticsEvent>
 
 #[cfg(test)]
 mod tests {
+    use o_sfu_model::UserId;
     use serde_json::{Map, Value};
 
-    use super::{DiagnosticsEventData, DiagnosticsStore, GLOBAL_RECENT_EVENT_LIMIT};
-    use crate::runtime::{RoomInstanceId, UserId};
+    use super::{
+        DiagnosticsEventData, DiagnosticsRoomInstanceId, DiagnosticsStore,
+        GLOBAL_RECENT_EVENT_LIMIT,
+    };
 
     #[test]
     fn global_events_keep_the_newest_entries_in_reverse_chronological_order() {
@@ -381,7 +400,7 @@ mod tests {
         fields.insert(String::from("state"), Value::from("connected"));
 
         store.record_transport_user_event(
-            RoomInstanceId::from_raw(12),
+            DiagnosticsRoomInstanceId::from_raw(12),
             &user_id,
             "transport.health_changed",
             2,
@@ -389,11 +408,11 @@ mod tests {
         );
         assert!(store.global_recent_events().is_empty());
 
-        store.register_room_instance(RoomInstanceId::from_raw(12), "room-a");
+        store.register_room_instance(DiagnosticsRoomInstanceId::from_raw(12), "room-a");
         let mut fields = Map::new();
         fields.insert(String::from("state"), Value::from("connected"));
         store.record_transport_user_event(
-            RoomInstanceId::from_raw(12),
+            DiagnosticsRoomInstanceId::from_raw(12),
             &user_id,
             "transport.health_changed",
             2,

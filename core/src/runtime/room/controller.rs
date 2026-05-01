@@ -55,7 +55,7 @@ use crate::{
         AvailableFeatures, ConnectionId, PeerSnapshot, RecordingState, RoomInstanceId, StreamType,
         UserId,
         diagnostics::{
-            DiagnosticsQualitySummary, DiagnosticsSource, DiagnosticsStore,
+            self, DiagnosticsQualitySummary, DiagnosticsSource, DiagnosticsStore,
             DiagnosticsUserTransport, DiagnosticsUserView,
         },
         metrics::RuntimeMetrics,
@@ -919,7 +919,7 @@ impl Room {
                     connection_id: connection_id.as_u64(),
                     health: observability_port
                         .session_transport_health(&session_key)
-                        .map(Into::into),
+                        .map(diagnostics::diagnostics_transport_health),
                     media_worker_id: session_key.media_worker_id(),
                     quality_summary: DiagnosticsQualitySummary {
                         current_incoming_bitrate: incoming_bitrate_by_session

@@ -1,5 +1,5 @@
 use super::shared::{LabeledValue, append_labeled_counter_family};
-use crate::runtime::metrics::RuntimeMetricsSnapshot;
+use crate::metrics::RuntimeMetricsSnapshot;
 
 pub(super) fn append_source_selection_metrics(
     output: &mut String,
