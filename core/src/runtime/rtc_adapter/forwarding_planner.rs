@@ -1,7 +1,5 @@
 //! Packet forwarding planner for the RTC adapter hot path.
 //!
-//! # Boundary role
-//!
 //! The packet loop receives media as `ForwardedPacket` values, but the flush
 //! step needs concrete destinations that know how to write to local RTC state,
 //! packet sinks such as recording or relay mailboxes. This module is the narrow

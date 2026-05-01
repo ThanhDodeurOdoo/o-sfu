@@ -51,8 +51,6 @@ pub struct RoutingOptions {
 /// describes how many process-local router placements a room may use and which
 /// spillover mode should interpret that limit.
 ///
-/// # Boundary role
-///
 /// `RoomShardingPolicy` belongs to room orchestration, not to the RTP packet
 /// loop. The room factory reads it once when reserving router and media-worker
 /// placements for a new room. Room state then uses the same policy to decide

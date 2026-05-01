@@ -1,7 +1,5 @@
 //! Shard-local media packet loop.
 //!
-//! # Boundary role
-//!
 //! The packet loop is the RTC adapter's transport hot path. Each
 //! `RtcTransportShard` starts one Tokio task that owns one mutable
 //! `RtcBootstrapState`, drives all `str0m::Rtc` instances for that shard and

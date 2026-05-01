@@ -1,7 +1,5 @@
 //! Packet-loop worker driver.
 //!
-//! # Boundary role
-//!
 //! This module owns the async task that ties the RTC worker together. It is the
 //! only packet-loop file that awaits socket I/O or worker-channel input. The
 //! rest of the packet-loop modules are synchronous helpers that run while the

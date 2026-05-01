@@ -1,7 +1,5 @@
 //! UDP ingress routing for RTC sessions.
 //!
-//! # Boundary role
-//!
 //! The shared UDP socket receives datagrams for every session on a shard. This
 //! module decides which `str0m::Rtc` should see one datagram. Its indexes and
 //! caches are performance hints only. `Rtc::accepts()` remains the authoritative

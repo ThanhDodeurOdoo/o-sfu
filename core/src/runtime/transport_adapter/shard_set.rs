@@ -34,8 +34,6 @@ use crate::{
 
 /// Process-local collection of RTC transport shards keyed by media-worker id.
 ///
-/// # Boundary role
-///
 /// The shard set is the last transport layer that knows about worker
 /// distribution. Above it, callers express media intent through transport
 /// ports. Below it, each [`RtcTransportShard`] owns one worker-local RTC

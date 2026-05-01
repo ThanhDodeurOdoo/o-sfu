@@ -19,8 +19,6 @@
 //!   pure router sessions, producers and consumers
 //! ```
 //!
-//! # Boundary role
-//!
 //! This module does not own transports and it does not forward RTP packets. It
 //! owns the cold-path routing placement needed before transport work can be
 //! addressed correctly. Producers are anchored on the router where their owner
