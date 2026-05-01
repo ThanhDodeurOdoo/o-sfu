@@ -136,7 +136,7 @@ async fn join_user_notifies_existing_peers_with_user_joined() {
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
-    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
+    let transport_adapter = MediaTransport::fake_for_testing();
     let (tx1, mut rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
     let first_join = room
@@ -215,7 +215,7 @@ async fn replacing_a_user_runtime_emits_departure_then_join_for_existing_peers()
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
-    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
+    let transport_adapter = MediaTransport::fake_for_testing();
     let (tx1, mut alice_rx) = test_sender();
     let (tx2, mut bob_old_rx) = test_sender();
     let (tx3, _bob_new_rx) = test_sender();
@@ -295,7 +295,7 @@ async fn join_same_user_twice(room: &Arc<super::super::Room>) -> (ConnectionId, 
 
 async fn publish_camera(
     room: &Arc<super::super::Room>,
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
 ) -> Option<String> {
     room.test_api()
         .media()
@@ -889,7 +889,7 @@ async fn stale_refresh_callbacks_do_not_target_a_replaced_user() {
 
 struct StaleRefreshScenario {
     room: Arc<super::super::Room>,
-    transport_adapter: RuntimeTransportAdapter,
+    transport_adapter: MediaTransport,
     fake: Arc<FakeWebRtcAdapter>,
     first_subscriber_connection: ConnectionId,
     second_subscriber_connection: ConnectionId,

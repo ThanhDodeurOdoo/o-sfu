@@ -21,7 +21,7 @@ use crate::runtime::{
     metrics::RuntimeMetrics,
     recording::MediaTap,
     telemetry::schema::event as telemetry_event,
-    transport_adapter::{MediaPort, ObservabilityPort, RuntimeTransportAdapter},
+    transport_adapter::{MediaPort, MediaTransport, ObservabilityPort},
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
@@ -286,7 +286,7 @@ impl RoomManager {
         &self,
         room_id: &str,
         request: JoinUserRequest,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) -> Result<(Arc<Room>, ConnectionId), RoomManagerJoinError> {
         let Some((room, user_count_before, media_counts_before, join_result)) = self
             .with_current_room(room_id, |room| async move {
@@ -328,7 +328,7 @@ impl RoomManager {
         room_id: &str,
         user_id: &UserId,
         connection_id: ConnectionId,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) -> bool {
         let Some((room, user_count_before, media_counts_before, did_remove_active_session)) = self
             .with_current_room(room_id, |room| async move {
@@ -367,7 +367,7 @@ impl RoomManager {
         &self,
         room_id: &str,
         user_ids: &[UserId],
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) {
         let Some((room, user_count_before, media_counts_before)) = self
             .with_current_room(room_id, |room| async move {

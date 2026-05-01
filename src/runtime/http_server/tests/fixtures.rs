@@ -45,7 +45,7 @@ pub(super) use crate::{
             RoomManagerDeps, RoomRuntimePolicy, rtp_capabilities,
         },
         testing::build_test_runtime_state,
-        transport_adapter::RuntimeTransportAdapter,
+        transport_adapter::MediaTransport,
     },
 };
 
@@ -54,7 +54,7 @@ pub(super) const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71
 pub(super) struct TestRuntimeState {
     pub(super) state: RuntimeState,
     pub(super) room_manager: Arc<RoomManager>,
-    pub(super) transport_adapter: RuntimeTransportAdapter,
+    pub(super) transport_adapter: MediaTransport,
 }
 
 pub(super) fn test_config() -> Config {
@@ -118,7 +118,7 @@ pub(super) fn test_state_with_handles() -> TestRuntimeState {
             metrics: Arc::clone(&metrics),
         },
     ));
-    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
+    let transport_adapter = MediaTransport::fake_for_testing();
     let state = build_test_runtime_state(
         &config,
         Arc::clone(&room_manager),

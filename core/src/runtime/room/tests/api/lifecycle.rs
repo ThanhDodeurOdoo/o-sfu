@@ -5,7 +5,7 @@ use crate::{
     UserInfoRefresh,
     runtime::{
         ConnectionId, RecordingOptions, UserId, UserInfo, UserPermissions,
-        transport_adapter::RuntimeTransportAdapter,
+        transport_adapter::MediaTransport,
     },
 };
 
@@ -40,7 +40,7 @@ impl RoomTestLifecycle<'_> {
         label: Option<String>,
         permissions: UserPermissions,
         sender: mpsc::UnboundedSender<UserOutbound>,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) -> Result<ConnectionId, RoomJoinError> {
         self.room
             .join_session_with_cleanup(
@@ -63,7 +63,7 @@ impl RoomTestLifecycle<'_> {
         self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) -> bool {
         self.leave_session_with_cleanup(
             user_id,
@@ -77,7 +77,7 @@ impl RoomTestLifecycle<'_> {
         self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) -> bool {
         self.leave_session_with_cleanup(
             user_id,
@@ -136,7 +136,7 @@ impl RoomTestLifecycle<'_> {
         user_id: &UserId,
         info: UserInfo,
         need_refresh: bool,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) {
         let Some(connection_id) = self
             .room
@@ -167,7 +167,7 @@ impl RoomTestLifecycle<'_> {
     pub async fn disconnect_users_without_transport_cleanup(
         self,
         user_ids: &[UserId],
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) {
         self.room
             .disconnect_users_with_cleanup(
@@ -177,7 +177,7 @@ impl RoomTestLifecycle<'_> {
             .await;
     }
 
-    pub async fn force_cleanup_retry_cycle(self, transport_adapter: &RuntimeTransportAdapter) {
+    pub async fn force_cleanup_retry_cycle(self, transport_adapter: &MediaTransport) {
         self.room
             .force_cleanup_retry_cycle_for_test(transport_adapter)
             .await;

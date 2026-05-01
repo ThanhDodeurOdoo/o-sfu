@@ -30,11 +30,7 @@ fn test_simulcast_video_rtp_parameters() -> MediaStream {
     sample_simulcast_video_rtp_parameters(None)
 }
 
-async fn make_session_ready(
-    room: &Room,
-    user_id: &UserId,
-    transport_adapter: &RuntimeTransportAdapter,
-) {
+async fn make_session_ready(room: &Room, user_id: &UserId, transport_adapter: &MediaTransport) {
     let Some(connection_id) = room.test_api().inspect().user_connection_id(user_id).await else {
         panic!("user should exist before publishing");
     };
@@ -55,7 +51,7 @@ async fn publish_media_stream(
     user_id: &UserId,
     stream_type: StreamType,
     parameters: MediaStream,
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
 ) {
     make_session_ready(room, user_id, transport_adapter).await;
     assert!(

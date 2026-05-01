@@ -8,7 +8,7 @@ use crate::{
     PublicationActivity,
     runtime::{
         ConnectionId, DownloadStates, StreamType, UserId,
-        transport_adapter::{MediaPort, RuntimeTransportAdapter, TransportMediaId},
+        transport_adapter::{MediaPort, MediaTransport, TransportMediaId},
     },
 };
 
@@ -31,7 +31,7 @@ impl RoomTestMedia<'_> {
         self,
         user_id: &UserId,
         publish: NegotiatedPublish,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) -> Option<String> {
         let validated_descriptor = {
             let state = self.room.state.read().await;
@@ -58,7 +58,7 @@ impl RoomTestMedia<'_> {
         stream_type: StreamType,
         media_kind: MediaKind,
         producer_rtp_parameters: RouterRtpParameters,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) -> Option<String> {
         let publish_prerequisites = {
             let state = self.room.state.read().await;
@@ -121,7 +121,7 @@ impl RoomTestMedia<'_> {
         user_id: &UserId,
         stream_type: StreamType,
         active: bool,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) {
         let Some(connection_id) = self
             .room
@@ -148,7 +148,7 @@ impl RoomTestMedia<'_> {
         user_id: &UserId,
         target_user_id: &UserId,
         states: &DownloadStates,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) {
         let Some(connection_id) = self
             .room

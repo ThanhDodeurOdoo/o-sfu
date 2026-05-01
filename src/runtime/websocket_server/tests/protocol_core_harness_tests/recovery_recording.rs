@@ -8,7 +8,7 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
         10_000,
         60_000,
         100,
-        RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&adapter)),
+        MediaTransport::from_fake_adapter(Arc::clone(&adapter)),
     )
     .await;
     assert!(server.is_some());
@@ -345,7 +345,7 @@ async fn protocol_core_recording_requests_resolve_against_real_server_responses(
     let server = spawn_test_server_with_feature_flags(
         1_000,
         100,
-        RuntimeTransportAdapter::fake_for_testing(),
+        MediaTransport::fake_for_testing(),
         RuntimeFeatureFlags {
             transcription: true,
             audio_recording: true,

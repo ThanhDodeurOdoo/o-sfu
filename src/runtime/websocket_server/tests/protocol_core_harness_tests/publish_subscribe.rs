@@ -106,7 +106,7 @@ async fn protocol_core_publish_round_trips_through_real_server_user_protocol() {
         10_000,
         60_000,
         100,
-        RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&adapter)),
+        MediaTransport::from_fake_adapter(Arc::clone(&adapter)),
     )
     .await;
     assert!(server.is_some());

@@ -82,7 +82,6 @@ pub mod transport {
             transport_adapter::{
                 MediaTransport, MediaTransportDeps, RtcTransport, RtcTransportBuildError,
                 RtcTransportBuilder, RtcTransportConfig, RtcTransportShardSetConfig,
-                RuntimeTransportAdapter,
             },
         },
         transport::*,

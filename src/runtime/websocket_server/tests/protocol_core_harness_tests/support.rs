@@ -35,7 +35,7 @@ pub(super) use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCod
 pub(super) use super::super::fixtures::*;
 pub(super) use crate::{
     config::RuntimeFeatureFlags,
-    runtime::{room::Room, transport_adapter::RuntimeTransportAdapter},
+    runtime::{room::Room, transport_adapter::MediaTransport},
 };
 
 pub(super) const BATCH_FLUSH_DELAY_MS: u32 = 100;
@@ -560,7 +560,7 @@ pub(super) async fn setup_fake_protocol_peers(
         10_000,
         60_000,
         100,
-        RuntimeTransportAdapter::from_fake_adapter(adapter),
+        MediaTransport::from_fake_adapter(adapter),
     )
     .await?;
     let room = create_room(&server, room_name, None, CreateRoomQuery::default()).await;

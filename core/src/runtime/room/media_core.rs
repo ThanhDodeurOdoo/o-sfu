@@ -7,12 +7,12 @@ use crate::{
     SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
     runtime::{
         ConnectionId, DownloadStates, StreamType, UserId, UserInfo,
-        transport_adapter::RuntimeTransportAdapter,
+        transport_adapter::MediaTransport,
     },
     transport::{AppliedSessionAnswer, TransportAdapterError, TransportSessionKey},
 };
 
-impl MediaRoom<RuntimeTransportAdapter> for Room {
+impl MediaRoom<MediaTransport> for Room {
     fn transport_user_key(
         &self,
         user_id: &UserId,
@@ -29,7 +29,7 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
         &self,
         session: &MediaSessionContext<'_>,
         capabilities: MediaCapabilities,
-        media_port: &RuntimeTransportAdapter,
+        media_port: &MediaTransport,
     ) -> SessionNegotiationOutcome {
         self.apply_session_negotiated(
             session.user_id(),
@@ -43,7 +43,7 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
     async fn apply_session_refreshed(
         &self,
         session: &MediaSessionContext<'_>,
-        media_port: &RuntimeTransportAdapter,
+        media_port: &MediaTransport,
     ) -> SessionNegotiationOutcome {
         self.apply_session_refreshed(session.user_id(), session.connection_id(), media_port)
             .await
@@ -72,7 +72,7 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
         session: &MediaSessionContext<'_>,
         stream_type: StreamType,
         activity: PublicationActivity,
-        media_port: &RuntimeTransportAdapter,
+        media_port: &MediaTransport,
     ) -> PublicationActivityOutcome {
         self.set_publication_active_runtime(
             session.user_id(),
@@ -89,7 +89,7 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
         session: &MediaSessionContext<'_>,
         target_user_id: &UserId,
         states: &DownloadStates,
-        media_port: &RuntimeTransportAdapter,
+        media_port: &MediaTransport,
     ) -> SubscriptionUpdateOutcome {
         self.update_subscription_runtime(
             session.user_id(),
@@ -106,7 +106,7 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
         session: &MediaSessionContext<'_>,
         info: UserInfo,
         refresh: UserInfoRefresh,
-        media_port: &RuntimeTransportAdapter,
+        media_port: &MediaTransport,
     ) {
         self.update_user_info_runtime_for_connection(
             session.user_id(),
@@ -122,7 +122,7 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
         &self,
         session: &MediaSessionContext<'_>,
         stream_type: StreamType,
-        media_port: &RuntimeTransportAdapter,
+        media_port: &MediaTransport,
     ) -> Result<PublishStageOutcome, TransportAdapterError> {
         self.stage_negotiated_publish(
             session.user_id(),
@@ -137,7 +137,7 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
         &self,
         session: &MediaSessionContext<'_>,
         stream_type: StreamType,
-        media_port: &RuntimeTransportAdapter,
+        media_port: &MediaTransport,
     ) -> RollbackStagedPublishOutcome {
         self.rollback_staged_publish(
             session.user_id(),
@@ -151,7 +151,7 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
     async fn rollback_connection_publishes(
         &self,
         session: &MediaSessionContext<'_>,
-        media_port: &RuntimeTransportAdapter,
+        media_port: &MediaTransport,
     ) {
         self.rollback_staged_publishes_for_connection(
             session.user_id(),
@@ -165,7 +165,7 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
         &self,
         session: &MediaSessionContext<'_>,
         applied_answer: &AppliedSessionAnswer,
-        media_port: &RuntimeTransportAdapter,
+        media_port: &MediaTransport,
     ) {
         self.commit_staged_publishes(
             session.user_id(),
@@ -181,7 +181,7 @@ impl MediaRoom<RuntimeTransportAdapter> for Room {
         &self,
         session: &MediaSessionContext<'_>,
         stream_type: StreamType,
-        media_port: &RuntimeTransportAdapter,
+        media_port: &MediaTransport,
     ) -> UnpublishOutcome {
         self.unpublish_track(
             session.user_id(),

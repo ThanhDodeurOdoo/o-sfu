@@ -13,10 +13,10 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
     core::{
-        MediaEndpointHealth, MediaSession, NegotiationOffer, PublicationActivity,
-        RollbackStagedPublishOutcome, RuntimeSfuCore, RuntimeTransportAdapter,
-        SessionNegotiationOutcome, SfuCoreError, SubscriptionUpdateOutcome, TransportEffectOutcome,
-        UnpublishOutcome, UploadEncoding, UploadLayerPolicyRole, UploadSlot, UserInfoRefresh,
+        MediaEndpointHealth, MediaSession, MediaTransport, NegotiationOffer, PublicationActivity,
+        RollbackStagedPublishOutcome, RuntimeSfuCore, SessionNegotiationOutcome, SfuCoreError,
+        SubscriptionUpdateOutcome, TransportEffectOutcome, UnpublishOutcome, UploadEncoding,
+        UploadLayerPolicyRole, UploadSlot, UserInfoRefresh,
     },
     runtime::{
         ConnectionId,
@@ -154,7 +154,7 @@ impl User {
         }
     }
 
-    fn media(&self) -> MediaSession<'_, Room, RuntimeTransportAdapter> {
+    fn media(&self) -> MediaSession<'_, Room, MediaTransport> {
         self.media_core
             .session(self.room.as_ref(), &self.id, self.connection_id)
     }

@@ -23,7 +23,7 @@ pub(super) use crate::{
         ConnectionId, DownloadStates, StreamType, UserId, UserInfo, UserPermissions,
         VideoLayoutIntent,
         transport_adapter::{
-            ActiveSpeakerSource, NegotiationPort, RuntimeTransportAdapter, TransportMediaId,
+            ActiveSpeakerSource, MediaTransport, NegotiationPort, TransportMediaId,
             test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
         },
     },
@@ -57,10 +57,10 @@ pub(super) fn test_sender() -> (
     mpsc::unbounded_channel()
 }
 
-pub(super) fn fake_adapter() -> (RuntimeTransportAdapter, Arc<FakeWebRtcAdapter>) {
+pub(super) fn fake_adapter() -> (MediaTransport, Arc<FakeWebRtcAdapter>) {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
     (
-        RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&adapter)),
+        MediaTransport::from_fake_adapter(Arc::clone(&adapter)),
         adapter,
     )
 }
@@ -118,7 +118,7 @@ pub(super) async fn apply_publish_transport_ready(
     room: &super::super::Room,
     user_id: &UserId,
     connection_id: ConnectionId,
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
 ) -> bool {
     apply_transport_ready(
         room,
@@ -134,7 +134,7 @@ pub(super) async fn apply_consume_transport_ready(
     room: &super::super::Room,
     user_id: &UserId,
     connection_id: ConnectionId,
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
 ) -> bool {
     apply_transport_ready(
         room,
@@ -151,7 +151,7 @@ async fn apply_transport_ready(
     user_id: &UserId,
     connection_id: ConnectionId,
     readiness: UserTransportReady,
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
 ) -> bool {
     let update = {
         let mut state = room.state.write().await;
@@ -165,7 +165,7 @@ pub(super) async fn apply_client_rtp_capabilities(
     user_id: &UserId,
     connection_id: ConnectionId,
     capabilities: MediaCapabilities,
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
 ) -> bool {
     let update = {
         let mut state = room.state.write().await;
@@ -179,7 +179,7 @@ async fn apply_negotiation_update(
     user_id: &UserId,
     connection_id: ConnectionId,
     update: UserNegotiationUpdate,
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
 ) -> bool {
     if !update.session_present {
         return false;
@@ -201,7 +201,7 @@ pub(super) async fn make_session_ready(room: &super::super::Room, user_id: &User
 pub(super) async fn refresh_session_consumers(
     room: &super::super::Room,
     user_id: &UserId,
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
 ) -> bool {
     room.apply_session_refreshed(
         user_id,
@@ -217,7 +217,7 @@ pub(super) async fn stage_negotiated_publish(
     user_id: &UserId,
     connection_id: ConnectionId,
     stream_type: StreamType,
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
 ) -> bool {
     room.stage_negotiated_publish(user_id, connection_id, stream_type, transport_adapter)
         .await
@@ -229,7 +229,7 @@ pub(super) async fn rollback_staged_publish(
     user_id: &UserId,
     connection_id: ConnectionId,
     stream_type: StreamType,
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
 ) -> bool {
     matches!(
         room.rollback_staged_publish(user_id, connection_id, stream_type, transport_adapter)
@@ -242,7 +242,7 @@ pub(super) async fn commit_staged_publishes(
     room: &super::super::Room,
     user_id: &UserId,
     connection_id: ConnectionId,
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
 ) {
     let session_key = room.transport_user_key(user_id, connection_id);
     let applied_answer = transport_adapter
@@ -263,7 +263,7 @@ pub(super) async fn rollback_staged_publishes_for_connection(
     room: &super::super::Room,
     user_id: &UserId,
     connection_id: ConnectionId,
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
 ) {
     room.rollback_staged_publishes_for_connection(user_id, connection_id, transport_adapter)
         .await;
@@ -296,7 +296,7 @@ struct ReadySessionScenarioOptions {
 
 struct ReadySessionScenario {
     room: Arc<super::super::Room>,
-    adapter: RuntimeTransportAdapter,
+    adapter: MediaTransport,
     fake: Option<Arc<FakeWebRtcAdapter>>,
     first_rx: mpsc::UnboundedReceiver<UserOutbound>,
     second_rx: mpsc::UnboundedReceiver<UserOutbound>,
@@ -357,7 +357,7 @@ async fn setup_ready_user_scenario(options: ReadySessionScenarioOptions) -> Read
         let (adapter, fake) = fake_adapter();
         (adapter, Some(fake))
     } else {
-        (RuntimeTransportAdapter::fake_for_testing(), None)
+        (MediaTransport::fake_for_testing(), None)
     };
 
     make_session_ready(&room, &UserId::Integer(1)).await;
@@ -392,7 +392,7 @@ async fn setup_ready_user_scenario(options: ReadySessionScenarioOptions) -> Read
 /// transports connected plus client RTP capabilities, ready for publish/consume tests.
 pub(super) async fn setup_two_ready_users() -> (
     Arc<super::super::Room>,
-    RuntimeTransportAdapter,
+    MediaTransport,
     mpsc::UnboundedReceiver<UserOutbound>,
     mpsc::UnboundedReceiver<UserOutbound>,
 ) {
@@ -407,7 +407,7 @@ pub(super) async fn setup_two_ready_users() -> (
 
 pub(super) async fn setup_two_ready_users_with_fake() -> (
     Arc<super::super::Room>,
-    RuntimeTransportAdapter,
+    MediaTransport,
     Arc<FakeWebRtcAdapter>,
     mpsc::UnboundedReceiver<UserOutbound>,
     mpsc::UnboundedReceiver<UserOutbound>,
@@ -425,7 +425,7 @@ pub(super) async fn setup_two_ready_users_with_fake() -> (
 
 pub(super) async fn setup_late_join_bootstrap_scenario() -> (
     Arc<super::super::Room>,
-    RuntimeTransportAdapter,
+    MediaTransport,
     Arc<FakeWebRtcAdapter>,
     mpsc::UnboundedReceiver<UserOutbound>,
     mpsc::UnboundedReceiver<UserOutbound>,

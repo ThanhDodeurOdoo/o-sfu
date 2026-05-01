@@ -14,7 +14,7 @@ use crate::{
 async fn publish_audio_and_camera(
     room: &Arc<super::super::Room>,
     user_id: &UserId,
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
 ) {
     assert!(
         room.test_api()
@@ -196,7 +196,7 @@ async fn room_replacement_join_rehomes_topology_and_transport_together() {
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
-    let adapter = RuntimeTransportAdapter::fake_for_testing();
+    let adapter = MediaTransport::fake_for_testing();
     let user_id = UserId::Integer(10);
     let (first_tx, _first_rx) = test_sender();
     let first_join = room
@@ -275,7 +275,7 @@ async fn room_spillover_diagnostics_reports_each_users_transport_worker() {
             .await;
         assert!(joined.is_ok());
     }
-    let adapter = RuntimeTransportAdapter::fake_for_testing();
+    let adapter = MediaTransport::fake_for_testing();
 
     let diagnostics = room.diagnostics_user_views(&adapter).await;
     let first_transport = diagnostics
@@ -419,7 +419,7 @@ async fn room_manager_lookup_by_uuid() {
 #[tokio::test]
 async fn room_manager_join_user_reports_missing_room() {
     let manager = RoomManager::for_test_with_admission_policy(RoomAdmissionPolicy::new(1));
-    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
+    let transport_adapter = MediaTransport::fake_for_testing();
     let (tx, _rx) = test_sender();
     let result = manager
         .join_session_for_test(
@@ -439,7 +439,7 @@ async fn room_manager_join_user_reports_missing_room() {
 #[tokio::test]
 async fn manager_leave_user_removes_empty_room() {
     let manager = RoomManager::for_test_with_admission_policy(RoomAdmissionPolicy::new(1));
-    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
+    let transport_adapter = MediaTransport::fake_for_testing();
     let first_room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
@@ -481,7 +481,7 @@ async fn manager_leave_user_removes_empty_room() {
 #[tokio::test]
 async fn manager_disconnect_users_removes_empty_room() {
     let manager = RoomManager::for_test_with_admission_policy(RoomAdmissionPolicy::new(1));
-    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
+    let transport_adapter = MediaTransport::fake_for_testing();
     let first_room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
@@ -530,7 +530,7 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
             metrics: Arc::clone(&metrics),
         },
     ));
-    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
+    let transport_adapter = MediaTransport::fake_for_testing();
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
@@ -593,7 +593,7 @@ async fn manager_metrics_track_live_rooms_and_users_without_replacement_drift() 
             metrics: Arc::clone(&metrics),
         },
     );
-    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
+    let transport_adapter = MediaTransport::fake_for_testing();
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
@@ -659,7 +659,7 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
             metrics: Arc::clone(&metrics),
         },
     );
-    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
+    let transport_adapter = MediaTransport::fake_for_testing();
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
@@ -742,7 +742,7 @@ async fn manager_metrics_track_receiver_source_selection_updates() {
             metrics: Arc::clone(&metrics),
         },
     );
-    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
+    let transport_adapter = MediaTransport::fake_for_testing();
     let room = manager
         .serve_room(
             "issuer-source-selection",
@@ -786,7 +786,7 @@ async fn manager_metrics_track_receiver_source_selection_updates() {
 #[tokio::test]
 async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
     let manager = RoomManager::for_test();
-    let transport_adapter = RuntimeTransportAdapter::fake_for_testing();
+    let transport_adapter = MediaTransport::fake_for_testing();
     let fake = transport_adapter
         .as_fake_adapter()
         .expect("test expects the fake transport adapter");

@@ -21,7 +21,7 @@ use super::{
         ConsumerRouteState, RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomManagerDeps,
         RoomRuntimePolicy, rtp_capabilities::router_rtp_capabilities,
     },
-    transport_adapter::RuntimeTransportAdapter,
+    transport_adapter::MediaTransport,
 };
 use crate::{config::Config, core::SfuCore};
 
@@ -226,7 +226,7 @@ pub(in crate::runtime) fn build_test_runtime_state(
     room_manager: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
-    transport_adapter: RuntimeTransportAdapter,
+    transport_adapter: MediaTransport,
 ) -> RuntimeState {
     let options = RuntimeOptions::from_config(config);
     let media_core = SfuCore::new(options.core, transport_adapter.clone());

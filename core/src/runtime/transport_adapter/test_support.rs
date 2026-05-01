@@ -11,7 +11,7 @@ pub use super::fake::FakeWebRtcEvent;
 #[cfg(any(test, feature = "testing-transport"))]
 use super::shard_set::RtcTransportShardSet;
 use super::{
-    runtime_adapter::RuntimeTransportAdapter,
+    runtime_adapter::MediaTransport,
     transport_backend::{MediaTransportBackend, TestTransport},
 };
 #[cfg(any(test, feature = "testing-transport"))]
@@ -237,7 +237,7 @@ impl SourcePolicyPort for FakeWebRtcAdapter {
     }
 }
 
-impl RuntimeTransportAdapter {
+impl MediaTransport {
     #[cfg(any(test, feature = "testing-transport"))]
     #[must_use]
     pub const fn from_test_transport(transport: TestTransport) -> Self {

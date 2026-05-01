@@ -12,7 +12,7 @@ use o_sfu_router::{
 use str0m::media::Mid;
 use tokio::time::timeout;
 
-use super::{RtcTransport, RtcTransportBuildError, RuntimeTransportAdapter, TestTransport};
+use super::{MediaTransport, RtcTransport, RtcTransportBuildError, TestTransport};
 use crate::{
     MediaCodecFlags, RtcPortRange,
     runtime::{
@@ -60,7 +60,7 @@ fn sample_audio_rtp_parameters(mid: &str, ssrc: u32) -> MediaStream {
         .with_mid(String::from(mid))
 }
 
-async fn prepare_rtc_session(adapter: &RuntimeTransportAdapter, session_key: &TransportSessionKey) {
+async fn prepare_rtc_session(adapter: &MediaTransport, session_key: &TransportSessionKey) {
     assert!(
         adapter
             .create_initial_session_offer(session_key)
@@ -69,17 +69,14 @@ async fn prepare_rtc_session(adapter: &RuntimeTransportAdapter, session_key: &Tr
     );
 }
 
-async fn prepare_rtc_sessions(
-    adapter: &RuntimeTransportAdapter,
-    session_keys: &[&TransportSessionKey],
-) {
+async fn prepare_rtc_sessions(adapter: &MediaTransport, session_keys: &[&TransportSessionKey]) {
     for session_key in session_keys {
         prepare_rtc_session(adapter, session_key).await;
     }
 }
 
 async fn publish_audio(
-    adapter: &RuntimeTransportAdapter,
+    adapter: &MediaTransport,
     session_key: &TransportSessionKey,
     rtp_parameters: &MediaStream,
 ) -> Option<TransportMediaId> {
@@ -91,7 +88,7 @@ async fn publish_audio(
 }
 
 async fn consume_audio(
-    adapter: &RuntimeTransportAdapter,
+    adapter: &MediaTransport,
     consumer_session_key: &TransportSessionKey,
     source_session_key: &TransportSessionKey,
     source_media_id: TransportMediaId,
@@ -184,7 +181,7 @@ async fn assert_remote_route_activity(
     clippy::panic,
     reason = "transport adapter tests use fixed valid RTC ranges and should fail immediately if their fixture is invalid"
 )]
-fn test_rtc_adapter(worker_count: usize, rtc_port_range: RtcPortRange) -> RuntimeTransportAdapter {
+fn test_rtc_adapter(worker_count: usize, rtc_port_range: RtcPortRange) -> MediaTransport {
     match RtcTransport::builder()
         .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -202,7 +199,7 @@ fn test_rtc_adapter(worker_count: usize, rtc_port_range: RtcPortRange) -> Runtim
         .worker_count(worker_count)
         .build()
     {
-        Ok(transport) => RuntimeTransportAdapter::from_rtc_transport(transport),
+        Ok(transport) => MediaTransport::from_rtc_transport(transport),
         Err(error) => panic!("fixed RTC transport test config should be valid: {error}"),
     }
 }
@@ -342,8 +339,7 @@ fn concrete_transports_satisfy_runtime_transport_ports() {
 
 #[test]
 fn fake_adapter_projects_offered_capabilities_after_minimal_sdp_validation() {
-    let adapter =
-        RuntimeTransportAdapter::from_fake_adapter(Arc::new(FakeWebRtcAdapter::default()));
+    let adapter = MediaTransport::from_fake_adapter(Arc::new(FakeWebRtcAdapter::default()));
     let offered = sample_router_capabilities();
 
     let projected =
@@ -354,8 +350,7 @@ fn fake_adapter_projects_offered_capabilities_after_minimal_sdp_validation() {
 
 #[test]
 fn fake_adapter_rejects_answers_without_minimal_sdp_shape() {
-    let adapter =
-        RuntimeTransportAdapter::from_fake_adapter(Arc::new(FakeWebRtcAdapter::default()));
+    let adapter = MediaTransport::from_fake_adapter(Arc::new(FakeWebRtcAdapter::default()));
 
     let projected =
         adapter.negotiated_client_rtp_capabilities("invalid-answer", &sample_router_capabilities());
@@ -364,9 +359,9 @@ fn fake_adapter_rejects_answers_without_minimal_sdp_shape() {
 }
 
 #[tokio::test]
-async fn runtime_transport_adapter_exposes_split_ports_to_callers() {
+async fn media_transport_exposes_split_ports_to_callers() {
     let fake = Arc::new(FakeWebRtcAdapter::default());
-    let adapter = RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&fake));
+    let adapter = MediaTransport::from_fake_adapter(Arc::clone(&fake));
     let session_key = test_session_key(17, 0, 3, UserId::Integer(41));
     let audio_rtp_parameters = sample_audio_rtp_parameters("aud-up", 1234);
 
@@ -494,7 +489,7 @@ async fn rtc_adapter_allocates_disjoint_media_ids_across_workers() {
 #[tokio::test]
 async fn runtime_transport_semantic_facades_preserve_fake_transport_behavior() {
     let fake = Arc::new(FakeWebRtcAdapter::default());
-    let adapter = RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&fake));
+    let adapter = MediaTransport::from_fake_adapter(Arc::clone(&fake));
     let session_key = test_session_key(18, 0, 19, UserId::Integer(20));
     let speaker_source = ActiveSpeakerSource::new(TransportMediaId::new(77), Instant::now());
     fake.set_active_speaker_source_snapshot(vec![speaker_source]);
@@ -527,7 +522,7 @@ async fn runtime_transport_semantic_facades_preserve_fake_transport_behavior() {
 #[tokio::test]
 async fn fake_transport_source_policy_subscription_wakes_on_active_speaker_updates() {
     let fake = Arc::new(FakeWebRtcAdapter::default());
-    let adapter = RuntimeTransportAdapter::from_fake_adapter(Arc::clone(&fake));
+    let adapter = MediaTransport::from_fake_adapter(Arc::clone(&fake));
     let subscription = adapter.source_policy_subscription();
     let dirty_room_instance_id = RoomInstanceId::from_raw(27);
 

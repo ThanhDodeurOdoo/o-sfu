@@ -300,13 +300,6 @@ impl MediaTransport {
     }
 }
 
-/// Compatibility alias for older call sites.
-///
-/// New code should use [`MediaTransport`] when naming the runtime boundary.
-/// The alias stays for one migration cycle so existing room and websocket code
-/// can move without unrelated churn.
-pub type RuntimeTransportAdapter = MediaTransport;
-
 impl NegotiationPort for RtcTransport {
     async fn create_initial_session_offer(
         &self,

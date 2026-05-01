@@ -43,7 +43,7 @@ pub(super) use crate::{
         },
         testing::{build_test_runtime_state, decode_protocol_welcome_batch},
         transport_adapter::{
-            MediaTransportDeps, RtcTransport, RtcTransportConfig, RuntimeTransportAdapter,
+            MediaTransport, MediaTransportDeps, RtcTransport, RtcTransportConfig,
             SessionBitrateLimits,
             test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
         },
@@ -60,7 +60,7 @@ pub(super) struct TestServer {
     pub(super) addr: SocketAddr,
     pub(super) handle: JoinHandle<()>,
     pub(super) room_manager: Arc<RoomManager>,
-    pub(super) transport_adapter: RuntimeTransportAdapter,
+    pub(super) transport_adapter: MediaTransport,
     pub(super) state: RuntimeState,
 }
 
@@ -124,7 +124,7 @@ pub(super) async fn spawn_test_server(
         10_000,
         60_000,
         room_size,
-        RuntimeTransportAdapter::fake_for_testing(),
+        MediaTransport::fake_for_testing(),
     )
     .await
 }
@@ -134,7 +134,7 @@ pub(super) async fn spawn_test_server_with_timeouts(
     user_timeout_ms: u64,
     ping_interval_ms: u64,
     room_size: usize,
-    transport_adapter: RuntimeTransportAdapter,
+    transport_adapter: MediaTransport,
 ) -> Option<TestServer> {
     spawn_test_server_impl(
         authentication_timeout_ms,
@@ -152,7 +152,7 @@ async fn spawn_test_server_impl(
     user_timeout_ms: u64,
     ping_interval_ms: u64,
     room_size: usize,
-    transport_adapter: RuntimeTransportAdapter,
+    transport_adapter: MediaTransport,
     feature_flags: RuntimeFeatureFlags,
 ) -> Option<TestServer> {
     let mut config = test_config(
@@ -210,7 +210,7 @@ async fn spawn_test_server_impl(
 pub(super) async fn spawn_test_server_with_adapter(
     authentication_timeout_ms: u64,
     room_size: usize,
-    transport_adapter: RuntimeTransportAdapter,
+    transport_adapter: MediaTransport,
 ) -> Option<TestServer> {
     spawn_test_server_with_timeouts(
         authentication_timeout_ms,
@@ -231,7 +231,7 @@ pub(super) async fn spawn_protocol_test_server(
         10_000,
         60_000,
         room_size,
-        RuntimeTransportAdapter::fake_for_testing(),
+        MediaTransport::fake_for_testing(),
     )
     .await
 }
@@ -239,7 +239,7 @@ pub(super) async fn spawn_protocol_test_server(
 pub(super) async fn spawn_test_server_with_feature_flags(
     authentication_timeout_ms: u64,
     room_size: usize,
-    transport_adapter: RuntimeTransportAdapter,
+    transport_adapter: MediaTransport,
     feature_flags: RuntimeFeatureFlags,
 ) -> Option<TestServer> {
     spawn_test_server_impl(
@@ -257,7 +257,7 @@ pub(super) async fn spawn_test_server_with_feature_flags(
     clippy::panic,
     reason = "the test fixture builds a constant valid RTC transport and failing here means the fixture itself is invalid"
 )]
-pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
+pub(super) fn build_real_rtc_transport_adapter() -> MediaTransport {
     match RtcTransport::builder()
         .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -275,7 +275,7 @@ pub(super) fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
         .worker_count(1)
         .build()
     {
-        Ok(transport) => RuntimeTransportAdapter::from_rtc_transport(transport),
+        Ok(transport) => MediaTransport::from_rtc_transport(transport),
         Err(error) => panic!("constant RTC test transport config should be valid: {error}"),
     }
 }

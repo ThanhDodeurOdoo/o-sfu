@@ -25,7 +25,7 @@ use crate::{
         ConnectionId,
         metrics::{RuntimeMetrics, WsSessionLoopExitReason},
         telemetry::schema::event as telemetry_event,
-        transport_adapter::RuntimeTransportAdapter,
+        transport_adapter::MediaTransport,
         websocket_server::{
             ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, decode_client_batch,
         },
@@ -56,7 +56,7 @@ pub(super) struct UserLoop<'a> {
     pub(super) connection_id: ConnectionId,
     pub(super) outbound_rx: &'a mut mpsc::UnboundedReceiver<UserOutbound>,
     pub(super) user: &'a mut User,
-    pub(super) transport_adapter: &'a RuntimeTransportAdapter,
+    pub(super) transport_adapter: &'a MediaTransport,
     pub(super) user_timeout_ms: u64,
     pub(super) ping_interval_ms: u64,
     pub(super) metrics: &'a RuntimeMetrics,
@@ -198,7 +198,7 @@ async fn finalize_user_session(
     user_id: &UserId,
     connection_id: ConnectionId,
     user: &mut User,
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
 ) {
     user.close().await;
     let _removed = room_manager

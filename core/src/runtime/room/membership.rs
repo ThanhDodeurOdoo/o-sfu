@@ -22,9 +22,7 @@ use crate::{
         diagnostics::DiagnosticsEventData,
         metrics::TransportCleanupFailureKind,
         telemetry::schema::event as telemetry_event,
-        transport_adapter::{
-            MediaPort, RuntimeTransportAdapter, SessionPort, TransportAdapterError,
-        },
+        transport_adapter::{MediaPort, MediaTransport, SessionPort, TransportAdapterError},
     },
 };
 
@@ -38,14 +36,12 @@ fn warn_transport_cleanup_failure(operation: &TransportCleanupOperation, message
 }
 #[derive(Clone, Copy)]
 pub(in crate::runtime::room) struct UserCleanup<'a> {
-    transport_adapter: Option<&'a RuntimeTransportAdapter>,
+    transport_adapter: Option<&'a MediaTransport>,
     clean_transport_state: bool,
 }
 
 impl<'a> UserCleanup<'a> {
-    pub(in crate::runtime::room) const fn runtime(
-        transport_adapter: &'a RuntimeTransportAdapter,
-    ) -> Self {
+    pub(in crate::runtime::room) const fn runtime(transport_adapter: &'a MediaTransport) -> Self {
         Self {
             transport_adapter: Some(transport_adapter),
             clean_transport_state: true,
@@ -54,7 +50,7 @@ impl<'a> UserCleanup<'a> {
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub(in crate::runtime::room) const fn state_only(
-        transport_adapter: Option<&'a RuntimeTransportAdapter>,
+        transport_adapter: Option<&'a MediaTransport>,
     ) -> Self {
         Self {
             transport_adapter,
@@ -62,9 +58,7 @@ impl<'a> UserCleanup<'a> {
         }
     }
 
-    pub(in crate::runtime::room) const fn transport_adapter(
-        self,
-    ) -> Option<&'a RuntimeTransportAdapter> {
+    pub(in crate::runtime::room) const fn transport_adapter(self) -> Option<&'a MediaTransport> {
         self.transport_adapter
     }
 
@@ -113,7 +107,7 @@ impl Room {
         label: Option<String>,
         permissions: UserPermissions,
         sender: mpsc::UnboundedSender<UserOutbound>,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) -> Result<ConnectionId, RoomJoinError> {
         self.join_session_with_cleanup(
             user_id,
@@ -159,7 +153,7 @@ impl Room {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) -> bool {
         self.run_session_transition(
             UserTransition::Close {
@@ -197,7 +191,7 @@ impl Room {
         connection_id: ConnectionId,
         info: UserInfo,
         refresh: UserInfoRefresh,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) {
         self.update_user_info_with_transport(
             user_id,
@@ -215,7 +209,7 @@ impl Room {
         connection_id: ConnectionId,
         info: UserInfo,
         refresh: UserInfoRefresh,
-        transport_adapter: Option<&RuntimeTransportAdapter>,
+        transport_adapter: Option<&MediaTransport>,
     ) {
         let need_refresh = refresh.is_needed();
         let outcome = {
@@ -245,7 +239,7 @@ impl Room {
     pub(crate) async fn disconnect_sessions_runtime(
         &self,
         user_ids: &[UserId],
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) {
         self.disconnect_users_with_cleanup(user_ids, UserCleanup::runtime(transport_adapter))
             .await;
@@ -343,7 +337,7 @@ impl Room {
     async fn execute_transport_cleanup_operation(
         &self,
         operation: &TransportCleanupOperation,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) -> Result<(), TransportAdapterError> {
         match operation {
             TransportCleanupOperation::RemoveMedia {
@@ -381,7 +375,7 @@ impl Room {
         &self,
         operation: &TransportCleanupOperation,
         error: TransportAdapterError,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) {
         let action = self
             .cleanup_reconciler()
@@ -424,10 +418,7 @@ impl Room {
     /// retry result. Transport adapter calls happen between those bookkeeping
     /// steps, which prevents adapter latency from blocking other room cleanup
     /// decisions.
-    async fn reconcile_transport_cleanup_retries(
-        &self,
-        transport_adapter: &RuntimeTransportAdapter,
-    ) {
+    async fn reconcile_transport_cleanup_retries(&self, transport_adapter: &MediaTransport) {
         loop {
             let retries = self.cleanup_reconciler().due_retries();
             if retries.is_empty() {
@@ -456,7 +447,7 @@ impl Room {
         &self,
         operation: &TransportCleanupOperation,
         action: CleanupRetryAction,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) {
         match action {
             CleanupRetryAction::Succeeded => {
@@ -500,7 +491,7 @@ impl Room {
     async fn force_transport_cleanup_owner_drop(
         &self,
         operation: &TransportCleanupOperation,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) {
         if !operation.is_media_removal() {
             return;
@@ -541,7 +532,7 @@ impl Room {
     #[cfg(any(test, feature = "testing-transport"))]
     pub(in crate::runtime::room) async fn force_cleanup_retry_cycle_for_test(
         &self,
-        transport_adapter: &RuntimeTransportAdapter,
+        transport_adapter: &MediaTransport,
     ) {
         self.cleanup_reconciler().force_due_for_test();
         self.reconcile_transport_cleanup_retries(transport_adapter)

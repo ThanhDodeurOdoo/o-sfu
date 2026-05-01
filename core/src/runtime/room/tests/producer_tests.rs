@@ -621,7 +621,7 @@ async fn receiver_budget_resumes_policy_paused_route_without_erasing_subscriptio
 
 async fn setup_ready_users_with_fake(
     user_ids: &[i64],
-) -> (Arc<Room>, RuntimeTransportAdapter, Arc<FakeWebRtcAdapter>) {
+) -> (Arc<Room>, MediaTransport, Arc<FakeWebRtcAdapter>) {
     let manager = RoomManager::for_test();
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
@@ -646,16 +646,12 @@ async fn setup_ready_users_with_fake(
     (room, adapter, fake)
 }
 
-async fn setup_three_ready_users_with_fake()
--> (Arc<Room>, RuntimeTransportAdapter, Arc<FakeWebRtcAdapter>) {
+async fn setup_three_ready_users_with_fake() -> (Arc<Room>, MediaTransport, Arc<FakeWebRtcAdapter>)
+{
     setup_ready_users_with_fake(&[1, 2, 3]).await
 }
 
-async fn publish_audio_and_camera(
-    room: &Arc<Room>,
-    user_id: &UserId,
-    adapter: &RuntimeTransportAdapter,
-) {
+async fn publish_audio_and_camera(room: &Arc<Room>, user_id: &UserId, adapter: &MediaTransport) {
     assert!(
         room.test_api()
             .media()
@@ -672,7 +668,7 @@ async fn publish_audio_and_camera(
     publish_camera(room, user_id, adapter).await;
 }
 
-async fn publish_camera(room: &Arc<Room>, user_id: &UserId, adapter: &RuntimeTransportAdapter) {
+async fn publish_camera(room: &Arc<Room>, user_id: &UserId, adapter: &MediaTransport) {
     assert!(
         room.test_api()
             .media()
@@ -821,7 +817,7 @@ fn assert_consumer_activity_update(
 
 async fn assert_subscription_layout(
     room: &Arc<Room>,
-    adapter: &RuntimeTransportAdapter,
+    adapter: &MediaTransport,
     consumer_user_id: &UserId,
     stream_type: StreamType,
     expected_role: DiagnosticsVideoLayoutRole,
@@ -2327,7 +2323,7 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
 
 struct RealRtcRefreshScenario {
     room: Arc<Room>,
-    transport_adapter: RuntimeTransportAdapter,
+    transport_adapter: MediaTransport,
     publisher_user_id: UserId,
     subscriber_user_id: UserId,
     publisher_initial_offer: SessionOffer,
@@ -2968,7 +2964,7 @@ async fn staged_negotiated_publish_duplicate_race_keeps_one_staged_entry_and_one
     clippy::panic,
     reason = "the RTC room test fixture uses a fixed valid configuration and should fail loudly if it stops being valid"
 )]
-fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
+fn build_real_rtc_transport_adapter() -> MediaTransport {
     match RtcTransport::builder()
         .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -2986,13 +2982,13 @@ fn build_real_rtc_transport_adapter() -> RuntimeTransportAdapter {
         .worker_count(1)
         .build()
     {
-        Ok(transport) => RuntimeTransportAdapter::from_rtc_transport(transport),
+        Ok(transport) => MediaTransport::from_rtc_transport(transport),
         Err(error) => panic!("constant RTC room test transport config should be valid: {error}"),
     }
 }
 
 async fn bootstrap_real_rtc_user(
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
     session_key: &TransportSessionKey,
 ) -> SessionOffer {
     transport_adapter
@@ -3028,7 +3024,7 @@ fn build_remote_rtc(port: u16) -> Rtc {
 }
 
 async fn apply_offer_answer(
-    adapter: &RuntimeTransportAdapter,
+    adapter: &MediaTransport,
     session_key: &TransportSessionKey,
     remote: &mut Rtc,
     offer_sdp: String,

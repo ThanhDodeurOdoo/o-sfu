@@ -55,7 +55,7 @@ use transport_adapter::SourcePolicyPort;
 #[cfg(any(test, feature = "testing-transport"))]
 pub use transport_adapter::test_support::test_transport_session_key;
 pub(crate) use transport_adapter::{
-    MediaPort, MediaTransport, MediaTransportDeps, ObservabilityPort, RuntimeTransportAdapter,
+    MediaPort, MediaTransport, MediaTransportDeps, ObservabilityPort,
     client_rtp_capabilities_from_answer,
 };
 pub use transport_adapter::{RemoteAddrDemux, TransportSessionKey};
@@ -71,7 +71,7 @@ pub struct Runtime {
     room_manager: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
-    transport_adapter: RuntimeTransportAdapter,
+    transport_adapter: MediaTransport,
 }
 
 #[derive(Debug, Clone)]
@@ -80,7 +80,7 @@ pub(super) struct RuntimeState {
     websocket_options: SocketOptions,
     rooms: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
-    transport_adapter: RuntimeTransportAdapter,
+    transport_adapter: MediaTransport,
     media_core: RuntimeSfuCore,
     metrics: Arc<RuntimeMetrics>,
 }
@@ -155,9 +155,9 @@ impl Runtime {
 /// deadline instead of polling the whole process on a fixed interval.
 fn spawn_source_packet_policy_update_task(
     rooms: Arc<RoomManager>,
-    observability_port: RuntimeTransportAdapter,
+    observability_port: MediaTransport,
     updates: transport_adapter::SourcePolicyUpdateSubscription,
-    media_port: RuntimeTransportAdapter,
+    media_port: MediaTransport,
 ) -> JoinHandle<()> {
     info!("booted source packet policy update task");
     tokio::spawn(async move {
@@ -232,7 +232,7 @@ async fn sync_source_packet_selection_policies(
 fn build_transport_adapter(
     options: &CoreOptions,
     services: &RuntimeServices,
-) -> Result<RuntimeTransportAdapter> {
+) -> Result<MediaTransport> {
     Ok(MediaTransport::from_core_options(
         options,
         MediaTransportDeps {

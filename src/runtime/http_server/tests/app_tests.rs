@@ -22,7 +22,7 @@ async fn publish_video_stream(
     connection_id: ConnectionId,
     stream_type: StreamType,
     ssrc: u64,
-    transport_adapter: &RuntimeTransportAdapter,
+    transport_adapter: &MediaTransport,
 ) {
     assert_eq!(
         room.apply_session_negotiated(

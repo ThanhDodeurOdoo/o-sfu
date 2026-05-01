@@ -23,7 +23,6 @@ mod transport_backend;
 pub use config::{MediaTransportDeps, RtcTransportConfig, RtcTransportShardSetConfig};
 pub use runtime_adapter::{
     MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,
-    RuntimeTransportAdapter,
 };
 #[cfg(any(test, feature = "testing-transport"))]
 pub use transport_backend::TestTransport;

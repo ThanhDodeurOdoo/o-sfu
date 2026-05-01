@@ -17,8 +17,8 @@
 //! - semantic media intent and outcome types such as [`PublicationActivity`],
 //!   [`PublishStageOutcome`], [`UnpublishOutcome`] and [`UserInfoRefresh`] for
 //!   caller-facing control decisions.
-//! - [`MediaTransport`], [`RtcTransport`], and [`RuntimeTransportAdapter`] as the
-//!   runtime media transport boundary over the concrete RTC adapter.
+//! - [`MediaTransport`] and [`RtcTransport`] as the runtime media transport
+//!   boundary over the concrete RTC adapter.
 //! - the transport concern traits in [`transport`], especially
 //!   [`TransportFacade`] when a caller needs one backend with negotiation,
 //!   media, and observability capabilities, and the narrower port traits when a
@@ -113,7 +113,6 @@ pub use runtime::{
     source_model::UploadLayerPolicyRole,
     transport_adapter::{
         MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,
-        RuntimeTransportAdapter,
     },
 };
 pub use sfu::{

@@ -100,7 +100,7 @@ pub(super) const CLEANUP_MAX_RETRIES: u8 = 3;
 ///
 /// # Ownership split
 ///
-/// The operation stores the identity needed by `RuntimeTransportAdapter`. It
+/// The operation stores the identity needed by `MediaTransport`. It
 /// does not own transport resources and it does not prove that those resources
 /// still exist. A retry that finds the resource gone is treated by the adapter
 /// contract, then converted into a retry action by `CleanupReconciler`.
