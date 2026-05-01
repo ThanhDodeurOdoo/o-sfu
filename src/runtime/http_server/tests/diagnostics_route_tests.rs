@@ -173,17 +173,17 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     assert!(alice_join.is_ok());
     assert!(bob_join.is_ok());
     assert!(carol_join.is_ok());
-    make_session_ready(&room, &bob_session_id, &test_state.transport_adapter).await;
-    make_session_ready(&room, &carol_session_id, &test_state.transport_adapter).await;
+    make_session_ready(&room, &bob_session_id, &test_state.media_transport).await;
+    make_session_ready(&room, &carol_session_id, &test_state.media_transport).await;
     publish_media_stream(
         &room,
         &alice_session_id,
         StreamType::Camera,
         test_simulcast_video_rtp_parameters(),
-        &test_state.transport_adapter,
+        &test_state.media_transport,
     )
     .await;
-    if let Some(fake) = test_state.transport_adapter.as_fake_adapter() {
+    if let Some(fake) = test_state.media_transport.as_fake_adapter() {
         fake.set_receiver_bandwidth_estimate(bob_session_id.clone(), 200_000);
     }
     for _ in 0..2 {
@@ -193,7 +193,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
                 &alice_session_id,
                 UserInfo::default(),
                 false,
-                &test_state.transport_adapter,
+                &test_state.media_transport,
             )
             .await;
     }
@@ -691,7 +691,7 @@ async fn diagnostics_user_lookup_drops_room_teardown_entries() {
                 permissions: UserPermissions::default(),
                 sender: tx,
             },
-            &test_state.transport_adapter,
+            &test_state.media_transport,
         )
         .await;
     assert!(join.is_ok());
@@ -705,7 +705,7 @@ async fn diagnostics_user_lookup_drops_room_teardown_entries() {
                 &room_id,
                 &user_id,
                 connection_id,
-                &test_state.transport_adapter,
+                &test_state.media_transport,
             )
             .await
     );

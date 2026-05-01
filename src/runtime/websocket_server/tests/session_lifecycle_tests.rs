@@ -163,7 +163,7 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
     let Some(connection_id) = connection_id else {
         return;
     };
-    server.transport_adapter.debug_set_session_transport_health(
+    server.media_transport.debug_set_session_transport_health(
         &room.transport_user_key(&core_user_id, connection_id),
         TransportSessionHealth::Disconnected,
     );
@@ -219,7 +219,7 @@ async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiat
     let Some(connection_id) = connection_id else {
         return;
     };
-    server.transport_adapter.debug_set_session_transport_health(
+    server.media_transport.debug_set_session_transport_health(
         &room.transport_user_key(&core_user_id, connection_id),
         TransportSessionHealth::Disconnected,
     );
@@ -436,7 +436,7 @@ async fn runtime_disconnect_rolls_back_staged_publish_before_room_cleanup() {
         .disconnect_users(
             room.uuid(),
             slice::from_ref(&user_id),
-            &server.transport_adapter,
+            &server.media_transport,
         )
         .await;
 
@@ -565,11 +565,7 @@ async fn disconnect_cleanup_still_closes_transport_adapter_user_state() {
 
     server
         .room_manager
-        .disconnect_users(
-            room.uuid(),
-            &[UserId::Integer(1)],
-            &server.transport_adapter,
-        )
+        .disconnect_users(room.uuid(), &[UserId::Integer(1)], &server.media_transport)
         .await;
 
     assert_eq!(read_close_code(alice).await, Some(CloseCode::Library(4003)));
@@ -619,7 +615,7 @@ async fn disconnect_cleanup_closes_transport_user_before_empty_room_removal() {
         .disconnect_users(
             room.uuid(),
             slice::from_ref(&core_user_id),
-            &server.transport_adapter,
+            &server.media_transport,
         )
         .await;
 

@@ -120,7 +120,7 @@ async fn stats_returns_live_room_data() {
         alice_connection_id,
         StreamType::Camera,
         22_222,
-        &test_state.transport_adapter,
+        &test_state.media_transport,
     )
     .await;
     publish_video_stream(
@@ -129,7 +129,7 @@ async fn stats_returns_live_room_data() {
         bob_connection_id,
         StreamType::Screen,
         33_333,
-        &test_state.transport_adapter,
+        &test_state.media_transport,
     )
     .await;
 

@@ -12,7 +12,7 @@ use tokio::{
 };
 
 use super::{
-    RuntimeServices, RuntimeState, build_transport_adapter,
+    RuntimeServices, RuntimeState, build_media_transport,
     diagnostics::DiagnosticsStore,
     http_server::app,
     metrics::RuntimeMetrics,
@@ -189,14 +189,14 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
             metrics: Arc::clone(&services.metrics),
         },
     ));
-    let transport_adapter = build_transport_adapter(&options.core, &services)?;
+    let media_transport = build_media_transport(&options.core, &services)?;
     let bind_address = config.http.bind_address;
     let state = build_test_runtime_state(
         &config,
         Arc::clone(&room_manager),
         Arc::clone(&services.diagnostics),
         Arc::clone(&services.metrics),
-        transport_adapter,
+        media_transport,
     );
     let listener = TcpListener::bind(bind_address).await?;
     let addr = listener
@@ -226,16 +226,16 @@ pub(in crate::runtime) fn build_test_runtime_state(
     room_manager: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
-    transport_adapter: MediaTransport,
+    media_transport: MediaTransport,
 ) -> RuntimeState {
     let options = RuntimeOptions::from_config(config);
-    let media_core = SfuCore::new(options.core, transport_adapter.clone());
+    let media_core = SfuCore::new(options.core, media_transport.clone());
     RuntimeState {
         http_options: options.http,
         websocket_options: options.websocket,
         rooms: room_manager,
         diagnostics,
-        transport_adapter,
+        media_transport,
         media_core,
         metrics,
     }

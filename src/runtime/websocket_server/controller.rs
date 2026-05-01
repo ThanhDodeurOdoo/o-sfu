@@ -124,7 +124,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
             connection_id: user_session.connection_id,
             outbound_rx: &mut user_session.outbound_rx,
             user: &mut user_session.user,
-            transport_adapter: &state.transport_adapter,
+            media_transport: &state.media_transport,
             user_timeout_ms: state.websocket_options.user.timeout_ms,
             ping_interval_ms: state.websocket_options.user.ping_interval_ms,
             metrics: &state.metrics,

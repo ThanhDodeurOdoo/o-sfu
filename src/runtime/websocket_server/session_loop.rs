@@ -56,7 +56,7 @@ pub(super) struct UserLoop<'a> {
     pub(super) connection_id: ConnectionId,
     pub(super) outbound_rx: &'a mut mpsc::UnboundedReceiver<UserOutbound>,
     pub(super) user: &'a mut User,
-    pub(super) transport_adapter: &'a MediaTransport,
+    pub(super) media_transport: &'a MediaTransport,
     pub(super) user_timeout_ms: u64,
     pub(super) ping_interval_ms: u64,
     pub(super) metrics: &'a RuntimeMetrics,
@@ -72,7 +72,7 @@ pub(super) async fn run(session: UserLoop<'_>) -> WsSessionLoopExitReason {
         connection_id,
         outbound_rx,
         user,
-        transport_adapter,
+        media_transport,
         user_timeout_ms,
         ping_interval_ms,
         metrics,
@@ -96,7 +96,7 @@ pub(super) async fn run(session: UserLoop<'_>) -> WsSessionLoopExitReason {
         user_id,
         connection_id,
         user,
-        transport_adapter,
+        media_transport,
     )
     .await;
     exit_reason
@@ -198,11 +198,11 @@ async fn finalize_user_session(
     user_id: &UserId,
     connection_id: ConnectionId,
     user: &mut User,
-    transport_adapter: &MediaTransport,
+    media_transport: &MediaTransport,
 ) {
     user.close().await;
     let _removed = room_manager
-        .close_session(room.uuid(), user_id, connection_id, transport_adapter)
+        .close_session(room.uuid(), user_id, connection_id, media_transport)
         .await;
 }
 

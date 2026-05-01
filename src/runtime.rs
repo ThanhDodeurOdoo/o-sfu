@@ -6,7 +6,7 @@
 //! Runtime
 //! |- http_server          -> HTTP control-plane routes and server boot
 //! |- websocket_server     -> WebSocket upgrade, auth handshake, and steady-state socket loop
-//! |- core                 -> room engine, transport adapter, recording, metrics, and diagnostics
+//! |- core                 -> room engine, media transport, recording, metrics, and diagnostics
 //! `- telemetry crate      -> tracing setup, schemas, diagnostics, metrics, and exporters
 //! ```
 
@@ -63,7 +63,7 @@ pub use transport_adapter::{RemoteAddrDemux, TransportSessionKey};
 /// Process-global shell for the server process.
 ///
 /// `Runtime` owns the long-lived subsystems that every request shares: configuration,
-/// room allocation, metrics,and the transport backend. Per-requets entrypoints take
+/// room allocation, metrics, and the media transport. Per-request entrypoints take
 /// cheap clones of these dependencies through [`RuntimeState`].
 #[derive(Debug)]
 pub struct Runtime {
@@ -71,7 +71,7 @@ pub struct Runtime {
     room_manager: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
-    transport_adapter: MediaTransport,
+    media_transport: MediaTransport,
 }
 
 #[derive(Debug, Clone)]
@@ -80,7 +80,7 @@ pub(super) struct RuntimeState {
     websocket_options: SocketOptions,
     rooms: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
-    transport_adapter: MediaTransport,
+    media_transport: MediaTransport,
     media_core: RuntimeSfuCore,
     metrics: Arc<RuntimeMetrics>,
 }
@@ -106,7 +106,7 @@ impl Runtime {
     pub fn new(config: &Config) -> Result<Self> {
         let options = RuntimeOptions::from_config(config);
         let services = RuntimeServices::default();
-        let transport_adapter = build_transport_adapter(&options.core, &services)?;
+        let media_transport = build_media_transport(&options.core, &services)?;
         let room_runtime_policy = build_room_runtime_policy(&options);
         info!("{}", config.log_view(process::id()));
         info!(
@@ -119,25 +119,25 @@ impl Runtime {
             room_manager,
             diagnostics: services.diagnostics,
             metrics: services.metrics,
-            transport_adapter,
+            media_transport,
         })
     }
 
     async fn run_until_stopped(self) -> Result<()> {
         let source_packet_policy_sync = spawn_source_packet_policy_update_task(
             Arc::clone(&self.room_manager),
-            self.transport_adapter.clone(),
-            subscribe_source_policy_updates(&self.transport_adapter),
-            self.transport_adapter.clone(),
+            self.media_transport.clone(),
+            subscribe_source_policy_updates(&self.media_transport),
+            self.media_transport.clone(),
         );
         let options = self.options.clone();
-        let media_core = SfuCore::new(options.core, self.transport_adapter.clone());
+        let media_core = SfuCore::new(options.core, self.media_transport.clone());
         let result = serve_http(RuntimeState {
             http_options: options.http.clone(),
             websocket_options: options.websocket.clone(),
             rooms: Arc::clone(&self.room_manager),
             diagnostics: Arc::clone(&self.diagnostics),
-            transport_adapter: self.transport_adapter.clone(),
+            media_transport: self.media_transport.clone(),
             media_core,
             metrics: self.metrics,
         })
@@ -229,7 +229,7 @@ async fn sync_source_packet_selection_policies(
         .await;
 }
 
-fn build_transport_adapter(
+fn build_media_transport(
     options: &CoreOptions,
     services: &RuntimeServices,
 ) -> Result<MediaTransport> {

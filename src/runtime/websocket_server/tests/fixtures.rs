@@ -60,7 +60,7 @@ pub(super) struct TestServer {
     pub(super) addr: SocketAddr,
     pub(super) handle: JoinHandle<()>,
     pub(super) room_manager: Arc<RoomManager>,
-    pub(super) transport_adapter: MediaTransport,
+    pub(super) media_transport: MediaTransport,
     pub(super) state: RuntimeState,
 }
 
@@ -134,14 +134,14 @@ pub(super) async fn spawn_test_server_with_timeouts(
     user_timeout_ms: u64,
     ping_interval_ms: u64,
     room_size: usize,
-    transport_adapter: MediaTransport,
+    media_transport: MediaTransport,
 ) -> Option<TestServer> {
     spawn_test_server_impl(
         authentication_timeout_ms,
         user_timeout_ms,
         ping_interval_ms,
         room_size,
-        transport_adapter,
+        media_transport,
         RuntimeFeatureFlags::default(),
     )
     .await
@@ -152,7 +152,7 @@ async fn spawn_test_server_impl(
     user_timeout_ms: u64,
     ping_interval_ms: u64,
     room_size: usize,
-    transport_adapter: MediaTransport,
+    media_transport: MediaTransport,
     feature_flags: RuntimeFeatureFlags,
 ) -> Option<TestServer> {
     let mut config = test_config(
@@ -186,7 +186,7 @@ async fn spawn_test_server_impl(
         Arc::clone(&room_manager),
         Arc::clone(&diagnostics),
         metrics,
-        transport_adapter.clone(),
+        media_transport.clone(),
     );
     let state_for_server = state.clone();
     let listener = TcpListener::bind(bind_address).await.ok()?;
@@ -202,7 +202,7 @@ async fn spawn_test_server_impl(
         addr,
         handle,
         room_manager,
-        transport_adapter,
+        media_transport,
         state,
     })
 }
@@ -210,14 +210,14 @@ async fn spawn_test_server_impl(
 pub(super) async fn spawn_test_server_with_adapter(
     authentication_timeout_ms: u64,
     room_size: usize,
-    transport_adapter: MediaTransport,
+    media_transport: MediaTransport,
 ) -> Option<TestServer> {
     spawn_test_server_with_timeouts(
         authentication_timeout_ms,
         10_000,
         60_000,
         room_size,
-        transport_adapter,
+        media_transport,
     )
     .await
 }
@@ -239,7 +239,7 @@ pub(super) async fn spawn_protocol_test_server(
 pub(super) async fn spawn_test_server_with_feature_flags(
     authentication_timeout_ms: u64,
     room_size: usize,
-    transport_adapter: MediaTransport,
+    media_transport: MediaTransport,
     feature_flags: RuntimeFeatureFlags,
 ) -> Option<TestServer> {
     spawn_test_server_impl(
@@ -247,7 +247,7 @@ pub(super) async fn spawn_test_server_with_feature_flags(
         10_000,
         60_000,
         room_size,
-        transport_adapter,
+        media_transport,
         feature_flags,
     )
     .await

@@ -49,7 +49,7 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
             StreamType::Camera,
             MediaKind::Video,
             sample_video_rtp_parameters("cam-0"),
-            &server.transport_adapter,
+            &server.media_transport,
         )
         .await;
     assert!(producer_id.is_some(), "protocol publisher should be ready");

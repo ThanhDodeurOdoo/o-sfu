@@ -110,7 +110,7 @@ async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
         axum::Json(
             state
                 .rooms
-                .stats_snapshots(&state.transport_adapter)
+                .stats_snapshots(&state.media_transport)
                 .await
                 .into_iter()
                 .map(http_room_stats)
@@ -233,7 +233,7 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
         for (room_id, user_ids) in &claims.user_ids_by_room {
             state
                 .rooms
-                .disconnect_users(room_id, user_ids, &state.transport_adapter)
+                .disconnect_users(room_id, user_ids, &state.media_transport)
                 .await;
         }
         state.metrics.record_http_disconnect_success();
@@ -274,12 +274,8 @@ async fn diagnostics_summary(State(state): State<RuntimeState>, headers: HeaderM
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
         }
         axum::Json(
-            diagnostics::summary_response(
-                &state.rooms,
-                &state.transport_adapter,
-                &state.diagnostics,
-            )
-            .await,
+            diagnostics::summary_response(&state.rooms, &state.media_transport, &state.diagnostics)
+                .await,
         )
         .into_response()
     }
@@ -294,7 +290,7 @@ async fn diagnostics_rooms(State(state): State<RuntimeState>, headers: HeaderMap
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
         }
         axum::Json(
-            diagnostics::rooms_response(&state.rooms, &state.transport_adapter, &state.diagnostics)
+            diagnostics::rooms_response(&state.rooms, &state.media_transport, &state.diagnostics)
                 .await,
         )
         .into_response()
@@ -315,7 +311,7 @@ async fn diagnostics_room_detail(
         }
         let Some(payload) = diagnostics::room_detail_response(
             &state.rooms,
-            &state.transport_adapter,
+            &state.media_transport,
             &state.diagnostics,
             &room_id,
         )
@@ -341,7 +337,7 @@ async fn diagnostics_room_users(
         }
         let Some(payload) = diagnostics::room_users_response(
             &state.rooms,
-            &state.transport_adapter,
+            &state.media_transport,
             &state.diagnostics,
             &room_id,
         )
@@ -367,7 +363,7 @@ async fn diagnostics_room_graph(
         }
         let Some(payload) = diagnostics::room_detail_response(
             &state.rooms,
-            &state.transport_adapter,
+            &state.media_transport,
             &state.diagnostics,
             &room_id,
         )
@@ -394,7 +390,7 @@ async fn diagnostics_user_graph(
         }
         let Some(payload) = diagnostics::room_detail_response(
             &state.rooms,
-            &state.transport_adapter,
+            &state.media_transport,
             &state.diagnostics,
             &room_id,
         )
@@ -423,7 +419,7 @@ async fn diagnostics_user_detail(
         }
         match diagnostics::user_detail_response(
             &state.rooms,
-            &state.transport_adapter,
+            &state.media_transport,
             &state.diagnostics,
             &user_id,
         )

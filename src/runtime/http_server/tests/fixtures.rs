@@ -54,7 +54,7 @@ pub(super) const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71
 pub(super) struct TestRuntimeState {
     pub(super) state: RuntimeState,
     pub(super) room_manager: Arc<RoomManager>,
-    pub(super) transport_adapter: MediaTransport,
+    pub(super) media_transport: MediaTransport,
 }
 
 pub(super) fn test_config() -> Config {
@@ -118,18 +118,18 @@ pub(super) fn test_state_with_handles() -> TestRuntimeState {
             metrics: Arc::clone(&metrics),
         },
     ));
-    let transport_adapter = MediaTransport::fake_for_testing();
+    let media_transport = MediaTransport::fake_for_testing();
     let state = build_test_runtime_state(
         &config,
         Arc::clone(&room_manager),
         diagnostics,
         metrics,
-        transport_adapter.clone(),
+        media_transport.clone(),
     );
     TestRuntimeState {
         state,
         room_manager,
-        transport_adapter,
+        media_transport,
     }
 }
 

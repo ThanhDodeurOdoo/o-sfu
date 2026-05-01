@@ -418,7 +418,7 @@ async fn join_user(
                 permissions,
                 sender: outbound_tx,
             },
-            &state.transport_adapter,
+            &state.media_transport,
         )
         .await;
     match join_result {
@@ -553,12 +553,7 @@ async fn cleanup_failed_session(
 ) {
     let _ = state
         .rooms
-        .close_session(
-            room.uuid(),
-            user_id,
-            connection_id,
-            &state.transport_adapter,
-        )
+        .close_session(room.uuid(), user_id, connection_id, &state.media_transport)
         .await;
 }
 
