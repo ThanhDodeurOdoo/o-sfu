@@ -95,6 +95,9 @@ impl PacketLoopRoutingMissKey {
 /// This is not a hash table security boundary. It samples length, prefix and
 /// suffix so common RTP or STUN variations usually differ before the exact byte
 /// comparison. Empty and short packets are still handled deterministically.
+///
+/// After playing with some benchmarks, it seems like SIMD can be use for some perf gains
+/// but ``std::simd`` is nightly so we probably need to use some arch flags
 fn packet_fingerprint(packet: &[u8]) -> u64 {
     fn load_u64(bytes: &[u8]) -> u64 {
         let mut buffer = [0_u8; 8];

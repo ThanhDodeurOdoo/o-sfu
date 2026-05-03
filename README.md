@@ -99,7 +99,7 @@ publication
 
 ## Tooling
 
-## Observability
+## Monitoring
 
 The `telemetry/` crate (sub dir) contain the telemetry tooling and serialization formats,
 runtime log and trace setup, event and field schema, diagnostics DTOs and recent
@@ -109,3 +109,8 @@ Grafana node-graph JSON formatting.
 you can check
 https://github.com/ThanhDodeurOdoo/o-sfu-telemetry
 it is an example of how to read and exploit the telemetry api
+
+## Benchmarking
+
+if you want to play with benchmarking you can fork
+https://github.com/ThanhDodeurOdoo/o-sfu-benchmarks
