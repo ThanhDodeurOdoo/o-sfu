@@ -542,7 +542,7 @@ async fn handle_outbound_payload(
                 None
             }
             Err(WebSocketCloseCode::Kicked) => {
-                debug!(close_code = 4003, "closing websocket from outbound signal");
+                debug!(close_code = 4108, "closing websocket from outbound signal");
                 close_writer(writer, WebSocketCloseCode::Kicked).await;
                 Some(WsSessionLoopExitReason::OutboundCloseSignal)
             }
@@ -558,7 +558,7 @@ async fn handle_outbound_payload(
         },
         Err(code) => {
             if code == WebSocketCloseCode::Kicked {
-                debug!(close_code = 4003, "closing websocket from outbound signal");
+                debug!(close_code = 4108, "closing websocket from outbound signal");
                 close_writer(writer, WebSocketCloseCode::Kicked).await;
                 Some(WsSessionLoopExitReason::OutboundCloseSignal)
             } else {

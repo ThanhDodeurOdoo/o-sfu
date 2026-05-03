@@ -238,7 +238,7 @@ fn protocol_core_terminal_close_enters_closed_with_cause() {
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.on_welcome(sample_welcome_payload());
 
-    let commands = core.on_ws_close(4004);
+    let commands = core.on_ws_close(4109);
 
     assert_eq!(core.state(), ConnectionState::Closed);
     assert_eq!(

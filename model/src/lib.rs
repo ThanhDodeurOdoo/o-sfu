@@ -385,9 +385,10 @@ pub struct RecordingOptions {
 
 /// WebSocket close code vocabulary shared by server and browser protocol code.
 ///
-/// Standard codes keep their RFC meaning. Codes in the `4000` range are
-/// o-sfu compatibility codes used to communicate business rejections to the
-/// browser and to label low-cardinality telemetry.
+/// Standard codes keep their RFC meaning. Custom codes mirror the legacy
+/// Odoo SFU websocket close vocabulary used by browser clients and
+/// low-cardinality telemetry. The custom values stay in the `4100` subrange
+/// used by the legacy SFU instead of the Odoo bus websocket close-code range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum WebSocketCloseCode {
@@ -399,15 +400,15 @@ pub enum WebSocketCloseCode {
     ProtocolError = 1002,
     /// The server hit an internal error while handling the socket.
     Error = 1011,
-    // Below are
+
     /// Authentication failed.
-    AuthFailed = 4001,
+    AuthFailed = 4106,
     /// The client did not authenticate before the server timeout.
-    AuthTimeout = 4002,
+    AuthTimeout = 4107,
     /// The runtime deliberately removed this client from the room.
-    Kicked = 4003,
+    Kicked = 4108,
     /// Admission failed because the room cannot accept another user.
-    RoomFull = 4004,
+    RoomFull = 4109,
 }
 
 impl WebSocketCloseCode {
@@ -423,10 +424,10 @@ impl WebSocketCloseCode {
             1001 => Some(Self::Leaving),
             1002 => Some(Self::ProtocolError),
             1011 => Some(Self::Error),
-            4001 => Some(Self::AuthFailed),
-            4002 => Some(Self::AuthTimeout),
-            4003 => Some(Self::Kicked),
-            4004 => Some(Self::RoomFull),
+            4106 => Some(Self::AuthFailed),
+            4107 => Some(Self::AuthTimeout),
+            4108 => Some(Self::Kicked),
+            4109 => Some(Self::RoomFull),
             _ => None,
         }
     }
@@ -439,10 +440,10 @@ impl From<WebSocketCloseCode> for u16 {
             WebSocketCloseCode::Leaving => 1001,
             WebSocketCloseCode::ProtocolError => 1002,
             WebSocketCloseCode::Error => 1011,
-            WebSocketCloseCode::AuthFailed => 4001,
-            WebSocketCloseCode::AuthTimeout => 4002,
-            WebSocketCloseCode::Kicked => 4003,
-            WebSocketCloseCode::RoomFull => 4004,
+            WebSocketCloseCode::AuthFailed => 4106,
+            WebSocketCloseCode::AuthTimeout => 4107,
+            WebSocketCloseCode::Kicked => 4108,
+            WebSocketCloseCode::RoomFull => 4109,
         }
     }
 }

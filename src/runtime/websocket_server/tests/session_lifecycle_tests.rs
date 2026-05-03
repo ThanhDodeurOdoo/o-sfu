@@ -393,7 +393,7 @@ async fn replacement_close_rolls_back_staged_publish_before_room_cleanup() {
     };
     assert_eq!(
         read_close_code(&mut first_socket).await,
-        Some(CloseCode::Library(4003))
+        Some(CloseCode::Library(4108))
     );
     assert!(
         wait_for_staged_publish_cleanup(&room, &user_id, connection_id)
@@ -442,7 +442,7 @@ async fn runtime_disconnect_rolls_back_staged_publish_before_room_cleanup() {
 
     assert_eq!(
         read_close_code(&mut websocket).await,
-        Some(CloseCode::Library(4003))
+        Some(CloseCode::Library(4108))
     );
     assert!(
         wait_for_staged_publish_cleanup(&room, &user_id, connection_id)
@@ -510,7 +510,7 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
 
     assert_eq!(
         read_close_code(&mut first_socket).await,
-        Some(CloseCode::Library(4003))
+        Some(CloseCode::Library(4108))
     );
 
     let events = wait_for_fake_webrtc_events(&adapter, 1).await;
@@ -568,7 +568,7 @@ async fn disconnect_cleanup_still_closes_transport_adapter_user_state() {
         .disconnect_users(room.uuid(), &[UserId::Integer(1)], &server.media_transport)
         .await;
 
-    assert_eq!(read_close_code(alice).await, Some(CloseCode::Library(4003)));
+    assert_eq!(read_close_code(alice).await, Some(CloseCode::Library(4108)));
     let peer_message = read_protocol_server_batch(bob).await.and_then(|batch| {
         protocol_server_messages(&batch).and_then(|mut messages| messages.drain(..).next())
     });
@@ -622,7 +622,7 @@ async fn disconnect_cleanup_closes_transport_user_before_empty_room_removal() {
     assert!(server.room_manager.get_by_uuid(room.uuid()).await.is_none());
     assert_eq!(
         read_close_code(&mut socket).await,
-        Some(CloseCode::Library(4003))
+        Some(CloseCode::Library(4108))
     );
 
     let events = wait_for_fake_webrtc_events(&adapter, 1).await;

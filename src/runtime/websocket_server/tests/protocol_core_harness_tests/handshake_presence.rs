@@ -109,9 +109,9 @@ async fn protocol_core_maps_real_server_auth_failure_to_closed_state() {
         None => return,
     })
     .await;
-    assert_eq!(close_code, Some(CloseCode::Library(4001)));
+    assert_eq!(close_code, Some(CloseCode::Library(4106)));
 
-    let observed = peer.observe_close(4001).await;
+    let observed = peer.observe_close(4106).await;
     assert!(
         observed.is_some(),
         "protocol core should consume the auth failure close code"
@@ -402,7 +402,7 @@ async fn protocol_user_replacement_emits_peerleft_then_peerjoined_for_existing_p
         None => return,
     })
     .await;
-    assert_eq!(close_code, Some(CloseCode::Library(4003)));
+    assert_eq!(close_code, Some(CloseCode::Library(4108)));
 
     assert!(
         matches!(

@@ -445,7 +445,7 @@ mod tests {
     #[test]
     fn host_command_bridge_preserves_simple_commands() {
         let command = host_commands(CommandBatch::from_test_commands(vec![
-            Command::CloseWebSocket { code: 4002 },
+            Command::CloseWebSocket { code: 4107 },
         ]))
         .into_iter()
         .next()
@@ -457,7 +457,7 @@ mod tests {
             encoded,
             json!({
                 "kind": "closeWebSocket",
-                "code": 4002
+                "code": 4107
             })
         );
     }

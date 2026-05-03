@@ -208,7 +208,7 @@ async fn fake_peers_cover_user_replacement_and_republish_over_protocol_user_flow
 
     assert_eq!(
         initial_publisher.read_close_code().await,
-        Some(CloseCode::Library(4003))
+        Some(CloseCode::Library(4108))
     );
     assert_departure_message_protocol(&mut subscriber, UserId::Integer(40)).await;
     assert_peer_joined_message_protocol(&mut subscriber, UserId::Integer(40)).await;
@@ -509,7 +509,7 @@ async fn fake_rtc_peers_rebootstrap_user_replacement_without_stale_media_routes(
 
     assert_eq!(
         initial_publisher.read_close_code().await,
-        Some(CloseCode::Library(4003))
+        Some(CloseCode::Library(4108))
     );
     assert_departure_message_protocol(&mut subscriber, UserId::Integer(80)).await;
     assert_peer_joined_message_protocol(&mut subscriber, UserId::Integer(80)).await;
@@ -686,7 +686,7 @@ async fn assert_replacement_audio_forwarding(
 ) {
     assert_eq!(
         initial_publisher.read_close_code().await,
-        Some(CloseCode::Library(4003))
+        Some(CloseCode::Library(4108))
     );
     assert_departure_message_protocol(subscriber, harness.publisher_user_id.clone()).await;
     assert_peer_joined_message_protocol(subscriber, harness.publisher_user_id.clone()).await;
@@ -853,7 +853,7 @@ async fn assert_replacement_subscriber_inherits_muted_audio_download(
 
     assert_eq!(
         subscriber.read_close_code().await,
-        Some(CloseCode::Library(4003))
+        Some(CloseCode::Library(4108))
     );
     assert_departure_message_protocol(publisher, UserId::Integer(83)).await;
     assert_peer_joined_message_protocol(publisher, UserId::Integer(83)).await;
@@ -934,7 +934,7 @@ async fn fake_rtc_replaced_socket_cannot_emit_presence_updates_after_rejoin() {
 
     assert_eq!(
         initial.read_close_code().await,
-        Some(CloseCode::Library(4003))
+        Some(CloseCode::Library(4108))
     );
     assert_departure_message_protocol(&mut observer, UserId::Integer(84)).await;
     assert_peer_joined_message_protocol(&mut observer, UserId::Integer(84)).await;
@@ -1027,7 +1027,7 @@ async fn fake_rtc_replaced_socket_cannot_finish_a_queued_publish_negotiation() {
     .await;
     assert_eq!(
         initial_publisher.read_close_code().await,
-        Some(CloseCode::Library(4003))
+        Some(CloseCode::Library(4108))
     );
 
     assert!(

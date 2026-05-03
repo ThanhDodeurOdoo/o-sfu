@@ -199,7 +199,7 @@ async fn websocket_timeout_is_reported_from_integration_test() {
 
     assert_eq!(
         client.read_close_code().await,
-        Some(CloseCode::Library(4002))
+        Some(CloseCode::Library(4107))
     );
 }
 
@@ -219,7 +219,7 @@ async fn invalid_jwt_is_rejected_from_integration_test() {
 
     assert_eq!(
         client.read_close_code().await,
-        Some(CloseCode::Library(4001))
+        Some(CloseCode::Library(4106))
     );
 }
 
@@ -481,7 +481,7 @@ async fn room_full_and_last_disconnect_cleanup_are_observable_from_integration_t
     };
     assert_eq!(
         second_client.read_close_code().await,
-        Some(CloseCode::Library(4004)),
+        Some(CloseCode::Library(4109)),
     );
 
     assert!(first_client.close().await.is_some());
@@ -537,7 +537,7 @@ async fn disconnect_api_kicks_target_and_notifies_remaining_from_integration_tes
     .await;
     assert_eq!(status, Some(StatusCode::OK));
 
-    assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4003)));
+    assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4108)));
 
     let message = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
         matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == UserId::Integer(2))
@@ -618,7 +618,7 @@ async fn replaced_socket_cannot_broadcast_or_change_info_from_integration_test()
         None,
         "stale replacement socket must not overwrite presence"
     );
-    assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4003)));
+    assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4108)));
     assert!(replacement.close().await.is_some());
 }
 
@@ -669,7 +669,7 @@ async fn numeric_string_user_ids_share_one_runtime_identity() {
     assert_peer_joined(&mut observer, UserId::Integer(42)).await;
     assert_eq!(
         numeric_user.read_close_code().await,
-        Some(CloseCode::Library(4003))
+        Some(CloseCode::Library(4108))
     );
 
     assert!(
@@ -695,7 +695,7 @@ async fn numeric_string_user_ids_share_one_runtime_identity() {
     assert_eq!(status, Some(StatusCode::OK));
     assert_eq!(
         replacement.read_close_code().await,
-        Some(CloseCode::Library(4003))
+        Some(CloseCode::Library(4108))
     );
     assert_peer_left(&mut observer, UserId::Integer(42)).await;
 }
@@ -822,7 +822,7 @@ async fn replaced_socket_cannot_finish_a_queued_publish_negotiation_from_integra
         None,
         "stale queued publish answers must not create observable room state"
     );
-    assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4003)));
+    assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4108)));
     assert!(replacement.close().await.is_some());
 }
 
@@ -878,7 +878,7 @@ async fn bulk_disconnected_socket_cannot_broadcast_after_logical_removal() {
         None,
         "bulk-disconnected sockets must not squeeze extra broadcast traffic through after removal"
     );
-    assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4003)));
+    assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4108)));
 }
 
 #[tokio::test]
@@ -936,11 +936,11 @@ async fn bulk_disconnect_scopes_each_room_independently_from_integration_test() 
 
     assert_eq!(
         a_drop.read_close_code().await,
-        Some(CloseCode::Library(4003))
+        Some(CloseCode::Library(4108))
     );
     assert_eq!(
         b_drop.read_close_code().await,
-        Some(CloseCode::Library(4003))
+        Some(CloseCode::Library(4108))
     );
 
     let a_departure = read_until_server_message(&mut a_keep, Duration::from_secs(1), |message| {
@@ -1010,6 +1010,6 @@ async fn mismatched_explicit_room_id_is_rejected_from_integration_test() {
 
     assert_eq!(
         client.read_close_code().await,
-        Some(CloseCode::Library(4001))
+        Some(CloseCode::Library(4106))
     );
 }
