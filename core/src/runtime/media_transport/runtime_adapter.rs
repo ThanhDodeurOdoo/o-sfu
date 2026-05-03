@@ -24,9 +24,9 @@ use thiserror::Error;
 use tracing::warn;
 
 use super::{
+    MediaTransportBackend,
     config::{MediaTransportDeps, RtcTransportConfig, RtcTransportShardSetConfig},
     shard_set::RtcTransportShardSet,
-    transport_backend::MediaTransportBackend,
 };
 use crate::{
     CoreOptions,
@@ -294,6 +294,18 @@ impl MediaTransport {
     /// This is useful for tests that need real RTC behavior while still passing
     /// the same type that production orchestration uses.
     #[must_use]
+    #[cfg(not(any(test, feature = "testing-transport")))]
+    pub const fn from_rtc_transport(transport: RtcTransport) -> Self {
+        Self { backend: transport }
+    }
+
+    /// Wraps a production RTC implementation in the opaque media transport
+    /// handle.
+    ///
+    /// This is useful for tests that need real RTC behavior while still passing
+    /// the same type that production orchestration uses.
+    #[must_use]
+    #[cfg(any(test, feature = "testing-transport"))]
     pub const fn from_rtc_transport(transport: RtcTransport) -> Self {
         Self {
             backend: MediaTransportBackend::Rtc(transport),

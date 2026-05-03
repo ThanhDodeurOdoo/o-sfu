@@ -30,11 +30,13 @@ mod runtime_adapter;
 mod shard_set;
 #[cfg(any(test, feature = "testing-transport"))]
 pub mod test_support;
-#[cfg(not(any(test, feature = "testing-transport")))]
-mod transport_backend;
 #[cfg(any(test, feature = "testing-transport"))]
 #[path = "test_support/transport_backend.rs"]
 mod transport_backend;
+#[cfg(any(test, feature = "testing-transport"))]
+use transport_backend::MediaTransportBackend;
+#[cfg(not(any(test, feature = "testing-transport")))]
+pub(super) type MediaTransportBackend = runtime_adapter::RtcTransport;
 
 pub use config::{MediaTransportDeps, RtcTransportConfig, RtcTransportShardSetConfig};
 pub use runtime_adapter::{

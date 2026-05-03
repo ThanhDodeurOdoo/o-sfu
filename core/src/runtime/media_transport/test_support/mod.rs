@@ -11,7 +11,7 @@ use str0m::media::Mid;
 
 #[cfg(any(test, feature = "testing-transport"))]
 use super::shard_set::RtcTransportShardSet;
-use super::{runtime_adapter::MediaTransport, transport_backend::MediaTransportBackend};
+use super::{MediaTransportBackend, runtime_adapter::MediaTransport};
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::RoomInstanceId;
 #[cfg(any(test, feature = "testing-transport"))]
