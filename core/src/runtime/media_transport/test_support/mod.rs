@@ -1,19 +1,17 @@
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
+mod fake_transport;
+
+#[cfg(any(test, feature = "testing-transport"))]
+pub use fake_transport::{FakeMediaTransport, FakeMediaTransportEvent};
 #[cfg(any(test, feature = "testing-transport"))]
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
 #[cfg(any(test, feature = "testing-transport"))]
 use str0m::media::Mid;
 
-pub use super::fake::FakeWebRtcAdapter;
-#[cfg(any(test, feature = "testing-transport"))]
-pub use super::fake::FakeWebRtcEvent;
 #[cfg(any(test, feature = "testing-transport"))]
 use super::shard_set::RtcTransportShardSet;
-use super::{
-    runtime_adapter::MediaTransport,
-    transport_backend::{MediaTransportBackend, TestTransport},
-};
+use super::{runtime_adapter::MediaTransport, transport_backend::MediaTransportBackend};
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::RoomInstanceId;
 #[cfg(any(test, feature = "testing-transport"))]
@@ -34,7 +32,7 @@ use crate::transport::{
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
-impl NegotiationPort for FakeWebRtcAdapter {
+impl NegotiationPort for FakeMediaTransport {
     async fn create_initial_session_offer(
         &self,
         session_key: &TransportSessionKey,
@@ -67,7 +65,7 @@ impl NegotiationPort for FakeWebRtcAdapter {
 }
 
 #[cfg(any(test, feature = "testing-transport"))]
-impl SessionPort for FakeWebRtcAdapter {
+impl SessionPort for FakeMediaTransport {
     async fn close_session(
         &self,
         session_key: &TransportSessionKey,
@@ -77,7 +75,7 @@ impl SessionPort for FakeWebRtcAdapter {
 }
 
 #[cfg(any(test, feature = "testing-transport"))]
-impl MediaPort for FakeWebRtcAdapter {
+impl MediaPort for FakeMediaTransport {
     async fn remove_media(
         &self,
         session_key: &TransportSessionKey,
@@ -188,7 +186,7 @@ impl MediaPort for FakeWebRtcAdapter {
 }
 
 #[cfg(any(test, feature = "testing-transport"))]
-impl ObservabilityPort for FakeWebRtcAdapter {
+impl ObservabilityPort for FakeMediaTransport {
     fn transport_bitrate_snapshot(
         &self,
         _session_keys: &[TransportSessionKey],
@@ -231,7 +229,7 @@ impl ObservabilityPort for FakeWebRtcAdapter {
 }
 
 #[cfg(any(test, feature = "testing-transport"))]
-impl SourcePolicyPort for FakeWebRtcAdapter {
+impl SourcePolicyPort for FakeMediaTransport {
     fn source_policy_subscription(&self) -> SourcePolicyUpdateSubscription {
         self.source_policy_signal().subscribe()
     }
@@ -239,21 +237,13 @@ impl SourcePolicyPort for FakeWebRtcAdapter {
 
 impl MediaTransport {
     #[cfg(any(test, feature = "testing-transport"))]
-    #[must_use]
-    pub const fn from_test_transport(transport: TestTransport) -> Self {
-        Self {
-            backend: MediaTransportBackend::Test(transport),
-        }
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
     #[allow(
         dead_code,
         reason = "the fake transport remains available only for deterministic test and feature-gated development workflows"
     )]
     #[must_use]
     pub fn fake_for_testing() -> Self {
-        Self::from_test_transport(TestTransport::default_fake())
+        Self::from_fake_transport(Arc::new(FakeMediaTransport::default()))
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
@@ -262,15 +252,18 @@ impl MediaTransport {
         reason = "targeted tests still need to inject a preconfigured fake media transport instance"
     )]
     #[must_use]
-    pub fn from_fake_adapter(adapter: Arc<FakeWebRtcAdapter>) -> Self {
-        Self::from_test_transport(TestTransport::new(adapter))
+    pub fn from_fake_transport(transport: Arc<FakeMediaTransport>) -> Self {
+        Self {
+            backend: MediaTransportBackend::Fake(transport),
+        }
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub fn as_fake_adapter(&self) -> Option<&Arc<FakeWebRtcAdapter>> {
+    #[must_use]
+    pub const fn as_fake_transport(&self) -> Option<&Arc<FakeMediaTransport>> {
         match &self.backend {
             MediaTransportBackend::Rtc(_) => None,
-            MediaTransportBackend::Test(transport) => Some(transport.adapter()),
+            MediaTransportBackend::Fake(transport) => Some(transport),
         }
     }
 
@@ -289,9 +282,8 @@ impl MediaTransport {
                     .negotiated_producer_parameters(session_key, transport_media_id)
                     .await
             }
-            MediaTransportBackend::Test(transport) => {
+            MediaTransportBackend::Fake(transport) => {
                 transport
-                    .adapter()
                     .negotiated_producer_parameters(session_key, transport_media_id)
                     .await
             }
@@ -302,7 +294,7 @@ impl MediaTransport {
     pub(super) fn as_rtc_shard_set(&self) -> Option<&Arc<RtcTransportShardSet>> {
         match &self.backend {
             MediaTransportBackend::Rtc(transport) => Some(transport.shards()),
-            MediaTransportBackend::Test(_) => None,
+            MediaTransportBackend::Fake(_) => None,
         }
     }
 
@@ -332,7 +324,7 @@ impl MediaTransport {
     ) -> Option<DebugRouteEntry> {
         match self {
             Self {
-                backend: MediaTransportBackend::Test(_),
+                backend: MediaTransportBackend::Fake(_),
             } => None,
             Self {
                 backend: MediaTransportBackend::Rtc(adapter),
@@ -353,7 +345,7 @@ impl MediaTransport {
     ) -> Option<DebugRouteEntry> {
         match self {
             Self {
-                backend: MediaTransportBackend::Test(_),
+                backend: MediaTransportBackend::Fake(_),
             } => None,
             Self {
                 backend: MediaTransportBackend::Rtc(adapter),
@@ -377,7 +369,7 @@ impl MediaTransport {
     ) -> Option<DebugRouteEntry> {
         match self {
             Self {
-                backend: MediaTransportBackend::Test(_),
+                backend: MediaTransportBackend::Fake(_),
             } => None,
             Self {
                 backend: MediaTransportBackend::Rtc(adapter),

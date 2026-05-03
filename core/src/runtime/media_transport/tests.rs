@@ -12,7 +12,7 @@ use o_sfu_router::{
 use str0m::media::Mid;
 use tokio::time::timeout;
 
-use super::{MediaTransport, RtcTransport, RtcTransportBuildError, TestTransport};
+use super::{MediaTransport, RtcTransport, RtcTransportBuildError};
 use crate::{
     MediaCodecFlags, RtcPortRange,
     runtime::{
@@ -22,7 +22,7 @@ use crate::{
             ActiveSpeakerSource, ConsumerActivity, MediaPort, MediaTransportDeps, NegotiationPort,
             ObservabilityPort, RtcTransportConfig, SessionBitrateLimits, SessionOffer, SessionPort,
             SourcePolicyPort, SourcePolicyUpdateSubscription, TransportAdapterError,
-            TransportMediaId, TransportSessionKey, test_support::FakeWebRtcAdapter,
+            TransportMediaId, TransportSessionKey, test_support::FakeMediaTransport,
         },
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry as MediaTap,
@@ -334,12 +334,12 @@ fn rtc_transport_builder_rejects_invalid_port_split() {
 #[test]
 fn concrete_transports_satisfy_runtime_transport_ports() {
     assert_runtime_transport::<RtcTransport>();
-    assert_runtime_transport::<TestTransport>();
+    assert_runtime_transport::<FakeMediaTransport>();
 }
 
 #[test]
 fn fake_adapter_projects_offered_capabilities_after_minimal_sdp_validation() {
-    let adapter = MediaTransport::from_fake_adapter(Arc::new(FakeWebRtcAdapter::default()));
+    let adapter = MediaTransport::from_fake_transport(Arc::new(FakeMediaTransport::default()));
     let offered = sample_router_capabilities();
 
     let projected =
@@ -350,7 +350,7 @@ fn fake_adapter_projects_offered_capabilities_after_minimal_sdp_validation() {
 
 #[test]
 fn fake_adapter_rejects_answers_without_minimal_sdp_shape() {
-    let adapter = MediaTransport::from_fake_adapter(Arc::new(FakeWebRtcAdapter::default()));
+    let adapter = MediaTransport::from_fake_transport(Arc::new(FakeMediaTransport::default()));
 
     let projected =
         adapter.negotiated_client_rtp_capabilities("invalid-answer", &sample_router_capabilities());
@@ -360,8 +360,8 @@ fn fake_adapter_rejects_answers_without_minimal_sdp_shape() {
 
 #[tokio::test]
 async fn media_transport_exposes_split_ports_to_callers() {
-    let fake = Arc::new(FakeWebRtcAdapter::default());
-    let adapter = MediaTransport::from_fake_adapter(Arc::clone(&fake));
+    let fake = Arc::new(FakeMediaTransport::default());
+    let adapter = MediaTransport::from_fake_transport(Arc::clone(&fake));
     let session_key = test_session_key(17, 0, 3, UserId::Integer(41));
     let audio_rtp_parameters = sample_audio_rtp_parameters("aud-up", 1234);
 
@@ -488,8 +488,8 @@ async fn rtc_engine_allocates_disjoint_media_ids_across_workers() {
 
 #[tokio::test]
 async fn runtime_transport_semantic_facades_preserve_fake_transport_behavior() {
-    let fake = Arc::new(FakeWebRtcAdapter::default());
-    let adapter = MediaTransport::from_fake_adapter(Arc::clone(&fake));
+    let fake = Arc::new(FakeMediaTransport::default());
+    let adapter = MediaTransport::from_fake_transport(Arc::clone(&fake));
     let session_key = test_session_key(18, 0, 19, UserId::Integer(20));
     let speaker_source = ActiveSpeakerSource::new(TransportMediaId::new(77), Instant::now());
     fake.set_active_speaker_source_snapshot(vec![speaker_source]);
@@ -521,8 +521,8 @@ async fn runtime_transport_semantic_facades_preserve_fake_transport_behavior() {
 
 #[tokio::test]
 async fn fake_transport_source_policy_subscription_wakes_on_active_speaker_updates() {
-    let fake = Arc::new(FakeWebRtcAdapter::default());
-    let adapter = MediaTransport::from_fake_adapter(Arc::clone(&fake));
+    let fake = Arc::new(FakeMediaTransport::default());
+    let adapter = MediaTransport::from_fake_transport(Arc::clone(&fake));
     let subscription = adapter.source_policy_subscription();
     let dirty_room_instance_id = RoomInstanceId::from_raw(27);
 

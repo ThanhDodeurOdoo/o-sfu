@@ -330,7 +330,7 @@ async fn leave_user_runtime_removes_surviving_consumer_media() {
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumeMediaRequested {
+            FakeMediaTransportEvent::ConsumeMediaRequested {
                 consumer_user_id,
                 source_user_id,
                 ..
@@ -358,7 +358,7 @@ async fn leave_user_runtime_removes_surviving_consumer_media() {
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::MediaRemoved { user_id, .. }
+            FakeMediaTransportEvent::MediaRemoved { user_id, .. }
                 if *user_id == UserId::Integer(2)
         )
     })
@@ -367,7 +367,7 @@ async fn leave_user_runtime_removes_surviving_consumer_media() {
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::MediaRemoved { user_id, .. }
+            FakeMediaTransportEvent::MediaRemoved { user_id, .. }
                 if *user_id == UserId::Integer(1)
         )
     })
@@ -395,7 +395,7 @@ async fn leave_user_runtime_removes_departing_consumer_media() {
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumeMediaRequested {
+            FakeMediaTransportEvent::ConsumeMediaRequested {
                 consumer_user_id: UserId::Integer(1),
                 source_user_id: UserId::Integer(2),
                 ..
@@ -423,7 +423,7 @@ async fn leave_user_runtime_removes_departing_consumer_media() {
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::MediaRemoved {
+            FakeMediaTransportEvent::MediaRemoved {
                 user_id: UserId::Integer(1),
                 ..
             }
@@ -453,7 +453,7 @@ async fn join_user_runtime_replacement_removes_surviving_consumer_media() {
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumeMediaRequested {
+            FakeMediaTransportEvent::ConsumeMediaRequested {
                 consumer_user_id,
                 source_user_id,
                 ..
@@ -479,7 +479,7 @@ async fn join_user_runtime_replacement_removes_surviving_consumer_media() {
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::MediaRemoved { user_id, .. }
+            FakeMediaTransportEvent::MediaRemoved { user_id, .. }
                 if *user_id == UserId::Integer(2)
         )
     })
@@ -488,7 +488,7 @@ async fn join_user_runtime_replacement_removes_surviving_consumer_media() {
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::MediaRemoved { user_id, .. }
+            FakeMediaTransportEvent::MediaRemoved { user_id, .. }
                 if *user_id == UserId::Integer(1)
         )
     })
@@ -537,7 +537,7 @@ async fn media_cleanup_failure_retries_until_success() {
     assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 0);
     assert!(fake.snapshot_events().iter().any(|event| matches!(
         event,
-        FakeWebRtcEvent::MediaRemoved {
+        FakeMediaTransportEvent::MediaRemoved {
             user_id: UserId::Integer(1),
             transport_media_id: removed_media_id,
         } if *removed_media_id == transport_media_id
@@ -574,7 +574,7 @@ async fn user_close_failure_retries_until_success() {
     assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 0);
     assert!(fake.snapshot_events().iter().any(|event| matches!(
         event,
-        FakeWebRtcEvent::SessionClosed {
+        FakeMediaTransportEvent::SessionClosed {
             user_id: closed_user_id,
         } if *closed_user_id == user_id
     )));
@@ -630,7 +630,7 @@ async fn cleanup_retry_exhaustion_drops_pending_retry() {
     assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 0);
     assert!(!fake.snapshot_events().iter().any(|event| matches!(
         event,
-        FakeWebRtcEvent::MediaRemoved {
+        FakeMediaTransportEvent::MediaRemoved {
             transport_media_id: removed_media_id,
             ..
         } if *removed_media_id == transport_media_id
@@ -731,7 +731,7 @@ async fn state_only_cleanup_does_not_enqueue_transport_retry() {
     assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 0);
     assert!(!fake.snapshot_events().iter().any(|event| matches!(
         event,
-        FakeWebRtcEvent::MediaRemoved {
+        FakeMediaTransportEvent::MediaRemoved {
             transport_media_id: removed_media_id,
             ..
         } if *removed_media_id == transport_media_id
@@ -844,7 +844,7 @@ async fn stale_refresh_callbacks_do_not_target_a_replaced_user() {
     wait_for_fake_event(&scenario.fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumerKeyframeRequested {
+            FakeMediaTransportEvent::ConsumerKeyframeRequested {
                 consumer_user_id: UserId::Integer(2),
                 source_user_id: UserId::Integer(1),
             }
@@ -890,7 +890,7 @@ async fn stale_refresh_callbacks_do_not_target_a_replaced_user() {
 struct StaleRefreshScenario {
     room: Arc<super::super::Room>,
     media_transport: MediaTransport,
-    fake: Arc<FakeWebRtcAdapter>,
+    fake: Arc<FakeMediaTransport>,
     first_subscriber_connection: ConnectionId,
     second_subscriber_connection: ConnectionId,
     second_subscriber_rx: mpsc::UnboundedReceiver<UserOutbound>,

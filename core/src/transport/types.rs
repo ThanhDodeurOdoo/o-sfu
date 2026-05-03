@@ -13,7 +13,7 @@ use crate::{
     runtime::{UserId, source_model::UploadLayerPolicyRole},
 };
 
-/// Room-scoped transport-adapter user identity.
+/// Room-scoped media-transport user identity.
 ///
 /// A `UserId` alone is not unique across the server: the same id can appear
 /// in different rooms simultaneously. This composite key allows one user

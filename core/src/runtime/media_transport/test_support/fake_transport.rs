@@ -31,9 +31,9 @@ use crate::{
 const FAKE_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-fake-offer\r\n";
 
 /// Deterministic fake transport events exposed only through the explicit
-/// transport-adapter test seam.
+/// media-transport test seam.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FakeWebRtcEvent {
+pub enum FakeMediaTransportEvent {
     SessionClosed {
         user_id: UserId,
     },
@@ -72,8 +72,8 @@ pub enum FakeWebRtcEvent {
 
 /// Deterministic transport backend for tests and feature-gated development.
 #[derive(Debug, Clone, Default)]
-pub struct FakeWebRtcAdapter {
-    events: Arc<Mutex<Vec<FakeWebRtcEvent>>>,
+pub struct FakeMediaTransport {
+    events: Arc<Mutex<Vec<FakeMediaTransportEvent>>>,
     next_media_id: Arc<AtomicU64>,
     media_owners: Arc<Mutex<BTreeMap<TransportMediaId, TransportSessionKey>>>,
     failed_media_removals: Arc<Mutex<BTreeSet<TransportMediaId>>>,
@@ -83,12 +83,12 @@ pub struct FakeWebRtcAdapter {
     negotiated_producer_parameters: Arc<Mutex<BTreeMap<TransportMediaId, RouterRtpParameters>>>,
     active_speaker_sources: Arc<Mutex<Vec<ActiveSpeakerSource>>>,
     receiver_bandwidth_estimates: Arc<Mutex<BTreeMap<UserId, u64>>>,
-    delays: Arc<Mutex<FakeWebRtcAdapterDelays>>,
+    delays: Arc<Mutex<FakeMediaTransportDelays>>,
     source_policy_signal: Arc<SourcePolicySignal>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-struct FakeWebRtcAdapterDelays {
+struct FakeMediaTransportDelays {
     publish_media: Option<Duration>,
     consume_media: Option<Duration>,
     producer_activity: Option<Duration>,
@@ -96,10 +96,10 @@ struct FakeWebRtcAdapterDelays {
 
 #[allow(
     clippy::unused_async,
-    reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
+    reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
 )]
-impl FakeWebRtcAdapter {
-    fn record_event(&self, event: FakeWebRtcEvent) {
+impl FakeMediaTransport {
+    fn record_event(&self, event: FakeMediaTransportEvent) {
         match self.events.lock() {
             Ok(mut events) => {
                 events.push(event);
@@ -132,7 +132,7 @@ impl FakeWebRtcAdapter {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub fn snapshot_events(&self) -> Vec<FakeWebRtcEvent> {
+    pub fn snapshot_events(&self) -> Vec<FakeMediaTransportEvent> {
         match self.events.lock() {
             Ok(events) => events.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
@@ -346,10 +346,10 @@ impl FakeWebRtcAdapter {
     }
 }
 
-impl FakeWebRtcAdapter {
+impl FakeMediaTransport {
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         match self.active_speaker_sources.lock() {
@@ -412,7 +412,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn create_initial_session_offer(
         &self,
@@ -425,7 +425,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn create_session_renegotiation_offer(
         &self,
@@ -438,7 +438,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn apply_session_answer(
         &self,
@@ -456,7 +456,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn close_session(
         &self,
@@ -483,7 +483,7 @@ impl FakeWebRtcAdapter {
                     .retain(|_, owner| owner != session_key);
             }
         }
-        self.record_event(FakeWebRtcEvent::SessionClosed {
+        self.record_event(FakeMediaTransportEvent::SessionClosed {
             user_id: session_key.user_id().clone(),
         });
         Ok(())
@@ -491,7 +491,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn remove_media(
         &self,
@@ -525,7 +525,7 @@ impl FakeWebRtcAdapter {
                 poisoned.into_inner().remove(&transport_media_id);
             }
         }
-        self.record_event(FakeWebRtcEvent::MediaRemoved {
+        self.record_event(FakeMediaTransportEvent::MediaRemoved {
             user_id: session_key.user_id().clone(),
             transport_media_id,
         });
@@ -535,7 +535,7 @@ impl FakeWebRtcAdapter {
     #[cfg(any(test, feature = "testing-transport"))]
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn negotiated_producer_parameters(
         &self,
@@ -557,7 +557,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn publish_media(
         &self,
@@ -565,7 +565,7 @@ impl FakeWebRtcAdapter {
         media_kind: MediaKind,
         _rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        self.record_event(FakeWebRtcEvent::PublishMediaRequested {
+        self.record_event(FakeMediaTransportEvent::PublishMediaRequested {
             user_id: session_key.user_id().clone(),
             media_kind,
         });
@@ -598,7 +598,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn consume_media(
         &self,
@@ -608,7 +608,7 @@ impl FakeWebRtcAdapter {
         _source_media_id: TransportMediaId,
         _consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        self.record_event(FakeWebRtcEvent::ConsumeMediaRequested {
+        self.record_event(FakeMediaTransportEvent::ConsumeMediaRequested {
             consumer_user_id: consumer_session_key.user_id().clone(),
             source_user_id: source_session_key.user_id().clone(),
             media_kind,
@@ -622,7 +622,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn set_producer_active(
         &self,
@@ -630,7 +630,7 @@ impl FakeWebRtcAdapter {
         _transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        self.record_event(FakeWebRtcEvent::ProducerActivityUpdated {
+        self.record_event(FakeMediaTransportEvent::ProducerActivityUpdated {
             user_id: session_key.user_id().clone(),
             active,
         });
@@ -642,7 +642,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn set_consumer_active(
         &self,
@@ -652,7 +652,7 @@ impl FakeWebRtcAdapter {
         _source_transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        self.record_event(FakeWebRtcEvent::ConsumerActivityUpdated {
+        self.record_event(FakeMediaTransportEvent::ConsumerActivityUpdated {
             consumer_user_id: consumer_session_key.user_id().clone(),
             source_user_id: source_session_key.user_id().clone(),
             active,
@@ -662,7 +662,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn set_consumer_packet_gate(
         &self,
@@ -672,7 +672,7 @@ impl FakeWebRtcAdapter {
         _source_transport_media_id: TransportMediaId,
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
-        self.record_event(FakeWebRtcEvent::ConsumerPacketGateUpdated {
+        self.record_event(FakeMediaTransportEvent::ConsumerPacketGateUpdated {
             consumer_user_id: consumer_session_key.user_id().clone(),
             source_user_id: source_session_key.user_id().clone(),
             packet_gate,
@@ -702,7 +702,7 @@ impl FakeWebRtcAdapter {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake adapter keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub async fn request_consumer_keyframe(
         &self,
@@ -711,7 +711,7 @@ impl FakeWebRtcAdapter {
         source_session_key: &TransportSessionKey,
         _source_transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        self.record_event(FakeWebRtcEvent::ConsumerKeyframeRequested {
+        self.record_event(FakeMediaTransportEvent::ConsumerKeyframeRequested {
             consumer_user_id: consumer_session_key.user_id().clone(),
             source_user_id: source_session_key.user_id().clone(),
         });

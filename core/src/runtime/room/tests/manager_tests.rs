@@ -87,7 +87,7 @@ fn spillover_room_manager(local_router_count: usize) -> RoomManager {
 }
 
 fn assert_consumer_packet_selection_update(
-    events: &[FakeWebRtcEvent],
+    events: &[FakeMediaTransportEvent],
     consumer_user_id: &UserId,
     source_user_id: &UserId,
     expected_rid: &str,
@@ -95,7 +95,7 @@ fn assert_consumer_packet_selection_update(
     assert!(events.iter().any(|event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumerPacketGateUpdated {
+            FakeMediaTransportEvent::ConsumerPacketGateUpdated {
                 consumer_user_id: updated_consumer_user_id,
                 source_user_id: updated_source_user_id,
                 packet_gate: SourcePacketGate::Rid(rid),
@@ -353,7 +353,7 @@ async fn room_spillover_publish_subscribe_and_leave_cleanup_stay_aligned() {
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumeMediaRequested {
+            FakeMediaTransportEvent::ConsumeMediaRequested {
                 consumer_user_id,
                 source_user_id,
                 media_kind: MediaKind::Video,
@@ -788,7 +788,7 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
     let manager = RoomManager::for_test();
     let media_transport = MediaTransport::fake_for_testing();
     let fake = media_transport
-        .as_fake_adapter()
+        .as_fake_transport()
         .expect("test expects the fake media transport");
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)

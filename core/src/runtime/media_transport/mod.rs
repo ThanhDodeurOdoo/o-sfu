@@ -25,9 +25,6 @@
 //! Keeping that split explicit prevents room and signaling orchestration from
 //! growing knowledge of the concrete WebRTC implementation.
 
-#[cfg(any(test, feature = "testing-transport"))]
-mod fake;
-
 mod config;
 mod runtime_adapter;
 mod shard_set;
@@ -36,15 +33,13 @@ pub mod test_support;
 #[cfg(not(any(test, feature = "testing-transport")))]
 mod transport_backend;
 #[cfg(any(test, feature = "testing-transport"))]
-#[path = "transport_backend_test.rs"]
+#[path = "test_support/transport_backend.rs"]
 mod transport_backend;
 
 pub use config::{MediaTransportDeps, RtcTransportConfig, RtcTransportShardSetConfig};
 pub use runtime_adapter::{
     MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,
 };
-#[cfg(any(test, feature = "testing-transport"))]
-pub use transport_backend::TestTransport;
 
 pub use crate::{
     SessionBitrateLimits,

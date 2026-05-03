@@ -19,7 +19,7 @@ use crate::{
         media_transport::{
             MediaPort, MediaTransportDeps, NegotiationPort, RtcTransport, RtcTransportConfig,
             SessionBitrateLimits, SessionOffer, SessionPort, SourcePacketGate, TransportMediaId,
-            TransportSessionKey, test_support::FakeWebRtcEvent,
+            TransportSessionKey, test_support::FakeMediaTransportEvent,
         },
         metrics::RuntimeMetrics,
         recording::MediaTap,
@@ -190,7 +190,7 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
     let removed_media_events = fake
         .snapshot_events()
         .into_iter()
-        .filter(|event| matches!(event, FakeWebRtcEvent::MediaRemoved { .. }))
+        .filter(|event| matches!(event, FakeMediaTransportEvent::MediaRemoved { .. }))
         .count();
     assert_eq!(removed_media_events, 2);
 }
@@ -621,7 +621,7 @@ async fn receiver_budget_resumes_policy_paused_route_without_erasing_subscriptio
 
 async fn setup_ready_users_with_fake(
     user_ids: &[i64],
-) -> (Arc<Room>, MediaTransport, Arc<FakeWebRtcAdapter>) {
+) -> (Arc<Room>, MediaTransport, Arc<FakeMediaTransport>) {
     let manager = RoomManager::for_test();
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
@@ -646,7 +646,7 @@ async fn setup_ready_users_with_fake(
     (room, adapter, fake)
 }
 
-async fn setup_three_ready_users_with_fake() -> (Arc<Room>, MediaTransport, Arc<FakeWebRtcAdapter>)
+async fn setup_three_ready_users_with_fake() -> (Arc<Room>, MediaTransport, Arc<FakeMediaTransport>)
 {
     setup_ready_users_with_fake(&[1, 2, 3]).await
 }
@@ -759,7 +759,7 @@ async fn assert_user_has_no_producer_route_target(
 }
 
 fn assert_consumer_packet_selection_update(
-    events: &[FakeWebRtcEvent],
+    events: &[FakeMediaTransportEvent],
     consumer_user_id: &UserId,
     source_user_id: &UserId,
     expected_rid: &str,
@@ -767,7 +767,7 @@ fn assert_consumer_packet_selection_update(
     assert!(events.iter().any(|event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumerPacketGateUpdated {
+            FakeMediaTransportEvent::ConsumerPacketGateUpdated {
                 consumer_user_id: updated_consumer_user_id,
                 source_user_id: updated_source_user_id,
                 packet_gate: SourcePacketGate::Rid(rid),
@@ -779,14 +779,14 @@ fn assert_consumer_packet_selection_update(
 }
 
 fn assert_consumer_keyframe_request(
-    events: &[FakeWebRtcEvent],
+    events: &[FakeMediaTransportEvent],
     expected_consumer_user_id: &UserId,
     expected_source_user_id: &UserId,
 ) {
     assert!(events.iter().any(|event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumerKeyframeRequested {
+            FakeMediaTransportEvent::ConsumerKeyframeRequested {
                 consumer_user_id,
                 source_user_id,
             } if consumer_user_id == expected_consumer_user_id
@@ -796,7 +796,7 @@ fn assert_consumer_keyframe_request(
 }
 
 fn assert_consumer_activity_update(
-    events: &[FakeWebRtcEvent],
+    events: &[FakeMediaTransportEvent],
     expected_consumer_user_id: &UserId,
     expected_source_user_id: &UserId,
     expected_active: bool,
@@ -804,7 +804,7 @@ fn assert_consumer_activity_update(
     assert!(events.iter().any(|event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumerActivityUpdated {
+            FakeMediaTransportEvent::ConsumerActivityUpdated {
                 consumer_user_id,
                 source_user_id,
                 active,
@@ -1432,7 +1432,7 @@ async fn publish_track_releases_room_lock_while_waiting_on_media_transport() {
     let (room, _adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
     let (fake_media_transport, _) = fake_adapter();
     let fake = fake_media_transport
-        .as_fake_adapter()
+        .as_fake_transport()
         .expect("expected fake media transport");
     fake.set_publish_media_delay(Some(Duration::from_millis(200)));
 
@@ -1456,7 +1456,7 @@ async fn publish_track_releases_room_lock_while_waiting_on_media_transport() {
     wait_for_fake_event(fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::PublishMediaRequested {
+            FakeMediaTransportEvent::PublishMediaRequested {
                 user_id: UserId::Integer(1),
                 media_kind: MediaKind::Video,
             }
@@ -1525,7 +1525,7 @@ async fn publish_track_defers_producer_commit_until_transport_publish_succeeds()
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::PublishMediaRequested {
+            FakeMediaTransportEvent::PublishMediaRequested {
                 user_id: UserId::Integer(1),
                 media_kind: MediaKind::Video,
             }
@@ -1590,7 +1590,7 @@ async fn publish_track_cleans_up_transport_media_when_user_leaves_mid_publish() 
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::PublishMediaRequested {
+            FakeMediaTransportEvent::PublishMediaRequested {
                 user_id: UserId::Integer(1),
                 media_kind: MediaKind::Video,
             }
@@ -1609,7 +1609,7 @@ async fn publish_track_cleans_up_transport_media_when_user_leaves_mid_publish() 
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::MediaRemoved {
+            FakeMediaTransportEvent::MediaRemoved {
                 user_id: UserId::Integer(1),
                 ..
             }
@@ -1677,7 +1677,7 @@ async fn production_change_updates_transport_route_activity() {
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ProducerActivityUpdated {
+            FakeMediaTransportEvent::ProducerActivityUpdated {
                 user_id: UserId::Integer(1),
                 active: false,
             }
@@ -1719,7 +1719,7 @@ async fn production_change_commits_user_state_before_transport_update_finishes()
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ProducerActivityUpdated {
+            FakeMediaTransportEvent::ProducerActivityUpdated {
                 user_id: UserId::Integer(1),
                 active: false,
             }
@@ -1763,7 +1763,7 @@ async fn late_join_bootstrap_releases_room_lock_while_waiting_on_media_transport
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumeMediaRequested {
+            FakeMediaTransportEvent::ConsumeMediaRequested {
                 consumer_user_id: UserId::Integer(2),
                 source_user_id: UserId::Integer(1),
                 media_kind: MediaKind::Video,
@@ -1834,7 +1834,7 @@ async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succ
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumeMediaRequested {
+            FakeMediaTransportEvent::ConsumeMediaRequested {
                 consumer_user_id: UserId::Integer(2),
                 source_user_id: UserId::Integer(1),
                 media_kind: MediaKind::Video,
@@ -1873,7 +1873,7 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_user_leaves_mid_cons
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumeMediaRequested {
+            FakeMediaTransportEvent::ConsumeMediaRequested {
                 consumer_user_id: UserId::Integer(2),
                 source_user_id: UserId::Integer(1),
                 media_kind: MediaKind::Video,
@@ -1893,7 +1893,7 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_user_leaves_mid_cons
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::MediaRemoved {
+            FakeMediaTransportEvent::MediaRemoved {
                 user_id: UserId::Integer(2),
                 ..
             }
@@ -1931,7 +1931,7 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumeMediaRequested {
+            FakeMediaTransportEvent::ConsumeMediaRequested {
                 consumer_user_id: UserId::Integer(2),
                 source_user_id: UserId::Integer(1),
                 media_kind: MediaKind::Video,
@@ -1955,7 +1955,7 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
         .filter(|event| {
             matches!(
                 event,
-                FakeWebRtcEvent::ConsumeMediaRequested {
+                FakeMediaTransportEvent::ConsumeMediaRequested {
                     consumer_user_id: UserId::Integer(2),
                     source_user_id: UserId::Integer(1),
                     media_kind: MediaKind::Video,
@@ -1993,7 +1993,7 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
     let removed_media = fake
         .snapshot_events()
         .into_iter()
-        .filter(|event| matches!(event, FakeWebRtcEvent::MediaRemoved { .. }))
+        .filter(|event| matches!(event, FakeMediaTransportEvent::MediaRemoved { .. }))
         .count();
     assert_eq!(
         removed_media, 2,
@@ -2048,7 +2048,7 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumeMediaRequested {
+            FakeMediaTransportEvent::ConsumeMediaRequested {
                 consumer_user_id: UserId::Integer(2),
                 source_user_id: UserId::Integer(1),
                 media_kind: MediaKind::Video,
@@ -2067,7 +2067,7 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
         fake.snapshot_events().iter().all(|event| {
             !matches!(
                 event,
-                FakeWebRtcEvent::ConsumerKeyframeRequested {
+                FakeMediaTransportEvent::ConsumerKeyframeRequested {
                     consumer_user_id: UserId::Integer(2),
                     source_user_id: UserId::Integer(1),
                 }
@@ -2079,7 +2079,7 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumerKeyframeRequested {
+            FakeMediaTransportEvent::ConsumerKeyframeRequested {
                 consumer_user_id: UserId::Integer(2),
                 source_user_id: UserId::Integer(1),
             }
@@ -2120,7 +2120,7 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumeMediaRequested {
+            FakeMediaTransportEvent::ConsumeMediaRequested {
                 consumer_user_id: UserId::Integer(2),
                 source_user_id: UserId::Integer(1),
                 media_kind: MediaKind::Video,
@@ -2139,7 +2139,7 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
         fake.snapshot_events().iter().all(|event| {
             !matches!(
                 event,
-                FakeWebRtcEvent::ConsumerKeyframeRequested {
+                FakeMediaTransportEvent::ConsumerKeyframeRequested {
                     consumer_user_id: UserId::Integer(2),
                     source_user_id: UserId::Integer(1),
                 }
@@ -2151,7 +2151,7 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumerKeyframeRequested {
+            FakeMediaTransportEvent::ConsumerKeyframeRequested {
                 consumer_user_id: UserId::Integer(2),
                 source_user_id: UserId::Integer(1),
             }
@@ -2477,7 +2477,7 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
     assert!(
         events.iter().any(|event| matches!(
             event,
-            FakeWebRtcEvent::PublishMediaRequested { user_id: owner, .. }
+            FakeMediaTransportEvent::PublishMediaRequested { user_id: owner, .. }
                 if *owner == user_id
         )),
         "staging should declare producer media on the transport"
@@ -2485,7 +2485,7 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
     assert!(
         events.iter().any(|event| matches!(
             event,
-            FakeWebRtcEvent::MediaRemoved { user_id: owner, .. }
+            FakeMediaTransportEvent::MediaRemoved { user_id: owner, .. }
                 if *owner == user_id
         )),
         "rolling back a staged publish should remove the staged transport media"
@@ -2525,7 +2525,7 @@ async fn duplicate_staged_publish_is_ignored_before_transport_reservation() {
             .iter()
             .filter(|event| matches!(
                 event,
-                FakeWebRtcEvent::PublishMediaRequested { user_id: owner, .. }
+                FakeMediaTransportEvent::PublishMediaRequested { user_id: owner, .. }
                     if *owner == user_id
             ))
             .count(),
@@ -2629,7 +2629,7 @@ async fn staged_negotiated_publish_commit_moves_through_room_owned_transaction()
     assert!(
         !fake.snapshot_events().iter().any(|event| matches!(
             event,
-            FakeWebRtcEvent::MediaRemoved { user_id: owner, .. }
+            FakeMediaTransportEvent::MediaRemoved { user_id: owner, .. }
                 if *owner == user_id
         )),
         "successful commit should not compensate the staged producer media"
@@ -2728,7 +2728,7 @@ async fn staged_negotiated_publish_commit_cleans_up_when_transport_parameters_ar
     assert!(
         fake.snapshot_events().iter().any(|event| matches!(
             event,
-            FakeWebRtcEvent::MediaRemoved {
+            FakeMediaTransportEvent::MediaRemoved {
                 user_id: owner,
                 transport_media_id: removed_media_id,
             } if *owner == user_id && *removed_media_id == transport_media_id
@@ -2775,7 +2775,7 @@ async fn staged_negotiated_publish_commit_cleans_up_when_user_state_rejects_it()
     assert!(
         fake.snapshot_events().iter().any(|event| matches!(
             event,
-            FakeWebRtcEvent::MediaRemoved { user_id: owner, .. }
+            FakeMediaTransportEvent::MediaRemoved { user_id: owner, .. }
                 if *owner == user_id
         )),
         "commit rejection should clean up the staged transport media"
@@ -2839,7 +2839,7 @@ async fn staged_negotiated_publish_commit_rejects_replaced_connection() {
     assert!(
         fake.snapshot_events().iter().any(|event| matches!(
             event,
-            FakeWebRtcEvent::MediaRemoved {
+            FakeMediaTransportEvent::MediaRemoved {
                 user_id: owner,
                 transport_media_id: removed_media_id,
             } if *owner == user_id && *removed_media_id == transport_media_id
@@ -2887,7 +2887,7 @@ async fn staged_publish_connection_cleanup_rolls_back_every_staged_stream() {
             .iter()
             .filter(|event| matches!(
                 event,
-                FakeWebRtcEvent::MediaRemoved { user_id: owner, .. }
+                FakeMediaTransportEvent::MediaRemoved { user_id: owner, .. }
                     if *owner == user_id
             ))
             .count(),
@@ -2935,7 +2935,7 @@ async fn staged_negotiated_publish_duplicate_race_keeps_one_staged_entry_and_one
             .iter()
             .filter(|event| matches!(
                 event,
-                FakeWebRtcEvent::PublishMediaRequested { user_id: owner, .. }
+                FakeMediaTransportEvent::PublishMediaRequested { user_id: owner, .. }
                     if *owner == user_id
             ))
             .count(),
@@ -2947,7 +2947,7 @@ async fn staged_negotiated_publish_duplicate_race_keeps_one_staged_entry_and_one
             .iter()
             .filter(|event| matches!(
                 event,
-                FakeWebRtcEvent::MediaRemoved { user_id: owner, .. }
+                FakeMediaTransportEvent::MediaRemoved { user_id: owner, .. }
                     if *owner == user_id
             ))
             .count(),

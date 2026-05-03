@@ -454,9 +454,9 @@ async fn runtime_disconnect_rolls_back_staged_publish_before_room_cleanup() {
 
 #[tokio::test]
 async fn websocket_closure_emits_fake_webrtc_user_closed_event() {
-    let adapter = Arc::new(FakeWebRtcAdapter::default());
+    let adapter = Arc::new(FakeMediaTransport::default());
     let media_transport =
-        MediaTransport::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
+        MediaTransport::from_fake_transport(Arc::<FakeMediaTransport>::clone(&adapter));
     let server = spawn_test_server_with_adapter(1_000, 100, media_transport).await;
     assert!(server.is_some());
     let Some(server) = server else {
@@ -479,7 +479,7 @@ async fn websocket_closure_emits_fake_webrtc_user_closed_event() {
     };
     assert_eq!(
         events.last(),
-        Some(&FakeWebRtcEvent::SessionClosed {
+        Some(&FakeMediaTransportEvent::SessionClosed {
             user_id: user_id.clone(),
         })
     );
@@ -487,9 +487,9 @@ async fn websocket_closure_emits_fake_webrtc_user_closed_event() {
 
 #[tokio::test]
 async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
-    let adapter = Arc::new(FakeWebRtcAdapter::default());
+    let adapter = Arc::new(FakeMediaTransport::default());
     let media_transport =
-        MediaTransport::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
+        MediaTransport::from_fake_transport(Arc::<FakeMediaTransport>::clone(&adapter));
     let server = spawn_test_server_with_adapter(1_000, 100, media_transport).await;
     assert!(server.is_some());
     let Some(server) = server else {
@@ -520,7 +520,7 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
     };
     assert_eq!(
         events.last(),
-        Some(&FakeWebRtcEvent::SessionClosed {
+        Some(&FakeMediaTransportEvent::SessionClosed {
             user_id: user_id.clone(),
         })
     );
@@ -534,7 +534,7 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
     };
     assert_eq!(
         events.last(),
-        Some(&FakeWebRtcEvent::SessionClosed {
+        Some(&FakeMediaTransportEvent::SessionClosed {
             user_id: user_id.clone(),
         })
     );
@@ -542,9 +542,9 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
 
 #[tokio::test]
 async fn disconnect_cleanup_still_closes_media_transport_user_state() {
-    let adapter = Arc::new(FakeWebRtcAdapter::default());
+    let adapter = Arc::new(FakeMediaTransport::default());
     let media_transport =
-        MediaTransport::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
+        MediaTransport::from_fake_transport(Arc::<FakeMediaTransport>::clone(&adapter));
     let server = spawn_test_server_with_adapter(1_000, 10, media_transport).await;
     assert!(server.is_some());
     let Some(server) = server else {
@@ -584,7 +584,7 @@ async fn disconnect_cleanup_still_closes_media_transport_user_state() {
     };
     assert_eq!(
         events.last(),
-        Some(&FakeWebRtcEvent::SessionClosed {
+        Some(&FakeMediaTransportEvent::SessionClosed {
             user_id: UserId::Integer(1)
         })
     );
@@ -592,9 +592,9 @@ async fn disconnect_cleanup_still_closes_media_transport_user_state() {
 
 #[tokio::test]
 async fn disconnect_cleanup_closes_transport_user_before_empty_room_removal() {
-    let adapter = Arc::new(FakeWebRtcAdapter::default());
+    let adapter = Arc::new(FakeMediaTransport::default());
     let media_transport =
-        MediaTransport::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
+        MediaTransport::from_fake_transport(Arc::<FakeMediaTransport>::clone(&adapter));
     let server = spawn_test_server_with_adapter(1_000, 10, media_transport).await;
     assert!(server.is_some());
     let Some(server) = server else {
@@ -632,7 +632,7 @@ async fn disconnect_cleanup_closes_transport_user_before_empty_room_removal() {
     };
     assert_eq!(
         events.last(),
-        Some(&FakeWebRtcEvent::SessionClosed {
+        Some(&FakeMediaTransportEvent::SessionClosed {
             user_id: core_user_id
         })
     );

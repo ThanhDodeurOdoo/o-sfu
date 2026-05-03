@@ -100,13 +100,13 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
 
 #[tokio::test]
 async fn protocol_core_publish_round_trips_through_real_server_user_protocol() {
-    let adapter = Arc::new(FakeWebRtcAdapter::default());
+    let adapter = Arc::new(FakeMediaTransport::default());
     let server = spawn_test_server_with_timeouts(
         1_000,
         10_000,
         60_000,
         100,
-        MediaTransport::from_fake_adapter(Arc::clone(&adapter)),
+        MediaTransport::from_fake_transport(Arc::clone(&adapter)),
     )
     .await;
     assert!(server.is_some());
@@ -181,7 +181,7 @@ async fn protocol_core_publish_round_trips_through_real_server_user_protocol() {
     assert!(
         adapter.snapshot_events().iter().any(|event| matches!(
             event,
-            FakeWebRtcEvent::PublishMediaRequested {
+            FakeMediaTransportEvent::PublishMediaRequested {
                 user_id,
                 media_kind,
             } if *user_id == UserId::Integer(53)

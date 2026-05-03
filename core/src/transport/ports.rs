@@ -8,7 +8,7 @@
 //!
 //! A caller that creates an offer, applies an answer and projects negotiated RTP
 //! capabilities knows it is performing negotiation. It does not know whether the
-//! backend is backed by str0m, a fake adapter or a future transport
+//! backend is backed by str0m, a fake transport or a future transport
 //! implementation.
 
 use std::{collections::BTreeSet, time::Instant};

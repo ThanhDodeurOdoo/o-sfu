@@ -96,7 +96,7 @@ async fn consumption_change_updates_transport_route_activity() {
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumerActivityUpdated {
+            FakeMediaTransportEvent::ConsumerActivityUpdated {
                 consumer_user_id: UserId::Integer(2),
                 source_user_id: UserId::Integer(1),
                 active: false,
@@ -141,7 +141,7 @@ async fn consumption_change_resume_requests_video_keyframe_refresh() {
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumerActivityUpdated {
+            FakeMediaTransportEvent::ConsumerActivityUpdated {
                 consumer_user_id: UserId::Integer(2),
                 source_user_id: UserId::Integer(1),
                 active: false,
@@ -168,7 +168,7 @@ async fn consumption_change_resume_requests_video_keyframe_refresh() {
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumerKeyframeRequested {
+            FakeMediaTransportEvent::ConsumerKeyframeRequested {
                 consumer_user_id: UserId::Integer(2),
                 source_user_id: UserId::Integer(1),
             }
@@ -236,7 +236,7 @@ async fn consumption_change_persists_preference_for_future_consumer_bootstrap() 
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
-            FakeWebRtcEvent::ConsumerActivityUpdated {
+            FakeMediaTransportEvent::ConsumerActivityUpdated {
                 consumer_user_id: UserId::Integer(2),
                 source_user_id: UserId::Integer(1),
                 active: false,

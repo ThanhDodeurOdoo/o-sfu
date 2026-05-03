@@ -545,7 +545,7 @@ pub(super) async fn recover_subscriber_and_replay_track(
 }
 
 pub(super) async fn setup_fake_protocol_peers(
-    adapter: Arc<FakeWebRtcAdapter>,
+    adapter: Arc<FakeMediaTransport>,
     room_name: &str,
     alice_user_id: UserId,
     bob_user_id: UserId,
@@ -560,7 +560,7 @@ pub(super) async fn setup_fake_protocol_peers(
         10_000,
         60_000,
         100,
-        MediaTransport::from_fake_adapter(adapter),
+        MediaTransport::from_fake_transport(adapter),
     )
     .await?;
     let room = create_room(&server, room_name, None, CreateRoomQuery::default()).await;

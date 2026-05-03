@@ -38,7 +38,7 @@ pub(super) use crate::{
         media_transport::{
             MediaTransport, MediaTransportDeps, RtcTransport, RtcTransportConfig,
             SessionBitrateLimits,
-            test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
+            test_support::{FakeMediaTransport, FakeMediaTransportEvent},
         },
         metrics::RuntimeMetrics,
         recording::MediaTap,
@@ -295,9 +295,9 @@ pub(super) async fn spawn_protocol_rtc_test_server(
 }
 
 pub(super) async fn wait_for_fake_webrtc_events(
-    adapter: &FakeWebRtcAdapter,
+    adapter: &FakeMediaTransport,
     event_count: usize,
-) -> Option<Vec<FakeWebRtcEvent>> {
+) -> Option<Vec<FakeMediaTransportEvent>> {
     timeout(Duration::from_secs(1), async {
         loop {
             let events = adapter.snapshot_events();

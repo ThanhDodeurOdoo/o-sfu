@@ -2,13 +2,13 @@ use super::support::*;
 
 #[tokio::test]
 async fn protocol_core_subscribe_updates_consumer_activity() {
-    let adapter = Arc::new(FakeWebRtcAdapter::default());
+    let adapter = Arc::new(FakeMediaTransport::default());
     let server = spawn_test_server_with_timeouts(
         1_000,
         10_000,
         60_000,
         100,
-        MediaTransport::from_fake_adapter(Arc::clone(&adapter)),
+        MediaTransport::from_fake_transport(Arc::clone(&adapter)),
     )
     .await;
     assert!(server.is_some());
@@ -81,7 +81,7 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
             if adapter.snapshot_events().iter().any(|event| {
                 matches!(
                     event,
-                    FakeWebRtcEvent::ConsumerActivityUpdated {
+                    FakeMediaTransportEvent::ConsumerActivityUpdated {
                         consumer_user_id,
                         source_user_id,
                         active: false,
@@ -97,7 +97,7 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
     .await
     .ok()
     .unwrap_or(false);
-    assert!(observed, "fake adapter should record subscribe activity");
+    assert!(observed, "fake transport should record subscribe activity");
 }
 
 #[tokio::test]
@@ -173,7 +173,7 @@ async fn protocol_core_subscribe_updates_real_rtc_consumer_activity() {
 
 #[tokio::test]
 async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
-    let adapter = Arc::new(FakeWebRtcAdapter::default());
+    let adapter = Arc::new(FakeMediaTransport::default());
     let alice_user_id = UserId::Integer(83);
     let bob_user_id = UserId::Integer(84);
     let core_alice_user_id = alice_user_id.clone();
@@ -238,7 +238,7 @@ async fn protocol_core_replays_latest_subscribe_after_real_server_recovery() {
                 .any(|event| {
                     matches!(
                         event,
-                        FakeWebRtcEvent::ConsumerActivityUpdated {
+                        FakeMediaTransportEvent::ConsumerActivityUpdated {
                             consumer_user_id,
                             source_user_id,
                             active: false,

@@ -66,12 +66,10 @@ pub mod transport {
     #[cfg(any(test, feature = "testing-transport"))]
     pub mod test_support {
         pub use crate::runtime::{
-            media_transport::test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
+            media_transport::test_support::{FakeMediaTransport, FakeMediaTransportEvent},
             rtc_engine::test_support::*,
         };
     }
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub use crate::runtime::media_transport::TestTransport;
     pub use crate::{
         SessionBitrateLimits,
         runtime::{

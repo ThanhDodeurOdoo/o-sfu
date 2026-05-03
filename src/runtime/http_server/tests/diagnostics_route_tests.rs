@@ -183,7 +183,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
         &test_state.media_transport,
     )
     .await;
-    if let Some(fake) = test_state.media_transport.as_fake_adapter() {
+    if let Some(fake) = test_state.media_transport.as_fake_transport() {
         fake.set_receiver_bandwidth_estimate(bob_session_id.clone(), 200_000);
     }
     for _ in 0..2 {

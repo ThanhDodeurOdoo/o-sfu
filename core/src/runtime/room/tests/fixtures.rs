@@ -24,7 +24,7 @@ pub(super) use crate::{
         VideoLayoutIntent,
         media_transport::{
             ActiveSpeakerSource, MediaTransport, NegotiationPort, TransportMediaId,
-            test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
+            test_support::{FakeMediaTransport, FakeMediaTransportEvent},
         },
     },
 };
@@ -57,10 +57,10 @@ pub(super) fn test_sender() -> (
     mpsc::unbounded_channel()
 }
 
-pub(super) fn fake_adapter() -> (MediaTransport, Arc<FakeWebRtcAdapter>) {
-    let adapter = Arc::new(FakeWebRtcAdapter::default());
+pub(super) fn fake_adapter() -> (MediaTransport, Arc<FakeMediaTransport>) {
+    let adapter = Arc::new(FakeMediaTransport::default());
     (
-        MediaTransport::from_fake_adapter(Arc::clone(&adapter)),
+        MediaTransport::from_fake_transport(Arc::clone(&adapter)),
         adapter,
     )
 }
@@ -297,7 +297,7 @@ struct ReadySessionScenarioOptions {
 struct ReadySessionScenario {
     room: Arc<super::super::Room>,
     adapter: MediaTransport,
-    fake: Option<Arc<FakeWebRtcAdapter>>,
+    fake: Option<Arc<FakeMediaTransport>>,
     first_rx: mpsc::UnboundedReceiver<UserOutbound>,
     second_rx: mpsc::UnboundedReceiver<UserOutbound>,
 }
@@ -408,7 +408,7 @@ pub(super) async fn setup_two_ready_users() -> (
 pub(super) async fn setup_two_ready_users_with_fake() -> (
     Arc<super::super::Room>,
     MediaTransport,
-    Arc<FakeWebRtcAdapter>,
+    Arc<FakeMediaTransport>,
     mpsc::UnboundedReceiver<UserOutbound>,
     mpsc::UnboundedReceiver<UserOutbound>,
 ) {
@@ -426,7 +426,7 @@ pub(super) async fn setup_two_ready_users_with_fake() -> (
 pub(super) async fn setup_late_join_bootstrap_scenario() -> (
     Arc<super::super::Room>,
     MediaTransport,
-    Arc<FakeWebRtcAdapter>,
+    Arc<FakeMediaTransport>,
     mpsc::UnboundedReceiver<UserOutbound>,
     mpsc::UnboundedReceiver<UserOutbound>,
 ) {
@@ -450,8 +450,8 @@ pub(super) fn drain_outbound(rx: &mut mpsc::UnboundedReceiver<UserOutbound>) -> 
 }
 
 pub(super) async fn wait_for_fake_event(
-    adapter: &FakeWebRtcAdapter,
-    predicate: impl Fn(&FakeWebRtcEvent) -> bool,
+    adapter: &FakeMediaTransport,
+    predicate: impl Fn(&FakeMediaTransportEvent) -> bool,
 ) {
     let wait_result = timeout(Duration::from_secs(1), async {
         loop {
