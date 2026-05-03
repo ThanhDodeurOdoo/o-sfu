@@ -11,82 +11,10 @@
 
 The goal is to be able to run it as an alternative to odoo/sfu (so the http and ws API and client bundle API are the same), but with:
 - higher control on routing
-- better recording integration (no port publishing to ffmpeg)
+- better recording integration
 - better scaling architecture (local and multi server sharding)
 - more observability (prometheus, open telemetry,...)
-- stronger guarantees (rust + formal proofs + fuzzing + UB tests + puppetter full stack tests)
-
-## Architecture
-
-```mermaid
-flowchart LR
-    subgraph external["external callers"]
-        Odoo["Odoo backend"]
-        Browser["Browser"]
-    end
-
-    subgraph client["client crate"]
-        SfuClient["SfuClient TS API"]
-        Protocol["protocol crate<br/>sans-I/O signaling core"]
-        BrowserRuntime["browser runtime<br/>WebSocket + RTCPeerConnection"]
-    end
-
-    subgraph server["server crate (src)"]
-        Runtime["runtime<br/>config + Tokio shell"]
-        Http["runtime/http_server<br/>HTTP control plane"]
-        Ws["runtime/websocket_server<br/>auth + socket loop"]
-        UserSession["application/user_session<br/>orchestration"]
-    end
-
-    subgraph core["core crate"]
-        SfuCore["SfuCore<br/>session factory"]
-        MediaSession["MediaSession<br/>per-user media intent"]
-        RoomManager["RoomManager / Room<br/>membership, publish, subscribe"]
-        RouterBridge["room topology + router_state<br/>runtime-to-router bridge"]
-        Transport["MediaTransport / RtcTransport<br/>negotiation and media ports"]
-        Rtc["str0m RTC adapter<br/>UDP, ICE-lite, RTP forwarding"]
-        Recording["recording taps<br/>packet sinks + .ortp writers"]
-    end
-
-    subgraph pure["pure and shared crates"]
-        Router["router<br/>Sans-I/O topology state machine"]
-        Rfc["rfc<br/>protocol constants and media kinds"]
-    end
-
-    subgraph scaling["cluster crate + control-plane binary"]
-        ControlPlane["ClusterControlPlane<br/>node leases + room ownership"]
-        TopologyCache["CachedTopologyStore<br/>topology snapshots"]
-    end
-
-    Odoo --> Http
-    Browser --> SfuClient
-    SfuClient --> Protocol
-    SfuClient --> BrowserRuntime
-    BrowserRuntime <--> Ws
-
-    Http --> Runtime
-    Ws --> UserSession
-    Runtime --> SfuCore
-    Runtime --> RoomManager
-    SfuCore --> MediaSession
-    UserSession --> MediaSession
-    MediaSession --> RoomManager
-    RoomManager --> RouterBridge
-    RouterBridge --> Router
-    RoomManager --> Transport
-    RoomManager --> Recording
-    Transport --> Rtc
-    Rtc --> Recording
-
-    Router --> Rfc
-    Transport --> Rfc
-
-    Runtime -. planned owner-aware ingress .-> ControlPlane
-    ControlPlane --> TopologyCache
-    TopologyCache -. cached room placement .-> Runtime
-```
-
-Uses [Str0m](https://github.com/algesten/str0m) as the WebRTC stack.
+- more?
 
 ### API documentation
 
@@ -133,10 +61,6 @@ you can read the one at [odoo/sfu](https://github.com/odoo/sfu), it's roughly th
 | `MAX_BITRATE_OUT`                  | `10000000`              | WebRTC desired-send-bitrate and BWE ceiling in bps per user (download); not a strict packet-forwarding cap.                                                       |
 | `MAX_VIDEO_BITRATE`                | `4000000`               | Maximum bitrate in bps for the highest default simulcast video layer metadata.                                                                                    |
 
-Codec preference variables accept comma-separated partial orders. Disabled
-codecs are ignored, and codecs omitted from the preference list keep their
-default relative order after the explicitly preferred entries.
-
 
 ## Running the server and contributing
 
@@ -155,8 +79,7 @@ will adapt accordingly.
 
 ### scalability (sharding)
 
-rooms will have multiple routers and the load will be sharded across them. In the long term an optional controller server will
-allow the SFUs to share shards between them.
+rooms can have multiple workers and the load will be sharded across them (logic still wip). In the long term an optional controller server will allow the SFUs to share shards between them.
 
 ### Simulcast/SVC
 
@@ -172,19 +95,17 @@ Partial coverage
 The browser bundle configures RID send encodings only for upload slots that
 match a production simulcast path. Unsupported H.264 profiles, unsupported
 browsers, and optional codec-only configurations fall back to single-encoding
-publication until they have explicit coverage.
+publication
 
 ## Tooling
 
 ## Observability
 
-The in-repo `telemetry/` crate contain the operator-facing telemetry formats:
+The `telemetry/` crate (sub dir) contain the telemetry tooling and serialization formats,
 runtime log and trace setup, event and field schema, diagnostics DTOs and recent
 event storage, the runtime metrics catalog, Prometheus text rendering and
 Grafana node-graph JSON formatting.
 
-https://github.com/ThanhDodeurOdoo/o-sfu-telemetry contains the optional Prometheus, Grafana, Alertmanager and collector examples that consume those formats.
-
-### Benchmarking
-
-  https://github.com/ThanhDodeurOdoo/o-sfu-benchmarks
+you can check
+https://github.com/ThanhDodeurOdoo/o-sfu-telemetry
+it is an example of how to read and exploit the telemetry api

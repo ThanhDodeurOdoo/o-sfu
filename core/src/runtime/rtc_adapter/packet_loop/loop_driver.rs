@@ -471,119 +471,73 @@ pub(super) fn next_timeout_deadline(state: &mut RtcBootstrapState) -> Option<Ins
     }
 }
 
-#[cfg(not(any(test, feature = "testing-transport")))]
 /// Wait for the next event that should resume the worker loop.
 ///
 /// Shutdown and commands are biased ahead of socket receive. When no socket has
-/// been opened yet, only shutdown and commands can wake the worker.
+/// been opened yet, only shutdown and commands can wake the worker. Testing
+/// builds also expose a debug channel ordered with normal commands so tests can
+/// observe and mutate worker state deterministically.
 async fn wait_for_next_loop_input(
     snapshot: Option<SnapshotInfo>,
     command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
+    #[cfg(any(test, feature = "testing-transport"))] debug_rx: &mut mpsc::Receiver<
+        DebugRtcWorkerCommand,
+    >,
     receive_buffer: &mut [u8],
     shutdown_token: &CancellationToken,
 ) -> Option<NextLoopInput> {
     let Some(info) = snapshot else {
-        return tokio::select! {
-            biased;
-            () = shutdown_token.cancelled() => None,
-            maybe_command = command_rx.recv() => maybe_command.map(NextLoopInput::Command),
-        };
+        return wait_for_control_input(
+            command_rx,
+            #[cfg(any(test, feature = "testing-transport"))]
+            debug_rx,
+            shutdown_token,
+        )
+        .await;
     };
-    if let Some(next_timeout) = info.next_timeout {
-        tokio::select! {
-            biased;
-            () = shutdown_token.cancelled() => None,
-            maybe_command = command_rx.recv() => {
-                maybe_command.map(NextLoopInput::Command)
-            }
-            result = timeout(
-                socket_wait_duration(next_timeout),
-                info.socket.recv_from(receive_buffer),
-            ) => {
-                Some(match result {
-                    Ok(result) => handle_socket_receive_result(result, info.candidate_addr),
-                    Err(_elapsed) => NextLoopInput::Datagram {
-                        source_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
-                        candidate_addr: info.candidate_addr,
-                        received_size: 0,
-                    },
-                })
-            }
-        }
-    } else {
-        tokio::select! {
-            biased;
-            () = shutdown_token.cancelled() => None,
-            maybe_command = command_rx.recv() => {
-                maybe_command.map(NextLoopInput::Command)
-            }
-            result = info.socket.recv_from(receive_buffer) => {
-                Some(handle_socket_receive_result(result, info.candidate_addr))
-            }
-        }
+    tokio::select! {
+        biased;
+        next_input = wait_for_control_input(
+            command_rx,
+            #[cfg(any(test, feature = "testing-transport"))]
+            debug_rx,
+            shutdown_token,
+        ) => next_input,
+        next_input = wait_for_socket_input(&info, receive_buffer) => Some(next_input),
     }
 }
 
-#[cfg(any(test, feature = "testing-transport"))]
-/// Wait for the next event in builds that expose a testing debug channel.
-///
-/// The debug channel is intentionally ordered with normal commands in the
-/// biased select because tests use it to observe and mutate worker state
-/// deterministically.
-async fn wait_for_next_loop_input(
-    snapshot: Option<SnapshotInfo>,
+async fn wait_for_control_input(
     command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
-    debug_rx: &mut mpsc::Receiver<DebugRtcWorkerCommand>,
-    receive_buffer: &mut [u8],
+    #[cfg(any(test, feature = "testing-transport"))] debug_rx: &mut mpsc::Receiver<
+        DebugRtcWorkerCommand,
+    >,
     shutdown_token: &CancellationToken,
 ) -> Option<NextLoopInput> {
-    let Some(info) = snapshot else {
-        return tokio::select! {
-            biased;
-            () = shutdown_token.cancelled() => None,
-            maybe_command = command_rx.recv() => maybe_command.map(NextLoopInput::Command),
-            maybe_debug_command = debug_rx.recv() => maybe_debug_command.map(NextLoopInput::DebugCommand),
-        };
-    };
-    if let Some(next_timeout) = info.next_timeout {
-        tokio::select! {
-            biased;
-            () = shutdown_token.cancelled() => None,
-            maybe_command = command_rx.recv() => {
-                maybe_command.map(NextLoopInput::Command)
-            }
-            maybe_debug_command = debug_rx.recv() => {
-                maybe_debug_command.map(NextLoopInput::DebugCommand)
-            }
-            result = timeout(
-                socket_wait_duration(next_timeout),
-                info.socket.recv_from(receive_buffer),
-            ) => {
-                Some(match result {
-                    Ok(result) => handle_socket_receive_result(result, info.candidate_addr),
-                    Err(_elapsed) => NextLoopInput::Datagram {
-                        source_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
-                        candidate_addr: info.candidate_addr,
-                        received_size: 0,
-                    },
-                })
-            }
+    #[cfg(any(test, feature = "testing-transport"))]
+    let debug_input = async { debug_rx.recv().await.map(NextLoopInput::DebugCommand) };
+    #[cfg(not(any(test, feature = "testing-transport")))]
+    let debug_input = std::future::pending::<Option<NextLoopInput>>();
+
+    tokio::select! {
+        biased;
+        () = shutdown_token.cancelled() => None,
+        maybe_command = command_rx.recv() => maybe_command.map(NextLoopInput::Command),
+        maybe_debug_input = debug_input => maybe_debug_input,
+    }
+}
+
+async fn wait_for_socket_input(info: &SnapshotInfo, receive_buffer: &mut [u8]) -> NextLoopInput {
+    let receive = info.socket.recv_from(receive_buffer);
+    let result = if let Some(next_timeout) = info.next_timeout {
+        match timeout(socket_wait_duration(next_timeout), receive).await {
+            Ok(result) => result,
+            Err(_elapsed) => return empty_datagram_loop_input(info.candidate_addr),
         }
     } else {
-        tokio::select! {
-            biased;
-            () = shutdown_token.cancelled() => None,
-            maybe_command = command_rx.recv() => {
-                maybe_command.map(NextLoopInput::Command)
-            }
-            maybe_debug_command = debug_rx.recv() => {
-                maybe_debug_command.map(NextLoopInput::DebugCommand)
-            }
-            result = info.socket.recv_from(receive_buffer) => {
-                Some(handle_socket_receive_result(result, info.candidate_addr))
-            }
-        }
-    }
+        receive.await
+    };
+    handle_socket_receive_result(result, info.candidate_addr)
 }
 
 fn handle_socket_receive_result(
@@ -598,12 +552,16 @@ fn handle_socket_receive_result(
         },
         Err(_error) => {
             warn!("rtc packet loop failed to receive datagram");
-            NextLoopInput::Datagram {
-                source_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
-                candidate_addr,
-                received_size: 0,
-            }
+            empty_datagram_loop_input(candidate_addr)
         }
+    }
+}
+
+fn empty_datagram_loop_input(candidate_addr: SocketAddr) -> NextLoopInput {
+    NextLoopInput::Datagram {
+        source_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
+        candidate_addr,
+        received_size: 0,
     }
 }
 

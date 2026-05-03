@@ -1,4 +1,3 @@
-// TODO: needs documentation:
 //! Pure client-side signaling state machine for the `o-sfu` protocol.
 //!
 //! `ProtocolCore` never perform I/O directly. Every public transition returns
@@ -81,7 +80,6 @@ const MAX_OUTBOUND_BATCH_LEN: usize = 16;
 /// test harness) must execute in order. That keeps transport work, timers, and
 /// projection updates visible at the protocol boundary instead of being buried
 /// in host-specific control flow.
-// TODO: needs documentation:
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     /// Serialize and send a JSON frame over the WebSocket.
@@ -194,18 +192,75 @@ struct PendingNegotiation {
     kind: NegotiationKind,
 }
 
-// TODO: needs documentation:
+/// The stored state falls into three groups:
+///   - session snapshots accepted from the server
+///   - remembered client intent that should survive reconnects
+///   - in-flight host work that must be cancelled or resolved during cleanup
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtocolCore {
+    /// Public lifecycle state exported to the host projection.
+    ///
+    /// This is the gate for all protocol transitions. Client messages are only
+    /// sent once authentication has completed, transport readiness only advances
+    /// from `Authenticated` and stale timer callbacks become no-ops when the
+    /// state no longer matches the timer role.
     state: ConnectionState,
+    /// Feature snapshot from the last accepted welcome payload.
+    ///
+    /// Until a welcome is accepted this remains empty. It is reset on fresh
+    /// connects and terminal cleanup so callers never read capabilities from a
+    /// previous room or credential context.
     features: AvailableFeatures,
+    /// Recording snapshot from the server.
+    ///
+    /// Welcome payloads make this authoritative after authentication. Later
+    /// recording-change messages update it incrementally, while fresh connects
+    /// and terminal cleanup reset it back to the neutral default.
     recording_state: RecordingState,
+    /// Current server-owned mapping from SDP mid to stream ownership metadata.
+    ///
+    /// The map is replaced by track snapshots and trimmed when peers leave. It
+    /// is the core's authoritative source for host track and source projection,
+    /// but it is runtime state only and is cleared on disconnect or socket loss.
     track_bindings: BTreeMap<String, TrackBinding>,
+    /// Latest client intent that must be replayed after a recovered socket is
+    /// authenticated.
+    ///
+    /// Publication, subscription and local user-info updates are kept here
+    /// because they describe what the user still wants. One-off broadcasts and
+    /// request-response operations are not sticky because replaying them later
+    /// would change their meaning.
     sticky_replay: StickyReplayState,
+    /// Saved admission context for the active connection attempt.
+    ///
+    /// Recovery reuses this URL, JWT and optional room to open the next socket.
+    /// Explicit disconnects, terminal close codes and fresh connects clear or
+    /// replace it so old credentials cannot revive a stopped session.
     connect_context: Option<ConnectContext>,
+    /// Delay that will be used for the next recovery retry.
+    ///
+    /// The value is reset after a successful welcome or intentional lifecycle
+    /// reset. Transient websocket loss consumes the current value when
+    /// scheduling recovery, then increases it for the following retry.
     recovery_delay_ms: u32,
+    /// Buffered outbound envelopes waiting for an immediate flush, size limit
+    /// or batch timer.
+    ///
+    /// The batcher owns only serializable protocol envelopes and the knowledge
+    /// that a flush timer is pending. The host still owns the actual timer and
+    /// websocket write side effects emitted as commands.
     outbound_batch: OutboundBatcher,
+    /// Tracks request-response operations that must resolve exactly once.
+    ///
+    /// Each live request is paired with one timeout timer. Responses and timer
+    /// callbacks both flow through this tracker so stale, mismatched or racing
+    /// events cannot resolve the wrong host promise.
     request_tracker: RequestTracker,
+    /// Server-driven SDP negotiation currently waiting for a host answer.
+    ///
+    /// Only one negotiation may be staged at a time. The stored request id and
+    /// kind must match the host answer exactly before the core sends a response,
+    /// which prevents reordered or stale SDP answers from crossing sessions.
     pending_negotiation: Option<PendingNegotiation>,
 }
 
