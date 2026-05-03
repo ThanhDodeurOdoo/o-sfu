@@ -46,7 +46,6 @@ pub(super) use crate::{
             Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomManagerDeps,
             RoomRuntimePolicy, rtp_capabilities,
         },
-        testing::{build_test_runtime_state, decode_protocol_welcome_batch},
     },
 };
 
@@ -181,7 +180,7 @@ async fn spawn_test_server_impl(
         },
     ));
     let bind_address = config.http.bind_address;
-    let state = build_test_runtime_state(
+    let state = RuntimeState::for_config_parts(
         &config,
         Arc::clone(&room_manager),
         Arc::clone(&diagnostics),
@@ -451,6 +450,17 @@ pub(super) async fn setup_negotiated_session(
 pub(super) async fn read_welcome(websocket: &mut TestWebSocket) -> Option<WelcomePayload> {
     let payload = read_text_message(websocket).await?;
     decode_protocol_welcome_batch(&payload)
+}
+
+fn decode_protocol_welcome_batch(payload: &str) -> Option<WelcomePayload> {
+    let batch = serde_json::from_str::<EnvelopeBatch>(payload).ok()?;
+    let envelope = batch.first()?.clone();
+    match ServerEnvelope::decode(envelope).ok()? {
+        ServerEnvelope::Message(ServerMessage::Welcome(welcome)) => Some(welcome),
+        ServerEnvelope::Message(_)
+        | ServerEnvelope::Request { .. }
+        | ServerEnvelope::Response { .. } => None,
+    }
 }
 
 pub(super) async fn read_protocol_server_batch(

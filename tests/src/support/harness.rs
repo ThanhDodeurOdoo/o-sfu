@@ -5,27 +5,39 @@
 
 use std::{
     collections::BTreeMap,
+    future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    time::Duration,
 };
 
+use anyhow::{Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
 use o_sfu::{
+    Runtime,
+    auth::{
+        HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims, WebSocketConnectClaims, sign,
+    },
     config::{
         AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
         MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig,
         TransportConfig, UserConfig, VideoBitrateLimits,
     },
-    testing::{
-        auth::{
-            HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims, WebSocketConnectClaims, sign,
-        },
-        http::{CHANNEL_PATH, CreateRoomQuery, DISCONNECT_PATH, METRICS_PATH, RoomResponse},
-        server::TestServer,
+    http::{
+        CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DISCONNECT_PATH, METRICS_PATH,
+        RoomResponse,
     },
 };
-use o_sfu_protocol::shared::{UserId, UserPermissions};
+use o_sfu_protocol::{
+    shared::{StreamType, UserId, UserPermissions},
+    signaling::{EnvelopeBatch, ServerEnvelope, ServerMessage, WelcomePayload},
+};
+use o_sfu_telemetry::diagnostics::{DiagnosticsRoomDetail, DiagnosticsRouteState};
 use reqwest::StatusCode;
-use tokio::net::TcpStream;
+use tokio::{
+    net::{TcpListener, TcpStream},
+    task::{JoinHandle, yield_now},
+    time::timeout,
+};
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{Message, Result as WebSocketResult, protocol::frame::coding::CloseCode},
@@ -36,6 +48,199 @@ pub type TestWebSocket =
 
 pub const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 pub const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
+
+/// Test-only server handle used by integration tests to exercise the real HTTP and WS entry points.
+#[derive(Debug)]
+pub struct TestServer {
+    addr: SocketAddr,
+    handle: JoinHandle<()>,
+}
+
+const TEST_POLL_DEADLINE: Duration = Duration::from_secs(3);
+
+impl TestServer {
+    #[must_use]
+    pub fn ws_url(&self) -> String {
+        format!("ws://{}/", self.addr)
+    }
+
+    #[must_use]
+    pub fn http_base_url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    pub async fn wait_for_room_absence(&self, room_id: &str) -> bool {
+        wait_for_test_predicate(|| async { self.room_absent(room_id).await.then_some(()) }).await
+    }
+
+    pub async fn wait_for_consumer_route_active(
+        &self,
+        room_id: &str,
+        consumer_user_id: &UserId,
+        producer_user_id: &UserId,
+        stream_type: StreamType,
+    ) -> bool {
+        self.wait_for_consumer_route_state(
+            room_id,
+            consumer_user_id,
+            producer_user_id,
+            stream_type,
+            ExpectedRouteState::Active,
+        )
+        .await
+    }
+
+    pub async fn wait_for_consumer_route_inactive(
+        &self,
+        room_id: &str,
+        consumer_user_id: &UserId,
+        producer_user_id: &UserId,
+        stream_type: StreamType,
+    ) -> bool {
+        self.wait_for_consumer_route_state(
+            room_id,
+            consumer_user_id,
+            producer_user_id,
+            stream_type,
+            ExpectedRouteState::Inactive,
+        )
+        .await
+    }
+
+    pub async fn wait_for_consumer_route_absence(
+        &self,
+        room_id: &str,
+        consumer_user_id: &UserId,
+        producer_user_id: &UserId,
+        stream_type: StreamType,
+    ) -> bool {
+        self.wait_for_consumer_route_state(
+            room_id,
+            consumer_user_id,
+            producer_user_id,
+            stream_type,
+            ExpectedRouteState::Absent,
+        )
+        .await
+    }
+
+    async fn wait_for_consumer_route_state(
+        &self,
+        room_id: &str,
+        consumer_user_id: &UserId,
+        producer_user_id: &UserId,
+        stream_type: StreamType,
+        expected_state: ExpectedRouteState,
+    ) -> bool {
+        wait_for_test_predicate(|| async {
+            let room = self.room_detail(room_id).await?;
+            expected_state
+                .matches(route_state(
+                    &room,
+                    consumer_user_id,
+                    producer_user_id,
+                    stream_type,
+                ))
+                .then_some(())
+        })
+        .await
+    }
+
+    async fn room_absent(&self, room_id: &str) -> bool {
+        reqwest::Client::new()
+            .get(format!(
+                "{}{DIAGNOSTICS_ROOMS_PATH}/{room_id}",
+                self.http_base_url()
+            ))
+            .send()
+            .await
+            .is_ok_and(|response| response.status() == StatusCode::NOT_FOUND)
+    }
+
+    async fn room_detail(&self, room_id: &str) -> Option<DiagnosticsRoomDetail> {
+        let response = reqwest::Client::new()
+            .get(format!(
+                "{}{DIAGNOSTICS_ROOMS_PATH}/{room_id}",
+                self.http_base_url()
+            ))
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        response.json::<DiagnosticsRoomDetail>().await.ok()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ExpectedRouteState {
+    Active,
+    Inactive,
+    Absent,
+}
+
+impl ExpectedRouteState {
+    fn matches(self, actual: Option<&DiagnosticsRouteState>) -> bool {
+        match self {
+            Self::Active => actual == Some(&DiagnosticsRouteState::Active),
+            Self::Inactive => actual == Some(&DiagnosticsRouteState::Inactive),
+            Self::Absent => actual.is_none(),
+        }
+    }
+}
+
+fn route_state<'room>(
+    room: &'room DiagnosticsRoomDetail,
+    consumer_user_id: &UserId,
+    producer_user_id: &UserId,
+    stream_type: StreamType,
+) -> Option<&'room DiagnosticsRouteState> {
+    room.users
+        .iter()
+        .find(|user| user.user_id == *consumer_user_id)?
+        .subscriptions
+        .iter()
+        .find(|subscription| {
+            subscription.producer_user_id == *producer_user_id
+                && subscription.stream_type == stream_type
+        })
+        .map(|subscription| &subscription.state)
+}
+
+impl Drop for TestServer {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+/// Spawn the real axum server on an ephemeral port for integration tests.
+///
+/// # Errors
+///
+/// Returns an error when the runtime cannot be constructed, the test listener
+/// cannot bind, or the local socket address cannot be read.
+///
+/// # Panics
+///
+/// Panics in the spawned server task if the production listener exits with an
+/// error instead of being aborted by test cleanup.
+pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
+    let bind_address = config.http.bind_address;
+    let runtime = Runtime::new(&config)?;
+    let listener = TcpListener::bind(bind_address).await?;
+    let addr = listener
+        .local_addr()
+        .map_err(|error| anyhow!("failed to read test listener address: {error}"))?;
+    let handle = tokio::spawn(async move {
+        let result = runtime.serve_listener(listener).await;
+        assert!(
+            result.is_ok(),
+            "test server should stop cleanly: {result:?}"
+        );
+    });
+    Ok(TestServer { addr, handle })
+}
 
 #[must_use]
 pub fn test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
@@ -187,4 +392,35 @@ pub async fn read_close_code(websocket: &mut TestWebSocket) -> Option<CloseCode>
             Message::Pong(_) | Message::Text(_) | Message::Binary(_) | Message::Frame(_) => {}
         }
     }
+}
+
+#[must_use]
+pub fn decode_protocol_welcome_batch(payload: &str) -> Option<WelcomePayload> {
+    let batch = serde_json::from_str::<EnvelopeBatch>(payload).ok()?;
+    let envelope = batch.first()?.clone();
+    match ServerEnvelope::decode(envelope).ok()? {
+        ServerEnvelope::Message(ServerMessage::Welcome(welcome)) => Some(welcome),
+        ServerEnvelope::Message(_)
+        | ServerEnvelope::Request { .. }
+        | ServerEnvelope::Response { .. } => None,
+    }
+}
+
+async fn wait_for_test_predicate<F, Fut>(mut predicate: F) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Option<()>>,
+{
+    timeout(TEST_POLL_DEADLINE, async {
+        loop {
+            if predicate().await.is_some() {
+                return Some(());
+            }
+            yield_now().await;
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+    .is_some()
 }

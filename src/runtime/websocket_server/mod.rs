@@ -20,7 +20,9 @@ mod session_loop;
 mod tests;
 
 pub(crate) use controller::{close_writer, upgrade};
-pub(crate) use handshake::decode_auth_payload_text;
-pub(crate) use io::{
-    ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, WsWriter, decode_client_batch,
+pub use handshake::decode_auth_payload_text;
+pub(crate) use io::WsWriter;
+pub use io::{
+    ClientBatchDecodeError, ClientBatchDecodeFailureKind, MAX_CLIENT_BATCH_ENVELOPES,
+    MAX_CLIENT_FRAME_BYTES, decode_client_batch,
 };

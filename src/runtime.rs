@@ -10,10 +10,11 @@
 //! `- telemetry crate      -> tracing setup, schemas, diagnostics, metrics, and exporters
 //! ```
 
-use std::{collections::BTreeSet, process, sync::Arc, time::Instant as StdInstant};
+use std::{collections::BTreeSet, future::Future, process, sync::Arc, time::Instant as StdInstant};
 
 use anyhow::Result;
 use tokio::{
+    net::TcpListener,
     runtime::Builder,
     task::JoinHandle,
     time::{self, Instant},
@@ -29,21 +30,15 @@ pub(crate) mod auth;
 pub(crate) mod diagnostics;
 pub(crate) mod http_server;
 pub(crate) mod options;
-mod request_origin;
-#[doc(hidden)]
-pub mod testing;
+pub(crate) mod request_origin;
 pub(crate) mod websocket_server;
 
 pub(crate) use diagnostics::DiagnosticsStore;
-use http_server::serve_http;
+use http_server::{serve_http, serve_http_on};
 use media_transport::SourcePolicyPort;
-#[cfg(any(test, feature = "testing-transport"))]
-pub use media_transport::test_support::test_transport_session_key;
 pub(crate) use media_transport::{
     MediaPort, MediaTransport, MediaTransportDeps, ObservabilityPort,
-    client_rtp_capabilities_from_answer,
 };
-pub use media_transport::{RemoteAddrDemux, TransportSessionKey};
 pub(crate) use metrics::RuntimeMetrics;
 pub(crate) use o_sfu_core::{
     ConnectionId, RoomInstanceId, SessionBitrateLimits,
@@ -53,7 +48,6 @@ pub(crate) use o_sfu_telemetry as telemetry;
 pub(crate) use o_sfu_telemetry::prometheus;
 use options::{HttpOptions, RuntimeOptions, SocketOptions};
 pub(crate) use recording::MediaTap;
-pub(crate) use request_origin::resolve_remote_address;
 use room::{
     RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy,
     rtp_capabilities,
@@ -103,6 +97,12 @@ impl Default for RuntimeServices {
 }
 
 impl Runtime {
+    /// Builds the process runtime from loaded configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the media transport cannot be constructed from the
+    /// configured RTC settings.
     pub fn new(config: &Config) -> Result<Self> {
         let options = RuntimeOptions::from_config(config);
         let services = RuntimeServices::default();
@@ -123,28 +123,80 @@ impl Runtime {
         })
     }
 
+    /// Serves HTTP and WebSocket traffic on a caller-provided listener.
+    ///
+    /// This is the embedder-friendly sibling of [`run`]. It lets integration
+    /// tests and external hosts bind an ephemeral port before handing the
+    /// socket to the production runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the Axum server fails while serving the supplied
+    /// listener.
+    pub async fn serve_listener(self, listener: TcpListener) -> Result<()> {
+        let state = self.state();
+        self.serve(serve_http_on(listener, state)).await
+    }
+
     async fn run_until_stopped(self) -> Result<()> {
+        let state = self.state();
+        self.serve(serve_http(state)).await
+    }
+
+    async fn serve(self, http_server: impl Future<Output = Result<()>>) -> Result<()> {
         let source_packet_policy_sync = spawn_source_packet_policy_update_task(
             Arc::clone(&self.room_manager),
             self.media_transport.clone(),
             subscribe_source_policy_updates(&self.media_transport),
             self.media_transport.clone(),
         );
-        let options = self.options.clone();
-        let media_core = SfuCore::new(options.core, self.media_transport.clone());
-        let result = serve_http(RuntimeState {
-            http_options: options.http.clone(),
-            websocket_options: options.websocket.clone(),
-            rooms: Arc::clone(&self.room_manager),
-            diagnostics: Arc::clone(&self.diagnostics),
-            media_transport: self.media_transport.clone(),
-            media_core,
-            metrics: self.metrics,
-        })
-        .await;
+        let result = http_server.await;
         source_packet_policy_sync.abort();
         let _ = source_packet_policy_sync.await;
         result
+    }
+
+    fn state(&self) -> RuntimeState {
+        RuntimeState::from_parts(
+            &self.options,
+            Arc::clone(&self.room_manager),
+            Arc::clone(&self.diagnostics),
+            Arc::clone(&self.metrics),
+            self.media_transport.clone(),
+        )
+    }
+}
+
+impl RuntimeState {
+    fn from_parts(
+        options: &RuntimeOptions,
+        rooms: Arc<RoomManager>,
+        diagnostics: Arc<DiagnosticsStore>,
+        metrics: Arc<RuntimeMetrics>,
+        media_transport: MediaTransport,
+    ) -> Self {
+        let media_core = SfuCore::new(options.core, media_transport.clone());
+        Self {
+            http_options: options.http.clone(),
+            websocket_options: options.websocket.clone(),
+            rooms,
+            diagnostics,
+            media_transport,
+            media_core,
+            metrics,
+        }
+    }
+
+    #[cfg(test)]
+    fn for_config_parts(
+        config: &Config,
+        rooms: Arc<RoomManager>,
+        diagnostics: Arc<DiagnosticsStore>,
+        metrics: Arc<RuntimeMetrics>,
+        media_transport: MediaTransport,
+    ) -> Self {
+        let options = RuntimeOptions::from_config(config);
+        Self::from_parts(&options, rooms, diagnostics, metrics, media_transport)
     }
 }
 

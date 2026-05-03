@@ -25,7 +25,7 @@ use crate::runtime::{
     metrics::HttpRoute,
     options::HttpOptions,
     prometheus::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
-    request_origin::{resolve_remote_address, trusted_forwarded_header},
+    request_origin::{request_base_url, resolve_remote_address},
     room::{RoomConfig, RuntimeRoomStatsSnapshot},
     telemetry::{self, schema::event as telemetry_event},
     websocket_server,
@@ -35,6 +35,10 @@ const MAX_DISCONNECT_BODY_BYTES: usize = 16 * 1024;
 
 pub(crate) async fn serve_http(state: RuntimeState) -> Result<()> {
     let listener = TcpListener::bind(state.http_options.bind_address).await?;
+    serve_http_on(listener, state).await
+}
+
+pub(crate) async fn serve_http_on(listener: TcpListener, state: RuntimeState) -> Result<()> {
     let local_address = listener.local_addr()?;
     info!(
         event = telemetry_event::HTTP_LISTENER_READY,
@@ -195,7 +199,11 @@ async fn room(
             StatusCode::OK,
             axum::Json(RoomResponse {
                 uuid: room.uuid().to_owned(),
-                url: request_base_url(&headers, &state.http_options),
+                url: request_base_url(
+                    &headers,
+                    state.http_options.trust_proxy_headers,
+                    state.http_options.bind_address,
+                ),
             }),
         )
             .into_response()
@@ -247,22 +255,6 @@ fn authorization_token(headers: &HeaderMap) -> Option<&str> {
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.split_once(' ').map(|(_, token)| token))
-}
-
-pub(crate) fn request_base_url(headers: &HeaderMap, options: &HttpOptions) -> String {
-    let scheme =
-        trusted_forwarded_header(headers, options.trust_proxy_headers, "x-forwarded-proto")
-            .unwrap_or("http");
-    let host = trusted_forwarded_header(headers, options.trust_proxy_headers, "x-forwarded-host")
-        .map(str::to_owned)
-        .or_else(|| {
-            headers
-                .get(header::HOST)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| options.bind_address.to_string());
-    format!("{scheme}://{host}")
 }
 
 async fn diagnostics_summary(State(state): State<RuntimeState>, headers: HeaderMap) -> Response {

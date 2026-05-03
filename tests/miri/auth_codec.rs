@@ -4,9 +4,9 @@
 //! serde, base64, and crypto internals are places we could catch UB with miri
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use o_sfu::testing::{
+use o_sfu::{
     auth::{AuthenticationError, RegisteredJwtClaims, WebSocketConnectClaims, sign, verify},
-    client_batch::{
+    websocket::{
         ClientBatchDecodeError, ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES,
         decode_client_batch,
     },

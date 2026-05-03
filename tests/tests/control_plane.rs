@@ -7,10 +7,7 @@ use std::collections::BTreeMap;
 
 use o_sfu::{
     config::RtcPortRange,
-    testing::{
-        http::{DISCONNECT_PATH, STATS_PATH, StatsResponse},
-        server::{TestServer, spawn_test_server},
-    },
+    http::{DISCONNECT_PATH, STATS_PATH, StatsResponse},
 };
 use o_sfu_protocol::{
     shared::{DownloadStates, StreamType, UserId, UserInfo},
@@ -19,12 +16,13 @@ use o_sfu_protocol::{
     },
 };
 use o_sfu_tests::support::{
-    TEST_AUTH_KEY, TEST_ROOM_KEY, create_room, disconnect_sessions_via_http, metrics_text,
+    TEST_AUTH_KEY, TEST_ROOM_KEY, TestServer, create_room, disconnect_sessions_via_http,
+    metrics_text,
     protocol_harness::{
         ProtocolWebSocketClient, connect_protocol_pair, protocol_test_config,
         read_until_server_message,
     },
-    signed_connect_claims,
+    signed_connect_claims, spawn_test_server,
 };
 use reqwest::StatusCode;
 use tokio::time::Duration;

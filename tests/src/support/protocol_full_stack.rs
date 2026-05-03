@@ -8,10 +8,7 @@ use std::time::Duration;
 use futures_util::SinkExt;
 use o_sfu::{
     config::Config,
-    testing::{
-        http::{METRICS_PATH, STATS_PATH, StatsResponse},
-        server::{TestServer, decode_protocol_welcome_batch, spawn_test_server},
-    },
+    http::{METRICS_PATH, STATS_PATH, StatsResponse},
 };
 use o_sfu_protocol::{
     shared::{DownloadStates, StreamType, UserId, UserInfo},
@@ -25,10 +22,10 @@ use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
 
 use super::{
-    TestWebSocket, connect_websocket, create_room,
+    TestServer, TestWebSocket, connect_websocket, create_room, decode_protocol_welcome_batch,
     fake_media::{FakeClock, FakeMediaSource},
     fake_rtc_peer::{FakeRtcPeer, ReceivedRtpPacket},
-    read_close_code, read_text_message, signed_connect_claims,
+    read_close_code, read_text_message, signed_connect_claims, spawn_test_server,
 };
 
 pub struct ProtocolLocalNetwork {

@@ -45,7 +45,6 @@ pub(super) use crate::{
             JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig,
             RoomManagerDeps, RoomRuntimePolicy, rtp_capabilities,
         },
-        testing::build_test_runtime_state,
     },
 };
 
@@ -119,7 +118,7 @@ pub(super) fn test_state_with_handles() -> TestRuntimeState {
         },
     ));
     let media_transport = MediaTransport::fake_for_testing();
-    let state = build_test_runtime_state(
+    let state = RuntimeState::for_config_parts(
         &config,
         Arc::clone(&room_manager),
         diagnostics,

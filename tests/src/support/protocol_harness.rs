@@ -4,7 +4,7 @@ use std::{
 };
 
 use futures_util::SinkExt;
-use o_sfu::{config::Config, testing::server::TestServer};
+use o_sfu::config::Config;
 use o_sfu_protocol::{
     shared::{UserId, UserInfo},
     signaling::{
@@ -17,7 +17,10 @@ use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
 
 use super::{
     fake_rtc_peer::FakeRtcPeer,
-    harness::{TestWebSocket, connect_websocket, read_close_code, read_text_message, test_config},
+    harness::{
+        TestServer, TestWebSocket, connect_websocket, read_close_code, read_text_message,
+        test_config,
+    },
 };
 
 const RTC_NEGOTIATION_PORT_BASE: u16 = 56_000;

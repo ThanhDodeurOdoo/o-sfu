@@ -15,4 +15,6 @@ mod controller;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use controller::{app, request_base_url, serve_http};
+#[cfg(test)]
+pub(crate) use controller::app;
+pub(crate) use controller::{serve_http, serve_http_on};

@@ -9,11 +9,11 @@
 use std::str;
 
 use libfuzzer_sys::fuzz_target;
-use o_sfu::testing::rtc::project_answer_capabilities;
+use o_sfu_core::server::transport::client_rtp_capabilities_from_answer;
 
 fuzz_target!(|data: &[u8]| {
     let Ok(answer_sdp) = str::from_utf8(data) else {
         return;
     };
-    let _ = project_answer_capabilities(answer_sdp);
+    let _ = client_rtp_capabilities_from_answer(answer_sdp);
 });

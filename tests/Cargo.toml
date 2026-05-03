@@ -12,6 +12,7 @@ default = ["otel-tracing"]
 otel-tracing = ["o-sfu/otel-tracing"]
 
 [dependencies]
+anyhow.workspace = true
 base64.workspace = true
 futures-util.workspace = true
 o-sfu = { path = "..", default-features = false }

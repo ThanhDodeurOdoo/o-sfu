@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use o_sfu::testing::http::IncomingBitRateStatsResponse;
+use o_sfu::http::IncomingBitRateStatsResponse;
 use o_sfu_protocol::{
     shared::{DownloadStates, StreamType, UserId, UserInfo},
     signaling::{ServerMessage, ServerRequest, TrackBinding},

@@ -226,7 +226,17 @@ fn decode_auth_batch(payload: &str) -> Result<Vec<ClientEnvelope>, WebSocketClos
     Ok(batch)
 }
 
-pub(crate) fn decode_auth_payload_text(payload: &str) -> Result<AuthPayload, WebSocketCloseCode> {
+/// Decodes the first WebSocket authentication frame.
+///
+/// The frame must contain exactly one signaling envelope and that envelope must
+/// be an auth message. Steady-state client batches are decoded by
+/// [`decode_client_batch`](crate::websocket::decode_client_batch).
+///
+/// # Errors
+///
+/// Returns the close code that the WebSocket edge uses when the frame is not a
+/// valid authentication batch.
+pub fn decode_auth_payload_text(payload: &str) -> Result<AuthPayload, WebSocketCloseCode> {
     let batch = decode_auth_batch(payload)?;
     extract_auth_envelope(batch)
 }
