@@ -8,9 +8,9 @@ use std::{
 
 use crate::runtime::{
     RoomInstanceId, UserId,
+    media_transport::{TransportMediaId, TransportSessionKey},
     recording::{MediaPacketSink, MediaSource, MediaTap, into_packet_sink},
-    rtc_adapter::test_support::{sample_forwarded_packet, test_transport_session_key},
-    transport_adapter::{TransportMediaId, TransportSessionKey},
+    rtc_engine::test_support::{sample_forwarded_packet, test_transport_session_key},
 };
 
 struct CountingSink {

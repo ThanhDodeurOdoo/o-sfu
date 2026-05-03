@@ -33,8 +33,8 @@ use super::{
 use crate::runtime::{
     ConnectionId,
     diagnostics::DiagnosticsEventData,
+    media_transport::{ConsumerActivity, MediaPort, TransportMediaId},
     telemetry::schema::event as telemetry_event,
-    transport_adapter::{ConsumerActivity, MediaPort, TransportMediaId},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -187,7 +187,7 @@ impl SubscriptionEffectPlan {
         }
     }
 
-    /// Applies the subscription decision to the transport adapter.
+    /// Applies the subscription decision to the media transport.
     ///
     /// A resumed video route needs more than an `active=true` flip. After a
     /// long pause the receiver may need a fresh decodable frame before it can
@@ -223,7 +223,7 @@ impl SubscriptionEffectPlan {
                     target_user_id = ?transport_op.producer_user_id,
                     stream_type = ?transport_op.stream_type,
                     active = transport_op.active,
-                    "transport adapter failed to update consumer route activity"
+                    "media transport failed to update consumer route activity"
                 );
             } else if transport_op.active
                 && matches!(
@@ -250,7 +250,7 @@ impl SubscriptionEffectPlan {
                     user_id = ?transport_op.consumer_user_id,
                     target_user_id = ?transport_op.producer_user_id,
                     stream_type = ?transport_op.stream_type,
-                    "transport adapter failed to request a consumer keyframe refresh"
+                    "media transport failed to request a consumer keyframe refresh"
                 );
             }
             room.diagnostics.record(transport_op.diagnostics);
@@ -355,7 +355,7 @@ impl ConsumerBootstrapOp {
                     error = ?error,
                     consumer_mid = prepared.consumer_rtp_parameters().mid(),
                     ?origin,
-                    "transport adapter rejected consume media declaration"
+                    "media transport rejected consume media declaration"
                 );
                 return None;
             }
@@ -393,7 +393,7 @@ impl ConsumerBootstrapOp {
                     target.consumer_connection_id(),
                     consumer_transport_media_id,
                     media_port,
-                    "transport adapter failed to remove consumer transport media after bootstrap state commit failed",
+                    "media transport failed to remove consumer transport media after bootstrap state commit failed",
                 )
                 .await;
             return;

@@ -7,7 +7,7 @@
 //! This module owns the small amount of retry state needed when the effect
 //! fails after the room can no longer derive it from `RoomState`.
 //!
-//! The reconciler deliberately does not call the transport adapter, mutate room
+//! The reconciler deliberately does not call the media transport, mutate room
 //! state or decide when a room is removed. It only classifies cleanup failures,
 //! deduplicates pending operations and tells room orchestration which effects
 //! are due for another attempt.
@@ -76,7 +76,7 @@ use std::collections::{BTreeMap, btree_map::Entry};
 
 use crate::runtime::{
     ConnectionId, UserId,
-    transport_adapter::{TransportAdapterError, TransportMediaId},
+    media_transport::{TransportAdapterError, TransportMediaId},
 };
 
 /// Maximum number of distinct cleanup operations one room may retain.
@@ -186,7 +186,7 @@ pub(super) enum CleanupFailureAction {
 ///
 /// This separates retry bookkeeping from transport side effects. The caller
 /// remains responsible for metrics, logging and terminal escalation because
-/// those actions need room context and transport adapter access.
+/// those actions need room context and media transport access.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CleanupRetryAction {
     /// The adapter accepted the cleanup and the pending entry was removed.
@@ -212,7 +212,7 @@ pub(super) enum CleanupRetryAction {
 ///
 /// `Room` protects the reconciler with a standard mutex because all methods are
 /// short synchronous bookkeeping steps. Callers must drop that guard before
-/// awaiting transport adapter work. Holding the guard across `.await` would
+/// awaiting media transport work. Holding the guard across `.await` would
 /// couple room cleanup recovery to adapter latency and could block unrelated
 /// cold-path teardown work.
 #[derive(Debug, Default)]

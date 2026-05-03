@@ -20,11 +20,11 @@ use crate::{
     RoomShardingPolicy,
     runtime::{
         ConnectionId, DownloadStates, RecordingState, StreamType, UserId,
+        media_transport::TransportMediaId,
         recording::RecordingService,
         source_model::{
             ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId, SourceEncodingId,
         },
-        transport_adapter::TransportMediaId,
     },
 };
 

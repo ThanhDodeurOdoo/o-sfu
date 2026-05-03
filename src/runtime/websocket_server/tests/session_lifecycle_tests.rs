@@ -1,7 +1,7 @@
 use std::slice;
 
 use super::fixtures::*;
-use crate::runtime::{ConnectionId, transport_adapter::TransportSessionHealth};
+use crate::runtime::{ConnectionId, media_transport::TransportSessionHealth};
 
 #[tokio::test]
 async fn websocket_sends_ping_frames_and_accepts_pongs() {
@@ -111,7 +111,7 @@ async fn websocket_closes_when_pong_times_out() {
 #[tokio::test]
 async fn websocket_closes_when_rtc_transport_disconnects() {
     let server =
-        spawn_test_server_with_timeouts(1_000, 200, 20, 100, build_real_rtc_transport_adapter())
+        spawn_test_server_with_timeouts(1_000, 200, 20, 100, build_real_rtc_media_transport())
             .await;
     assert!(server.is_some());
     let Some(server) = server else {
@@ -179,7 +179,7 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
 #[tokio::test]
 async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiation() {
     let server =
-        spawn_test_server_with_timeouts(1_000, 200, 20, 100, build_real_rtc_transport_adapter())
+        spawn_test_server_with_timeouts(1_000, 200, 20, 100, build_real_rtc_media_transport())
             .await;
     assert!(server.is_some());
     let Some(server) = server else {
@@ -455,9 +455,9 @@ async fn runtime_disconnect_rolls_back_staged_publish_before_room_cleanup() {
 #[tokio::test]
 async fn websocket_closure_emits_fake_webrtc_user_closed_event() {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
-    let transport_adapter =
+    let media_transport =
         MediaTransport::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
-    let server = spawn_test_server_with_adapter(1_000, 100, transport_adapter).await;
+    let server = spawn_test_server_with_adapter(1_000, 100, media_transport).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -488,9 +488,9 @@ async fn websocket_closure_emits_fake_webrtc_user_closed_event() {
 #[tokio::test]
 async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
-    let transport_adapter =
+    let media_transport =
         MediaTransport::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
-    let server = spawn_test_server_with_adapter(1_000, 100, transport_adapter).await;
+    let server = spawn_test_server_with_adapter(1_000, 100, media_transport).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -541,11 +541,11 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
 }
 
 #[tokio::test]
-async fn disconnect_cleanup_still_closes_transport_adapter_user_state() {
+async fn disconnect_cleanup_still_closes_media_transport_user_state() {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
-    let transport_adapter =
+    let media_transport =
         MediaTransport::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
-    let server = spawn_test_server_with_adapter(1_000, 10, transport_adapter).await;
+    let server = spawn_test_server_with_adapter(1_000, 10, media_transport).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -593,9 +593,9 @@ async fn disconnect_cleanup_still_closes_transport_adapter_user_state() {
 #[tokio::test]
 async fn disconnect_cleanup_closes_transport_user_before_empty_room_removal() {
     let adapter = Arc::new(FakeWebRtcAdapter::default());
-    let transport_adapter =
+    let media_transport =
         MediaTransport::from_fake_adapter(Arc::<FakeWebRtcAdapter>::clone(&adapter));
-    let server = spawn_test_server_with_adapter(1_000, 10, transport_adapter).await;
+    let server = spawn_test_server_with_adapter(1_000, 10, media_transport).await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;

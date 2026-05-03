@@ -23,9 +23,9 @@ use crate::{
     },
     runtime::{
         ConnectionId,
+        media_transport::MediaTransport,
         metrics::{RuntimeMetrics, WsSessionLoopExitReason},
         telemetry::schema::event as telemetry_event,
-        transport_adapter::MediaTransport,
         websocket_server::{
             ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES, decode_client_batch,
         },

@@ -12,8 +12,8 @@ use super::super::{
 };
 use crate::runtime::{
     ConnectionId, DownloadStates, StreamType, UserId,
+    media_transport::TransportMediaId,
     source_model::{ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId},
-    transport_adapter::TransportMediaId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

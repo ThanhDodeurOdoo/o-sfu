@@ -13,8 +13,8 @@ use o_sfu_router::{ProducerId, RouterEvent, RouterObserver, SessionId as UserId,
 use super::{MediaPacketSink, MediaSource, into_packet_sink, user::RecordingSession};
 use crate::runtime::{
     RoomInstanceId,
+    media_transport::{TransportMediaId, TransportSessionKey},
     metrics::RuntimeMetrics,
-    transport_adapter::{TransportMediaId, TransportSessionKey},
 };
 
 #[repr(u8)]

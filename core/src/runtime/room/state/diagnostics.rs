@@ -16,14 +16,14 @@ use crate::runtime::{
         DiagnosticsTemporalLayerSelection, DiagnosticsUserTransport, DiagnosticsUserView,
         DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
     },
+    media_transport::{
+        ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSourceDiagnostic,
+        TransportMediaId,
+    },
     source_model::{
         ConsumerSourceSelection, OverBudgetExceptionReason, PolicyPauseReason,
         PublishedSourceDescriptor, PublishedSourceId, SourceEncodingDescriptor, SourceEncodingId,
         SourceRoomPolicySelector, SourceRoutePriority, SourceSelector, SourceTemporalLayerId,
-    },
-    transport_adapter::{
-        ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSourceDiagnostic,
-        TransportMediaId,
     },
 };
 

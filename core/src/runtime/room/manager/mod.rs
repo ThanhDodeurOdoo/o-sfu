@@ -18,10 +18,10 @@ use super::{
 use crate::runtime::{
     ConnectionId, RoomInstanceId, UserId, UserPermissions,
     diagnostics::{self, DiagnosticsEventData, DiagnosticsStore},
+    media_transport::{MediaPort, MediaTransport, ObservabilityPort},
     metrics::RuntimeMetrics,
     recording::MediaTap,
     telemetry::schema::event as telemetry_event,
-    transport_adapter::{MediaPort, MediaTransport, ObservabilityPort},
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
@@ -286,7 +286,7 @@ impl RoomManager {
         &self,
         room_id: &str,
         request: JoinUserRequest,
-        transport_adapter: &MediaTransport,
+        media_transport: &MediaTransport,
     ) -> Result<(Arc<Room>, ConnectionId), RoomManagerJoinError> {
         let Some((room, user_count_before, media_counts_before, join_result)) = self
             .with_current_room(room_id, |room| async move {
@@ -298,7 +298,7 @@ impl RoomManager {
                         request.label,
                         request.permissions,
                         request.sender,
-                        transport_adapter,
+                        media_transport,
                     )
                     .await;
                 (room, user_count_before, media_counts_before, join_result)
@@ -328,14 +328,14 @@ impl RoomManager {
         room_id: &str,
         user_id: &UserId,
         connection_id: ConnectionId,
-        transport_adapter: &MediaTransport,
+        media_transport: &MediaTransport,
     ) -> bool {
         let Some((room, user_count_before, media_counts_before, did_remove_active_session)) = self
             .with_current_room(room_id, |room| async move {
                 let user_count_before = room.user_count().await;
                 let media_counts_before = room.media_counts().await;
                 let did_remove_active_session = room
-                    .remove_user(user_id, connection_id, transport_adapter)
+                    .remove_user(user_id, connection_id, media_transport)
                     .await;
                 (
                     room,
@@ -367,13 +367,13 @@ impl RoomManager {
         &self,
         room_id: &str,
         user_ids: &[UserId],
-        transport_adapter: &MediaTransport,
+        media_transport: &MediaTransport,
     ) {
         let Some((room, user_count_before, media_counts_before)) = self
             .with_current_room(room_id, |room| async move {
                 let user_count_before = room.user_count().await;
                 let media_counts_before = room.media_counts().await;
-                room.disconnect_sessions_runtime(user_ids, transport_adapter)
+                room.disconnect_sessions_runtime(user_ids, media_transport)
                     .await;
                 (room, user_count_before, media_counts_before)
             })

@@ -58,11 +58,11 @@ use crate::{
             self, DiagnosticsQualitySummary, DiagnosticsSource, DiagnosticsStore,
             DiagnosticsUserTransport, DiagnosticsUserView,
         },
-        metrics::RuntimeMetrics,
-        recording::{MediaSource, MediaTap, RecordingService},
-        transport_adapter::{
+        media_transport::{
             ActiveSpeakerSourceDiagnostic, ObservabilityPort, TransportMediaId, TransportSessionKey,
         },
+        metrics::RuntimeMetrics,
+        recording::{MediaSource, MediaTap, RecordingService},
     },
 };
 
@@ -604,7 +604,7 @@ pub struct Room {
     /// This lives on `Room` instead of `RoomState` because retry bookkeeping
     /// must survive the state transition that forgot the user or media object.
     /// Callers may lock it for short synchronous updates only, then must drop
-    /// the guard before awaiting transport adapter work.
+    /// the guard before awaiting media transport work.
     pub(super) cleanup_reconciler: StdMutex<CleanupReconciler>,
     /// Staged publish reservations that live across the offer/answer gap.
     ///

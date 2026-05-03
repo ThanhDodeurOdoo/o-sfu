@@ -126,7 +126,7 @@ pub struct ReceiverBandwidthSnapshot {
     pub per_session: Vec<(TransportSessionKey, u64)>,
 }
 
-/// Opaque identifier for a media line allocated by the transport adapter.
+/// Opaque identifier for a media line allocated by the media transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
 pub struct TransportMediaId(u64);
 

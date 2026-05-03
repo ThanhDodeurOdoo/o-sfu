@@ -22,14 +22,14 @@ async fn publish_video_stream(
     connection_id: ConnectionId,
     stream_type: StreamType,
     ssrc: u64,
-    transport_adapter: &MediaTransport,
+    media_transport: &MediaTransport,
 ) {
     assert_eq!(
         room.apply_session_negotiated(
             user_id,
             connection_id,
             sample_client_rtp_capabilities(),
-            transport_adapter,
+            media_transport,
         )
         .await,
         SessionNegotiationOutcome::Applied
@@ -42,7 +42,7 @@ async fn publish_video_stream(
                 stream_type,
                 MediaKind::Video,
                 test_video_rtp_parameters(ssrc),
-                transport_adapter,
+                media_transport,
             )
             .await
             .is_some()

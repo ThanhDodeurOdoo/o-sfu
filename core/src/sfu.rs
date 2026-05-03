@@ -29,7 +29,7 @@ pub struct OfferedMediaCapabilities(MediaCapabilities);
 
 /// Transport-neutral SDP offer returned by the media-core public API.
 ///
-/// The transport adapter still owns the backend-specific `SessionOffer` shape.
+/// The media transport still owns the backend-specific `SessionOffer` shape.
 /// `NegotiationOffer` is the stable core-facing vocabulary consumed by server
 /// signaling code and mapped to the compatibility websocket payload at the
 /// protocol edge.
@@ -149,7 +149,7 @@ pub enum SfuCoreError {
 #[derive(Debug, Clone)]
 pub struct SfuCore<T> {
     _options: CoreOptions,
-    transport_adapter: T,
+    media_transport: T,
 }
 
 /// Borrowed media handle for one room user connection.
@@ -192,10 +192,10 @@ where
     /// fixes the backend to [`crate::MediaTransport`]. Tests and future
     /// adapters can use any backend that satisfies [`TransportFacade`].
     #[must_use]
-    pub fn new(options: CoreOptions, transport_adapter: T) -> Self {
+    pub fn new(options: CoreOptions, media_transport: T) -> Self {
         Self {
             _options: options,
-            transport_adapter,
+            media_transport,
         }
     }
 
@@ -238,7 +238,7 @@ where
     #[must_use]
     pub fn endpoint_health(&self) -> Option<MediaEndpointHealth> {
         self.core
-            .transport_adapter
+            .media_transport
             .session_transport_health(self.context.transport_user_key())
             .map(|health| match health {
                 TransportSessionHealth::Connected => MediaEndpointHealth::Connected,
@@ -263,7 +263,7 @@ where
             OfferedMediaCapabilities(self.room.router_rtp_capabilities().await);
         let offer = self
             .core
-            .transport_adapter
+            .media_transport
             .create_initial_session_offer(self.context.transport_user_key())
             .await
             .map_err(SfuCoreError::Transport)?;
@@ -279,7 +279,7 @@ where
     ) -> Result<Option<NegotiationOffer>, SfuCoreError> {
         match self
             .core
-            .transport_adapter
+            .media_transport
             .create_session_renegotiation_offer(self.context.transport_user_key())
             .await
         {
@@ -310,7 +310,7 @@ where
         let applied_answer = self.apply_transport_answer(answer_sdp).await?;
         let client_capabilities = self
             .core
-            .transport_adapter
+            .media_transport
             .negotiated_client_rtp_capabilities(answer_sdp, &offered_capabilities.0)
             .map_err(SfuCoreError::CapabilityProjection)?;
         let outcome = self
@@ -318,7 +318,7 @@ where
             .apply_session_negotiated(
                 &self.context,
                 client_capabilities,
-                &self.core.transport_adapter,
+                &self.core.media_transport,
             )
             .await;
         if outcome != SessionNegotiationOutcome::Applied {
@@ -344,7 +344,7 @@ where
         let applied_answer = self.apply_transport_answer(answer_sdp).await?;
         let outcome = self
             .room
-            .apply_session_refreshed(&self.context, &self.core.transport_adapter)
+            .apply_session_refreshed(&self.context, &self.core.media_transport)
             .await;
         if outcome != SessionNegotiationOutcome::Applied {
             return Err(SfuCoreError::SessionRefreshRejected(outcome));
@@ -390,7 +390,7 @@ where
                 &self.context,
                 stream_type,
                 activity,
-                &self.core.transport_adapter,
+                &self.core.media_transport,
             )
             .await
     }
@@ -409,7 +409,7 @@ where
                 &self.context,
                 target_user_id,
                 states,
-                &self.core.transport_adapter,
+                &self.core.media_transport,
             )
             .await
     }
@@ -420,7 +420,7 @@ where
     /// incremental update. Stale connections are ignored by the room boundary.
     pub async fn update_user_info(&self, info: UserInfo, refresh: UserInfoRefresh) {
         self.room
-            .update_user_info(&self.context, info, refresh, &self.core.transport_adapter)
+            .update_user_info(&self.context, info, refresh, &self.core.media_transport)
             .await;
     }
 
@@ -435,7 +435,7 @@ where
         stream_type: StreamType,
     ) -> Result<PublishStageOutcome, SfuCoreError> {
         self.room
-            .stage_publish(&self.context, stream_type, &self.core.transport_adapter)
+            .stage_publish(&self.context, stream_type, &self.core.media_transport)
             .await
             .map_err(SfuCoreError::Transport)
     }
@@ -450,7 +450,7 @@ where
         stream_type: StreamType,
     ) -> RollbackStagedPublishOutcome {
         self.room
-            .rollback_staged_publish(&self.context, stream_type, &self.core.transport_adapter)
+            .rollback_staged_publish(&self.context, stream_type, &self.core.media_transport)
             .await
     }
 
@@ -461,7 +461,7 @@ where
     /// close the transport session itself.
     pub async fn rollback_connection_publishes(&self) {
         self.room
-            .rollback_connection_publishes(&self.context, &self.core.transport_adapter)
+            .rollback_connection_publishes(&self.context, &self.core.media_transport)
             .await;
     }
 
@@ -472,7 +472,7 @@ where
     /// collapsed boolean.
     pub async fn unpublish(&self, stream_type: StreamType) -> UnpublishOutcome {
         self.room
-            .unpublish(&self.context, stream_type, &self.core.transport_adapter)
+            .unpublish(&self.context, stream_type, &self.core.media_transport)
             .await
     }
 
@@ -481,7 +481,7 @@ where
         answer_sdp: &str,
     ) -> Result<AppliedSessionAnswer, SfuCoreError> {
         self.core
-            .transport_adapter
+            .media_transport
             .apply_session_answer(self.context.transport_user_key(), answer_sdp)
             .await
             .map_err(SfuCoreError::Transport)
@@ -489,7 +489,7 @@ where
 
     async fn commit_staged_publishes(&self, applied_answer: &AppliedSessionAnswer) {
         self.room
-            .commit_staged_publishes(&self.context, applied_answer, &self.core.transport_adapter)
+            .commit_staged_publishes(&self.context, applied_answer, &self.core.media_transport)
             .await;
     }
 }

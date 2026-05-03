@@ -4,7 +4,7 @@
 //!
 //! This module owns the room-side unit of work for media changes that need
 //! transport calls. `RoomState` stays authoritative for live producers and
-//! consumers. The transport adapter stays authoritative for allocated media
+//! consumers. The media transport stays authoritative for allocated media
 //! lines. This file owns the short-lived (only latts for transactions)
 //! bridge between those two layers so websocket publish and unpublish
 //! flows do not have to remember rollback  details
@@ -13,7 +13,7 @@
 //! # Staged publish lifecycle
 //!
 //! A publish is staged only after chanel state validates the current user
-//! and the transport adapter reserves a media line While the browser answers
+//! and the media transport reserves a media line While the browser answers
 //! renegotiation, that reservation lives in `PendingPublishTransactions`.
 //! Answer handling later drains the transaction and either commits it into
 //! room state or consumes it through transport cleanup.
@@ -43,11 +43,11 @@ use crate::{
     runtime::{
         ConnectionId, StreamType, UserId,
         diagnostics::DiagnosticsEventData,
-        telemetry::schema::event as telemetry_event,
-        transport_adapter::{
+        media_transport::{
             AppliedSessionAnswer, ConsumerActivity, MediaPort, ObservabilityPort,
             TransportAdapterError, TransportMediaId,
         },
+        telemetry::schema::event as telemetry_event,
     },
 };
 
@@ -90,7 +90,7 @@ struct PendingPublishKey {
 /// room either commits it or rolls it back.
 ///
 /// The descriptor proves only that the user was publish-ready when staging
-/// started. The reservation proves that the transport adapter allocated media
+/// started. The reservation proves that the media transport allocated media
 /// that must be accounted for. Keeping both values together prevents call sites
 /// from committing room state while forgetting the transport owner, or from
 /// cleaning transport media while leaving a descriptor that can still commit.
@@ -108,12 +108,12 @@ pub(super) struct PendingPublishTransaction {
 ///
 /// These states are intentionally local to the transaction boundary. The
 /// websocket layer sees publish intent and answer handling. `RoomState` sees
-/// only committed producers. The transport adapter sees media add or remove
+/// only committed producers. The media transport sees media add or remove
 /// calls. This enum records which layer is responsible for the reserved media
 /// right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StagedMediaReservationState {
-    /// The media line exists in the transport adapter but is not committed in
+    /// The media line exists in the media transport but is not committed in
     /// chanel state.
     Reserved,
     /// The chanel committed the producer, so normal unpublish or leave cleanup
@@ -121,7 +121,7 @@ enum StagedMediaReservationState {
     Committed,
     /// The transaction made an explicit cleanup decision.
     ///
-    /// This does not prove the transport adapter removed the handle
+    /// This does not prove the media transport removed the handle
     /// successfully. Cleanup is best-effort at this boundary and failures are
     /// reported through logs.
     Released,
@@ -316,7 +316,7 @@ impl PendingPublishTransaction {
             self.cleanup_reserved_media(
                 room,
                 media_port,
-                "transport adapter failed to remove staged publish media after answered negotiation omitted producer parameters",
+                "media transport failed to remove staged publish media after answered negotiation omitted producer parameters",
             )
             .await;
             warn!(
@@ -391,7 +391,7 @@ impl PendingPublishTransaction {
                 .cleanup(
                     room,
                     media_port,
-                    "transport adapter failed to remove published transport media after room commit failed",
+                    "media transport failed to remove published transport media after room commit failed",
                 )
                 .await;
             warn!(
@@ -631,7 +631,7 @@ impl Room {
                 .cleanup_reserved_media(
                     self,
                     media_port,
-                    "transport adapter failed to remove duplicated staged publish media",
+                    "media transport failed to remove duplicated staged publish media",
                 )
                 .await;
             return Ok(PublishStageOutcome::DuplicateAfterReservation { cleanup });
@@ -665,7 +665,7 @@ impl Room {
             .cleanup_reserved_media(
                 self,
                 media_port,
-                "transport adapter failed to remove staged publish media during rollback",
+                "media transport failed to remove staged publish media during rollback",
             )
             .await;
         RollbackStagedPublishOutcome::RolledBack { cleanup }
@@ -693,7 +693,7 @@ impl Room {
                 .cleanup_reserved_media(
                     self,
                     media_port,
-                    "transport adapter failed to remove staged publish media during connection cleanup",
+                    "media transport failed to remove staged publish media during connection cleanup",
                 )
                 .await;
         }
@@ -806,7 +806,7 @@ impl Room {
                     user_id = ?removal.user(),
                     connection_id = ?removal.connection(),
                     transport_media_id = ?removal.transport_media(),
-                    "transport adapter failed to remove transport media during room cleanup"
+                    "media transport failed to remove transport media during room cleanup"
                 );
                 return false;
             }
@@ -842,7 +842,7 @@ impl Room {
                 consumer_user_id = ?target.consumer_user_id(),
                 producer_user_id = ?target.producer_user_id(),
                 ?origin,
-                "transport adapter failed to apply the initial consumer pause state"
+                "media transport failed to apply the initial consumer pause state"
             );
         }
     }
@@ -861,7 +861,7 @@ fn answer_derived_publish_parameters() -> RouterRtpParameters {
 #[cfg(test)]
 mod tests {
     use super::StagedMediaReservation;
-    use crate::runtime::{ConnectionId, UserId, transport_adapter::TransportMediaId};
+    use crate::runtime::{ConnectionId, UserId, media_transport::TransportMediaId};
 
     #[test]
     #[should_panic(expected = "staged media reservation dropped while still reserved")]

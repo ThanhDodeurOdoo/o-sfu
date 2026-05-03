@@ -136,7 +136,7 @@ async fn join_user_notifies_existing_peers_with_user_joined() {
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
-    let transport_adapter = MediaTransport::fake_for_testing();
+    let media_transport = MediaTransport::fake_for_testing();
     let (tx1, mut rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
     let first_join = room
@@ -145,7 +145,7 @@ async fn join_user_notifies_existing_peers_with_user_joined() {
             None,
             UserPermissions::default(),
             tx1,
-            &transport_adapter,
+            &media_transport,
         )
         .await;
     let second_join = room
@@ -154,7 +154,7 @@ async fn join_user_notifies_existing_peers_with_user_joined() {
             None,
             UserPermissions::default(),
             tx2,
-            &transport_adapter,
+            &media_transport,
         )
         .await;
     assert!(first_join.is_ok());
@@ -215,7 +215,7 @@ async fn replacing_a_user_runtime_emits_departure_then_join_for_existing_peers()
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
-    let transport_adapter = MediaTransport::fake_for_testing();
+    let media_transport = MediaTransport::fake_for_testing();
     let (tx1, mut alice_rx) = test_sender();
     let (tx2, mut bob_old_rx) = test_sender();
     let (tx3, _bob_new_rx) = test_sender();
@@ -225,7 +225,7 @@ async fn replacing_a_user_runtime_emits_departure_then_join_for_existing_peers()
             None,
             UserPermissions::default(),
             tx1,
-            &transport_adapter,
+            &media_transport,
         )
         .await
         .is_ok()
@@ -236,7 +236,7 @@ async fn replacing_a_user_runtime_emits_departure_then_join_for_existing_peers()
             None,
             UserPermissions::default(),
             tx2,
-            &transport_adapter,
+            &media_transport,
         )
         .await
         .is_ok()
@@ -253,7 +253,7 @@ async fn replacing_a_user_runtime_emits_departure_then_join_for_existing_peers()
             None,
             UserPermissions::default(),
             tx3,
-            &transport_adapter,
+            &media_transport,
         )
         .await
         .is_ok()
@@ -295,7 +295,7 @@ async fn join_same_user_twice(room: &Arc<super::super::Room>) -> (ConnectionId, 
 
 async fn publish_camera(
     room: &Arc<super::super::Room>,
-    transport_adapter: &MediaTransport,
+    media_transport: &MediaTransport,
 ) -> Option<String> {
     room.test_api()
         .media()
@@ -304,14 +304,14 @@ async fn publish_camera(
             StreamType::Camera,
             MediaKind::Video,
             test_video_rtp_parameters(),
-            transport_adapter,
+            media_transport,
         )
         .await
 }
 
 #[tokio::test]
 async fn leave_user_runtime_removes_surviving_consumer_media() {
-    let (room, transport_adapter, fake, _publisher_rx, _subscriber_rx) =
+    let (room, media_transport, fake, _publisher_rx, _subscriber_rx) =
         setup_two_ready_users_with_fake().await;
 
     assert!(
@@ -322,7 +322,7 @@ async fn leave_user_runtime_removes_surviving_consumer_media() {
                 StreamType::Camera,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
-                &transport_adapter,
+                &media_transport,
             )
             .await
             .is_some()
@@ -351,7 +351,7 @@ async fn leave_user_runtime_removes_surviving_consumer_media() {
     assert!(
         room.test_api()
             .lifecycle()
-            .leave_session_runtime(&UserId::Integer(1), connection_id, &transport_adapter,)
+            .leave_session_runtime(&UserId::Integer(1), connection_id, &media_transport,)
             .await
     );
 
@@ -376,7 +376,7 @@ async fn leave_user_runtime_removes_surviving_consumer_media() {
 
 #[tokio::test]
 async fn leave_user_runtime_removes_departing_consumer_media() {
-    let (room, transport_adapter, fake, _publisher_rx, _subscriber_rx) =
+    let (room, media_transport, fake, _publisher_rx, _subscriber_rx) =
         setup_two_ready_users_with_fake().await;
 
     assert!(
@@ -387,7 +387,7 @@ async fn leave_user_runtime_removes_departing_consumer_media() {
                 StreamType::Camera,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
-                &transport_adapter,
+                &media_transport,
             )
             .await
             .is_some()
@@ -416,7 +416,7 @@ async fn leave_user_runtime_removes_departing_consumer_media() {
     assert!(
         room.test_api()
             .lifecycle()
-            .leave_session_runtime(&UserId::Integer(1), connection_id, &transport_adapter,)
+            .leave_session_runtime(&UserId::Integer(1), connection_id, &media_transport,)
             .await
     );
 
@@ -434,7 +434,7 @@ async fn leave_user_runtime_removes_departing_consumer_media() {
 
 #[tokio::test]
 async fn join_user_runtime_replacement_removes_surviving_consumer_media() {
-    let (room, transport_adapter, fake, _publisher_rx, _subscriber_rx) =
+    let (room, media_transport, fake, _publisher_rx, _subscriber_rx) =
         setup_two_ready_users_with_fake().await;
 
     assert!(
@@ -445,7 +445,7 @@ async fn join_user_runtime_replacement_removes_surviving_consumer_media() {
                 StreamType::Camera,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
-                &transport_adapter,
+                &media_transport,
             )
             .await
             .is_some()
@@ -470,7 +470,7 @@ async fn join_user_runtime_replacement_removes_surviving_consumer_media() {
             None,
             UserPermissions::default(),
             replacement_tx,
-            &transport_adapter,
+            &media_transport,
         )
         .await
         .is_ok()
@@ -497,7 +497,7 @@ async fn join_user_runtime_replacement_removes_surviving_consumer_media() {
 
 #[tokio::test]
 async fn media_cleanup_failure_retries_until_success() {
-    let (room, transport_adapter, fake, _publisher_rx, _subscriber_rx) =
+    let (room, media_transport, fake, _publisher_rx, _subscriber_rx) =
         setup_two_ready_users_with_fake().await;
 
     assert!(
@@ -508,7 +508,7 @@ async fn media_cleanup_failure_retries_until_success() {
                 StreamType::Camera,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
-                &transport_adapter,
+                &media_transport,
             )
             .await
             .is_some()
@@ -530,7 +530,7 @@ async fn media_cleanup_failure_retries_until_success() {
     assert!(
         room.test_api()
             .lifecycle()
-            .leave_session_runtime(&UserId::Integer(1), connection_id, &transport_adapter)
+            .leave_session_runtime(&UserId::Integer(1), connection_id, &media_transport)
             .await
     );
 
@@ -550,7 +550,7 @@ async fn user_close_failure_retries_until_success() {
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
-    let (transport_adapter, fake) = fake_adapter();
+    let (media_transport, fake) = fake_adapter();
     let (tx, _rx) = test_sender();
     let user_id = UserId::Integer(1);
     let connection_id = room
@@ -559,7 +559,7 @@ async fn user_close_failure_retries_until_success() {
             None,
             UserPermissions::default(),
             tx,
-            &transport_adapter,
+            &media_transport,
         )
         .await
         .expect("user should join");
@@ -567,7 +567,7 @@ async fn user_close_failure_retries_until_success() {
     fake.fail_next_close_session(session_key);
 
     assert!(
-        room.remove_user(&user_id, connection_id, &transport_adapter)
+        room.remove_user(&user_id, connection_id, &media_transport)
             .await
     );
 
@@ -582,7 +582,7 @@ async fn user_close_failure_retries_until_success() {
 
 #[tokio::test]
 async fn cleanup_retry_exhaustion_drops_pending_retry() {
-    let (room, transport_adapter, fake, _publisher_rx, _subscriber_rx) =
+    let (room, media_transport, fake, _publisher_rx, _subscriber_rx) =
         setup_two_ready_users_with_fake().await;
 
     assert!(
@@ -593,7 +593,7 @@ async fn cleanup_retry_exhaustion_drops_pending_retry() {
                 StreamType::Camera,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
-                &transport_adapter,
+                &media_transport,
             )
             .await
             .is_some()
@@ -615,16 +615,16 @@ async fn cleanup_retry_exhaustion_drops_pending_retry() {
     assert!(
         room.test_api()
             .lifecycle()
-            .leave_session_runtime(&UserId::Integer(1), connection_id, &transport_adapter)
+            .leave_session_runtime(&UserId::Integer(1), connection_id, &media_transport)
             .await
     );
     room.test_api()
         .lifecycle()
-        .force_cleanup_retry_cycle(&transport_adapter)
+        .force_cleanup_retry_cycle(&media_transport)
         .await;
     room.test_api()
         .lifecycle()
-        .force_cleanup_retry_cycle(&transport_adapter)
+        .force_cleanup_retry_cycle(&media_transport)
         .await;
 
     assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 0);
@@ -658,7 +658,7 @@ async fn manager_shutdown_abandons_pending_cleanup_retry_for_removed_room() {
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
-    let (transport_adapter, fake) = fake_adapter();
+    let (media_transport, fake) = fake_adapter();
     let (tx, _rx) = test_sender();
     let user_id = UserId::Integer(1);
     let connection_id = room
@@ -667,7 +667,7 @@ async fn manager_shutdown_abandons_pending_cleanup_retry_for_removed_room() {
             None,
             UserPermissions::default(),
             tx,
-            &transport_adapter,
+            &media_transport,
         )
         .await
         .expect("user should join");
@@ -676,7 +676,7 @@ async fn manager_shutdown_abandons_pending_cleanup_retry_for_removed_room() {
 
     assert!(
         manager
-            .close_session(room.uuid(), &user_id, connection_id, &transport_adapter)
+            .close_session(room.uuid(), &user_id, connection_id, &media_transport)
             .await
     );
 
@@ -687,7 +687,7 @@ async fn manager_shutdown_abandons_pending_cleanup_retry_for_removed_room() {
 
 #[tokio::test]
 async fn state_only_cleanup_does_not_enqueue_transport_retry() {
-    let (room, transport_adapter, fake, _publisher_rx, _subscriber_rx) =
+    let (room, media_transport, fake, _publisher_rx, _subscriber_rx) =
         setup_two_ready_users_with_fake().await;
 
     assert!(
@@ -698,7 +698,7 @@ async fn state_only_cleanup_does_not_enqueue_transport_retry() {
                 StreamType::Camera,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
-                &transport_adapter,
+                &media_transport,
             )
             .await
             .is_some()
@@ -723,7 +723,7 @@ async fn state_only_cleanup_does_not_enqueue_transport_retry() {
             .leave_session_without_transport_cleanup(
                 &UserId::Integer(1),
                 connection_id,
-                &transport_adapter,
+                &media_transport,
             )
             .await
     );
@@ -744,7 +744,7 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_user() {
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
-    let (transport_adapter, _fake) = fake_adapter();
+    let (media_transport, _fake) = fake_adapter();
     let (first_connection, second_connection) = join_same_user_twice(&room).await;
 
     assert_ne!(first_connection, second_connection);
@@ -761,7 +761,7 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_user() {
             &room,
             &UserId::Integer(1),
             first_connection,
-            &transport_adapter,
+            &media_transport,
         )
         .await
     );
@@ -771,7 +771,7 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_user() {
             &UserId::Integer(1),
             first_connection,
             test_client_rtp_capabilities(),
-            &transport_adapter,
+            &media_transport,
         )
         .await
     );
@@ -780,7 +780,7 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_user() {
             &UserId::Integer(1),
             first_connection,
             test_client_rtp_capabilities(),
-            &transport_adapter,
+            &media_transport,
         )
         .await,
         SessionNegotiationOutcome::StaleConnection
@@ -793,7 +793,7 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_user() {
             .await
     );
     assert!(
-        publish_camera(&room, &transport_adapter).await.is_none(),
+        publish_camera(&room, &media_transport).await.is_none(),
         "stale negotiation callbacks must not make the replacement user publish-ready"
     );
 
@@ -802,7 +802,7 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_user() {
             &UserId::Integer(1),
             second_connection,
             test_client_rtp_capabilities(),
-            &transport_adapter,
+            &media_transport,
         )
         .await,
         SessionNegotiationOutcome::Applied
@@ -814,7 +814,7 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_user() {
             .await
     );
     assert!(
-        publish_camera(&room, &transport_adapter).await.is_some(),
+        publish_camera(&room, &media_transport).await.is_some(),
         "the current connection should become publish-ready after its own negotiation answer"
     );
 }
@@ -830,7 +830,7 @@ async fn stale_refresh_callbacks_do_not_target_a_replaced_user() {
                 &UserId::Integer(2),
                 scenario.second_subscriber_connection,
                 test_client_rtp_capabilities(),
-                &scenario.transport_adapter,
+                &scenario.media_transport,
             )
             .await,
         SessionNegotiationOutcome::Applied
@@ -858,7 +858,7 @@ async fn stale_refresh_callbacks_do_not_target_a_replaced_user() {
             .apply_session_refreshed(
                 &UserId::Integer(2),
                 scenario.first_subscriber_connection,
-                &scenario.transport_adapter,
+                &scenario.media_transport,
             )
             .await,
         SessionNegotiationOutcome::StaleConnection,
@@ -875,7 +875,7 @@ async fn stale_refresh_callbacks_do_not_target_a_replaced_user() {
             .apply_session_refreshed(
                 &UserId::Integer(2),
                 scenario.second_subscriber_connection,
-                &scenario.transport_adapter,
+                &scenario.media_transport,
             )
             .await,
         SessionNegotiationOutcome::Applied,
@@ -889,7 +889,7 @@ async fn stale_refresh_callbacks_do_not_target_a_replaced_user() {
 
 struct StaleRefreshScenario {
     room: Arc<super::super::Room>,
-    transport_adapter: MediaTransport,
+    media_transport: MediaTransport,
     fake: Arc<FakeWebRtcAdapter>,
     first_subscriber_connection: ConnectionId,
     second_subscriber_connection: ConnectionId,
@@ -901,7 +901,7 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
-    let (transport_adapter, fake) = fake_adapter();
+    let (media_transport, fake) = fake_adapter();
     let (publisher_tx, mut publisher_rx) = test_sender();
     let (first_subscriber_tx, _first_subscriber_rx) = test_sender();
     let publisher_connection = room
@@ -932,7 +932,7 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
             &UserId::Integer(1),
             publisher_connection,
             test_client_rtp_capabilities(),
-            &transport_adapter,
+            &media_transport,
         )
         .await,
         SessionNegotiationOutcome::Applied
@@ -945,7 +945,7 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
                 StreamType::Camera,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
-                &transport_adapter,
+                &media_transport,
             )
             .await
             .is_some()
@@ -968,7 +968,7 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
 
     StaleRefreshScenario {
         room,
-        transport_adapter,
+        media_transport,
         fake,
         first_subscriber_connection,
         second_subscriber_connection,

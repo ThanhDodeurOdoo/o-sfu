@@ -18,7 +18,7 @@
 //! selector state is stored.
 
 use super::{Room, effects::SourcePolicyEffectPlan};
-use crate::runtime::transport_adapter::{ActiveSpeakerSource, MediaPort, ObservabilityPort};
+use crate::runtime::media_transport::{ActiveSpeakerSource, MediaPort, ObservabilityPort};
 
 impl Room {
     /// Refreshes source packet policy from live transport observability.

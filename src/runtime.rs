@@ -36,10 +36,18 @@ pub(crate) mod websocket_server;
 
 pub(crate) use diagnostics::DiagnosticsStore;
 use http_server::serve_http;
+use media_transport::SourcePolicyPort;
+#[cfg(any(test, feature = "testing-transport"))]
+pub use media_transport::test_support::test_transport_session_key;
+pub(crate) use media_transport::{
+    MediaPort, MediaTransport, MediaTransportDeps, ObservabilityPort,
+    client_rtp_capabilities_from_answer,
+};
+pub use media_transport::{RemoteAddrDemux, TransportSessionKey};
 pub(crate) use metrics::RuntimeMetrics;
 pub(crate) use o_sfu_core::{
     ConnectionId, RoomInstanceId, SessionBitrateLimits,
-    server::{metrics, recording, room, transport as transport_adapter},
+    server::{metrics, recording, room, transport as media_transport},
 };
 pub(crate) use o_sfu_telemetry as telemetry;
 pub(crate) use o_sfu_telemetry::prometheus;
@@ -51,14 +59,6 @@ use room::{
     rtp_capabilities,
 };
 use telemetry::{init_tracing, schema::event as telemetry_event};
-use transport_adapter::SourcePolicyPort;
-#[cfg(any(test, feature = "testing-transport"))]
-pub use transport_adapter::test_support::test_transport_session_key;
-pub(crate) use transport_adapter::{
-    MediaPort, MediaTransport, MediaTransportDeps, ObservabilityPort,
-    client_rtp_capabilities_from_answer,
-};
-pub use transport_adapter::{RemoteAddrDemux, TransportSessionKey};
 
 /// Process-global shell for the server process.
 ///
@@ -156,7 +156,7 @@ impl Runtime {
 fn spawn_source_packet_policy_update_task(
     rooms: Arc<RoomManager>,
     observability_port: MediaTransport,
-    updates: transport_adapter::SourcePolicyUpdateSubscription,
+    updates: media_transport::SourcePolicyUpdateSubscription,
     media_port: MediaTransport,
 ) -> JoinHandle<()> {
     info!("booted source packet policy update task");
@@ -195,7 +195,7 @@ fn spawn_source_packet_policy_update_task(
 
 fn subscribe_source_policy_updates(
     source_policy_port: &impl SourcePolicyPort,
-) -> transport_adapter::SourcePolicyUpdateSubscription {
+) -> media_transport::SourcePolicyUpdateSubscription {
     source_policy_port.source_policy_subscription()
 }
 

@@ -187,7 +187,7 @@ async fn protocol_core_publish_round_trips_through_real_server_user_protocol() {
             } if *user_id == UserId::Integer(53)
                 && *media_kind == MediaKind::Video
         )),
-        "protocol publish should declare producer media through the transport adapter"
+        "protocol publish should declare producer media through the media transport"
     );
 }
 

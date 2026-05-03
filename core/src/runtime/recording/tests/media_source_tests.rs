@@ -2,11 +2,11 @@ use std::{sync::Arc, time::Instant};
 
 use crate::runtime::{
     RoomInstanceId,
+    media_transport::{TransportMediaId, TransportSessionKey},
     recording::{
         MediaPacketSink, MediaTap,
         test_support::{into_media_source, is_room_active},
     },
-    transport_adapter::{TransportMediaId, TransportSessionKey},
 };
 
 struct NoopSink;

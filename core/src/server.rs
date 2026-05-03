@@ -66,22 +66,22 @@ pub mod transport {
     #[cfg(any(test, feature = "testing-transport"))]
     pub mod test_support {
         pub use crate::runtime::{
-            rtc_adapter::test_support::*,
-            transport_adapter::test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
+            media_transport::test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
+            rtc_engine::test_support::*,
         };
     }
     #[cfg(any(test, feature = "testing-transport"))]
-    pub use crate::runtime::transport_adapter::TestTransport;
+    pub use crate::runtime::media_transport::TestTransport;
     pub use crate::{
         SessionBitrateLimits,
         runtime::{
-            rtc_adapter::{
-                RelayTargetRegistry, RemoteAddrDemux, WorkerHandleSlot,
-                client_rtp_capabilities_from_answer,
-            },
-            transport_adapter::{
+            media_transport::{
                 MediaTransport, MediaTransportDeps, RtcTransport, RtcTransportBuildError,
                 RtcTransportBuilder, RtcTransportConfig, RtcTransportShardSetConfig,
+            },
+            rtc_engine::{
+                RelayTargetRegistry, RemoteAddrDemux, WorkerHandleSlot,
+                client_rtp_capabilities_from_answer,
             },
         },
         transport::*,

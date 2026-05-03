@@ -1,5 +1,5 @@
 use super::{PendingPublishTransactions, Room};
-use crate::runtime::{ConnectionId, StreamType, UserId, transport_adapter::TransportMediaId};
+use crate::runtime::{ConnectionId, StreamType, UserId, media_transport::TransportMediaId};
 
 impl PendingPublishTransactions {
     pub(in crate::runtime::room) fn staged_count_for_connection(

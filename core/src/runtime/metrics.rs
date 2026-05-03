@@ -1,7 +1,7 @@
 pub use o_sfu_telemetry::metrics::*;
 
 use crate::runtime::{
-    rtc_adapter::TransportSessionHealth,
+    rtc_engine::TransportSessionHealth,
     source_model::{SourceRoomPolicySelector, SourceSelector},
 };
 

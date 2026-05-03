@@ -4,6 +4,7 @@ use o_sfu_router::{MediaKind, ProducerId, RouterEvent, SessionId as RouterSessio
 
 use crate::runtime::{
     RoomInstanceId, UserId as SignalingSessionId,
+    media_transport::TransportMediaId,
     metrics::RuntimeMetrics,
     recording::{
         MediaSource, MediaTap, RecordingService,
@@ -11,8 +12,7 @@ use crate::runtime::{
             RecordingLifecycleState, into_media_source, is_room_active, transition_error_state,
         },
     },
-    rtc_adapter::test_support::{sample_forwarded_packet, test_transport_session_key},
-    transport_adapter::TransportMediaId,
+    rtc_engine::test_support::{sample_forwarded_packet, test_transport_session_key},
 };
 
 #[test]

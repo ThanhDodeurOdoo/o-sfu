@@ -438,6 +438,7 @@ mod tests {
         MediaCodecFlags,
         runtime::{
             ConnectionId, RoomInstanceId, StreamType, UserPermissions,
+            media_transport::TransportMediaId,
             metrics::RuntimeMetrics,
             recording::{MediaSource, MediaTap, RecordingService},
             room::{
@@ -456,7 +457,6 @@ mod tests {
                 PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
                 SourceEncodingId,
             },
-            transport_adapter::TransportMediaId,
         },
     };
 

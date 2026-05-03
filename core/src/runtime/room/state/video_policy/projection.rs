@@ -2,13 +2,13 @@
 //!
 //! The budget planner speaks in `SourceSelector` values. This module is the
 //! only room-state boundary that translates that room intent into the
-//! packet-facing gate vocabulary consumed by the transport adapter.
+//! packet-facing gate vocabulary consumed by the media transport.
 
 #[cfg(test)]
 use crate::runtime::source_model::SourceEncodingId;
 use crate::runtime::{
+    media_transport::{SourcePacketGate, SourcePacketOperatingPoint},
     source_model::{PublishedSourceDescriptor, SourceSelector},
-    transport_adapter::{SourcePacketGate, SourcePacketOperatingPoint},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

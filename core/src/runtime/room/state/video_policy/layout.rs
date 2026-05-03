@@ -17,8 +17,8 @@ use super::{
 };
 use crate::runtime::{
     DownloadStates, StreamType, UserId, VideoLayoutIntent,
+    media_transport::ActiveSpeakerSource,
     source_model::{PublishedSourceDescriptor, SourceRoomPolicySelector, SourceRoutePriority},
-    transport_adapter::ActiveSpeakerSource,
 };
 
 const ACTIVE_SPEAKER_CAMERA_CLEAR_LIMIT: usize = 5;

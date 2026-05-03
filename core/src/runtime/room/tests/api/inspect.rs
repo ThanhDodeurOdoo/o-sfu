@@ -2,8 +2,8 @@ use o_sfu_router::RouterId;
 
 use super::super::super::{Room, RoomUserPermissions};
 use crate::runtime::{
-    ConnectionId, StreamType, UserId, UserInfo, source_model::SourceEncodingId,
-    transport_adapter::TransportMediaId,
+    ConnectionId, StreamType, UserId, UserInfo, media_transport::TransportMediaId,
+    source_model::SourceEncodingId,
 };
 
 #[derive(Clone, Copy)]

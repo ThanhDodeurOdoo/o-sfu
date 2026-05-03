@@ -10,11 +10,11 @@ use std::{
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
-use super::rtc_adapter::ForwardedPacket;
+use super::rtc_engine::ForwardedPacket;
 use super::{
     RoomInstanceId,
+    media_transport::{TransportMediaId, TransportSessionKey},
     metrics::RtpForwardDestinationKind,
-    transport_adapter::{TransportMediaId, TransportSessionKey},
 };
 
 pub trait PacketSink: Send + Sync {

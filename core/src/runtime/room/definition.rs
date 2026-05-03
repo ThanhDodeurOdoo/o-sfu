@@ -19,7 +19,7 @@ use crate::{
     RoomShardingPolicy, RuntimeFeatureFlags,
     runtime::{
         AvailableFeatures, ConnectionId, RoomInstanceId, UserId,
-        transport_adapter::TransportSessionKey,
+        media_transport::TransportSessionKey,
     },
 };
 

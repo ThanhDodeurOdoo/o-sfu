@@ -5,7 +5,7 @@ use crate::{
     UserInfoRefresh,
     runtime::{
         ConnectionId, RecordingOptions, UserId, UserInfo, UserPermissions,
-        transport_adapter::MediaTransport,
+        media_transport::MediaTransport,
     },
 };
 
@@ -40,7 +40,7 @@ impl RoomTestLifecycle<'_> {
         label: Option<String>,
         permissions: UserPermissions,
         sender: mpsc::UnboundedSender<UserOutbound>,
-        transport_adapter: &MediaTransport,
+        media_transport: &MediaTransport,
     ) -> Result<ConnectionId, RoomJoinError> {
         self.room
             .join_session_with_cleanup(
@@ -48,7 +48,7 @@ impl RoomTestLifecycle<'_> {
                 label,
                 permissions,
                 sender,
-                UserCleanup::state_only(Some(transport_adapter)),
+                UserCleanup::state_only(Some(media_transport)),
                 false,
             )
             .await
@@ -63,12 +63,12 @@ impl RoomTestLifecycle<'_> {
         self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        transport_adapter: &MediaTransport,
+        media_transport: &MediaTransport,
     ) -> bool {
         self.leave_session_with_cleanup(
             user_id,
             connection_id,
-            UserCleanup::runtime(transport_adapter),
+            UserCleanup::runtime(media_transport),
         )
         .await
     }
@@ -77,12 +77,12 @@ impl RoomTestLifecycle<'_> {
         self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        transport_adapter: &MediaTransport,
+        media_transport: &MediaTransport,
     ) -> bool {
         self.leave_session_with_cleanup(
             user_id,
             connection_id,
-            UserCleanup::state_only(Some(transport_adapter)),
+            UserCleanup::state_only(Some(media_transport)),
         )
         .await
     }
@@ -103,8 +103,8 @@ impl RoomTestLifecycle<'_> {
         };
         room.cleanup_transport_removals(cleanup, &outcome.transport_removals)
             .await;
-        if let Some(transport_adapter) = cleanup.transport_adapter() {
-            room.sync_source_packet_selection_policy(Some(transport_adapter), transport_adapter)
+        if let Some(media_transport) = cleanup.media_transport() {
+            room.sync_source_packet_selection_policy(Some(media_transport), media_transport)
                 .await;
         }
         Room::emit_lifecycle_effects(outcome.effects);
@@ -136,7 +136,7 @@ impl RoomTestLifecycle<'_> {
         user_id: &UserId,
         info: UserInfo,
         need_refresh: bool,
-        transport_adapter: &MediaTransport,
+        media_transport: &MediaTransport,
     ) {
         let Some(connection_id) = self
             .room
@@ -153,7 +153,7 @@ impl RoomTestLifecycle<'_> {
                 connection_id,
                 info,
                 UserInfoRefresh::from_needed(need_refresh),
-                transport_adapter,
+                media_transport,
             )
             .await;
     }
@@ -167,19 +167,16 @@ impl RoomTestLifecycle<'_> {
     pub async fn disconnect_users_without_transport_cleanup(
         self,
         user_ids: &[UserId],
-        transport_adapter: &MediaTransport,
+        media_transport: &MediaTransport,
     ) {
         self.room
-            .disconnect_users_with_cleanup(
-                user_ids,
-                UserCleanup::state_only(Some(transport_adapter)),
-            )
+            .disconnect_users_with_cleanup(user_ids, UserCleanup::state_only(Some(media_transport)))
             .await;
     }
 
-    pub async fn force_cleanup_retry_cycle(self, transport_adapter: &MediaTransport) {
+    pub async fn force_cleanup_retry_cycle(self, media_transport: &MediaTransport) {
         self.room
-            .force_cleanup_retry_cycle_for_test(transport_adapter)
+            .force_cleanup_retry_cycle_for_test(media_transport)
             .await;
     }
 

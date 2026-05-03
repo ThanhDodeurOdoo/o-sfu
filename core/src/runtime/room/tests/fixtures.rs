@@ -22,7 +22,7 @@ pub(super) use crate::{
     runtime::{
         ConnectionId, DownloadStates, StreamType, UserId, UserInfo, UserPermissions,
         VideoLayoutIntent,
-        transport_adapter::{
+        media_transport::{
             ActiveSpeakerSource, MediaTransport, NegotiationPort, TransportMediaId,
             test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
         },
@@ -118,14 +118,14 @@ pub(super) async fn apply_publish_transport_ready(
     room: &super::super::Room,
     user_id: &UserId,
     connection_id: ConnectionId,
-    transport_adapter: &MediaTransport,
+    media_transport: &MediaTransport,
 ) -> bool {
     apply_transport_ready(
         room,
         user_id,
         connection_id,
         UserTransportReady::Publish,
-        transport_adapter,
+        media_transport,
     )
     .await
 }
@@ -134,14 +134,14 @@ pub(super) async fn apply_consume_transport_ready(
     room: &super::super::Room,
     user_id: &UserId,
     connection_id: ConnectionId,
-    transport_adapter: &MediaTransport,
+    media_transport: &MediaTransport,
 ) -> bool {
     apply_transport_ready(
         room,
         user_id,
         connection_id,
         UserTransportReady::Consume,
-        transport_adapter,
+        media_transport,
     )
     .await
 }
@@ -151,13 +151,13 @@ async fn apply_transport_ready(
     user_id: &UserId,
     connection_id: ConnectionId,
     readiness: UserTransportReady,
-    transport_adapter: &MediaTransport,
+    media_transport: &MediaTransport,
 ) -> bool {
     let update = {
         let mut state = room.state.write().await;
         state.set_transport_ready_for_test(user_id, connection_id, readiness)
     };
-    apply_negotiation_update(room, user_id, connection_id, update, transport_adapter).await
+    apply_negotiation_update(room, user_id, connection_id, update, media_transport).await
 }
 
 pub(super) async fn apply_client_rtp_capabilities(
@@ -165,13 +165,13 @@ pub(super) async fn apply_client_rtp_capabilities(
     user_id: &UserId,
     connection_id: ConnectionId,
     capabilities: MediaCapabilities,
-    transport_adapter: &MediaTransport,
+    media_transport: &MediaTransport,
 ) -> bool {
     let update = {
         let mut state = room.state.write().await;
         state.set_client_rtp_capabilities_for_test(user_id, connection_id, &capabilities)
     };
-    apply_negotiation_update(room, user_id, connection_id, update, transport_adapter).await
+    apply_negotiation_update(room, user_id, connection_id, update, media_transport).await
 }
 
 async fn apply_negotiation_update(
@@ -179,14 +179,14 @@ async fn apply_negotiation_update(
     user_id: &UserId,
     connection_id: ConnectionId,
     update: UserNegotiationUpdate,
-    transport_adapter: &MediaTransport,
+    media_transport: &MediaTransport,
 ) -> bool {
     if !update.session_present {
         return false;
     }
     if update.became_consumer_ready {
         return room
-            .bootstrap_missing_consumers_for_connection(user_id, connection_id, transport_adapter)
+            .bootstrap_missing_consumers_for_connection(user_id, connection_id, media_transport)
             .await;
     }
     true
@@ -201,12 +201,12 @@ pub(super) async fn make_session_ready(room: &super::super::Room, user_id: &User
 pub(super) async fn refresh_session_consumers(
     room: &super::super::Room,
     user_id: &UserId,
-    transport_adapter: &MediaTransport,
+    media_transport: &MediaTransport,
 ) -> bool {
     room.apply_session_refreshed(
         user_id,
         user_connection_id(room, user_id).await,
-        transport_adapter,
+        media_transport,
     )
     .await
         == SessionNegotiationOutcome::Applied
@@ -217,9 +217,9 @@ pub(super) async fn stage_negotiated_publish(
     user_id: &UserId,
     connection_id: ConnectionId,
     stream_type: StreamType,
-    transport_adapter: &MediaTransport,
+    media_transport: &MediaTransport,
 ) -> bool {
-    room.stage_negotiated_publish(user_id, connection_id, stream_type, transport_adapter)
+    room.stage_negotiated_publish(user_id, connection_id, stream_type, media_transport)
         .await
         .is_ok_and(PublishStageOutcome::staged)
 }
@@ -229,10 +229,10 @@ pub(super) async fn rollback_staged_publish(
     user_id: &UserId,
     connection_id: ConnectionId,
     stream_type: StreamType,
-    transport_adapter: &MediaTransport,
+    media_transport: &MediaTransport,
 ) -> bool {
     matches!(
-        room.rollback_staged_publish(user_id, connection_id, stream_type, transport_adapter)
+        room.rollback_staged_publish(user_id, connection_id, stream_type, media_transport)
             .await,
         RollbackStagedPublishOutcome::RolledBack { .. }
     )
@@ -242,10 +242,10 @@ pub(super) async fn commit_staged_publishes(
     room: &super::super::Room,
     user_id: &UserId,
     connection_id: ConnectionId,
-    transport_adapter: &MediaTransport,
+    media_transport: &MediaTransport,
 ) {
     let session_key = room.transport_user_key(user_id, connection_id);
-    let applied_answer = transport_adapter
+    let applied_answer = media_transport
         .apply_session_answer(&session_key, "")
         .await
         .unwrap_or_default();
@@ -253,8 +253,8 @@ pub(super) async fn commit_staged_publishes(
         user_id,
         connection_id,
         &applied_answer,
-        transport_adapter,
-        transport_adapter,
+        media_transport,
+        media_transport,
     )
     .await;
 }
@@ -263,9 +263,9 @@ pub(super) async fn rollback_staged_publishes_for_connection(
     room: &super::super::Room,
     user_id: &UserId,
     connection_id: ConnectionId,
-    transport_adapter: &MediaTransport,
+    media_transport: &MediaTransport,
 ) {
-    room.rollback_staged_publishes_for_connection(user_id, connection_id, transport_adapter)
+    room.rollback_staged_publishes_for_connection(user_id, connection_id, media_transport)
         .await;
 }
 

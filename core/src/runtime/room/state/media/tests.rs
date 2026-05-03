@@ -29,6 +29,7 @@ use crate::{
     MediaCodecFlags,
     runtime::{
         ConnectionId, DownloadStates, RoomInstanceId, StreamType, UserId, UserPermissions,
+        media_transport::TransportMediaId,
         metrics::RuntimeMetrics,
         recording::{MediaSource, MediaTap, RecordingService},
         room::{
@@ -42,7 +43,6 @@ use crate::{
             PublishedSourceId, PublishedSourceOwner, SourceEncodingDescriptor,
             SourceEncodingDescriptorParts, SourceEncodingId, SourceSelector,
         },
-        transport_adapter::TransportMediaId,
     },
 };
 

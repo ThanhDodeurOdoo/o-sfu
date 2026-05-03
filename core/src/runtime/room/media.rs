@@ -11,8 +11,8 @@ use crate::{
     runtime::{
         ConnectionId, DownloadStates, StreamType, UserId,
         diagnostics::DiagnosticsEventData,
+        media_transport::{MediaPort, ObservabilityPort, ProducerActivity},
         telemetry::schema::event as telemetry_event,
-        transport_adapter::{MediaPort, ObservabilityPort, ProducerActivity},
     },
 };
 
@@ -116,7 +116,7 @@ impl Room {
                 ?user_id,
                 ?stream_type,
                 active = outcome.active,
-                "transport adapter failed to update producer route activity"
+                "media transport failed to update producer route activity"
             );
             TransportEffectOutcome::Failed
         } else {

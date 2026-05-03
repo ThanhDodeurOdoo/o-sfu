@@ -16,12 +16,12 @@ use super::{
 };
 use crate::runtime::{
     StreamType, UserId,
+    media_transport::{ActiveSpeakerSource, ReceiverBandwidthSnapshot},
     source_model::{
         ConsumerSourceSelection, OverBudgetExceptionReason, PolicyPauseReason,
         ReceiverVideoBudgetDiagnostics, SourceEncodingDescriptor, SourceRoomPolicySelector,
         SourceRoutePriority, SourceSelector, UploadLayerPolicyRole,
     },
-    transport_adapter::{ActiveSpeakerSource, ReceiverBandwidthSnapshot},
 };
 
 /// Minimum room size where camera simulcast adaptation starts constraining receivers.

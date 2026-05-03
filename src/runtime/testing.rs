@@ -15,18 +15,18 @@ use super::{
     RuntimeServices, RuntimeState, build_media_transport,
     diagnostics::DiagnosticsStore,
     http_server::app,
+    media_transport::MediaTransport,
     metrics::RuntimeMetrics,
     options::RuntimeOptions,
     room::{
         ConsumerRouteState, RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomManagerDeps,
         RoomRuntimePolicy, rtp_capabilities::router_rtp_capabilities,
     },
-    transport_adapter::MediaTransport,
 };
 use crate::{config::Config, core::SfuCore};
 
 #[derive(Debug, Default)]
-pub struct SourcePolicyDirtyState(super::transport_adapter::SourcePolicyDirtyState);
+pub struct SourcePolicyDirtyState(super::media_transport::SourcePolicyDirtyState);
 
 impl SourcePolicyDirtyState {
     pub fn take_dirty(&self) -> bool {
@@ -43,8 +43,8 @@ impl SourcePolicyDirtyState {
 }
 
 pub use super::{
+    media_transport::{RelayTargetRegistry, WorkerHandleSlot},
     recording::ActiveRoomRegistry,
-    transport_adapter::{RelayTargetRegistry, WorkerHandleSlot},
 };
 
 /// Test-only server handle used by integration tests to exercise the real HTTP and WS entry points.

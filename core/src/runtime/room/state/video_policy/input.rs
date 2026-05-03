@@ -3,7 +3,7 @@
 //! This module is the only place where the policy path reads `RoomState`
 //! indexes and transport observation snapshots together. It normalizes that
 //! state into route-shaped facts so the budget planner can be tested without a
-//! `Room`, transport adapter, websocket user, or `str0m` state.
+//! `Room`, media transport, websocket user, or `str0m` state.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,11 +13,11 @@ use super::{
 };
 use crate::runtime::{
     ConnectionId, StreamType, UserId,
+    media_transport::{ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportMediaId},
     source_model::{
         ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
         SourceEncodingDescriptor,
     },
-    transport_adapter::{ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportMediaId},
 };
 
 /// Policy input for one refresh across all live receiver/source video routes.
@@ -121,7 +121,7 @@ pub(in crate::runtime::room) struct ReceiverVideoRouteInput<'a> {
 /// Construction input for [`ReceiverVideoRouteInput`].
 ///
 /// The route input is intentionally explicit so pure policy tests can build the
-/// planner input without constructing a full room or transport adapter.
+/// planner input without constructing a full room or media transport.
 #[derive(Debug, Clone)]
 pub(in crate::runtime::room) struct ReceiverVideoRouteInputParts<'a> {
     pub(in crate::runtime::room) user_count: usize,

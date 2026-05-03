@@ -35,6 +35,11 @@ pub(super) use crate::{
         auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
         diagnostics::DiagnosticsStore,
         http_server::app,
+        media_transport::{
+            MediaTransport, MediaTransportDeps, RtcTransport, RtcTransportConfig,
+            SessionBitrateLimits,
+            test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
+        },
         metrics::RuntimeMetrics,
         recording::MediaTap,
         room::{
@@ -42,11 +47,6 @@ pub(super) use crate::{
             RoomRuntimePolicy, rtp_capabilities,
         },
         testing::{build_test_runtime_state, decode_protocol_welcome_batch},
-        transport_adapter::{
-            MediaTransport, MediaTransportDeps, RtcTransport, RtcTransportConfig,
-            SessionBitrateLimits,
-            test_support::{FakeWebRtcAdapter, FakeWebRtcEvent},
-        },
     },
 };
 
@@ -257,7 +257,7 @@ pub(super) async fn spawn_test_server_with_feature_flags(
     clippy::panic,
     reason = "the test fixture builds a constant valid RTC transport and failing here means the fixture itself is invalid"
 )]
-pub(super) fn build_real_rtc_transport_adapter() -> MediaTransport {
+pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
     match RtcTransport::builder()
         .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -289,7 +289,7 @@ pub(super) async fn spawn_protocol_rtc_test_server(
         10_000,
         60_000,
         room_size,
-        build_real_rtc_transport_adapter(),
+        build_real_rtc_media_transport(),
     )
     .await
 }

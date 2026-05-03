@@ -35,7 +35,7 @@ pub(super) use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCod
 pub(super) use super::super::fixtures::*;
 pub(super) use crate::{
     config::RuntimeFeatureFlags,
-    runtime::{room::Room, transport_adapter::MediaTransport},
+    runtime::{media_transport::MediaTransport, room::Room},
 };
 
 pub(super) const BATCH_FLUSH_DELAY_MS: u32 = 100;

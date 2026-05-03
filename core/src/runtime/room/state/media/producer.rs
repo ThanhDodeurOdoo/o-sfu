@@ -30,12 +30,12 @@ use super::{
 };
 use crate::runtime::{
     ConnectionId, StreamType, UserId, UserInfo,
+    media_transport::TransportMediaId,
     source_model::{
         PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
         PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
         SourceEncodingId, SourceModelError, UploadLayerPolicyRole,
     },
-    transport_adapter::TransportMediaId,
 };
 
 #[allow(

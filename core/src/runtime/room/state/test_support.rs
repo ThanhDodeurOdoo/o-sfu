@@ -4,8 +4,8 @@ use super::shared::{RoomState, SourceKey};
 #[cfg(test)]
 use crate::runtime::source_model::PublishedSourceId;
 use crate::runtime::{
-    ConnectionId, StreamType, UserId, room::RoomUserPermissions, source_model::SourceEncodingId,
-    transport_adapter::TransportMediaId,
+    ConnectionId, StreamType, UserId, media_transport::TransportMediaId, room::RoomUserPermissions,
+    source_model::SourceEncodingId,
 };
 
 impl RoomState {

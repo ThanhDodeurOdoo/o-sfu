@@ -8,7 +8,7 @@ use crate::{
     PublicationActivity,
     runtime::{
         ConnectionId, DownloadStates, StreamType, UserId,
-        transport_adapter::{MediaPort, MediaTransport, TransportMediaId},
+        media_transport::{MediaPort, MediaTransport, TransportMediaId},
     },
 };
 
@@ -31,7 +31,7 @@ impl RoomTestMedia<'_> {
         self,
         user_id: &UserId,
         publish: NegotiatedPublish,
-        transport_adapter: &MediaTransport,
+        media_transport: &MediaTransport,
     ) -> Option<String> {
         let validated_descriptor = {
             let state = self.room.state.read().await;
@@ -45,8 +45,8 @@ impl RoomTestMedia<'_> {
         PendingPublishTransaction::new(validated_descriptor, publish.transport_media_id)
             .commit_with_parameters(
                 self.room,
-                transport_adapter,
-                transport_adapter,
+                media_transport,
+                media_transport,
                 publish.consumable_rtp_parameters,
             )
             .await
@@ -58,7 +58,7 @@ impl RoomTestMedia<'_> {
         stream_type: StreamType,
         media_kind: MediaKind,
         producer_rtp_parameters: RouterRtpParameters,
-        transport_adapter: &MediaTransport,
+        media_transport: &MediaTransport,
     ) -> Option<String> {
         let publish_prerequisites = {
             let state = self.room.state.read().await;
@@ -85,7 +85,7 @@ impl RoomTestMedia<'_> {
                 media_kind,
             )?
         };
-        let transport_media_id = match transport_adapter
+        let transport_media_id = match media_transport
             .publish_media(
                 &self
                     .room
@@ -101,7 +101,7 @@ impl RoomTestMedia<'_> {
                     ?user_id,
                     connection_id = ?publisher_connection_id,
                     ?stream_type,
-                    "transport adapter rejected publish media declaration"
+                    "media transport rejected publish media declaration"
                 );
                 return None;
             }
@@ -109,8 +109,8 @@ impl RoomTestMedia<'_> {
         PendingPublishTransaction::new(validated_descriptor, transport_media_id)
             .commit_with_parameters(
                 self.room,
-                transport_adapter,
-                transport_adapter,
+                media_transport,
+                media_transport,
                 consumable_rtp_parameters,
             )
             .await
@@ -121,7 +121,7 @@ impl RoomTestMedia<'_> {
         user_id: &UserId,
         stream_type: StreamType,
         active: bool,
-        transport_adapter: &MediaTransport,
+        media_transport: &MediaTransport,
     ) {
         let Some(connection_id) = self
             .room
@@ -138,7 +138,7 @@ impl RoomTestMedia<'_> {
                 connection_id,
                 stream_type,
                 PublicationActivity::from_active(active),
-                transport_adapter,
+                media_transport,
             )
             .await;
     }
@@ -148,7 +148,7 @@ impl RoomTestMedia<'_> {
         user_id: &UserId,
         target_user_id: &UserId,
         states: &DownloadStates,
-        transport_adapter: &MediaTransport,
+        media_transport: &MediaTransport,
     ) {
         let Some(connection_id) = self
             .room
@@ -165,7 +165,7 @@ impl RoomTestMedia<'_> {
                 connection_id,
                 target_user_id,
                 states,
-                transport_adapter,
+                media_transport,
             )
             .await;
     }

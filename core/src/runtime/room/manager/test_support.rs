@@ -7,8 +7,8 @@ use super::{
 use crate::{
     MediaCodecFlags, RuntimeFeatureFlags,
     runtime::{
-        ConnectionId, UserId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
-        recording::MediaTap, transport_adapter::MediaTransport,
+        ConnectionId, UserId, diagnostics::DiagnosticsStore, media_transport::MediaTransport,
+        metrics::RuntimeMetrics, recording::MediaTap,
     },
 };
 
@@ -60,7 +60,7 @@ impl RoomManager {
         &self,
         room_id: &str,
         request: JoinUserRequest,
-        transport_adapter: &MediaTransport,
+        media_transport: &MediaTransport,
     ) -> Result<(Arc<super::super::Room>, ConnectionId), RoomManagerJoinError> {
         let Some((room, user_count_before, media_counts_before, join_result)) = self
             .with_current_room(room_id, |room| async move {
@@ -74,7 +74,7 @@ impl RoomManager {
                         request.label,
                         request.permissions,
                         request.sender,
-                        transport_adapter,
+                        media_transport,
                     )
                     .await;
                 (room, user_count_before, media_counts_before, join_result)
@@ -101,7 +101,7 @@ impl RoomManager {
         room_id: &str,
         user_id: &UserId,
         connection_id: ConnectionId,
-        transport_adapter: &MediaTransport,
+        media_transport: &MediaTransport,
     ) -> bool {
         let Some((room, user_count_before, media_counts_before, did_remove_active_session)) = self
             .with_current_room(room_id, |room| async move {
@@ -113,7 +113,7 @@ impl RoomManager {
                     .leave_session_without_transport_cleanup(
                         user_id,
                         connection_id,
-                        transport_adapter,
+                        media_transport,
                     )
                     .await;
                 (
@@ -142,7 +142,7 @@ impl RoomManager {
         &self,
         room_id: &str,
         user_ids: &[UserId],
-        transport_adapter: &MediaTransport,
+        media_transport: &MediaTransport,
     ) {
         let Some((room, user_count_before, media_counts_before)) = self
             .with_current_room(room_id, |room| async move {
@@ -150,7 +150,7 @@ impl RoomManager {
                 let media_counts_before = room.media_counts().await;
                 room.test_api()
                     .lifecycle()
-                    .disconnect_users_without_transport_cleanup(user_ids, transport_adapter)
+                    .disconnect_users_without_transport_cleanup(user_ids, media_transport)
                     .await;
                 (room, user_count_before, media_counts_before)
             })

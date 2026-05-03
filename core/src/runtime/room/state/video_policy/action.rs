@@ -7,10 +7,10 @@
 use super::{input::ReceiverVideoRouteInput, projection::source_packet_gate_for_selector};
 use crate::runtime::{
     ConnectionId, UserId,
+    media_transport::{SourcePacketGate, TransportMediaId},
     source_model::{
         PolicyPauseReason, PublishedSourceId, ReceiverVideoBudgetDiagnostics, SourceSelector,
     },
-    transport_adapter::{SourcePacketGate, TransportMediaId},
 };
 
 /// Semantic decision for one receiver/source video route.

@@ -2,7 +2,7 @@
 //!
 //! This module turns live room state plus bounded event history into the
 //! summary, room, and user views served by `/internal/diagnostics/...`.
-//! It depend on `ObservabilityPort` rather than the full transport adapter so
+//! It depend on `ObservabilityPort` rather than the full media transport so
 //!  diagnostics stays a consumer of transport snapshots,
 //! not a peer that can mutate transport state.
 //!
@@ -22,8 +22,8 @@ use super::{
     },
 };
 use crate::runtime::{
+    media_transport::ObservabilityPort,
     room::{RoomManager, RuntimeRoomDirectorySnapshot},
-    transport_adapter::ObservabilityPort,
 };
 
 #[derive(Debug, Clone)]

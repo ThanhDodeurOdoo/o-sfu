@@ -15,11 +15,11 @@ use super::super::{
     state::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate, RoomState},
 };
 use crate::runtime::{
-    metrics::{self, BudgetSolverOutcome},
-    transport_adapter::{
+    media_transport::{
         ActiveSpeakerSource, ConsumerActivity, ConsumerPacketGateUpdate, MediaPort,
         ReceiverBandwidthSnapshot,
     },
+    metrics::{self, BudgetSolverOutcome},
 };
 
 /// Executes one source-policy refresh after pure room planning.
@@ -172,7 +172,7 @@ impl SourcePolicyEffectPlan {
                 source_transport_media_id = ?update.source_transport_media_id(),
                 consumer_transport_media_id = ?update.consumer_transport_media_id(),
                 route_active = update.route_active(),
-                "transport adapter failed to apply receiver video policy route activity"
+                "media transport failed to apply receiver video policy route activity"
             );
             return None;
         }
@@ -184,7 +184,7 @@ impl SourcePolicyEffectPlan {
             source_user_id = ?update.source_user_id(),
             source_transport_media_id = ?update.source_transport_media_id(),
             consumer_transport_media_id = ?update.consumer_transport_media_id(),
-            "transport adapter failed to request an adaptation keyframe refresh"
+            "media transport failed to request an adaptation keyframe refresh"
         );
         Some(update)
     }
@@ -264,7 +264,7 @@ impl SourcePolicyEffectPlan {
                 source_user_id = ?update.source_user_id(),
                 source_transport_media_id = ?update.source_transport_media_id(),
                 consumer_transport_media_id = ?update.consumer_transport_media_id(),
-                "transport adapter accepted adaptation keyframe refresh"
+                "media transport accepted adaptation keyframe refresh"
             );
         }
         accepted
@@ -294,7 +294,7 @@ impl SourcePolicyEffectPlan {
             policy_pause_reason = ?update.policy_pause_reason(),
             packet_gate = ?update.packet_gate(),
             request_keyframe = update.request_keyframe(),
-            "transport adapter accepted receiver-driven packet selection update"
+            "media transport accepted receiver-driven packet selection update"
         );
     }
 
@@ -304,7 +304,7 @@ impl SourcePolicyEffectPlan {
             source_user_id = ?update.source_user_id(),
             source_transport_media_id = ?update.source_transport_media_id(),
             consumer_transport_media_id = ?update.consumer_transport_media_id(),
-            "transport adapter rejected the receiver-driven packet selection update"
+            "media transport rejected the receiver-driven packet selection update"
         );
     }
 }

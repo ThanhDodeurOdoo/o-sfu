@@ -5,16 +5,16 @@ use crate::{
     MediaCodecFlags, RuntimeFeatureFlags,
     runtime::{
         diagnostics::DiagnosticsStore,
+        media_transport::{SourcePacketGate, TransportMediaId},
         metrics::RuntimeMetrics,
         recording::MediaTap,
-        transport_adapter::{SourcePacketGate, TransportMediaId},
     },
 };
 
 async fn publish_audio_and_camera(
     room: &Arc<super::super::Room>,
     user_id: &UserId,
-    transport_adapter: &MediaTransport,
+    media_transport: &MediaTransport,
 ) {
     assert!(
         room.test_api()
@@ -24,7 +24,7 @@ async fn publish_audio_and_camera(
                 StreamType::Audio,
                 MediaKind::Audio,
                 test_audio_rtp_parameters(),
-                transport_adapter,
+                media_transport,
             )
             .await
             .is_some()
@@ -37,7 +37,7 @@ async fn publish_audio_and_camera(
                 StreamType::Camera,
                 MediaKind::Video,
                 test_simulcast_video_rtp_parameters(),
-                transport_adapter,
+                media_transport,
             )
             .await
             .is_some()
@@ -419,7 +419,7 @@ async fn room_manager_lookup_by_uuid() {
 #[tokio::test]
 async fn room_manager_join_user_reports_missing_room() {
     let manager = RoomManager::for_test_with_admission_policy(RoomAdmissionPolicy::new(1));
-    let transport_adapter = MediaTransport::fake_for_testing();
+    let media_transport = MediaTransport::fake_for_testing();
     let (tx, _rx) = test_sender();
     let result = manager
         .join_session_for_test(
@@ -430,7 +430,7 @@ async fn room_manager_join_user_reports_missing_room() {
                 permissions: UserPermissions::default(),
                 sender: tx,
             },
-            &transport_adapter,
+            &media_transport,
         )
         .await;
     assert!(matches!(result, Err(RoomManagerJoinError::MissingRoom)));
@@ -439,7 +439,7 @@ async fn room_manager_join_user_reports_missing_room() {
 #[tokio::test]
 async fn manager_leave_user_removes_empty_room() {
     let manager = RoomManager::for_test_with_admission_policy(RoomAdmissionPolicy::new(1));
-    let transport_adapter = MediaTransport::fake_for_testing();
+    let media_transport = MediaTransport::fake_for_testing();
     let first_room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
@@ -454,7 +454,7 @@ async fn manager_leave_user_removes_empty_room() {
                 permissions: UserPermissions::default(),
                 sender: tx,
             },
-            &transport_adapter,
+            &media_transport,
         )
         .await;
     assert!(joined.is_ok());
@@ -467,7 +467,7 @@ async fn manager_leave_user_removes_empty_room() {
             &room_id,
             &UserId::Integer(1),
             connection_id,
-            &transport_adapter,
+            &media_transport,
         )
         .await;
 
@@ -481,7 +481,7 @@ async fn manager_leave_user_removes_empty_room() {
 #[tokio::test]
 async fn manager_disconnect_users_removes_empty_room() {
     let manager = RoomManager::for_test_with_admission_policy(RoomAdmissionPolicy::new(1));
-    let transport_adapter = MediaTransport::fake_for_testing();
+    let media_transport = MediaTransport::fake_for_testing();
     let first_room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
@@ -496,13 +496,13 @@ async fn manager_disconnect_users_removes_empty_room() {
                 permissions: UserPermissions::default(),
                 sender: tx,
             },
-            &transport_adapter,
+            &media_transport,
         )
         .await;
     assert!(joined.is_ok());
 
     manager
-        .disconnect_sessions_for_test(&room_id, &[UserId::Integer(1)], &transport_adapter)
+        .disconnect_sessions_for_test(&room_id, &[UserId::Integer(1)], &media_transport)
         .await;
 
     assert!(manager.get_by_uuid(&room_id).await.is_none());
@@ -530,7 +530,7 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
             metrics: Arc::clone(&metrics),
         },
     ));
-    let transport_adapter = MediaTransport::fake_for_testing();
+    let media_transport = MediaTransport::fake_for_testing();
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
@@ -545,7 +545,7 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
                 permissions: UserPermissions::default(),
                 sender: tx,
             },
-            &transport_adapter,
+            &media_transport,
         )
         .await;
     assert!(joined.is_ok());
@@ -555,7 +555,7 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
     let first_user_ids = [UserId::Integer(1)];
     let second_user_ids = [UserId::Integer(1)];
     let manager_ref = Arc::clone(&manager);
-    let transport_ref = transport_adapter.clone();
+    let transport_ref = media_transport.clone();
     let first_cleanup = async {
         manager_ref
             .disconnect_sessions_for_test(&room_id, &first_user_ids, &transport_ref)
@@ -563,7 +563,7 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
     };
     let second_cleanup = async {
         manager
-            .disconnect_sessions_for_test(&room_id, &second_user_ids, &transport_adapter)
+            .disconnect_sessions_for_test(&room_id, &second_user_ids, &media_transport)
             .await;
     };
 
@@ -593,7 +593,7 @@ async fn manager_metrics_track_live_rooms_and_users_without_replacement_drift() 
             metrics: Arc::clone(&metrics),
         },
     );
-    let transport_adapter = MediaTransport::fake_for_testing();
+    let media_transport = MediaTransport::fake_for_testing();
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
@@ -610,7 +610,7 @@ async fn manager_metrics_track_live_rooms_and_users_without_replacement_drift() 
                 permissions: UserPermissions::default(),
                 sender: first_tx,
             },
-            &transport_adapter,
+            &media_transport,
         )
         .await;
     assert!(first_join.is_ok());
@@ -626,14 +626,14 @@ async fn manager_metrics_track_live_rooms_and_users_without_replacement_drift() 
                 permissions: UserPermissions::default(),
                 sender: replacement_tx,
             },
-            &transport_adapter,
+            &media_transport,
         )
         .await;
     assert!(replacement_join.is_ok());
     assert_eq!(metrics.snapshot().active_users, 1);
 
     manager
-        .disconnect_sessions_for_test(&room_id, &[UserId::Integer(1)], &transport_adapter)
+        .disconnect_sessions_for_test(&room_id, &[UserId::Integer(1)], &media_transport)
         .await;
 
     let snapshot = metrics.snapshot();
@@ -659,7 +659,7 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
             metrics: Arc::clone(&metrics),
         },
     );
-    let transport_adapter = MediaTransport::fake_for_testing();
+    let media_transport = MediaTransport::fake_for_testing();
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
@@ -676,7 +676,7 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
                     permissions: UserPermissions::default(),
                     sender,
                 },
-                &transport_adapter,
+                &media_transport,
             )
             .await;
         assert!(joined.is_ok(), "user {raw_user_id} should join");
@@ -691,7 +691,7 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
                 StreamType::Camera,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
-                &transport_adapter,
+                &media_transport,
             )
             .await
             .is_some()
@@ -704,7 +704,7 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
     assert_eq!(snapshot.active_subscriptions, 1);
 
     manager
-        .disconnect_sessions_for_test(&room_id, &[UserId::Integer(1)], &transport_adapter)
+        .disconnect_sessions_for_test(&room_id, &[UserId::Integer(1)], &media_transport)
         .await;
 
     let snapshot = metrics.snapshot();
@@ -714,7 +714,7 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
     assert_eq!(snapshot.active_subscriptions, 0);
 
     manager
-        .disconnect_sessions_for_test(&room_id, &[UserId::Integer(2)], &transport_adapter)
+        .disconnect_sessions_for_test(&room_id, &[UserId::Integer(2)], &media_transport)
         .await;
 
     let snapshot = metrics.snapshot();
@@ -742,7 +742,7 @@ async fn manager_metrics_track_receiver_source_selection_updates() {
             metrics: Arc::clone(&metrics),
         },
     );
-    let transport_adapter = MediaTransport::fake_for_testing();
+    let media_transport = MediaTransport::fake_for_testing();
     let room = manager
         .serve_room(
             "issuer-source-selection",
@@ -773,7 +773,7 @@ async fn manager_metrics_track_receiver_source_selection_updates() {
                 StreamType::Camera,
                 MediaKind::Video,
                 test_simulcast_video_rtp_parameters(),
-                &transport_adapter,
+                &media_transport,
             )
             .await
             .is_some()
@@ -786,10 +786,10 @@ async fn manager_metrics_track_receiver_source_selection_updates() {
 #[tokio::test]
 async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
     let manager = RoomManager::for_test();
-    let transport_adapter = MediaTransport::fake_for_testing();
-    let fake = transport_adapter
+    let media_transport = MediaTransport::fake_for_testing();
+    let fake = media_transport
         .as_fake_adapter()
-        .expect("test expects the fake transport adapter");
+        .expect("test expects the fake media transport");
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
@@ -811,7 +811,7 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
         make_session_ready(&room, &UserId::Integer(raw_user_id)).await;
     }
     for raw_user_id in [1_i64, 2_i64] {
-        publish_audio_and_camera(&room, &UserId::Integer(raw_user_id), &transport_adapter).await;
+        publish_audio_and_camera(&room, &UserId::Integer(raw_user_id), &media_transport).await;
     }
     for receiver in &mut receivers {
         let _ = drain_outbound(receiver);
@@ -831,8 +831,8 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
     manager
         .sync_source_packet_selection_policies_for_runtime_ids(
             &BTreeSet::from([room.instance_id()]),
-            &transport_adapter,
-            &transport_adapter,
+            &media_transport,
+            &media_transport,
         )
         .await;
 

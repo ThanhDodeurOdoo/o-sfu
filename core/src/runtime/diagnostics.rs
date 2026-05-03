@@ -1,7 +1,7 @@
 pub use o_sfu_telemetry::diagnostics::*;
 use serde_json::{Value, json};
 
-use crate::runtime::{RoomInstanceId, rtc_adapter::TransportSessionHealth};
+use crate::runtime::{RoomInstanceId, rtc_engine::TransportSessionHealth};
 
 pub(crate) const fn diagnostics_room_instance_id(
     room_instance_id: RoomInstanceId,

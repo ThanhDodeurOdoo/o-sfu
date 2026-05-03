@@ -38,6 +38,7 @@ pub(super) use crate::{
             DISCONNECT_PATH, METRICS_PATH, NOOP_PATH, NoopResponse, RoomResponse, STATS_PATH,
             StatsResponse,
         },
+        media_transport::MediaTransport,
         metrics::RuntimeMetrics,
         recording::MediaTap,
         room::{
@@ -45,7 +46,6 @@ pub(super) use crate::{
             RoomManagerDeps, RoomRuntimePolicy, rtp_capabilities,
         },
         testing::build_test_runtime_state,
-        transport_adapter::MediaTransport,
     },
 };
 

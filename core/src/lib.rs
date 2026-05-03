@@ -18,7 +18,7 @@
 //!   [`PublishStageOutcome`], [`UnpublishOutcome`] and [`UserInfoRefresh`] for
 //!   caller-facing control decisions.
 //! - [`MediaTransport`] and [`RtcTransport`] as the runtime media transport
-//!   boundary over the concrete RTC adapter.
+//!   boundary over the concrete RTC engine.
 //! - the transport concern traits in [`transport`], especially
 //!   [`TransportFacade`] when a caller needs one backend with negotiation,
 //!   media, and observability capabilities, and the narrower port traits when a
@@ -105,10 +105,8 @@ pub use room::{
     SubscriptionUpdateOutcome, TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
 };
 pub use runtime::{
+    media_transport::{MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder},
     source_model::UploadLayerPolicyRole,
-    transport_adapter::{
-        MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,
-    },
 };
 pub use sfu::{
     MediaEndpointHealth, MediaSession, NegotiationOffer, OfferedMediaCapabilities, SfuCore,

@@ -16,14 +16,14 @@ use crate::{
             DiagnosticsPolicyPauseReason, DiagnosticsStore, DiagnosticsVideoLayoutRole,
             DiagnosticsVideoRoutePriority,
         },
-        metrics::RuntimeMetrics,
-        recording::MediaTap,
-        room::Room,
-        transport_adapter::{
+        media_transport::{
             MediaPort, MediaTransportDeps, NegotiationPort, RtcTransport, RtcTransportConfig,
             SessionBitrateLimits, SessionOffer, SessionPort, SourcePacketGate, TransportMediaId,
             TransportSessionKey, test_support::FakeWebRtcEvent,
         },
+        metrics::RuntimeMetrics,
+        recording::MediaTap,
+        room::Room,
     },
 };
 
@@ -1124,7 +1124,7 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
                 StreamType::Audio,
                 MediaKind::Audio,
                 test_audio_rtp_parameters(),
-                &scenario.transport_adapter,
+                &scenario.media_transport,
             )
             .await
             .is_some()
@@ -1162,7 +1162,7 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
         .room
         .transport_user_key(&scenario.publisher_user_id, connection_id);
     scenario
-        .transport_adapter
+        .media_transport
         .close_session(&transport_user_key)
         .await
         .expect("closing the publisher transport should succeed");
@@ -1174,7 +1174,7 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
                 &scenario.publisher_user_id,
                 connection_id,
                 StreamType::Audio,
-                &scenario.transport_adapter,
+                &scenario.media_transport,
             )
             .await,
         UnpublishOutcome::TransportCleanupFailed,
@@ -1428,17 +1428,17 @@ async fn user_replacement_purges_all_published_stream_mappings() {
 }
 
 #[tokio::test]
-async fn publish_track_releases_room_lock_while_waiting_on_transport_adapter() {
+async fn publish_track_releases_room_lock_while_waiting_on_media_transport() {
     let (room, _adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
-    let (fake_transport_adapter, _) = fake_adapter();
-    let fake = fake_transport_adapter
+    let (fake_media_transport, _) = fake_adapter();
+    let fake = fake_media_transport
         .as_fake_adapter()
-        .expect("expected fake transport adapter");
+        .expect("expected fake media transport");
     fake.set_publish_media_delay(Some(Duration::from_millis(200)));
 
     let publish_task = tokio::spawn({
         let room = Arc::clone(&room);
-        let adapter = fake_transport_adapter.clone();
+        let adapter = fake_media_transport.clone();
         async move {
             room.test_api()
                 .media()
@@ -1741,8 +1741,8 @@ async fn production_change_commits_user_state_before_transport_update_finishes()
 }
 
 #[tokio::test]
-async fn late_join_bootstrap_releases_room_lock_while_waiting_on_transport_adapter() {
-    let (room, transport_adapter, fake, mut publisher_rx, mut subscriber_rx) =
+async fn late_join_bootstrap_releases_room_lock_while_waiting_on_media_transport() {
+    let (room, media_transport, fake, mut publisher_rx, mut subscriber_rx) =
         setup_late_join_bootstrap_scenario().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
@@ -1754,7 +1754,7 @@ async fn late_join_bootstrap_releases_room_lock_while_waiting_on_transport_adapt
 
     let bootstrap_task = tokio::spawn({
         let room = Arc::clone(&room);
-        let adapter = transport_adapter.clone();
+        let adapter = media_transport.clone();
         async move {
             let _ = refresh_session_consumers(&room, &UserId::Integer(2), &adapter).await;
         }
@@ -1813,7 +1813,7 @@ async fn late_join_bootstrap_releases_room_lock_while_waiting_on_transport_adapt
 
 #[tokio::test]
 async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succeeds() {
-    let (room, transport_adapter, fake, mut publisher_rx, mut subscriber_rx) =
+    let (room, media_transport, fake, mut publisher_rx, mut subscriber_rx) =
         setup_late_join_bootstrap_scenario().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
@@ -1825,7 +1825,7 @@ async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succ
 
     let bootstrap_task = tokio::spawn({
         let room = Arc::clone(&room);
-        let adapter = transport_adapter.clone();
+        let adapter = media_transport.clone();
         async move {
             let _ = refresh_session_consumers(&room, &UserId::Integer(2), &adapter).await;
         }
@@ -1852,7 +1852,7 @@ async fn late_join_bootstrap_defers_consumer_commit_until_transport_consume_succ
 
 #[tokio::test]
 async fn late_join_bootstrap_cleans_up_transport_media_when_user_leaves_mid_consume() {
-    let (room, transport_adapter, fake, mut publisher_rx, mut subscriber_rx) =
+    let (room, media_transport, fake, mut publisher_rx, mut subscriber_rx) =
         setup_late_join_bootstrap_scenario().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
@@ -1864,7 +1864,7 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_user_leaves_mid_cons
 
     let bootstrap_task = tokio::spawn({
         let room = Arc::clone(&room);
-        let adapter = transport_adapter.clone();
+        let adapter = media_transport.clone();
         async move {
             let _ = refresh_session_consumers(&room, &UserId::Integer(2), &adapter).await;
         }
@@ -1904,7 +1904,7 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_user_leaves_mid_cons
 
 #[tokio::test]
 async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_cleanup() {
-    let (room, transport_adapter, fake, mut publisher_rx, mut subscriber_rx) =
+    let (room, media_transport, fake, mut publisher_rx, mut subscriber_rx) =
         setup_two_ready_users_with_fake().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
@@ -1913,7 +1913,7 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
 
     let publish_task = tokio::spawn({
         let room = Arc::clone(&room);
-        let adapter = transport_adapter.clone();
+        let adapter = media_transport.clone();
         async move {
             room.test_api()
                 .media()
@@ -1940,7 +1940,7 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
     })
     .await;
 
-    let _ = refresh_session_consumers(&room, &UserId::Integer(2), &transport_adapter).await;
+    let _ = refresh_session_consumers(&room, &UserId::Integer(2), &media_transport).await;
 
     assert!(
         publish_task
@@ -1982,7 +1982,7 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
             &UserId::Integer(1),
             test_connection_id(0),
             StreamType::Camera,
-            &transport_adapter
+            &media_transport
         )
         .await,
         UnpublishOutcome::Unpublished
@@ -2019,7 +2019,7 @@ async fn production_change_ignores_unknown_stream_type() {
 
 #[tokio::test]
 async fn client_capabilities_bootstrap_late_join_when_download_connected_first() {
-    let (room, transport_adapter, fake, mut publisher_rx, mut subscriber_rx) =
+    let (room, media_transport, fake, mut publisher_rx, mut subscriber_rx) =
         setup_late_join_bootstrap_scenario().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
@@ -2034,7 +2034,7 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
             &UserId::Integer(2),
             user_connection_id(&room, &UserId::Integer(2)).await,
             test_client_rtp_capabilities(),
-            &transport_adapter,
+            &media_transport,
         )
         .await
     );
@@ -2075,7 +2075,7 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
         }),
         "fresh bootstraps must not request a keyframe before the refresh answer lands"
     );
-    assert!(refresh_session_consumers(&room, &UserId::Integer(2), &transport_adapter).await);
+    assert!(refresh_session_consumers(&room, &UserId::Integer(2), &media_transport).await);
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
@@ -2090,7 +2090,7 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
 
 #[tokio::test]
 async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() {
-    let (room, transport_adapter, fake, mut publisher_rx, mut subscriber_rx) =
+    let (room, media_transport, fake, mut publisher_rx, mut subscriber_rx) =
         setup_late_join_bootstrap_scenario().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
@@ -2112,7 +2112,7 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
             &room,
             &UserId::Integer(2),
             user_connection_id(&room, &UserId::Integer(2)).await,
-            &transport_adapter,
+            &media_transport,
         )
         .await
     );
@@ -2147,7 +2147,7 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
         }),
         "fresh bootstraps must not request a keyframe before the refresh answer lands"
     );
-    assert!(refresh_session_consumers(&room, &UserId::Integer(2), &transport_adapter).await);
+    assert!(refresh_session_consumers(&room, &UserId::Integer(2), &media_transport).await);
     wait_for_fake_event(&fake, |event| {
         matches!(
             event,
@@ -2174,7 +2174,7 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
                 StreamType::Camera,
                 MediaKind::Video,
                 video_rtp_parameters_with_mid("cam-refresh-retry", 22_222),
-                &scenario.transport_adapter,
+                &scenario.media_transport,
             )
             .await
             .is_some()
@@ -2187,7 +2187,7 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
     assert_eq!(scenario.room.test_api().inspect().consumer_count().await, 1);
 
     let first_refresh_offer = scenario
-        .transport_adapter
+        .media_transport
         .create_session_renegotiation_offer(&scenario.subscriber_session_key)
         .await
         .expect("first subscriber refresh should stage an rtc offer");
@@ -2202,7 +2202,7 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
                 StreamType::Screen,
                 MediaKind::Video,
                 video_rtp_parameters_with_mid("screen-refresh-retry", 33_333),
-                &scenario.transport_adapter,
+                &scenario.media_transport,
             )
             .await
             .is_some()
@@ -2226,7 +2226,7 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
     );
 
     let second_refresh_offer = scenario
-        .transport_adapter
+        .media_transport
         .create_session_renegotiation_offer(&scenario.subscriber_session_key)
         .await
         .expect("retry should stage the deferred rtc offer");
@@ -2260,7 +2260,7 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
         .transport_user_key(&scenario.publisher_user_id, publisher_connection_id);
     let mut publisher_remote = build_remote_rtc(55_101);
     apply_offer_answer(
-        &scenario.transport_adapter,
+        &scenario.media_transport,
         &publisher_session_key,
         &mut publisher_remote,
         scenario.publisher_initial_offer.into_sdp(),
@@ -2268,7 +2268,7 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
     .await;
 
     let transport_media_id = scenario
-        .transport_adapter
+        .media_transport
         .publish_media(
             &publisher_session_key,
             MediaKind::Video,
@@ -2277,19 +2277,19 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
         .await
         .expect("protocol publish intent should stage a recv-only media line");
     let publish_offer = scenario
-        .transport_adapter
+        .media_transport
         .create_session_renegotiation_offer(&publisher_session_key)
         .await
         .expect("protocol publish should stage a follow-up offer");
     apply_offer_answer(
-        &scenario.transport_adapter,
+        &scenario.media_transport,
         &publisher_session_key,
         &mut publisher_remote,
         publish_offer.into_sdp(),
     )
     .await;
     let negotiated_parameters = scenario
-        .transport_adapter
+        .media_transport
         .negotiated_producer_parameters(&publisher_session_key, transport_media_id)
         .await
         .expect("answered protocol publish should expose negotiated producer parameters");
@@ -2308,7 +2308,7 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
                     transport_media_id,
                     consumable_rtp_parameters: negotiated_parameters,
                 },
-                &scenario.transport_adapter,
+                &scenario.media_transport,
             )
             .await
             .is_some()
@@ -2323,7 +2323,7 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
 
 struct RealRtcRefreshScenario {
     room: Arc<Room>,
-    transport_adapter: MediaTransport,
+    media_transport: MediaTransport,
     publisher_user_id: UserId,
     subscriber_user_id: UserId,
     publisher_initial_offer: SessionOffer,
@@ -2364,19 +2364,19 @@ async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario {
         )
         .await
         .expect("subscriber should join");
-    let transport_adapter = build_real_rtc_transport_adapter();
+    let media_transport = build_real_rtc_media_transport();
     let publisher_session_key =
         room.transport_user_key(&publisher_user_id, publisher_connection_id);
     let subscriber_session_key =
         room.transport_user_key(&subscriber_user_id, subscriber_connection_id);
 
     let publisher_initial_offer =
-        bootstrap_real_rtc_user(&transport_adapter, &publisher_session_key).await;
+        bootstrap_real_rtc_user(&media_transport, &publisher_session_key).await;
     let subscriber_initial_offer =
-        bootstrap_real_rtc_user(&transport_adapter, &subscriber_session_key).await;
+        bootstrap_real_rtc_user(&media_transport, &subscriber_session_key).await;
     let mut subscriber_remote = build_remote_rtc(55_100);
     apply_offer_answer(
-        &transport_adapter,
+        &media_transport,
         &subscriber_session_key,
         &mut subscriber_remote,
         subscriber_initial_offer.into_sdp(),
@@ -2388,7 +2388,7 @@ async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario {
             &publisher_user_id,
             publisher_connection_id,
             test_client_rtp_capabilities(),
-            &transport_adapter,
+            &media_transport,
         )
         .await,
         SessionNegotiationOutcome::Applied
@@ -2398,7 +2398,7 @@ async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario {
             &subscriber_user_id,
             subscriber_connection_id,
             test_client_rtp_capabilities(),
-            &transport_adapter,
+            &media_transport,
         )
         .await,
         SessionNegotiationOutcome::Applied
@@ -2406,7 +2406,7 @@ async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario {
 
     RealRtcRefreshScenario {
         room,
-        transport_adapter,
+        media_transport,
         publisher_user_id,
         subscriber_user_id,
         publisher_initial_offer,
@@ -2419,7 +2419,7 @@ async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario {
 
 async fn settle_refresh_offer(scenario: &mut RealRtcRefreshScenario, offer: SessionOffer) {
     apply_offer_answer(
-        &scenario.transport_adapter,
+        &scenario.media_transport,
         &scenario.subscriber_session_key,
         &mut scenario.subscriber_remote,
         offer.into_sdp(),
@@ -2431,7 +2431,7 @@ async fn settle_refresh_offer(scenario: &mut RealRtcRefreshScenario, offer: Sess
         .apply_session_refreshed(
             &scenario.subscriber_user_id,
             user_connection_id(&scenario.room, &scenario.subscriber_user_id).await,
-            &scenario.transport_adapter,
+            &scenario.media_transport,
         )
         .await;
 }
@@ -2964,7 +2964,7 @@ async fn staged_negotiated_publish_duplicate_race_keeps_one_staged_entry_and_one
     clippy::panic,
     reason = "the RTC room test fixture uses a fixed valid configuration and should fail loudly if it stops being valid"
 )]
-fn build_real_rtc_transport_adapter() -> MediaTransport {
+fn build_real_rtc_media_transport() -> MediaTransport {
     match RtcTransport::builder()
         .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -2988,10 +2988,10 @@ fn build_real_rtc_transport_adapter() -> MediaTransport {
 }
 
 async fn bootstrap_real_rtc_user(
-    transport_adapter: &MediaTransport,
+    media_transport: &MediaTransport,
     session_key: &TransportSessionKey,
 ) -> SessionOffer {
-    transport_adapter
+    media_transport
         .create_initial_session_offer(session_key)
         .await
         .expect("rtc user should produce an initial offer")

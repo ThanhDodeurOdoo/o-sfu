@@ -6,8 +6,7 @@ use crate::{
     PublishStageOutcome, RollbackStagedPublishOutcome, SessionNegotiationOutcome,
     SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
     runtime::{
-        ConnectionId, DownloadStates, StreamType, UserId, UserInfo,
-        transport_adapter::MediaTransport,
+        ConnectionId, DownloadStates, StreamType, UserId, UserInfo, media_transport::MediaTransport,
     },
     transport::{AppliedSessionAnswer, TransportAdapterError, TransportSessionKey},
 };
