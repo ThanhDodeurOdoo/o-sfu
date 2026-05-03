@@ -27,9 +27,6 @@ base64 = "0.22"
 bitflags = "2.6"
 futures-util = "0.3"
 hmac = "0.13"
-opentelemetry = { version = "0.31", features = ["trace"] }
-opentelemetry-otlp = { version = "0.31", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client"] }
-opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
 o-sfu-protocol = { path = "protocol" }
 o-sfu-cluster = { path = "cluster" }
 o-sfu-core = { path = "core" }
@@ -52,8 +49,6 @@ tokio = { version = "1.52", features = [
 tokio-tungstenite = "0.29"
 tokio-util = "0.7"
 tracing = "0.1"
-tracing-opentelemetry = "0.32"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 thiserror = "2.0"
 uuid = { version = "1.18", features = ["v4"] }
 subtle = "2.6"
@@ -157,7 +152,6 @@ tokio.workspace = true
 tokio-tungstenite.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 

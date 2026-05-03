@@ -21,15 +21,15 @@ otel-tracing = [
 anyhow.workspace = true
 o-sfu-model.workspace = true
 o-sfu-telemetry-macros = { path = "macros", optional = true }
-opentelemetry = { workspace = true, optional = true }
-opentelemetry-otlp = { workspace = true, optional = true }
-opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry = { version = "0.31", features = ["trace"], optional = true }
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client"], optional = true }
+opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"], optional = true }
 serde.workspace = true
 serde_json.workspace = true
 time.workspace = true
 tracing.workspace = true
-tracing-opentelemetry = { workspace = true, optional = true }
-tracing-subscriber.workspace = true
+tracing-opentelemetry = { version = "0.32", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 [lints]
 workspace = true
