@@ -452,6 +452,7 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
     );
 }
 
+#[tokio::test]
 async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish_intent_has_no_ssrc()
  {
     let adapter = RtcTransportShard::default();

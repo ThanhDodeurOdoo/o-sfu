@@ -3,7 +3,7 @@
 //! `test_support` owns the transport lifecycle bookkeeping and state mutators
 //! that exist only for deterministic adapter tests.
 
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(test)]
 pub(in crate::runtime::rtc_adapter) mod test_support;
 
 use std::{

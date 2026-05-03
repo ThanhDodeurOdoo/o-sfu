@@ -15,7 +15,7 @@ use super::{
 };
 use crate::runtime::{ConnectionId, UserId, UserInfo};
 
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(test)]
 mod test_support;
 
 #[derive(Debug)]

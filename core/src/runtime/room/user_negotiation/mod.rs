@@ -12,7 +12,7 @@
 //! the caller can bootstrap missing consumers exactly once when readiness
 //! crosses that boundary.
 
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(test)]
 mod test_support;
 
 /// Identifies which transport side just became usable for one user.

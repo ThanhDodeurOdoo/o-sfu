@@ -71,11 +71,6 @@
     clippy::return_self_not_must_use,
     reason = "The physical core split temporarily exposes former server-internal media APIs; the next room-media migration will narrow and document the stable public surface."
 )]
-#![allow(
-    dead_code,
-    reason = "The testing-transport feature exposes cross-crate test seams used by selected server tests; not every helper is constructed in every all-features target."
-)]
-
 mod ids;
 mod options;
 mod room;

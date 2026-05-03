@@ -14,7 +14,7 @@ use crate::runtime::{
     recording::{RecordingRouterObserver, RecordingService},
 };
 
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(test)]
 mod test_support;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

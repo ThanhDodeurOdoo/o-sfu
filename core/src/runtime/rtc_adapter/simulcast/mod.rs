@@ -300,7 +300,6 @@ mod tests {
             profile.default_layers(),
             common::default_layer_specs(VideoBitrateLimits::default())
         );
-        assert!(h264::H264SimulcastProfile::is_promoted());
         assert!(!h264::H264SimulcastProfile::rtx_allowed());
 
         for parameters in [

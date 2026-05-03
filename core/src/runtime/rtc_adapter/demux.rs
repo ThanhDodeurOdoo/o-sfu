@@ -212,7 +212,7 @@ impl RemoteAddrDemux {
             .map(|(session_key, addrs)| (session_key, addrs.as_slice()))
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub(super) fn session_addrs_for(
         &self,
         session_key: &TransportSessionKey,
@@ -222,14 +222,14 @@ impl RemoteAddrDemux {
             .map(Vec::as_slice)
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub(super) fn local_ice_ufrag_for(&self, session_key: &TransportSessionKey) -> Option<&str> {
         self.local_ice_ufrag_by_session
             .get(session_key)
             .map(String::as_str)
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub(super) fn remote_candidate_addrs_for(
         &self,
         session_key: &TransportSessionKey,

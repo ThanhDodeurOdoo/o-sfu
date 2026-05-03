@@ -51,7 +51,7 @@ use crate::{
     },
 };
 
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(test)]
 mod test_support;
 
 /// Registry for publish transactions that reserved transport media but are not
@@ -283,7 +283,7 @@ impl PendingPublishTransaction {
         )
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub(super) const fn transport_media_id(&self) -> TransportMediaId {
         self.reservation.transport_media_id()
     }

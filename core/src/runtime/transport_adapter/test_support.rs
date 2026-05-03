@@ -298,7 +298,7 @@ impl MediaTransport {
         }
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub(super) fn as_rtc_shard_set(&self) -> Option<&Arc<RtcTransportShardSet>> {
         match &self.backend {
             MediaTransportBackend::Rtc(transport) => Some(transport.shards()),

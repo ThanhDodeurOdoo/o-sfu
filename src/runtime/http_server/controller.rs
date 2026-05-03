@@ -9,7 +9,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tracing::{Instrument, info};
 
@@ -445,12 +444,7 @@ enum DiagnosticsAccess {
 fn ensure_diagnostics_access(headers: &HeaderMap, options: &HttpOptions) -> DiagnosticsAccess {
     if let Some(expected_token) = options.diagnostics.auth_token.as_deref() {
         return match authorization_token(headers) {
-            Some(actual_token)
-                if actual_token
-                    .as_bytes()
-                    .ct_eq(expected_token.as_bytes())
-                    .into() =>
-            {
+            Some(actual_token) if tokens_match(actual_token, expected_token) => {
                 DiagnosticsAccess::Allowed
             }
             _ => DiagnosticsAccess::Unauthorized,
@@ -463,6 +457,14 @@ fn ensure_diagnostics_access(headers: &HeaderMap, options: &HttpOptions) -> Diag
     } else {
         DiagnosticsAccess::Disabled
     }
+}
+
+fn tokens_match(actual: &str, expected: &str) -> bool {
+    let mut diff = actual.len() ^ expected.len();
+    for (actual, expected) in actual.bytes().zip(expected.bytes()) {
+        diff |= usize::from(actual ^ expected);
+    }
+    diff == 0
 }
 
 fn http_room_stats(snapshot: RuntimeRoomStatsSnapshot) -> RoomStatsResponse {

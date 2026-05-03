@@ -51,7 +51,6 @@ tokio-util = "0.7"
 tracing = "0.1"
 thiserror = "2.0"
 uuid = { version = "1.18", features = ["v4"] }
-subtle = "2.6"
 
 [workspace.lints.rust]
 rust_2018_idioms = { level = "warn", priority = -1 }
@@ -146,7 +145,6 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 str0m.workspace = true
-subtle.workspace = true
 time.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true

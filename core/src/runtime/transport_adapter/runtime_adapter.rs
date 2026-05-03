@@ -88,6 +88,7 @@ impl RtcTransport {
         }
     }
 
+    #[cfg(any(test, feature = "testing-transport"))]
     pub(super) fn shards(&self) -> &Arc<RtcTransportShardSet> {
         &self.shards
     }

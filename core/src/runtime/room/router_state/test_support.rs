@@ -27,10 +27,6 @@ impl RoomRouterState {
         )
     }
 
-    pub(in crate::runtime::room) fn user_count(&self) -> u64 {
-        u64::try_from(self.router.session_count()).unwrap_or(u64::MAX)
-    }
-
     pub(in crate::runtime::room) fn remove_session_mapping_for_test(&mut self, user_id: &UserId) {
         self.router_user_ids_by_user_id.remove(user_id);
     }

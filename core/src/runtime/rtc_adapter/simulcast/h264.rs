@@ -36,10 +36,6 @@ impl H264SimulcastProfile {
             .then(|| Self::new(video_bitrate_limits))
     }
 
-    pub(super) const fn is_promoted() -> bool {
-        true
-    }
-
     pub(super) const fn rtx_allowed() -> bool {
         false
     }

@@ -1,10 +1,10 @@
 use o_sfu_router::{MediaCapabilities as RouterRtpCapabilities, RouterId};
 
 use super::shared::{RoomState, SourceKey};
+#[cfg(test)]
+use crate::runtime::source_model::PublishedSourceId;
 use crate::runtime::{
-    ConnectionId, StreamType, UserId,
-    room::RoomUserPermissions,
-    source_model::{PublishedSourceId, SourceEncodingId},
+    ConnectionId, StreamType, UserId, room::RoomUserPermissions, source_model::SourceEncodingId,
     transport_adapter::TransportMediaId,
 };
 
@@ -88,6 +88,7 @@ impl RoomState {
             .map(|entry| entry.owner_user_id().clone())
     }
 
+    #[cfg(test)]
     pub(in crate::runtime::room) fn inspect_source_id_for_transport_media_id(
         &self,
         transport_media_id: TransportMediaId,

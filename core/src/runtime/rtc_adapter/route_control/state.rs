@@ -29,6 +29,7 @@ pub(in crate::runtime::rtc_adapter) struct RouteControlState {
 }
 
 impl RouteControlState {
+    #[cfg(test)]
     pub(in crate::runtime::rtc_adapter) fn decide_keyframe_request(
         &mut self,
         source_transport_media_id: TransportMediaId,
@@ -237,7 +238,7 @@ impl RouteControlState {
             .collect()
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub(in crate::runtime::rtc_adapter) fn set_packet_gate(
         &mut self,
         source_transport_media_id: TransportMediaId,

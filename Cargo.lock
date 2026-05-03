@@ -1083,7 +1083,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "str0m",
- "subtle",
  "thiserror",
  "time",
  "tokio",

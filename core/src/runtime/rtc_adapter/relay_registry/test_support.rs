@@ -1,14 +1,17 @@
 use std::sync::PoisonError;
 
+#[cfg(test)]
 use tokio::sync::mpsc;
 
+#[cfg(test)]
 use super::{
     ActiveRelayTarget, ForwardedPacket, InterNodeRelaySender, RELAY_MAILBOX_CAPACITY,
-    RelayEnqueueOutcome, RelayPacketMailbox, RelayRegistry, RelaySourceRegistration, RelayTargetId,
-    RelayTargetTransport,
+    RelayEnqueueOutcome, RelayPacketMailbox, RelayTargetId, RelayTargetTransport,
 };
+use super::{RelayRegistry, RelaySourceRegistration};
 use crate::runtime::transport_adapter::TransportMediaId;
 
+#[cfg(test)]
 impl RelayPacketMailbox {
     pub(in crate::runtime::rtc_adapter) fn channel_for_test()
     -> (Self, mpsc::Receiver<ForwardedPacket>) {
@@ -23,6 +26,7 @@ impl RelayPacketMailbox {
     }
 }
 
+#[cfg(test)]
 impl InterNodeRelaySender {
     pub(in crate::runtime::rtc_adapter) fn channel_for_test()
     -> (Self, mpsc::Receiver<ForwardedPacket>) {
@@ -37,6 +41,7 @@ impl InterNodeRelaySender {
     }
 }
 
+#[cfg(test)]
 impl RelayTargetTransport {
     pub(in crate::runtime::rtc_adapter) fn forward_packet(
         &self,
@@ -54,6 +59,7 @@ impl RelayTargetTransport {
     }
 }
 
+#[cfg(test)]
 impl ActiveRelayTarget<RelayTargetId, RelayTargetTransport> {
     pub(in crate::runtime::rtc_adapter) fn forward_packet(
         &self,
