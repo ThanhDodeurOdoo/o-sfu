@@ -48,7 +48,7 @@ jobs:
         run: cargo test -p o-sfu
 
       - name: Run integration and verification crate tests
-        run: cargo test -p o-sfu-tests
+        run: cargo test -p o-sfu-tests -p o-sfu-proofs
 
       - name: Run workspace doctests
         run: cargo test --workspace --doc

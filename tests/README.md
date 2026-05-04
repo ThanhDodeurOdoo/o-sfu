@@ -141,6 +141,12 @@ Run all proofs:
 cargo kani -p o-sfu-proofs
 ```
 
+Run the production-router drift check for the proof model:
+
+```bash
+cargo test -p o-sfu-proofs --release router::drift_tests
+```
+
 Run one harness:
 
 ```bash

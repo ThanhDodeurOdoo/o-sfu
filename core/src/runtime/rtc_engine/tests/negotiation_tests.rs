@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use o_sfu_rfc::webrtc;
 use o_sfu_router::{
-    MediaKind as RouterMediaKind, test_sample::sample_simulcast_video_rtp_parameters,
+    MediaKind as RouterMediaKind, test_support::rtp_samples::sample_simulcast_video_rtp_parameters,
 };
 use str0m::{
     Candidate, Rtc,

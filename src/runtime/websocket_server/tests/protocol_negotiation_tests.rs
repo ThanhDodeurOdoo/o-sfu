@@ -1,5 +1,5 @@
 use o_sfu_protocol::signaling::{ServerMessage, ServerRequest, TrackBinding};
-use o_sfu_router::{MediaKind, test_sample::sample_simulcast_video_rtp_parameters};
+use o_sfu_router::{MediaKind, test_support::rtp_samples::sample_simulcast_video_rtp_parameters};
 
 use super::fixtures::*;
 

@@ -4,7 +4,8 @@ use std::{
 };
 
 use o_sfu_router::{
-    MediaKind, test_sample::sample_video_rtp_parameters as router_sample_video_rtp_parameters,
+    MediaKind,
+    test_support::rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters,
 };
 use str0m::{Candidate, Rtc, change::SdpOffer};
 

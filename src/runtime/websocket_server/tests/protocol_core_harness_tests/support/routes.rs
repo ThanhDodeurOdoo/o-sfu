@@ -1,4 +1,4 @@
-use o_sfu_router::test_sample::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
+use o_sfu_router::test_support::rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
 use str0m::media::Mid;
 
 use super::*;

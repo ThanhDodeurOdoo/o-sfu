@@ -10,7 +10,7 @@ version.workspace = true
 [dependencies]
 o-sfu-protocol = { path = "../../protocol", features = ["verification-models"] }
 o-sfu-rfc = { path = "../../rfc" }
-o-sfu-router = { path = "../../router" }
+o-sfu-router = { path = "../../router", features = ["test-support"] }
 serde_json.workspace = true
 
 [lints]

@@ -11,7 +11,7 @@ use std::{collections::BTreeSet, sync::Arc};
 use o_sfu_router::{
     ConsumerCapability, MediaKind as RouterMediaKind, ProducerId, RouterId,
     derive_consumable_rtp_parameters,
-    test_sample::{
+    test_support::rtp_samples::{
         sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
         sample_video_rtp_parameters,
     },

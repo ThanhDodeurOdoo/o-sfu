@@ -3,6 +3,8 @@
     reason = "The verification model is only use by dedicated proof harnesses."
 )]
 
+#[cfg(test)]
+mod drift_tests;
 mod invariants;
 mod model;
 #[cfg(kani)]

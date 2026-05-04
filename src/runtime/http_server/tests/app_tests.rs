@@ -1,6 +1,6 @@
 use o_sfu_router::{
     MediaKind, MediaStream,
-    test_sample::{sample_client_rtp_capabilities, sample_video_rtp_parameters},
+    test_support::rtp_samples::{sample_client_rtp_capabilities, sample_video_rtp_parameters},
 };
 
 use super::fixtures::*;

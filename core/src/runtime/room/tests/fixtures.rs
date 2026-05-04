@@ -1,6 +1,6 @@
 pub(super) use std::{sync::Arc, time::Duration};
 
-use o_sfu_router::test_sample::{
+use o_sfu_router::test_support::rtp_samples::{
     sample_audio_rtp_parameters, sample_client_rtp_capabilities,
     sample_client_rtp_capabilities_without_video_rtx, sample_simulcast_video_rtp_parameters,
     sample_video_rtp_parameters,

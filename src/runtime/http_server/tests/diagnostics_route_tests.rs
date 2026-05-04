@@ -10,7 +10,9 @@ use std::net::SocketAddr;
 
 use o_sfu_router::{
     MediaKind, MediaStream,
-    test_sample::{sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters},
+    test_support::rtp_samples::{
+        sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
+    },
 };
 use serde_json::Value;
 
