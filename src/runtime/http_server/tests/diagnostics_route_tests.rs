@@ -683,7 +683,7 @@ async fn diagnostics_user_lookup_drops_room_teardown_entries() {
     let (tx, _rx) = mpsc::unbounded_channel();
     let join = test_state
         .room_manager
-        .join_session_for_test(
+        .join_user(
             &room_id,
             JoinUserRequest {
                 user_id: user_id.clone(),
@@ -701,7 +701,7 @@ async fn diagnostics_user_lookup_drops_room_teardown_entries() {
     assert!(
         test_state
             .room_manager
-            .leave_session_for_test(
+            .close_session(
                 &room_id,
                 &user_id,
                 connection_id,

@@ -422,7 +422,7 @@ async fn room_manager_join_user_reports_missing_room() {
     let media_transport = MediaTransport::fake_for_testing();
     let (tx, _rx) = test_sender();
     let result = manager
-        .join_session_for_test(
+        .join_user(
             "missing-room",
             JoinUserRequest {
                 user_id: UserId::Integer(1),
@@ -446,7 +446,7 @@ async fn manager_leave_user_removes_empty_room() {
     let room_id = first_room.uuid().to_owned();
     let (tx, _rx) = test_sender();
     let joined = manager
-        .join_session_for_test(
+        .join_user(
             &room_id,
             JoinUserRequest {
                 user_id: UserId::Integer(1),
@@ -463,7 +463,7 @@ async fn manager_leave_user_removes_empty_room() {
     };
 
     manager
-        .leave_session_for_test(
+        .close_session(
             &room_id,
             &UserId::Integer(1),
             connection_id,
@@ -488,7 +488,7 @@ async fn manager_disconnect_users_removes_empty_room() {
     let room_id = first_room.uuid().to_owned();
     let (tx, _rx) = test_sender();
     let joined = manager
-        .join_session_for_test(
+        .join_user(
             &room_id,
             JoinUserRequest {
                 user_id: UserId::Integer(1),
@@ -502,7 +502,7 @@ async fn manager_disconnect_users_removes_empty_room() {
     assert!(joined.is_ok());
 
     manager
-        .disconnect_sessions_for_test(&room_id, &[UserId::Integer(1)], &media_transport)
+        .disconnect_users(&room_id, &[UserId::Integer(1)], &media_transport)
         .await;
 
     assert!(manager.get_by_uuid(&room_id).await.is_none());
@@ -537,7 +537,7 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
     let room_id = room.uuid().to_owned();
     let (tx, _rx) = test_sender();
     let joined = manager
-        .join_session_for_test(
+        .join_user(
             &room_id,
             JoinUserRequest {
                 user_id: UserId::Integer(1),
@@ -558,12 +558,12 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
     let transport_ref = media_transport.clone();
     let first_cleanup = async {
         manager_ref
-            .disconnect_sessions_for_test(&room_id, &first_user_ids, &transport_ref)
+            .disconnect_users(&room_id, &first_user_ids, &transport_ref)
             .await;
     };
     let second_cleanup = async {
         manager
-            .disconnect_sessions_for_test(&room_id, &second_user_ids, &media_transport)
+            .disconnect_users(&room_id, &second_user_ids, &media_transport)
             .await;
     };
 
@@ -602,7 +602,7 @@ async fn manager_metrics_track_live_rooms_and_users_without_replacement_drift() 
 
     let (first_tx, _first_rx) = test_sender();
     let first_join = manager
-        .join_session_for_test(
+        .join_user(
             &room_id,
             JoinUserRequest {
                 user_id: UserId::Integer(1),
@@ -618,7 +618,7 @@ async fn manager_metrics_track_live_rooms_and_users_without_replacement_drift() 
 
     let (replacement_tx, _replacement_rx) = test_sender();
     let replacement_join = manager
-        .join_session_for_test(
+        .join_user(
             &room_id,
             JoinUserRequest {
                 user_id: UserId::Integer(1),
@@ -633,7 +633,7 @@ async fn manager_metrics_track_live_rooms_and_users_without_replacement_drift() 
     assert_eq!(metrics.snapshot().active_users, 1);
 
     manager
-        .disconnect_sessions_for_test(&room_id, &[UserId::Integer(1)], &media_transport)
+        .disconnect_users(&room_id, &[UserId::Integer(1)], &media_transport)
         .await;
 
     let snapshot = metrics.snapshot();
@@ -668,7 +668,7 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
     for raw_user_id in [1_i64, 2_i64] {
         let (sender, _receiver) = test_sender();
         let joined = manager
-            .join_session_for_test(
+            .join_user(
                 &room_id,
                 JoinUserRequest {
                     user_id: UserId::Integer(raw_user_id),
@@ -704,7 +704,7 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
     assert_eq!(snapshot.active_subscriptions, 1);
 
     manager
-        .disconnect_sessions_for_test(&room_id, &[UserId::Integer(1)], &media_transport)
+        .disconnect_users(&room_id, &[UserId::Integer(1)], &media_transport)
         .await;
 
     let snapshot = metrics.snapshot();
@@ -714,7 +714,7 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
     assert_eq!(snapshot.active_subscriptions, 0);
 
     manager
-        .disconnect_sessions_for_test(&room_id, &[UserId::Integer(2)], &media_transport)
+        .disconnect_users(&room_id, &[UserId::Integer(2)], &media_transport)
         .await;
 
     let snapshot = metrics.snapshot();
