@@ -48,6 +48,7 @@ pub(super) use routes::{
 pub(super) use rtc::reduced_capability_rtc;
 pub(super) use scenarios::{
     bob_update_info_and_deliver, close_peer_and_observe_recovery,
+    close_peer_and_wait_for_room_cleanup, consume_camera_publish_bootstrap,
     publish_camera_and_bootstrap_subscriber, recover_peer_with_latest_info,
     recover_subscriber_and_replay_track, setup_fake_protocol_peers, setup_protocol_recovery_peers,
     setup_real_rtc_protocol_peers,

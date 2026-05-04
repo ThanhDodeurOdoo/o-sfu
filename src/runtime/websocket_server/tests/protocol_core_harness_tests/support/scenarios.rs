@@ -19,6 +19,14 @@ pub(crate) async fn publish_camera_and_bootstrap_subscriber(
         publisher.read_server_frame().await.is_some(),
         "{renegotiation_context}"
     );
+    consume_camera_publish_bootstrap(subscriber, publisher_user_id, snapshot_context).await
+}
+
+pub(crate) async fn consume_camera_publish_bootstrap(
+    subscriber: &mut ProtocolHarnessPeer,
+    publisher_user_id: &UserId,
+    snapshot_context: &str,
+) -> Option<TrackBinding> {
     let track_snapshot = read_track_snapshot(subscriber).await;
     assert!(track_snapshot.is_some(), "{snapshot_context}");
     let track_snapshot = track_snapshot?;
@@ -200,6 +208,30 @@ pub(crate) async fn close_peer_and_observe_recovery(
     bob.observe_close(1011).await?;
     alice.read_server_frame().await?;
     Some(())
+}
+
+pub(crate) async fn close_peer_and_wait_for_room_cleanup(
+    peer: &mut ProtocolHarnessPeer,
+    room: &Arc<Room>,
+    user_id: &UserId,
+) -> Option<()> {
+    let connection_id = room
+        .test_api()
+        .inspect()
+        .user_connection_id(user_id)
+        .await?;
+    peer.websocket.as_mut()?.close(None).await.ok()?;
+    peer.websocket = None;
+    timeout(Duration::from_secs(1), async {
+        loop {
+            if !room.has_connection(user_id, connection_id).await {
+                return;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .ok()
 }
 
 pub(crate) async fn recover_peer_with_latest_info(

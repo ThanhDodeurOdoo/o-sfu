@@ -370,7 +370,7 @@ async fn protocol_handshake_uses_answer_derived_client_capabilities_for_user_sta
 
 #[tokio::test]
 async fn protocol_core_publish_queues_follow_up_renegotiation_until_first_answer_lands() {
-    let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
+    let Some((_server, room, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
         "issuer-protocol-rtc-publish-queue",
         UserId::Integer(73),
         UserId::Integer(74),
@@ -415,18 +415,15 @@ async fn protocol_core_publish_queues_follow_up_renegotiation_until_first_answer
         alice.answer_next_negotiation().await.is_some(),
         "publisher should answer the first queued negotiation"
     );
-    let Some(first_track_bindings) = read_track_snapshot(&mut bob).await else {
-        return;
-    };
-    assert_eq!(first_track_bindings.len(), 1);
-    assert_track_snapshot_contains(
-        &first_track_bindings,
-        &ProtocolSessionId::Integer(73),
-        ProtocolStreamType::Camera,
-    );
     assert!(
-        bob.read_server_frame().await.is_some(),
-        "subscriber should receive the first renegotiation request after the initial publish commit"
+        consume_camera_publish_bootstrap(
+            &mut bob,
+            &ProtocolSessionId::Integer(73),
+            "subscriber should receive the initial camera track snapshot",
+        )
+        .await
+        .is_some(),
+        "subscriber should consume the committed camera publish bootstrap"
     );
 
     assert!(
@@ -460,6 +457,18 @@ async fn protocol_core_publish_queues_follow_up_renegotiation_until_first_answer
     assert!(
         bob.read_server_frame().await.is_some(),
         "subscriber should receive the follow-up renegotiation request for the queued publish"
+    );
+    assert!(
+        close_peer_and_wait_for_room_cleanup(&mut alice, &room, &UserId::Integer(73))
+            .await
+            .is_some(),
+        "publisher websocket should close cleanly before the test server is dropped"
+    );
+    assert!(
+        close_peer_and_wait_for_room_cleanup(&mut bob, &room, &UserId::Integer(74))
+            .await
+            .is_some(),
+        "subscriber websocket should close cleanly before the test server is dropped"
     );
 }
 
