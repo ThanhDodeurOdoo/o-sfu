@@ -8,8 +8,10 @@
 
 mod bootstrap_state_tests;
 mod fixtures;
+mod forwarding_planner_tests;
 mod lifecycle_tests;
 mod media_flow_tests;
 mod negotiation_tests;
 mod parsing;
+mod relay_registry_tests;
 mod shared_payload_tests;
