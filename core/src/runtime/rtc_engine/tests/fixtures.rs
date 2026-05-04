@@ -135,7 +135,10 @@ pub(super) async fn prepare_transport_session(
     adapter: &RtcTransportShard,
     session_key: &TransportSessionKey,
 ) -> Result<SessionOffer, TransportAdapterError> {
-    adapter.create_initial_session_offer(session_key).await
+    adapter
+        .negotiation()
+        .create_initial_session_offer(session_key)
+        .await
 }
 
 pub(super) fn set_transport_health(
@@ -235,22 +238,6 @@ pub(super) async fn observe_audio_activity(
     adapter
         .debug_observe_audio_activity(transport_media_id, voice_activity, audio_level_dbov, now)
         .await;
-}
-
-pub(super) fn activate_relay_route(
-    source_adapter: &RtcTransportShard,
-    source_transport_media_id: TransportMediaId,
-    target_adapter: &RtcTransportShard,
-) -> Result<(), TransportAdapterError> {
-    source_adapter.debug_activate_relay_route(source_transport_media_id, target_adapter)
-}
-
-pub(super) fn deactivate_relay_route(
-    source_adapter: &RtcTransportShard,
-    source_transport_media_id: TransportMediaId,
-    target_adapter: &RtcTransportShard,
-) {
-    source_adapter.debug_deactivate_relay_route(source_transport_media_id, target_adapter);
 }
 
 pub(super) fn relay_target_count_for_source(

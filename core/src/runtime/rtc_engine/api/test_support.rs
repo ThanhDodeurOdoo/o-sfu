@@ -4,26 +4,23 @@ use std::{
     time::Instant,
 };
 
-use o_sfu_router::MediaStream as RouterRtpParameters;
-use str0m::media::{MediaKind, Mid};
+use str0m::media::Mid;
 use tokio::sync::oneshot;
 
 use super::{
     super::{
-        commands::RemoteSourceControl,
         state::TransportSessionHealth,
         test_support::{DebugRouteEntry, DebugRtcWorkerCommand},
     },
-    facade::{RtcTransportMediaFacade, RtcTransportSessionFacade, RtcTransportShard},
+    facade::RtcTransportShard,
 };
 use crate::{
     MediaCodecFlags, RtcPortRange,
     runtime::{
         diagnostics::DiagnosticsStore,
         media_transport::{
-            AppliedSessionAnswer, MediaTransportDeps, RtcTransportConfig, SessionBitrateLimits,
-            SessionOffer, SourcePolicySignal, TransportAdapterError, TransportMediaId,
-            TransportSessionKey,
+            MediaTransportDeps, RtcTransportConfig, SessionBitrateLimits, SourcePolicySignal,
+            TransportMediaId, TransportSessionKey,
         },
         metrics::{self, RuntimeMetrics},
         packet_sink_registry::RoomPacketSinkRegistry as MediaTap,
@@ -31,152 +28,6 @@ use crate::{
 };
 
 impl RtcTransportShard {
-    pub async fn create_initial_session_offer(
-        &self,
-        session_key: &TransportSessionKey,
-    ) -> Result<SessionOffer, TransportAdapterError> {
-        self.negotiation()
-            .create_initial_session_offer(session_key)
-            .await
-    }
-
-    pub async fn create_session_renegotiation_offer(
-        &self,
-        session_key: &TransportSessionKey,
-    ) -> Result<SessionOffer, TransportAdapterError> {
-        self.negotiation()
-            .create_session_renegotiation_offer(session_key)
-            .await
-    }
-
-    pub async fn apply_session_answer(
-        &self,
-        session_key: &TransportSessionKey,
-        answer_sdp: &str,
-    ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-        self.negotiation()
-            .apply_session_answer(session_key, answer_sdp)
-            .await
-    }
-
-    pub async fn close_session(
-        &self,
-        session_key: &TransportSessionKey,
-    ) -> Result<(), TransportAdapterError> {
-        self.users().close_session(session_key).await
-    }
-
-    pub async fn remove_media(
-        &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-    ) -> Result<(), TransportAdapterError> {
-        self.media()
-            .remove_media(session_key, transport_media_id)
-            .await
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub async fn negotiated_producer_parameters(
-        &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-    ) -> Result<RouterRtpParameters, TransportAdapterError> {
-        self.media()
-            .negotiated_producer_parameters(session_key, transport_media_id)
-            .await
-    }
-
-    pub async fn add_recv_media(
-        &self,
-        session_key: &TransportSessionKey,
-        media_kind: MediaKind,
-        rtp_parameters: &RouterRtpParameters,
-    ) -> Result<TransportMediaId, TransportAdapterError> {
-        self.media()
-            .add_recv_media(session_key, media_kind, rtp_parameters)
-            .await
-    }
-
-    pub async fn add_send_media(
-        &self,
-        consumer_session_key: &TransportSessionKey,
-        media_kind: MediaKind,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        remote_source_control: Option<RemoteSourceControl>,
-        consumer_rtp_parameters: &RouterRtpParameters,
-    ) -> Result<TransportMediaId, TransportAdapterError> {
-        self.media()
-            .add_send_media(
-                consumer_session_key,
-                media_kind,
-                source_session_key,
-                source_transport_media_id,
-                remote_source_control,
-                consumer_rtp_parameters,
-            )
-            .await
-    }
-
-    pub async fn set_producer_active(
-        &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-        active: bool,
-    ) -> Result<(), TransportAdapterError> {
-        self.media()
-            .set_producer_active(session_key, transport_media_id, active)
-            .await
-    }
-
-    pub async fn set_consumer_active(
-        &self,
-        consumer_session_key: &TransportSessionKey,
-        consumer_transport_media_id: TransportMediaId,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        active: bool,
-    ) -> Result<(), TransportAdapterError> {
-        self.media()
-            .set_consumer_active(
-                consumer_session_key,
-                consumer_transport_media_id,
-                source_session_key,
-                source_transport_media_id,
-                active,
-            )
-            .await
-    }
-
-    pub fn activate_relay_route(
-        &self,
-        source_transport_media_id: TransportMediaId,
-        target: &Self,
-    ) -> Result<(), TransportAdapterError> {
-        self.media()
-            .activate_relay_route(source_transport_media_id, target)
-    }
-
-    pub fn deactivate_relay_route(
-        &self,
-        source_transport_media_id: TransportMediaId,
-        target: &Self,
-    ) {
-        self.media()
-            .deactivate_relay_route(source_transport_media_id, target);
-    }
-
-    pub fn set_relay_route_active(
-        &self,
-        source_transport_media_id: TransportMediaId,
-        target: &Self,
-        active: bool,
-    ) {
-        self.media()
-            .set_relay_route_active(source_transport_media_id, target, active);
-    }
-
     pub fn debug_set_session_transport_health(
         &self,
         session_key: &TransportSessionKey,
@@ -386,22 +237,6 @@ impl RtcTransportShard {
             .await;
     }
 
-    pub fn debug_activate_relay_route(
-        &self,
-        source_transport_media_id: TransportMediaId,
-        target: &Self,
-    ) -> Result<(), TransportAdapterError> {
-        self.activate_relay_route(source_transport_media_id, target)
-    }
-
-    pub fn debug_deactivate_relay_route(
-        &self,
-        source_transport_media_id: TransportMediaId,
-        target: &Self,
-    ) {
-        self.deactivate_relay_route(source_transport_media_id, target);
-    }
-
     pub fn debug_relay_target_count_for_source(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -416,29 +251,6 @@ impl RtcTransportShard {
     ) -> usize {
         self.relay_registry
             .active_target_count_for_source(source_transport_media_id)
-    }
-}
-
-impl RtcTransportSessionFacade<'_> {
-    pub async fn close_session(
-        self,
-        session_key: &TransportSessionKey,
-    ) -> Result<(), TransportAdapterError> {
-        let _ = self.close_session_with_outcome(session_key).await?;
-        Ok(())
-    }
-}
-
-impl RtcTransportMediaFacade<'_> {
-    pub async fn remove_media(
-        self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-    ) -> Result<(), TransportAdapterError> {
-        let _ = self
-            .remove_media_with_outcome(session_key, transport_media_id)
-            .await?;
-        Ok(())
     }
 }
 

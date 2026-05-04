@@ -26,12 +26,21 @@ async fn rtc_metrics_track_live_transport_users_without_double_counting() {
     assert_eq!(adapter.metrics.snapshot().active_transport_users, 1);
 
     assert!(matches!(
-        adapter.create_initial_session_offer(&session_key).await,
+        adapter
+            .negotiation()
+            .create_initial_session_offer(&session_key)
+            .await,
         Err(TransportAdapterError::InvalidInput)
     ));
     assert_eq!(adapter.metrics.snapshot().active_transport_users, 1);
 
-    assert!(adapter.close_session(&session_key).await.is_ok());
+    assert!(
+        adapter
+            .users()
+            .close_session_with_outcome(&session_key)
+            .await
+            .is_ok()
+    );
     let snapshot = adapter.metrics.snapshot();
     assert_eq!(snapshot.active_transport_users, 0);
     assert_eq!(snapshot.transport_user_lifetime_le_1_second, 1);
@@ -47,6 +56,7 @@ async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
     assert!(bootstrap_result.is_ok());
 
     let transport_media_id = adapter
+        .media()
         .add_recv_media(&session_key, Str0mMediaKind::Audio, &rtp_parameters)
         .await;
     assert!(transport_media_id.is_ok());
@@ -72,6 +82,7 @@ async fn rtc_session_bootstrap_applies_configured_outgoing_bitrate_cap() {
 
     assert!(
         adapter
+            .negotiation()
             .create_initial_session_offer(&session_key)
             .await
             .is_ok()
@@ -95,6 +106,7 @@ async fn rtc_recv_media_applies_configured_incoming_bitrate_cap() {
     );
     assert!(
         adapter
+            .media()
             .add_recv_media(&session_key, Str0mMediaKind::Audio, &rtp_parameters)
             .await
             .is_ok()
@@ -125,6 +137,7 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
     );
 
     let source_media_id = adapter
+        .media()
         .add_recv_media(
             &producer_session_key,
             Str0mMediaKind::Audio,
@@ -137,6 +150,7 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
     };
 
     let consumer_media_id = adapter
+        .media()
         .add_send_media(
             &consumer_session_key,
             Str0mMediaKind::Audio,
@@ -195,6 +209,7 @@ async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate
     }
 
     let source_media_id = adapter
+        .media()
         .add_recv_media(
             &producer_session_key,
             Str0mMediaKind::Video,
@@ -204,6 +219,7 @@ async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate
         .expect("producer media should register");
 
     let _first_consumer_media_id = adapter
+        .media()
         .add_send_media(
             &first_consumer_session_key,
             Str0mMediaKind::Video,
@@ -221,6 +237,7 @@ async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate
     assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
 
     let _second_consumer_media_id = adapter
+        .media()
         .add_send_media(
             &second_consumer_session_key,
             Str0mMediaKind::Video,
@@ -255,6 +272,7 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
     }
 
     let source_media_id = adapter
+        .media()
         .add_recv_media(
             &producer_session_key,
             Str0mMediaKind::Video,
@@ -264,6 +282,7 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
         .expect("producer media should register");
 
     let consumer_media_id = adapter
+        .media()
         .add_send_media(
             &consumer_session_key,
             Str0mMediaKind::Video,
@@ -337,6 +356,7 @@ async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
     }
 
     let source_media_id = adapter
+        .media()
         .add_recv_media(
             &producer_session_key,
             Str0mMediaKind::Video,
@@ -346,6 +366,7 @@ async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
         .expect("producer media should register");
 
     let consumer_media_id = adapter
+        .media()
         .add_send_media(
             &consumer_session_key,
             Str0mMediaKind::Video,
@@ -392,6 +413,7 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
     );
 
     let source_media_id = adapter
+        .media()
         .add_recv_media(
             &producer_session_key,
             Str0mMediaKind::Video,
@@ -404,6 +426,7 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
     };
 
     let consumer_media_id = adapter
+        .media()
         .add_send_media(
             &consumer_session_key,
             Str0mMediaKind::Video,
@@ -420,12 +443,14 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
 
     assert!(
         adapter
+            .media()
             .set_producer_active(&producer_session_key, source_media_id, false)
             .await
             .is_ok()
     );
     assert!(
         adapter
+            .media()
             .set_consumer_active(
                 &consumer_session_key,
                 consumer_media_id,
@@ -464,6 +489,7 @@ async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
             .is_ok()
     );
     let transport_media_id = adapter
+        .media()
         .add_recv_media(&session_key, Str0mMediaKind::Video, &rtp_parameters)
         .await
         .expect("should declare recv media");
@@ -501,6 +527,7 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
             .is_ok()
     );
     let transport_media_id = adapter
+        .media()
         .add_recv_media(&session_key, Str0mMediaKind::Audio, &rtp_parameters)
         .await
         .expect("should declare recv media");
@@ -535,6 +562,7 @@ async fn rtc_incoming_bitrate_snapshot_ignores_closed_sessions() {
             .is_ok()
     );
     let transport_media_id = adapter
+        .media()
         .add_recv_media(&session_key, Str0mMediaKind::Video, &rtp_parameters)
         .await
         .expect("should declare recv media");
@@ -554,7 +582,13 @@ async fn rtc_incoming_bitrate_snapshot_ignores_closed_sessions() {
         960
     );
 
-    assert!(adapter.close_session(&session_key).await.is_ok());
+    assert!(
+        adapter
+            .users()
+            .close_session_with_outcome(&session_key)
+            .await
+            .is_ok()
+    );
 
     let snapshot = adapter.transport_bitrate_snapshot(slice::from_ref(&session_key));
     assert_eq!(snapshot.total, 0);
@@ -578,6 +612,7 @@ async fn rtc_active_speaker_source_snapshot_orders_recent_audio_sources() {
     }
 
     let first_media_id = adapter
+        .media()
         .add_recv_media(
             &first_session_key,
             Str0mMediaKind::Audio,
@@ -586,6 +621,7 @@ async fn rtc_active_speaker_source_snapshot_orders_recent_audio_sources() {
         .await
         .expect("first audio media should register");
     let second_media_id = adapter
+        .media()
         .add_recv_media(
             &second_session_key,
             Str0mMediaKind::Audio,
@@ -628,6 +664,7 @@ async fn rtc_active_speaker_deadline_tracks_the_current_hold_window() {
     );
 
     let media_id = adapter
+        .media()
         .add_recv_media(&session_key, Str0mMediaKind::Audio, &rtp_parameters)
         .await
         .expect("audio media should register");
@@ -647,13 +684,16 @@ async fn rtc_active_speaker_deadline_tracks_the_current_hold_window() {
 }
 
 #[tokio::test]
-async fn rtc_debug_relay_route_helpers_register_and_remove_target_mailboxes() {
+async fn rtc_relay_route_facade_registers_and_removes_target_mailboxes() {
     let source_adapter = RtcTransportShard::default();
     let target_adapter = RtcTransportShard::default();
     let source_transport_media_id = TransportMediaId::new(91);
 
     assert!(
-        activate_relay_route(&source_adapter, source_transport_media_id, &target_adapter,).is_ok()
+        source_adapter
+            .media()
+            .activate_relay_route(source_transport_media_id, &target_adapter)
+            .is_ok()
     );
     assert_eq!(
         relay_target_count_for_source(&source_adapter, source_transport_media_id),
@@ -664,13 +704,17 @@ async fn rtc_debug_relay_route_helpers_register_and_remove_target_mailboxes() {
         0
     );
 
-    source_adapter.set_relay_route_active(source_transport_media_id, &target_adapter, true);
+    source_adapter
+        .media()
+        .set_relay_route_active(source_transport_media_id, &target_adapter, true);
     assert_eq!(
         active_relay_target_count_for_source(&source_adapter, source_transport_media_id),
         1
     );
 
-    deactivate_relay_route(&source_adapter, source_transport_media_id, &target_adapter);
+    source_adapter
+        .media()
+        .deactivate_relay_route(source_transport_media_id, &target_adapter);
     assert_eq!(
         relay_target_count_for_source(&source_adapter, source_transport_media_id),
         0

@@ -110,7 +110,13 @@ async fn rtc_transport_close_session_allows_recreating_the_initial_offer() {
             .await
             .is_ok()
     );
-    assert_eq!(adapter.close_session(&session_key).await, Ok(()));
+    assert!(
+        adapter
+            .users()
+            .close_session_with_outcome(&session_key)
+            .await
+            .is_ok()
+    );
     assert!(
         prepare_transport_session(&adapter, &session_key)
             .await
@@ -141,7 +147,13 @@ async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
         Some(super::super::state::TransportSessionHealth::Disconnected)
     );
 
-    assert_eq!(adapter.close_session(&session_key).await, Ok(()));
+    assert!(
+        adapter
+            .users()
+            .close_session_with_outcome(&session_key)
+            .await
+            .is_ok()
+    );
     assert_eq!(adapter.session_transport_health(&session_key), None);
     let metrics_snapshot = adapter.metrics.snapshot();
     assert_eq!(metrics_snapshot.connected_transport_users, 0);
@@ -165,7 +177,13 @@ async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
         Some(session_key.clone())
     );
 
-    assert_eq!(adapter.close_session(&session_key).await, Ok(()));
+    assert!(
+        adapter
+            .users()
+            .close_session_with_outcome(&session_key)
+            .await
+            .is_ok()
+    );
 
     assert_eq!(remote_addr_owner(&adapter, source_addr).await, None);
     assert!(!has_any_remote_addr_session(&adapter).await);
@@ -183,7 +201,13 @@ async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
     sleep(Duration::from_millis(5)).await;
     assert!(adapter.packet_loop_started());
 
-    assert_eq!(adapter.close_session(&first_session_key).await, Ok(()));
+    assert!(
+        adapter
+            .users()
+            .close_session_with_outcome(&first_session_key)
+            .await
+            .is_ok()
+    );
     assert!(!adapter.packet_loop_started());
     assert!(matches!(adapter.worker_handle(), Ok(None)));
 
@@ -219,7 +243,13 @@ async fn rtc_transport_distinguishes_same_session_id_across_channels() {
         &second_session_key,
         super::super::state::TransportSessionHealth::Disconnected,
     );
-    assert_eq!(adapter.close_session(&first_session_key).await, Ok(()));
+    assert!(
+        adapter
+            .users()
+            .close_session_with_outcome(&first_session_key)
+            .await
+            .is_ok()
+    );
     assert_eq!(
         adapter.session_transport_health(&second_session_key),
         Some(super::super::state::TransportSessionHealth::Disconnected)
@@ -244,7 +274,12 @@ async fn rtc_transport_concurrent_initial_offers_deliver_all_worker_responses() 
         Duration::from_secs(1),
         join_all(session_keys.into_iter().map(|session_key| {
             let adapter = Arc::clone(&adapter);
-            async move { adapter.create_initial_session_offer(&session_key).await }
+            async move {
+                adapter
+                    .negotiation()
+                    .create_initial_session_offer(&session_key)
+                    .await
+            }
         })),
     )
     .await;
@@ -282,8 +317,12 @@ async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() 
 
     let close_results = timeout(Duration::from_secs(1), async {
         tokio::join!(
-            adapter.close_session(&first_session_key),
-            adapter.close_session(&second_session_key),
+            adapter
+                .users()
+                .close_session_with_outcome(&first_session_key),
+            adapter
+                .users()
+                .close_session_with_outcome(&second_session_key),
         )
     })
     .await;
@@ -291,8 +330,8 @@ async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() 
     let Ok((first_close, second_close)) = close_results else {
         return;
     };
-    assert_eq!(first_close, Ok(()));
-    assert_eq!(second_close, Ok(()));
+    assert!(first_close.is_ok());
+    assert!(second_close.is_ok());
 
     sleep(Duration::from_millis(5)).await;
     assert!(!adapter.packet_loop_started());
