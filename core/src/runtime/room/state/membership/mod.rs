@@ -183,7 +183,7 @@ impl RoomState {
                 presence: UserPresence::default(),
                 layout: UserLayout::default(),
                 negotiation: UserNegotiation::default(),
-                desired_download_states: BTreeMap::new(),
+                desired_source_subscriptions: BTreeMap::new(),
                 parsed_client_rtp_capabilities: None,
                 connection_id,
                 sender,

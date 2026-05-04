@@ -21,9 +21,15 @@ use super::{
         DiagnosticsUserView,
     },
 };
-use crate::runtime::{
-    media_transport::ObservabilityPort,
-    room::{RoomManager, RuntimeRoomDirectorySnapshot},
+use crate::{
+    application::stream_catalog::{
+        AUDIO_STREAM_LABEL, CAMERA_STREAM_LABEL, SCREEN_STREAM_LABEL,
+        diagnostics_bitrate_for_stream_id,
+    },
+    runtime::{
+        media_transport::ObservabilityPort,
+        room::{RoomManager, RuntimeRoomDirectorySnapshot},
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -220,15 +226,24 @@ fn user_summaries(detail: &DiagnosticsRoomDetail) -> Vec<DiagnosticsUserSummary>
         .map(|user| {
             let bitrate = &user.transport.quality_summary.current_incoming_bitrate;
             DiagnosticsUserSummary {
-                audio_incoming_bitrate_bps: bitrate.audio,
-                camera_incoming_bitrate_bps: bitrate.camera,
+                audio_incoming_bitrate_bps: diagnostics_bitrate_for_stream_id(
+                    &bitrate.by_stream_bps,
+                    AUDIO_STREAM_LABEL,
+                ),
+                camera_incoming_bitrate_bps: diagnostics_bitrate_for_stream_id(
+                    &bitrate.by_stream_bps,
+                    CAMERA_STREAM_LABEL,
+                ),
                 connection_id: user.transport.connection_id,
                 health: user.transport.health.clone(),
                 incoming_bitrate_bps: bitrate.total,
                 media_worker_id: user.transport.media_worker_id,
                 publication_count: user.publications.len(),
                 room_id: detail.summary.uuid.clone(),
-                screen_incoming_bitrate_bps: bitrate.screen,
+                screen_incoming_bitrate_bps: diagnostics_bitrate_for_stream_id(
+                    &bitrate.by_stream_bps,
+                    SCREEN_STREAM_LABEL,
+                ),
                 subscription_count: user.subscriptions.len(),
                 user_id: user.user_id.clone(),
                 user_key: user_id_to_path_segment(&user.user_id),

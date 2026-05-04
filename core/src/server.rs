@@ -44,9 +44,9 @@ pub mod session {
     //! Shared runtime session vocabulary used at the server edge.
 
     pub use crate::runtime::{
-        AvailableFeatures, DownloadStates, JsonPayload, PeerSnapshot, RecordingOptions,
-        RecordingState, RecordingStateUpdate, StopCode, StreamType, UserId, UserInfo,
-        UserPermissions, VideoLayoutIntent, WebSocketCloseCode,
+        AvailableFeatures, JsonPayload, PeerSnapshot, RecordingOptions, RecordingState,
+        RecordingStateUpdate, StopCode, UserId, UserInfo, UserPermissions, VideoLayoutIntent,
+        WebSocketCloseCode,
     };
 }
 

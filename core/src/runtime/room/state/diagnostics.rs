@@ -5,7 +5,7 @@ use std::{
 
 use super::shared::{ConsumerKey, RoomState};
 use crate::runtime::{
-    ConnectionId, StreamType, UserId,
+    ConnectionId, UserId,
     diagnostics::{
         DiagnosticsActiveSpeaker, DiagnosticsActiveSpeakerReason, DiagnosticsActiveSpeakerState,
         DiagnosticsIncomingBitrate, DiagnosticsMediaKind, DiagnosticsOverBudgetExceptionReason,
@@ -41,17 +41,11 @@ impl RoomState {
                 .entry(entry.owner_user_id().clone())
                 .or_default();
             session_bitrate.total = session_bitrate.total.saturating_add(*bits);
-            match entry.stream_type() {
-                StreamType::Audio => {
-                    session_bitrate.audio = session_bitrate.audio.saturating_add(*bits);
-                }
-                StreamType::Camera => {
-                    session_bitrate.camera = session_bitrate.camera.saturating_add(*bits);
-                }
-                StreamType::Screen => {
-                    session_bitrate.screen = session_bitrate.screen.saturating_add(*bits);
-                }
-            }
+            let stream_bitrate = session_bitrate
+                .by_stream_bps
+                .entry(entry.stream_id().to_string())
+                .or_default();
+            *stream_bitrate = stream_bitrate.saturating_add(*bits);
         }
         incoming_bitrate
     }
@@ -65,7 +59,7 @@ impl RoomState {
             let Some(entry) = self.source_transport_media_entry(*transport_media_id) else {
                 continue;
             };
-            let source_bitrate = incoming_bitrate.entry(entry.source_id).or_default();
+            let source_bitrate = incoming_bitrate.entry(entry.source_id()).or_default();
             *source_bitrate = (*source_bitrate).saturating_add(*bits);
         }
         incoming_bitrate
@@ -107,7 +101,7 @@ impl RoomState {
                     mid: source.mid().map(|mid| mid.as_str().to_owned()),
                     owner_user_id: source.owner().user_id().clone(),
                     source_id: source.source_id().as_u64(),
-                    stream_type: source.stream_type(),
+                    stream_id: source.stream_id().to_string(),
                     transport_media_id: transport_media_id.map(TransportMediaId::as_u64),
                 }
             })
@@ -166,7 +160,7 @@ impl RoomState {
                         .collect(),
                     media_kind: diagnostics_media_kind(producer.media_kind),
                     source_id: producer.source_id.as_u64(),
-                    stream_type: producer.stream_type,
+                    stream_id: producer.stream_id.to_string(),
                     transport_media_id: producer.transport_media_id.map(TransportMediaId::as_u64),
                 })
             })
@@ -196,7 +190,7 @@ impl RoomState {
                 let route_state = self.consumer_route_state(
                     user_id,
                     source.owner().user_id(),
-                    source.stream_type(),
+                    source.stream_id(),
                 )?;
                 let layout_intent = self.diagnostics_video_layout_intent(user_id, source);
                 Some(DiagnosticsSubscription {
@@ -214,7 +208,7 @@ impl RoomState {
                         super::ConsumerRouteState::Inactive => DiagnosticsRouteState::Inactive,
                         super::ConsumerRouteState::Absent => return None,
                     },
-                    stream_type: source.stream_type(),
+                    stream_id: source.stream_id().to_string(),
                 })
             })
             .collect::<Vec<_>>();
@@ -255,7 +249,7 @@ impl RoomState {
                     .and_then(|producer| producer.transport_media_id)
                     .map(TransportMediaId::as_u64),
                 state: DiagnosticsRouteState::Pending,
-                stream_type: source.stream_type(),
+                stream_id: source.stream_id().to_string(),
             })
         }));
         subscriptions
@@ -374,8 +368,8 @@ fn diagnostics_source_selector(value: SourceSelector) -> DiagnosticsSourceSelect
         SourceSelector::RoomPolicy(SourceRoomPolicySelector::Featured) => {
             DiagnosticsSourceSelector::RoomPolicyFeatured
         }
-        SourceSelector::RoomPolicy(SourceRoomPolicySelector::ScreenShare) => {
-            DiagnosticsSourceSelector::RoomPolicyScreenShare
+        SourceSelector::RoomPolicy(SourceRoomPolicySelector::ReadableDetail) => {
+            DiagnosticsSourceSelector::RoomPolicyReadableDetail
         }
         SourceSelector::RoomPolicy(SourceRoomPolicySelector::ActiveSpeaker) => {
             DiagnosticsSourceSelector::RoomPolicyActiveSpeaker
@@ -425,7 +419,7 @@ fn diagnostics_video_layout_role(value: SourceRoomPolicySelector) -> Diagnostics
     match value {
         SourceRoomPolicySelector::Pinned => DiagnosticsVideoLayoutRole::Pinned,
         SourceRoomPolicySelector::Featured => DiagnosticsVideoLayoutRole::Featured,
-        SourceRoomPolicySelector::ScreenShare => DiagnosticsVideoLayoutRole::ScreenShare,
+        SourceRoomPolicySelector::ReadableDetail => DiagnosticsVideoLayoutRole::ReadableDetail,
         SourceRoomPolicySelector::ActiveSpeaker => DiagnosticsVideoLayoutRole::ActiveSpeaker,
         SourceRoomPolicySelector::VisibleThumbnail => DiagnosticsVideoLayoutRole::VisibleThumbnail,
         SourceRoomPolicySelector::Hidden => DiagnosticsVideoLayoutRole::Hidden,
@@ -436,7 +430,7 @@ fn diagnostics_video_layout_role(value: SourceRoomPolicySelector) -> Diagnostics
 fn diagnostics_video_route_priority(value: SourceRoutePriority) -> DiagnosticsVideoRoutePriority {
     match value {
         SourceRoutePriority::PinnedOrFeatured => DiagnosticsVideoRoutePriority::PinnedOrFeatured,
-        SourceRoutePriority::ScreenShare => DiagnosticsVideoRoutePriority::ScreenShare,
+        SourceRoutePriority::ReadableDetail => DiagnosticsVideoRoutePriority::ReadableDetail,
         SourceRoutePriority::ActiveSpeaker => DiagnosticsVideoRoutePriority::ActiveSpeaker,
         SourceRoutePriority::VisibleThumbnail => DiagnosticsVideoRoutePriority::VisibleThumbnail,
         SourceRoutePriority::HiddenOrOverflow => DiagnosticsVideoRoutePriority::HiddenOrOverflow,
@@ -506,7 +500,7 @@ mod tests {
     use super::*;
     use crate::runtime::source_model::{
         PublishedSourceDescriptorParts, PublishedSourceOwner, SourceEncodingDescriptorParts,
-        SourceOperatingPoint, SourceSelector,
+        SourceOperatingPoint, SourcePolicy, SourceSelector, UserStreamId,
     };
 
     fn encoding(
@@ -533,8 +527,9 @@ mod tests {
         PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id: encoding.source_id(),
             owner: PublishedSourceOwner::new(UserId::Integer(1)),
-            stream_type: StreamType::Camera,
+            stream_id: UserStreamId::new("main-video"),
             media_kind: MediaKind::Video,
+            policy: SourcePolicy::hidden(),
             mid: None,
             encodings: vec![encoding],
         })

@@ -16,6 +16,23 @@ pub(crate) async fn consume_peer_joined_update(
     Some(())
 }
 
+pub(crate) async fn consume_peer_info_update(
+    peer: &mut ProtocolHarnessPeer,
+    user_id: ProtocolSessionId,
+    info: ProtocolSessionInfo,
+) -> Option<()> {
+    peer.read_server_frame().await?;
+    assert_eq!(
+        peer.updates.last(),
+        Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
+            bundle_session_info_key(&user_id),
+            info,
+        )]))),
+        "peer info should project into the post-auth user-info update surface"
+    );
+    Some(())
+}
+
 pub(crate) fn assert_track_snapshot_contains(
     track_bindings: &[TrackBinding],
     user_id: &ProtocolSessionId,

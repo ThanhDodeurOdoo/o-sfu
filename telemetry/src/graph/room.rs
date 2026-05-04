@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{Value, json};
 
 use super::common::{
-    download_main_stat, route_state_color, route_state_label, stream_type_color, stream_type_label,
+    download_main_stat, route_state_color, route_state_label, stream_id_color, stream_id_label,
     transport_health_label, user_id_to_string,
 };
 use crate::diagnostics::types::{
@@ -63,14 +63,14 @@ fn bitrate_share(part: u64, total: u64) -> Option<f64> {
 
 fn add_bitrate_arcs(node: &mut Value, bitrate: &DiagnosticsIncomingBitrate) {
     if let Some(obj) = node.as_object_mut() {
-        if let Some(share) = bitrate_share(bitrate.audio, bitrate.total) {
-            obj.insert("arc__audio".to_string(), json!(share));
-        }
-        if let Some(share) = bitrate_share(bitrate.camera, bitrate.total) {
-            obj.insert("arc__camera".to_string(), json!(share));
-        }
-        if let Some(share) = bitrate_share(bitrate.screen, bitrate.total) {
-            obj.insert("arc__screen".to_string(), json!(share));
+        for (stream_id, bps) in &bitrate.by_stream_bps {
+            if let Some(share) = bitrate_share(*bps, bitrate.total) {
+                let field_name = stream_id
+                    .chars()
+                    .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                    .collect::<String>();
+                obj.insert(format!("arc__stream_{field_name}"), json!(share));
+            }
         }
     }
 }
@@ -162,7 +162,7 @@ fn push_source_entries(
 ) {
     let room_uuid = detail.summary.uuid.as_str();
     for source in &detail.sources {
-        let stream_type = stream_type_label(source.stream_type);
+        let stream_id = stream_id_label(&source.stream_id);
         let media_kind_str = format!("{:?}", source.media_kind).to_lowercase();
         let active_str = if source.active { "active" } else { "inactive" };
         let downloads = download_counts.get(&source.source_id).copied().unwrap_or(0);
@@ -171,12 +171,12 @@ fn push_source_entries(
 
         nodes.push(json!({
             "id": format!("source:{}:{}", room_uuid, source.source_id),
-            "title": format!("{} #{}", stream_type, source.source_id),
+            "title": format!("{} #{}", stream_id, source.source_id),
             "subtitle": format!("{} {}", active_str, media_kind_str),
             "mainStat": format!("{} bps", source.current_incoming_bitrate_bps),
             "secondaryStat": format!("{} encodings / {} downloads", source.encodings.len(), downloads),
             "detail__owner_session_id": user_id_to_string(&source.owner_user_id),
-            "detail__stream_type": stream_type,
+            "detail__stream_id": stream_id,
             "detail__media_kind": media_kind_str,
             "detail__transport_media_id": source.transport_media_id,
             "detail__mid": source.mid,
@@ -192,13 +192,13 @@ fn push_source_entries(
         } else {
             1.0
         };
-        let color = stream_type_color(source.stream_type);
+        let color = stream_id_color(&source.stream_id);
 
         edges.push(json!({
             "id": format!("publish:{}:{}", room_uuid, source.source_id),
             "source": format!("session:{}:{}", room_uuid, user_id_to_string(&source.owner_user_id)),
             "target": format!("source:{}:{}", room_uuid, source.source_id),
-            "mainStat": format!("{} upload", stream_type),
+            "mainStat": format!("{} upload", stream_id),
             "secondaryStat": format!("{} bps", source.current_incoming_bitrate_bps),
             "thickness": thickness,
             "color": color,
@@ -225,6 +225,7 @@ fn download_edge(
         "color": route_state_color(&sub.state),
         "detail__source_id": sub.source_id,
         "detail__producer_session_id": user_id_to_string(&sub.producer_user_id),
+        "detail__stream_id": &sub.stream_id,
         "detail__selector": format!("{:?}", sub.selection.selector),
         "detail__selection_reason": format!("{:?}", sub.selection.selection_reason),
         "detail__selection_active": sub.selection.active,

@@ -32,6 +32,7 @@ use crate::{
             PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
             PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
             SourceEncodingId,
+            test_support::{source_publish_intent_for_stream_type, stream_id_for_stream_type},
         },
     },
 };
@@ -70,11 +71,13 @@ fn install_test_published_producer(
     let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
     let source_id = PublishedSourceId::allocate(&mut state.next_source_id);
     let encoding_id = SourceEncodingId::allocate(&mut state.next_source_encoding_id);
+    let intent = source_publish_intent_for_stream_type(stream_type);
     let source = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
         source_id,
         owner: PublishedSourceOwner::new(user_id.clone()),
-        stream_type,
-        media_kind: MediaKind::Video,
+        stream_id: intent.stream_id().clone(),
+        media_kind: intent.media_kind(),
+        policy: intent.policy(),
         mid: None,
         encodings: vec![SourceEncodingDescriptor::new(
             SourceEncodingDescriptorParts {
@@ -96,7 +99,7 @@ fn install_test_published_producer(
     state.sources.insert(source_id, source);
     state
         .source_ids_by_owner_stream
-        .insert(SourceKey::new(user_id, stream_type), source_id);
+        .insert(SourceKey::new(user_id, intent.stream_id()), source_id);
     state
         .producer_id_by_source_id
         .insert(source_id, producer_id);
@@ -107,7 +110,7 @@ fn install_test_published_producer(
             source_id,
             owner_user_id: user_id.clone(),
             owner_connection_id: connection_id,
-            stream_type,
+            stream_id: stream_id_for_stream_type(stream_type),
             media_kind: MediaKind::Video,
             consumable_rtp_parameters: MediaStream::new(vec![], vec![], vec![]),
             routed_producer_id,
@@ -124,7 +127,7 @@ fn install_test_published_producer(
                 vec![encoding_id],
                 user_id.clone(),
                 connection_id,
-                stream_type,
+                stream_id_for_stream_type(stream_type),
             ),
         );
     }

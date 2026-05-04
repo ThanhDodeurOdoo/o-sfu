@@ -203,9 +203,17 @@ fn route_state<'room>(
         .iter()
         .find(|subscription| {
             subscription.producer_user_id == *producer_user_id
-                && subscription.stream_type == stream_type
+                && subscription.stream_id == stream_id_for_stream_type(stream_type)
         })
         .map(|subscription| &subscription.state)
+}
+
+fn stream_id_for_stream_type(stream_type: StreamType) -> &'static str {
+    match stream_type {
+        StreamType::Audio => "audio",
+        StreamType::Camera => "camera",
+        StreamType::Screen => "screen",
+    }
 }
 
 impl Drop for TestServer {

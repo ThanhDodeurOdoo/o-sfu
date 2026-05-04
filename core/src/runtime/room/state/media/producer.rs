@@ -1,11 +1,14 @@
 //! Producer-side room state transitions.
 //!
-//! the pure state work around publishing, unpublishing and producer activity changes
-//! after transport negotiation is done elsewhere.
-//! The main rule here is that room state only commits a producer once the
-//! caller has a validated user and a real transport media id to attach.
-
-use std::collections::BTreeMap;
+//! This file owns the pure state work around publish, unpublish and producer
+//! activity changes after transport negotiation has happened elsewhere. The
+//! main rule is that room state commits a producer only after the caller has a
+//! current user connection, a generic source publish intent and a real transport
+//! media id to attach.
+//!
+//! Source policy is copied from [`SourcePublishIntent`] into the committed
+//! source descriptor. The policy then drives layout and BWE decisions without
+//! requiring this module to know product stream names.
 
 use o_sfu_router::{
     MediaFormat, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, Mid,
@@ -16,9 +19,7 @@ use tracing::{error, warn};
 use super::{
     super::{
         super::{
-            RoomEventMessage, TrackBindingUpdate, UserOutbound,
-            outbound::{MessageFanout, OutboundSender},
-            topology::RoutedProducerId,
+            TrackBindingUpdate, UserOutbound, outbound::OutboundSender, topology::RoutedProducerId,
         },
         ids::ProducerRuntimeId,
         shared::{
@@ -29,12 +30,13 @@ use super::{
     subscription::{ConsumerBootstrapProducerSnapshot, PendingConsumerBootstrapTarget},
 };
 use crate::runtime::{
-    ConnectionId, StreamType, UserId, UserInfo,
+    ConnectionId, UserId,
     media_transport::TransportMediaId,
     source_model::{
         PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
         PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-        SourceEncodingId, SourceModelError, UploadLayerPolicyRole,
+        SourceEncodingId, SourceModelError, SourcePolicy, SourcePublishIntent,
+        UploadLayerPolicyRole, UserStreamId,
     },
 };
 
@@ -66,8 +68,9 @@ pub(in crate::runtime::room) struct ProducerRouteTarget {
 pub(in crate::runtime::room) struct ValidatedPublishDescriptor {
     owner_user_id: UserId,
     owner_connection_id: ConnectionId,
-    stream_type: StreamType,
+    stream_id: UserStreamId,
     media_kind: RouterMediaKind,
+    policy: SourcePolicy,
 }
 
 #[derive(Debug, Clone)]
@@ -80,8 +83,9 @@ pub(in crate::runtime::room) struct ValidatedPublishDescriptor {
 pub(in crate::runtime::room) struct PreparedPublishedTrack {
     owner_user_id: UserId,
     owner_connection_id: ConnectionId,
-    stream_type: StreamType,
+    stream_id: UserStreamId,
     media_kind: RouterMediaKind,
+    policy: SourcePolicy,
     consumable_rtp_parameters: RouterRtpParameters,
 }
 
@@ -106,7 +110,8 @@ struct PublishedSourceInstall {
 pub(in crate::runtime::room) struct ProducerActivityOutcome {
     pub(in crate::runtime::room) transport_media_id: TransportMediaId,
     pub(in crate::runtime::room) active: bool,
-    pub(in crate::runtime::room) fanout: MessageFanout,
+    recipients: Vec<OutboundSender>,
+    update: TrackBindingUpdate,
 }
 
 #[derive(Debug)]
@@ -117,7 +122,6 @@ pub(in crate::runtime::room) struct ProducerActivityOutcome {
 /// update stays outside the state lock.
 pub(in crate::runtime::room) struct UnpublishTrackOutcome {
     recipients: Vec<OutboundSender>,
-    user_info_snapshot: Option<BTreeMap<UserId, UserInfo>>,
 }
 
 impl RoomState {
@@ -131,14 +135,13 @@ impl RoomState {
         &self,
         user_id: &UserId,
         publisher_connection_id: ConnectionId,
-        stream_type: StreamType,
-        media_kind: RouterMediaKind,
+        intent: &SourcePublishIntent,
     ) -> Option<ValidatedPublishDescriptor> {
         let Some(user) = self.users.get(user_id) else {
             warn!(
                 ?user_id,
                 publisher_connection_id = ?publisher_connection_id,
-                ?stream_type,
+                stream_id = %intent.stream_id(),
                 "cannot prepare negotiated publish because the user is missing from room state"
             );
             return None;
@@ -148,7 +151,7 @@ impl RoomState {
                 ?user_id,
                 publisher_connection_id = ?publisher_connection_id,
                 current_connection_id = ?user.connection_id,
-                ?stream_type,
+                stream_id = %intent.stream_id(),
                 "cannot prepare negotiated publish because the connection is stale"
             );
             return None;
@@ -157,7 +160,7 @@ impl RoomState {
             warn!(
                 ?user_id,
                 publisher_connection_id = ?publisher_connection_id,
-                ?stream_type,
+                stream_id = %intent.stream_id(),
                 "cannot prepare negotiated publish because the user is not publish-ready"
             );
             return None;
@@ -165,8 +168,9 @@ impl RoomState {
         Some(ValidatedPublishDescriptor {
             owner_user_id: user_id.clone(),
             owner_connection_id: publisher_connection_id,
-            stream_type,
-            media_kind,
+            stream_id: intent.stream_id().clone(),
+            media_kind: intent.media_kind(),
+            policy: intent.policy(),
         })
     }
 
@@ -189,7 +193,7 @@ impl RoomState {
                 error!(
                     user_id = ?pending.owner_user_id,
                     owner_connection_id = ?pending.owner_connection_id,
-                    ?pending.stream_type,
+                    stream_id = %pending.stream_id,
                     ?transport_media_id,
                     ?error,
                     "failed to build source descriptor for negotiated publish"
@@ -204,7 +208,7 @@ impl RoomState {
         let routed_producer_id = self.add_routed_producer_for_publish(&pending)?;
         let owner_user_id = pending.owner_user_id.clone();
         let owner_connection_id = pending.owner_connection_id;
-        let stream_type = pending.stream_type;
+        let stream_id = pending.stream_id.clone();
         let media_kind = pending.media_kind;
         let source_id = source_descriptor.source_id();
 
@@ -222,7 +226,7 @@ impl RoomState {
             owner_user_id,
             owner_connection_id,
             producer_id,
-            stream_type,
+            stream_id,
             media_kind,
             transport_media_id,
         );
@@ -239,7 +243,7 @@ impl RoomState {
             warn!(
                 user_id = ?pending.owner_user_id,
                 owner_connection_id = ?pending.owner_connection_id,
-                ?pending.stream_type,
+                stream_id = %pending.stream_id,
                 ?transport_media_id,
                 "cannot commit negotiated publish because the user is missing from room state"
             );
@@ -251,20 +255,20 @@ impl RoomState {
                 owner_connection_id = ?pending.owner_connection_id,
                 current_connection_id = ?user.connection_id,
                 publish_ready = user.negotiation.can_publish(),
-                ?pending.stream_type,
+                stream_id = %pending.stream_id,
                 ?transport_media_id,
                 "cannot commit negotiated publish because the user state changed before commit"
             );
             return None;
         }
-        let source_key = SourceKey::new(&pending.owner_user_id, pending.stream_type);
+        let source_key = SourceKey::new(&pending.owner_user_id, &pending.stream_id);
         if self.source_ids_by_owner_stream.contains_key(&source_key) {
             warn!(
                 user_id = ?pending.owner_user_id,
                 owner_connection_id = ?pending.owner_connection_id,
-                ?pending.stream_type,
+                stream_id = %pending.stream_id,
                 ?transport_media_id,
-                "cannot commit negotiated publish because a source already exists for this compatibility stream"
+                "cannot commit negotiated publish because a source already exists for this stream"
             );
             return None;
         }
@@ -308,7 +312,7 @@ impl RoomState {
                 source_id,
                 owner_user_id: pending.owner_user_id.clone(),
                 owner_connection_id: pending.owner_connection_id,
-                stream_type: pending.stream_type,
+                stream_id: pending.stream_id.clone(),
                 media_kind: pending.media_kind,
                 consumable_rtp_parameters: pending.consumable_rtp_parameters,
                 routed_producer_id,
@@ -329,7 +333,7 @@ impl RoomState {
                 source_encoding_ids,
                 pending.owner_user_id.clone(),
                 pending.owner_connection_id,
-                pending.stream_type,
+                pending.stream_id,
             ),
         );
     }
@@ -366,8 +370,9 @@ impl RoomState {
         PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id,
             owner: PublishedSourceOwner::new(pending.owner_user_id.clone()),
-            stream_type: pending.stream_type,
+            stream_id: pending.stream_id.clone(),
             media_kind: pending.media_kind,
+            policy: pending.policy,
             mid: pending.consumable_rtp_parameters.mid().map(Mid::new),
             encodings,
         })
@@ -406,13 +411,13 @@ impl RoomState {
     }
 
     #[must_use]
-    pub(in crate::runtime::room) fn producer_stream_type_for_transport_media_id(
+    pub(in crate::runtime::room) fn producer_stream_id_for_transport_media_id(
         &self,
         transport_media_id: TransportMediaId,
-    ) -> Option<StreamType> {
+    ) -> Option<UserStreamId> {
         self.source_transport_media_index
             .get(&transport_media_id)
-            .map(SourceTransportMediaIndexEntry::stream_type)
+            .map(|entry| entry.stream_id().clone())
     }
 
     #[must_use]
@@ -428,10 +433,10 @@ impl RoomState {
         &self,
         owner_user_id: &UserId,
         owner_connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
     ) -> Option<ProducerRouteTarget> {
         let producer_id =
-            self.producer_id_for_source_key(&SourceKey::new(owner_user_id, stream_type))?;
+            self.producer_id_for_source_key(&SourceKey::new(owner_user_id, stream_id))?;
         let producer = self.producers.get(&producer_id)?;
         if producer.owner_connection_id != owner_connection_id {
             return None;
@@ -449,10 +454,10 @@ impl RoomState {
     pub(in crate::runtime::room) fn producer_route_target_for_user(
         &self,
         user_id: &UserId,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
     ) -> Option<ProducerRouteTarget> {
         let connection_id = self.user_connection_id(user_id)?;
-        self.producer_route_target(user_id, connection_id, stream_type)
+        self.producer_route_target(user_id, connection_id, stream_id)
     }
 
     /// Lists the transport media that must be removed for an explicit unpublish.
@@ -465,9 +470,9 @@ impl RoomState {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
     ) -> Option<Vec<TransportMediaRemoval>> {
-        let producer_target = self.producer_route_target(user_id, connection_id, stream_type)?;
+        let producer_target = self.producer_route_target(user_id, connection_id, stream_id)?;
         let mut transport_removals = vec![TransportMediaRemoval {
             user: user_id.clone(),
             connection: connection_id,
@@ -499,9 +504,9 @@ impl RoomState {
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
     ) -> Option<UnpublishTrackOutcome> {
-        let producer_target = self.producer_route_target(user_id, connection_id, stream_type)?;
+        let producer_target = self.producer_route_target(user_id, connection_id, stream_id)?;
         if self
             .topology
             .remove_producer(producer_target.routed_producer_id)
@@ -509,25 +514,18 @@ impl RoomState {
         {
             error!(
                 ?user_id,
-                ?stream_type,
+                stream_id = %stream_id,
                 "failed to remove published track from room router"
             );
             return None;
         }
         self.remove_source_registry_entry(producer_target.source_id)?;
-        let user_info_snapshot = match stream_type {
-            StreamType::Camera | StreamType::Screen => {
-                Some(BTreeMap::from([self.user_info_snapshot(user_id)?]))
-            }
-            StreamType::Audio => None,
-        };
         Some(UnpublishTrackOutcome {
             recipients: self
                 .users
                 .values()
                 .map(|user| user.sender.clone())
                 .collect(),
-            user_info_snapshot,
         })
     }
 
@@ -545,7 +543,7 @@ impl RoomState {
         &mut self,
         user_id: &UserId,
         producer_target: &ProducerRouteTarget,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
         active: bool,
     ) -> Option<ProducerActivityOutcome> {
         let current_connection_id = self.user_connection_id(user_id);
@@ -556,6 +554,9 @@ impl RoomState {
             || producer.routed_producer_id != producer_target.routed_producer_id
             || producer.transport_media_id != Some(producer_target.transport_media_id)
         {
+            return None;
+        }
+        if producer.active == active {
             return None;
         }
         let route_state = if active {
@@ -570,7 +571,7 @@ impl RoomState {
         {
             error!(
                 ?user_id,
-                ?stream_type,
+                stream_id = %stream_id,
                 "failed to set producer pause state in room router"
             );
             return None;
@@ -579,11 +580,19 @@ impl RoomState {
             let producer = self.producers.get_mut(&producer_target.producer_id)?;
             producer.active = active;
         }
-        let snapshot = BTreeMap::from([self.user_info_snapshot(user_id)?]);
         Some(ProducerActivityOutcome {
             transport_media_id: producer_target.transport_media_id,
             active,
-            fanout: self.fanout_all(&RoomEventMessage::UserInfoChanged(snapshot)),
+            recipients: self
+                .users
+                .values()
+                .map(|user| user.sender.clone())
+                .collect(),
+            update: TrackBindingUpdate {
+                user_id: user_id.clone(),
+                stream_id: stream_id.clone(),
+                active: Some(active),
+            },
         })
     }
 }
@@ -593,8 +602,8 @@ impl ValidatedPublishDescriptor {
         self.owner_connection_id
     }
 
-    pub(in crate::runtime::room) const fn stream_type(&self) -> StreamType {
-        self.stream_type
+    pub(in crate::runtime::room) const fn stream_id(&self) -> &UserStreamId {
+        &self.stream_id
     }
 
     pub(in crate::runtime::room) fn owner_user_id(&self) -> &UserId {
@@ -609,8 +618,9 @@ impl ValidatedPublishDescriptor {
         PreparedPublishedTrack {
             owner_user_id: self.owner_user_id,
             owner_connection_id: self.owner_connection_id,
-            stream_type: self.stream_type,
+            stream_id: self.stream_id,
             media_kind: self.media_kind,
+            policy: self.policy,
             consumable_rtp_parameters,
         }
     }
@@ -622,25 +632,26 @@ impl ProducerRouteTarget {
     }
 }
 
+impl ProducerActivityOutcome {
+    pub(in crate::runtime::room) fn emit(self) {
+        for recipient in self.recipients {
+            let _ = recipient.send(UserOutbound::TrackBindingUpdate(self.update.clone()));
+        }
+    }
+}
+
 impl UnpublishTrackOutcome {
     /// Emits the unpublish side effects after state cleanup already landed
     ///
-    /// Recipients always get the track binding removal. Camera and screen
-    /// unpublish also fan out a user-info snapshot so clients can clear the
-    /// visible publication flag without rebuilding their own projection.
-    pub(in crate::runtime::room) fn emit(self, user_id: &UserId, stream_type: StreamType) {
+    /// Recipients always get the track binding removal.
+    pub(in crate::runtime::room) fn emit(self, user_id: &UserId, stream_id: &UserStreamId) {
         let track_update = UserOutbound::TrackBindingUpdate(TrackBindingUpdate {
             user_id: user_id.clone(),
-            stream_type,
+            stream_id: stream_id.clone(),
             active: None,
         });
         for recipient in self.recipients {
             let _ = recipient.send(track_update.clone());
-            if let Some(snapshot) = self.user_info_snapshot.as_ref() {
-                let _ = recipient.send(UserOutbound::Message(RoomEventMessage::UserInfoChanged(
-                    snapshot.clone(),
-                )));
-            }
         }
     }
 }

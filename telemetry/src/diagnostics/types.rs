@@ -2,7 +2,9 @@
 //!
 //!structs and enums shape returned by the diagnostics tools
 
-use o_sfu_model::{RecordingState, StreamType, UserId, UserInfo};
+use std::collections::BTreeMap;
+
+use o_sfu_model::{RecordingState, UserId, UserInfo};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -36,7 +38,7 @@ pub enum DiagnosticsSourceSelector {
     OperatingPoint,
     RoomPolicyPinned,
     RoomPolicyFeatured,
-    RoomPolicyScreenShare,
+    RoomPolicyReadableDetail,
     RoomPolicyActiveSpeaker,
     RoomPolicyVisibleThumbnail,
     RoomPolicyHidden,
@@ -85,7 +87,7 @@ pub enum DiagnosticsTemporalLayerSelection {
 pub enum DiagnosticsVideoLayoutRole {
     Pinned,
     Featured,
-    ScreenShare,
+    ReadableDetail,
     ActiveSpeaker,
     VisibleThumbnail,
     Hidden,
@@ -96,7 +98,7 @@ pub enum DiagnosticsVideoLayoutRole {
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticsVideoRoutePriority {
     PinnedOrFeatured,
-    ScreenShare,
+    ReadableDetail,
     ActiveSpeaker,
     VisibleThumbnail,
     HiddenOrOverflow,
@@ -153,12 +155,8 @@ impl DiagnosticsActiveSpeaker {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsIncomingBitrate {
-    #[serde(rename = "audioBps")]
-    pub audio: u64,
-    #[serde(rename = "cameraBps")]
-    pub camera: u64,
-    #[serde(rename = "screenBps")]
-    pub screen: u64,
+    #[serde(default)]
+    pub by_stream_bps: BTreeMap<String, u64>,
     #[serde(rename = "totalBps")]
     pub total: u64,
 }
@@ -187,7 +185,7 @@ pub struct DiagnosticsPublication {
     pub encoding_ids: Vec<u64>,
     pub media_kind: DiagnosticsMediaKind,
     pub source_id: u64,
-    pub stream_type: StreamType,
+    pub stream_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transport_media_id: Option<u64>,
 }
@@ -232,7 +230,7 @@ pub struct DiagnosticsSource {
     pub mid: Option<String>,
     pub owner_user_id: UserId,
     pub source_id: u64,
-    pub stream_type: StreamType,
+    pub stream_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transport_media_id: Option<u64>,
 }
@@ -282,7 +280,7 @@ pub struct DiagnosticsSubscription {
     pub state: DiagnosticsRouteState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_transport_media_id: Option<u64>,
-    pub stream_type: StreamType,
+    pub stream_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -28,11 +28,26 @@ use crate::{
     },
 };
 
+fn assert_track_binding_activity_update(
+    message: &UserOutbound,
+    user_id: &UserId,
+    stream_type: StreamType,
+    active: Option<bool>,
+) {
+    match message {
+        UserOutbound::TrackBindingUpdate(update) => {
+            assert_eq!(&update.user_id, user_id);
+            assert_eq!(update.stream_id, stream_id_for_stream_type(stream_type));
+            assert_eq!(update.active, active);
+        }
+        other => panic!("expected TrackBindingUpdate, got {other:?}"),
+    }
+}
+
 #[tokio::test]
-async fn production_change_pauses_producer_and_broadcasts_info() {
+async fn production_change_pauses_producer_and_broadcasts_track_binding() {
     let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
-    // User 1 publishes a camera track.
     let producer_id = room
         .test_api()
         .media()
@@ -46,7 +61,6 @@ async fn production_change_pauses_producer_and_broadcasts_info() {
         .await;
     assert!(producer_id.is_some());
 
-    // Drain the INIT_CONSUMER bootstrap that went to user 2.
     let bootstrap_msgs = drain_outbound(&mut rx2);
     assert!(
         bootstrap_msgs
@@ -54,46 +68,42 @@ async fn production_change_pauses_producer_and_broadcasts_info() {
             .any(|m| matches!(m, UserOutbound::Request(..))),
         "user 2 should have received a bootstrap remote track request"
     );
-    // User 1 shouldn't get its own consumer.
     assert!(drain_outbound(&mut rx1).is_empty());
 
-    // Now user 1 sends PRODUCTION_CHANGE: camera off (pause).
     room.test_api()
         .media()
         .set_publication_active(&UserId::Integer(1), StreamType::Camera, false, &adapter)
         .await;
 
-    // Both users should receive a user info broadcast with isCameraOn = false.
     let msgs1 = drain_outbound(&mut rx1);
     let msgs2 = drain_outbound(&mut rx2);
-    assert_eq!(msgs1.len(), 1, "user 1 should get info broadcast");
-    assert_eq!(msgs2.len(), 1, "user 2 should get info broadcast");
+    assert_eq!(msgs1.len(), 1, "user 1 should get track binding update");
+    assert_eq!(msgs2.len(), 1, "user 2 should get track binding update");
+    assert_track_binding_activity_update(
+        &msgs1[0],
+        &UserId::Integer(1),
+        StreamType::Camera,
+        Some(false),
+    );
+    assert_track_binding_activity_update(
+        &msgs2[0],
+        &UserId::Integer(1),
+        StreamType::Camera,
+        Some(false),
+    );
 
-    // Verify the broadcast contains isCameraOn = false.
-    let info_msg = &msgs1[0];
-    if let UserOutbound::Message(RoomEventMessage::UserInfoChanged(snapshot)) = info_msg {
-        let info = snapshot
-            .values()
-            .next()
-            .expect("snapshot should have one entry");
-        assert_eq!(info.is_camera_on, Some(false));
-    } else {
-        panic!("expected UserInfoChanged, got {info_msg:?}");
-    }
-
-    // Resume: user 1 sends PRODUCTION_CHANGE: camera on.
     room.test_api()
         .media()
         .set_publication_active(&UserId::Integer(1), StreamType::Camera, true, &adapter)
         .await;
 
     let msgs1 = drain_outbound(&mut rx1);
-    if let UserOutbound::Message(RoomEventMessage::UserInfoChanged(snapshot)) = &msgs1[0] {
-        let info = snapshot.values().next().unwrap();
-        assert_eq!(info.is_camera_on, Some(true));
-    } else {
-        panic!("expected UserInfoChanged after resume");
-    }
+    assert_track_binding_activity_update(
+        &msgs1[0],
+        &UserId::Integer(1),
+        StreamType::Camera,
+        Some(true),
+    );
 }
 
 #[tokio::test]
@@ -137,7 +147,7 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
         room.unpublish_track(
             &UserId::Integer(1),
             test_connection_id(0),
-            StreamType::Camera,
+            &stream_id_for_stream_type(StreamType::Camera),
             &adapter,
         )
         .await,
@@ -166,28 +176,16 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
         message,
         UserOutbound::TrackBindingUpdate(update)
             if update.user_id == UserId::Integer(1)
-                && update.stream_type == StreamType::Camera
+                && update.stream_id == stream_id_for_stream_type(StreamType::Camera)
                 && update.active.is_none()
     )));
     assert!(subscriber_messages.iter().any(|message| matches!(
         message,
         UserOutbound::TrackBindingUpdate(update)
             if update.user_id == UserId::Integer(1)
-                && update.stream_type == StreamType::Camera
+                && update.stream_id == stream_id_for_stream_type(StreamType::Camera)
                 && update.active.is_none()
     )));
-    assert!(subscriber_messages.iter().any(|message| matches!(
-        message,
-        UserOutbound::Message(RoomEventMessage::UserInfoChanged(snapshot))
-            if snapshot
-                .values()
-                .next()
-                .is_some_and(|info| info == &UserInfo {
-                    is_camera_on: Some(false),
-                    ..UserInfo::snapshot_defaults()
-                })
-    )));
-
     let removed_media_events = fake
         .snapshot_events()
         .into_iter()
@@ -833,7 +831,7 @@ async fn assert_subscription_layout(
     };
     assert!(
         user.subscriptions.iter().any(|subscription| {
-            subscription.stream_type == stream_type
+            subscription.stream_id == stream_id_for_stream_type(stream_type).to_string()
                 && subscription.layout_role == Some(expected_role)
                 && subscription.layout_priority == Some(expected_priority)
         }),
@@ -1105,8 +1103,8 @@ async fn screen_share_layout_uses_screen_specific_priority_in_diagnostics() {
         &adapter,
         &UserId::Integer(2),
         StreamType::Screen,
-        DiagnosticsVideoLayoutRole::ScreenShare,
-        DiagnosticsVideoRoutePriority::ScreenShare,
+        DiagnosticsVideoLayoutRole::ReadableDetail,
+        DiagnosticsVideoRoutePriority::ReadableDetail,
     )
     .await;
 }
@@ -1174,7 +1172,7 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
             .unpublish_track(
                 &scenario.publisher_user_id,
                 connection_id,
-                StreamType::Audio,
+                &stream_id_for_stream_type(StreamType::Audio),
                 &scenario.media_transport,
             )
             .await,
@@ -1621,7 +1619,7 @@ async fn publish_track_cleans_up_transport_media_when_user_leaves_mid_publish() 
 }
 
 #[tokio::test]
-async fn production_change_updates_screen_sharing_info() {
+async fn production_change_updates_screen_track_binding_activity() {
     let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
     room.test_api()
@@ -1635,23 +1633,21 @@ async fn production_change_updates_screen_sharing_info() {
         )
         .await;
 
-    // Drain bootstrap messages.
     drain_outbound(&mut rx1);
     drain_outbound(&mut rx2);
 
-    // Pause screen sharing.
     room.test_api()
         .media()
         .set_publication_active(&UserId::Integer(1), StreamType::Screen, false, &adapter)
         .await;
 
     let msgs = drain_outbound(&mut rx1);
-    if let UserOutbound::Message(RoomEventMessage::UserInfoChanged(snapshot)) = &msgs[0] {
-        let info = snapshot.values().next().unwrap();
-        assert_eq!(info.is_screen_sharing_on, Some(false));
-    } else {
-        panic!("expected UserInfoChanged for screen sharing");
-    }
+    assert_track_binding_activity_update(
+        &msgs[0],
+        &UserId::Integer(1),
+        StreamType::Screen,
+        Some(false),
+    );
 }
 
 #[tokio::test]
@@ -1984,7 +1980,7 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
         room.unpublish_track(
             &UserId::Integer(1),
             test_connection_id(0),
-            StreamType::Camera,
+            &stream_id_for_stream_type(StreamType::Camera),
             &media_transport
         )
         .await,
@@ -2461,8 +2457,13 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
     );
 
     assert_eq!(
-        room.rollback_staged_publish(&user_id, connection_id, StreamType::Camera, &adapter)
-            .await,
+        room.rollback_staged_publish(
+            &user_id,
+            connection_id,
+            &stream_id_for_stream_type(StreamType::Camera),
+            &adapter
+        )
+        .await,
         RollbackStagedPublishOutcome::RolledBack {
             cleanup: crate::TransportEffectOutcome::Applied
         }
@@ -2508,15 +2509,25 @@ async fn duplicate_staged_publish_is_ignored_before_transport_reservation() {
         .expect("publisher should have a live connection");
 
     assert_eq!(
-        room.stage_negotiated_publish(&user_id, connection_id, StreamType::Camera, &adapter)
-            .await
-            .expect("first stage should not hit transport failure"),
+        room.stage_negotiated_publish(
+            &user_id,
+            connection_id,
+            &source_publish_intent_for_stream_type(StreamType::Camera),
+            &adapter
+        )
+        .await
+        .expect("first stage should not hit transport failure"),
         crate::PublishStageOutcome::Staged
     );
     assert_eq!(
-        room.stage_negotiated_publish(&user_id, connection_id, StreamType::Camera, &adapter)
-            .await
-            .expect("duplicate stage should not hit transport failure"),
+        room.stage_negotiated_publish(
+            &user_id,
+            connection_id,
+            &source_publish_intent_for_stream_type(StreamType::Camera),
+            &adapter
+        )
+        .await
+        .expect("duplicate stage should not hit transport failure"),
         crate::PublishStageOutcome::Duplicate
     );
     assert_eq!(
@@ -2536,8 +2547,13 @@ async fn duplicate_staged_publish_is_ignored_before_transport_reservation() {
         "the pre-await duplicate check should avoid reserving a second transport media"
     );
     assert_eq!(
-        room.rollback_staged_publish(&user_id, connection_id, StreamType::Camera, &adapter)
-            .await,
+        room.rollback_staged_publish(
+            &user_id,
+            connection_id,
+            &stream_id_for_stream_type(StreamType::Camera),
+            &adapter
+        )
+        .await,
         RollbackStagedPublishOutcome::RolledBack {
             cleanup: crate::TransportEffectOutcome::Applied
         }
@@ -2557,8 +2573,13 @@ async fn explicit_unpublish_missing_publication_is_a_domain_noop() {
         .expect("publisher should have a live connection");
 
     assert_eq!(
-        room.unpublish_track(&user_id, connection_id, StreamType::Camera, &adapter)
-            .await,
+        room.unpublish_track(
+            &user_id,
+            connection_id,
+            &stream_id_for_stream_type(StreamType::Camera),
+            &adapter
+        )
+        .await,
         UnpublishOutcome::MissingPublication
     );
 }
@@ -2586,8 +2607,13 @@ async fn staged_publish_rollback_reports_cleanup_failure_without_state_ownership
     fake.fail_next_remove_media(transport_media_id);
 
     assert_eq!(
-        room.rollback_staged_publish(&user_id, connection_id, StreamType::Camera, &adapter)
-            .await,
+        room.rollback_staged_publish(
+            &user_id,
+            connection_id,
+            &stream_id_for_stream_type(StreamType::Camera),
+            &adapter
+        )
+        .await,
         RollbackStagedPublishOutcome::RolledBack {
             cleanup: crate::TransportEffectOutcome::Failed
         }
@@ -2626,7 +2652,10 @@ async fn staged_negotiated_publish_commit_moves_through_room_owned_transaction()
         staged_publish_count(&room, &user_id, connection_id).await,
         0
     );
-    assert!(room.is_stream_published(&user_id, StreamType::Camera).await);
+    assert!(
+        room.is_stream_published(&user_id, &stream_id_for_stream_type(StreamType::Camera))
+            .await
+    );
     assert!(drain_outbound(&mut publisher_rx).is_empty());
     assert_bootstrap_for_stream(&drain_outbound(&mut subscriber_rx), StreamType::Camera);
     assert!(
@@ -2670,7 +2699,10 @@ async fn staged_negotiated_publish_commit_materializes_all_negotiated_encodings(
         staged_publish_count(&room, &user_id, connection_id).await,
         0
     );
-    assert!(room.is_stream_published(&user_id, StreamType::Camera).await);
+    assert!(
+        room.is_stream_published(&user_id, &stream_id_for_stream_type(StreamType::Camera))
+            .await
+    );
     assert_eq!(
         room.test_api()
             .inspect()
@@ -2725,7 +2757,11 @@ async fn staged_negotiated_publish_commit_cleans_up_when_transport_parameters_ar
         staged_publish_count(&room, &user_id, connection_id).await,
         0
     );
-    assert!(!room.is_stream_published(&user_id, StreamType::Camera).await);
+    assert!(
+        !room
+            .is_stream_published(&user_id, &stream_id_for_stream_type(StreamType::Camera))
+            .await
+    );
     assert!(drain_outbound(&mut publisher_rx).is_empty());
     assert!(drain_outbound(&mut subscriber_rx).is_empty());
     assert!(
@@ -2829,7 +2865,11 @@ async fn staged_negotiated_publish_commit_rejects_replaced_connection() {
         0
     );
     assert_eq!(room.test_api().inspect().producer_count().await, 0);
-    assert!(!room.is_stream_published(&user_id, StreamType::Camera).await);
+    assert!(
+        !room
+            .is_stream_published(&user_id, &stream_id_for_stream_type(StreamType::Camera))
+            .await
+    );
     assert_eq!(
         room.test_api()
             .inspect()
@@ -2912,9 +2952,11 @@ async fn staged_negotiated_publish_duplicate_race_keeps_one_staged_entry_and_one
         .await
         .expect("publisher should have a live connection");
 
+    let first_intent = source_publish_intent_for_stream_type(StreamType::Camera);
+    let second_intent = source_publish_intent_for_stream_type(StreamType::Camera);
     let (first_stage, second_stage) = tokio::join!(
-        room.stage_negotiated_publish(&user_id, connection_id, StreamType::Camera, &adapter,),
-        room.stage_negotiated_publish(&user_id, connection_id, StreamType::Camera, &adapter,),
+        room.stage_negotiated_publish(&user_id, connection_id, &first_intent, &adapter),
+        room.stage_negotiated_publish(&user_id, connection_id, &second_intent, &adapter),
     );
 
     let outcomes = [
@@ -3008,7 +3050,7 @@ fn assert_bootstrap_for_stream(messages: &[UserOutbound], stream_type: StreamTyp
                 if matches!(
                     request.as_ref(),
                     RoomEventRequest::BootstrapRemoteTrack(payload)
-                        if payload.stream_type() == stream_type
+                        if payload.stream_id() == &stream_id_for_stream_type(stream_type)
                 )
         )),
         "expected a bootstrap request for {stream_type:?}"

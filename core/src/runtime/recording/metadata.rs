@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::StreamType;
+use crate::runtime::source_model::UserStreamId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,7 +27,7 @@ pub(crate) struct RecordingMetadata {
 pub(crate) struct RecordingFileMetadata {
     pub(crate) filename: String,
     pub(crate) user_id: String,
-    pub(crate) stream_type: StreamType,
+    pub(crate) stream_id: UserStreamId,
     pub(crate) codec: String,
     pub(crate) clock_rate: u32,
     pub(crate) segments: Vec<RecordingSegment>,

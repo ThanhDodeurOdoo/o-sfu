@@ -296,7 +296,7 @@ async fn join_same_user_twice(room: &Arc<super::super::Room>) -> (ConnectionId, 
 async fn publish_camera(
     room: &Arc<super::super::Room>,
     media_transport: &MediaTransport,
-) -> Option<String> {
+) -> Option<UserStreamId> {
     room.test_api()
         .media()
         .publish_track(

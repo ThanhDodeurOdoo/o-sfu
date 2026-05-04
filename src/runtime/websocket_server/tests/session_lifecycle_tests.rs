@@ -290,8 +290,12 @@ async fn websocket_finish_rolls_back_staged_publish_before_room_cleanup() {
         "publish intent should stage media and request renegotiation"
     );
     assert!(
-        room.has_staged_publish(&core_user_id, connection_id, StreamType::Camera)
-            .await,
+        room.has_staged_publish(
+            &core_user_id,
+            connection_id,
+            &stream_id_for_stream_type(StreamType::Camera)
+        )
+        .await,
         "publish should be staged before the user finishes"
     );
 
@@ -299,7 +303,11 @@ async fn websocket_finish_rolls_back_staged_publish_before_room_cleanup() {
     let cleanup = timeout(Duration::from_secs(1), async {
         loop {
             if !room
-                .has_staged_publish(&core_user_id, connection_id, StreamType::Camera)
+                .has_staged_publish(
+                    &core_user_id,
+                    connection_id,
+                    &stream_id_for_stream_type(StreamType::Camera),
+                )
                 .await
             {
                 break;
@@ -665,8 +673,12 @@ async fn stage_camera_publish(
         "publish intent should stage media and request renegotiation"
     );
     assert!(
-        room.has_staged_publish(user_id, connection_id, StreamType::Camera)
-            .await,
+        room.has_staged_publish(
+            user_id,
+            connection_id,
+            &stream_id_for_stream_type(StreamType::Camera)
+        )
+        .await,
         "publish should be staged before the close path starts"
     );
     Some(connection_id)
@@ -680,7 +692,11 @@ async fn wait_for_staged_publish_cleanup(
     timeout(Duration::from_secs(1), async {
         loop {
             if !room
-                .has_staged_publish(user_id, connection_id, StreamType::Camera)
+                .has_staged_publish(
+                    user_id,
+                    connection_id,
+                    &stream_id_for_stream_type(StreamType::Camera),
+                )
                 .await
             {
                 break;

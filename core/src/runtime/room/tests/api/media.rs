@@ -9,6 +9,13 @@ use crate::{
     runtime::{
         ConnectionId, DownloadStates, StreamType, UserId,
         media_transport::{MediaPort, MediaTransport, TransportMediaId},
+        source_model::{
+            UserStreamId,
+            test_support::{
+                source_publish_intent_for_stream_type, stream_id_for_stream_type,
+                subscription_intents_from_download_states,
+            },
+        },
     },
 };
 
@@ -32,15 +39,11 @@ impl RoomTestMedia<'_> {
         user_id: &UserId,
         publish: NegotiatedPublish,
         media_transport: &MediaTransport,
-    ) -> Option<String> {
+    ) -> Option<UserStreamId> {
+        let intent = source_publish_intent_for_stream_type(publish.stream_type);
         let validated_descriptor = {
             let state = self.room.state.read().await;
-            state.validate_publish_descriptor(
-                user_id,
-                publish.connection_id,
-                publish.stream_type,
-                publish.media_kind,
-            )?
+            state.validate_publish_descriptor(user_id, publish.connection_id, &intent)?
         };
         PendingPublishTransaction::new(validated_descriptor, publish.transport_media_id)
             .commit_with_parameters(
@@ -59,7 +62,8 @@ impl RoomTestMedia<'_> {
         media_kind: MediaKind,
         producer_rtp_parameters: RouterRtpParameters,
         media_transport: &MediaTransport,
-    ) -> Option<String> {
+    ) -> Option<UserStreamId> {
+        let intent = source_publish_intent_for_stream_type(stream_type);
         let publish_prerequisites = {
             let state = self.room.state.read().await;
             state.publish_prerequisites(user_id)?
@@ -78,12 +82,7 @@ impl RoomTestMedia<'_> {
                 .ok()?;
         let validated_descriptor = {
             let state = self.room.state.read().await;
-            state.validate_publish_descriptor(
-                user_id,
-                publisher_connection_id,
-                stream_type,
-                media_kind,
-            )?
+            state.validate_publish_descriptor(user_id, publisher_connection_id, &intent)?
         };
         let transport_media_id = match media_transport
             .publish_media(
@@ -136,7 +135,7 @@ impl RoomTestMedia<'_> {
             .set_publication_active_runtime(
                 user_id,
                 connection_id,
-                stream_type,
+                &stream_id_for_stream_type(stream_type),
                 PublicationActivity::from_active(active),
                 media_transport,
             )
@@ -159,12 +158,13 @@ impl RoomTestMedia<'_> {
         else {
             return;
         };
+        let intents = subscription_intents_from_download_states(states);
         self.room
             .update_subscription_runtime(
                 user_id,
                 connection_id,
                 target_user_id,
-                states,
+                &intents,
                 media_transport,
             )
             .await;

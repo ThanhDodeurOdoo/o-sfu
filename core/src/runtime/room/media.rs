@@ -1,3 +1,19 @@
+//! Room media orchestration above pure state and transport effects.
+//!
+//! Public callers should normally enter through [`crate::MediaSession`]. This
+//! module is the room-internal bridge that takes generic source ids and
+//! subscription intents, performs short authoritative state transitions and
+//! then delegates transport work to effect plans after locks are released.
+//!
+//! # Boundary role
+//!
+//! The room does not translate product stream labels here. A caller must already
+//! have a [`UserStreamId`] and, for subscriptions, a
+//! [`SourceSubscriptionIntent`]. That keeps business policy at the application
+//! edge while this layer focuses on ownership, staleness and cleanup ordering.
+
+use std::collections::BTreeMap;
+
 use tracing::warn;
 
 use super::{
@@ -9,9 +25,10 @@ use crate::{
     PublicationActivity, PublicationActivityOutcome, SubscriptionUpdateOutcome,
     TransportEffectOutcome, UnpublishOutcome,
     runtime::{
-        ConnectionId, DownloadStates, StreamType, UserId,
+        ConnectionId, UserId,
         diagnostics::DiagnosticsEventData,
         media_transport::{MediaPort, ObservabilityPort, ProducerActivity},
+        source_model::{SourceSubscriptionIntent, UserStreamId},
         telemetry::schema::event as telemetry_event,
     },
 };
@@ -84,14 +101,14 @@ impl Room {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
         activity: PublicationActivity,
         media_port: &impl MediaPort,
     ) -> PublicationActivityOutcome {
         let active = activity.is_active();
         let Some(producer_target) = ({
             let state = self.state.read().await;
-            state.producer_route_target(user_id, connection_id, stream_type)
+            state.producer_route_target(user_id, connection_id, stream_id)
         }) else {
             return PublicationActivityOutcome::MissingPublication;
         };
@@ -99,7 +116,7 @@ impl Room {
             self.transport_user_key(user_id, producer_target.owner_connection_id());
         let Some(outcome) = ({
             let mut state = self.state.write().await;
-            state.apply_producer_activity(user_id, &producer_target, stream_type, active)
+            state.apply_producer_activity(user_id, &producer_target, stream_id, active)
         }) else {
             return PublicationActivityOutcome::StalePublication;
         };
@@ -114,7 +131,7 @@ impl Room {
         {
             warn!(
                 ?user_id,
-                ?stream_type,
+                stream_id = %stream_id,
                 active = outcome.active,
                 "media transport failed to update producer route activity"
             );
@@ -132,9 +149,9 @@ impl Room {
             .with_media_worker_id(self.media_worker_id())
             .with_transport_media_id(outcome.transport_media_id.as_u64())
             .insert_field("active", outcome.active)
-            .insert_field("stream_type", format!("{stream_type:?}").to_lowercase()),
+            .insert_field("stream_id", stream_id.to_string()),
         );
-        outcome.fanout.emit();
+        outcome.emit();
         PublicationActivityOutcome::Applied { transport_update }
     }
 
@@ -145,7 +162,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         target_user_id: &UserId,
-        states: &DownloadStates,
+        intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
         media_port: &(impl MediaPort + ObservabilityPort),
     ) -> SubscriptionUpdateOutcome {
         let effect_plan = {
@@ -158,7 +175,7 @@ impl Room {
                 subscriptions: state.subscription_count(),
             };
             let planned_change =
-                state.plan_subscription_change(user_id, connection_id, target_user_id, states);
+                state.plan_subscription_change(user_id, connection_id, target_user_id, intents);
             let media_counts_after = RoomMediaCounts {
                 publications: state.publication_count(),
                 subscriptions: state.subscription_count(),
@@ -183,11 +200,11 @@ impl Room {
         SubscriptionUpdateOutcome::Applied
     }
 
-    pub async fn is_stream_published(&self, user_id: &UserId, stream_type: StreamType) -> bool {
+    pub async fn is_stream_published(&self, user_id: &UserId, stream_id: &UserStreamId) -> bool {
         self.state
             .read()
             .await
-            .producer_route_target_for_user(user_id, stream_type)
+            .producer_route_target_for_user(user_id, stream_id)
             .is_some()
     }
 
@@ -195,18 +212,18 @@ impl Room {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
         media_port: &impl MediaPort,
     ) -> UnpublishOutcome {
         let Some(effect_plan) = ({
             let state = self.state.read().await;
             state
-                .unpublish_transport_removals(user_id, connection_id, stream_type)
+                .unpublish_transport_removals(user_id, connection_id, stream_id)
                 .map(|transport_removals| {
                     UnpublishEffectPlan::new(
                         user_id.clone(),
                         connection_id,
-                        stream_type,
+                        stream_id.clone(),
                         transport_removals,
                     )
                 })

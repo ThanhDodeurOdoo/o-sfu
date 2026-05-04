@@ -9,26 +9,30 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use o_sfu_protocol::shared::StreamType;
 use tokio::net::TcpListener;
 use tracing::{Instrument, info};
 
-use crate::runtime::{
-    RuntimeState,
-    auth::{self, HttpDisconnectClaims, HttpRoomClaims},
-    diagnostics,
-    diagnostics::DiagnosticsUserLookup,
-    http_server::contract::{
-        CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
-        DISCONNECT_PATH, IncomingBitRateStatsResponse, METRICS_PATH, NOOP_PATH, NoopResponse,
-        RoomResponse, RoomStatsResponse, STATS_PATH, UsersStatsResponse,
+use crate::{
+    application::stream_catalog::value_for_stream_type,
+    runtime::{
+        RuntimeState,
+        auth::{self, HttpDisconnectClaims, HttpRoomClaims},
+        diagnostics,
+        diagnostics::DiagnosticsUserLookup,
+        http_server::contract::{
+            CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
+            DISCONNECT_PATH, IncomingBitRateStatsResponse, METRICS_PATH, NOOP_PATH, NoopResponse,
+            RoomResponse, RoomStatsResponse, STATS_PATH, UsersStatsResponse,
+        },
+        metrics::HttpRoute,
+        options::HttpOptions,
+        prometheus::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
+        request_origin::{request_base_url, resolve_remote_address},
+        room::{RoomConfig, RuntimeRoomStatsSnapshot},
+        telemetry::{self, schema::event as telemetry_event},
+        websocket_server,
     },
-    metrics::HttpRoute,
-    options::HttpOptions,
-    prometheus::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
-    request_origin::{request_base_url, resolve_remote_address},
-    room::{RoomConfig, RuntimeRoomStatsSnapshot},
-    telemetry::{self, schema::event as telemetry_event},
-    websocket_server,
 };
 
 const MAX_DISCONNECT_BODY_BYTES: usize = 16 * 1024;
@@ -460,20 +464,22 @@ fn tokens_match(actual: &str, expected: &str) -> bool {
 }
 
 fn http_room_stats(snapshot: RuntimeRoomStatsSnapshot) -> RoomStatsResponse {
+    let incoming_bitrate = &snapshot.users_stats.incoming_bitrate;
+    let active_stream_counts = &snapshot.users_stats.active_stream_counts;
     RoomStatsResponse {
         create_date: snapshot.create_date,
         uuid: snapshot.uuid,
         remote_address: snapshot.remote_address,
         users_stats: UsersStatsResponse {
             incoming_bit_rate: IncomingBitRateStatsResponse {
-                total: snapshot.users_stats.incoming_bitrate.total,
-                audio: snapshot.users_stats.incoming_bitrate.audio,
-                camera: snapshot.users_stats.incoming_bitrate.camera,
-                screen: snapshot.users_stats.incoming_bitrate.screen,
+                total: incoming_bitrate.total,
+                audio: value_for_stream_type(&incoming_bitrate.by_stream, StreamType::Audio),
+                camera: value_for_stream_type(&incoming_bitrate.by_stream, StreamType::Camera),
+                screen: value_for_stream_type(&incoming_bitrate.by_stream, StreamType::Screen),
             },
             count: snapshot.users_stats.count,
-            camera_count: snapshot.users_stats.camera_count,
-            screen_count: snapshot.users_stats.screen_count,
+            camera_count: value_for_stream_type(active_stream_counts, StreamType::Camera),
+            screen_count: value_for_stream_type(active_stream_counts, StreamType::Screen),
         },
         web_rtc_enabled: snapshot.web_rtc_enabled,
     }

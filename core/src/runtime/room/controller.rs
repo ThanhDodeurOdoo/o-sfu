@@ -52,8 +52,7 @@ use super::{
 use crate::{
     RoomShardingPolicy, RuntimeFeatureFlags,
     runtime::{
-        AvailableFeatures, ConnectionId, PeerSnapshot, RecordingState, RoomInstanceId, StreamType,
-        UserId,
+        AvailableFeatures, ConnectionId, PeerSnapshot, RecordingState, RoomInstanceId, UserId,
         diagnostics::{
             self, DiagnosticsQualitySummary, DiagnosticsSource, DiagnosticsStore,
             DiagnosticsUserTransport, DiagnosticsUserView,
@@ -63,6 +62,7 @@ use crate::{
         },
         metrics::RuntimeMetrics,
         recording::{MediaSource, MediaTap, RecordingService},
+        source_model::UserStreamId,
     },
 };
 
@@ -70,20 +70,20 @@ use crate::{
 ///
 /// This keeps the room boundary independent from wire `mid` assignment. The
 /// websocket user applies the update to its own current track bindings.
-/// The room only talks in terms of publisher user ids and logical stream
-/// kinds, which keeps room state independent from renegotiation details
+/// The room only talks in terms of publisher user ids and orchestration stream
+/// ids, which keeps room state independent from renegotiation details.
 #[derive(Debug, Clone)]
 pub struct TrackBindingUpdate {
     /// Publisher whose wire track set changed.
     ///
-    /// The receiver uses this together with `stream_type` to find its current
+    /// The receiver uses this together with `stream_id` to find its current
     /// browser-side binding for that remote track.
     pub user_id: UserId,
-    /// Which logical stream changd for that publisher.
+    /// Which logical stream changed for that publisher.
     ///
     /// The room never exposes transport media ids here because bindings are
     /// assigned per user after negotiation.
-    pub stream_type: StreamType,
+    pub stream_id: UserStreamId,
     /// `Some(active)` updates an existing binding. `None` removes it
     ///
     /// `None` is used for unpublish or teardown paths where the receiver must
@@ -468,27 +468,21 @@ impl Default for RoomConfig {
     }
 }
 
-/// Best-effort inbound bitrate totals grouped by logical stream type.
+/// Best-effort inbound bitrate totals grouped by orchestration stream id.
 ///
 /// These numbers are cold-path observability data assembled from transport
 /// snapshots plus room-owned producer metadata. They are not used for routing
 /// decisions in the hot path.
 ///
-/// The split into audio, camera and screen is room-owned interpretation of the
-/// current producer set, not a transport-native classification.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IncomingBitrateSnapshot {
     /// Sum reported by the transport layer for every known media flow.
     ///
     /// This can be larger than the sum of the typed buckets if transport state
     /// still contains media that room state no longer classifies.
     pub total: u64,
-    /// Audio-only share of `total`.
-    pub audio: u64,
-    /// Camera-video share of `total`.
-    pub camera: u64,
-    /// Screen-share share of `total`.
-    pub screen: u64,
+    /// Bitrate grouped by the stream id supplied by orchestration.
+    pub by_stream: BTreeMap<UserStreamId, u64>,
 }
 
 /// Cold-path observability snapshot for one live room.
@@ -498,7 +492,7 @@ pub struct IncomingBitrateSnapshot {
 ///
 /// See [`Room::diagnostics_user_views`] for the richer per-user
 /// inspection surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoomUserStatsSnapshot {
     /// Aggregate inbound bitrate across the room's current transport media.
     ///
@@ -506,14 +500,8 @@ pub struct RoomUserStatsSnapshot {
     pub incoming_bitrate: IncomingBitrateSnapshot,
     /// Total live user count in the room.
     pub count: u64,
-    /// Sessions currently publishing camera video.
-    ///
-    /// This counts distinct users, not the number of camera producers.
-    pub camera_count: u64,
-    /// Sessions currently publishing screen video.
-    ///
-    /// This counts distinct users, not the number of screen producers.
-    pub screen_count: u64,
+    /// Distinct users with at least one active publication for each stream id.
+    pub active_stream_counts: BTreeMap<UserStreamId, u64>,
 }
 
 /// Cheap publication and subscription counters used around room transitions.
@@ -708,13 +696,12 @@ impl Room {
         &self,
         consumer_user_id: &UserId,
         producer_user_id: &UserId,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
     ) -> Option<ConsumerRouteState> {
-        self.state.read().await.consumer_route_state(
-            consumer_user_id,
-            producer_user_id,
-            stream_type,
-        )
+        self.state
+            .read()
+            .await
+            .consumer_route_state(consumer_user_id, producer_user_id, stream_id)
     }
 
     #[must_use]
@@ -807,35 +794,25 @@ impl Room {
             .map(|(user_id, connection_id)| self.transport_user_key(&user_id, connection_id))
             .collect::<Vec<_>>();
         let transport_snapshot = observability_port.transport_bitrate_snapshot(&session_keys);
-        let mut aggregated_bitrate = IncomingBitrateSnapshot {
+        let mut incoming_bitrate = IncomingBitrateSnapshot {
             total: transport_snapshot.total,
             ..Default::default()
         };
         for (transport_media_id, bits) in transport_snapshot.per_media {
-            let Some(stream_type) =
-                state.producer_stream_type_for_transport_media_id(transport_media_id)
+            let Some(stream_id) =
+                state.producer_stream_id_for_transport_media_id(transport_media_id)
             else {
                 continue;
             };
-            match stream_type {
-                StreamType::Audio => {
-                    aggregated_bitrate.audio = aggregated_bitrate.audio.saturating_add(bits);
-                }
-                StreamType::Camera => {
-                    aggregated_bitrate.camera = aggregated_bitrate.camera.saturating_add(bits);
-                }
-                StreamType::Screen => {
-                    aggregated_bitrate.screen = aggregated_bitrate.screen.saturating_add(bits);
-                }
-            }
+            let entry = incoming_bitrate.by_stream.entry(stream_id).or_default();
+            *entry = entry.saturating_add(bits);
         }
-        let (count, camera_count, screen_count) = state.user_stats_counts();
+        let (count, active_stream_counts) = state.user_stats_counts();
         drop(state);
         RoomUserStatsSnapshot {
-            incoming_bitrate: aggregated_bitrate,
+            incoming_bitrate,
             count,
-            camera_count,
-            screen_count,
+            active_stream_counts,
         }
     }
 

@@ -14,10 +14,7 @@
 
 use tracing::warn;
 
-use crate::{
-    UnpublishOutcome,
-    runtime::{StreamType, UserId},
-};
+use crate::{UnpublishOutcome, runtime::UserId};
 
 mod source_policy;
 pub(super) use source_policy::SourcePolicyEffectPlan;
@@ -34,6 +31,7 @@ use crate::runtime::{
     ConnectionId,
     diagnostics::DiagnosticsEventData,
     media_transport::{ConsumerActivity, MediaPort, TransportMediaId},
+    source_model::UserStreamId,
     telemetry::schema::event as telemetry_event,
 };
 
@@ -61,7 +59,8 @@ struct SubscriptionTransportOp {
     producer_user_id: UserId,
     producer_connection_id: ConnectionId,
     source_media: TransportMediaId,
-    stream_type: StreamType,
+    stream_id: UserStreamId,
+    media_kind: o_sfu_router::MediaKind,
     active: bool,
     diagnostics: DiagnosticsEventData,
 }
@@ -111,7 +110,8 @@ impl SubscriptionEffectPlan {
                 producer_user_id: route_update.producer_user_id().clone(),
                 producer_connection_id: route_update.source_connection_id(),
                 source_media: route_update.source_media(),
-                stream_type: route_update.stream_type(),
+                stream_id: route_update.stream_id().clone(),
+                media_kind: route_update.media_kind(),
                 active: route_update.active(),
                 diagnostics: DiagnosticsEventData::for_user(
                     room.uuid(),
@@ -131,10 +131,7 @@ impl SubscriptionEffectPlan {
                     "source_transport_media_id",
                     route_update.source_media().as_u64(),
                 )
-                .insert_field(
-                    "stream_type",
-                    format!("{:?}", route_update.stream_type()).to_lowercase(),
-                ),
+                .insert_field("stream_id", route_update.stream_id().to_string()),
             })
             .collect();
         Self {
@@ -191,8 +188,8 @@ impl SubscriptionEffectPlan {
     ///
     /// A resumed video route needs more than an `active=true` flip. After a
     /// long pause the receiver may need a fresh decodable frame before it can
-    /// render again, so successful camera and screen resumes trigger an
-    /// immediate keyframe request on the underlying consumer route.
+    /// render again, so successful video resumes trigger an immediate keyframe
+    /// request on the underlying consumer route.
     pub(super) async fn execute(self, room: &Room, media_port: &impl MediaPort) {
         if let Some(media_count_delta) = self.media_count_delta {
             media_count_delta.record(room);
@@ -221,15 +218,12 @@ impl SubscriptionEffectPlan {
                 warn!(
                     user_id = ?transport_op.consumer_user_id,
                     target_user_id = ?transport_op.producer_user_id,
-                    stream_type = ?transport_op.stream_type,
+                    stream_id = %transport_op.stream_id,
                     active = transport_op.active,
                     "media transport failed to update consumer route activity"
                 );
             } else if transport_op.active
-                && matches!(
-                    transport_op.stream_type,
-                    StreamType::Camera | StreamType::Screen
-                )
+                && transport_op.media_kind == o_sfu_router::MediaKind::Video
                 && media_port
                     .request_consumer_keyframe(
                         &room.transport_user_key(
@@ -249,7 +243,7 @@ impl SubscriptionEffectPlan {
                 warn!(
                     user_id = ?transport_op.consumer_user_id,
                     target_user_id = ?transport_op.producer_user_id,
-                    stream_type = ?transport_op.stream_type,
+                    stream_id = %transport_op.stream_id,
                     "media transport failed to request a consumer keyframe refresh"
                 );
             }
@@ -424,10 +418,7 @@ impl ConsumerBootstrapOp {
                 "source_transport_media_id",
                 target.transport_media_id().as_u64(),
             )
-            .insert_field(
-                "stream_type",
-                format!("{:?}", target.stream_type()).to_lowercase(),
-            )
+            .insert_field("stream_id", target.stream_id().to_string())
             .insert_field("origin", format!("{origin:?}").to_lowercase()),
         );
         let _ = sender.send(super::UserOutbound::Request(Box::new(
@@ -440,7 +431,7 @@ impl ConsumerBootstrapOp {
 pub(super) struct UnpublishEffectPlan {
     user_id: UserId,
     connection_id: ConnectionId,
-    stream_type: StreamType,
+    stream_id: UserStreamId,
     transport_removals: Vec<TransportMediaRemoval>,
 }
 
@@ -448,13 +439,13 @@ impl UnpublishEffectPlan {
     pub(super) fn new(
         user_id: UserId,
         connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_id: UserStreamId,
         transport_removals: Vec<TransportMediaRemoval>,
     ) -> Self {
         Self {
             user_id,
             connection_id,
-            stream_type,
+            stream_id,
             transport_removals,
         }
     }
@@ -479,8 +470,7 @@ impl UnpublishEffectPlan {
                 publications: state.publication_count(),
                 subscriptions: state.subscription_count(),
             };
-            let outcome =
-                state.unpublish_track(&self.user_id, self.connection_id, self.stream_type);
+            let outcome = state.unpublish_track(&self.user_id, self.connection_id, &self.stream_id);
             let media_counts_after = RoomMediaCounts {
                 publications: state.publication_count(),
                 subscriptions: state.subscription_count(),
@@ -492,13 +482,13 @@ impl UnpublishEffectPlan {
             warn!(
                 user_id = ?self.user_id,
                 connection_id = ?self.connection_id,
-                stream_type = ?self.stream_type,
+                stream_id = %self.stream_id,
                 "transport cleanup succeeded but room state commit failed"
             );
             return UnpublishOutcome::StateCommitRejected;
         };
         MediaCountDelta::new(media_counts_before, media_counts_after).record(room);
-        outcome.emit(&self.user_id, self.stream_type);
+        outcome.emit(&self.user_id, &self.stream_id);
         UnpublishOutcome::Unpublished
     }
 }

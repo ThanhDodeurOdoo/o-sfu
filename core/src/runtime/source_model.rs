@@ -8,12 +8,15 @@
 //! handles: those layers may attach facts to a source, but they must not define
 //! the source identity.
 //!
-//! A published camera, screen share or audio track is modeled as one
-//! [`PublishedSourceId`] plus one or more [`SourceEncodingId`] values. `Mid`,
-//! `Rid` and `Ssrc` stay as negotiated or transport-facing attachment points.
-//! Keeping those identities separate lets later same-room
-//! spillover and recording consume the same source inventory without redefining
-//! it around local worker placement.
+//! A published media stream is modeled as one [`PublishedSourceId`] plus one or
+//! more [`SourceEncodingId`] values. `Mid`, `Rid` and `Ssrc` stay as negotiated
+//! or transport-facing attachment points. Keeping those identities separate
+//! lets later same-room spillover and recording consume the same source
+//! inventory without redefining it around local worker placement.
+//!
+//! Business layers should express stream-specific behavior by constructing
+//! [`SourcePublishIntent`] values. Core policy reads the generic
+//! [`SourcePolicy`] carried by each source, never compatibility stream labels.
 //!
 //! # Performance
 //!
@@ -34,9 +37,349 @@ use std::fmt::{self, Display, Formatter};
 
 use o_sfu_rfc::rtp::frame_marking;
 use o_sfu_router::{MediaFormat, MediaKind, Mid, Rid, Ssrc};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::runtime::{StreamType, UserId};
+use crate::runtime::{UserId, VideoLayoutIntent};
+
+/// Orchestration-owned stream identity inside one user's source inventory.
+///
+/// The room treats this value as an opaque slot name scoped by the publishing
+/// user. Compatibility layers and future orchestrators allocate the stable
+/// stream ids and attach media and policy metadata separately.
+///
+/// # Invariant
+///
+/// `UserStreamId` is not globally unique. It is unique only together with the
+/// owning user id. Room indexes that need publication identity must pair it with
+/// the owner or use [`PublishedSourceId`] after a publish commits.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct UserStreamId(String);
+
+impl UserStreamId {
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Display for UserStreamId {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl From<&str> for UserStreamId {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<String> for UserStreamId {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+#[cfg(any(test, feature = "testing-transport"))]
+#[path = "source_model/test_support.rs"]
+pub(crate) mod test_support;
+
+/// Orchestration-provided publish intent for one user stream.
+///
+/// This is the API business-layer code should pass into core when a user starts
+/// publishing. It carries the stream identity, technical media kind and room
+/// policy as one immutable decision. Core captures these values when the staged
+/// publish commits.
+///
+/// # Boundary role
+///
+/// Compatibility concepts such as "camera" or "screen" must be translated into
+/// this type before entering core. If a product stream needs different layout
+/// or bandwidth behavior, change the orchestration catalog that builds this
+/// intent instead of adding stream-specific branches to room state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourcePublishIntent {
+    stream_id: UserStreamId,
+    media_kind: MediaKind,
+    policy: SourcePolicy,
+}
+
+impl SourcePublishIntent {
+    #[must_use]
+    pub fn new(stream_id: UserStreamId, media_kind: MediaKind, policy: SourcePolicy) -> Self {
+        Self {
+            stream_id,
+            media_kind,
+            policy,
+        }
+    }
+
+    #[must_use]
+    pub const fn stream_id(&self) -> &UserStreamId {
+        &self.stream_id
+    }
+
+    #[must_use]
+    pub const fn media_kind(&self) -> MediaKind {
+        self.media_kind
+    }
+
+    #[must_use]
+    pub const fn policy(&self) -> SourcePolicy {
+        self.policy
+    }
+}
+
+/// Room policy metadata supplied by orchestration for one source.
+///
+/// `SourcePolicy` is the generic contract between business orchestration and
+/// core room policy. It tells core what it may do with a source after publish,
+/// but it does not name the product feature that created the stream and it does
+/// not limit how many streams a user may publish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourcePolicy {
+    layout: Option<SourceLayoutPolicy>,
+    adaptation: SourceAdaptationPolicy,
+    active_speaker: Option<ActiveSpeakerPolicy>,
+}
+
+impl SourcePolicy {
+    #[must_use]
+    pub const fn new(
+        layout: Option<SourceLayoutPolicy>,
+        adaptation: SourceAdaptationPolicy,
+        active_speaker: Option<ActiveSpeakerPolicy>,
+    ) -> Self {
+        Self {
+            layout,
+            adaptation,
+            active_speaker,
+        }
+    }
+
+    #[must_use]
+    pub const fn hidden() -> Self {
+        Self::new(None, SourceAdaptationPolicy::None, None)
+    }
+
+    #[must_use]
+    pub const fn layout(self) -> Option<SourceLayoutPolicy> {
+        self.layout
+    }
+
+    #[must_use]
+    pub const fn adaptation(self) -> SourceAdaptationPolicy {
+        self.adaptation
+    }
+
+    #[must_use]
+    pub const fn active_speaker(self) -> Option<ActiveSpeakerPolicy> {
+        self.active_speaker
+    }
+}
+
+/// Default receiver-layout role for one source.
+///
+/// Orchestration sets this when a source is published. Core combines it with a
+/// receiver's explicit layout preference and the active-speaker snapshot to
+/// choose a [`SourceRoomPolicySelector`] for each receiver/source route.
+///
+/// If a source has no layout policy, core treats it as hidden for video budget
+/// planning. That is useful for audio and for future sources that should route
+/// without entering receiver video layout decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceLayoutPolicy {
+    visible_selector: SourceRoomPolicySelector,
+    active_speaker_selector: Option<SourceRoomPolicySelector>,
+}
+
+impl SourceLayoutPolicy {
+    #[must_use]
+    pub const fn new(
+        visible_selector: SourceRoomPolicySelector,
+        active_speaker_selector: Option<SourceRoomPolicySelector>,
+    ) -> Self {
+        Self {
+            visible_selector,
+            active_speaker_selector,
+        }
+    }
+
+    #[must_use]
+    pub fn resolve(
+        self,
+        preference: Option<VideoLayoutIntent>,
+        active_speaker: bool,
+    ) -> SourceRoomPolicySelector {
+        match preference {
+            Some(VideoLayoutIntent::Pinned) => SourceRoomPolicySelector::Pinned,
+            Some(VideoLayoutIntent::Featured) => SourceRoomPolicySelector::Featured,
+            Some(VideoLayoutIntent::Hidden) => SourceRoomPolicySelector::Hidden,
+            Some(VideoLayoutIntent::Overflow) => SourceRoomPolicySelector::Overflow,
+            None if active_speaker => self
+                .active_speaker_selector
+                .unwrap_or(self.visible_selector),
+            Some(VideoLayoutIntent::VisibleThumbnail) | None => self.visible_selector,
+        }
+    }
+}
+
+/// Receiver bandwidth behavior for one published source.
+///
+/// Orchestration chooses this once, when building [`SourcePublishIntent`]. Core
+/// then uses it to decide whether the source participates in receiver-video
+/// layer selection, route pausing and over-budget diagnostics.
+///
+/// # Example situations
+///
+/// Use [`Self::None`] for audio or metadata-like sources that should not spend
+/// receiver video budget. Use [`Self::ScalableVideo`] for video with cheap and
+/// high-quality encodings. Use [`Self::ReadableDetail`] when the receiver must
+/// keep enough detail to inspect text or other fine visual content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceAdaptationPolicy {
+    /// Keep this source out of receiver-video BWE control.
+    ///
+    /// Core may still route the source through normal subscriptions. The
+    /// budget planner does not choose a video encoding for it, count it in the
+    /// receiver video budget or pause it because of BWE pressure.
+    ///
+    /// Example: a speech detector source can drive active-speaker state without
+    /// entering video-layer selection.
+    None,
+    /// Let the receiver-video planner choose among advertised encodings.
+    ///
+    /// The planner can pick a lower encoding for thumbnail routes, request a
+    /// keyframe after the selected encoding changes and pause non-protected
+    /// routes when the receiver budget cannot carry all selected video.
+    ///
+    /// Example: a two-layer video source can use the high layer while featured
+    /// and the low layer while shown as a secondary tile.
+    ScalableVideo,
+    /// Keep readable detail ahead of normal thumbnail adaptation.
+    ///
+    /// The planner targets the highest advertised encoding. Routes with this
+    /// policy are protected from normal overload pauses, so diagnostics report
+    /// a protected over-budget exception if they keep the receiver above BWE.
+    ///
+    /// Example: a text-heavy visual source should stay on the readable encoding
+    /// even when ordinary thumbnails are degraded or paused.
+    ReadableDetail,
+}
+
+/// Active-speaker relationship supplied by orchestration.
+///
+/// Core receives transport active-speaker observations, but orchestration
+/// decides which sources participate in that relationship. Audio-like sources
+/// normally detect speech. Video-like sources may be promotable by speech from
+/// another source in the same group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveSpeakerPolicy {
+    group: ActiveSpeakerGroup,
+    role: ActiveSpeakerSourceRole,
+}
+
+impl ActiveSpeakerPolicy {
+    #[must_use]
+    pub const fn new(group: ActiveSpeakerGroup, role: ActiveSpeakerSourceRole) -> Self {
+        Self { group, role }
+    }
+
+    #[must_use]
+    pub const fn group(self) -> ActiveSpeakerGroup {
+        self.group
+    }
+
+    #[must_use]
+    pub const fn role(self) -> ActiveSpeakerSourceRole {
+        self.role
+    }
+}
+
+/// Orchestration-owned active-speaker group id.
+///
+/// Groups let future orchestrators keep unrelated speech domains separate
+/// without teaching core about product stream names. The current Odoo
+/// compatibility layer uses [`Self::MAIN`] for the call's normal audio and
+/// camera relationship.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveSpeakerGroup(u16);
+
+impl ActiveSpeakerGroup {
+    pub const MAIN: Self = Self(0);
+}
+
+/// Role one source plays inside an active-speaker group.
+///
+/// # Example situation
+///
+/// A speech source and a video source can share [`ActiveSpeakerGroup::MAIN`].
+/// The speech source uses [`Self::Detector`]. The video source uses
+/// [`Self::Promotable`], so speech observations can promote that user's video
+/// route for receivers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActiveSpeakerSourceRole {
+    /// Transport observations from this source can mark its owner active.
+    ///
+    /// A detector is usually an audio-like source. It does not receive video
+    /// layout treatment by itself.
+    Detector,
+    /// This source can receive active-speaker video treatment for its owner.
+    ///
+    /// Core promotes a promotable source only when a detector in the same group
+    /// marks the same owner as active.
+    Promotable,
+}
+
+/// Per-source subscription update supplied by orchestration.
+///
+/// This is the generic core shape for receiver download intent. Business
+/// compatibility code decides which stream ids to include. Core merges partial
+/// updates by stream id and applies the resulting active or layout preference
+/// to existing and future consumer routes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SourceSubscriptionIntent {
+    active: Option<bool>,
+    layout: Option<VideoLayoutIntent>,
+}
+
+impl SourceSubscriptionIntent {
+    #[must_use]
+    pub const fn new(active: Option<bool>, layout: Option<VideoLayoutIntent>) -> Self {
+        Self { active, layout }
+    }
+
+    #[must_use]
+    pub const fn active(self) -> Option<bool> {
+        self.active
+    }
+
+    #[must_use]
+    pub const fn layout(self) -> Option<VideoLayoutIntent> {
+        self.layout
+    }
+
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.active.is_none() && self.layout.is_none()
+    }
+
+    pub const fn merge(&mut self, update: Self) {
+        if update.active.is_some() {
+            self.active = update.active;
+        }
+        if update.layout.is_some() {
+            self.layout = update.layout;
+        }
+    }
+}
 
 /// Stable room-domain identity for one logical published source.
 ///
@@ -206,26 +549,47 @@ impl PublishedSourceOwner {
     }
 }
 
-/// Consumer-side routing intent for a source.
+/// Resolved packet-selection command for one consumer/source route.
 ///
-/// Selectors live above packet gates. Room policy can express whether a
-/// consumer wants the source open, pinned to a concrete source encoding or left
-/// to a room policy bucket. Transport code should receive a projected
-/// transport-native gate after this intent is resolved
+/// The budget planner writes selectors into room state. A later projection step
+/// turns them into transport packet gates such as "open" or "forward this RID".
+/// Transport code should never receive [`Self::RoomPolicy`], because that value
+/// still needs room-level policy resolution.
+///
+/// # Example situations
+///
+/// [`Self::Open`] means the route has no source-level packet gate.
+/// [`Self::Encoding`] means "forward the negotiated RID for this encoding".
+/// [`Self::OperatingPoint`] means "forward this encoding up to this temporal
+/// layer". [`Self::RoomPolicy`] means "this route is a visible thumbnail" or
+/// another room role that must still be resolved before transport sees it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SourceSelector {
-    /// No source-level limit has been requested.
+    /// Forward the source without a source-level packet gate.
+    ///
+    /// This is the default for sources that are not controlled by receiver-video
+    /// adaptation or when the planner has not selected a narrower gate.
     #[default]
     Open,
-    /// Select one source encoding by runtime identity.
+    /// Forward only one advertised source encoding.
+    ///
+    /// Projection maps the encoding id to its negotiated RID. If the encoding
+    /// has no RID, projection fails rather than guessing at packet identity.
     Encoding(SourceEncodingId),
-    /// Select one source encoding plus a codec-native temporal layer ceiling.
+    /// Forward one encoding up to a codec-native temporal layer ceiling.
+    ///
+    /// Projection requires advertised temporal metadata and rejects a selector
+    /// whose temporal ceiling is higher than the source declared.
     #[allow(
         dead_code,
         reason = "operating-point selectors stay internal until RFC 9626 metadata negotiation is implemented"
     )]
     OperatingPoint(SourceOperatingPoint),
-    /// Defer the concrete encoding choice to room-level policy.
+    /// Keep the route in a named room-policy bucket.
+    ///
+    /// This is valid as policy input and diagnostics vocabulary. It must be
+    /// resolved to [`Self::Open`], [`Self::Encoding`] or [`Self::OperatingPoint`]
+    /// before transport packet-gate projection.
     #[allow(
         dead_code,
         reason = "room-policy selectors are policy input today; the budget planner still resolves them before transport projection"
@@ -252,26 +616,59 @@ impl SourceSelector {
     }
 }
 
-/// Room policy bucket used before policy resolves to a concrete encoding.
+/// Receiver-specific layout role before a concrete encoding is chosen.
 ///
-/// This keeps layout intent out of the transport layer. The room can decide
-/// later that a thumbnail should map to a lower simulcast encoding while a
-/// featured source stays unconstrained.
+/// Layout code produces this role for each receiver/source route. The budget
+/// planner reads it to decide quality targets, overload protection and pause
+/// order. Transport code sees only the final packet gate after this role has
+/// been resolved.
+///
+/// # Example situations
+///
+/// A receiver action can produce [`Self::Pinned`] or [`Self::Featured`]. Source
+/// policy can produce [`Self::ReadableDetail`]. Active-speaker state can produce
+/// [`Self::ActiveSpeaker`]. Default visible video often starts as
+/// [`Self::VisibleThumbnail`], while receiver layout can move a subscribed
+/// route to [`Self::Hidden`] or [`Self::Overflow`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceRoomPolicySelector {
     /// The receiver explicitly pinned this source.
+    ///
+    /// Pinned routes use featured quality and are protected from overload
+    /// pauses. They share the highest budget priority with featured routes.
     Pinned,
-    /// The receiver explicitly promoted this source to featured treatment.
+    /// The receiver explicitly requested featured treatment for this source.
+    ///
+    /// Featured routes use featured quality and are protected from overload
+    /// pauses. They share the highest budget priority with pinned routes.
     Featured,
-    /// Screen share keeps readability-focused priority separate from cameras.
-    ScreenShare,
-    /// The active-speaker snapshot promoted this camera source.
+    /// Source policy says readable detail matters for this route.
+    ///
+    /// Readable-detail routes use featured quality and are protected from
+    /// overload pauses, but explicit pinned or featured receiver intent outranks
+    /// them.
+    ReadableDetail,
+    /// Active-speaker policy promoted this source for the current receiver.
+    ///
+    /// Active-speaker routes use featured quality and are protected from
+    /// overload pauses. Explicit receiver intent and readable detail outrank
+    /// this role.
     ActiveSpeaker,
-    /// Source is consumed as a visible small tile.
+    /// The source is visible as a secondary tile.
+    ///
+    /// Visible thumbnails count toward the receiver's visible-video budget.
+    /// They can downswitch to cheaper encodings and can be paused if protected
+    /// routes still leave the receiver over budget.
     VisibleThumbnail,
-    /// Source is subscribed but not currently visible in the receiver layout.
+    /// The receiver is subscribed but the source is not visible right now.
+    ///
+    /// Hidden routes do not count toward the visible-video budget. They are
+    /// first-class diagnostics and first candidates for overload pause.
     Hidden,
-    /// Source is outside the visible receiver tile set.
+    /// The source is outside the receiver's visible tile set.
+    ///
+    /// Overflow routes behave like hidden routes for budget purposes, but keep
+    /// a distinct pause reason so diagnostics can explain the layout decision.
     Overflow,
 }
 
@@ -280,7 +677,7 @@ impl SourceRoomPolicySelector {
     pub const fn priority(self) -> SourceRoutePriority {
         match self {
             Self::Pinned | Self::Featured => SourceRoutePriority::PinnedOrFeatured,
-            Self::ScreenShare => SourceRoutePriority::ScreenShare,
+            Self::ReadableDetail => SourceRoutePriority::ReadableDetail,
             Self::ActiveSpeaker => SourceRoutePriority::ActiveSpeaker,
             Self::VisibleThumbnail => SourceRoutePriority::VisibleThumbnail,
             Self::Hidden | Self::Overflow => SourceRoutePriority::HiddenOrOverflow,
@@ -291,7 +688,7 @@ impl SourceRoomPolicySelector {
     pub const fn uses_featured_quality(self) -> bool {
         matches!(
             self,
-            Self::Pinned | Self::Featured | Self::ScreenShare | Self::ActiveSpeaker
+            Self::Pinned | Self::Featured | Self::ReadableDetail | Self::ActiveSpeaker
         )
     }
 
@@ -301,17 +698,34 @@ impl SourceRoomPolicySelector {
     }
 }
 
-/// Server-owned policy role for one upload or source encoding layer.
+/// Server-owned role for one advertised upload encoding.
 ///
-/// The browser may use this as sender-parameter metadata, but the room remains
-/// authoritative for deciding when a receiver should consume the layer.
+/// The role lets the budget planner understand what an encoding is meant for
+/// without reading product stream names. It is advertised to the browser as
+/// sender metadata and later copied into the source descriptor after negotiation.
+///
+/// # Example situation
+///
+/// A two-layer video offer can mark the high layer as [`Self::Featured`] and the
+/// low layer as [`Self::Thumbnail`]. The budget planner can then choose the low
+/// layer for a secondary tile without knowing why the product created the
+/// source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadLayerPolicyRole {
-    /// Highest useful quality for featured, pinned, or screen-readable video.
+    /// Highest useful quality for protected or detail-focused routes.
+    ///
+    /// The planner avoids using this as the first cheap fallback for thumbnail
+    /// routes when a lower-cost encoding exists.
     Featured,
-    /// Normal thumbnail quality for visible secondary video.
+    /// Normal quality target for visible secondary video.
+    ///
+    /// This is the expected low-cost encoding for thumbnail routes before the
+    /// planner considers pausing the route.
     Thumbnail,
-    /// Future low-cost thumbnail rung used before pausing a route.
+    /// Lower-cost thumbnail rung below the normal thumbnail target.
+    ///
+    /// This is reserved for a future upload ladder where the server advertises
+    /// more than two useful video encodings.
     DegradedThumbnail,
 }
 
@@ -326,31 +740,62 @@ impl UploadLayerPolicyRole {
     }
 }
 
-/// Receiver-side priority bucket used by room policy and diagnostics.
+/// Overload priority derived from a route's room-policy selector.
+///
+/// The receiver budget planner uses this ordering when it has already tried
+/// cheaper encodings and still needs to pause routes. Lower-priority buckets are
+/// paused first. Protected buckets are not paused by normal overload handling.
+///
+/// # Example situation
+///
+/// When selected video exceeds the receiver BWE, hidden and overflow routes are
+/// paused before visible thumbnails. Active-speaker, readable-detail and pinned
+/// or featured routes stay protected, so they can produce a protected
+/// over-budget diagnostic instead of a pause.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SourceRoutePriority {
-    /// User-pinned or explicitly featured video wins overload decisions.
+    /// Explicit receiver intent.
+    ///
+    /// Pinned and featured routes are protected and outrank every other route.
     PinnedOrFeatured,
-    /// Screen share keeps readability ahead of active-speaker camera bias.
-    ScreenShare,
-    /// Active speaker is important, but still below explicit receiver intent.
+    /// Detail-preserving source policy.
+    ///
+    /// Readable-detail routes are protected. They outrank active-speaker routes
+    /// but stay below explicit pinned or featured receiver intent.
+    ReadableDetail,
+    /// Server-promoted active-speaker route.
+    ///
+    /// Active-speaker routes are protected. Explicit receiver intent and
+    /// readable-detail source policy outrank them.
     ActiveSpeaker,
-    /// Visible camera thumbnails are useful but degradable.
+    /// Visible secondary route.
+    ///
+    /// Visible thumbnails can be downswitched and then paused if protected
+    /// routes still leave the receiver over budget.
     VisibleThumbnail,
-    /// Hidden and overflow videos are first to lose budget in later overload work.
+    /// Route that is not currently visible.
+    ///
+    /// Hidden and overflow routes are first to pause under receiver budget
+    /// pressure.
     HiddenOrOverflow,
 }
 
-/// Server-owned reason why video policy may withhold a live route.
+/// Reason why room policy withholds media for a subscribed route.
 ///
-/// The reason is separate from the compatibility subscription state. A user can
-/// stay subscribed while room policy temporarily withholds RTP delivery for a
-/// receiver-specific overload decision.
+/// This is separate from subscription state. A receiver can remain subscribed
+/// while core temporarily closes the packet gate for budget or layout reasons.
+///
+/// # Example situations
+///
+/// [`Self::HiddenTile`] means layout hid the source. [`Self::OverflowTile`]
+/// means layout pushed it outside the visible tile set. [`Self::BudgetPressure`]
+/// means the route was useful, but the receiver BWE could not fit it after
+/// cheaper layers were tried.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyPauseReason {
-    /// The receiver budget cannot fit this route after lower layers were tried.
+    /// The receiver budget cannot fit this route after cheaper layers were tried.
     BudgetPressure,
-    /// The receiver layout says the source is currently hidden.
+    /// The receiver layout explicitly hides this source.
     HiddenTile,
     /// The receiver layout puts this source outside the visible tile set.
     OverflowTile,
@@ -358,10 +803,20 @@ pub enum PolicyPauseReason {
     MissingUsableLayer,
 }
 
-/// Receiver-level reason why selected video may exceed the available budget.
+/// Reason selected video is allowed to exceed the receiver bandwidth estimate.
+///
+/// # Example situation
+///
+/// After thumbnails and hidden routes have been degraded or paused, a pinned or
+/// readable-detail route can still exceed BWE. Diagnostics use this reason to
+/// show that the over-budget state came from protected room policy rather than
+/// from a missing pause decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverBudgetExceptionReason {
-    /// The remaining active routes are protected by layout intent.
+    /// The remaining over-budget routes are protected by room policy.
+    ///
+    /// This means the planner already degraded or paused every non-protected
+    /// route it could, but protected routes still exceed the latest BWE.
     ProtectedRoute,
 }
 
@@ -510,10 +965,10 @@ impl ConsumerSourceSelection {
 
 /// Authoritative room-domain description of one published source.
 ///
-/// The descriptor groups the stable source id, owner, compatibility stream
-/// label, media kind and negotiated source facts that recording, diagnostics
-/// and transport projection need to agree on. It does not own router producer
-/// state, socket state or packet-loop routing tables
+/// The descriptor groups the stable source id, owner, orchestration stream id,
+/// media kind, source policy and negotiated source facts that recording,
+/// diagnostics and transport projection need to agree on. It does not own
+/// router producer state, socket state or packet-loop routing tables.
 ///
 /// # Invariants
 ///
@@ -526,10 +981,12 @@ pub struct PublishedSourceDescriptor {
     source_id: PublishedSourceId,
     /// Live publishing authority used to reject stale commit or cleanup work.
     owner: PublishedSourceOwner,
-    /// Odoo-facing compatibility label kept as source metadata, not identity.
-    stream_type: StreamType,
+    /// Orchestration-owned stream identity scoped by the source owner.
+    stream_id: UserStreamId,
     /// Router-facing media family used by negotiation and route planning.
     media_kind: MediaKind,
+    /// Room policy metadata supplied by orchestration for this source.
+    policy: SourcePolicy,
     /// Negotiated media-section identity when the RTC edge has one.
     mid: Option<Mid>,
     /// Advertised encodings owned by this logical source.
@@ -562,8 +1019,9 @@ impl PublishedSourceDescriptor {
         Ok(Self {
             source_id: parts.source_id,
             owner: parts.owner,
-            stream_type: parts.stream_type,
+            stream_id: parts.stream_id,
             media_kind: parts.media_kind,
+            policy: parts.policy,
             mid: parts.mid,
             encodings: parts.encodings,
         })
@@ -580,13 +1038,18 @@ impl PublishedSourceDescriptor {
     }
 
     #[must_use]
-    pub const fn stream_type(&self) -> StreamType {
-        self.stream_type
+    pub const fn stream_id(&self) -> &UserStreamId {
+        &self.stream_id
     }
 
     #[must_use]
     pub const fn media_kind(&self) -> MediaKind {
         self.media_kind
+    }
+
+    #[must_use]
+    pub const fn policy(&self) -> SourcePolicy {
+        self.policy
     }
 
     #[must_use]
@@ -622,10 +1085,12 @@ pub struct PublishedSourceDescriptorParts {
     pub source_id: PublishedSourceId,
     /// Publishing user authority for stale-work checks.
     pub owner: PublishedSourceOwner,
-    /// Compatibility label used by the existing Odoo-facing API.
-    pub stream_type: StreamType,
+    /// Orchestration-owned stream identity scoped by the source owner.
+    pub stream_id: UserStreamId,
     /// Router-facing media family for this source.
     pub media_kind: MediaKind,
+    /// Room policy metadata supplied by orchestration for this source.
+    pub policy: SourcePolicy,
     /// Negotiated media-section id when known.
     pub mid: Option<Mid>,
     /// Encodings that belong to this source.
@@ -636,7 +1101,7 @@ pub struct PublishedSourceDescriptorParts {
 ///
 /// This keeps policy identity separate from negotiated transport facts. RID,
 /// SSRC, bitrate and codec data are metadata that help route projection,
-/// diagnostics and recording describe the encoding; they are not substitutes
+/// diagnostics and recording describe the encoding. They are not substitutes
 /// for [`SourceEncodingId`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceEncodingDescriptor {
@@ -849,8 +1314,9 @@ mod tests {
         let descriptor = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id,
             owner,
-            stream_type: StreamType::Camera,
+            stream_id: UserStreamId::new("main-video"),
             media_kind: MediaKind::Video,
+            policy: SourcePolicy::hidden(),
             mid: Some(Mid::new("video-0")),
             encodings: vec![
                 source_encoding(source_id, low_encoding_id, "lo"),
@@ -861,7 +1327,7 @@ mod tests {
 
         assert_eq!(descriptor.source_id(), source_id);
         assert_eq!(descriptor.owner().user_id(), &UserId::Integer(42));
-        assert_eq!(descriptor.stream_type(), StreamType::Camera);
+        assert_eq!(descriptor.stream_id().as_str(), "main-video");
         assert_eq!(descriptor.media_kind(), MediaKind::Video);
         assert_eq!(
             descriptor.mid().map(Mid::as_str),
@@ -900,8 +1366,9 @@ mod tests {
         let result = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id,
             owner: PublishedSourceOwner::new(UserId::Integer(42)),
-            stream_type: StreamType::Camera,
+            stream_id: UserStreamId::new("main-video"),
             media_kind: MediaKind::Video,
+            policy: SourcePolicy::hidden(),
             mid: None,
             encodings: vec![source_encoding(other_source_id, encoding_id, "lo")],
         });

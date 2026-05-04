@@ -257,7 +257,10 @@ async fn invalid_protocol_initial_answer_closes_before_user_negotiates() {
     );
     assert!(
         !room
-            .is_stream_published(&UserId::Integer(91), StreamType::Camera)
+            .is_stream_published(
+                &UserId::Integer(91),
+                &stream_id_for_stream_type(StreamType::Camera),
+            )
             .await,
         "invalid initial answer must not let queued publish state commit through a fallback-ready user"
     );

@@ -91,11 +91,11 @@ mod tests {
 
     use super::*;
     use crate::runtime::{
-        StreamType, UserId,
+        UserId,
         source_model::{
             PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
             SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
-            SourceOperatingPoint, SourceTemporalLayerId,
+            SourceOperatingPoint, SourcePolicy, SourceTemporalLayerId, UserStreamId,
         },
     };
 
@@ -105,8 +105,9 @@ mod tests {
         PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id: PublishedSourceId::from_raw(7),
             owner: PublishedSourceOwner::new(UserId::Integer(42)),
-            stream_type: StreamType::Camera,
+            stream_id: UserStreamId::new("main-video"),
             media_kind: MediaKind::Video,
+            policy: SourcePolicy::hidden(),
             mid: None,
             encodings,
         })

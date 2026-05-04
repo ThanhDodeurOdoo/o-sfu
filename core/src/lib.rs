@@ -107,7 +107,11 @@ pub use room::{
 };
 pub use runtime::{
     media_transport::{MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder},
-    source_model::UploadLayerPolicyRole,
+    source_model::{
+        ActiveSpeakerGroup, ActiveSpeakerPolicy, ActiveSpeakerSourceRole, SourceAdaptationPolicy,
+        SourceLayoutPolicy, SourcePolicy, SourcePublishIntent, SourceRoomPolicySelector,
+        SourceSubscriptionIntent, UploadLayerPolicyRole, UserStreamId,
+    },
 };
 pub use sfu::{
     MediaEndpointHealth, MediaSession, NegotiationOffer, OfferedMediaCapabilities, SfuCore,

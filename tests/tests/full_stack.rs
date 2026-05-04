@@ -1350,6 +1350,15 @@ async fn publish_camera_track(
     publisher.publish_track(&source).await?;
     publisher.complete_next_negotiation().await?;
     assert_track_snapshot(subscriber, UserId::Integer(10), StreamType::Camera, true).await;
+    assert_peer_info_update(
+        subscriber,
+        UserId::Integer(10),
+        UserInfo {
+            is_camera_on: Some(true),
+            ..UserInfo::snapshot_defaults()
+        },
+    )
+    .await;
     Some(())
 }
 
@@ -1391,9 +1400,19 @@ async fn assert_camera_unpublish_updates_snapshot_and_info(
             .is_some()
     );
     assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_snapshot = subscriber.read_next_server_message().await;
-    assert!(track_snapshot.is_some());
-    let Some(ServerMessage::Tracks(track_snapshot)) = track_snapshot else {
+    let first_message = subscriber.read_next_server_message().await;
+    let second_message = subscriber.read_next_server_message().await;
+    assert!(first_message.is_some());
+    assert!(second_message.is_some());
+    let (Some(first_message), Some(second_message)) = (first_message, second_message) else {
+        return;
+    };
+    let messages = [first_message, second_message];
+    let track_snapshot = messages.iter().find_map(|message| match message {
+        ServerMessage::Tracks(snapshot) => Some(snapshot),
+        _ => None,
+    });
+    let Some(track_snapshot) = track_snapshot else {
         panic!("expected track snapshot after camera unpublish");
     };
     assert!(
@@ -1401,9 +1420,11 @@ async fn assert_camera_unpublish_updates_snapshot_and_info(
         "protocol unpublish should clear the authoritative camera track snapshot"
     );
 
-    let peer_info = subscriber.read_next_server_message().await;
-    assert!(peer_info.is_some());
-    let Some(ServerMessage::PeerInfo(peer_info)) = peer_info else {
+    let peer_info = messages.iter().find_map(|message| match message {
+        ServerMessage::PeerInfo(info) => Some(info),
+        _ => None,
+    });
+    let Some(peer_info) = peer_info else {
         panic!("expected peer info update after camera unpublish");
     };
     assert_eq!(peer_info.user_id, UserId::Integer(10));
@@ -1482,6 +1503,20 @@ async fn assert_empty_track_snapshot(subscriber: &mut ProtocolFakePeer) {
         panic!("expected protocol track snapshot");
     };
     assert!(track_bindings.is_empty());
+}
+
+async fn assert_peer_info_update(
+    subscriber: &mut ProtocolFakePeer,
+    user_id: UserId,
+    expected_info: UserInfo,
+) {
+    let message = subscriber.read_next_server_message().await;
+    assert!(message.is_some());
+    let Some(ServerMessage::PeerInfo(peer_info)) = message else {
+        panic!("expected protocol peer info update");
+    };
+    assert_eq!(peer_info.user_id, user_id);
+    assert_eq!(peer_info.info, expected_info);
 }
 
 async fn assert_no_server_message_protocol(subscriber: &mut ProtocolFakePeer) {

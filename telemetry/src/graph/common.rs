@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use o_sfu_model::{StreamType, UserId};
+use o_sfu_model::UserId;
 use serde_json::Value;
 
 use crate::diagnostics::types::{
@@ -22,20 +22,25 @@ pub(super) fn user_id_matches(user_id: &UserId, requested_user_id: &str) -> bool
     }
 }
 
-pub(super) fn stream_type_label(stream_type: StreamType) -> &'static str {
-    match stream_type {
-        StreamType::Audio => "audio",
-        StreamType::Camera => "camera",
-        StreamType::Screen => "screen",
+const STREAM_COLOR_PALETTE: &[&str] =
+    &["blue", "orange", "purple", "green", "yellow", "red", "gray"];
+
+pub(super) fn stream_id_label(stream_id: &str) -> &str {
+    if stream_id.is_empty() {
+        "source"
+    } else {
+        stream_id
     }
 }
 
-pub(super) fn stream_type_color(stream_type: StreamType) -> &'static str {
-    match stream_type {
-        StreamType::Audio => "blue",
-        StreamType::Camera => "orange",
-        StreamType::Screen => "purple",
-    }
+pub(super) fn stream_id_color(stream_id: &str) -> &'static str {
+    let hash = stream_id.as_bytes().iter().fold(0_usize, |acc, byte| {
+        acc.wrapping_mul(31).wrapping_add(usize::from(*byte))
+    });
+    STREAM_COLOR_PALETTE
+        .get(hash % STREAM_COLOR_PALETTE.len())
+        .copied()
+        .unwrap_or("gray")
 }
 
 pub(super) fn transport_health_label(health: Option<&DiagnosticsTransportHealth>) -> &'static str {
@@ -63,10 +68,10 @@ pub(super) fn route_state_color(state: &DiagnosticsRouteState) -> &'static str {
 }
 
 pub(super) fn download_main_stat(sub: &DiagnosticsSubscription) -> String {
-    let stream_type = stream_type_label(sub.stream_type);
+    let stream_id = stream_id_label(&sub.stream_id);
     match sub.selection.selected_rid.as_deref() {
-        Some(rid) if !rid.is_empty() => format!("{stream_type} {rid}"),
-        _ => stream_type.to_string(),
+        Some(rid) if !rid.is_empty() => format!("{stream_id} {rid}"),
+        _ => stream_id.to_string(),
     }
 }
 

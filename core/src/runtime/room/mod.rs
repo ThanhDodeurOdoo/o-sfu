@@ -36,7 +36,6 @@ mod router_state;
 pub mod rtp_capabilities;
 mod source_policy_sync;
 mod state;
-mod stream_role;
 #[cfg(any(test, feature = "testing-transport"))]
 mod tests;
 mod topology;

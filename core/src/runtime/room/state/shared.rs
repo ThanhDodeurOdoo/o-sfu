@@ -19,11 +19,12 @@ use super::{
 use crate::{
     RoomShardingPolicy,
     runtime::{
-        ConnectionId, DownloadStates, RecordingState, StreamType, UserId,
+        ConnectionId, RecordingState, UserId,
         media_transport::TransportMediaId,
         recording::RecordingService,
         source_model::{
-            ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId, SourceEncodingId,
+            ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
+            SourceEncodingId, SourceSubscriptionIntent, UserStreamId,
         },
     },
 };
@@ -52,7 +53,7 @@ pub(in crate::runtime::room) struct RoomState {
     pub(super) recording_state: RecordingState,
     /// Source graph keyed by stable room-domain source id.
     pub(super) sources: BTreeMap<PublishedSourceId, PublishedSourceDescriptor>,
-    /// Compatibility source lookup keyed by the publisher user and stream type.
+    /// Source lookup keyed by publisher user and orchestration stream id.
     pub(super) source_ids_by_owner_stream: BTreeMap<SourceKey, PublishedSourceId>,
     /// Published source ids owned by each room user.
     ///
@@ -111,7 +112,7 @@ impl ConsumerKey {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct SourceKey {
     owner_user_id: UserId,
-    stream_type: StreamType,
+    stream_id: UserStreamId,
 }
 
 #[derive(Debug)]
@@ -126,7 +127,8 @@ pub(in crate::runtime::room) struct ActiveUser {
     pub(super) presence: UserPresence,
     pub(super) layout: UserLayout,
     pub(super) negotiation: UserNegotiation,
-    pub(super) desired_download_states: BTreeMap<UserId, DownloadStates>,
+    pub(super) desired_source_subscriptions:
+        BTreeMap<UserId, BTreeMap<UserStreamId, SourceSubscriptionIntent>>,
     pub(super) parsed_client_rtp_capabilities: Option<RouterRtpCapabilities>,
     pub(super) connection_id: ConnectionId,
     pub(super) sender: OutboundSender,
@@ -137,7 +139,7 @@ pub(in crate::runtime::room) struct PublishedProducer {
     pub(super) source_id: PublishedSourceId,
     pub(super) owner_user_id: UserId,
     pub(super) owner_connection_id: ConnectionId,
-    pub(super) stream_type: StreamType,
+    pub(super) stream_id: UserStreamId,
     pub(super) media_kind: MediaKind,
     pub(super) consumable_rtp_parameters: o_sfu_router::MediaStream,
     pub(super) routed_producer_id: RoutedProducerId,
@@ -151,7 +153,7 @@ pub(in crate::runtime::room) struct SourceTransportMediaIndexEntry {
     pub(super) encoding_ids: Vec<SourceEncodingId>,
     owner_user_id: UserId,
     owner_connection_id: ConnectionId,
-    stream_type: StreamType,
+    stream_id: UserStreamId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -377,19 +379,23 @@ impl SourceTransportMediaIndexEntry {
         encoding_ids: Vec<SourceEncodingId>,
         owner_user_id: UserId,
         owner_connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_id: UserStreamId,
     ) -> Self {
         Self {
             source_id,
             encoding_ids,
             owner_user_id,
             owner_connection_id,
-            stream_type,
+            stream_id,
         }
     }
 
     pub(super) fn owner_user_id(&self) -> &UserId {
         &self.owner_user_id
+    }
+
+    pub(super) const fn source_id(&self) -> PublishedSourceId {
+        self.source_id
     }
 
     #[cfg_attr(
@@ -403,16 +409,16 @@ impl SourceTransportMediaIndexEntry {
         self.owner_connection_id
     }
 
-    pub(super) const fn stream_type(&self) -> StreamType {
-        self.stream_type
+    pub(super) const fn stream_id(&self) -> &UserStreamId {
+        &self.stream_id
     }
 }
 
 impl SourceKey {
-    pub(super) fn new(owner_user_id: &UserId, stream_type: StreamType) -> Self {
+    pub(super) fn new(owner_user_id: &UserId, stream_id: &UserStreamId) -> Self {
         Self {
             owner_user_id: owner_user_id.clone(),
-            stream_type,
+            stream_id: stream_id.clone(),
         }
     }
 }
@@ -523,7 +529,7 @@ impl RoomState {
         for key in consumer_keys {
             self.remove_consumer_key_state(&key);
         }
-        let source_key = SourceKey::new(source.owner().user_id(), source.stream_type());
+        let source_key = SourceKey::new(source.owner().user_id(), source.stream_id());
         self.source_ids_by_owner_stream.remove(&source_key);
         self.unregister_source_owner(source.owner().user_id(), source_id);
         let producer_id = self.producer_id_by_source_id.remove(&source_id)?;

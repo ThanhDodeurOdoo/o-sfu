@@ -1,7 +1,6 @@
 use serde_json::json;
 
 use crate::runtime::{
-    StreamType,
     recording::{
         OrtpFileHeader,
         test_support::{
@@ -9,6 +8,7 @@ use crate::runtime::{
             StreamWriter,
         },
     },
+    source_model::UserStreamId,
 };
 
 #[test]
@@ -60,7 +60,7 @@ fn recording_metadata_round_trips_through_json() {
         files: vec![RecordingFileMetadata {
             filename: "audio/1000-42-audio.ortp".to_owned(),
             user_id: "42".to_owned(),
-            stream_type: StreamType::Audio,
+            stream_id: UserStreamId::new("main-audio"),
             codec: "opus".to_owned(),
             clock_rate: 48_000,
             segments: vec![RecordingSegment {
@@ -88,7 +88,7 @@ fn recording_metadata_round_trips_through_json() {
             "files": [{
                 "filename": "audio/1000-42-audio.ortp",
                 "userId": "42",
-                "streamType": "audio",
+                "streamId": "main-audio",
                 "codec": "opus",
                 "clockRate": 48000,
                 "segments": [{

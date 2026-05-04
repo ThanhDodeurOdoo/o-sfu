@@ -1,3 +1,19 @@
+//! Consumer-side room state transitions.
+//!
+//! This file applies receiver download intent after the application layer has
+//! translated any compatibility shape into source-keyed
+//! [`SourceSubscriptionIntent`] values. The state layer persists those intents
+//! by target user and stream id, then plans route activity changes and
+//! bootstraps for the effect layer.
+//!
+//! # Boundary role
+//!
+//! The subscription state never decides what "camera" or "screen" means. It
+//! only knows whether a receiver wants a generic source active and which layout
+//! preference should be associated with that source.
+
+use std::collections::BTreeMap;
+
 use o_sfu_router::{
     ConsumerCapability, ConsumerRouteState as RouterConsumerRouteState,
     MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, can_consume,
@@ -11,9 +27,12 @@ use super::super::{
     shared::{ConsumerKey, ConsumerState, PublishedProducer, RoomState, SourceKey},
 };
 use crate::runtime::{
-    ConnectionId, DownloadStates, StreamType, UserId,
+    ConnectionId, UserId,
     media_transport::TransportMediaId,
-    source_model::{ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId},
+    source_model::{
+        ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
+        SourceSubscriptionIntent, UserStreamId,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,7 +44,8 @@ use crate::runtime::{
 pub(in crate::runtime::room) struct ConsumerRouteUpdate {
     consumer_state: ConsumerState,
     producer_user_id: UserId,
-    stream_type: StreamType,
+    stream_id: UserStreamId,
+    media_kind: RouterMediaKind,
     active: bool,
 }
 
@@ -73,7 +93,7 @@ pub(in crate::runtime::room) struct ConsumerBootstrapProducerSnapshot {
     owner_user_id: UserId,
     owner_connection_id: ConnectionId,
     producer_id: ProducerRuntimeId,
-    stream_type: StreamType,
+    stream_id: UserStreamId,
     media_kind: RouterMediaKind,
     transport_media_id: TransportMediaId,
     routed_producer_id: Option<RoutedProducerId>,
@@ -111,7 +131,7 @@ pub struct RemoteTrackBootstrap {
     source_descriptor: PublishedSourceDescriptor,
     user_id: UserId,
     active: bool,
-    stream_type: StreamType,
+    stream_id: UserStreamId,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -127,14 +147,14 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
         target_user_id: &UserId,
-        states: &DownloadStates,
+        intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
     ) -> PlannedSubscriptionChange {
         if self.user_for_connection(user_id, connection_id).is_none() {
             return PlannedSubscriptionChange::default();
         }
-        self.persist_compat_download_states(user_id, target_user_id, states);
+        self.persist_source_subscription_intents(user_id, target_user_id, intents);
         let route_updates =
-            self.apply_subscription_route_updates(user_id, connection_id, target_user_id, states);
+            self.apply_subscription_route_updates(user_id, connection_id, target_user_id, intents);
         let bootstraps = self.plan_consumer_bootstraps_for_targets(
             self.collect_missing_consumer_targets_for_peer(user_id, connection_id, target_user_id),
         );
@@ -144,22 +164,28 @@ impl RoomState {
         }
     }
 
-    fn persist_compat_download_states(
+    fn persist_source_subscription_intents(
         &mut self,
         user_id: &UserId,
         target_user_id: &UserId,
-        states: &DownloadStates,
+        intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
     ) {
         let Some(user) = self.users.get_mut(user_id) else {
             return;
         };
         let existing_states = user
-            .desired_download_states
+            .desired_source_subscriptions
             .entry(target_user_id.clone())
             .or_default();
-        merge_download_states(existing_states, states);
-        if download_states_are_empty(existing_states) {
-            user.desired_download_states.remove(target_user_id);
+        for (stream_id, update) in intents {
+            existing_states
+                .entry(stream_id.clone())
+                .and_modify(|intent| intent.merge(*update))
+                .or_insert(*update);
+        }
+        existing_states.retain(|_, intent| !intent.is_empty());
+        if existing_states.is_empty() {
+            user.desired_source_subscriptions.remove(target_user_id);
         }
     }
 
@@ -195,15 +221,20 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
         target_user_id: &UserId,
-        states: &DownloadStates,
+        intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
     ) -> Vec<ConsumerRouteUpdate> {
         let mut accepted_updates = Vec::new();
-        for (stream_type, active) in states.iter() {
-            let Some(source_id) =
-                self.source_id_for_compat_subscription(target_user_id, stream_type)
-            else {
+        for (stream_id, intent) in intents {
+            let Some(active) = intent.active() else {
                 continue;
             };
+            let Some(source_id) = self.source_id_for_subscription(target_user_id, stream_id) else {
+                continue;
+            };
+            let Some(source) = self.sources.get(&source_id) else {
+                continue;
+            };
+            let media_kind = source.media_kind();
             let key = ConsumerKey::new(user_id, source_id);
             self.set_consumer_source_selection(&key, active);
             let Some(current_consumer_state) = self.consumer_index.get(&key).copied() else {
@@ -225,7 +256,7 @@ impl RoomState {
                 error!(
                     ?user_id,
                     ?target_user_id,
-                    ?stream_type,
+                    stream_id = %stream_id,
                     "failed to set consumer pause state in room router"
                 );
                 continue;
@@ -233,7 +264,8 @@ impl RoomState {
             accepted_updates.push(ConsumerRouteUpdate {
                 consumer_state: current_consumer_state,
                 producer_user_id: target_user_id.clone(),
-                stream_type,
+                stream_id: stream_id.clone(),
+                media_kind,
                 active,
             });
         }
@@ -303,20 +335,20 @@ impl RoomState {
                 producer.owner_user_id.clone(),
                 producer.owner_connection_id,
                 producer_id,
-                producer.stream_type,
+                producer.stream_id.clone(),
                 producer.media_kind,
                 transport_media_id,
             ),
         ))
     }
 
-    fn source_id_for_compat_subscription(
+    fn source_id_for_subscription(
         &self,
         producer_user_id: &UserId,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
     ) -> Option<PublishedSourceId> {
         self.source_ids_by_owner_stream
-            .get(&SourceKey::new(producer_user_id, stream_type))
+            .get(&SourceKey::new(producer_user_id, stream_id))
             .copied()
     }
 
@@ -395,7 +427,7 @@ impl RoomState {
                     source_descriptor,
                     user_id: prepared_producer.owner_user_id.clone(),
                     active: prepared_producer.active.unwrap_or(true),
-                    stream_type: prepared_producer.stream_type,
+                    stream_id: prepared_producer.stream_id.clone(),
                 },
                 consumer_active,
                 producer: prepared_producer,
@@ -412,10 +444,10 @@ impl RoomState {
             .get(&consumer_key)
             .copied()
             .unwrap_or_else(|| {
-                ConsumerSourceSelection::open(self.desired_download_active(
+                ConsumerSourceSelection::open(self.desired_source_subscription_active(
                     &target.consumer_user_id,
                     target.producer_user_id(),
-                    target.stream_type(),
+                    target.stream_id(),
                 ))
             })
     }
@@ -504,23 +536,24 @@ impl RoomState {
         self.prune_consumer_key_indexes_if_unused(&consumer_key);
     }
 
-    pub(in crate::runtime::room) fn desired_download_active(
+    pub(in crate::runtime::room) fn desired_source_subscription_active(
         &self,
         user_id: &UserId,
         target_user_id: &UserId,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
     ) -> bool {
         self.users
             .get(user_id)
-            .and_then(|user| user.desired_download_states.get(target_user_id))
-            .and_then(|states| download_state_for_stream_type(states, stream_type))
+            .and_then(|user| user.desired_source_subscriptions.get(target_user_id))
+            .and_then(|states| states.get(stream_id))
+            .and_then(|intent| intent.active())
             .unwrap_or(true)
     }
 
-    /// Returns the effective room route state for a compatibility subscription.
+    /// Returns the effective room route state for a source subscription.
     ///
     /// This is a cold-path query for signaling and diagnostics. It resolves the
-    /// compatibility stream to current room indexes and combines producer
+    /// stream id to current room indexes and combines producer
     /// activity with the receiver-local source selection. Missing users return
     /// `None`, while missing routes for an existing user return
     /// [`ConsumerRouteState::Absent`].
@@ -528,11 +561,10 @@ impl RoomState {
         &self,
         consumer_user_id: &UserId,
         producer_user_id: &UserId,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
     ) -> Option<ConsumerRouteState> {
         self.users.get(consumer_user_id)?;
-        let Some(source_id) = self.source_id_for_compat_subscription(producer_user_id, stream_type)
-        else {
+        let Some(source_id) = self.source_id_for_subscription(producer_user_id, stream_id) else {
             return Some(ConsumerRouteState::Absent);
         };
         let consumer_key = ConsumerKey::new(consumer_user_id, source_id);
@@ -551,10 +583,10 @@ impl RoomState {
                 .get(&consumer_key)
                 .map_or_else(
                     || {
-                        self.desired_download_active(
+                        self.desired_source_subscription_active(
                             consumer_user_id,
                             producer_user_id,
-                            stream_type,
+                            stream_id,
                         )
                     },
                     |selection| selection.active(),
@@ -583,10 +615,7 @@ impl RoomState {
                     let source = self.sources.get(&key.source_id)?;
                     if key.consumer_user_id != *consumer_user_id
                         || consumer_state.consumer_connection_id != consumer_connection_id
-                        || !matches!(
-                            source.stream_type(),
-                            StreamType::Camera | StreamType::Screen
-                        )
+                        || source.media_kind() != RouterMediaKind::Video
                     {
                         return None;
                     }
@@ -649,8 +678,12 @@ impl ConsumerRouteUpdate {
         self.consumer_state.source_media
     }
 
-    pub(in crate::runtime::room) const fn stream_type(&self) -> StreamType {
-        self.stream_type
+    pub(in crate::runtime::room) fn stream_id(&self) -> &UserStreamId {
+        &self.stream_id
+    }
+
+    pub(in crate::runtime::room) const fn media_kind(&self) -> RouterMediaKind {
+        self.media_kind
     }
 
     pub(in crate::runtime::room) const fn active(&self) -> bool {
@@ -699,8 +732,8 @@ impl PendingConsumerBootstrapTarget {
         self.producer.transport_media_id
     }
 
-    pub(in crate::runtime::room) const fn stream_type(&self) -> StreamType {
-        self.producer.stream_type
+    pub(in crate::runtime::room) fn stream_id(&self) -> &UserStreamId {
+        &self.producer.stream_id
     }
 }
 
@@ -728,7 +761,7 @@ impl ConsumerBootstrapProducerSnapshot {
         owner_user_id: UserId,
         owner_connection_id: ConnectionId,
         producer_id: ProducerRuntimeId,
-        stream_type: StreamType,
+        stream_id: UserStreamId,
         media_kind: RouterMediaKind,
         transport_media_id: TransportMediaId,
     ) -> Self {
@@ -737,7 +770,7 @@ impl ConsumerBootstrapProducerSnapshot {
             owner_user_id,
             owner_connection_id,
             producer_id,
-            stream_type,
+            stream_id,
             media_kind,
             transport_media_id,
             routed_producer_id: None,
@@ -759,7 +792,7 @@ impl ConsumerBootstrapProducerSnapshot {
             owner_user_id: self.owner_user_id.clone(),
             owner_connection_id: self.owner_connection_id,
             producer_id: self.producer_id,
-            stream_type: self.stream_type,
+            stream_id: self.stream_id.clone(),
             media_kind: self.media_kind,
             transport_media_id: self.transport_media_id,
             routed_producer_id: Some(routed_producer_id),
@@ -771,7 +804,7 @@ impl ConsumerBootstrapProducerSnapshot {
         producer.source_id == self.source_id
             && producer.owner_user_id == self.owner_user_id
             && producer.owner_connection_id == self.owner_connection_id
-            && producer.stream_type == self.stream_type
+            && producer.stream_id == self.stream_id
             && producer.media_kind == self.media_kind
             && producer.transport_media_id == Some(self.transport_media_id)
     }
@@ -811,8 +844,8 @@ impl RemoteTrackBootstrap {
         self.active
     }
 
-    pub const fn stream_type(&self) -> StreamType {
-        self.stream_type
+    pub fn stream_id(&self) -> &UserStreamId {
+        &self.stream_id
     }
 
     pub fn into_room_event_request(self) -> RoomEventRequest {
@@ -835,42 +868,5 @@ impl ConsumerKeyframeRefreshTarget {
 
     pub(in crate::runtime::room) const fn source_media(&self) -> TransportMediaId {
         self.source_media
-    }
-}
-
-fn merge_download_states(target: &mut DownloadStates, update: &DownloadStates) {
-    if let Some(audio) = update.audio {
-        target.audio = Some(audio);
-    }
-    if let Some(camera) = update.camera {
-        target.camera = Some(camera);
-    }
-    if let Some(screen) = update.screen {
-        target.screen = Some(screen);
-    }
-    if let Some(camera_layout) = update.camera_layout {
-        target.camera_layout = Some(camera_layout);
-    }
-    if let Some(screen_layout) = update.screen_layout {
-        target.screen_layout = Some(screen_layout);
-    }
-}
-
-fn download_states_are_empty(states: &DownloadStates) -> bool {
-    states.audio.is_none()
-        && states.camera.is_none()
-        && states.screen.is_none()
-        && states.camera_layout.is_none()
-        && states.screen_layout.is_none()
-}
-
-fn download_state_for_stream_type(
-    states: &DownloadStates,
-    stream_type: StreamType,
-) -> Option<bool> {
-    match stream_type {
-        StreamType::Audio => states.audio,
-        StreamType::Camera => states.camera,
-        StreamType::Screen => states.screen,
     }
 }

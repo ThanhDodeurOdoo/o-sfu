@@ -25,6 +25,7 @@ pub(super) use tokio_tungstenite::{
 
 use crate::config::RoomShardingPolicy;
 pub(super) use crate::{
+    application::stream_catalog::stream_id_for_stream_type,
     config::{
         AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
         MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig, TransportConfig,

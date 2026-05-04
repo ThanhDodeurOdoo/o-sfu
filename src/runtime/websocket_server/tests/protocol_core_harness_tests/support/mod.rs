@@ -33,7 +33,8 @@ mod rtc;
 mod scenarios;
 
 pub(super) use assertions::{
-    assert_track_snapshot_contains, consume_peer_joined_update, peer_reached_state,
+    assert_track_snapshot_contains, consume_peer_info_update, consume_peer_joined_update,
+    peer_reached_state,
 };
 pub(super) use frames::{
     no_server_frame, read_single_protocol_server_message, read_track_snapshot,

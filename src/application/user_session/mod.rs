@@ -1,3 +1,18 @@
+//! Application-owned user session orchestration.
+//!
+//! This module owns the compatibility flow for one authenticated websocket
+//! connection. It accepts Odoo protocol messages, translates stream labels
+//! through [`crate::application::stream_catalog`] and calls the core media
+//! facade with generic source intents.
+//!
+//! # Boundary role
+//!
+//! Business-layer changes to publication shape should enter core as
+//! [`crate::core::SourcePublishIntent`] and
+//! [`crate::core::SourceSubscriptionIntent`] values. This file sequences those
+//! intents around negotiation, request tracking and user-info fanout, but it
+//! should not duplicate the stream policy matrix from `stream_catalog`.
+
 use std::{collections::BTreeMap, sync::Arc};
 
 use o_sfu_protocol::{
@@ -8,15 +23,18 @@ use o_sfu_protocol::{
         UploadLayerPolicyRole as ProtocolUploadLayerPolicyRole, WelcomePayload,
     },
 };
-use o_sfu_router::MediaKind;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
+    application::stream_catalog::{
+        source_publish_intent_for_stream_type, stream_id_for_stream_type, stream_type_for_stream_id,
+    },
     core::{
         MediaEndpointHealth, MediaSession, MediaTransport, NegotiationOffer, PublicationActivity,
-        RollbackStagedPublishOutcome, RuntimeSfuCore, SessionNegotiationOutcome, SfuCoreError,
+        PublicationActivityOutcome, RollbackStagedPublishOutcome, RuntimeSfuCore,
+        SessionNegotiationOutcome, SfuCoreError, SourceSubscriptionIntent,
         SubscriptionUpdateOutcome, TransportEffectOutcome, UnpublishOutcome, UploadEncoding,
-        UploadLayerPolicyRole, UploadSlot, UserInfoRefresh,
+        UploadLayerPolicyRole, UploadSlot, UserInfoRefresh, UserStreamId,
     },
     runtime::{
         ConnectionId,
@@ -198,6 +216,20 @@ impl User {
         Ok(UserOutput::new())
     }
 
+    async fn update_publication_info(
+        &self,
+        stream_type: StreamType,
+        active: bool,
+    ) -> Result<(), UserError> {
+        let Some(info) = publication_info_update(stream_type, active) else {
+            return Ok(());
+        };
+        self.media()
+            .update_user_info(info, UserInfoRefresh::NotNeeded)
+            .await;
+        Ok(())
+    }
+
     pub async fn broadcast(&self, message: JsonPayload) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
         self.room
@@ -218,16 +250,20 @@ impl User {
     )]
     pub async fn publish(&mut self, stream_type: StreamType) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
+        let stream_id = stream_id_for_stream_type(stream_type);
         let has_queued_publish = self.state.negotiation.has_queued_publish(stream_type);
         {
             let media = self.media();
-            if has_queued_publish || media.has_staged_publish(stream_type).await {
+            if has_queued_publish || media.has_staged_publish(&stream_id).await {
                 return Ok(UserOutput::new());
             }
-            if media.is_stream_published(stream_type).await {
-                media
-                    .set_publication_activity(stream_type, PublicationActivity::Active)
+            if media.is_stream_published(&stream_id).await {
+                let outcome = media
+                    .set_publication_activity(&stream_id, PublicationActivity::Active)
                     .await;
+                if matches!(outcome, PublicationActivityOutcome::Applied { .. }) {
+                    self.update_publication_info(stream_type, true).await?;
+                }
                 return Ok(UserOutput::new());
             }
         }
@@ -249,21 +285,23 @@ impl User {
         }
         let media_disposition = {
             let media = self.media();
-            match media.rollback_staged_publish(stream_type).await {
+            let stream_id = stream_id_for_stream_type(stream_type);
+            match media.rollback_staged_publish(&stream_id).await {
                 RollbackStagedPublishOutcome::RolledBack { cleanup } => {
                     Some(UnpublishMediaDisposition::RolledBackStagedPublish { cleanup })
                 }
-                RollbackStagedPublishOutcome::NotStaged => match media.unpublish(stream_type).await
-                {
-                    UnpublishOutcome::Unpublished => {
-                        Some(UnpublishMediaDisposition::RemovedLivePublication)
+                RollbackStagedPublishOutcome::NotStaged => {
+                    match media.unpublish(&stream_id).await {
+                        UnpublishOutcome::Unpublished => {
+                            Some(UnpublishMediaDisposition::RemovedLivePublication)
+                        }
+                        UnpublishOutcome::MissingPublication => None,
+                        UnpublishOutcome::TransportCleanupFailed
+                        | UnpublishOutcome::StateCommitRejected => {
+                            Some(UnpublishMediaDisposition::UnpublishFailed)
+                        }
                     }
-                    UnpublishOutcome::MissingPublication => None,
-                    UnpublishOutcome::TransportCleanupFailed
-                    | UnpublishOutcome::StateCommitRejected => {
-                        Some(UnpublishMediaDisposition::UnpublishFailed)
-                    }
-                },
+                }
             }
         };
         match media_disposition {
@@ -273,6 +311,7 @@ impl User {
                 Ok(UserOutput::new())
             }
             Some(UnpublishMediaDisposition::RemovedLivePublication) => {
+                self.update_publication_info(stream_type, false).await?;
                 self.request_renegotiation().await
             }
             Some(UnpublishMediaDisposition::UnpublishFailed) => Err(UserError::InternalError),
@@ -302,9 +341,10 @@ impl User {
             outcome = "request_received",
             "received subscribe intent"
         );
+        let source_intents = subscription_intents_from_download_states(states);
         let outcome = self
             .media()
-            .update_subscription(target_user_id, states)
+            .update_subscription(target_user_id, &source_intents)
             .await;
         if outcome == SubscriptionUpdateOutcome::StaleConnection {
             return Err(UserError::ProtocolViolation);
@@ -328,8 +368,14 @@ impl User {
         let Some(resolved) = self.resolve_negotiation_answer(&response_to) else {
             return Err(UserError::ProtocolViolation);
         };
-        self.apply_negotiation_action(&resolved.pending, &answer.sdp, &response_to)
+        let committed_stream_ids = self
+            .apply_negotiation_action(&resolved.pending, &answer.sdp, &response_to)
             .await?;
+        for stream_id in committed_stream_ids {
+            if let Some(stream_type) = stream_type_for_stream_id(&stream_id) {
+                self.update_publication_info(stream_type, true).await?;
+            }
+        }
         info!(
             event = telemetry_event::NEGOTIATION_SUCCEEDED,
             operation = negotiation_operation_name(&resolved.pending.action),
@@ -569,7 +615,7 @@ impl User {
         pending: &PendingUserRequest,
         answer_sdp: &str,
         response_to: &RequestId,
-    ) -> Result<(), UserError> {
+    ) -> Result<Vec<UserStreamId>, UserError> {
         let media = self.media();
         let result = match &pending.action {
             PendingUserAction::EstablishSession {
@@ -581,11 +627,14 @@ impl User {
             }
             PendingUserAction::RefreshSession => media.apply_renegotiation_answer(answer_sdp).await,
         };
-        if let Err(error) = result {
-            self.log_negotiation_apply_error(response_to, pending, error);
-            return Err(map_core_negotiation_error(error));
-        }
-        Ok(())
+        let committed_stream_ids = match result {
+            Ok(committed_stream_ids) => committed_stream_ids,
+            Err(error) => {
+                self.log_negotiation_apply_error(response_to, pending, error);
+                return Err(map_core_negotiation_error(error));
+            }
+        };
+        Ok(committed_stream_ids)
     }
 
     async fn create_renegotiation_offer(&self) -> Result<Option<NegotiationOffer>, UserError> {
@@ -656,23 +705,20 @@ impl User {
     }
 
     async fn stage_publish_slot(&self, stream_type: StreamType) -> Result<bool, UserError> {
-        let media_kind = media_kind_for_stream_type(stream_type);
-        let outcome = self
-            .media()
-            .stage_publish(stream_type)
-            .await
-            .map_err(|error| {
-                warn!(
-                    event = telemetry_event::PUBLISH_ABORTED,
-                    operation = "publish_prepare",
-                    outcome = "transport_error",
-                    media_kind = ?media_kind,
-                    stream_type = ?stream_type,
-                    ?error,
-                    "failed to stage publish stream for negotiation"
-                );
-                UserError::InternalError
-            })?;
+        let intent = source_publish_intent_for_stream_type(stream_type);
+        let media_kind = intent.media_kind();
+        let outcome = self.media().stage_publish(&intent).await.map_err(|error| {
+            warn!(
+                event = telemetry_event::PUBLISH_ABORTED,
+                operation = "publish_prepare",
+                outcome = "transport_error",
+                media_kind = ?media_kind,
+                stream_type = ?stream_type,
+                ?error,
+                "failed to stage publish stream for negotiation"
+            );
+            UserError::InternalError
+        })?;
         let event = if outcome.staged() {
             telemetry_event::PUBLISH_PREPARED
         } else {
@@ -737,10 +783,42 @@ impl Drop for User {
     }
 }
 
-const fn media_kind_for_stream_type(stream_type: StreamType) -> MediaKind {
+fn subscription_intents_from_download_states(
+    states: &DownloadStates,
+) -> BTreeMap<UserStreamId, SourceSubscriptionIntent> {
+    let mut intents = BTreeMap::new();
+    if states.audio.is_some() {
+        intents.insert(
+            stream_id_for_stream_type(StreamType::Audio),
+            SourceSubscriptionIntent::new(states.audio, None),
+        );
+    }
+    if states.camera.is_some() || states.camera_layout.is_some() {
+        intents.insert(
+            stream_id_for_stream_type(StreamType::Camera),
+            SourceSubscriptionIntent::new(states.camera, states.camera_layout),
+        );
+    }
+    if states.screen.is_some() || states.screen_layout.is_some() {
+        intents.insert(
+            stream_id_for_stream_type(StreamType::Screen),
+            SourceSubscriptionIntent::new(states.screen, states.screen_layout),
+        );
+    }
+    intents
+}
+
+fn publication_info_update(stream_type: StreamType, active: bool) -> Option<UserInfo> {
     match stream_type {
-        StreamType::Audio => MediaKind::Audio,
-        StreamType::Camera | StreamType::Screen => MediaKind::Video,
+        StreamType::Audio => None,
+        StreamType::Camera => Some(UserInfo {
+            is_camera_on: Some(active),
+            ..UserInfo::default()
+        }),
+        StreamType::Screen => Some(UserInfo {
+            is_screen_sharing_on: Some(active),
+            ..UserInfo::default()
+        }),
     }
 }
 

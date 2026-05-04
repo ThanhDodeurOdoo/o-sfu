@@ -111,10 +111,10 @@ async fn publish_until_ready(
     server: &TestServer,
     stream_type: StreamType,
     mid: &str,
-) -> Option<String> {
+) -> Option<()> {
     timeout(Duration::from_secs(1), async {
         loop {
-            if let Some(producer_id) = room
+            if room
                 .test_api()
                 .media()
                 .publish_track(
@@ -125,8 +125,9 @@ async fn publish_until_ready(
                     &server.media_transport,
                 )
                 .await
+                .is_some()
             {
-                return Some(producer_id);
+                return Some(());
             }
             sleep(Duration::from_millis(10)).await;
         }

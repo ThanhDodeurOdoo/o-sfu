@@ -26,6 +26,10 @@ pub(super) use crate::{
             ActiveSpeakerSource, MediaTransport, NegotiationPort, TransportMediaId,
             test_support::{FakeMediaTransport, FakeMediaTransportEvent},
         },
+        source_model::{
+            UserStreamId,
+            test_support::{source_publish_intent_for_stream_type, stream_id_for_stream_type},
+        },
     },
 };
 
@@ -219,9 +223,14 @@ pub(super) async fn stage_negotiated_publish(
     stream_type: StreamType,
     media_transport: &MediaTransport,
 ) -> bool {
-    room.stage_negotiated_publish(user_id, connection_id, stream_type, media_transport)
-        .await
-        .is_ok_and(PublishStageOutcome::staged)
+    room.stage_negotiated_publish(
+        user_id,
+        connection_id,
+        &source_publish_intent_for_stream_type(stream_type),
+        media_transport,
+    )
+    .await
+    .is_ok_and(PublishStageOutcome::staged)
 }
 
 pub(super) async fn rollback_staged_publish(
@@ -232,8 +241,13 @@ pub(super) async fn rollback_staged_publish(
     media_transport: &MediaTransport,
 ) -> bool {
     matches!(
-        room.rollback_staged_publish(user_id, connection_id, stream_type, media_transport)
-            .await,
+        room.rollback_staged_publish(
+            user_id,
+            connection_id,
+            &stream_id_for_stream_type(stream_type),
+            media_transport,
+        )
+        .await,
         RollbackStagedPublishOutcome::RolledBack { .. }
     )
 }

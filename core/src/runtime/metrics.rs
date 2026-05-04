@@ -20,7 +20,7 @@ pub(crate) const fn source_selection_kind(selector: SourceSelector) -> SourceSel
         SourceSelector::RoomPolicy(
             SourceRoomPolicySelector::Pinned
             | SourceRoomPolicySelector::Featured
-            | SourceRoomPolicySelector::ScreenShare
+            | SourceRoomPolicySelector::ReadableDetail
             | SourceRoomPolicySelector::ActiveSpeaker,
         ) => SourceSelectionKind::RoomPolicyFeatured,
         SourceSelector::RoomPolicy(

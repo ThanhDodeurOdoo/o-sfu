@@ -1,3 +1,4 @@
+use o_sfu_protocol::shared::StreamType;
 use o_sfu_router::{
     MediaKind, MediaStream,
     test_support::rtp_samples::{sample_client_rtp_capabilities, sample_video_rtp_parameters},
@@ -7,7 +8,7 @@ use super::fixtures::*;
 use crate::{
     core::{
         SessionNegotiationOutcome,
-        server::session::{StreamType, UserId, UserPermissions},
+        server::session::{UserId, UserPermissions},
     },
     runtime::room::Room,
 };

@@ -205,8 +205,9 @@ pub struct UserPermissions {
 /// Presence and call UI state associated with one room participant.
 ///
 /// This is business state visible to other clients. It does not own media
-/// routing, transport health or source identity. The room projects those lower
-/// layers into this shape when it emits peer snapshots and presence changes.
+/// routing, transport health or source identity. Application orchestration
+/// updates media-related fields before the room stores and rebroadcasts this
+/// payload.
 ///
 /// Fields are optional so callers can send partial updates. Use
 /// [`Self::snapshot_complete`] when serializing a full room snapshot.
@@ -263,6 +264,41 @@ impl UserInfo {
             is_deaf: Some(self.is_deaf.unwrap_or(false)),
             is_raising_hand: Some(self.is_raising_hand.unwrap_or(false)),
         }
+    }
+
+    /// Merge a partial presence update into the current stored value.
+    ///
+    /// `None` means "unchanged", matching the wire contract for incremental
+    /// user-info updates.
+    pub fn apply_partial_update(&mut self, update: &Self) {
+        if let Some(is_talking) = update.is_talking {
+            self.is_talking = Some(is_talking);
+        }
+        if let Some(is_featured) = update.is_featured {
+            self.is_featured = Some(is_featured);
+        }
+        if let Some(is_camera_on) = update.is_camera_on {
+            self.is_camera_on = Some(is_camera_on);
+        }
+        if let Some(is_screen_sharing_on) = update.is_screen_sharing_on {
+            self.is_screen_sharing_on = Some(is_screen_sharing_on);
+        }
+        if let Some(is_self_muted) = update.is_self_muted {
+            self.is_self_muted = Some(is_self_muted);
+        }
+        if let Some(is_deaf) = update.is_deaf {
+            self.is_deaf = Some(is_deaf);
+        }
+        if let Some(is_raising_hand) = update.is_raising_hand {
+            self.is_raising_hand = Some(is_raising_hand);
+        }
+    }
+
+    /// Return this presence payload with the room-layout featured flag applied.
+    #[must_use]
+    pub fn with_featured(mut self, is_featured: Option<bool>) -> Self {
+        self.is_featured = is_featured;
+        self
     }
 }
 

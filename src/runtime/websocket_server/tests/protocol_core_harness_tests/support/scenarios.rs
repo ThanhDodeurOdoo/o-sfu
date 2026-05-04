@@ -30,6 +30,15 @@ pub(crate) async fn publish_camera_and_bootstrap_subscriber(
         subscriber.read_server_frame().await.is_some(),
         "subscriber should consume the remote-track renegotiation request"
     );
+    consume_peer_info_update(
+        subscriber,
+        publisher_user_id.clone(),
+        ProtocolSessionInfo {
+            is_camera_on: Some(true),
+            ..ProtocolSessionInfo::snapshot_defaults()
+        },
+    )
+    .await?;
     Some(track_binding.clone())
 }
 

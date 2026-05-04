@@ -43,7 +43,7 @@ use serde_json::{Value, json};
 
 use super::common::{
     download_main_stat, push_unique_edge, push_unique_node, route_state_color, route_state_label,
-    source_by_id, stream_type_color, stream_type_label, transport_health_label, user_by_id,
+    source_by_id, stream_id_color, stream_id_label, transport_health_label, user_by_id,
     user_id_matches, user_id_to_string,
 };
 use crate::diagnostics::types::{
@@ -93,14 +93,15 @@ fn path_worker_node(detail: &DiagnosticsRoomDetail, media_worker_id: usize) -> V
 }
 
 fn path_source_node(room_uuid: &str, source: &DiagnosticsSource) -> Value {
-    let stream_type = stream_type_label(source.stream_type);
+    let stream_id = stream_id_label(&source.stream_id);
     json!({
         "id": format!("source:{}:{}", room_uuid, source.source_id),
-        "title": format!("{} #{}", stream_type, source.source_id),
+        "title": format!("{} #{}", stream_id, source.source_id),
         "subtitle": format!("{:?}", source.media_kind).to_lowercase(),
         "mainStat": format!("{} bps", source.current_incoming_bitrate_bps),
         "secondaryStat": format!("{} encodings", source.encodings.len()),
         "detail__owner_user": user_id_to_string(&source.owner_user_id),
+        "detail__stream_id": stream_id,
         "detail__transport_media_id": source.transport_media_id,
     })
 }
@@ -182,10 +183,11 @@ fn push_publish_path(
             "id": edge_id,
             "source": format!("worker:{}", owner.transport.media_worker_id),
             "target": format!("source:{}:{}", room_uuid, source.source_id),
-            "mainStat": format!("{} upload", stream_type_label(source.stream_type)),
+            "mainStat": format!("{} upload", stream_id_label(&source.stream_id)),
             "secondaryStat": format!("{} bps", source.current_incoming_bitrate_bps),
-            "color": stream_type_color(source.stream_type),
+            "color": stream_id_color(&source.stream_id),
             "detail__owner_user": user_id_to_string(&owner.user_id),
+            "detail__stream_id": &source.stream_id,
             "detail__transport_media_id": source.transport_media_id,
         }),
     );

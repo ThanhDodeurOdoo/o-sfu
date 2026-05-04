@@ -8,6 +8,7 @@
 
 use std::net::SocketAddr;
 
+use o_sfu_protocol::shared::StreamType;
 use o_sfu_router::{
     MediaKind, MediaStream,
     test_support::rtp_samples::{
@@ -20,7 +21,7 @@ use super::fixtures::*;
 use crate::{
     core::{
         SessionNegotiationOutcome,
-        server::session::{StreamType, UserId, UserInfo, UserPermissions},
+        server::session::{UserId, UserInfo, UserPermissions},
     },
     runtime::{
         diagnostics::{DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection},

@@ -1,5 +1,8 @@
 use super::{PendingPublishTransactions, Room};
-use crate::runtime::{ConnectionId, StreamType, UserId, media_transport::TransportMediaId};
+use crate::runtime::{
+    ConnectionId, StreamType, UserId, media_transport::TransportMediaId,
+    source_model::test_support::stream_id_for_stream_type,
+};
 
 impl PendingPublishTransactions {
     pub(in crate::runtime::room) fn staged_count_for_connection(
@@ -9,7 +12,7 @@ impl PendingPublishTransactions {
     ) -> usize {
         self.staged
             .keys()
-            .filter(|key| key.user_id == *user_id && key.connection_id == connection_id)
+            .filter(|key| key.user == *user_id && key.connection == connection_id)
             .count()
     }
 
@@ -19,12 +22,11 @@ impl PendingPublishTransactions {
         connection_id: ConnectionId,
         stream_type: StreamType,
     ) -> Option<TransportMediaId> {
+        let stream_id = stream_id_for_stream_type(stream_type);
         self.staged
             .iter()
             .find(|(key, _)| {
-                key.user_id == *user_id
-                    && key.connection_id == connection_id
-                    && key.stream_type == stream_type
+                key.user == *user_id && key.connection == connection_id && key.stream == stream_id
             })
             .map(|(_, transaction)| transaction.transport_media_id())
     }

@@ -9,10 +9,6 @@ impl ProducerRuntimeId {
         *next_producer_id = next_producer_id.saturating_add(1);
         Self(current)
     }
-
-    pub(in crate::runtime::room) fn into_wire_id(self) -> String {
-        self.to_string()
-    }
 }
 
 impl Display for ProducerRuntimeId {

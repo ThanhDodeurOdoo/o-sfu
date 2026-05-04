@@ -13,6 +13,7 @@ use o_sfu_protocol::{
 };
 
 use crate::{
+    application::stream_catalog::stream_type_for_stream_id,
     core::{
         OfferedMediaCapabilities, UploadLayerPolicyRole,
         server::source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
@@ -301,10 +302,13 @@ impl UserWireState {
     }
 
     pub(super) fn apply_remote_track_bootstrap(&mut self, track: &RemoteTrackBootstrap) {
+        let Some(stream_type) = stream_type_for_stream_id(track.stream_id()) else {
+            return;
+        };
         self.apply_track_binding(
             track.mid().to_owned(),
             track.user_id().clone(),
-            track.stream_type(),
+            stream_type,
             track.active(),
             track.source_descriptor(),
         );
@@ -319,7 +323,9 @@ impl UserWireState {
         update: &TrackBindingUpdate,
     ) -> UserWireMessages {
         let user_id = update.user_id.clone();
-        let stream_type = update.stream_type;
+        let Some(stream_type) = stream_type_for_stream_id(&update.stream_id) else {
+            return UserWireMessages::messages(Vec::new());
+        };
         let changed = match update.active {
             Some(active) => self.set_track_active(&user_id, stream_type, active),
             None => self.remove_track_binding(&user_id, stream_type),
@@ -470,12 +476,15 @@ mod tests {
         shared::StreamType,
         signaling::{RequestId, ServerRequest, SessionDescriptionPayload},
     };
-    use o_sfu_router::{MediaKind, Mid, Rid};
+    use o_sfu_router::{Mid, Rid};
 
     use super::*;
-    use crate::core::server::source_model::{
-        PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
-        SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
+    use crate::{
+        application::stream_catalog::source_publish_intent_for_stream_type,
+        core::server::source_model::{
+            PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
+            SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
+        },
     };
 
     #[test]
@@ -579,11 +588,13 @@ mod tests {
             max_temporal_layer_id: None,
             negotiated_format: None,
         });
+        let intent = source_publish_intent_for_stream_type(StreamType::Camera);
         PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
             source_id,
             owner: PublishedSourceOwner::new(UserId::Integer(7)),
-            stream_type: StreamType::Camera,
-            media_kind: MediaKind::Video,
+            stream_id: intent.stream_id().clone(),
+            media_kind: intent.media_kind(),
+            policy: intent.policy(),
             mid: Some(Mid::new(mid)),
             encodings: vec![encoding],
         })

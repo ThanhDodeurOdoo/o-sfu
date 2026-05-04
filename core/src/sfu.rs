@@ -5,6 +5,17 @@
 //! expresses media intent through that handle. The handle keeps room identity,
 //! user identity and runtime connection identity together so outer
 //! orchestration does not pass the same tuple through every call.
+//!
+//! # Business-layer API
+//!
+//! Application code that changes publication policy should use
+//! [`SourcePublishIntent`] for upload intent and
+//! [`SourceSubscriptionIntent`] keyed by [`UserStreamId`] for download intent.
+//! Core does not accept compatibility stream labels on this facade. Those
+//! labels must be translated at the application edge before calling
+//! [`MediaSession::stage_publish`] or [`MediaSession::update_subscription`].
+
+use std::collections::BTreeMap;
 
 use o_sfu_router::MediaCapabilities;
 
@@ -13,8 +24,11 @@ use crate::{
     PublicationActivityOutcome, PublishStageOutcome, RollbackStagedPublishOutcome,
     SessionNegotiationOutcome, SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
     runtime::{
-        DownloadStates, StreamType, UserId, UserInfo, room::Room,
-        source_model::UploadLayerPolicyRole,
+        UserId, UserInfo,
+        room::Room,
+        source_model::{
+            SourcePublishIntent, SourceSubscriptionIntent, UploadLayerPolicyRole, UserStreamId,
+        },
     },
     transport::{
         AppliedSessionAnswer, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
@@ -174,6 +188,14 @@ pub struct SfuCore<T> {
 /// Session methods are cold-path orchestration calls. They may await room
 /// locks, transport commands and cleanup effects. The room boundary remains
 /// responsible for releasing state locks before awaiting transport work.
+///
+/// # Source policy
+///
+/// Publishing and subscribing are intentionally generic. A caller supplies
+/// stream ids and source policies from its orchestration catalog. The session
+/// facade validates ownership and applies transport work, but it does not
+/// decide whether a stream behaves like camera, screen share or any future
+/// product concept.
 #[derive(Debug)]
 pub struct MediaSession<'a, T>
 where
@@ -308,7 +330,7 @@ where
         &self,
         answer_sdp: &str,
         offered_capabilities: &OfferedMediaCapabilities,
-    ) -> Result<(), SfuCoreError> {
+    ) -> Result<Vec<UserStreamId>, SfuCoreError> {
         let applied_answer = self.apply_transport_answer(answer_sdp).await?;
         let client_capabilities = self
             .core
@@ -327,8 +349,7 @@ where
         if outcome != SessionNegotiationOutcome::Applied {
             return Err(SfuCoreError::SessionNegotiationRejected(outcome));
         }
-        self.commit_staged_publishes(&applied_answer).await;
-        Ok(())
+        Ok(self.commit_staged_publishes(&applied_answer).await)
     }
 
     /// Apply the browser answer for a renegotiation offer.
@@ -343,7 +364,10 @@ where
     /// Returns transport errors from answer application or
     /// [`SfuCoreError::SessionRefreshRejected`] when room state rejects the
     /// refresh.
-    pub async fn apply_renegotiation_answer(&self, answer_sdp: &str) -> Result<(), SfuCoreError> {
+    pub async fn apply_renegotiation_answer(
+        &self,
+        answer_sdp: &str,
+    ) -> Result<Vec<UserStreamId>, SfuCoreError> {
         let applied_answer = self.apply_transport_answer(answer_sdp).await?;
         let outcome = self
             .room
@@ -356,8 +380,7 @@ where
         if outcome != SessionNegotiationOutcome::Applied {
             return Err(SfuCoreError::SessionRefreshRejected(outcome));
         }
-        self.commit_staged_publishes(&applied_answer).await;
-        Ok(())
+        Ok(self.commit_staged_publishes(&applied_answer).await)
     }
 
     /// Check whether this connection already has a staged publish for a stream.
@@ -365,12 +388,12 @@ where
     /// This is an idempotency hint for websocket orchestration. It is not an
     /// authority to commit media by itself because another task can still win
     /// or clean up the staged transaction before the answer arrives.
-    pub async fn has_staged_publish(&self, stream_type: StreamType) -> bool {
+    pub async fn has_staged_publish(&self, stream_id: &UserStreamId) -> bool {
         self.room
             .has_staged_publish(
                 self.context.user_id(),
                 self.context.connection_id(),
-                stream_type,
+                stream_id,
             )
             .await
     }
@@ -380,9 +403,9 @@ where
     /// The result is room-authoritative at the moment of the state read. It
     /// does not reserve the stream against a concurrent unpublish or user
     /// replacement.
-    pub async fn is_stream_published(&self, stream_type: StreamType) -> bool {
+    pub async fn is_stream_published(&self, stream_id: &UserStreamId) -> bool {
         self.room
-            .is_stream_published(self.context.user_id(), stream_type)
+            .is_stream_published(self.context.user_id(), stream_id)
             .await
     }
 
@@ -393,14 +416,14 @@ where
     /// activity change was rejected.
     pub async fn set_publication_activity(
         &self,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
         activity: PublicationActivity,
     ) -> PublicationActivityOutcome {
         self.room
             .set_publication_active_runtime(
                 self.context.user_id(),
                 self.context.connection_id(),
-                stream_type,
+                stream_id,
                 activity,
                 &self.core.media_transport,
             )
@@ -411,17 +434,19 @@ where
     ///
     /// The returned outcome is room-authoritative. A stale connection means the
     /// caller is acting on a session that has already been replaced or removed.
+    /// The caller owns translation from compatibility download state into the
+    /// generic per-stream map.
     pub async fn update_subscription(
         &self,
         target_user_id: &UserId,
-        states: &DownloadStates,
+        intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
     ) -> SubscriptionUpdateOutcome {
         self.room
             .update_subscription_runtime(
                 self.context.user_id(),
                 self.context.connection_id(),
                 target_user_id,
-                states,
+                intents,
                 &self.core.media_transport,
             )
             .await
@@ -449,15 +474,20 @@ where
     /// offer. Duplicate and rejected outcomes are ordinary domain decisions.
     /// `Err` means the transport could not reserve media and the publish cannot
     /// safely continue.
+    ///
+    /// The intent is the business-layer policy handoff. Core stores the stream
+    /// id as opaque identity and later uses the attached
+    /// [`crate::runtime::source_model::SourcePolicy`] when applying receiver
+    /// layout and bandwidth decisions.
     pub async fn stage_publish(
         &self,
-        stream_type: StreamType,
+        intent: &SourcePublishIntent,
     ) -> Result<PublishStageOutcome, SfuCoreError> {
         self.room
             .stage_negotiated_publish(
                 self.context.user_id(),
                 self.context.connection_id(),
-                stream_type,
+                intent,
                 &self.core.media_transport,
             )
             .await
@@ -471,13 +501,13 @@ where
     /// teardown.
     pub async fn rollback_staged_publish(
         &self,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
     ) -> RollbackStagedPublishOutcome {
         self.room
             .rollback_staged_publish(
                 self.context.user_id(),
                 self.context.connection_id(),
-                stream_type,
+                stream_id,
                 &self.core.media_transport,
             )
             .await
@@ -503,12 +533,12 @@ where
     /// Missing publications are normal no-ops. Cleanup or state commit failures
     /// are explicit outcomes so callers do not infer failure reasons from a
     /// collapsed boolean.
-    pub async fn unpublish(&self, stream_type: StreamType) -> UnpublishOutcome {
+    pub async fn unpublish(&self, stream_id: &UserStreamId) -> UnpublishOutcome {
         self.room
             .unpublish_track(
                 self.context.user_id(),
                 self.context.connection_id(),
-                stream_type,
+                stream_id,
                 &self.core.media_transport,
             )
             .await
@@ -525,7 +555,10 @@ where
             .map_err(SfuCoreError::Transport)
     }
 
-    async fn commit_staged_publishes(&self, applied_answer: &AppliedSessionAnswer) {
+    async fn commit_staged_publishes(
+        &self,
+        applied_answer: &AppliedSessionAnswer,
+    ) -> Vec<UserStreamId> {
         self.room
             .commit_staged_publishes(
                 self.context.user_id(),
@@ -534,7 +567,7 @@ where
                 &self.core.media_transport,
                 &self.core.media_transport,
             )
-            .await;
+            .await
     }
 }
 

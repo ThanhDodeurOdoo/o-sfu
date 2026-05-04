@@ -23,9 +23,11 @@ pub mod source_model;
 pub mod telemetry;
 
 pub use session_types::{
-    AvailableFeatures, DownloadStates, JsonPayload, PeerSnapshot, RecordingOptions, RecordingState,
-    RecordingStateUpdate, StopCode, StreamType, UserId, UserInfo, UserPermissions,
-    VideoLayoutIntent, WebSocketCloseCode,
+    AvailableFeatures, JsonPayload, PeerSnapshot, RecordingOptions, RecordingState,
+    RecordingStateUpdate, StopCode, UserId, UserInfo, UserPermissions, VideoLayoutIntent,
+    WebSocketCloseCode,
 };
+#[cfg(any(test, feature = "testing-transport"))]
+pub(crate) use session_types::{DownloadStates, StreamType};
 
 pub use crate::{ConnectionId, RoomInstanceId};

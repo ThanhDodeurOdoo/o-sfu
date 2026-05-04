@@ -4,19 +4,24 @@
 //! indexes and transport observation snapshots together. It normalizes that
 //! state into route-shaped facts so the budget planner can be tested without a
 //! `Room`, media transport, websocket user, or `str0m` state.
+//!
+//! Source behavior enters this path through the committed
+//! [`PublishedSourceDescriptor`]. That keeps product vocabulary at the
+//! orchestration edge while letting the planner consume media kind, layout
+//! policy, adaptation policy and active-speaker role as generic route facts.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    super::shared::{RoomState, SourceKey},
-    layout::{ReceiverVideoLayoutIntent, featured_camera_user_ids_for_active_speakers},
+    super::shared::RoomState,
+    layout::{ReceiverVideoLayoutIntent, featured_source_user_ids_for_active_speakers},
 };
 use crate::runtime::{
-    ConnectionId, StreamType, UserId,
+    ConnectionId, UserId,
     media_transport::{ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportMediaId},
     source_model::{
-        ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
-        SourceEncodingDescriptor,
+        ActiveSpeakerSourceRole, ConsumerSourceSelection, PublishedSourceDescriptor,
+        PublishedSourceId, SourceAdaptationPolicy, SourceEncodingDescriptor,
     },
 };
 
@@ -38,11 +43,11 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
         active_speaker_sources: &[ActiveSpeakerSource],
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
     ) -> Self {
-        let featured_camera_user_ids =
-            featured_camera_user_ids_for_active_speakers(state, active_speaker_sources);
+        let featured_source_user_ids =
+            featured_source_user_ids_for_active_speakers(state, active_speaker_sources);
         let receiver_bandwidth_by_user = receiver_bandwidth_by_user(receiver_bandwidth_snapshot);
-        let visible_camera_route_counts =
-            visible_camera_route_counts_by_consumer(state, &featured_camera_user_ids);
+        let visible_scalable_route_counts =
+            visible_scalable_route_counts_by_consumer(state, &featured_source_user_ids);
         let selectable_encoding_ladders = selectable_encoding_ladders_by_source(&state.sources);
         let routes = state
             .consumer_index
@@ -68,7 +73,7 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
                 let layout_intent = state.receiver_video_layout_intent(
                     &consumer_key.consumer_user_id,
                     source,
-                    &featured_camera_user_ids,
+                    &featured_source_user_ids,
                 );
                 Some(ReceiverVideoRouteInput::new(ReceiverVideoRouteInputParts {
                     user_count: state.user_count(),
@@ -81,7 +86,7 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
                     consumer_transport_media_id: consumer_state.consumer_media,
                     current_selection,
                     layout_intent,
-                    visible_camera_route_count: visible_camera_route_counts
+                    visible_scalable_route_count: visible_scalable_route_counts
                         .get(&consumer_key.consumer_user_id)
                         .copied()
                         .unwrap_or(1),
@@ -113,7 +118,7 @@ pub(in crate::runtime::room) struct ReceiverVideoRouteInput<'a> {
     consumer_transport_media_id: TransportMediaId,
     current_selection: ConsumerSourceSelection,
     layout_intent: ReceiverVideoLayoutIntent,
-    visible_camera_route_count: usize,
+    visible_scalable_route_count: usize,
     receiver_bandwidth_bps: Option<u64>,
     encodings: Vec<&'a SourceEncodingDescriptor>,
 }
@@ -134,7 +139,7 @@ pub(in crate::runtime::room) struct ReceiverVideoRouteInputParts<'a> {
     pub(in crate::runtime::room) consumer_transport_media_id: TransportMediaId,
     pub(in crate::runtime::room) current_selection: ConsumerSourceSelection,
     pub(in crate::runtime::room) layout_intent: ReceiverVideoLayoutIntent,
-    pub(in crate::runtime::room) visible_camera_route_count: usize,
+    pub(in crate::runtime::room) visible_scalable_route_count: usize,
     pub(in crate::runtime::room) receiver_bandwidth_bps: Option<u64>,
     pub(in crate::runtime::room) encodings: Vec<&'a SourceEncodingDescriptor>,
 }
@@ -153,7 +158,7 @@ impl<'a> ReceiverVideoRouteInput<'a> {
             consumer_transport_media_id: parts.consumer_transport_media_id,
             current_selection: parts.current_selection,
             layout_intent: parts.layout_intent,
-            visible_camera_route_count: parts.visible_camera_route_count,
+            visible_scalable_route_count: parts.visible_scalable_route_count,
             receiver_bandwidth_bps: parts.receiver_bandwidth_bps,
             encodings: parts.encodings,
         }
@@ -167,8 +172,8 @@ impl<'a> ReceiverVideoRouteInput<'a> {
         self.source.source_id()
     }
 
-    pub(in crate::runtime::room) const fn stream_type(&self) -> StreamType {
-        self.source.stream_type()
+    pub(in crate::runtime::room) const fn adaptation_policy(&self) -> SourceAdaptationPolicy {
+        self.source.policy().adaptation()
     }
 
     pub(in crate::runtime::room) fn consumer_user_id(&self) -> &'a UserId {
@@ -207,8 +212,8 @@ impl<'a> ReceiverVideoRouteInput<'a> {
         self.user_count
     }
 
-    pub(in crate::runtime::room) const fn visible_camera_route_count(&self) -> usize {
-        self.visible_camera_route_count
+    pub(in crate::runtime::room) const fn visible_scalable_route_count(&self) -> usize {
+        self.visible_scalable_route_count
     }
 
     pub(in crate::runtime::room) const fn receiver_bandwidth_bps(&self) -> Option<u64> {
@@ -220,16 +225,16 @@ impl<'a> ReceiverVideoRouteInput<'a> {
     }
 }
 
-fn visible_camera_route_counts_by_consumer(
+fn visible_scalable_route_counts_by_consumer(
     state: &RoomState,
-    featured_camera_user_ids: &BTreeSet<UserId>,
+    featured_source_user_ids: &BTreeSet<UserId>,
 ) -> BTreeMap<UserId, usize> {
     let mut counts = BTreeMap::new();
     for (consumer_key, consumer_state) in &state.consumer_index {
         let Some(source) = state.sources.get(&consumer_key.source_id) else {
             continue;
         };
-        if source.stream_type() != StreamType::Camera {
+        if source.policy().adaptation() != SourceAdaptationPolicy::ScalableVideo {
             continue;
         }
         let Some(producer_id) = state.producer_id_by_source_id.get(&consumer_key.source_id) else {
@@ -254,7 +259,7 @@ fn visible_camera_route_counts_by_consumer(
         let layout_intent = state.receiver_video_layout_intent(
             &consumer_key.consumer_user_id,
             source,
-            featured_camera_user_ids,
+            featured_source_user_ids,
         );
         if !layout_intent.counts_toward_visible_budget() {
             continue;
@@ -302,30 +307,41 @@ pub(super) fn selectable_encodings(
     encodings
 }
 
-pub(super) fn camera_owner_for_active_audio_source(
+pub(super) fn featured_source_owner_for_active_speaker_source(
     state: &RoomState,
     transport_media_id: TransportMediaId,
 ) -> Option<UserId> {
-    let owner_user_id = state
-        .source_transport_media_entry(transport_media_id)
-        .filter(|entry| entry.stream_type() == StreamType::Audio)
-        .map(|entry| entry.owner_user_id().clone())?;
+    let entry = state.source_transport_media_entry(transport_media_id)?;
+    let detector_source = state.sources.get(&entry.source_id())?;
+    let detector_policy = detector_source.policy().active_speaker()?;
+    if detector_policy.role() != ActiveSpeakerSourceRole::Detector {
+        return None;
+    }
+    let owner_user_id = entry.owner_user_id().clone();
     state
-        .source_ids_by_owner_stream
-        .contains_key(&SourceKey::new(&owner_user_id, StreamType::Camera))
+        .source_ids_by_owner
+        .get(&owner_user_id)?
+        .iter()
+        .filter_map(|source_id| state.sources.get(source_id))
+        .any(|source| {
+            source.policy().active_speaker().is_some_and(|policy| {
+                policy.group() == detector_policy.group()
+                    && policy.role() == ActiveSpeakerSourceRole::Promotable
+            })
+        })
         .then_some(owner_user_id)
 }
 
-pub(super) fn first_featured_camera_session_for_active_speakers(
+pub(super) fn first_featured_source_user_for_active_speakers(
     state: &RoomState,
     active_speaker_sources: &[ActiveSpeakerSource],
 ) -> Option<UserId> {
-    active_speaker_sources
-        .iter()
-        .find_map(|source| camera_owner_for_active_audio_source(state, source.transport_media_id()))
+    active_speaker_sources.iter().find_map(|source| {
+        featured_source_owner_for_active_speaker_source(state, source.transport_media_id())
+    })
 }
 
-pub(super) fn first_featured_camera_sessions_for_active_speakers(
+pub(super) fn first_featured_source_users_for_active_speakers(
     state: &RoomState,
     active_speaker_sources: &[ActiveSpeakerSource],
     limit: usize,
@@ -333,7 +349,7 @@ pub(super) fn first_featured_camera_sessions_for_active_speakers(
     active_speaker_sources
         .iter()
         .filter_map(|source| {
-            camera_owner_for_active_audio_source(state, source.transport_media_id())
+            featured_source_owner_for_active_speaker_source(state, source.transport_media_id())
         })
         .take(limit)
         .collect()

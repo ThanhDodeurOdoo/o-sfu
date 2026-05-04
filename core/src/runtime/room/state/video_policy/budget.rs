@@ -4,6 +4,15 @@
 //! then solves the receiver's selected video set against the live bandwidth
 //! estimate. Overload is expressed as semantic route pauses so the transport
 //! withholds whole routes instead of randomly dropping packets.
+//!
+//! # Source policy
+//!
+//! The planner does not know product stream names. A source participates in
+//! receiver BWE control because its descriptor carries
+//! [`SourceAdaptationPolicy::ScalableVideo`], and a readable-detail source is
+//! protected because its descriptor carries
+//! [`SourceAdaptationPolicy::ReadableDetail`]. Orchestration changes those
+//! decisions before publish by building a different source policy.
 
 use std::collections::BTreeMap;
 
@@ -15,17 +24,17 @@ use super::{
     input::{ReceiverVideoPolicyInput, ReceiverVideoRouteInput},
 };
 use crate::runtime::{
-    StreamType, UserId,
+    UserId,
     media_transport::{ActiveSpeakerSource, ReceiverBandwidthSnapshot},
     source_model::{
         ConsumerSourceSelection, OverBudgetExceptionReason, PolicyPauseReason,
-        ReceiverVideoBudgetDiagnostics, SourceEncodingDescriptor, SourceRoomPolicySelector,
-        SourceRoutePriority, SourceSelector, UploadLayerPolicyRole,
+        ReceiverVideoBudgetDiagnostics, SourceAdaptationPolicy, SourceEncodingDescriptor,
+        SourceRoomPolicySelector, SourceRoutePriority, SourceSelector, UploadLayerPolicyRole,
     },
 };
 
-/// Minimum room size where camera simulcast adaptation starts constraining receivers.
-const MULTIPARTY_CAMERA_SIMULCAST_SELECTION_THRESHOLD: usize = 3;
+/// Minimum room size where scalable-video adaptation starts constraining receivers.
+const MULTIPARTY_SCALABLE_VIDEO_SELECTION_THRESHOLD: usize = 3;
 
 /// Number of policy refreshes that must agree before a lower encoding is committed.
 const DOWNSWITCH_PRESSURE_OBSERVATIONS: u8 = 2;
@@ -175,11 +184,11 @@ fn consumer_route_adaptation_plan(
 ) -> Option<ConsumerAdaptationPlan> {
     consumer_adaptation_plan(
         route.user_count(),
-        route.stream_type(),
+        route.adaptation_policy(),
         route.encodings(),
         route.current_selection(),
         route.layout_intent().uses_featured_quality(),
-        route.visible_camera_route_count(),
+        route.visible_scalable_route_count(),
         route.receiver_bandwidth_bps(),
     )
 }
@@ -361,18 +370,19 @@ fn adaptation_outcomes(
 
 fn consumer_adaptation_plan(
     user_count: usize,
-    stream_type: StreamType,
+    adaptation_policy: SourceAdaptationPolicy,
     encodings: &[&SourceEncodingDescriptor],
     current: ConsumerSourceSelection,
     featured: bool,
-    visible_camera_route_count: usize,
+    visible_scalable_route_count: usize,
     receiver_bandwidth_bps: Option<u64>,
 ) -> Option<ConsumerAdaptationPlan> {
-    if stream_type == StreamType::Screen {
-        return screen_share_adaptation_plan(encodings, current);
-    }
-    if stream_type != StreamType::Camera {
-        return None;
+    match adaptation_policy {
+        SourceAdaptationPolicy::ReadableDetail => {
+            return readable_detail_adaptation_plan(encodings, current);
+        }
+        SourceAdaptationPolicy::None => return None,
+        SourceAdaptationPolicy::ScalableVideo => {}
     }
     if encodings.len() < 2 {
         return None;
@@ -381,7 +391,7 @@ fn consumer_adaptation_plan(
     let target_index = desired_encoding_index(
         user_count,
         featured,
-        visible_camera_route_count,
+        visible_scalable_route_count,
         receiver_bandwidth_bps,
         encodings,
     );
@@ -461,7 +471,7 @@ fn selected_receiver_bitrate_bps(planned_routes: &[PlannedReceiverRoute<'_>]) ->
 }
 
 fn route_can_downgrade(route: &PlannedReceiverRoute<'_>) -> bool {
-    route.route.stream_type() == StreamType::Camera
+    route.route.adaptation_policy() == SourceAdaptationPolicy::ScalableVideo
         && matches!(
             route.route.layout_intent().priority(),
             SourceRoutePriority::VisibleThumbnail | SourceRoutePriority::HiddenOrOverflow
@@ -472,7 +482,7 @@ fn route_is_protected(route: &PlannedReceiverRoute<'_>) -> bool {
     matches!(
         route.route.layout_intent().priority(),
         SourceRoutePriority::PinnedOrFeatured
-            | SourceRoutePriority::ScreenShare
+            | SourceRoutePriority::ReadableDetail
             | SourceRoutePriority::ActiveSpeaker
     )
 }
@@ -482,7 +492,7 @@ fn pause_rank(route: &PlannedReceiverRoute<'_>) -> u8 {
         SourceRoutePriority::HiddenOrOverflow => 0,
         SourceRoutePriority::VisibleThumbnail => 1,
         SourceRoutePriority::ActiveSpeaker => 2,
-        SourceRoutePriority::ScreenShare => 3,
+        SourceRoutePriority::ReadableDetail => 3,
         SourceRoutePriority::PinnedOrFeatured => 4,
     }
 }
@@ -536,7 +546,7 @@ fn selector_bitrate_bps(encodings: &[&SourceEncodingDescriptor], selector: Sourc
         .unwrap_or_default()
 }
 
-fn screen_share_adaptation_plan(
+fn readable_detail_adaptation_plan(
     encodings: &[&SourceEncodingDescriptor],
     current: ConsumerSourceSelection,
 ) -> Option<ConsumerAdaptationPlan> {
@@ -556,12 +566,12 @@ fn screen_share_adaptation_plan(
 fn desired_encoding_index(
     user_count: usize,
     featured: bool,
-    visible_camera_route_count: usize,
+    visible_scalable_route_count: usize,
     receiver_bandwidth_bps: Option<u64>,
     encodings: &[&SourceEncodingDescriptor],
 ) -> usize {
     let highest_index = encodings.len().saturating_sub(1);
-    if user_count < MULTIPARTY_CAMERA_SIMULCAST_SELECTION_THRESHOLD {
+    if user_count < MULTIPARTY_SCALABLE_VIDEO_SELECTION_THRESHOLD {
         return highest_index;
     }
     let Some(receiver_bandwidth_bps) = receiver_bandwidth_bps else {
@@ -570,7 +580,7 @@ fn desired_encoding_index(
     let budget_bps = if featured {
         receiver_bandwidth_bps
     } else {
-        let divisor = u64::try_from(visible_camera_route_count)
+        let divisor = u64::try_from(visible_scalable_route_count)
             .unwrap_or(u64::MAX)
             .saturating_mul(THUMBNAIL_BUDGET_DIVISOR)
             .max(1);

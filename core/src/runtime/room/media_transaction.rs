@@ -36,17 +36,17 @@ use super::{
         ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, TransportMediaRemoval,
         ValidatedPublishDescriptor,
     },
-    stream_role::UserStreamIntent,
 };
 use crate::{
     PublishStageOutcome, RollbackStagedPublishOutcome, TransportEffectOutcome,
     runtime::{
-        ConnectionId, StreamType, UserId,
+        ConnectionId, UserId,
         diagnostics::DiagnosticsEventData,
         media_transport::{
             AppliedSessionAnswer, ConsumerActivity, MediaPort, ObservabilityPort,
             TransportAdapterError, TransportMediaId,
         },
+        source_model::{SourcePublishIntent, UserStreamId},
         telemetry::schema::event as telemetry_event,
     },
 };
@@ -59,7 +59,7 @@ mod test_support;
 ///
 /// # Invariant
 ///
-/// At most one `(user, connection, stream_type)` entry may be staged at a
+/// At most one `(user, connection, stream_id)` entry may be staged at a
 /// time. The key includes the runtime-local connection id so stale replaced
 /// sockets cannot share ownership with the current websocket for the same user
 /// facing user id.
@@ -77,13 +77,13 @@ pub(super) struct PendingPublishTransactions {
 /// Stable key for one staged publish slot
 ///
 /// This uses the protocol user identity for room ownershio, the runtime
-/// connection id for stale-socket rejection and the stream type for the
-/// per-user media slot.
+/// connection id for stale-socket rejection and the orchestration stream id
+/// for the per-user media slot.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct PendingPublishKey {
-    user_id: UserId,
-    connection_id: ConnectionId,
-    stream_type: StreamType,
+    user: UserId,
+    connection: ConnectionId,
+    stream: UserStreamId,
 }
 
 /// Publish transaction that owns a reserved transport media line until the
@@ -158,7 +158,7 @@ struct StagedMediaReservation {
 /// This exists so the lock-protected state mutation stays small while the
 /// follow-up effects still run in the right order after unlock
 struct CommittedPublish {
-    producer_id: String,
+    stream_id: UserStreamId,
     media_counts_before: RoomMediaCounts,
     media_counts_after: RoomMediaCounts,
     consumer_targets: Vec<PendingConsumerBootstrapTarget>,
@@ -176,10 +176,10 @@ impl PendingPublishTransactions {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
     ) -> bool {
         self.staged
-            .contains_key(&PendingPublishKey::new(user_id, connection_id, stream_type))
+            .contains_key(&PendingPublishKey::new(user_id, connection_id, stream_id))
     }
 
     /// Attempt to register a new staged publish.
@@ -209,10 +209,10 @@ impl PendingPublishTransactions {
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
     ) -> Option<PendingPublishTransaction> {
         self.staged
-            .remove(&PendingPublishKey::new(user_id, connection_id, stream_type))
+            .remove(&PendingPublishKey::new(user_id, connection_id, stream_id))
     }
 
     /// Drains every staged publish owned by one websocket connection.
@@ -228,7 +228,7 @@ impl PendingPublishTransactions {
         let matching_keys = self
             .staged
             .keys()
-            .filter(|key| key.user_id == *user_id && key.connection_id == connection_id)
+            .filter(|key| key.user == *user_id && key.connection == connection_id)
             .cloned()
             .collect::<Vec<_>>();
         matching_keys
@@ -242,12 +242,12 @@ impl PendingPublishKey {
     pub(super) fn new(
         user_id: &UserId,
         connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
     ) -> Self {
         Self {
-            user_id: user_id.clone(),
-            connection_id,
-            stream_type,
+            user: user_id.clone(),
+            connection: connection_id,
+            stream: stream_id.clone(),
         }
     }
 }
@@ -279,7 +279,7 @@ impl PendingPublishTransaction {
         PendingPublishKey::new(
             self.descriptor.owner_user_id(),
             self.descriptor.owner_connection_id(),
-            self.descriptor.stream_type(),
+            self.descriptor.stream_id(),
         )
     }
 
@@ -304,10 +304,10 @@ impl PendingPublishTransaction {
         applied_answer: &AppliedSessionAnswer,
         observability_port: &impl ObservabilityPort,
         media_port: &impl MediaPort,
-    ) -> Option<String> {
+    ) -> Option<UserStreamId> {
         let owner_user_id = self.descriptor.owner_user_id().clone();
         let owner_connection_id = self.descriptor.owner_connection_id();
-        let stream_type = self.descriptor.stream_type();
+        let stream_id = self.descriptor.stream_id().clone();
         let transport_media_id = self.reservation.transport_media_id();
         let Some(negotiated_parameters) = applied_answer
             .negotiated_producer_parameters(transport_media_id)
@@ -322,7 +322,7 @@ impl PendingPublishTransaction {
             warn!(
                 user_id = ?owner_user_id,
                 connection_id = ?owner_connection_id,
-                ?stream_type,
+                stream_id = %stream_id,
                 ?transport_media_id,
                 "answered negotiation did not include staged publish parameters during room commit"
             );
@@ -345,14 +345,14 @@ impl PendingPublishTransaction {
         observability_port: &impl ObservabilityPort,
         media_port: &impl MediaPort,
         consumable_rtp_parameters: RouterRtpParameters,
-    ) -> Option<String> {
+    ) -> Option<UserStreamId> {
         let Self {
             descriptor,
             reservation,
         } = self;
         let owner_user_id = descriptor.owner_user_id().clone();
         let owner_connection_id = descriptor.owner_connection_id();
-        let stream_type = descriptor.stream_type();
+        let stream_id = descriptor.stream_id().clone();
         let transport_media_id = reservation.transport_media_id();
         let committed_publish = {
             let mut state = room.state.write().await;
@@ -371,8 +371,8 @@ impl PendingPublishTransaction {
                 subscriptions: state.subscription_count(),
             };
             drop(state);
-            consumer_targets.map(|(producer_id, consumer_targets)| CommittedPublish {
-                producer_id: producer_id.into_wire_id(),
+            consumer_targets.map(|(_producer_id, consumer_targets)| CommittedPublish {
+                stream_id: stream_id.clone(),
                 media_counts_before,
                 media_counts_after,
                 consumer_targets,
@@ -397,18 +397,18 @@ impl PendingPublishTransaction {
             warn!(
                 user_id = ?owner_user_id,
                 connection_id = ?owner_connection_id,
-                stream_type = ?stream_type,
+                stream_id = %stream_id,
                 transport_media_id = ?transport_media_id,
                 "room rejected staged negotiated publish during commit"
             );
             return None;
         };
         reservation.commit();
-        let producer_id = committed_publish.producer_id.clone();
+        let stream_id = committed_publish.stream_id.clone();
         committed_publish
             .finish(room, observability_port, media_port)
             .await;
-        Some(producer_id)
+        Some(stream_id)
     }
 
     /// Consumes a staged publish that cannot become live.
@@ -551,12 +551,12 @@ impl Room {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
     ) -> bool {
         self.pending_publish_transactions
             .lock()
             .await
-            .contains(user_id, connection_id, stream_type)
+            .contains(user_id, connection_id, stream_id)
     }
 
     /// Validates room ownership and reserves transport media for a negotiated publish.
@@ -573,13 +573,12 @@ impl Room {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        stream_type: StreamType,
+        intent: &SourcePublishIntent,
         media_port: &impl MediaPort,
     ) -> Result<PublishStageOutcome, TransportAdapterError> {
-        let media_kind = media_kind_for_stream_type(stream_type);
         let validated_descriptor = {
             let state = self.state.read().await;
-            state.validate_publish_descriptor(user_id, connection_id, stream_type, media_kind)
+            state.validate_publish_descriptor(user_id, connection_id, intent)
         };
         let Some(validated_descriptor) = validated_descriptor else {
             return Ok(PublishStageOutcome::Rejected);
@@ -589,7 +588,7 @@ impl Room {
         if self.pending_publish_transactions.lock().await.contains(
             user_id,
             connection_id,
-            stream_type,
+            intent.stream_id(),
         ) {
             return Ok(PublishStageOutcome::Duplicate);
         }
@@ -597,7 +596,7 @@ impl Room {
         let transport_media_id = match media_port
             .publish_media(
                 &session_key,
-                media_kind,
+                intent.media_kind(),
                 &answer_derived_publish_parameters(),
             )
             .await
@@ -607,7 +606,8 @@ impl Room {
                 warn!(
                     ?user_id,
                     connection_id = ?connection_id,
-                    ?stream_type,
+                    stream_id = %intent.stream_id(),
+                    media_kind = ?intent.media_kind(),
                     "failed to stage negotiated publish stream"
                 );
                 return Err(error);
@@ -648,16 +648,16 @@ impl Room {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_id: &UserStreamId,
         media_port: &impl MediaPort,
     ) -> RollbackStagedPublishOutcome {
         // Explicit unpublish before commit only needs transport cleanup because
         // the producer never became live in room state.
-        let staged_publish = self.pending_publish_transactions.lock().await.take(
-            user_id,
-            connection_id,
-            stream_type,
-        );
+        let staged_publish =
+            self.pending_publish_transactions
+                .lock()
+                .await
+                .take(user_id, connection_id, stream_id);
         let Some(staged_publish) = staged_publish else {
             return RollbackStagedPublishOutcome::NotStaged;
         };
@@ -714,17 +714,22 @@ impl Room {
         applied_answer: &AppliedSessionAnswer,
         observability_port: &impl ObservabilityPort,
         media_port: &impl MediaPort,
-    ) {
+    ) -> Vec<UserStreamId> {
         let staged_publishes = self
             .pending_publish_transactions
             .lock()
             .await
             .take_for_connection(user_id, connection_id);
+        let mut committed_stream_ids = Vec::new();
         for staged_publish in staged_publishes {
-            let _producer_id = staged_publish
+            if let Some(stream_id) = staged_publish
                 .commit(self, applied_answer, observability_port, media_port)
-                .await;
+                .await
+            {
+                committed_stream_ids.push(stream_id);
+            }
         }
+        committed_stream_ids
     }
 
     /// Releases a pending consumer-bootstrap reservation after the matching
@@ -846,10 +851,6 @@ impl Room {
             );
         }
     }
-}
-
-fn media_kind_for_stream_type(stream_type: StreamType) -> o_sfu_router::MediaKind {
-    UserStreamIntent::from_stream_type(stream_type).media_kind()
 }
 
 /// Marker parameters for a protocol publish whose concrete SSRC/RID bindings
