@@ -1,10 +1,15 @@
 use o_sfu_router::{ProducerId as RouterProducerId, RouterError};
 
 use super::fixtures::*;
-use crate::runtime::room::{
-    LocalRoomRouterPlacements, LocalRoomRouterPlacementsError,
-    router_state::RoomRouterStateError,
-    topology::{RoomTopologyError, RoutedProducerId},
+use crate::{
+    LocalSpilloverPolicy,
+    runtime::room::{
+        LocalRoomRouterPlacements, LocalRoomRouterPlacementsError,
+        router_state::RoomRouterStateError,
+        topology::{
+            LoadPressureReason, RoomTopologyError, RoutedProducerId, TopologyPressureSnapshot,
+        },
+    },
 };
 
 #[test]
@@ -196,6 +201,218 @@ fn topology_detaches_idle_spillover_router_after_last_home_session_leaves() {
 
     assert_eq!(topology.router_count(), 1);
     assert_eq!(topology.user_count(), 1);
+}
+
+#[test]
+fn load_triggered_topology_keeps_small_rooms_on_primary_router() {
+    let policy = LocalSpilloverPolicy::conservative()
+        .with_min_receiver_count(3)
+        .with_activation_window(1);
+    let mut topology = RoomTopology::new_with_load_spillover(RouterId(9), 2, policy);
+    let first_user_id = UserId::Integer(10);
+    let second_user_id = UserId::Integer(20);
+
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &first_user_id,
+                0,
+                TopologyPressureSnapshot {
+                    receiver_count: 1,
+                    ..Default::default()
+                },
+            )
+            .is_ok()
+    );
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &second_user_id,
+                1,
+                TopologyPressureSnapshot {
+                    receiver_count: 2,
+                    ..Default::default()
+                },
+            )
+            .is_ok()
+    );
+
+    assert_eq!(
+        topology.home_router_id_for_user(&first_user_id),
+        Some(RouterId(9))
+    );
+    assert_eq!(
+        topology.home_router_id_for_user(&second_user_id),
+        Some(RouterId(9))
+    );
+    assert_eq!(topology.router_count(), 1);
+}
+
+#[test]
+fn load_triggered_topology_attaches_router_after_pressure_window() {
+    let policy = LocalSpilloverPolicy::conservative()
+        .with_min_receiver_count(2)
+        .with_activation_window(1);
+    let mut topology = RoomTopology::new_with_load_spillover(RouterId(9), 2, policy);
+    let first_user_id = UserId::Integer(10);
+    let second_user_id = UserId::Integer(20);
+
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &first_user_id,
+                0,
+                TopologyPressureSnapshot {
+                    receiver_count: 1,
+                    ..Default::default()
+                },
+            )
+            .is_ok()
+    );
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &second_user_id,
+                1,
+                TopologyPressureSnapshot {
+                    receiver_count: 2,
+                    ..Default::default()
+                },
+            )
+            .is_ok()
+    );
+
+    assert_eq!(
+        topology.home_router_id_for_user(&first_user_id),
+        Some(RouterId(9))
+    );
+    assert_eq!(
+        topology.home_router_id_for_user(&second_user_id),
+        Some(RouterId(10))
+    );
+    assert_eq!(topology.router_count(), 2);
+    assert_eq!(topology.active_load_router_count_for_test(), 2);
+    assert_eq!(
+        topology.last_load_pressure_reason_for_test(),
+        Some(LoadPressureReason::ReceiverCount)
+    );
+}
+
+#[test]
+fn load_triggered_topology_honors_activation_window() {
+    let policy = LocalSpilloverPolicy::conservative()
+        .with_min_receiver_count(2)
+        .with_activation_window(2);
+    let mut topology = RoomTopology::new_with_load_spillover(RouterId(9), 2, policy);
+    let first_user_id = UserId::Integer(10);
+    let second_user_id = UserId::Integer(20);
+    let third_user_id = UserId::Integer(30);
+
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &first_user_id,
+                0,
+                TopologyPressureSnapshot {
+                    receiver_count: 1,
+                    ..Default::default()
+                },
+            )
+            .is_ok()
+    );
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &second_user_id,
+                1,
+                TopologyPressureSnapshot {
+                    receiver_count: 2,
+                    ..Default::default()
+                },
+            )
+            .is_ok()
+    );
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &third_user_id,
+                3,
+                TopologyPressureSnapshot {
+                    receiver_count: 3,
+                    ..Default::default()
+                },
+            )
+            .is_ok()
+    );
+
+    assert_eq!(
+        topology.home_router_id_for_user(&first_user_id),
+        Some(RouterId(9))
+    );
+    assert_eq!(
+        topology.home_router_id_for_user(&second_user_id),
+        Some(RouterId(9))
+    );
+    assert_eq!(
+        topology.home_router_id_for_user(&third_user_id),
+        Some(RouterId(10))
+    );
+}
+
+#[test]
+fn load_triggered_topology_waits_for_cooldown_before_idle_detach() {
+    let policy = LocalSpilloverPolicy::conservative()
+        .with_min_receiver_count(2)
+        .with_activation_window(1)
+        .with_cooldown_window(2);
+    let mut topology = RoomTopology::new_with_load_spillover(RouterId(9), 2, policy);
+    let first_user_id = UserId::Integer(10);
+    let second_user_id = UserId::Integer(20);
+    let third_user_id = UserId::Integer(30);
+
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &first_user_id,
+                0,
+                TopologyPressureSnapshot {
+                    receiver_count: 1,
+                    ..Default::default()
+                },
+            )
+            .is_ok()
+    );
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &second_user_id,
+                1,
+                TopologyPressureSnapshot {
+                    receiver_count: 2,
+                    ..Default::default()
+                },
+            )
+            .is_ok()
+    );
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &third_user_id,
+                2,
+                TopologyPressureSnapshot {
+                    receiver_count: 3,
+                    ..Default::default()
+                },
+            )
+            .is_ok()
+    );
+    assert_eq!(topology.router_count(), 2);
+
+    assert!(topology.apply_client_leave(&second_user_id).is_ok());
+    assert_eq!(topology.router_count(), 2);
+
+    assert!(topology.apply_client_leave(&third_user_id).is_ok());
+    assert_eq!(topology.router_count(), 1);
 }
 
 #[test]

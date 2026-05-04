@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, time::Instant};
 
 use super::fixtures::*;
 use crate::{
-    MediaCodecFlags, RuntimeFeatureFlags,
+    LocalSpilloverPolicy, MediaCodecFlags, RuntimeFeatureFlags,
     runtime::{
         diagnostics::DiagnosticsStore,
         media_transport::{SourcePacketGate, TransportMediaId},
@@ -83,6 +83,25 @@ fn spillover_room_manager(local_router_count: usize) -> RoomManager {
         .with_room_sharding_policy(crate::RoomShardingPolicy::bounded_local_spillover(
             local_router_count,
         )),
+    ))
+}
+
+fn load_spillover_room_manager(
+    local_router_count: usize,
+    policy: LocalSpilloverPolicy,
+) -> RoomManager {
+    RoomManager::for_test_with_config(super::super::RoomManagerConfig::new(
+        local_router_count,
+        super::super::RoomRuntimePolicy::new(
+            super::super::RoomAdmissionPolicy::new(100),
+            crate::RuntimeFeatureFlags::default(),
+            super::super::rtp_capabilities::router_rtp_capabilities(
+                crate::MediaCodecFlags::default(),
+            ),
+        )
+        .with_room_sharding_policy(
+            crate::RoomShardingPolicy::load_triggered_local_spillover(local_router_count, policy),
+        ),
     ))
 }
 
@@ -188,6 +207,118 @@ async fn room_spillover_policy_places_user_transport_on_local_workers() {
 
     assert_eq!(first_key.media_worker_id(), 0);
     assert_eq!(second_key.media_worker_id(), 1);
+}
+
+#[tokio::test]
+async fn load_triggered_room_keeps_small_room_transport_on_primary_worker() {
+    let manager = load_spillover_room_manager(
+        2,
+        LocalSpilloverPolicy::conservative()
+            .with_min_receiver_count(3)
+            .with_activation_window(1),
+    );
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+
+    for raw_user_id in [10_i64, 20] {
+        let (tx, _rx) = test_sender();
+        let joined = room
+            .test_api()
+            .lifecycle()
+            .join_user(
+                UserId::Integer(raw_user_id),
+                None,
+                UserPermissions::default(),
+                tx,
+            )
+            .await;
+        assert!(joined.is_ok());
+    }
+
+    for raw_user_id in [10_i64, 20] {
+        let user_id = UserId::Integer(raw_user_id);
+        let Some(connection_id) = room.test_api().inspect().user_connection_id(&user_id).await
+        else {
+            panic!("user should be joined");
+        };
+        assert_eq!(
+            room.transport_user_key(&user_id, connection_id)
+                .media_worker_id(),
+            0
+        );
+        assert_eq!(
+            room.test_api()
+                .inspect()
+                .topology_home_router_id(&user_id)
+                .await,
+            Some(RouterId(0))
+        );
+    }
+}
+
+#[tokio::test]
+async fn load_triggered_room_places_new_receivers_on_spillover_worker_after_pressure() {
+    let manager = load_spillover_room_manager(
+        2,
+        LocalSpilloverPolicy::conservative()
+            .with_min_receiver_count(2)
+            .with_activation_window(1),
+    );
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+
+    for raw_user_id in [10_i64, 20] {
+        let (tx, _rx) = test_sender();
+        let joined = room
+            .test_api()
+            .lifecycle()
+            .join_user(
+                UserId::Integer(raw_user_id),
+                None,
+                UserPermissions::default(),
+                tx,
+            )
+            .await;
+        assert!(joined.is_ok());
+    }
+    let first_user_id = UserId::Integer(10);
+    let second_user_id = UserId::Integer(20);
+    let Some(first_connection) = room
+        .test_api()
+        .inspect()
+        .user_connection_id(&first_user_id)
+        .await
+    else {
+        panic!("first user should be joined");
+    };
+    let Some(second_connection) = room
+        .test_api()
+        .inspect()
+        .user_connection_id(&second_user_id)
+        .await
+    else {
+        panic!("second user should be joined");
+    };
+
+    assert_eq!(
+        room.transport_user_key(&first_user_id, first_connection)
+            .media_worker_id(),
+        0
+    );
+    assert_eq!(
+        room.transport_user_key(&second_user_id, second_connection)
+            .media_worker_id(),
+        1
+    );
+    assert_eq!(
+        room.test_api()
+            .inspect()
+            .topology_home_router_id(&second_user_id)
+            .await,
+        Some(RouterId(1))
+    );
 }
 
 #[tokio::test]

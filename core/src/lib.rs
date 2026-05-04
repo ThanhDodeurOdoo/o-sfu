@@ -94,9 +94,9 @@ pub mod unstable {
 
 pub use ids::{ConnectionId, RoomInstanceId};
 pub use options::{
-    AudioCodecPreference, CodecOptions, CodecPreferences, CoreOptions, MediaCodecFlags,
-    MediaOptions, ObservabilityOptions, RoomShardingPolicy, RoomSpilloverMode, RoutingOptions,
-    RtcPortRange, RuntimeFeatureFlags, SessionBitrateLimits, VideoBitrateLimits,
+    AudioCodecPreference, CodecOptions, CodecPreferences, CoreOptions, LocalSpilloverPolicy,
+    MediaCodecFlags, MediaOptions, ObservabilityOptions, RoomShardingPolicy, RoomSpilloverMode,
+    RoutingOptions, RtcPortRange, RuntimeFeatureFlags, SessionBitrateLimits, VideoBitrateLimits,
     VideoCodecPreference,
 };
 pub use room::{

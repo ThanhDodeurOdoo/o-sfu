@@ -71,11 +71,31 @@ pub struct RoomShardingPolicy {
     spillover: RoomSpilloverMode,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalSpilloverPolicy {
+    /// Joined receiver count that is high enough to start spillover pressure.
+    min_receiver_count: usize,
+    /// Active and pending consumer routes allowed per active local router.
+    max_active_consumers_per_router: usize,
+    /// Receiver fan-out allowed for one published source before it is pressured.
+    max_fanout_per_source: usize,
+    /// Aggregate transport egress bitrate threshold, in bits per second.
+    egress_bitrate_threshold_bps: u64,
+    /// Packet-loop scheduling lag threshold, in milliseconds.
+    packet_loop_lag_threshold_ms: u64,
+    /// Queued transport command depth that indicates control-path pressure.
+    command_backlog_threshold: usize,
+    /// Relay mailbox depth that indicates cross-worker forwarding pressure.
+    relay_mailbox_depth_threshold: usize,
+    /// Worker pressure score threshold on a 0 to 100 saturation scale.
+    worker_pressure_threshold: u8,
+    /// Consecutive pressured observations required before attaching capacity.
+    activation_window: usize,
+    /// Consecutive idle cleanup observations required before draining capacity.
+    cooldown_window: usize,
+}
+
 /// How a room interprets its reserved local router placements.
-///
-/// The enum keeps the default single-router behavior explicit instead of
-/// encoding it as a magic limit. That makes strict rooms and opt-in spillover
-/// rooms easy to distinguish in tests, diagnostics and future policy code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomSpilloverMode {
     /// Keep all users, producers and consumers on the room's primary router.
@@ -89,6 +109,9 @@ pub enum RoomSpilloverMode {
     /// an adaptive load-triggered policy; adaptive thresholds will need their own
     /// measured inputs before they become public API.
     BoundedLocalSpillover,
+    /// Keep small rooms on the primary router and attach local capacity only
+    /// after measured pressure crosses the configured policy thresholds.
+    LoadTriggeredLocalSpillover(LocalSpilloverPolicy),
 }
 
 impl RoutingOptions {
@@ -132,6 +155,22 @@ impl RoomShardingPolicy {
         }
     }
 
+    /// Build the production same-room spillover policy.
+    ///
+    /// `max_local_routers` is still only an upper bound. Rooms start on their
+    /// primary placement and attach additional local placements when the
+    /// provided load policy reports sustained pressure.
+    #[must_use]
+    pub const fn load_triggered_local_spillover(
+        max_local_routers: usize,
+        policy: LocalSpilloverPolicy,
+    ) -> Self {
+        Self {
+            max_local_routers,
+            spillover: RoomSpilloverMode::LoadTriggeredLocalSpillover(policy),
+        }
+    }
+
     /// Return the non-zero local router cap for one room.
     ///
     /// The cap is the number of room-local router placements the runtime may
@@ -163,10 +202,11 @@ impl RoomShardingPolicy {
     #[must_use]
     pub fn allowed_local_router_count(self, reserved_local_routers: usize) -> usize {
         match self.spillover {
-            RoomSpilloverMode::StrictSingleRouter => 1,
             RoomSpilloverMode::BoundedLocalSpillover => {
                 self.max_local_routers().min(reserved_local_routers).max(1)
             }
+            RoomSpilloverMode::StrictSingleRouter
+            | RoomSpilloverMode::LoadTriggeredLocalSpillover(_) => 1,
         }
     }
 }
@@ -174,6 +214,168 @@ impl RoomShardingPolicy {
 impl Default for RoomShardingPolicy {
     fn default() -> Self {
         Self::strict_single_router()
+    }
+}
+
+impl LocalSpilloverPolicy {
+    pub const DEFAULT_MIN_RECEIVER_COUNT: usize = 16;
+    pub const DEFAULT_MAX_ACTIVE_CONSUMERS_PER_ROUTER: usize = 64;
+    pub const DEFAULT_MAX_FANOUT_PER_SOURCE: usize = 48;
+    pub const DEFAULT_EGRESS_BITRATE_THRESHOLD_BPS: u64 = 750_000_000;
+    pub const DEFAULT_PACKET_LOOP_LAG_THRESHOLD_MS: u64 = 20;
+    pub const DEFAULT_COMMAND_BACKLOG_THRESHOLD: usize = 128;
+    pub const DEFAULT_RELAY_MAILBOX_DEPTH_THRESHOLD: usize = 128;
+    pub const DEFAULT_WORKER_PRESSURE_THRESHOLD: u8 = 80;
+    pub const DEFAULT_ACTIVATION_WINDOW: usize = 2;
+    pub const DEFAULT_COOLDOWN_WINDOW: usize = 4;
+
+    /// Build the default conservative threshold set.
+    #[must_use]
+    pub const fn conservative() -> Self {
+        Self {
+            min_receiver_count: Self::DEFAULT_MIN_RECEIVER_COUNT,
+            max_active_consumers_per_router: Self::DEFAULT_MAX_ACTIVE_CONSUMERS_PER_ROUTER,
+            max_fanout_per_source: Self::DEFAULT_MAX_FANOUT_PER_SOURCE,
+            egress_bitrate_threshold_bps: Self::DEFAULT_EGRESS_BITRATE_THRESHOLD_BPS,
+            packet_loop_lag_threshold_ms: Self::DEFAULT_PACKET_LOOP_LAG_THRESHOLD_MS,
+            command_backlog_threshold: Self::DEFAULT_COMMAND_BACKLOG_THRESHOLD,
+            relay_mailbox_depth_threshold: Self::DEFAULT_RELAY_MAILBOX_DEPTH_THRESHOLD,
+            worker_pressure_threshold: Self::DEFAULT_WORKER_PRESSURE_THRESHOLD,
+            activation_window: Self::DEFAULT_ACTIVATION_WINDOW,
+            cooldown_window: Self::DEFAULT_COOLDOWN_WINDOW,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_min_receiver_count(mut self, value: usize) -> Self {
+        self.min_receiver_count = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_max_active_consumers_per_router(mut self, value: usize) -> Self {
+        self.max_active_consumers_per_router = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_max_fanout_per_source(mut self, value: usize) -> Self {
+        self.max_fanout_per_source = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_egress_bitrate_threshold_bps(mut self, value: u64) -> Self {
+        self.egress_bitrate_threshold_bps = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_packet_loop_lag_threshold_ms(mut self, value: u64) -> Self {
+        self.packet_loop_lag_threshold_ms = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_command_backlog_threshold(mut self, value: usize) -> Self {
+        self.command_backlog_threshold = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_relay_mailbox_depth_threshold(mut self, value: usize) -> Self {
+        self.relay_mailbox_depth_threshold = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_worker_pressure_threshold(mut self, value: u8) -> Self {
+        self.worker_pressure_threshold = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_activation_window(mut self, value: usize) -> Self {
+        self.activation_window = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_cooldown_window(mut self, value: usize) -> Self {
+        self.cooldown_window = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn min_receiver_count(self) -> usize {
+        self.min_receiver_count
+    }
+
+    #[must_use]
+    pub const fn max_active_consumers_per_router(self) -> usize {
+        if self.max_active_consumers_per_router == 0 {
+            1
+        } else {
+            self.max_active_consumers_per_router
+        }
+    }
+
+    #[must_use]
+    pub const fn max_fanout_per_source(self) -> usize {
+        if self.max_fanout_per_source == 0 {
+            1
+        } else {
+            self.max_fanout_per_source
+        }
+    }
+
+    #[must_use]
+    pub const fn egress_bitrate_threshold_bps(self) -> u64 {
+        self.egress_bitrate_threshold_bps
+    }
+
+    #[must_use]
+    pub const fn packet_loop_lag_threshold_ms(self) -> u64 {
+        self.packet_loop_lag_threshold_ms
+    }
+
+    #[must_use]
+    pub const fn command_backlog_threshold(self) -> usize {
+        self.command_backlog_threshold
+    }
+
+    #[must_use]
+    pub const fn relay_mailbox_depth_threshold(self) -> usize {
+        self.relay_mailbox_depth_threshold
+    }
+
+    #[must_use]
+    pub const fn worker_pressure_threshold(self) -> u8 {
+        self.worker_pressure_threshold
+    }
+
+    #[must_use]
+    pub const fn activation_window(self) -> usize {
+        if self.activation_window == 0 {
+            1
+        } else {
+            self.activation_window
+        }
+    }
+
+    #[must_use]
+    pub const fn cooldown_window(self) -> usize {
+        if self.cooldown_window == 0 {
+            1
+        } else {
+            self.cooldown_window
+        }
+    }
+}
+
+impl Default for LocalSpilloverPolicy {
+    fn default() -> Self {
+        Self::conservative()
     }
 }
 

@@ -1,7 +1,7 @@
 use std::{net::IpAddr, num::NonZeroUsize};
 
 use anyhow::{Context, Result, anyhow, ensure};
-use o_sfu_core::{RoomShardingPolicy, RtcPortRange, VideoBitrateLimits};
+use o_sfu_core::{LocalSpilloverPolicy, RoomShardingPolicy, RtcPortRange, VideoBitrateLimits};
 
 use super::{TransportConfig, parsing::parse_optional_env};
 
@@ -59,6 +59,8 @@ pub(super) fn load_transport_config(
         "ROOM_MAX_LOCAL_ROUTERS must be a valid usize",
     )?
     .unwrap_or(1);
+    let room_spillover_mode = get_var("ROOM_SPILLOVER_MODE");
+    let local_spillover_policy = load_local_spillover_policy(&mut get_var)?;
     let rtc_port_range = RtcPortRange::new(rtc_min_port, rtc_max_port);
     validate_transport_config(TransportConfigValidation {
         public_ip,
@@ -71,7 +73,11 @@ pub(super) fn load_transport_config(
         max_video_bitrate_bps,
         rtc_port_range,
     })?;
-    let room_sharding_policy = room_sharding_policy(room_max_local_routers);
+    let room_sharding_policy = room_sharding_policy(
+        room_max_local_routers,
+        room_spillover_mode.as_deref(),
+        local_spillover_policy,
+    )?;
     Ok(TransportConfig {
         public_ip,
         max_bitrate_in_bps,
@@ -86,13 +92,151 @@ pub(super) fn load_transport_config(
 /// Translate the operator local-router cap into the core room policy.
 ///
 /// `ROOM_MAX_LOCAL_ROUTERS=1` keeps the strict historical topology. Any larger
-/// value opts rooms into bounded deterministic local spillover, with the numeric
-/// value kept as the per-room local router cap.
-fn room_sharding_policy(room_max_local_routers: usize) -> RoomShardingPolicy {
-    if room_max_local_routers == 1 {
-        return RoomShardingPolicy::strict_single_router();
+/// value uses the load-triggered production policy unless
+/// `ROOM_SPILLOVER_MODE=bounded` explicitly requests the deterministic topology
+/// exercise mode.
+fn room_sharding_policy(
+    room_max_local_routers: usize,
+    mode: Option<&str>,
+    local_spillover_policy: LocalSpilloverPolicy,
+) -> Result<RoomShardingPolicy> {
+    if room_max_local_routers == 1 || mode == Some("strict") {
+        return Ok(RoomShardingPolicy::strict_single_router());
     }
-    RoomShardingPolicy::bounded_local_spillover(room_max_local_routers)
+    match mode.unwrap_or("load") {
+        "load" | "load-triggered" => Ok(RoomShardingPolicy::load_triggered_local_spillover(
+            room_max_local_routers,
+            local_spillover_policy,
+        )),
+        "bounded" => Ok(RoomShardingPolicy::bounded_local_spillover(
+            room_max_local_routers,
+        )),
+        other => Err(anyhow!(
+            "ROOM_SPILLOVER_MODE must be one of strict, load, load-triggered or bounded, got {other}"
+        )),
+    }
+}
+
+fn load_local_spillover_policy(
+    get_var: &mut impl FnMut(&str) -> Option<String>,
+) -> Result<LocalSpilloverPolicy> {
+    let min_receiver_count = parse_optional_env(
+        &mut *get_var,
+        "ROOM_SPILLOVER_MIN_RECEIVERS",
+        "ROOM_SPILLOVER_MIN_RECEIVERS must be a valid usize",
+    )?
+    .unwrap_or(LocalSpilloverPolicy::DEFAULT_MIN_RECEIVER_COUNT);
+    let max_active_consumers_per_router = parse_optional_env(
+        &mut *get_var,
+        "ROOM_SPILLOVER_MAX_CONSUMERS_PER_ROUTER",
+        "ROOM_SPILLOVER_MAX_CONSUMERS_PER_ROUTER must be a valid usize",
+    )?
+    .unwrap_or(LocalSpilloverPolicy::DEFAULT_MAX_ACTIVE_CONSUMERS_PER_ROUTER);
+    let max_fanout_per_source = parse_optional_env(
+        &mut *get_var,
+        "ROOM_SPILLOVER_MAX_FANOUT_PER_SOURCE",
+        "ROOM_SPILLOVER_MAX_FANOUT_PER_SOURCE must be a valid usize",
+    )?
+    .unwrap_or(LocalSpilloverPolicy::DEFAULT_MAX_FANOUT_PER_SOURCE);
+    let egress_bitrate_threshold_bps = parse_optional_env(
+        &mut *get_var,
+        "ROOM_SPILLOVER_EGRESS_BITRATE_BPS",
+        "ROOM_SPILLOVER_EGRESS_BITRATE_BPS must be a valid u64",
+    )?
+    .unwrap_or(LocalSpilloverPolicy::DEFAULT_EGRESS_BITRATE_THRESHOLD_BPS);
+    let packet_loop_lag_threshold_ms = parse_optional_env(
+        &mut *get_var,
+        "ROOM_SPILLOVER_PACKET_LOOP_LAG_MS",
+        "ROOM_SPILLOVER_PACKET_LOOP_LAG_MS must be a valid u64",
+    )?
+    .unwrap_or(LocalSpilloverPolicy::DEFAULT_PACKET_LOOP_LAG_THRESHOLD_MS);
+    let command_backlog_threshold = parse_optional_env(
+        &mut *get_var,
+        "ROOM_SPILLOVER_COMMAND_BACKLOG",
+        "ROOM_SPILLOVER_COMMAND_BACKLOG must be a valid usize",
+    )?
+    .unwrap_or(LocalSpilloverPolicy::DEFAULT_COMMAND_BACKLOG_THRESHOLD);
+    let relay_mailbox_depth_threshold = parse_optional_env(
+        &mut *get_var,
+        "ROOM_SPILLOVER_RELAY_MAILBOX_DEPTH",
+        "ROOM_SPILLOVER_RELAY_MAILBOX_DEPTH must be a valid usize",
+    )?
+    .unwrap_or(LocalSpilloverPolicy::DEFAULT_RELAY_MAILBOX_DEPTH_THRESHOLD);
+    let worker_pressure_threshold = parse_optional_env(
+        &mut *get_var,
+        "ROOM_SPILLOVER_WORKER_PRESSURE",
+        "ROOM_SPILLOVER_WORKER_PRESSURE must be a valid u8",
+    )?
+    .unwrap_or(LocalSpilloverPolicy::DEFAULT_WORKER_PRESSURE_THRESHOLD);
+    let activation_window = parse_optional_env(
+        &mut *get_var,
+        "ROOM_SPILLOVER_ACTIVATION_WINDOW",
+        "ROOM_SPILLOVER_ACTIVATION_WINDOW must be a valid usize",
+    )?
+    .unwrap_or(LocalSpilloverPolicy::DEFAULT_ACTIVATION_WINDOW);
+    let cooldown_window = parse_optional_env(
+        &mut *get_var,
+        "ROOM_SPILLOVER_COOLDOWN_WINDOW",
+        "ROOM_SPILLOVER_COOLDOWN_WINDOW must be a valid usize",
+    )?
+    .unwrap_or(LocalSpilloverPolicy::DEFAULT_COOLDOWN_WINDOW);
+    validate_local_spillover_policy(LocalSpilloverConfigValidation {
+        min_receiver_count,
+        max_active_consumers_per_router,
+        max_fanout_per_source,
+        worker_pressure_threshold,
+        activation_window,
+        cooldown_window,
+    })?;
+    Ok(LocalSpilloverPolicy::conservative()
+        .with_min_receiver_count(min_receiver_count)
+        .with_max_active_consumers_per_router(max_active_consumers_per_router)
+        .with_max_fanout_per_source(max_fanout_per_source)
+        .with_egress_bitrate_threshold_bps(egress_bitrate_threshold_bps)
+        .with_packet_loop_lag_threshold_ms(packet_loop_lag_threshold_ms)
+        .with_command_backlog_threshold(command_backlog_threshold)
+        .with_relay_mailbox_depth_threshold(relay_mailbox_depth_threshold)
+        .with_worker_pressure_threshold(worker_pressure_threshold)
+        .with_activation_window(activation_window)
+        .with_cooldown_window(cooldown_window))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LocalSpilloverConfigValidation {
+    min_receiver_count: usize,
+    max_active_consumers_per_router: usize,
+    max_fanout_per_source: usize,
+    worker_pressure_threshold: u8,
+    activation_window: usize,
+    cooldown_window: usize,
+}
+
+fn validate_local_spillover_policy(input: LocalSpilloverConfigValidation) -> Result<()> {
+    ensure!(
+        NonZeroUsize::new(input.min_receiver_count).is_some(),
+        "ROOM_SPILLOVER_MIN_RECEIVERS must be greater than zero"
+    );
+    ensure!(
+        NonZeroUsize::new(input.max_active_consumers_per_router).is_some(),
+        "ROOM_SPILLOVER_MAX_CONSUMERS_PER_ROUTER must be greater than zero"
+    );
+    ensure!(
+        NonZeroUsize::new(input.max_fanout_per_source).is_some(),
+        "ROOM_SPILLOVER_MAX_FANOUT_PER_SOURCE must be greater than zero"
+    );
+    ensure!(
+        input.worker_pressure_threshold <= 100,
+        "ROOM_SPILLOVER_WORKER_PRESSURE must be less than or equal to 100"
+    );
+    ensure!(
+        NonZeroUsize::new(input.activation_window).is_some(),
+        "ROOM_SPILLOVER_ACTIVATION_WINDOW must be greater than zero"
+    );
+    ensure!(
+        NonZeroUsize::new(input.cooldown_window).is_some(),
+        "ROOM_SPILLOVER_COOLDOWN_WINDOW must be greater than zero"
+    );
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -160,7 +304,7 @@ fn validate_transport_config(input: TransportConfigValidation) -> Result<()> {
 mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
-    use o_sfu_core::RoomSpilloverMode;
+    use o_sfu_core::{LocalSpilloverPolicy, RoomSpilloverMode};
 
     use super::{
         RoomShardingPolicy, RtcPortRange, TransportConfig, VideoBitrateLimits,
@@ -269,6 +413,8 @@ mod tests {
             "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
             "RTC_MEDIA_WORKER_COUNT" => Some("3".to_owned()),
             "ROOM_MAX_LOCAL_ROUTERS" => Some("2".to_owned()),
+            "ROOM_SPILLOVER_MIN_RECEIVERS" => Some("8".to_owned()),
+            "ROOM_SPILLOVER_ACTIVATION_WINDOW" => Some("1".to_owned()),
             _ => None,
         });
 
@@ -277,10 +423,81 @@ mod tests {
             return;
         };
         assert_eq!(config.room_sharding_policy.max_local_routers(), 2);
+        let spillover = config.room_sharding_policy.spillover();
+        assert!(matches!(
+            spillover,
+            RoomSpilloverMode::LoadTriggeredLocalSpillover(_)
+        ));
+        let RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) = spillover else {
+            return;
+        };
+        assert_eq!(policy.min_receiver_count(), 8);
+        assert_eq!(policy.activation_window(), 1);
+    }
+
+    #[test]
+    fn load_transport_config_accepts_explicit_bounded_spillover_mode() {
+        let config = load_transport_config(|key| match key {
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "RTC_MEDIA_WORKER_COUNT" => Some("3".to_owned()),
+            "ROOM_MAX_LOCAL_ROUTERS" => Some("2".to_owned()),
+            "ROOM_SPILLOVER_MODE" => Some("bounded".to_owned()),
+            _ => None,
+        });
+
+        assert!(config.is_ok());
+        let Some(config) = config.ok() else {
+            return;
+        };
         assert_eq!(
             config.room_sharding_policy.spillover(),
             RoomSpilloverMode::BoundedLocalSpillover
         );
+    }
+
+    #[test]
+    fn load_transport_config_rejects_invalid_spillover_mode() {
+        let config = load_transport_config(|key| match key {
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "RTC_MEDIA_WORKER_COUNT" | "ROOM_MAX_LOCAL_ROUTERS" => Some("2".to_owned()),
+            "ROOM_SPILLOVER_MODE" => Some("invalid".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn load_transport_config_rejects_zero_spillover_activation_window() {
+        let config = load_transport_config(|key| match key {
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "RTC_MEDIA_WORKER_COUNT" | "ROOM_MAX_LOCAL_ROUTERS" => Some("2".to_owned()),
+            "ROOM_SPILLOVER_ACTIVATION_WINDOW" => Some("0".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn load_transport_config_load_policy_defaults_are_conservative() {
+        let config = load_transport_config(|key| match key {
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "RTC_MEDIA_WORKER_COUNT" | "ROOM_MAX_LOCAL_ROUTERS" => Some("2".to_owned()),
+            _ => None,
+        });
+
+        assert!(config.is_ok());
+        let Some(config) = config.ok() else {
+            return;
+        };
+        let spillover = config.room_sharding_policy.spillover();
+        assert!(matches!(
+            spillover,
+            RoomSpilloverMode::LoadTriggeredLocalSpillover(_)
+        ));
+        let RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) = spillover else {
+            return;
+        };
+        assert_eq!(policy, LocalSpilloverPolicy::conservative());
     }
 
     #[test]

@@ -77,6 +77,19 @@ impl RoomTopology {
     }
 
     #[cfg(test)]
+    pub(in crate::runtime::room) fn new_with_load_spillover(
+        primary_router_id: RouterId,
+        local_router_count: usize,
+        policy: crate::LocalSpilloverPolicy,
+    ) -> Self {
+        Self::new_with_policy(
+            primary_router_id,
+            RoomShardingPolicy::load_triggered_local_spillover(local_router_count, policy),
+            local_router_count,
+        )
+    }
+
+    #[cfg(test)]
     pub(in crate::runtime::room) fn user_count(&self) -> u64 {
         u64::try_from(self.session_home_router.len()).unwrap_or(u64::MAX)
     }
@@ -90,6 +103,18 @@ impl RoomTopology {
         user_id: &UserId,
     ) -> Option<RouterId> {
         self.session_home_router.get(user_id).copied()
+    }
+
+    #[cfg(test)]
+    pub(in crate::runtime::room) fn active_load_router_count_for_test(&self) -> usize {
+        self.placement_policy.active_router_count_for_test()
+    }
+
+    #[cfg(test)]
+    pub(in crate::runtime::room) fn last_load_pressure_reason_for_test(
+        &self,
+    ) -> Option<super::LoadPressureReason> {
+        self.placement_policy.last_load_pressure_reason_for_test()
     }
 
     #[cfg(test)]

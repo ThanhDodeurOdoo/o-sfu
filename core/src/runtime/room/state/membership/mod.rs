@@ -6,7 +6,7 @@ use super::{
     super::{
         RoomEventMessage, RoomJoinError, RoomUserPermissions, UserCloseReason,
         outbound::{MessageFanout, OutboundSender},
-        topology::{RoomTopology, RoomTopologyError},
+        topology::{RoomTopology, RoomTopologyError, TopologyPressureSnapshot},
         user_negotiation::{UserNegotiation, UserNegotiationUpdate},
     },
     layout::UserLayout,
@@ -51,6 +51,7 @@ pub(in crate::runtime::room) struct JoinUserOutcome {
     pub(in crate::runtime::room) connection_id: ConnectionId,
     pub(in crate::runtime::room) effects: LifecycleEffects,
     pub(in crate::runtime::room) user_id: UserId,
+    pub(in crate::runtime::room) transport_media_worker_id: usize,
     pub(in crate::runtime::room) transport_removals: Vec<TransportMediaRemoval>,
 }
 
@@ -90,7 +91,7 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
         is_new: bool,
-    ) -> Result<(), RoomJoinError> {
+    ) -> Result<usize, RoomJoinError> {
         let mut topology = self.topology.clone();
         if !is_new && let Err(error) = self.reset_existing_session_routing(&mut topology, user_id) {
             error!(
@@ -100,10 +101,11 @@ impl RoomState {
             );
             return Err(RoomJoinError::RouterState);
         }
+        let pressure = self.topology_pressure_snapshot(is_new);
         let topology_result = if is_new {
-            topology.apply_client_join(user_id, connection_id.as_u64())
+            topology.apply_client_join_with_pressure(user_id, connection_id.as_u64(), pressure)
         } else {
-            topology.replace_client_session(user_id, connection_id.as_u64())
+            topology.replace_client_session_with_pressure(user_id, connection_id.as_u64(), pressure)
         };
         if let Err(error) = topology_result {
             error!(
@@ -113,8 +115,33 @@ impl RoomState {
             );
             return Err(RoomJoinError::RouterState);
         }
+        let Some(home_placement) = topology.home_placement_for_user(user_id) else {
+            error!(
+                ?user_id,
+                "joined user has no home placement in room topology"
+            );
+            return Err(RoomJoinError::RouterState);
+        };
+        let media_worker_id = home_placement.media_worker;
         self.topology = topology;
-        Ok(())
+        Ok(media_worker_id)
+    }
+
+    fn topology_pressure_snapshot(&self, is_new_join: bool) -> TopologyPressureSnapshot {
+        let receiver_count = self.users.len().saturating_add(usize::from(is_new_join));
+        let max_source_fanout = self
+            .consumer_keys_by_source
+            .values()
+            .map(BTreeSet::len)
+            .max()
+            .unwrap_or_default();
+        TopologyPressureSnapshot {
+            receiver_count,
+            active_consumer_count: self.consumer_index.len(),
+            pending_consumer_count: self.pending_consumer_bootstraps.len(),
+            max_source_fanout,
+            ..Default::default()
+        }
     }
 
     fn join_transport_removals(
@@ -179,7 +206,7 @@ impl RoomState {
             return Err(RoomJoinError::RoomFull);
         }
         let connection_id = ConnectionId::allocate(&mut self.next_connection_id);
-        self.apply_join_topology(user_id, connection_id, is_new)?;
+        let transport_media_worker_id = self.apply_join_topology(user_id, connection_id, is_new)?;
         let transport_removals = self.join_transport_removals(user_id, is_new);
 
         let previous_sender =
@@ -223,6 +250,7 @@ impl RoomState {
             connection_id,
             effects,
             user_id: user_id.clone(),
+            transport_media_worker_id,
             transport_removals,
         })
     }

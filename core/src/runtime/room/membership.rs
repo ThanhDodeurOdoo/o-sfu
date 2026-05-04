@@ -608,98 +608,135 @@ impl Room {
     ) -> UserTransitionResult {
         match outcome {
             UserTransitionOutcome::Join(outcome) => {
-                self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
-                    .await;
-                if let Some(media_transport) = cleanup.media_transport() {
-                    self.sync_source_packet_selection_policy(
-                        Some(media_transport),
-                        media_transport,
-                    )
-                    .await;
-                }
-                let connection_id = outcome.connection_id;
-                let user_id = outcome.user_id.clone();
-                Self::emit_lifecycle_effects(outcome.effects);
-                self.diagnostics.register_user(self.uuid(), &user_id);
-                self.diagnostics.record(
-                    DiagnosticsEventData::for_user(
-                        self.uuid(),
-                        &user_id,
-                        telemetry_event::USER_JOINED,
-                    )
-                    .with_connection_id(connection_id.as_u64())
-                    .with_media_worker_id(self.media_worker_id()),
-                );
-                UserTransitionResult::Joined(connection_id)
+                self.finalize_join_transition(outcome, cleanup).await
             }
             UserTransitionOutcome::Close {
                 outcome,
                 user_id,
                 connection_id,
             } => {
-                let had_state = outcome.is_some();
-                if let Some(outcome) = outcome {
-                    self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
-                        .await;
-                    Self::emit_lifecycle_effects(outcome.effects);
-                }
-                self.close_transport_user_for_cleanup(&user_id, connection_id, cleanup)
-                    .await;
-                if had_state {
-                    self.diagnostics.record(
-                        DiagnosticsEventData::for_user(
-                            self.uuid(),
-                            &user_id,
-                            telemetry_event::USER_CLOSED,
-                        )
-                        .with_connection_id(connection_id.as_u64())
-                        .with_media_worker_id(self.media_worker_id()),
-                    );
-                    self.diagnostics.forget_user(self.uuid(), &user_id);
-                    if let Some(media_transport) = cleanup.media_transport() {
-                        self.sync_source_packet_selection_policy(
-                            Some(media_transport),
-                            media_transport,
-                        )
-                        .await;
-                    }
-                }
-                UserTransitionResult::Applied
+                self.finalize_close_transition(outcome, user_id, connection_id, cleanup)
+                    .await
             }
             UserTransitionOutcome::Disconnect(outcome) => {
-                self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
-                    .await;
-                for disconnected_session in &outcome.disconnected_users {
-                    self.close_transport_user_for_cleanup(
-                        &disconnected_session.user_id,
-                        disconnected_session.connection_id,
-                        cleanup,
-                    )
-                    .await;
-                }
-                for disconnected_session in &outcome.disconnected_users {
-                    self.diagnostics.record(
-                        DiagnosticsEventData::for_user(
-                            self.uuid(),
-                            &disconnected_session.user_id,
-                            telemetry_event::USER_DISCONNECTED,
-                        )
-                        .with_media_worker_id(self.media_worker_id()),
-                    );
-                    self.diagnostics
-                        .forget_user(self.uuid(), &disconnected_session.user_id);
-                }
-                if let Some(media_transport) = cleanup.media_transport() {
-                    self.sync_source_packet_selection_policy(
-                        Some(media_transport),
-                        media_transport,
-                    )
-                    .await;
-                }
-                Self::emit_lifecycle_effects(outcome.effects);
-                UserTransitionResult::Applied
+                self.finalize_disconnect_transition(outcome, cleanup).await
             }
         }
+    }
+
+    async fn finalize_join_transition(
+        &self,
+        outcome: JoinUserOutcome,
+        cleanup: UserCleanup<'_>,
+    ) -> UserTransitionResult {
+        let connection_id = outcome.connection_id;
+        self.definition
+            .register_transport_worker(connection_id, outcome.transport_media_worker_id);
+        self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
+            .await;
+        if let Some(media_transport) = cleanup.media_transport() {
+            self.sync_source_packet_selection_policy(Some(media_transport), media_transport)
+                .await;
+        }
+        let user_id = outcome.user_id.clone();
+        Self::emit_lifecycle_effects(outcome.effects);
+        self.diagnostics.register_user(self.uuid(), &user_id);
+        self.diagnostics.record(
+            DiagnosticsEventData::for_user(self.uuid(), &user_id, telemetry_event::USER_JOINED)
+                .with_connection_id(connection_id.as_u64())
+                .with_media_worker_id(outcome.transport_media_worker_id),
+        );
+        UserTransitionResult::Joined(connection_id)
+    }
+
+    async fn finalize_close_transition(
+        &self,
+        outcome: Option<LeaveUserOutcome>,
+        user_id: UserId,
+        connection_id: ConnectionId,
+        cleanup: UserCleanup<'_>,
+    ) -> UserTransitionResult {
+        let had_state = outcome.is_some();
+        let media_worker_id = self
+            .definition
+            .media_worker_id_for_connection(connection_id);
+        if let Some(outcome) = outcome {
+            self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
+                .await;
+            Self::emit_lifecycle_effects(outcome.effects);
+        }
+        self.close_transport_user_for_cleanup(&user_id, connection_id, cleanup)
+            .await;
+        if had_state {
+            self.record_closed_user(&user_id, connection_id, media_worker_id, cleanup)
+                .await;
+        }
+        self.definition.unregister_transport_worker(connection_id);
+        UserTransitionResult::Applied
+    }
+
+    async fn record_closed_user(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+        media_worker_id: usize,
+        cleanup: UserCleanup<'_>,
+    ) {
+        self.diagnostics.record(
+            DiagnosticsEventData::for_user(self.uuid(), user_id, telemetry_event::USER_CLOSED)
+                .with_connection_id(connection_id.as_u64())
+                .with_media_worker_id(media_worker_id),
+        );
+        self.diagnostics.forget_user(self.uuid(), user_id);
+        if let Some(media_transport) = cleanup.media_transport() {
+            self.sync_source_packet_selection_policy(Some(media_transport), media_transport)
+                .await;
+        }
+    }
+
+    async fn finalize_disconnect_transition(
+        &self,
+        outcome: DisconnectUsersOutcome,
+        cleanup: UserCleanup<'_>,
+    ) -> UserTransitionResult {
+        self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
+            .await;
+        for disconnected_session in &outcome.disconnected_users {
+            self.close_transport_user_for_cleanup(
+                &disconnected_session.user_id,
+                disconnected_session.connection_id,
+                cleanup,
+            )
+            .await;
+        }
+        for disconnected_session in &outcome.disconnected_users {
+            self.record_disconnected_user(
+                &disconnected_session.user_id,
+                disconnected_session.connection_id,
+            );
+        }
+        if let Some(media_transport) = cleanup.media_transport() {
+            self.sync_source_packet_selection_policy(Some(media_transport), media_transport)
+                .await;
+        }
+        Self::emit_lifecycle_effects(outcome.effects);
+        UserTransitionResult::Applied
+    }
+
+    fn record_disconnected_user(&self, user_id: &UserId, connection_id: ConnectionId) {
+        let media_worker_id = self
+            .definition
+            .media_worker_id_for_connection(connection_id);
+        self.diagnostics.record(
+            DiagnosticsEventData::for_user(
+                self.uuid(),
+                user_id,
+                telemetry_event::USER_DISCONNECTED,
+            )
+            .with_media_worker_id(media_worker_id),
+        );
+        self.diagnostics.forget_user(self.uuid(), user_id);
+        self.definition.unregister_transport_worker(connection_id);
     }
 
     pub(super) fn emit_lifecycle_effects(effects: LifecycleEffects) {

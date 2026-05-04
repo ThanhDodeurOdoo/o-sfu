@@ -12,6 +12,11 @@
 //! room topology. Keeping them together in `RoomDefinition` gives the room
 //! facade one immutable source of truth after creation.
 
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex, PoisonError},
+};
+
 use uuid::Uuid;
 
 use super::{LocalRoomRouterPlacements, RoomConfig, RoomRuntimeContext, RoomRuntimePolicy};
@@ -65,6 +70,7 @@ pub(crate) struct RoomDefinition {
     /// outside the topology lock. The room definition can answer that cold-path
     /// routing question without borrowing mutable room state.
     room_sharding_policy: RoomShardingPolicy,
+    transport_worker_by_connection: Arc<Mutex<BTreeMap<ConnectionId, usize>>>,
     identity: RoomIdentity,
     config: RoomConfig,
     feature_flags: RuntimeFeatureFlags,
@@ -84,6 +90,7 @@ impl RoomDefinition {
             media_worker_id: runtime_context.media_worker(),
             local_routers: runtime_context.local_routers().clone(),
             room_sharding_policy: runtime_policy.room_sharding_policy,
+            transport_worker_by_connection: Arc::new(Mutex::new(BTreeMap::new())),
             identity: RoomIdentity::new(issuer, key),
             config,
             feature_flags: runtime_policy.feature_flags,
@@ -129,6 +136,24 @@ impl RoomDefinition {
         )
     }
 
+    pub(crate) fn register_transport_worker(
+        &self,
+        connection_id: ConnectionId,
+        media_worker_id: usize,
+    ) {
+        self.transport_worker_by_connection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(connection_id, media_worker_id);
+    }
+
+    pub(crate) fn unregister_transport_worker(&self, connection_id: ConnectionId) {
+        self.transport_worker_by_connection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&connection_id);
+    }
+
     /// Resolve the media worker that owns one user's transport session.
     ///
     /// This mirrors `RoomTopology` home-router placement for local spillover.
@@ -137,7 +162,16 @@ impl RoomDefinition {
     ///
     /// The method is cold-path control-plane work. It is called while building
     /// transport commands and diagnostics, not from packet forwarding loops.
-    fn media_worker_id_for_connection(&self, connection_id: ConnectionId) -> usize {
+    pub(crate) fn media_worker_id_for_connection(&self, connection_id: ConnectionId) -> usize {
+        if let Some(media_worker_id) = self
+            .transport_worker_by_connection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&connection_id)
+            .copied()
+        {
+            return media_worker_id;
+        }
         let placement_count = self
             .room_sharding_policy
             .allowed_local_router_count(self.local_routers.len());
