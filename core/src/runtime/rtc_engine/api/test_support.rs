@@ -200,13 +200,7 @@ impl RtcTransportShard {
         F: FnOnce(oneshot::Sender<T>) -> DebugRtcWorkerCommand,
     {
         let worker_handle = self.ensure_packet_loop_started().ok()?;
-        let (response_tx, response_rx) = oneshot::channel();
-        worker_handle
-            .debug_tx
-            .send(build_command(response_tx))
-            .await
-            .ok()?;
-        response_rx.await.ok()
+        worker_handle.debug_handle.request(build_command).await
     }
 
     pub async fn debug_resolve_mid(&self, transport_media_id: TransportMediaId) -> Option<Mid> {
@@ -231,21 +225,11 @@ impl RtcTransportShard {
     }
 
     pub async fn debug_has_any_remote_addr_session(&self) -> bool {
-        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
-            return false;
-        };
-        let (response_tx, response_rx) = oneshot::channel();
-        if worker_handle
-            .debug_tx
-            .send(DebugRtcWorkerCommand::HasAnyRemoteAddrSession {
-                response: response_tx,
-            })
-            .await
-            .is_err()
-        {
-            return false;
-        }
-        response_rx.await.unwrap_or(false)
+        self.request_debug_worker(|response| DebugRtcWorkerCommand::HasAnyRemoteAddrSession {
+            response,
+        })
+        .await
+        .unwrap_or(false)
     }
 
     pub async fn debug_remember_remote_addr(

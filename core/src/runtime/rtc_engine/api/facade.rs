@@ -56,7 +56,7 @@ static NEXT_RELAY_TARGET_ID: AtomicU64 = AtomicU64::new(1);
 pub struct RtcWorkerHandle {
     pub(super) command_tx: mpsc::Sender<RtcWorkerCommand>,
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(super) debug_tx: mpsc::Sender<super::super::test_support::DebugRtcWorkerCommand>,
+    pub(super) debug_handle: super::super::test_support::RtcWorkerDebugHandle,
     pub(super) relay_mailbox: RelayPacketMailbox,
     pub bitrate_state: Arc<Mutex<RtcBitrateState>>,
     pub snapshot_state: Arc<Mutex<RtcSnapshotState>>,
@@ -68,7 +68,7 @@ impl fmt::Debug for RtcWorkerHandle {
         let mut debug = formatter.debug_struct("RtcWorkerHandle");
         debug.field("command_tx", &self.command_tx);
         #[cfg(any(test, feature = "testing-transport"))]
-        debug.field("debug_tx", &self.debug_tx);
+        debug.field("debug_handle", &self.debug_handle);
         debug.field("relay_mailbox", &self.relay_mailbox);
         debug.finish_non_exhaustive()
     }

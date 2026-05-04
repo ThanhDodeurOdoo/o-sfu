@@ -88,6 +88,7 @@ mod buffers;
 mod event_observation;
 mod forward_flush;
 mod ingress_routing;
+mod input;
 mod keyframe_requests;
 mod loop_driver;
 mod session_drain;
@@ -96,4 +97,5 @@ mod tests;
 
 #[cfg(test)]
 pub use event_observation::{transport_health_from_event, transport_ice_state};
-pub use loop_driver::{PacketLoopConfig, run_packet_loop};
+pub(in crate::runtime::rtc_engine) use input::PacketLoopInputReceivers;
+pub(in crate::runtime::rtc_engine) use loop_driver::{PacketLoopConfig, run_packet_loop};

@@ -1,10 +1,13 @@
 #[path = "test_support/debug_command.rs"]
 mod debug_command;
+#[path = "test_support/debug_mailbox.rs"]
+mod debug_mailbox;
 #[path = "test_support/worker_debug.rs"]
 mod worker_debug;
 
 pub(super) use debug_command::DebugRtcWorkerCommand;
 pub use debug_command::{DebugPacketGate, DebugRouteEntry};
+pub(super) use debug_mailbox::{RtcWorkerDebugChannels, RtcWorkerDebugHandle};
 pub(super) use worker_debug::handle_debug_worker_command;
 
 #[cfg(any(test, feature = "testing-transport"))]

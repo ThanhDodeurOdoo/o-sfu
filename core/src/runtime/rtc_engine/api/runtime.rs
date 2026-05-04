@@ -118,7 +118,7 @@ impl RtcTransportShard {
         };
         let (command_tx, command_rx) = mpsc::channel(64);
         #[cfg(any(test, feature = "testing-transport"))]
-        let (debug_tx, debug_rx) = mpsc::channel(64);
+        let debug_channels = super::super::test_support::RtcWorkerDebugChannels::new();
         let (relay_tx, relay_rx) = mpsc::channel(RELAY_MAILBOX_CAPACITY);
         let bitrate_state = Arc::new(Mutex::new(RtcBitrateState::default()));
         let snapshot_state = Arc::new(Mutex::new(super::super::state::RtcSnapshotState::default()));
@@ -126,7 +126,7 @@ impl RtcTransportShard {
         let worker_handle = RtcWorkerHandle {
             command_tx,
             #[cfg(any(test, feature = "testing-transport"))]
-            debug_tx,
+            debug_handle: debug_channels.handle(),
             relay_mailbox: RelayPacketMailbox::new(relay_tx),
             bitrate_state: Arc::clone(&bitrate_state),
             snapshot_state: Arc::clone(&snapshot_state),
@@ -134,6 +134,10 @@ impl RtcTransportShard {
         };
         let worker_handle = worker_slot.store(worker_handle);
         drop(worker_slot);
+        let packet_loop_inputs =
+            packet_loop::PacketLoopInputReceivers::new(command_rx, relay_rx, shutdown_token);
+        #[cfg(any(test, feature = "testing-transport"))]
+        let packet_loop_inputs = debug_channels.install(packet_loop_inputs);
         info!(
             relay_target_id = ?self.relay_target_id,
             public_ip = %self.public_ip,
@@ -161,11 +165,7 @@ impl RtcTransportShard {
             },
             bitrate_state,
             snapshot_state,
-            command_rx,
-            #[cfg(any(test, feature = "testing-transport"))]
-            debug_rx,
-            relay_rx,
-            shutdown_token,
+            packet_loop_inputs,
         ));
         Ok(worker_handle)
     }

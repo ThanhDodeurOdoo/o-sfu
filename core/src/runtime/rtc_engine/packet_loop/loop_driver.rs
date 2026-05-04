@@ -26,24 +26,21 @@ use std::{
 };
 
 use tokio::{net::UdpSocket, sync::mpsc, time::timeout};
-use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-#[cfg(any(test, feature = "testing-transport"))]
-use super::super::test_support::{DebugRtcWorkerCommand, handle_debug_worker_command};
 use super::{
     super::{
         bitrate::RtcBitrateState,
-        commands::RtcWorkerCommand,
         forwarding_planner::populate_forward_routes,
         relay_registry::RelayRegistry,
         routing_miss::PacketLoopRoutingState,
         state::{RtcBootstrapState, RtcSnapshotState},
-        worker::{WorkerCommandContext, drain_due_rid_keyframe_refreshes, handle_worker_command},
+        worker::{WorkerCommandContext, drain_due_rid_keyframe_refreshes},
     },
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers, RECEIVE_BUFFER_LEN},
     forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
     ingress_routing::route_packet_to_matching_session,
+    input::{PacketLoopControlInput, PacketLoopInputReceivers},
     keyframe_requests::flush_pending_keyframe_requests,
     session_drain::drain_ready_sessions,
 };
@@ -61,7 +58,7 @@ use crate::{
 /// copied into session creation are immutable shard settings. `Arc` fields are
 /// shared services that the packet loop may update or query without exposing
 /// direct access to `RtcBootstrapState`.
-pub struct PacketLoopConfig {
+pub(in crate::runtime::rtc_engine) struct PacketLoopConfig {
     /// Public ICE-lite address advertised by sessions created on this shard.
     pub public_ip: IpAddr,
     /// Maximum inbound bitrate applied when new RTC engine sessions are created.
@@ -112,9 +109,7 @@ struct SnapshotInfo {
 /// keeps the driver on one input path while letting `next_timeout_deadline`
 /// wake ready sessions without fabricating a command.
 enum NextLoopInput {
-    Command(RtcWorkerCommand),
-    #[cfg(any(test, feature = "testing-transport"))]
-    DebugCommand(DebugRtcWorkerCommand),
+    Control(PacketLoopControlInput),
     Datagram {
         source_addr: SocketAddr,
         candidate_addr: SocketAddr,
@@ -137,16 +132,11 @@ enum NextLoopInput {
 /// forwards, but it waits for only one next external input before looping.
 /// Relay draining is bounded so a relay burst cannot starve commands or socket
 /// ingress indefinitely.
-pub async fn run_packet_loop(
+pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
     config: PacketLoopConfig,
     bitrate_state: Arc<Mutex<RtcBitrateState>>,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
-    mut command_rx: mpsc::Receiver<RtcWorkerCommand>,
-    #[cfg(any(test, feature = "testing-transport"))] mut debug_rx: mpsc::Receiver<
-        DebugRtcWorkerCommand,
-    >,
-    mut relay_rx: mpsc::Receiver<super::super::forwarded_packet::ForwardedPacket>,
-    shutdown_token: CancellationToken,
+    mut inputs: PacketLoopInputReceivers,
 ) {
     let mut bootstrap_state = RtcBootstrapState {
         next_media_id: config.media_id_base,
@@ -157,14 +147,12 @@ pub async fn run_packet_loop(
     let mut buffers = PacketLoopBuffers::new();
 
     loop {
-        drain_pending_worker_commands(
+        drain_pending_control_inputs(
             &mut bootstrap_state,
             &bitrate_state,
             &snapshot_state,
             &config,
-            &mut command_rx,
-            #[cfg(any(test, feature = "testing-transport"))]
-            &mut debug_rx,
+            &mut inputs,
             &mut routing_state,
         );
 
@@ -172,7 +160,7 @@ pub async fn run_packet_loop(
             &mut bootstrap_state,
             &snapshot_state,
             &config,
-            &mut relay_rx,
+            inputs.relay_rx(),
             &mut buffers,
         );
 
@@ -195,15 +183,8 @@ pub async fn run_packet_loop(
             }
         }
 
-        let Some(next_input) = wait_for_next_loop_input(
-            snapshot,
-            &mut command_rx,
-            #[cfg(any(test, feature = "testing-transport"))]
-            &mut debug_rx,
-            &mut receive_buffer,
-            &shutdown_token,
-        )
-        .await
+        let Some(next_input) =
+            wait_for_next_loop_input(snapshot, &mut inputs, &mut receive_buffer).await
         else {
             return;
         };
@@ -220,35 +201,21 @@ pub async fn run_packet_loop(
     }
 }
 
-fn drain_pending_worker_commands(
+fn drain_pending_control_inputs(
     bootstrap_state: &mut RtcBootstrapState,
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: &PacketLoopConfig,
-    command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
-    #[cfg(any(test, feature = "testing-transport"))] debug_rx: &mut mpsc::Receiver<
-        DebugRtcWorkerCommand,
-    >,
+    inputs: &mut PacketLoopInputReceivers,
     routing_state: &mut PacketLoopRoutingState,
 ) {
-    while let Ok(command) = command_rx.try_recv() {
-        handle_worker_command_and_clear_routing_cache(
+    while let Some(input) = inputs.try_recv_control() {
+        handle_control_input_and_clear_routing_cache(
             bootstrap_state,
             bitrate_state,
             snapshot_state,
             config,
-            command,
-            routing_state,
-        );
-    }
-    #[cfg(any(test, feature = "testing-transport"))]
-    while let Ok(command) = debug_rx.try_recv() {
-        handle_debug_worker_command_and_clear_routing_cache(
-            bootstrap_state,
-            bitrate_state,
-            snapshot_state,
-            config,
-            command,
+            input,
             routing_state,
         );
     }
@@ -256,8 +223,8 @@ fn drain_pending_worker_commands(
 
 /// Apply the event that woke the worker after the pump phase.
 ///
-/// Commands mutate authoritative worker state and conservatively invalidate
-/// ingress routing hints. Datagram inputs are routed into the owning
+/// Control inputs mutate authoritative worker state and conservatively
+/// invalidate ingress routing hints. Datagram inputs are routed into the owning
 /// `str0m::Rtc` if the receive buffer contains a non-empty packet. A
 /// zero-length datagram input is the driver's internal timeout wake and only
 /// causes the next turn to poll ready sessions.
@@ -271,25 +238,13 @@ fn handle_loop_input(
     routing_state: &mut PacketLoopRoutingState,
 ) -> bool {
     match next_input {
-        NextLoopInput::Command(command) => {
-            handle_worker_command_and_clear_routing_cache(
+        NextLoopInput::Control(input) => {
+            handle_control_input_and_clear_routing_cache(
                 bootstrap_state,
                 bitrate_state,
                 snapshot_state,
                 config,
-                command,
-                routing_state,
-            );
-            true
-        }
-        #[cfg(any(test, feature = "testing-transport"))]
-        NextLoopInput::DebugCommand(command) => {
-            handle_debug_worker_command_and_clear_routing_cache(
-                bootstrap_state,
-                bitrate_state,
-                snapshot_state,
-                config,
-                command,
+                input,
                 routing_state,
             );
             true
@@ -319,21 +274,21 @@ fn handle_loop_input(
     }
 }
 
-/// Execute one normal worker command against authoritative worker state.
+/// Execute one control input against authoritative worker state.
 ///
-/// The command handler owns all control-plane mutation for the RTC engine. The
+/// The input handler owns all control-plane mutation for the RTC engine. The
 /// packet-loop driver only supplies the shard context and then clears cached
-/// ingress routing state. This is conservative because some commands change
+/// ingress routing state. This is conservative because control input can change
 /// which session owns a source tuple or ICE username fragment.
-fn handle_worker_command_and_clear_routing_cache(
+fn handle_control_input_and_clear_routing_cache(
     bootstrap_state: &mut RtcBootstrapState,
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: &PacketLoopConfig,
-    command: RtcWorkerCommand,
+    input: PacketLoopControlInput,
     routing_state: &mut PacketLoopRoutingState,
 ) {
-    handle_worker_command(
+    input.dispatch(
         bootstrap_state,
         &WorkerCommandContext {
             bitrate_state,
@@ -348,41 +303,6 @@ fn handle_worker_command_and_clear_routing_cache(
             codec_preferences: config.codec_preferences,
             metrics: &config.metrics,
         },
-        command,
-    );
-    routing_state.clear_on_topology_change();
-}
-
-#[cfg(any(test, feature = "testing-transport"))]
-/// Execute one testing-only worker command and invalidate ingress routing hints.
-///
-/// Debug commands can mutate the same worker-owned state as normal commands, so
-/// they follow the same conservative cache invalidation under the testing
-/// feature.
-fn handle_debug_worker_command_and_clear_routing_cache(
-    bootstrap_state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    config: &PacketLoopConfig,
-    command: DebugRtcWorkerCommand,
-    routing_state: &mut PacketLoopRoutingState,
-) {
-    handle_debug_worker_command(
-        bootstrap_state,
-        &WorkerCommandContext {
-            bitrate_state,
-            snapshot_state,
-            relay_registry: &config.relay_registry,
-            public_ip: config.public_ip,
-            max_bitrate_in_bps: config.max_bitrate_in_bps,
-            max_bitrate_out_bps: config.max_bitrate_out_bps,
-            video_bitrate_limits: config.video_bitrate_limits,
-            rtc_port_range: config.rtc_port_range,
-            codec_flags: config.codec_flags,
-            codec_preferences: config.codec_preferences,
-            metrics: &config.metrics,
-        },
-        command,
     );
     routing_state.clear_on_topology_change();
 }
@@ -473,57 +393,21 @@ pub(super) fn next_timeout_deadline(state: &mut RtcBootstrapState) -> Option<Ins
 
 /// Wait for the next event that should resume the worker loop.
 ///
-/// Shutdown and commands are biased ahead of socket receive. When no socket has
-/// been opened yet, only shutdown and commands can wake the worker. Testing
-/// builds also expose a debug channel ordered with normal commands so tests can
-/// observe and mutate worker state deterministically.
+/// Shutdown and control input are biased ahead of socket receive. When no
+/// socket has been opened yet, only shutdown and control input can wake the
+/// worker.
 async fn wait_for_next_loop_input(
     snapshot: Option<SnapshotInfo>,
-    command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
-    #[cfg(any(test, feature = "testing-transport"))] debug_rx: &mut mpsc::Receiver<
-        DebugRtcWorkerCommand,
-    >,
+    inputs: &mut PacketLoopInputReceivers,
     receive_buffer: &mut [u8],
-    shutdown_token: &CancellationToken,
 ) -> Option<NextLoopInput> {
     let Some(info) = snapshot else {
-        return wait_for_control_input(
-            command_rx,
-            #[cfg(any(test, feature = "testing-transport"))]
-            debug_rx,
-            shutdown_token,
-        )
-        .await;
+        return inputs.recv_control().await.map(NextLoopInput::Control);
     };
     tokio::select! {
         biased;
-        next_input = wait_for_control_input(
-            command_rx,
-            #[cfg(any(test, feature = "testing-transport"))]
-            debug_rx,
-            shutdown_token,
-        ) => next_input,
+        next_input = inputs.recv_control() => next_input.map(NextLoopInput::Control),
         next_input = wait_for_socket_input(&info, receive_buffer) => Some(next_input),
-    }
-}
-
-async fn wait_for_control_input(
-    command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
-    #[cfg(any(test, feature = "testing-transport"))] debug_rx: &mut mpsc::Receiver<
-        DebugRtcWorkerCommand,
-    >,
-    shutdown_token: &CancellationToken,
-) -> Option<NextLoopInput> {
-    #[cfg(any(test, feature = "testing-transport"))]
-    let debug_input = async { debug_rx.recv().await.map(NextLoopInput::DebugCommand) };
-    #[cfg(not(any(test, feature = "testing-transport")))]
-    let debug_input = std::future::pending::<Option<NextLoopInput>>();
-
-    tokio::select! {
-        biased;
-        () = shutdown_token.cancelled() => None,
-        maybe_command = command_rx.recv() => maybe_command.map(NextLoopInput::Command),
-        maybe_debug_input = debug_input => maybe_debug_input,
     }
 }
 
