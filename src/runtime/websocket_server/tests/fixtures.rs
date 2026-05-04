@@ -55,6 +55,11 @@ pub(super) type TestWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
 pub(super) type CreateRoomQuery = RoomConfig;
 
+/// App-level WebSocket subsystem fixture.
+///
+/// This serves the Axum app over a local listener while keeping direct access to
+/// private room and media-transport state for server-crate tests. Full
+/// `Runtime::serve` startup coverage belongs to the integration test crate.
 pub(super) struct TestServer {
     pub(super) addr: SocketAddr,
     pub(super) handle: JoinHandle<()>,

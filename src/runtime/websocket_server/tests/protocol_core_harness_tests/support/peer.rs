@@ -1,0 +1,295 @@
+use std::collections::VecDeque;
+
+use futures_util::SinkExt;
+use o_sfu_protocol::{
+    core::{Command, CommandBatch, NegotiationKind, ProtocolCore},
+    host_bridge::{HostCommand, host_commands},
+    signaling::RecordingOptions,
+};
+use tokio_tungstenite::{connect_async, tungstenite};
+
+use super::{
+    BATCH_FLUSH_DELAY_MS, BTreeMap, BundleStateChange, BundleUpdate, Duration,
+    ProtocolDownloadStates, ProtocolSessionId, ProtocolSessionInfo, ProtocolStreamType, RequestId,
+    TestWebSocket, read_text_message,
+    rtc::{ProtocolHarnessRtcPeer, ProtocolHarnessRtcPeerFactory, default_protocol_harness_rtc},
+};
+
+#[derive(Debug, Clone)]
+pub(crate) struct PendingHarnessNegotiation {
+    request_id: RequestId,
+    kind: NegotiationKind,
+    sdp: String,
+}
+
+pub(crate) struct ProtocolHarnessPeer {
+    pub(crate) core: ProtocolCore,
+    pub(crate) pending_request_commands: Vec<HostCommand>,
+    pub(crate) pending_negotiations: VecDeque<PendingHarnessNegotiation>,
+    rtc_peer_factory: Option<ProtocolHarnessRtcPeerFactory>,
+    rtc_peer: Option<ProtocolHarnessRtcPeer>,
+    pub(crate) state_changes: Vec<BundleStateChange>,
+    pub(crate) timers: BTreeMap<u32, u32>,
+    pub(crate) updates: Vec<BundleUpdate>,
+    pub(crate) websocket: Option<TestWebSocket>,
+    pub(crate) auto_answer_negotiation: bool,
+}
+
+impl Default for ProtocolHarnessPeer {
+    fn default() -> Self {
+        Self {
+            core: ProtocolCore::default(),
+            pending_request_commands: Vec::new(),
+            pending_negotiations: VecDeque::new(),
+            rtc_peer_factory: None,
+            rtc_peer: None,
+            state_changes: Vec::new(),
+            timers: BTreeMap::new(),
+            updates: Vec::new(),
+            websocket: None,
+            auto_answer_negotiation: true,
+        }
+    }
+}
+
+impl ProtocolHarnessPeer {
+    pub(crate) fn with_real_rtc_negotiation(port: u16) -> Option<Self> {
+        let rtc_peer_factory =
+            ProtocolHarnessRtcPeerFactory::new(port, default_protocol_harness_rtc);
+        Some(Self {
+            rtc_peer_factory: Some(rtc_peer_factory),
+            rtc_peer: Some(rtc_peer_factory.build_peer()?),
+            ..Self::default()
+        })
+    }
+
+    pub(crate) fn with_custom_rtc_negotiation(
+        port: u16,
+        build_rtc: fn() -> str0m::Rtc,
+    ) -> Option<Self> {
+        let rtc_peer_factory = ProtocolHarnessRtcPeerFactory::new(port, build_rtc);
+        Some(Self {
+            rtc_peer_factory: Some(rtc_peer_factory),
+            rtc_peer: Some(rtc_peer_factory.build_peer()?),
+            ..Self::default()
+        })
+    }
+
+    pub(crate) async fn connect(
+        &mut self,
+        url: &str,
+        jwt: &str,
+        room: Option<String>,
+    ) -> Option<()> {
+        let commands = self.core.connect(url.to_owned(), jwt.to_owned(), room);
+        self.run_commands(commands).await
+    }
+
+    pub(crate) async fn read_server_frame(&mut self) -> Option<()> {
+        let payload = super::timeout(
+            Duration::from_secs(1),
+            read_text_message(self.websocket.as_mut()?),
+        )
+        .await
+        .ok()??;
+        let commands = self.core.on_ws_message(&payload);
+        self.run_commands(commands).await
+    }
+
+    pub(crate) async fn observe_close(&mut self, code: u16) -> Option<()> {
+        let commands = self.core.on_ws_close(code);
+        self.run_commands(commands).await
+    }
+
+    pub(crate) async fn connect_and_finish_handshake(
+        &mut self,
+        url: &str,
+        jwt: &str,
+        room: Option<String>,
+    ) -> Option<()> {
+        self.connect(url, jwt, room).await?;
+        self.read_server_frame().await?;
+        self.read_server_frame().await?;
+        Some(())
+    }
+
+    pub(crate) async fn broadcast(&mut self, message: serde_json::Value) -> Option<()> {
+        let commands = self.core.broadcast(message);
+        self.run_commands(commands).await?;
+        self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
+    }
+
+    pub(crate) async fn update_info(&mut self, info: ProtocolSessionInfo) -> Option<()> {
+        let commands = self.core.update_info(info);
+        self.run_commands(commands).await?;
+        self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
+    }
+
+    pub(crate) async fn publish(
+        &mut self,
+        stream_type: ProtocolStreamType,
+        active: bool,
+    ) -> Option<()> {
+        let commands = self.core.publish(stream_type, active);
+        self.run_commands(commands).await?;
+        self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
+    }
+
+    pub(crate) async fn subscribe(
+        &mut self,
+        user_id: ProtocolSessionId,
+        states: ProtocolDownloadStates,
+    ) -> Option<()> {
+        let commands = self.core.subscribe(user_id, states);
+        self.run_commands(commands).await?;
+        self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
+    }
+
+    pub(crate) async fn start_recording(
+        &mut self,
+        audio: Option<bool>,
+        video: Option<bool>,
+        transcription: Option<bool>,
+    ) -> Option<()> {
+        let commands = self.core.start_recording(RecordingOptions {
+            audio,
+            video,
+            transcription,
+        });
+        self.run_commands(commands).await?;
+        self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
+    }
+
+    pub(crate) async fn stop_recording(&mut self) -> Option<()> {
+        let commands = self.core.stop_recording();
+        self.run_commands(commands).await?;
+        self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
+    }
+
+    pub(crate) async fn flush_timers_with_delay(&mut self, delay_ms: u32) -> Option<()> {
+        let timer_ids = self
+            .timers
+            .iter()
+            .filter_map(|(id, ms)| (*ms == delay_ms).then_some(*id))
+            .collect::<Vec<_>>();
+        for timer_id in timer_ids {
+            let commands = self.core.on_timer(timer_id);
+            self.run_commands(commands).await?;
+        }
+        Some(())
+    }
+
+    pub(crate) async fn answer_next_negotiation(&mut self) -> Option<()> {
+        let pending = self.pending_negotiations.pop_front()?;
+        let answer_sdp = match self.rtc_peer.as_mut() {
+            Some(rtc_peer) => rtc_peer.answer_offer(&pending.sdp)?,
+            None => String::from("v=0\r\ns=protocol-core-answer\r\n"),
+        };
+        let commands =
+            self.core
+                .submit_negotiation_answer(&pending.request_id, pending.kind, &answer_sdp);
+        let mut raw_commands = commands.into_vec();
+        raw_commands.extend(self.core.on_transport_ready());
+        self.run_commands(CommandBatch::try_from_vec(raw_commands).ok()?)
+            .await
+    }
+
+    pub(crate) async fn run_commands(&mut self, commands: CommandBatch) -> Option<()> {
+        let mut pending: VecDeque<_> = commands.into_vec().into();
+        while let Some(command) = pending.pop_front() {
+            let follow_up = match command {
+                Command::Connect { url } => {
+                    let websocket = connect_async(url).await.ok()?;
+                    self.websocket = Some(websocket.0);
+                    self.core.on_ws_open().into_vec()
+                }
+                Command::SendWebSocket(frame) => {
+                    self.websocket
+                        .as_mut()?
+                        .send(tungstenite::Message::Text(frame.into()))
+                        .await
+                        .ok()?;
+                    Vec::new()
+                }
+                Command::EmitStateChange { state, cause } => {
+                    self.state_changes.push(BundleStateChange { state, cause });
+                    Vec::new()
+                }
+                command @ Command::EmitEvent { .. } => {
+                    let batch = CommandBatch::try_from_vec(vec![command]).ok()?;
+                    for host_command in host_commands(batch) {
+                        if let HostCommand::EmitUpdate { update } = host_command {
+                            self.updates.push(update);
+                        }
+                    }
+                    Vec::new()
+                }
+                Command::CreatePeerConnection => {
+                    if let Some(factory) = self.rtc_peer_factory {
+                        self.rtc_peer = factory.build_peer();
+                        let _ = self.rtc_peer.as_ref()?;
+                    }
+                    Vec::new()
+                }
+                Command::ClosePeerConnection => {
+                    self.rtc_peer = None;
+                    Vec::new()
+                }
+                Command::AttachTrack { .. } | Command::DetachTrack { .. } => Vec::new(),
+                Command::ApplyNegotiation {
+                    request_id,
+                    kind,
+                    sdp,
+                    upload_slots: _,
+                } => {
+                    if !self.auto_answer_negotiation {
+                        self.pending_negotiations
+                            .push_back(PendingHarnessNegotiation {
+                                request_id,
+                                kind,
+                                sdp,
+                            });
+                        continue;
+                    }
+                    let answer_sdp = match self.rtc_peer.as_mut() {
+                        Some(rtc_peer) => rtc_peer.answer_offer(&sdp)?,
+                        None => String::from("v=0\r\ns=protocol-core-answer\r\n"),
+                    };
+                    let follow_up =
+                        self.core
+                            .submit_negotiation_answer(&request_id, kind, &answer_sdp);
+                    let mut raw_follow_up = follow_up.into_vec();
+                    raw_follow_up.extend(self.core.on_transport_ready());
+                    raw_follow_up
+                }
+                Command::ScheduleTimer { id, ms } => {
+                    self.timers.insert(id, ms);
+                    Vec::new()
+                }
+                Command::CancelTimer { id } => {
+                    self.timers.remove(&id);
+                    Vec::new()
+                }
+                Command::CloseWebSocket { .. } => {
+                    self.websocket.as_mut()?.close(None).await.ok()?;
+                    Vec::new()
+                }
+                Command::RegisterPendingRequest { request_id, kind } => {
+                    self.pending_request_commands
+                        .push(HostCommand::RegisterPendingRequest {
+                            request_id,
+                            request_kind: kind.into(),
+                        });
+                    Vec::new()
+                }
+                Command::ResolvePendingRequest { request_id, ok } => {
+                    self.pending_request_commands
+                        .push(HostCommand::ResolvePendingRequest { request_id, ok });
+                    Vec::new()
+                }
+            };
+            pending.extend(follow_up);
+        }
+        Some(())
+    }
+}

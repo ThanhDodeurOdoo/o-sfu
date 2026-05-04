@@ -3,6 +3,8 @@
 ## Layout
 
   - `tests/tests/`: integration tests
+  - `tests/src/support/`: cross-crate integration harnesses for real server
+    entry points, fake peers, websocket clients, and polling predicates
   - `tests/miri/`: UB tests
   - `tests/fuzz/`: fuzzing
   - `tests/proofs/`: formal verification
