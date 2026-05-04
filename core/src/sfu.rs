@@ -433,7 +433,7 @@ where
     /// incremental update. Stale connections are ignored by the room boundary.
     pub async fn update_user_info(&self, info: UserInfo, refresh: UserInfoRefresh) {
         self.room
-            .update_user_info_runtime_for_connection(
+            .update_user_info(
                 self.context.user_id(),
                 self.context.connection_id(),
                 info,

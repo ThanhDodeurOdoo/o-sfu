@@ -148,7 +148,7 @@ impl RoomTestLifecycle<'_> {
             return;
         };
         self.room
-            .update_user_info_runtime_for_connection(
+            .update_user_info(
                 user_id,
                 connection_id,
                 info,

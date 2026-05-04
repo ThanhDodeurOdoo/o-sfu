@@ -187,7 +187,7 @@ impl Room {
         self.state.read().await.user_connection_id(user_id) == Some(connection_id)
     }
 
-    pub(crate) async fn update_user_info_runtime_for_connection(
+    pub(crate) async fn update_user_info(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
