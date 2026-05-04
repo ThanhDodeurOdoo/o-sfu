@@ -37,11 +37,6 @@ impl CommandBatch {
         Self { commands }
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_test_commands(commands: Vec<Command>) -> Self {
-        Self::from_core_commands(commands)
-    }
-
     /// Validates this batch using the canonical Rust command-order contract.
     ///
     /// # Errors
