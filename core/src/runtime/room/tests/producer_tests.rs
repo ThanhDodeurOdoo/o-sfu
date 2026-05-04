@@ -1468,13 +1468,14 @@ async fn publish_track_releases_room_lock_while_waiting_on_media_transport() {
     let update_result = timeout(Duration::from_millis(50), async {
         room.test_api()
             .lifecycle()
-            .update_user_info(
+            .update_user_info_runtime(
                 &UserId::Integer(2),
                 UserInfo {
                     is_talking: Some(true),
                     ..UserInfo::default()
                 },
                 false,
+                &fake_media_transport,
             )
             .await;
     })
@@ -1776,13 +1777,14 @@ async fn late_join_bootstrap_releases_room_lock_while_waiting_on_media_transport
     let update_result = timeout(Duration::from_millis(50), async {
         room.test_api()
             .lifecycle()
-            .update_user_info(
+            .update_user_info_runtime(
                 &UserId::Integer(1),
                 UserInfo {
                     is_talking: Some(true),
                     ..UserInfo::default()
                 },
                 false,
+                &media_transport,
             )
             .await;
     })

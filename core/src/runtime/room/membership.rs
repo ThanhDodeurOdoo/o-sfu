@@ -157,12 +157,26 @@ impl Room {
         connection_id: ConnectionId,
         media_transport: &MediaTransport,
     ) -> bool {
+        self.remove_user_with_cleanup(
+            user_id,
+            connection_id,
+            UserCleanup::runtime(media_transport),
+        )
+        .await
+    }
+
+    pub(in crate::runtime::room) async fn remove_user_with_cleanup(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+        cleanup: UserCleanup<'_>,
+    ) -> bool {
         self.run_session_transition(
             UserTransition::Close {
                 user_id,
                 connection_id,
             },
-            UserCleanup::runtime(media_transport),
+            cleanup,
         )
         .await
         .is_ok_and(|result| !matches!(result, UserTransitionResult::Missing))

@@ -396,24 +396,6 @@ impl RoomTopology {
         Ok(())
     }
 
-    /// Apply the router-side part of a user join.
-    ///
-    /// Room membership decides whether the user is allowed to join. This method
-    /// only commits the matching pure-router records after that decision has
-    /// already been made.
-    #[cfg(test)]
-    pub(super) fn apply_client_join(
-        &mut self,
-        user_id: &UserId,
-        router_session_seed: u64,
-    ) -> Result<(), RoomTopologyError> {
-        self.apply_client_join_with_pressure(
-            user_id,
-            router_session_seed,
-            TopologyPressureSnapshot::default(),
-        )
-    }
-
     pub(super) fn apply_client_join_with_pressure(
         &mut self,
         user_id: &UserId,
@@ -430,19 +412,6 @@ impl RoomTopology {
     /// Replacement joins are not duplicate setup work: the old connection loses
     /// ownership and the new connection must be placed from its own seed so
     /// router placement and transport worker ownership remain aligned.
-    #[cfg(test)]
-    pub(super) fn replace_client_session(
-        &mut self,
-        user_id: &UserId,
-        router_session_seed: u64,
-    ) -> Result<(), RoomTopologyError> {
-        self.replace_client_session_with_pressure(
-            user_id,
-            router_session_seed,
-            TopologyPressureSnapshot::default(),
-        )
-    }
-
     pub(super) fn replace_client_session_with_pressure(
         &mut self,
         user_id: &UserId,
@@ -451,15 +420,6 @@ impl RoomTopology {
     ) -> Result<(), RoomTopologyError> {
         self.remove_session(user_id)?;
         self.apply_client_join_with_pressure(user_id, router_session_seed, pressure)
-    }
-
-    /// Apply the router-side part of a user leave.
-    ///
-    /// This removes the user's records from every attached router, not just the
-    /// home router. Cross-router subscriptions may have created shadow receiver
-    /// sessions on producer routers and those shadows must leave with the user.
-    pub(super) fn apply_client_leave(&mut self, user_id: &UserId) -> Result<(), RoomTopologyError> {
-        self.remove_session(user_id)
     }
 
     pub(super) fn home_placement_for_user(

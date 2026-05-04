@@ -17,7 +17,11 @@ fn topology_assigns_the_primary_router_to_joined_users() {
     let mut topology = RoomTopology::new(RouterId(7));
     let user_id = UserId::Integer(10);
 
-    assert!(topology.apply_client_join(&user_id, 42).is_ok());
+    assert!(
+        topology
+            .apply_client_join_with_pressure(&user_id, 42, TopologyPressureSnapshot::default())
+            .is_ok()
+    );
 
     assert_eq!(
         topology.home_router_id_for_user(&user_id),
@@ -31,8 +35,16 @@ fn topology_rejoin_does_not_duplicate_router_users() {
     let mut topology = RoomTopology::new(RouterId(7));
     let user_id = UserId::Integer(10);
 
-    assert!(topology.apply_client_join(&user_id, 42).is_ok());
-    assert!(topology.apply_client_join(&user_id, 43).is_ok());
+    assert!(
+        topology
+            .apply_client_join_with_pressure(&user_id, 42, TopologyPressureSnapshot::default())
+            .is_ok()
+    );
+    assert!(
+        topology
+            .apply_client_join_with_pressure(&user_id, 43, TopologyPressureSnapshot::default())
+            .is_ok()
+    );
 
     assert_eq!(topology.user_count(), 1);
 }
@@ -44,7 +56,11 @@ fn topology_returns_router_scoped_entity_handles() {
     let consumer_user_id = UserId::Integer(20);
 
     for (seed, user_id) in [(10, &producer_user_id), (20, &consumer_user_id)] {
-        assert!(topology.apply_client_join(user_id, seed).is_ok());
+        assert!(
+            topology
+                .apply_client_join_with_pressure(user_id, seed, TopologyPressureSnapshot::default())
+                .is_ok()
+        );
     }
 
     let producer = topology
@@ -78,8 +94,24 @@ fn topology_attaches_spillover_router_for_bounded_policy() {
     let first_user_id = UserId::Integer(10);
     let second_user_id = UserId::Integer(20);
 
-    assert!(topology.apply_client_join(&first_user_id, 0).is_ok());
-    assert!(topology.apply_client_join(&second_user_id, 1).is_ok());
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &first_user_id,
+                0,
+                TopologyPressureSnapshot::default(),
+            )
+            .is_ok()
+    );
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &second_user_id,
+                1,
+                TopologyPressureSnapshot::default(),
+            )
+            .is_ok()
+    );
 
     assert_eq!(
         topology.home_router_id_for_user(&first_user_id),
@@ -98,13 +130,21 @@ fn topology_replacement_rehomes_from_the_new_connection_seed() {
     let mut topology = RoomTopology::new_with_bounded_spillover(RouterId(9), 2);
     let user_id = UserId::Integer(10);
 
-    assert!(topology.apply_client_join(&user_id, 0).is_ok());
+    assert!(
+        topology
+            .apply_client_join_with_pressure(&user_id, 0, TopologyPressureSnapshot::default())
+            .is_ok()
+    );
     assert_eq!(
         topology.home_router_id_for_user(&user_id),
         Some(RouterId(9))
     );
 
-    assert!(topology.replace_client_session(&user_id, 1).is_ok());
+    assert!(
+        topology
+            .replace_client_session_with_pressure(&user_id, 1, TopologyPressureSnapshot::default())
+            .is_ok()
+    );
 
     assert_eq!(
         topology.home_router_id_for_user(&user_id),
@@ -119,8 +159,24 @@ fn topology_routes_cross_router_consumers_through_source_router() {
     let producer_user_id = UserId::Integer(10);
     let consumer_user_id = UserId::Integer(20);
 
-    assert!(topology.apply_client_join(&producer_user_id, 0).is_ok());
-    assert!(topology.apply_client_join(&consumer_user_id, 1).is_ok());
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &producer_user_id,
+                0,
+                TopologyPressureSnapshot::default(),
+            )
+            .is_ok()
+    );
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &consumer_user_id,
+                1,
+                TopologyPressureSnapshot::default(),
+            )
+            .is_ok()
+    );
 
     let producer = topology
         .add_producer(&producer_user_id, RouterMediaKind::Audio)
@@ -172,7 +228,15 @@ fn topology_rejects_shadow_consumer_without_receiver_home_placement() {
 fn topology_rejects_consumer_on_unreserved_router() {
     let mut topology = RoomTopology::new(RouterId(9));
     let consumer_user_id = UserId::Integer(20);
-    assert!(topology.apply_client_join(&consumer_user_id, 0).is_ok());
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &consumer_user_id,
+                0,
+                TopologyPressureSnapshot::default(),
+            )
+            .is_ok()
+    );
 
     assert_eq!(
         topology.add_consumer(
@@ -193,11 +257,27 @@ fn topology_detaches_idle_spillover_router_after_last_home_session_leaves() {
     let first_user_id = UserId::Integer(10);
     let second_user_id = UserId::Integer(20);
 
-    assert!(topology.apply_client_join(&first_user_id, 0).is_ok());
-    assert!(topology.apply_client_join(&second_user_id, 1).is_ok());
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &first_user_id,
+                0,
+                TopologyPressureSnapshot::default(),
+            )
+            .is_ok()
+    );
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &second_user_id,
+                1,
+                TopologyPressureSnapshot::default(),
+            )
+            .is_ok()
+    );
     assert_eq!(topology.router_count(), 2);
 
-    assert!(topology.apply_client_leave(&second_user_id).is_ok());
+    assert!(topology.remove_session(&second_user_id).is_ok());
 
     assert_eq!(topology.router_count(), 1);
     assert_eq!(topology.user_count(), 1);
@@ -408,10 +488,10 @@ fn load_triggered_topology_waits_for_cooldown_before_idle_detach() {
     );
     assert_eq!(topology.router_count(), 2);
 
-    assert!(topology.apply_client_leave(&second_user_id).is_ok());
+    assert!(topology.remove_session(&second_user_id).is_ok());
     assert_eq!(topology.router_count(), 2);
 
-    assert!(topology.apply_client_leave(&third_user_id).is_ok());
+    assert!(topology.remove_session(&third_user_id).is_ok());
     assert_eq!(topology.router_count(), 1);
 }
 
@@ -419,7 +499,11 @@ fn load_triggered_topology_waits_for_cooldown_before_idle_detach() {
 fn topology_reports_missing_router_for_user_lookup() {
     let mut topology = RoomTopology::new(RouterId(7));
     let user_id = UserId::Integer(10);
-    assert!(topology.apply_client_join(&user_id, 42).is_ok());
+    assert!(
+        topology
+            .apply_client_join_with_pressure(&user_id, 42, TopologyPressureSnapshot::default())
+            .is_ok()
+    );
     topology.remove_router_for_test(RouterId(7));
 
     assert_eq!(
@@ -443,7 +527,11 @@ fn topology_placement_bundle_rejects_empty_router_sets() {
 fn topology_reports_missing_user_mapping_from_router_state() {
     let mut topology = RoomTopology::new(RouterId(7));
     let user_id = UserId::Integer(10);
-    assert!(topology.apply_client_join(&user_id, 42).is_ok());
+    assert!(
+        topology
+            .apply_client_join_with_pressure(&user_id, 42, TopologyPressureSnapshot::default())
+            .is_ok()
+    );
     topology.remove_session_mapping_for_test(&user_id);
     topology.remove_transport_mapping_for_test(&user_id);
 

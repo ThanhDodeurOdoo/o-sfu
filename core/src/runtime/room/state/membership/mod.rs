@@ -293,7 +293,7 @@ impl RoomState {
         }
         let transport_removals =
             self.collect_user_transport_removals(&BTreeSet::from([user_id.clone()]));
-        if let Err(error) = self.topology.apply_client_leave(user_id) {
+        if let Err(error) = self.topology.remove_session(user_id) {
             error!(
                 ?user_id,
                 ?error,
@@ -395,7 +395,7 @@ impl RoomState {
             if !self.users.contains_key(user_id) {
                 continue;
             }
-            if let Err(error) = self.topology.apply_client_leave(user_id) {
+            if let Err(error) = self.topology.remove_session(user_id) {
                 error!(
                     ?user_id,
                     ?error,

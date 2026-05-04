@@ -93,22 +93,9 @@ impl RoomTestLifecycle<'_> {
         connection_id: ConnectionId,
         cleanup: UserCleanup<'_>,
     ) -> bool {
-        let room = self.room;
-        let outcome = {
-            let mut state = room.state.write().await;
-            state.apply_leave(user_id, connection_id)
-        };
-        let Some(outcome) = outcome else {
-            return false;
-        };
-        room.cleanup_transport_removals(cleanup, &outcome.transport_removals)
-            .await;
-        if let Some(media_transport) = cleanup.media_transport() {
-            room.sync_source_packet_selection_policy(Some(media_transport), media_transport)
-                .await;
-        }
-        Room::emit_lifecycle_effects(outcome.effects);
-        true
+        self.room
+            .remove_user_with_cleanup(user_id, connection_id, cleanup)
+            .await
     }
 
     pub async fn broadcast(self, sender_id: &UserId, message: serde_json::Value) {
@@ -116,19 +103,6 @@ impl RoomTestLifecycle<'_> {
             return;
         };
         self.room.broadcast(sender_id, connection_id, message).await;
-    }
-
-    pub async fn update_user_info(self, user_id: &UserId, info: UserInfo, need_refresh: bool) {
-        let Some(connection_id) = self.room.state.read().await.user_connection_id(user_id) else {
-            return;
-        };
-        let outcome = {
-            let mut state = self.room.state.write().await;
-            state.apply_presence_update(user_id, connection_id, &info, need_refresh)
-        };
-        if let Some(outcome) = outcome {
-            outcome.emit();
-        }
     }
 
     pub async fn update_user_info_runtime(

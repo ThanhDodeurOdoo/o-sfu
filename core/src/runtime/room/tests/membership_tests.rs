@@ -1020,6 +1020,7 @@ async fn update_user_info_broadcasts_to_all() {
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
+    let media_transport = MediaTransport::fake_for_testing();
     let (tx1, mut rx1) = test_sender();
     let (tx2, mut rx2) = test_sender();
     let _ = room
@@ -1039,7 +1040,7 @@ async fn update_user_info_broadcasts_to_all() {
     };
     room.test_api()
         .lifecycle()
-        .update_user_info(&UserId::Integer(1), info, false)
+        .update_user_info_runtime(&UserId::Integer(1), info, false, &media_transport)
         .await;
 
     let msg1 = rx1.try_recv();
@@ -1065,6 +1066,7 @@ async fn update_user_info_with_refresh_sends_full_snapshot() {
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
+    let media_transport = MediaTransport::fake_for_testing();
     let (tx1, mut rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
     let _ = room
@@ -1084,7 +1086,7 @@ async fn update_user_info_with_refresh_sends_full_snapshot() {
     };
     room.test_api()
         .lifecycle()
-        .update_user_info(&UserId::Integer(1), info, true)
+        .update_user_info_runtime(&UserId::Integer(1), info, true, &media_transport)
         .await;
 
     let msg = rx1.try_recv();
