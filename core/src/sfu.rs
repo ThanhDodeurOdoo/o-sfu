@@ -9,10 +9,13 @@
 use o_sfu_router::MediaCapabilities;
 
 use crate::{
-    ConnectionId, CoreOptions, MediaRoom, MediaSessionContext, PublicationActivity,
+    ConnectionId, CoreOptions, MediaSessionContext, PublicationActivity,
     PublicationActivityOutcome, PublishStageOutcome, RollbackStagedPublishOutcome,
     SessionNegotiationOutcome, SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
-    runtime::{DownloadStates, StreamType, UserId, UserInfo, source_model::UploadLayerPolicyRole},
+    runtime::{
+        DownloadStates, StreamType, UserId, UserInfo, room::Room,
+        source_model::UploadLayerPolicyRole,
+    },
     transport::{
         AppliedSessionAnswer, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
         TransportAdapterError, TransportFacade, TransportSessionHealth,
@@ -172,13 +175,12 @@ pub struct SfuCore<T> {
 /// locks, transport commands and cleanup effects. The room boundary remains
 /// responsible for releasing state locks before awaiting transport work.
 #[derive(Debug)]
-pub struct MediaSession<'a, R, T>
+pub struct MediaSession<'a, T>
 where
     T: TransportFacade,
-    R: MediaRoom<T>,
 {
     core: &'a SfuCore<T>,
-    room: &'a R,
+    room: &'a Room,
     context: MediaSessionContext<'a>,
 }
 
@@ -209,27 +211,27 @@ where
     /// operation validates the current connection at the point where room state
     /// would change.
     #[must_use]
-    pub fn session<'a, R>(
+    pub fn session<'a>(
         &'a self,
-        room: &'a R,
+        room: &'a Room,
         user_id: &'a UserId,
         connection_id: ConnectionId,
-    ) -> MediaSession<'a, R, T>
-    where
-        R: MediaRoom<T>,
-    {
+    ) -> MediaSession<'a, T> {
         MediaSession {
             core: self,
             room,
-            context: room.media_session_context(user_id, connection_id),
+            context: MediaSessionContext::new(
+                user_id,
+                connection_id,
+                room.transport_user_key(user_id, connection_id),
+            ),
         }
     }
 }
 
-impl<R, T> MediaSession<'_, R, T>
+impl<T> MediaSession<'_, T>
 where
     T: TransportFacade,
-    R: MediaRoom<T>,
 {
     /// Return the current transport health for this endpoint.
     ///
@@ -316,7 +318,8 @@ where
         let outcome = self
             .room
             .apply_session_negotiated(
-                &self.context,
+                self.context.user_id(),
+                self.context.connection_id(),
                 client_capabilities,
                 &self.core.media_transport,
             )
@@ -344,7 +347,11 @@ where
         let applied_answer = self.apply_transport_answer(answer_sdp).await?;
         let outcome = self
             .room
-            .apply_session_refreshed(&self.context, &self.core.media_transport)
+            .apply_session_refreshed(
+                self.context.user_id(),
+                self.context.connection_id(),
+                &self.core.media_transport,
+            )
             .await;
         if outcome != SessionNegotiationOutcome::Applied {
             return Err(SfuCoreError::SessionRefreshRejected(outcome));
@@ -360,7 +367,11 @@ where
     /// or clean up the staged transaction before the answer arrives.
     pub async fn has_staged_publish(&self, stream_type: StreamType) -> bool {
         self.room
-            .has_staged_publish(&self.context, stream_type)
+            .has_staged_publish(
+                self.context.user_id(),
+                self.context.connection_id(),
+                stream_type,
+            )
             .await
     }
 
@@ -371,7 +382,7 @@ where
     /// replacement.
     pub async fn is_stream_published(&self, stream_type: StreamType) -> bool {
         self.room
-            .is_stream_published(&self.context, stream_type)
+            .is_stream_published(self.context.user_id(), stream_type)
             .await
     }
 
@@ -386,8 +397,9 @@ where
         activity: PublicationActivity,
     ) -> PublicationActivityOutcome {
         self.room
-            .set_publication_active(
-                &self.context,
+            .set_publication_active_runtime(
+                self.context.user_id(),
+                self.context.connection_id(),
                 stream_type,
                 activity,
                 &self.core.media_transport,
@@ -405,8 +417,9 @@ where
         states: &DownloadStates,
     ) -> SubscriptionUpdateOutcome {
         self.room
-            .update_subscription(
-                &self.context,
+            .update_subscription_runtime(
+                self.context.user_id(),
+                self.context.connection_id(),
                 target_user_id,
                 states,
                 &self.core.media_transport,
@@ -420,7 +433,13 @@ where
     /// incremental update. Stale connections are ignored by the room boundary.
     pub async fn update_user_info(&self, info: UserInfo, refresh: UserInfoRefresh) {
         self.room
-            .update_user_info(&self.context, info, refresh, &self.core.media_transport)
+            .update_user_info_runtime_for_connection(
+                self.context.user_id(),
+                self.context.connection_id(),
+                info,
+                refresh,
+                &self.core.media_transport,
+            )
             .await;
     }
 
@@ -435,7 +454,12 @@ where
         stream_type: StreamType,
     ) -> Result<PublishStageOutcome, SfuCoreError> {
         self.room
-            .stage_publish(&self.context, stream_type, &self.core.media_transport)
+            .stage_negotiated_publish(
+                self.context.user_id(),
+                self.context.connection_id(),
+                stream_type,
+                &self.core.media_transport,
+            )
             .await
             .map_err(SfuCoreError::Transport)
     }
@@ -450,7 +474,12 @@ where
         stream_type: StreamType,
     ) -> RollbackStagedPublishOutcome {
         self.room
-            .rollback_staged_publish(&self.context, stream_type, &self.core.media_transport)
+            .rollback_staged_publish(
+                self.context.user_id(),
+                self.context.connection_id(),
+                stream_type,
+                &self.core.media_transport,
+            )
             .await
     }
 
@@ -461,7 +490,11 @@ where
     /// close the transport session itself.
     pub async fn rollback_connection_publishes(&self) {
         self.room
-            .rollback_connection_publishes(&self.context, &self.core.media_transport)
+            .rollback_staged_publishes_for_connection(
+                self.context.user_id(),
+                self.context.connection_id(),
+                &self.core.media_transport,
+            )
             .await;
     }
 
@@ -472,7 +505,12 @@ where
     /// collapsed boolean.
     pub async fn unpublish(&self, stream_type: StreamType) -> UnpublishOutcome {
         self.room
-            .unpublish(&self.context, stream_type, &self.core.media_transport)
+            .unpublish_track(
+                self.context.user_id(),
+                self.context.connection_id(),
+                stream_type,
+                &self.core.media_transport,
+            )
             .await
     }
 
@@ -489,7 +527,13 @@ where
 
     async fn commit_staged_publishes(&self, applied_answer: &AppliedSessionAnswer) {
         self.room
-            .commit_staged_publishes(&self.context, applied_answer, &self.core.media_transport)
+            .commit_staged_publishes(
+                self.context.user_id(),
+                self.context.connection_id(),
+                applied_answer,
+                &self.core.media_transport,
+                &self.core.media_transport,
+            )
             .await;
     }
 }

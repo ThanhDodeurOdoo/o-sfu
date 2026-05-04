@@ -4,25 +4,16 @@
 //!
 //! `SfuCore` owns transport orchestration, while the concrete room
 //! implementation owns membership, publication state and subscription intent.
-//! This file defines the narrow bridge between those layers. It lets callers
-//! express media intent through a `MediaSession` without exposing room maps,
-//! router ids or transport reservation details.
+//! This file defines the session context and domain outcomes shared by those
+//! layers. It lets callers express media intent through a `MediaSession`
+//! without exposing room maps, router ids or transport reservation details.
 //!
 //! The outcome enums distinguish expected domain rejections from transport
 //! failures. Idempotent no-ops such as a duplicate staged publish stay normal
 //! outcomes. A failed transport allocation stays an error because the caller
 //! cannot safely continue the publish flow without a reserved media line.
 
-use o_sfu_router::MediaCapabilities;
-
-use crate::{
-    ConnectionId,
-    runtime::{DownloadStates, StreamType, UserId, UserInfo},
-    transport::{
-        AppliedSessionAnswer, MediaPort, ObservabilityPort, TransportAdapterError,
-        TransportSessionKey,
-    },
-};
+use crate::{ConnectionId, runtime::UserId, transport::TransportSessionKey};
 
 #[derive(Debug, Clone)]
 /// Stable room identity bundle for one media operation.
@@ -40,9 +31,6 @@ pub struct MediaSessionContext<'a> {
 
 impl<'a> MediaSessionContext<'a> {
     /// Build a context from room-owned identity data.
-    ///
-    /// Normal callers should prefer [`MediaRoom::media_session_context`] so the
-    /// room remains the authority for transport key derivation.
     #[must_use]
     pub const fn new(
         user_id: &'a UserId,
@@ -250,206 +238,4 @@ impl UserInfoRefresh {
     pub const fn is_needed(self) -> bool {
         matches!(self, Self::Needed)
     }
-}
-
-#[allow(
-    async_fn_in_trait,
-    reason = "media room calls are static-dispatch bridges from the server room into the media core facade"
-)]
-/// Room operations required by the media-core session facade.
-///
-/// # Boundary role
-///
-/// Implementations keep room state authoritative for membership,
-/// publication ownership and subscription intent. The media core supplies the
-/// transport port needed for deferred side effects, but it does not inspect or
-/// mutate room internals directly.
-///
-/// # Concurrency model
-///
-/// These calls are cold-path orchestration. Implementations should snapshot or
-/// mutate room state under short locks, release those locks before awaiting
-/// transport work and return domain outcomes that tell the caller whether the
-/// intent was applied, ignored or rejected.
-pub trait MediaRoom<T>
-where
-    T: MediaPort + ObservabilityPort + Send + Sync,
-{
-    /// Builds the transport identity for one room connection.
-    ///
-    /// The room owns worker and instance placement, so callers should obtain
-    /// transport keys through this boundary instead of reconstructing them.
-    fn transport_user_key(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-    ) -> TransportSessionKey;
-
-    /// Builds the media-session context used by [`crate::MediaSession`].
-    ///
-    /// The default implementation keeps the transport key derived by the room
-    /// next to the user and connection identities that produced it. Override it
-    /// only if the room has extra context to attach without changing the public
-    /// session contract.
-    fn media_session_context<'a>(
-        &self,
-        user_id: &'a UserId,
-        connection_id: ConnectionId,
-    ) -> MediaSessionContext<'a> {
-        MediaSessionContext::new(
-            user_id,
-            connection_id,
-            self.transport_user_key(user_id, connection_id),
-        )
-    }
-
-    /// Returns the router RTP capabilities advertised in initial offers.
-    ///
-    /// The result is the room's current capability view. `MediaSession` stores
-    /// the returned value with the offer so answer projection uses the same
-    /// capability set that the browser received.
-    async fn router_rtp_capabilities(&self) -> MediaCapabilities;
-
-    /// Commits an initial answer into room negotiation state.
-    ///
-    /// The returned outcome names room-state acceptance only. Transport answer
-    /// application happens before this call in `MediaSession`.
-    async fn apply_session_negotiated(
-        &self,
-        session: &MediaSessionContext<'_>,
-        capabilities: MediaCapabilities,
-        media_port: &T,
-    ) -> SessionNegotiationOutcome;
-
-    /// Refreshes room-side negotiation state after a follow-up answer.
-    ///
-    /// Implementations should treat callbacks for replaced connections as
-    /// stale rather than mutating the current session.
-    async fn apply_session_refreshed(
-        &self,
-        session: &MediaSessionContext<'_>,
-        media_port: &T,
-    ) -> SessionNegotiationOutcome;
-
-    /// Checks whether this connection already has a staged publish.
-    ///
-    /// This is an idempotency read for orchestration. It is not a reservation,
-    /// because the staged transaction can still be committed or rolled back by
-    /// a later operation.
-    async fn has_staged_publish(
-        &self,
-        session: &MediaSessionContext<'_>,
-        stream_type: StreamType,
-    ) -> bool;
-
-    /// Checks whether this user currently owns a live publication for a stream.
-    ///
-    /// This is a point-in-time room-state read. It does not reserve ownership
-    /// against a later unpublish, disconnect or replacement.
-    async fn is_stream_published(
-        &self,
-        session: &MediaSessionContext<'_>,
-        stream_type: StreamType,
-    ) -> bool;
-
-    /// Applies user-visible publication activity and mirrors it to transport.
-    ///
-    /// The outcome separates room-state acceptance from best-effort transport
-    /// projection so callers can log route update failures without pretending
-    /// the visible activity change was rejected.
-    async fn set_publication_active(
-        &self,
-        session: &MediaSessionContext<'_>,
-        stream_type: StreamType,
-        activity: PublicationActivity,
-        media_port: &T,
-    ) -> PublicationActivityOutcome;
-
-    /// Persists subscription intent for a target user and plans route effects.
-    ///
-    /// This is the room-owned bridge from compatibility download state to
-    /// source-keyed subscription state. Transport work happens below this
-    /// boundary after room state has planned the effect.
-    async fn update_subscription(
-        &self,
-        session: &MediaSessionContext<'_>,
-        target_user_id: &UserId,
-        states: &DownloadStates,
-        media_port: &T,
-    ) -> SubscriptionUpdateOutcome;
-
-    /// Applies room-visible user info for the session.
-    ///
-    /// Implementations should ignore stale connections rather than refreshing
-    /// the current replacement user with old websocket state. The `refresh`
-    /// flag tells fanout whether peers need a full snapshot.
-    async fn update_user_info(
-        &self,
-        session: &MediaSessionContext<'_>,
-        info: UserInfo,
-        refresh: UserInfoRefresh,
-        media_port: &T,
-    );
-
-    /// Reserves transport media for a publish that still needs negotiation.
-    ///
-    /// `TransportAdapterError` means the publish could not reserve media and
-    /// should surface as an exceptional failure. `PublishStageOutcome` covers
-    /// normal domain results after the room decided whether the publish intent
-    /// may proceed.
-    async fn stage_publish(
-        &self,
-        session: &MediaSessionContext<'_>,
-        stream_type: StreamType,
-        media_port: &T,
-    ) -> Result<PublishStageOutcome, TransportAdapterError>;
-
-    /// Cancels one pending publish reservation for the session.
-    ///
-    /// Rollback is used by explicit unpublish before the answer lands. It
-    /// consumes any staged reservation even when transport cleanup is reported
-    /// as failed.
-    async fn rollback_staged_publish(
-        &self,
-        session: &MediaSessionContext<'_>,
-        stream_type: StreamType,
-        media_port: &T,
-    ) -> RollbackStagedPublishOutcome;
-
-    /// Cancels every pending publish reservation owned by the connection.
-    ///
-    /// This is connection cleanup, not user-visible unpublish. Implementations
-    /// should drain all staged reservations for the exact connection so a
-    /// replaced socket cannot later commit media it no longer owns.
-    async fn rollback_connection_publishes(
-        &self,
-        session: &MediaSessionContext<'_>,
-        media_port: &T,
-    );
-
-    /// Commits staged publishes after the transport answer accepted them.
-    ///
-    /// The room must re-check current ownership before installing each live
-    /// producer because connection replacement can happen while negotiation is
-    /// in flight. Rejected commits should consume their staged transport
-    /// reservations through cleanup.
-    async fn commit_staged_publishes(
-        &self,
-        session: &MediaSessionContext<'_>,
-        applied_answer: &AppliedSessionAnswer,
-        media_port: &T,
-    );
-
-    /// Removes a live publication and its dependent consumer routes.
-    ///
-    /// This is stricter than staged rollback because room state already owns
-    /// live routing and diagnostics entries. Implementations should report
-    /// cleanup failures as `UnpublishOutcome::TransportCleanupFailed` without
-    /// dropping authoritative room ownership.
-    async fn unpublish(
-        &self,
-        session: &MediaSessionContext<'_>,
-        stream_type: StreamType,
-        media_port: &T,
-    ) -> UnpublishOutcome;
 }

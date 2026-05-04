@@ -20,7 +20,9 @@ use crate::{
     runtime::{
         ConnectionId, UserId, UserInfo, UserPermissions,
         diagnostics::DiagnosticsEventData,
-        media_transport::{MediaPort, MediaTransport, SessionPort, TransportAdapterError},
+        media_transport::{
+            MediaPort, MediaTransport, ObservabilityPort, SessionPort, TransportAdapterError,
+        },
         metrics::TransportCleanupFailureKind,
         telemetry::schema::event as telemetry_event,
     },
@@ -191,25 +193,7 @@ impl Room {
         connection_id: ConnectionId,
         info: UserInfo,
         refresh: UserInfoRefresh,
-        media_transport: &MediaTransport,
-    ) {
-        self.update_user_info_with_transport(
-            user_id,
-            connection_id,
-            info,
-            refresh,
-            Some(media_transport),
-        )
-        .await;
-    }
-
-    async fn update_user_info_with_transport(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-        info: UserInfo,
-        refresh: UserInfoRefresh,
-        media_transport: Option<&MediaTransport>,
+        media_transport: &(impl MediaPort + ObservabilityPort),
     ) {
         let need_refresh = refresh.is_needed();
         let outcome = {
@@ -217,10 +201,8 @@ impl Room {
             state.apply_presence_update(user_id, connection_id, &info, need_refresh)
         };
         if let Some(outcome) = outcome {
-            if let Some(media_transport) = media_transport {
-                self.sync_source_packet_selection_policy(Some(media_transport), media_transport)
-                    .await;
-            }
+            self.sync_source_packet_selection_policy(Some(media_transport), media_transport)
+                .await;
             outcome.emit();
         } else {
             warn!(
@@ -233,7 +215,7 @@ impl Room {
         }
     }
 
-    pub(crate) async fn disconnect_sessions_runtime(
+    pub(crate) async fn disconnect_users(
         &self,
         user_ids: &[UserId],
         media_transport: &MediaTransport,

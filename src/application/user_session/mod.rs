@@ -154,7 +154,7 @@ impl User {
         }
     }
 
-    fn media(&self) -> MediaSession<'_, Room, MediaTransport> {
+    fn media(&self) -> MediaSession<'_, MediaTransport> {
         self.media_core
             .session(self.room.as_ref(), &self.id, self.connection_id)
     }

@@ -373,8 +373,7 @@ impl RoomManager {
             .with_current_room(room_id, |room| async move {
                 let user_count_before = room.user_count().await;
                 let media_counts_before = room.media_counts().await;
-                room.disconnect_sessions_runtime(user_ids, media_transport)
-                    .await;
+                room.disconnect_users(user_ids, media_transport).await;
                 (room, user_count_before, media_counts_before)
             })
             .await

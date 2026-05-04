@@ -12,8 +12,8 @@
 //!   constructs sessions, while media operations live on `MediaSession`.
 //! - [`NegotiationOffer`], [`UploadSlot`], and [`UploadEncoding`], the
 //!   transport-neutral negotiation vocabulary exposed by the core front door.
-//! - [`MediaRoom`] and [`MediaSessionContext`], the room bridge implemented by
-//!   the runtime room engine.
+//! - [`MediaSessionContext`], the room-owned identity bundle carried by
+//!   [`MediaSession`].
 //! - semantic media intent and outcome types such as [`PublicationActivity`],
 //!   [`PublishStageOutcome`], [`UnpublishOutcome`] and [`UserInfoRefresh`] for
 //!   caller-facing control decisions.
@@ -62,9 +62,10 @@
 //! ```
 //!
 //! `o-sfu-core` keeps the core transport backend generic for tests and future
-//! adapters, but normal server application code should use [`RuntimeSfuCore`]
-//! and should not become generic over transport backends just because the core
-//! can be.
+//! adapters, but the session facade targets the runtime
+//! [`server::room::Room`] implementation. Normal server application code should
+//! use [`RuntimeSfuCore`] and should not become generic over transport backends
+//! just because the core can be.
 #![allow(
     clippy::missing_errors_doc,
     clippy::must_use_candidate,
@@ -100,9 +101,9 @@ pub use options::{
     VideoCodecPreference,
 };
 pub use room::{
-    MediaRoom, MediaSessionContext, PublicationActivity, PublicationActivityOutcome,
-    PublishStageOutcome, RollbackStagedPublishOutcome, SessionNegotiationOutcome,
-    SubscriptionUpdateOutcome, TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
+    MediaSessionContext, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
+    RollbackStagedPublishOutcome, SessionNegotiationOutcome, SubscriptionUpdateOutcome,
+    TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
 };
 pub use runtime::{
     media_transport::{MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder},
