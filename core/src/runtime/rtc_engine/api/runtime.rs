@@ -159,7 +159,6 @@ impl RtcTransportShard {
                 media_id_base: self.media_id_base,
                 diagnostics: Arc::clone(&self.diagnostics),
                 packet_sink_registry: Arc::clone(&self.packet_sink_registry),
-                relay_registry: Arc::clone(&self.relay_registry),
                 source_policy_signal: Arc::clone(&self.source_policy_signal),
                 metrics: Arc::clone(&self.metrics),
             },

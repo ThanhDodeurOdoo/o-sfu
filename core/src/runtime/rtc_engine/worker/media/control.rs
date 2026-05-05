@@ -47,7 +47,7 @@ use super::{
         commands::{ConsumerPacketGateCommand, RelayCleanup, RemoteSourceControl},
         demux::{MediaRouteDestination, MediaRouteEntry},
         media_registry::RegisteredMediaHandle,
-        relay_registry::{RelayRegistry, RelayTargetId},
+        relay_registry::{RelayTargetId, RelayTargetTransport},
         route_control::{PacketLayerGate, aggregate_packet_gates},
         state::RtcBootstrapState,
     },
@@ -174,8 +174,7 @@ pub fn respond_request_consumer_keyframe(
 }
 
 pub fn respond_set_remote_source_route_active(
-    state: &RtcBootstrapState,
-    relay_registry: &RelayRegistry,
+    state: &mut RtcBootstrapState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     target_id: RelayTargetId,
@@ -184,7 +183,51 @@ pub fn respond_set_remote_source_route_active(
     if owned_local_producer_mid(state, source_session_key, source_transport_media_id).is_none() {
         return;
     }
-    relay_registry.set_source_target_active(source_transport_media_id, target_id, active);
+    state.set_relay_target_active(source_transport_media_id, target_id, active);
+}
+
+pub fn respond_add_relay_target(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    target_id: RelayTargetId,
+    target: RelayTargetTransport,
+    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+) {
+    let _ = response.send(worker_add_relay_target(
+        state,
+        source_session_key,
+        source_transport_media_id,
+        target_id,
+        target,
+    ));
+}
+
+pub fn respond_remove_relay_target(
+    state: &mut RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+    target_id: RelayTargetId,
+    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+) {
+    state.remove_relay_target(source_transport_media_id, target_id);
+    let _ = response.send(Ok(()));
+}
+
+pub fn respond_set_relay_target_active(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    target_id: RelayTargetId,
+    active: bool,
+    response: oneshot::Sender<Result<(), TransportAdapterError>>,
+) {
+    let _ = response.send(worker_set_relay_target_active(
+        state,
+        source_session_key,
+        source_transport_media_id,
+        target_id,
+        active,
+    ));
 }
 
 pub fn respond_set_remote_source_packet_gate(
@@ -615,6 +658,32 @@ fn worker_set_producer_active(
         .get_mut(&transport_media_id)
         .ok_or(TransportAdapterError::TransportUnavailable)?;
     route_entry.source_active = active;
+    Ok(())
+}
+
+fn worker_add_relay_target(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    target_id: RelayTargetId,
+    target: RelayTargetTransport,
+) -> Result<(), TransportAdapterError> {
+    ensure_owned_local_producer_mid(state, source_session_key, source_transport_media_id)?;
+    state.add_relay_target(source_transport_media_id, target_id, target);
+    Ok(())
+}
+
+fn worker_set_relay_target_active(
+    state: &mut RtcBootstrapState,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    target_id: RelayTargetId,
+    active: bool,
+) -> Result<(), TransportAdapterError> {
+    if active {
+        ensure_owned_local_producer_mid(state, source_session_key, source_transport_media_id)?;
+    }
+    state.set_relay_target_active(source_transport_media_id, target_id, active);
     Ok(())
 }
 

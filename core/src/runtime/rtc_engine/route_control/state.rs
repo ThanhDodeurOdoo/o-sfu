@@ -160,6 +160,20 @@ impl RouteControlState {
             .and_then(|source_control| source_control.relay_packet_gates.get(&target_id))
     }
 
+    pub(in crate::runtime::rtc_engine) fn forget_relay_packet_gate(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
+    ) {
+        let Some(source_control) = self.sources.get_mut(&source_transport_media_id) else {
+            return;
+        };
+        source_control.relay_packet_gates.remove(&target_id);
+        if source_control.is_empty() {
+            self.sources.remove(&source_transport_media_id);
+        }
+    }
+
     pub(in crate::runtime::rtc_engine) fn forget_source(
         &mut self,
         source_transport_media_id: TransportMediaId,

@@ -7,8 +7,8 @@
 //! they are writing focused RTC-engine tests or backend integration code.
 //!
 //! The engine is worker-oriented. Each [`RtcTransportShard`] owns one lazy
-//! packet loop, a command mailbox, relay registration state, diagnostics hooks,
-//! packet-sink fanout, bitrate snapshots, and the worker-local state machines
+//! packet loop, command and relay mailboxes, worker-local relay target state,
+//! diagnostics hooks, packet-sink fanout, bitrate snapshots, and the state machines
 //! needed to drive Str0m. The surrounding media transport shard set decides
 //! which session belongs to which worker and hides cross-worker relay setup
 //! from room orchestration.
@@ -25,7 +25,7 @@
 //!   and zero-copy payload ownership;
 //! - `media_registry`, `relay_registry`, `route_control`, `routing_miss`,
 //!   `bitrate`, and `negotiated_capabilities`: transport media ownership,
-//!   cross-worker relay targets, packet gates, active-speaker observations,
+//!   relay mailbox and target primitives, packet gates, active-speaker observations,
 //!   unknown-source recovery, observability snapshots, and answer-derived RTP
 //!   capability projection;
 //! - `simulcast` and `sdp_simulcast`: RTC-edge simulcast negotiation helpers

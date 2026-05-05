@@ -72,6 +72,14 @@ pub(in crate::runtime::rtc_engine) enum DebugRtcWorkerCommand {
         now: Instant,
         response: oneshot::Sender<()>,
     },
+    RelayTargetCount {
+        source_transport_media_id: TransportMediaId,
+        response: oneshot::Sender<usize>,
+    },
+    ActiveRelayTargetCount {
+        source_transport_media_id: TransportMediaId,
+        response: oneshot::Sender<usize>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

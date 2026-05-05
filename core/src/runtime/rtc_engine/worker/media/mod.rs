@@ -11,10 +11,11 @@ pub(in crate::runtime::rtc_engine) use control::{
     drain_due_rid_keyframe_refreshes, observe_source_rid_readiness,
 };
 pub(super) use control::{
-    refresh_source_packet_gate, respond_request_consumer_keyframe, respond_set_consumer_active,
+    refresh_source_packet_gate, respond_add_relay_target, respond_remove_relay_target,
+    respond_request_consumer_keyframe, respond_set_consumer_active,
     respond_set_consumer_packet_gate, respond_set_consumer_packet_gates,
-    respond_set_producer_active, respond_set_remote_source_packet_gate,
-    respond_set_remote_source_route_active,
+    respond_set_producer_active, respond_set_relay_target_active,
+    respond_set_remote_source_packet_gate, respond_set_remote_source_route_active,
 };
 pub use keyframe::request_keyframe_for_source;
 pub(super) use keyframe::respond_request_remote_keyframe;

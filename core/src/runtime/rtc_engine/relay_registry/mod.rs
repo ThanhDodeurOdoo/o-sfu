@@ -1,15 +1,8 @@
-use std::{
-    collections::BTreeMap,
-    fmt,
-    sync::{
-        Arc, PoisonError, RwLock,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 use tokio::sync::mpsc;
 
-use super::forwarded_packet::ForwardedPacket;
+use super::{forwarded_packet::ForwardedPacket, state::RtcBootstrapState};
 use crate::runtime::media_transport::TransportMediaId;
 
 #[cfg(any(test, feature = "testing-transport"))]
@@ -127,8 +120,8 @@ struct RelayTargetRegistration<Target> {
     active_reference_count: usize,
 }
 
-/// Shared per-source relay target state used by the live registry and the Loom
-/// model that validates publication and reference-count transitions.
+/// Per-source relay target state stored by the source worker and reused by the
+/// Loom model that validates publication and reference-count transitions.
 #[derive(Debug, Clone)]
 pub struct RelayTargetRegistry<TargetId, Target> {
     targets: BTreeMap<TargetId, RelayTargetRegistration<Target>>,
@@ -206,10 +199,17 @@ where
     }
 
     #[must_use]
+    pub fn active_targets_slice(&self) -> &[ActiveRelayTarget<TargetId, Target>] {
+        &self.active_targets
+    }
+
+    #[must_use]
     pub fn has_active_targets(&self) -> bool {
-        self.targets
-            .values()
-            .any(|registration| registration.active_reference_count > 0)
+        !self.active_targets.is_empty()
+    }
+
+    pub fn contains_target(&self, target_id: TargetId) -> bool {
+        self.targets.contains_key(&target_id)
     }
 
     pub fn is_target_active(&self, target_id: TargetId) -> bool {
@@ -244,16 +244,16 @@ where
     }
 }
 
-type RelaySourceRegistration = RelayTargetRegistry<RelayTargetId, RelayTargetTransport>;
+pub(super) type RelaySourceRegistration = RelayTargetRegistry<RelayTargetId, RelayTargetTransport>;
 
 /// Source-indexed relay destinations owned by one packet loop.
 ///
-/// A source worker keeps this registry beside its normal local route table. For
+/// A source worker keeps this state beside its normal local route table. For
 /// every source packet, the forwarding planner can add local sends and relay
 /// sends from the same source media id:
 ///
 /// ```text
-/// W0 RelayRegistry
+/// W0 RtcBootstrapState
 ///
 ///   source_media_id A
 ///        |
@@ -266,129 +266,92 @@ type RelaySourceRegistration = RelayTargetRegistry<RelayTargetId, RelayTargetTra
 ///
 /// Relay sends use bounded `try_send`; overload drops are counted at the
 /// packet-loop forwarding boundary instead of blocking the source worker.
-pub(super) struct RelayRegistry {
-    any_active: AtomicBool,
-    active_sources: RwLock<BTreeMap<TransportMediaId, RelaySourceRegistration>>,
-}
-
-impl Default for RelayRegistry {
-    fn default() -> Self {
-        Self {
-            any_active: AtomicBool::new(false),
-            active_sources: RwLock::new(BTreeMap::new()),
-        }
-    }
-}
-
-impl RelayRegistry {
-    pub(super) fn targets_for_source(
+impl RtcBootstrapState {
+    pub(super) fn relay_targets_for_source(
         &self,
         source_transport_media_id: TransportMediaId,
-    ) -> Option<Arc<[ActiveRelayTarget<RelayTargetId, RelayTargetTransport>]>> {
-        if !self.any_active.load(Ordering::Acquire) {
-            return None;
-        }
-        self.active_sources
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
+    ) -> Option<&[ActiveRelayTarget<RelayTargetId, RelayTargetTransport>]> {
+        self.relay_targets
             .get(&source_transport_media_id)
             .and_then(|registration| {
                 registration
                     .has_active_targets()
-                    .then(|| registration.active_targets())
+                    .then(|| registration.active_targets_slice())
             })
     }
 
-    pub(super) fn activate_source_target(
-        &self,
+    pub(super) fn add_relay_target(
+        &mut self,
         source_transport_media_id: TransportMediaId,
         target_id: RelayTargetId,
         target: RelayTargetTransport,
     ) {
-        let mut active_sources = self
-            .active_sources
-            .write()
-            .unwrap_or_else(PoisonError::into_inner);
-        active_sources
+        self.relay_targets
             .entry(source_transport_media_id)
             .or_default()
             .add_target(target_id, target);
-        let has_active_sources = active_sources
-            .values()
-            .any(RelaySourceRegistration::has_active_targets);
-        drop(active_sources);
-        self.any_active.store(has_active_sources, Ordering::Release);
     }
 
-    pub(super) fn deactivate_source_target(
-        &self,
+    pub(super) fn remove_relay_target(
+        &mut self,
         source_transport_media_id: TransportMediaId,
         target_id: RelayTargetId,
     ) {
-        let mut active_sources = self
-            .active_sources
-            .write()
-            .unwrap_or_else(PoisonError::into_inner);
-        let remove_source = active_sources
-            .get_mut(&source_transport_media_id)
-            .is_some_and(|source| source.remove_target(target_id));
+        let Some(source) = self.relay_targets.get_mut(&source_transport_media_id) else {
+            return;
+        };
+        let had_target = source.contains_target(target_id);
+        let remove_source = source.remove_target(target_id);
+        let target_removed = had_target && !source.contains_target(target_id);
         if remove_source {
-            active_sources.remove(&source_transport_media_id);
+            self.relay_targets.remove(&source_transport_media_id);
         }
-        let has_active_sources = active_sources
-            .values()
-            .any(RelaySourceRegistration::has_active_targets);
-        drop(active_sources);
-        self.any_active.store(has_active_sources, Ordering::Release);
+        if target_removed {
+            self.route_control
+                .forget_relay_packet_gate(source_transport_media_id, target_id);
+        }
     }
 
-    pub(super) fn set_source_target_active(
-        &self,
+    pub(super) fn set_relay_target_active(
+        &mut self,
         source_transport_media_id: TransportMediaId,
         target_id: RelayTargetId,
         active: bool,
     ) {
-        let mut active_sources = self
-            .active_sources
-            .write()
-            .unwrap_or_else(PoisonError::into_inner);
-        let Some(source_registration) = active_sources.get_mut(&source_transport_media_id) else {
+        let Some(source_registration) = self.relay_targets.get_mut(&source_transport_media_id)
+        else {
             return;
         };
         source_registration.set_target_active(target_id, active);
-        let has_active_sources = active_sources
-            .values()
-            .any(RelaySourceRegistration::has_active_targets);
-        drop(active_sources);
-        self.any_active.store(has_active_sources, Ordering::Release);
     }
 
-    pub(super) fn is_source_target_active(
+    pub(super) fn is_relay_target_active(
         &self,
         source_transport_media_id: TransportMediaId,
         target_id: RelayTargetId,
     ) -> bool {
-        self.active_sources
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
+        self.relay_targets
             .get(&source_transport_media_id)
             .is_some_and(|source_registration| source_registration.is_target_active(target_id))
     }
 
-    fn active_source_count(&self) -> usize {
-        self.active_sources
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .len()
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub(super) fn relay_target_count_for_source(
+        &self,
+        source_transport_media_id: TransportMediaId,
+    ) -> usize {
+        self.relay_targets
+            .get(&source_transport_media_id)
+            .map_or(0, RelaySourceRegistration::target_count)
     }
-}
 
-impl fmt::Debug for RelayRegistry {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RelayRegistry")
-            .field("any_active", &self.any_active.load(Ordering::Relaxed))
-            .field("active_source_count", &self.active_source_count())
-            .finish_non_exhaustive()
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub(super) fn active_relay_target_count_for_source(
+        &self,
+        source_transport_media_id: TransportMediaId,
+    ) -> usize {
+        self.relay_targets
+            .get(&source_transport_media_id)
+            .map_or(0, RelaySourceRegistration::active_target_count)
     }
 }

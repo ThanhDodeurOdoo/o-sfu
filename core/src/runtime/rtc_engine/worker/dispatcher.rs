@@ -20,7 +20,6 @@ use super::{
     super::{
         bitrate::RtcBitrateState,
         commands::RtcWorkerCommand,
-        relay_registry::RelayRegistry,
         state::{RtcBootstrapState, RtcSnapshotState},
     },
     media,
@@ -41,7 +40,6 @@ use crate::{
 pub struct WorkerCommandContext<'a> {
     pub bitrate_state: &'a Arc<Mutex<RtcBitrateState>>,
     pub snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
-    pub relay_registry: &'a RelayRegistry,
     pub public_ip: IpAddr,
     pub max_bitrate_in_bps: u64,
     pub max_bitrate_out_bps: u64,
@@ -100,6 +98,9 @@ pub fn handle_worker_command(
         RtcWorkerCommand::RemoveMedia { .. }
         | RtcWorkerCommand::AddRecvMedia { .. }
         | RtcWorkerCommand::AddSendMedia { .. }
+        | RtcWorkerCommand::AddRelayTarget { .. }
+        | RtcWorkerCommand::RemoveRelayTarget { .. }
+        | RtcWorkerCommand::SetRelayTargetActive { .. }
         | RtcWorkerCommand::RequestRemoteKeyframe { .. }
         | RtcWorkerCommand::SetRemoteSourceRouteActive { .. }
         | RtcWorkerCommand::SetRemoteSourcePacketGate { .. }
@@ -118,7 +119,6 @@ pub fn handle_worker_command(
                     codec_preferences: context.codec_preferences,
                 },
                 context.metrics,
-                context.relay_registry,
                 command,
             );
         }
@@ -220,7 +220,6 @@ fn handle_media_command(
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     recv_media_policy: media::RecvMediaPolicy,
     metrics: &RuntimeMetrics,
-    relay_registry: &RelayRegistry,
     command: RtcWorkerCommand,
 ) {
     match command {
@@ -269,7 +268,10 @@ fn handle_media_command(
             },
             response,
         ),
-        RtcWorkerCommand::RequestRemoteKeyframe { .. }
+        RtcWorkerCommand::AddRelayTarget { .. }
+        | RtcWorkerCommand::RemoveRelayTarget { .. }
+        | RtcWorkerCommand::SetRelayTargetActive { .. }
+        | RtcWorkerCommand::RequestRemoteKeyframe { .. }
         | RtcWorkerCommand::SetRemoteSourceRouteActive { .. }
         | RtcWorkerCommand::SetRemoteSourcePacketGate { .. }
         | RtcWorkerCommand::SetProducerActive { .. }
@@ -277,7 +279,7 @@ fn handle_media_command(
         | RtcWorkerCommand::SetConsumerPacketGate { .. }
         | RtcWorkerCommand::SetConsumerPacketGateBatch { .. }
         | RtcWorkerCommand::RequestConsumerKeyframe { .. } => {
-            handle_media_route_control_command(state, metrics, relay_registry, command);
+            handle_media_route_control_command(state, metrics, command);
         }
         _ => {}
     }
@@ -286,10 +288,14 @@ fn handle_media_command(
 fn handle_media_route_control_command(
     state: &mut RtcBootstrapState,
     metrics: &RuntimeMetrics,
-    relay_registry: &RelayRegistry,
     command: RtcWorkerCommand,
 ) {
     match command {
+        RtcWorkerCommand::AddRelayTarget { .. }
+        | RtcWorkerCommand::RemoveRelayTarget { .. }
+        | RtcWorkerCommand::SetRelayTargetActive { .. } => {
+            handle_relay_route_control_command(state, command);
+        }
         RtcWorkerCommand::RequestRemoteKeyframe {
             source_session_key,
             source_transport_media_id,
@@ -299,7 +305,6 @@ fn handle_media_route_control_command(
         } => media::respond_request_remote_keyframe(
             state,
             metrics,
-            relay_registry,
             &media::RemoteKeyframeRequest {
                 source_session_key: &source_session_key,
                 source_transport_media_id,
@@ -315,7 +320,6 @@ fn handle_media_route_control_command(
             active,
         } => media::respond_set_remote_source_route_active(
             state,
-            relay_registry,
             &source_session_key,
             source_transport_media_id,
             target_id,
@@ -370,6 +374,50 @@ fn handle_media_route_control_command(
         RtcWorkerCommand::RequestConsumerKeyframe { .. } => {
             handle_consumer_keyframe_request(state, metrics, command);
         }
+        _ => {}
+    }
+}
+
+fn handle_relay_route_control_command(state: &mut RtcBootstrapState, command: RtcWorkerCommand) {
+    match command {
+        RtcWorkerCommand::AddRelayTarget {
+            source_session_key,
+            source_transport_media_id,
+            target_id,
+            target,
+            response,
+        } => media::respond_add_relay_target(
+            state,
+            &source_session_key,
+            source_transport_media_id,
+            target_id,
+            target,
+            response,
+        ),
+        RtcWorkerCommand::RemoveRelayTarget {
+            source_transport_media_id,
+            target_id,
+            response,
+        } => media::respond_remove_relay_target(
+            state,
+            source_transport_media_id,
+            target_id,
+            response,
+        ),
+        RtcWorkerCommand::SetRelayTargetActive {
+            source_session_key,
+            source_transport_media_id,
+            target_id,
+            active,
+            response,
+        } => media::respond_set_relay_target_active(
+            state,
+            &source_session_key,
+            source_transport_media_id,
+            target_id,
+            active,
+            response,
+        ),
         _ => {}
     }
 }

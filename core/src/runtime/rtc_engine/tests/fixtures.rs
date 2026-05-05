@@ -240,16 +240,20 @@ pub(super) async fn observe_audio_activity(
         .await;
 }
 
-pub(super) fn relay_target_count_for_source(
+pub(super) async fn relay_target_count_for_source(
     adapter: &RtcTransportShard,
     source_transport_media_id: TransportMediaId,
 ) -> usize {
-    adapter.debug_relay_target_count_for_source(source_transport_media_id)
+    adapter
+        .debug_relay_target_count_for_source(source_transport_media_id)
+        .await
 }
 
-pub(super) fn active_relay_target_count_for_source(
+pub(super) async fn active_relay_target_count_for_source(
     adapter: &RtcTransportShard,
     source_transport_media_id: TransportMediaId,
 ) -> usize {
-    adapter.debug_active_relay_target_count_for_source(source_transport_media_id)
+    adapter
+        .debug_active_relay_target_count_for_source(source_transport_media_id)
+        .await
 }

@@ -237,20 +237,28 @@ impl RtcTransportShard {
             .await;
     }
 
-    pub fn debug_relay_target_count_for_source(
+    pub async fn debug_relay_target_count_for_source(
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> usize {
-        self.relay_registry
-            .target_count_for_source(source_transport_media_id)
+        self.request_debug_worker(|response| DebugRtcWorkerCommand::RelayTargetCount {
+            source_transport_media_id,
+            response,
+        })
+        .await
+        .unwrap_or(0)
     }
 
-    pub fn debug_active_relay_target_count_for_source(
+    pub async fn debug_active_relay_target_count_for_source(
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> usize {
-        self.relay_registry
-            .active_target_count_for_source(source_transport_media_id)
+        self.request_debug_worker(|response| DebugRtcWorkerCommand::ActiveRelayTargetCount {
+            source_transport_media_id,
+            response,
+        })
+        .await
+        .unwrap_or(0)
     }
 }
 

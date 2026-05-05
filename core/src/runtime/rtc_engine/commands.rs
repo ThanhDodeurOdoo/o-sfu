@@ -4,7 +4,10 @@ use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
 use tokio::sync::{mpsc, oneshot};
 
-use super::{relay_registry::RelayTargetId, route_control::PacketLayerGate};
+use super::{
+    relay_registry::{RelayTargetId, RelayTargetTransport},
+    route_control::PacketLayerGate,
+};
 use crate::runtime::{
     RoomInstanceId,
     media_transport::{
@@ -248,6 +251,25 @@ pub(super) enum RtcWorkerCommand {
         remote_source_control: Option<RemoteSourceControl>,
         consumer_rtp_parameters: RouterRtpParameters,
         response: RtcWorkerResponse<TransportMediaId>,
+    },
+    AddRelayTarget {
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
+        target: RelayTargetTransport,
+        response: RtcWorkerResponse<()>,
+    },
+    RemoveRelayTarget {
+        source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
+        response: RtcWorkerResponse<()>,
+    },
+    SetRelayTargetActive {
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
+        active: bool,
+        response: RtcWorkerResponse<()>,
     },
     RequestRemoteKeyframe {
         source_session_key: TransportSessionKey,

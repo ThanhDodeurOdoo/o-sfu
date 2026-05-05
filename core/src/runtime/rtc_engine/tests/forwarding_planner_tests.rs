@@ -20,7 +20,7 @@ use crate::runtime::{
         demux::{MediaRouteDestination, MediaRouteEntry},
         forwarding_destination::{ForwardingDestination, PacketForward},
         media_registry::RegisteredMediaHandle,
-        relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayRegistry, RelayTargetId},
+        relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayTargetId},
         route_control::{PacketLayerGate, PacketOperatingPointGate},
         state::RtcBootstrapState,
         test_support::{
@@ -80,7 +80,6 @@ fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() 
     );
     let mut state = RtcBootstrapState::default();
     let media_tap = MediaTap::default();
-    let relay_registry = RelayRegistry::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: producer_session.clone(),
@@ -118,7 +117,6 @@ fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() 
     populate_forward_routes(
         &state,
         &media_tap,
-        &relay_registry,
         &metrics,
         &mut pending_packets,
         &mut forwards,
@@ -139,7 +137,6 @@ fn populate_forward_routes_keeps_recording_and_local_rtc_destinations_together()
     let consumer_session = test_transport_session_key(21, 0, 22, UserId::Integer(24));
     let mut state = RtcBootstrapState::default();
     let media_tap = MediaTap::default();
-    let relay_registry = RelayRegistry::default();
     let metrics = RuntimeMetrics::default();
     let sink = Arc::new(CountingSink::new());
     let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
@@ -182,7 +179,6 @@ fn populate_forward_routes_keeps_recording_and_local_rtc_destinations_together()
     populate_forward_routes(
         &state,
         &media_tap,
-        &relay_registry,
         &metrics,
         &mut pending_packets,
         &mut forwards,
@@ -207,7 +203,6 @@ fn populate_forward_routes_reserves_dense_fanout_before_pushing_destinations() {
     let consumer_session = test_transport_session_key(25, 0, 28, UserId::Integer(29));
     let mut state = RtcBootstrapState::default();
     let media_tap = MediaTap::default();
-    let relay_registry = RelayRegistry::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: producer_session.clone(),
@@ -244,7 +239,6 @@ fn populate_forward_routes_reserves_dense_fanout_before_pushing_destinations() {
     populate_forward_routes(
         &state,
         &media_tap,
-        &relay_registry,
         &metrics,
         &mut pending_packets,
         &mut forwards,
@@ -260,7 +254,6 @@ fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc
     let consumer_session = test_transport_session_key(31, 0, 32, UserId::Integer(34));
     let mut state = RtcBootstrapState::default();
     let media_tap = MediaTap::default();
-    let relay_registry = RelayRegistry::default();
     let metrics = RuntimeMetrics::default();
     let recording_sink = Arc::new(CountingSink::new());
     let (first_relay_mailbox, _first_relay_rx) = RelayPacketMailbox::channel_for_test();
@@ -294,18 +287,18 @@ fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc
         producer_session.room_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
     );
-    relay_registry.activate_source_target(
+    state.add_relay_target(
         source_transport_media_id,
         RelayTargetId::new(1),
         first_relay_mailbox.into(),
     );
-    relay_registry.set_source_target_active(source_transport_media_id, RelayTargetId::new(1), true);
-    relay_registry.activate_source_target(
+    state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(1), true);
+    state.add_relay_target(
         source_transport_media_id,
         RelayTargetId::new(2),
         second_relay_mailbox.into(),
     );
-    relay_registry.set_source_target_active(source_transport_media_id, RelayTargetId::new(2), true);
+    state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(2), true);
     let pending_packets = vec![sample_forwarded_packet(
         producer_session,
         "aud-up",
@@ -317,7 +310,6 @@ fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc
     populate_forward_routes(
         &state,
         &media_tap,
-        &relay_registry,
         &metrics,
         &mut pending_packets,
         &mut forwards,
@@ -348,7 +340,6 @@ fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_r
     let consumer_session = test_transport_session_key(41, 1, 44, UserId::Integer(45));
     let mut state = RtcBootstrapState::default();
     let media_tap = MediaTap::default();
-    let relay_registry = RelayRegistry::default();
     let metrics = RuntimeMetrics::default();
     let recording_sink = Arc::new(CountingSink::new());
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
@@ -378,12 +369,12 @@ fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_r
         producer_session.room_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
     );
-    relay_registry.activate_source_target(
+    state.add_relay_target(
         source_transport_media_id,
         RelayTargetId::new(1),
         relay_mailbox.into(),
     );
-    relay_registry.set_source_target_active(source_transport_media_id, RelayTargetId::new(1), true);
+    state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(1), true);
     let pending_packets = vec![
         sample_forwarded_packet(producer_session, "aud-up", b"payload")
             .share_for_relay(source_transport_media_id),
@@ -394,7 +385,6 @@ fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_r
     populate_forward_routes(
         &state,
         &media_tap,
-        &relay_registry,
         &metrics,
         &mut pending_packets,
         &mut forwards,
@@ -414,7 +404,6 @@ fn populate_forward_routes_only_relays_the_registered_source_media() {
     let remote_consumer_session = test_transport_session_key(52, 1, 56, UserId::Integer(57));
     let mut state = RtcBootstrapState::default();
     let media_tap = MediaTap::default();
-    let relay_registry = RelayRegistry::default();
     let metrics = RuntimeMetrics::default();
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
     let first_source_transport_media_id =
@@ -448,16 +437,12 @@ fn populate_forward_routes_only_relays_the_registered_source_media() {
             }],
         },
     );
-    relay_registry.activate_source_target(
+    state.add_relay_target(
         first_source_transport_media_id,
         RelayTargetId::new(1),
         relay_mailbox.into(),
     );
-    relay_registry.set_source_target_active(
-        first_source_transport_media_id,
-        RelayTargetId::new(1),
-        true,
-    );
+    state.set_relay_target_active(first_source_transport_media_id, RelayTargetId::new(1), true);
     let pending_packets = vec![
         sample_forwarded_packet(first_producer_session, "aud-up-1", b"payload-1"),
         sample_forwarded_packet(second_producer_session, "aud-up-2", b"payload-2"),
@@ -468,7 +453,6 @@ fn populate_forward_routes_only_relays_the_registered_source_media() {
     populate_forward_routes(
         &state,
         &media_tap,
-        &relay_registry,
         &metrics,
         &mut pending_packets,
         &mut forwards,
@@ -496,7 +480,6 @@ fn populate_forward_routes_plans_inter_node_relay_targets_without_new_packet_sha
     let producer_session = test_transport_session_key(58, 0, 59, UserId::Integer(60));
     let mut state = RtcBootstrapState::default();
     let media_tap = MediaTap::default();
-    let relay_registry = RelayRegistry::default();
     let metrics = RuntimeMetrics::default();
     let (inter_node_sender, _inter_node_rx) = InterNodeRelaySender::channel_for_test();
     let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
@@ -504,12 +487,12 @@ fn populate_forward_routes_plans_inter_node_relay_targets_without_new_packet_sha
         mid: Mid::from("aud-up"),
     });
 
-    relay_registry.activate_source_target(
+    state.add_relay_target(
         source_transport_media_id,
         RelayTargetId::new(9),
         inter_node_sender.into(),
     );
-    relay_registry.set_source_target_active(source_transport_media_id, RelayTargetId::new(9), true);
+    state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(9), true);
 
     let pending_packets = vec![sample_forwarded_packet(
         producer_session,
@@ -522,7 +505,6 @@ fn populate_forward_routes_plans_inter_node_relay_targets_without_new_packet_sha
     populate_forward_routes(
         &state,
         &media_tap,
-        &relay_registry,
         &metrics,
         &mut pending_packets,
         &mut forwards,
@@ -546,7 +528,6 @@ fn populate_forward_routes_enforces_per_consumer_rid_gates_after_aggregate_admit
     let hi_consumer_session = test_transport_session_key(81, 0, 82, UserId::Integer(85));
     let mut state = RtcBootstrapState::default();
     let media_tap = MediaTap::default();
-    let relay_registry = RelayRegistry::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: producer_session.clone(),
@@ -607,7 +588,6 @@ fn populate_forward_routes_enforces_per_consumer_rid_gates_after_aggregate_admit
     populate_forward_routes(
         &state,
         &media_tap,
-        &relay_registry,
         &metrics,
         &mut pending_packets,
         &mut forwards,
@@ -640,7 +620,6 @@ fn populate_forward_routes_enforces_per_consumer_temporal_ceilings_after_aggrega
     let high_consumer_session = test_transport_session_key(86, 0, 87, UserId::Integer(90));
     let mut state = RtcBootstrapState::default();
     let media_tap = MediaTap::default();
-    let relay_registry = RelayRegistry::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: producer_session.clone(),
@@ -717,7 +696,6 @@ fn populate_forward_routes_enforces_per_consumer_temporal_ceilings_after_aggrega
     populate_forward_routes(
         &state,
         &media_tap,
-        &relay_registry,
         &metrics,
         &mut pending_packets,
         &mut forwards,
@@ -753,7 +731,6 @@ fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admit
     let producer_session = test_transport_session_key(91, 0, 92, UserId::Integer(93));
     let mut state = RtcBootstrapState::default();
     let media_tap = MediaTap::default();
-    let relay_registry = RelayRegistry::default();
     let metrics = RuntimeMetrics::default();
     let (intra_node_mailbox, _intra_node_rx) = RelayPacketMailbox::channel_for_test();
     let (inter_node_sender, _inter_node_rx) = InterNodeRelaySender::channel_for_test();
@@ -763,18 +740,18 @@ fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admit
     });
     let hi_target_id = RelayTargetId::new(1);
     let lo_target_id = RelayTargetId::new(2);
-    relay_registry.activate_source_target(
+    state.add_relay_target(
         source_transport_media_id,
         hi_target_id,
         intra_node_mailbox.into(),
     );
-    relay_registry.set_source_target_active(source_transport_media_id, hi_target_id, true);
-    relay_registry.activate_source_target(
+    state.set_relay_target_active(source_transport_media_id, hi_target_id, true);
+    state.add_relay_target(
         source_transport_media_id,
         lo_target_id,
         inter_node_sender.into(),
     );
-    relay_registry.set_source_target_active(source_transport_media_id, lo_target_id, true);
+    state.set_relay_target_active(source_transport_media_id, lo_target_id, true);
     state.route_control.set_relay_packet_gate(
         source_transport_media_id,
         hi_target_id,
@@ -799,7 +776,6 @@ fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admit
     populate_forward_routes(
         &state,
         &media_tap,
-        &relay_registry,
         &metrics,
         &mut pending_packets,
         &mut forwards,
@@ -833,7 +809,6 @@ fn populate_forward_routes_gates_only_the_selected_source_media() {
     let open_consumer_session = test_transport_session_key(61, 0, 62, UserId::Integer(66));
     let mut state = RtcBootstrapState::default();
     let media_tap = MediaTap::default();
-    let relay_registry = RelayRegistry::default();
     let metrics = RuntimeMetrics::default();
     let recording_sink = Arc::new(CountingSink::new());
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
@@ -897,16 +872,12 @@ fn populate_forward_routes_gates_only_the_selected_source_media() {
         gated_producer_session.room_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
     );
-    relay_registry.activate_source_target(
+    state.add_relay_target(
         gated_source_transport_media_id,
         RelayTargetId::new(1),
         relay_mailbox.into(),
     );
-    relay_registry.set_source_target_active(
-        gated_source_transport_media_id,
-        RelayTargetId::new(1),
-        true,
-    );
+    state.set_relay_target_active(gated_source_transport_media_id, RelayTargetId::new(1), true);
     let pending_packets = vec![
         sample_forwarded_packet_with_rid(
             gated_producer_session,
@@ -922,7 +893,6 @@ fn populate_forward_routes_gates_only_the_selected_source_media() {
     populate_forward_routes(
         &state,
         &media_tap,
-        &relay_registry,
         &metrics,
         &mut pending_packets,
         &mut forwards,
@@ -953,7 +923,6 @@ fn populate_forward_routes_applies_operating_point_packet_gates() {
     let consumer_session = test_transport_session_key(71, 0, 72, UserId::Integer(74));
     let mut state = RtcBootstrapState::default();
     let media_tap = MediaTap::default();
-    let relay_registry = RelayRegistry::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: producer_session.clone(),
@@ -1005,7 +974,6 @@ fn populate_forward_routes_applies_operating_point_packet_gates() {
     populate_forward_routes(
         &state,
         &media_tap,
-        &relay_registry,
         &metrics,
         &mut pending_packets,
         &mut forwards,

@@ -12,10 +12,11 @@
 //! observability.
 //!
 //! Authoritative media state lives in the worker-owned `RtcBootstrapState`.
-//! `RtcSnapshotState`, bitrate counters, diagnostics, metrics, relay registries,
-//! packet sinks and source-policy signals are side channels used to expose
-//! observations or enqueue work without letting external callers mutate the
-//! hot-path state directly.
+//! `RtcSnapshotState`, bitrate counters, diagnostics, metrics, packet sinks and
+//! source-policy signals are side channels used to expose observations or
+//! enqueue work without letting external callers mutate the hot-path state
+//! directly. Relay routing state stays in the worker-owned
+//! `RtcBootstrapState`.
 //!
 //! # Packet-loop turn
 //!

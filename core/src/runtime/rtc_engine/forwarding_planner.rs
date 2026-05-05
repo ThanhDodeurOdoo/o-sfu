@@ -29,7 +29,7 @@ use super::{
     demux::{MediaRouteDestination, MediaRouteEntry},
     forwarded_packet::ForwardedPacket,
     forwarding_destination::PacketForward,
-    relay_registry::{ActiveRelayTarget, RelayRegistry, RelayTargetId, RelayTargetTransport},
+    relay_registry::{ActiveRelayTarget, RelayTargetId, RelayTargetTransport},
     route_control::{PacketLayerMetadata, PacketRouteDecision},
     state::RtcBootstrapState,
 };
@@ -42,7 +42,6 @@ use crate::runtime::{
 pub(super) fn populate_forward_routes(
     state: &RtcBootstrapState,
     packet_sink_registry: &RoomPacketSinkRegistry,
-    relay_registry: &RelayRegistry,
     metrics: &RuntimeMetrics,
     pending_packets: &mut [ForwardedPacket],
     forwards: &mut Vec<PacketForward>,
@@ -51,7 +50,6 @@ pub(super) fn populate_forward_routes(
         populate_forward_routes_for_packet(
             state,
             packet_sink_registry,
-            relay_registry,
             metrics,
             packet_idx,
             packet,
@@ -72,7 +70,6 @@ pub(super) fn populate_forward_routes(
 fn populate_forward_routes_for_packet(
     state: &RtcBootstrapState,
     packet_sink_registry: &RoomPacketSinkRegistry,
-    relay_registry: &RelayRegistry,
     metrics: &RuntimeMetrics,
     packet_idx: usize,
     packet: &mut ForwardedPacket,
@@ -87,17 +84,12 @@ fn populate_forward_routes_for_packet(
         .flatten();
     let relay_targets = packet
         .visits_origin_sinks()
-        .then(|| relay_registry.targets_for_source(source_transport_media_id))
+        .then(|| state.relay_targets_for_source(source_transport_media_id))
         .flatten();
     let route_entry = state.media_route_index.get(&source_transport_media_id);
-    reserve_forward_capacity(
-        origin_sink.as_ref(),
-        relay_targets.as_deref(),
-        route_entry,
-        forwards,
-    );
+    reserve_forward_capacity(origin_sink.as_ref(), relay_targets, route_entry, forwards);
     push_origin_sink_forward(packet_idx, source_transport_media_id, origin_sink, forwards);
-    if !has_routed_forward(relay_targets.as_deref(), route_entry) {
+    if !has_routed_forward(relay_targets, route_entry) {
         return;
     }
     let metadata = packet.resolve_route_control_layer_metadata(state);
@@ -106,7 +98,7 @@ fn populate_forward_routes_for_packet(
     }
     populate_relay_forwards(
         state,
-        relay_targets.as_deref(),
+        relay_targets,
         packet_idx,
         source_transport_media_id,
         metadata,

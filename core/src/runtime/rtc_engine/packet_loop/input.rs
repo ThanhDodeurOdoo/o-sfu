@@ -24,7 +24,7 @@ use super::super::{
 ///
 /// `RtcTransportShard` builds this bundle when it lazily boots a worker. After
 /// that point the packet loop is the only receiver owner, while facade methods,
-/// relay registries and test-support helpers retain sender-side handles.
+/// relay-control handles and test-support helpers retain sender-side handles.
 ///
 /// Keeping these receivers together makes the loop driver depend on a single
 /// worker-input contract. Production construction stays limited to commands,

@@ -90,7 +90,7 @@ pub(super) async fn run(session: UserLoop<'_>) -> WsSessionLoopExitReason {
         metrics,
     })
     .await;
-    finalize_user_session(
+    teardown(
         room_manager,
         room,
         user_id,
@@ -192,7 +192,7 @@ async fn run_until_exit(session: UserLoopState<'_>) -> WsSessionLoopExitReason {
     }
 }
 
-async fn finalize_user_session(
+async fn teardown(
     room_manager: &RoomManager,
     room: &Room,
     user_id: &UserId,

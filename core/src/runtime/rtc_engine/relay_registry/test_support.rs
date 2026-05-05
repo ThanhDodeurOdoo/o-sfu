@@ -1,5 +1,3 @@
-use std::sync::PoisonError;
-
 #[cfg(test)]
 use tokio::sync::mpsc;
 
@@ -8,7 +6,7 @@ use super::{
     ActiveRelayTarget, ForwardedPacket, InterNodeRelaySender, RELAY_MAILBOX_CAPACITY,
     RelayEnqueueOutcome, RelayPacketMailbox, RelayTargetId, RelayTargetTransport,
 };
-use super::{RelayRegistry, RelaySourceRegistration};
+#[cfg(test)]
 use crate::runtime::media_transport::TransportMediaId;
 
 #[cfg(test)]
@@ -68,29 +66,5 @@ impl ActiveRelayTarget<RelayTargetId, RelayTargetTransport> {
     ) -> RelayEnqueueOutcome {
         self.target()
             .forward_packet(packet, source_transport_media_id)
-    }
-}
-
-impl RelayRegistry {
-    pub(in crate::runtime::rtc_engine) fn target_count_for_source(
-        &self,
-        source_transport_media_id: TransportMediaId,
-    ) -> usize {
-        self.active_sources
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&source_transport_media_id)
-            .map_or(0, RelaySourceRegistration::target_count)
-    }
-
-    pub(in crate::runtime::rtc_engine) fn active_target_count_for_source(
-        &self,
-        source_transport_media_id: TransportMediaId,
-    ) -> usize {
-        self.active_sources
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&source_transport_media_id)
-            .map_or(0, RelaySourceRegistration::active_target_count)
     }
 }

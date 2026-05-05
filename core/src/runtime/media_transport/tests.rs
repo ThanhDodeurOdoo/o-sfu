@@ -107,18 +107,22 @@ async fn consume_audio(
     result.ok()
 }
 
-fn assert_relay_target_counts(
+async fn assert_relay_target_counts(
     source_shard: &RtcTransportShard,
     source_media_id: TransportMediaId,
     total: usize,
     active: usize,
 ) {
     assert_eq!(
-        source_shard.debug_relay_target_count_for_source(source_media_id),
+        source_shard
+            .debug_relay_target_count_for_source(source_media_id)
+            .await,
         total
     );
     assert_eq!(
-        source_shard.debug_active_relay_target_count_for_source(source_media_id),
+        source_shard
+            .debug_active_relay_target_count_for_source(source_media_id)
+            .await,
         active
     );
 }
@@ -566,11 +570,15 @@ async fn rtc_engine_registers_and_prunes_cross_worker_remote_sources() {
     let consumer_shard = shards.shard_for_user(&consumer_session);
 
     assert_eq!(
-        source_shard.debug_relay_target_count_for_source(source_media_id),
+        source_shard
+            .debug_relay_target_count_for_source(source_media_id)
+            .await,
         1
     );
     assert_eq!(
-        source_shard.debug_active_relay_target_count_for_source(source_media_id),
+        source_shard
+            .debug_active_relay_target_count_for_source(source_media_id)
+            .await,
         1
     );
     assert_eq!(
@@ -611,11 +619,15 @@ async fn rtc_engine_registers_and_prunes_cross_worker_remote_sources() {
             .is_none()
     );
     assert_eq!(
-        source_shard.debug_relay_target_count_for_source(source_media_id),
+        source_shard
+            .debug_relay_target_count_for_source(source_media_id)
+            .await,
         0
     );
     assert_eq!(
-        source_shard.debug_active_relay_target_count_for_source(source_media_id),
+        source_shard
+            .debug_active_relay_target_count_for_source(source_media_id)
+            .await,
         0
     );
 }
@@ -675,7 +687,7 @@ async fn rtc_engine_keeps_independent_relay_targets_per_remote_worker() {
     let first_consumer_shard = shards.shard_for_user(&first_consumer_session);
     let second_consumer_shard = shards.shard_for_user(&second_consumer_session);
 
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 2, 2);
+    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 2, 2).await;
     assert_remote_source_owner(
         first_consumer_shard.as_ref(),
         source_media_id,
@@ -695,7 +707,7 @@ async fn rtc_engine_keeps_independent_relay_targets_per_remote_worker() {
             .await
             .is_ok()
     );
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 1);
+    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 1).await;
     assert_remote_source_owner(
         second_consumer_shard.as_ref(),
         source_media_id,
@@ -709,7 +721,7 @@ async fn rtc_engine_keeps_independent_relay_targets_per_remote_worker() {
             .await
             .is_ok()
     );
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 0, 0);
+    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 0, 0).await;
 }
 
 #[tokio::test]
@@ -823,7 +835,7 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
     let source_shard = shards.shard_for_user(&source_session);
     let remote_consumer_shard = shards.shard_for_user(&remote_consumer_session);
 
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 1);
+    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 1).await;
 
     assert!(
         adapter
@@ -838,7 +850,7 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
             .is_ok()
     );
 
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 0);
+    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 0).await;
     assert_local_route_active(
         source_shard.as_ref(),
         &source_session,
@@ -867,7 +879,7 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
             .await
             .is_ok()
     );
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 1);
+    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 1).await;
 
     assert!(
         adapter
@@ -875,5 +887,5 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
             .await
             .is_ok()
     );
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 0, 0);
+    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 0, 0).await;
 }

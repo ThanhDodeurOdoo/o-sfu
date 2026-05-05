@@ -15,7 +15,7 @@
 //!
 //! Shared observable state is updated through narrow side channels. The packet
 //! loop owns authoritative media state, while snapshots, metrics, diagnostics,
-//! packet sinks, relay registries and source-policy signals are outputs or
+//! packet sinks, relay target state and source-policy signals are outputs or
 //! configuration dependencies.
 
 use std::{
@@ -32,7 +32,6 @@ use super::{
     super::{
         bitrate::RtcBitrateState,
         forwarding_planner::populate_forward_routes,
-        relay_registry::RelayRegistry,
         routing_miss::PacketLoopRoutingState,
         state::{RtcBootstrapState, RtcSnapshotState},
         worker::{WorkerCommandContext, drain_due_rid_keyframe_refreshes},
@@ -84,8 +83,6 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopConfig {
     pub diagnostics: Arc<DiagnosticsStore>,
     /// Room-scoped packet sinks such as recording taps.
     pub packet_sink_registry: Arc<RoomPacketSinkRegistry>,
-    /// Registry of worker or node relay targets for published media.
-    pub relay_registry: Arc<RelayRegistry>,
     /// Wakeup mechanism for room-owned source policy recomputation.
     pub source_policy_signal: Arc<SourcePolicySignal>,
     /// Central metrics catalog updated by packet-loop observations.
@@ -293,7 +290,6 @@ fn handle_control_input_and_clear_routing_cache(
         &WorkerCommandContext {
             bitrate_state,
             snapshot_state,
-            relay_registry: &config.relay_registry,
             public_ip: config.public_ip,
             max_bitrate_in_bps: config.max_bitrate_in_bps,
             max_bitrate_out_bps: config.max_bitrate_out_bps,
@@ -357,7 +353,6 @@ fn snapshot_and_pump(
     populate_forward_routes(
         state,
         &config.packet_sink_registry,
-        &config.relay_registry,
         &config.metrics,
         &mut buffers.pending_packets,
         &mut buffers.forwards,

@@ -2,8 +2,8 @@
 //!
 //! ### Key Structures
 //!
-//! * [`RtcTransportShard`]: The central handle for an RTC worker shard. It own
-//!   the relay registry and the handle to the background worker loop.
+//! * [`RtcTransportShard`]: The central handle for an RTC worker shard. It owns
+//!   the handle to the background worker loop.
 //! * [`RtcTransportNegotiationFacade`]: Handles SDP-related operations like creating
 //!   offers and applying answers.
 //! * [`RtcTransportMediaFacade`]: Handles media-level operations like adding/removing
@@ -33,7 +33,7 @@ use super::super::{
         CloseSessionOutcome, CloseSessionState, ConsumerPacketGateCommand, RemoteSourceControl,
         RemoveMediaOutcome, RtcWorkerCommand,
     },
-    relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
+    relay_registry::{RelayPacketMailbox, RelayTargetId, RelayTargetTransport},
     state::RtcSnapshotState,
 };
 use crate::{
@@ -82,8 +82,8 @@ impl fmt::Debug for RtcWorkerHandle {
 /// and observability facades.
 ///
 /// `TransportMediaId` values allocated by a shard must be process-wide
-/// distinct because relay registries, route-control maps and packet gates use
-/// them as source keys across workers. The shard set assigns `media_id_base`
+/// distinct because worker-local relay target maps, route-control maps and
+/// packet gates use them as source keys across workers. The shard set assigns `media_id_base`
 /// before the packet loop starts so the hot path can keep using the compact
 /// media id key without adding a composite worker key to every packet lookup.
 pub struct RtcTransportShard {
@@ -99,7 +99,6 @@ pub struct RtcTransportShard {
     pub(super) codec_preferences: CodecPreferences,
     pub(super) diagnostics: Arc<DiagnosticsStore>,
     pub(super) packet_sink_registry: Arc<RoomPacketSinkRegistry>,
-    pub(super) relay_registry: Arc<RelayRegistry>,
     pub(super) source_policy_signal: Arc<SourcePolicySignal>,
     pub metrics: Arc<RuntimeMetrics>,
     pub(super) worker_handle: Mutex<super::runtime::WorkerHandleSlot<RtcWorkerHandle>>,
@@ -146,7 +145,6 @@ impl RtcTransportShard {
             codec_preferences: config.codec_preferences(),
             diagnostics: deps.diagnostics(),
             packet_sink_registry: deps.packet_sink_registry(),
-            relay_registry: Arc::new(RelayRegistry::default()),
             source_policy_signal,
             metrics: deps.metrics(),
             worker_handle: Mutex::new(super::runtime::WorkerHandleSlot::default()),
@@ -438,41 +436,54 @@ impl RtcTransportMediaFacade<'_> {
         ))
     }
 
-    pub fn activate_relay_route(
+    pub async fn activate_relay_route(
         self,
+        source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         target: &RtcTransportShard,
     ) -> Result<(), TransportAdapterError> {
         let mailbox = target.ensure_packet_loop_started()?.relay_mailbox;
-        self.adapter.relay_registry.activate_source_target(
-            source_transport_media_id,
-            target.relay_target_id,
-            super::super::relay_registry::RelayTargetTransport::from(mailbox),
-        );
-        Ok(())
+        self.adapter
+            .request_worker(|response| RtcWorkerCommand::AddRelayTarget {
+                source_session_key: source_session_key.clone(),
+                source_transport_media_id,
+                target_id: target.relay_target_id,
+                target: RelayTargetTransport::from(mailbox),
+                response,
+            })
+            .await
     }
 
-    pub fn deactivate_relay_route(
+    pub async fn deactivate_relay_route(
         self,
         source_transport_media_id: TransportMediaId,
         target: &RtcTransportShard,
-    ) {
+    ) -> Result<(), TransportAdapterError> {
         self.adapter
-            .relay_registry
-            .deactivate_source_target(source_transport_media_id, target.relay_target_id);
+            .request_worker(|response| RtcWorkerCommand::RemoveRelayTarget {
+                source_transport_media_id,
+                target_id: target.relay_target_id,
+                response,
+            })
+            .await
     }
 
-    pub fn set_relay_route_active(
+    pub async fn set_relay_route_active(
         self,
+        source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         target: &RtcTransportShard,
         active: bool,
-    ) {
-        self.adapter.relay_registry.set_source_target_active(
-            source_transport_media_id,
-            target.relay_target_id,
-            active,
-        );
+    ) -> Result<(), TransportAdapterError> {
+        self.adapter
+            .request_worker(|response| RtcWorkerCommand::SetRelayTargetActive {
+                source_session_key: source_session_key.clone(),
+                source_transport_media_id,
+                target_id: target.relay_target_id,
+                active,
+                response,
+            })
+            .await
     }
 }
 

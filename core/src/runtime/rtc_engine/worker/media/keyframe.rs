@@ -10,10 +10,7 @@ use str0m::media::{KeyframeRequestKind, Mid, Rid};
 use tracing::debug;
 
 use super::{
-    super::super::{
-        relay_registry::RelayRegistry, route_control::KeyframeRequestDecision,
-        state::RtcBootstrapState,
-    },
+    super::super::{route_control::KeyframeRequestDecision, state::RtcBootstrapState},
     control::owned_local_producer_mid,
     types::RemoteKeyframeRequest,
 };
@@ -25,11 +22,9 @@ use crate::runtime::{
 pub fn respond_request_remote_keyframe(
     state: &mut RtcBootstrapState,
     metrics: &RuntimeMetrics,
-    relay_registry: &RelayRegistry,
     request: &RemoteKeyframeRequest<'_>,
 ) {
-    if !relay_registry.is_source_target_active(request.source_transport_media_id, request.target_id)
-    {
+    if !state.is_relay_target_active(request.source_transport_media_id, request.target_id) {
         metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
         return;
     }

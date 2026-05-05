@@ -43,9 +43,7 @@ use crate::{
             commands::{RemoteSourceControl, RtcWorkerCommand},
             demux::{MediaRouteDestination, MediaRouteEntry},
             media_registry::RegisteredMediaHandle,
-            relay_registry::{
-                InterNodeRelaySender, RelayPacketMailbox, RelayRegistry, RelayTargetId,
-            },
+            relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayTargetId},
             route_control::{KeyframeRequestDecision, PacketLayerGate},
             state::{RtcBootstrapState, RtcSnapshotState},
             test_support::{
@@ -336,7 +334,6 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
     let producer_session = test_transport_session_key(18, 0, 19, UserId::Integer(20));
     let mut state = RtcBootstrapState::default();
     let media_tap = MediaTap::default();
-    let relay_registry = RelayRegistry::default();
     let sink = Arc::new(CountingSink::new());
     let _source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: producer_session.clone(),
@@ -358,7 +355,6 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
     super::super::forwarding_planner::populate_forward_routes(
         &state,
         &media_tap,
-        &relay_registry,
         &metrics,
         &mut buffers.pending_packets,
         &mut buffers.forwards,
@@ -542,7 +538,6 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
     let consumer_session = test_transport_session_key(28, 0, 31, UserId::Integer(32));
     let mut state = RtcBootstrapState::default();
     let media_tap = MediaTap::default();
-    let relay_registry = RelayRegistry::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: producer_session.clone(),
@@ -589,7 +584,6 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
     super::super::forwarding_planner::populate_forward_routes(
         &state,
         &media_tap,
-        &relay_registry,
         &metrics,
         &mut buffers.pending_packets,
         &mut buffers.forwards,

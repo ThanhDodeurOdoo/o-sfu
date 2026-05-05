@@ -70,7 +70,7 @@ const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
 ///   producer session W0
 ///          |
 ///          v
-///   W0 packet loop -> RelayRegistry -> W1 RelayPacketMailbox
+///   W0 packet loop -> worker-local relay targets -> W1 RelayPacketMailbox
 ///          |                                      |
 ///          |                                      v
 ///          +---------------------------> W1 packet loop -> consumer session W1
@@ -185,7 +185,7 @@ impl RtcTransportShardSet {
     /// Cleanup records are produced by the shard that owns the removed session
     /// or media handle. The shard set uses them to clear source-side relay
     /// state without requiring the caller to understand worker topology.
-    pub(super) fn release_relay_cleanup(
+    pub(super) async fn release_relay_cleanup(
         &self,
         target_shard: &Arc<RtcTransportShard>,
         relay_cleanup: &[RelayCleanup],
@@ -195,9 +195,10 @@ impl RtcTransportShardSet {
             if Arc::ptr_eq(&source_shard, target_shard) {
                 continue;
             }
-            source_shard
+            let _ = source_shard
                 .media()
-                .deactivate_relay_route(cleanup.source_transport_media_id(), target_shard.as_ref());
+                .deactivate_relay_route(cleanup.source_transport_media_id(), target_shard.as_ref())
+                .await;
         }
     }
 
@@ -449,7 +450,8 @@ impl RtcTransportShardSet {
             .users()
             .close_session_with_outcome(session_key)
             .await?;
-        self.release_relay_cleanup(&session_shard, close_outcome.relay_cleanup());
+        self.release_relay_cleanup(&session_shard, close_outcome.relay_cleanup())
+            .await;
         Ok(())
     }
 
@@ -467,7 +469,8 @@ impl RtcTransportShardSet {
             .await?;
         if let Some(cleanup) = remove_outcome.relay_cleanup() {
             let relay_cleanup = [cleanup.clone()];
-            self.release_relay_cleanup(&session_shard, &relay_cleanup);
+            self.release_relay_cleanup(&session_shard, &relay_cleanup)
+                .await;
         }
         Ok(())
     }
@@ -530,7 +533,8 @@ impl RtcTransportShardSet {
         if let Some((source_shard, consumer_shard)) = &relay_route {
             source_shard
                 .media()
-                .activate_relay_route(source_media_id, consumer_shard.as_ref())?;
+                .activate_relay_route(source_session_key, source_media_id, consumer_shard.as_ref())
+                .await?;
         }
         let consumer_shard = self.shard_for_user(consumer_session_key);
         let add_result = consumer_shard
@@ -546,15 +550,27 @@ impl RtcTransportShardSet {
             .await;
         if let Some((source_shard, consumer_shard)) = relay_route {
             if add_result.is_ok() {
-                source_shard.media().set_relay_route_active(
-                    source_media_id,
-                    consumer_shard.as_ref(),
-                    true,
-                );
-            } else {
-                source_shard
+                if let Err(error) = source_shard
                     .media()
-                    .deactivate_relay_route(source_media_id, consumer_shard.as_ref());
+                    .set_relay_route_active(
+                        source_session_key,
+                        source_media_id,
+                        consumer_shard.as_ref(),
+                        true,
+                    )
+                    .await
+                {
+                    let _ = source_shard
+                        .media()
+                        .deactivate_relay_route(source_media_id, consumer_shard.as_ref())
+                        .await;
+                    return Err(error);
+                }
+            } else {
+                let _ = source_shard
+                    .media()
+                    .deactivate_relay_route(source_media_id, consumer_shard.as_ref())
+                    .await;
             }
         }
         add_result

@@ -132,6 +132,24 @@ fn handle_debug_command(
             now,
             response,
         ),
+        DebugRtcWorkerCommand::RelayTargetCount { .. }
+        | DebugRtcWorkerCommand::ActiveRelayTargetCount { .. } => {
+            handle_debug_relay_command(state, command);
+        }
+    }
+}
+
+fn handle_debug_relay_command(state: &RtcBootstrapState, command: DebugRtcWorkerCommand) {
+    match command {
+        DebugRtcWorkerCommand::RelayTargetCount {
+            source_transport_media_id,
+            response,
+        } => respond_debug_relay_target_count(state, source_transport_media_id, response),
+        DebugRtcWorkerCommand::ActiveRelayTargetCount {
+            source_transport_media_id,
+            response,
+        } => respond_debug_active_relay_target_count(state, source_transport_media_id, response),
+        _ => {}
     }
 }
 
@@ -141,6 +159,22 @@ fn respond_debug_resolve_mid(
     response: oneshot::Sender<Option<Mid>>,
 ) {
     let _ = response.send(state.resolve_mid(transport_media_id));
+}
+
+fn respond_debug_relay_target_count(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+    response: oneshot::Sender<usize>,
+) {
+    let _ = response.send(state.relay_target_count_for_source(source_transport_media_id));
+}
+
+fn respond_debug_active_relay_target_count(
+    state: &RtcBootstrapState,
+    source_transport_media_id: TransportMediaId,
+    response: oneshot::Sender<usize>,
+) {
+    let _ = response.send(state.active_relay_target_count_for_source(source_transport_media_id));
 }
 
 fn respond_debug_remote_addr_owner(

@@ -32,6 +32,7 @@ use super::{
         ConsumerMidLookupKey, ProducerMidLookupKey, ProducerSsrcLookupKey, RegisteredMediaHandle,
         RemoteSourceRegistration,
     },
+    relay_registry::RelaySourceRegistration,
     route_control::RouteControlState,
 };
 use crate::runtime::media_transport::{
@@ -106,6 +107,7 @@ pub(super) struct RtcBootstrapState {
     pub(super) incoming_bitrate_counters: BTreeMap<TransportMediaId, Arc<IncomingMediaBitrate>>,
     pub(super) consumer_mid_registry: BTreeMap<ConsumerMidLookupKey, TransportMediaId>,
     pub(super) remote_source_registry: BTreeMap<TransportMediaId, RemoteSourceRegistration>,
+    pub(super) relay_targets: BTreeMap<TransportMediaId, RelaySourceRegistration>,
     pub(super) remote_addr_demux: RemoteAddrDemux,
     pub(super) mid_registry: BTreeMap<u64, RegisteredMediaHandle>,
     pub(super) dirty_sessions: BTreeSet<TransportSessionKey>,

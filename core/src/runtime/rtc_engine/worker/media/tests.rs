@@ -31,7 +31,7 @@ use crate::{
             commands::{ConsumerPacketGateCommand, RemoteSourceControl, RtcWorkerCommand},
             demux::{MediaRouteDestination, MediaRouteEntry},
             media_registry::RegisteredMediaHandle,
-            relay_registry::{RelayPacketMailbox, RelayRegistry, RelayTargetId},
+            relay_registry::{RelayPacketMailbox, RelayTargetId},
             route_control::{KeyframeRequestDecision, PacketLayerGate},
             state::RtcBootstrapState,
             test_support::test_transport_session_key,
@@ -253,7 +253,6 @@ fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
     let source_mid = Mid::from("cam-up");
     let mut state = RtcBootstrapState::default();
     let metrics = RuntimeMetrics::default();
-    let relay_registry = RelayRegistry::default();
     let (_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
     let source_transport_media_id =
         prepare_source_session(&mut state, &source_session, source_mid, 66_666);
@@ -261,7 +260,6 @@ fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
     respond_request_remote_keyframe(
         &mut state,
         &metrics,
-        &relay_registry,
         &RemoteKeyframeRequest {
             source_session_key: &source_session,
             source_transport_media_id,
@@ -284,23 +282,17 @@ fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
     let source_mid = Mid::from("cam-up");
     let mut state = RtcBootstrapState::default();
     let metrics = RuntimeMetrics::default();
-    let relay_registry = RelayRegistry::default();
     let (mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
     let source_transport_media_id =
         prepare_source_session(&mut state, &source_session, source_mid, 77_777);
     let relay_target_id = RelayTargetId::new(8);
 
-    relay_registry.activate_source_target(
-        source_transport_media_id,
-        relay_target_id,
-        mailbox.into(),
-    );
-    relay_registry.set_source_target_active(source_transport_media_id, relay_target_id, true);
+    state.add_relay_target(source_transport_media_id, relay_target_id, mailbox.into());
+    state.set_relay_target_active(source_transport_media_id, relay_target_id, true);
 
     respond_request_remote_keyframe(
         &mut state,
         &metrics,
-        &relay_registry,
         &RemoteKeyframeRequest {
             source_session_key: &source_session,
             source_transport_media_id,
@@ -312,7 +304,6 @@ fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
     respond_request_remote_keyframe(
         &mut state,
         &metrics,
-        &relay_registry,
         &RemoteKeyframeRequest {
             source_session_key: &source_session,
             source_transport_media_id,

@@ -13,7 +13,7 @@
 //!   inputs needed by the server runtime;
 //! - implement the transport port traits from [`crate::transport`] so higher
 //!   layers express intent without knowing about RTC workers, Str0m state, UDP
-//!   sockets, relay registries, or deterministic test backends;
+//!   sockets, worker-local relay routing, or deterministic test backends;
 //! - select the active backend for the build. Production builds wrap the real
 //!   RTC engine through [`RtcTransport`], while test builds can also select a
 //!   deterministic fake transport without putting fake-only behavior on the

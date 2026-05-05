@@ -687,36 +687,65 @@ async fn rtc_active_speaker_deadline_tracks_the_current_hold_window() {
 async fn rtc_relay_route_facade_registers_and_removes_target_mailboxes() {
     let source_adapter = RtcTransportShard::default();
     let target_adapter = RtcTransportShard::default();
-    let source_transport_media_id = TransportMediaId::new(91);
+    let source_session = transport_key(91, 91, UserId::Integer(91));
+    let rtp_parameters = sample_router_rtp_parameters("aud-up", 91_091);
+
+    assert!(
+        prepare_transport_session(&source_adapter, &source_session)
+            .await
+            .is_ok()
+    );
+    let source_transport_media_id = source_adapter
+        .media()
+        .add_recv_media(&source_session, Str0mMediaKind::Audio, &rtp_parameters)
+        .await;
+    assert!(source_transport_media_id.is_ok());
+    let Some(source_transport_media_id) = source_transport_media_id.ok() else {
+        return;
+    };
 
     assert!(
         source_adapter
             .media()
-            .activate_relay_route(source_transport_media_id, &target_adapter)
+            .activate_relay_route(&source_session, source_transport_media_id, &target_adapter)
+            .await
             .is_ok()
     );
     assert_eq!(
-        relay_target_count_for_source(&source_adapter, source_transport_media_id),
+        relay_target_count_for_source(&source_adapter, source_transport_media_id).await,
         1
     );
     assert_eq!(
-        active_relay_target_count_for_source(&source_adapter, source_transport_media_id),
+        active_relay_target_count_for_source(&source_adapter, source_transport_media_id).await,
         0
     );
 
-    source_adapter
-        .media()
-        .set_relay_route_active(source_transport_media_id, &target_adapter, true);
+    assert!(
+        source_adapter
+            .media()
+            .set_relay_route_active(
+                &source_session,
+                source_transport_media_id,
+                &target_adapter,
+                true,
+            )
+            .await
+            .is_ok()
+    );
     assert_eq!(
-        active_relay_target_count_for_source(&source_adapter, source_transport_media_id),
+        active_relay_target_count_for_source(&source_adapter, source_transport_media_id).await,
         1
     );
 
-    source_adapter
-        .media()
-        .deactivate_relay_route(source_transport_media_id, &target_adapter);
+    assert!(
+        source_adapter
+            .media()
+            .deactivate_relay_route(source_transport_media_id, &target_adapter)
+            .await
+            .is_ok()
+    );
     assert_eq!(
-        relay_target_count_for_source(&source_adapter, source_transport_media_id),
+        relay_target_count_for_source(&source_adapter, source_transport_media_id).await,
         0
     );
 }
