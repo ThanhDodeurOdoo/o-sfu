@@ -30,8 +30,8 @@ use crate::{
         source_publish_intent_for_stream_type, stream_id_for_stream_type, stream_type_for_stream_id,
     },
     core::{
-        MediaEndpointHealth, MediaSession, MediaTransport, NegotiationOffer, PublicationActivity,
-        PublicationActivityOutcome, RollbackStagedPublishOutcome, RuntimeSfuCore,
+        MediaCore, MediaEndpointHealth, MediaSession, MediaTransport, NegotiationOffer,
+        PublicationActivity, PublicationActivityOutcome, RollbackStagedPublishOutcome,
         SessionNegotiationOutcome, SfuCoreError, SourceSubscriptionIntent,
         SubscriptionUpdateOutcome, TransportEffectOutcome, UnpublishOutcome, UploadEncoding,
         UploadLayerPolicyRole, UploadSlot, UserInfoRefresh, UserStreamId,
@@ -147,7 +147,7 @@ pub struct User {
     connection_id: ConnectionId,
     remote_address: Arc<str>,
     room: Arc<Room>,
-    media_core: RuntimeSfuCore,
+    media_core: MediaCore,
     state: UserState,
     cleanup_finished: bool,
 }
@@ -159,7 +159,7 @@ impl User {
         connection_id: ConnectionId,
         remote_address: Arc<str>,
         room: Arc<Room>,
-        media_core: RuntimeSfuCore,
+        media_core: MediaCore,
     ) -> Self {
         Self {
             id: user_id,

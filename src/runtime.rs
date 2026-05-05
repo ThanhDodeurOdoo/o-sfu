@@ -23,7 +23,7 @@ use tracing::info;
 
 use crate::{
     config::Config,
-    core::{CoreOptions, RuntimeSfuCore, SfuCore},
+    core::{CoreOptions, MediaCore, SfuCore},
 };
 
 pub(crate) mod auth;
@@ -75,7 +75,7 @@ pub(super) struct RuntimeState {
     rooms: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     media_transport: MediaTransport,
-    media_core: RuntimeSfuCore,
+    media_core: MediaCore,
     metrics: Arc<RuntimeMetrics>,
 }
 

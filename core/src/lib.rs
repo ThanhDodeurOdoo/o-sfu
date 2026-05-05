@@ -39,13 +39,13 @@
 //! # Server-facing example
 //!
 //! ```rust,no_run
-//! use o_sfu_core::{CoreOptions, RuntimeSfuCore, RtcTransport};
+//! use o_sfu_core::{CoreOptions, MediaCore, RtcTransport};
 //! use o_sfu_core::server::room::Room;
 //! use o_sfu_core::server::session::UserId;
 //! use o_sfu_core::ConnectionId;
 //!
 //! async fn create_offer(
-//!     core: &RuntimeSfuCore,
+//!     core: &MediaCore,
 //!     room: &Room,
 //!     user_id: &UserId,
 //!     connection_id: ConnectionId,
@@ -56,15 +56,15 @@
 //!     Ok(())
 //! }
 //!
-//! fn build_core(options: CoreOptions, transport: RtcTransport) -> RuntimeSfuCore {
-//!     RuntimeSfuCore::new(options, o_sfu_core::MediaTransport::from_rtc_transport(transport))
+//! fn build_core(options: CoreOptions, transport: RtcTransport) -> MediaCore {
+//!     MediaCore::new(options, o_sfu_core::MediaTransport::from_rtc_transport(transport))
 //! }
 //! ```
 //!
 //! `o-sfu-core` keeps the core transport backend generic for tests and future
 //! adapters, but the session facade targets the runtime
 //! [`server::room::Room`] implementation. Normal server application code should
-//! use [`RuntimeSfuCore`] and should not become generic over transport backends
+//! use [`MediaCore`] and should not become generic over transport backends
 //! just because the core can be.
 #![allow(
     clippy::missing_errors_doc,
@@ -129,4 +129,4 @@ pub use transport::TransportFacade;
 /// This alias fixes [`SfuCore`] to the cfg-selected [`MediaTransport`] backend.
 /// Normal server application code should depend on this type instead of being
 /// generic over transport backends.
-pub type RuntimeSfuCore = SfuCore<MediaTransport>;
+pub type MediaCore = SfuCore<MediaTransport>;

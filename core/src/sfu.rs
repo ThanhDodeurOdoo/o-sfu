@@ -212,7 +212,7 @@ where
 {
     /// Build a media core facade over one transport backend.
     ///
-    /// Production server code normally uses [`crate::RuntimeSfuCore`], which
+    /// Production server code normally uses [`crate::MediaCore`], which
     /// fixes the backend to [`crate::MediaTransport`]. Tests and future
     /// adapters can use any backend that satisfies [`TransportFacade`].
     #[must_use]
