@@ -1,3 +1,32 @@
+//! Room membership orchestration for joins, leaves, disconnects and
+//! negotiation readiness.
+//!
+//! This module is the async boundary around pure `RoomState` membership
+//! transitions. `RoomState` remains authoritative for live users, connection
+//! ids, fan-out plans and media removals. The `Room` methods in this file
+//! acquire the state lock, capture a transition outcome, release the lock and
+//! then run transport cleanup, diagnostics, policy refresh and outbound
+//! fan-out.
+//!
+//! The split keeps membership decisions deterministic. Transport adapters,
+//! websocket senders and diagnostics never decide whether a user is present.
+//! They only observe or complete work captured by a committed state
+//! transition.
+//!
+//! # Concurrency model
+//!
+//! Public and crate-visible entrypoints here are cold-path orchestration calls.
+//! They must not hold the room state lock across `.await`. Cleanup retry
+//! bookkeeping is synchronous and short, while media transport calls run after
+//! the retry or state guard has been released.
+//!
+//! # What belongs here
+//!
+//! Join, leave, disconnect and session negotiation readiness belong here
+//! because they connect room state to async runtime effects. Packet routing,
+//! wire-envelope serialization and router placement decisions stay in their
+//! own modules.
+
 use std::sync::{MutexGuard, PoisonError};
 
 use o_sfu_router::MediaCapabilities;
@@ -36,13 +65,34 @@ fn warn_transport_cleanup_failure(operation: &TransportCleanupOperation, message
         "{message}"
     );
 }
+
+/// Cleanup policy used by membership transitions after room state has moved on.
+///
+/// Production callers pass a media transport and allow the room to clean the
+/// matching transport resources once the state transition has committed. Tests
+/// and state-only callers can keep the same membership path while disabling
+/// adapter cleanup.
+///
+/// A missing transport means only the effects that do not need the adapter can
+/// run. That is useful for tests that want the authoritative room-state result
+/// without faking transport ownership.
 #[derive(Clone, Copy)]
 pub(in crate::runtime::room) struct UserCleanup<'a> {
+    /// Adapter boundary used for deferred cleanup, policy refresh and
+    /// transport-adjacent session work.
     media_transport: Option<&'a MediaTransport>,
+    /// Whether the caller allows this transition to mutate transport state.
+    ///
+    /// This is distinct from `media_transport` because tests may still need a
+    /// transport handle for observation while keeping cleanup state unchanged.
     clean_transport_state: bool,
 }
 
 impl<'a> UserCleanup<'a> {
+    /// Build the production cleanup policy for a runtime membership change.
+    ///
+    /// The room will close stale transport users and remove detached media
+    /// after the corresponding `RoomState` transition has committed.
     pub(in crate::runtime::room) const fn runtime(media_transport: &'a MediaTransport) -> Self {
         Self {
             media_transport: Some(media_transport),
@@ -50,6 +100,10 @@ impl<'a> UserCleanup<'a> {
         }
     }
 
+    /// Build a cleanup policy that keeps transport state intact.
+    ///
+    /// This keeps tests focused on room-state lifecycle decisions while still
+    /// allowing optional transport-backed observations after the transition.
     #[cfg(any(test, feature = "testing-transport"))]
     pub(in crate::runtime::room) const fn state_only(
         media_transport: Option<&'a MediaTransport>,
@@ -69,7 +123,14 @@ impl<'a> UserCleanup<'a> {
     }
 }
 
+/// Membership command applied under the `RoomState` lock.
+///
+/// The enum is local to this module because callers should express intent
+/// through `Room` methods. Keeping all membership commands in one pipeline
+/// makes the lock boundary explicit and gives every transition the same
+/// deferred cleanup path.
 enum UserTransition<'a> {
+    /// Install a new session or replace the current session for the same user.
     Join {
         user_id: &'a UserId,
         label: Option<String>,
@@ -77,32 +138,65 @@ enum UserTransition<'a> {
         sender: mpsc::UnboundedSender<UserOutbound>,
         emit_joined_fanout: bool,
     },
+    /// Close one runtime connection and clean up any matching transport owner.
     Close {
         user_id: &'a UserId,
         connection_id: ConnectionId,
     },
-    Disconnect {
-        user_ids: &'a [UserId],
-    },
+    /// Remove the currently live sessions for a batch of user ids.
+    Disconnect { user_ids: &'a [UserId] },
 }
 
+/// Result exposed by the membership transition pipeline.
+///
+/// This separates domain outcomes from the concrete state structs returned by
+/// `RoomState`. Callers only need to know whether a join produced a connection,
+/// whether a close or disconnect was applied and whether the state layer
+/// produced any transition to finalize.
 enum UserTransitionResult {
+    /// A join committed and allocated this runtime-local connection id.
     Joined(ConnectionId),
+    /// A close or disconnect command completed its orchestration path.
     Applied,
+    /// No state transition was available to finalize.
     Missing,
 }
 
+/// State-owned transition data captured before async effects run.
+///
+/// Values stored here are the only data finalization may use after the
+/// `RoomState` guard is dropped. This prevents cleanup, diagnostics and fan-out
+/// from rediscovering mutable room state after it has already advanced.
 enum UserTransitionOutcome {
+    /// A successful join, including replacement cleanup and fan-out effects.
     Join(JoinUserOutcome),
+    /// A close command with optional state output.
+    ///
+    /// The state output is missing when the connection is stale or already
+    /// gone. The transport cleanup identity is still kept so runtime cleanup
+    /// can release resources for the requested connection.
     Close {
         outcome: Option<LeaveUserOutcome>,
         user_id: UserId,
         connection_id: ConnectionId,
     },
+    /// A bulk disconnect outcome for every user still present in state.
     Disconnect(DisconnectUsersOutcome),
 }
 
 impl Room {
+    /// Join a user through the runtime membership boundary.
+    ///
+    /// This is the production join entrypoint used by the room manager after
+    /// admission has selected the current room. The returned `ConnectionId` is
+    /// runtime-local and must be paired with the same `UserId` for later room
+    /// operations.
+    ///
+    /// # Error handling guidance
+    ///
+    /// `RoomFull` is an admission decision made by room state. `RouterState`
+    /// means the join could not be mirrored into routing topology, so callers
+    /// must treat the join as not committed.
     pub(crate) async fn add_user(
         &self,
         user_id: UserId,
@@ -122,8 +216,14 @@ impl Room {
         .await
     }
 
-    /// Run the room-owned join transition and perform the deferred cleanup only
-    /// after the state lock has been released.
+    /// Run the room-owned join transition with an explicit cleanup policy.
+    ///
+    /// This method exists so production and test callers share the same join
+    /// sequencing while choosing whether transport state should be touched.
+    /// The pure state transition allocates the connection id and captures any
+    /// replacement cleanup while the write lock is held. Transport cleanup,
+    /// policy refresh, diagnostics and fan-out run only after that lock has
+    /// been released.
     pub(in crate::runtime::room) async fn join_session_with_cleanup(
         &self,
         user_id: UserId,
@@ -151,6 +251,13 @@ impl Room {
         Ok(connection_id)
     }
 
+    /// Close one user connection through the production cleanup path.
+    ///
+    /// The close request is scoped by both `UserId` and `ConnectionId` so stale
+    /// websocket handles cannot remove a newer session from room state. The
+    /// transport close is still attempted for the requested identity after the
+    /// state decision because the lower layer may own resources for that
+    /// runtime-local connection.
     pub(crate) async fn remove_user(
         &self,
         user_id: &UserId,
@@ -165,6 +272,12 @@ impl Room {
         .await
     }
 
+    /// Close one user connection with an explicit cleanup policy.
+    ///
+    /// The returned boolean reports whether the close command entered the room
+    /// transition pipeline. It is not a proof that live room state contained
+    /// the connection, because stale close requests still need best-effort
+    /// transport cleanup for the requested runtime identity.
     pub(in crate::runtime::room) async fn remove_user_with_cleanup(
         &self,
         user_id: &UserId,
@@ -182,6 +295,11 @@ impl Room {
         .is_ok_and(|result| !matches!(result, UserTransitionResult::Missing))
     }
 
+    /// Fan a user-originated room message out to the other live sessions.
+    ///
+    /// The sender identity is checked against authoritative room state before
+    /// fan-out is emitted. Stale senders are ignored because websocket code can
+    /// race with replacement or teardown.
     pub async fn broadcast(
         &self,
         sender_id: &UserId,
@@ -197,10 +315,21 @@ impl Room {
         }
     }
 
+    /// Check whether room state still binds a user to a runtime connection.
+    ///
+    /// This is an authoritative room-state query at the instant the read lock
+    /// is held. It is still a cold-path snapshot, so callers must not treat it
+    /// as a lease across later awaits.
     pub async fn has_connection(&self, user_id: &UserId, connection_id: ConnectionId) -> bool {
         self.state.read().await.user_connection_id(user_id) == Some(connection_id)
     }
 
+    /// Apply client-visible user info for one live connection.
+    ///
+    /// Room state decides whether the update is still current, then returns a
+    /// fan-out plan that is emitted after the lock is released. A refresh may
+    /// trigger a full projection fan-out and a source selection policy sync
+    /// because layout or presence changes can affect video priority.
     pub(crate) async fn update_user_info(
         &self,
         user_id: &UserId,
@@ -229,6 +358,11 @@ impl Room {
         }
     }
 
+    /// Disconnect a batch of users through the production cleanup path.
+    ///
+    /// Missing users are ignored by room state. Current users are removed under
+    /// one state transition, then transport cleanup, diagnostics and fan-out run
+    /// outside the state lock.
     pub(crate) async fn disconnect_users(
         &self,
         user_ids: &[UserId],
@@ -238,6 +372,11 @@ impl Room {
             .await;
     }
 
+    /// Disconnect a batch of users with an explicit cleanup policy.
+    ///
+    /// This is used by tests and lifecycle helpers that need the same room
+    /// state transition as production while controlling whether transport
+    /// resources are touched.
     pub(in crate::runtime::room) async fn disconnect_users_with_cleanup(
         &self,
         user_ids: &[UserId],
@@ -543,6 +682,11 @@ impl Room {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Apply one membership command and finalize its deferred effects.
+    ///
+    /// This is the common sequencing point for join, close and disconnect. It
+    /// keeps the mutation phase and async effect phase adjacent in the code so
+    /// future changes do not accidentally await while holding room state.
     async fn run_session_transition(
         &self,
         transition: UserTransition<'_>,
@@ -554,6 +698,11 @@ impl Room {
         Ok(self.finalize_session_transition(outcome, cleanup).await)
     }
 
+    /// Mutate `RoomState` and capture all data needed after the lock is gone.
+    ///
+    /// No transport, diagnostics or websocket work belongs in this phase. The
+    /// returned outcome is intentionally owned so finalization never has to
+    /// re-read mutable membership state to decide cleanup.
     async fn apply_state_transition(
         &self,
         transition: UserTransition<'_>,
@@ -597,6 +746,12 @@ impl Room {
         Ok(Some(outcome))
     }
 
+    /// Run the async effects produced by a committed membership transition.
+    ///
+    /// At this point room state has already accepted or rejected the command.
+    /// Finalization may update runtime metadata, clean transport resources,
+    /// refresh source selection policy and emit outbound effects, but it must
+    /// not reopen the membership decision.
     async fn finalize_session_transition(
         &self,
         outcome: UserTransitionOutcome,
@@ -620,6 +775,11 @@ impl Room {
         }
     }
 
+    /// Finalize a committed join after room state has allocated its connection.
+    ///
+    /// Replacement joins may carry media cleanup for the previous session. The
+    /// new session is registered with diagnostics and transport placement only
+    /// after the state transition succeeds.
     async fn finalize_join_transition(
         &self,
         outcome: JoinUserOutcome,
@@ -645,6 +805,12 @@ impl Room {
         UserTransitionResult::Joined(connection_id)
     }
 
+    /// Finalize a close request after room state has made its stale check.
+    ///
+    /// If the state transition removed a live session, this emits lifecycle
+    /// effects and diagnostics. The transport close is attempted even for stale
+    /// state outcomes because the requested runtime identity can still own
+    /// adapter resources outside room state.
     async fn finalize_close_transition(
         &self,
         outcome: Option<LeaveUserOutcome>,
@@ -671,6 +837,11 @@ impl Room {
         UserTransitionResult::Applied
     }
 
+    /// Record diagnostics for a live session that was removed by close.
+    ///
+    /// This is separate from transport cleanup because diagnostics track the
+    /// room-level lifecycle, while cleanup tracks adapter resources that may
+    /// already be detached from state.
     async fn record_closed_user(
         &self,
         user_id: &UserId,
@@ -690,6 +861,11 @@ impl Room {
         }
     }
 
+    /// Finalize a bulk disconnect after room state has removed current users.
+    ///
+    /// Cleanup and diagnostics are driven only by the users returned from
+    /// `RoomState`, so missing ids in the request do not create transport or
+    /// telemetry side effects.
     async fn finalize_disconnect_transition(
         &self,
         outcome: DisconnectUsersOutcome,
@@ -719,6 +895,7 @@ impl Room {
         UserTransitionResult::Applied
     }
 
+    /// Record diagnostics for a user removed by the bulk disconnect path.
     fn record_disconnected_user(&self, user_id: &UserId, connection_id: ConnectionId) {
         let media_worker_id = self
             .definition
@@ -735,6 +912,11 @@ impl Room {
         self.definition.unregister_transport_worker(connection_id);
     }
 
+    /// Emit close requests and room fan-outs captured by a state transition.
+    ///
+    /// Send failures are ignored because lifecycle effects are best-effort
+    /// notifications after room state has already committed the membership
+    /// change.
     pub(super) fn emit_lifecycle_effects(effects: LifecycleEffects) {
         for close_request in effects.close_requests {
             let _ = close_request
@@ -746,8 +928,16 @@ impl Room {
         }
     }
 
-    /// Commit the answer-derived negotiated capability set for one live
-    /// connection and trigger any consumer bootstrap that depends on it.
+    /// Commit the answer-derived negotiated capability set for one live session.
+    ///
+    /// This is called after the transport boundary has accepted the browser
+    /// answer and projected the negotiated RTP capabilities. Room state records
+    /// the session as consumer-ready, then any missing consumer bootstrap runs
+    /// outside the state lock.
+    ///
+    /// `StaleConnection` means the user was replaced or removed before the
+    /// answer callback reached the room. Transport negotiation may have
+    /// succeeded, but room state no longer accepts the session as current.
     pub async fn apply_session_negotiated(
         &self,
         user_id: &UserId,
@@ -763,6 +953,11 @@ impl Room {
             .await
     }
 
+    /// Apply the side effects that follow a negotiation state change.
+    ///
+    /// Consumer bootstrap is deferred until room state says the session became
+    /// ready to receive. Keyframe refresh requests are best-effort transport
+    /// hints and do not make the negotiation outcome fail.
     async fn apply_negotiation_update(
         &self,
         user_id: &UserId,
@@ -786,6 +981,12 @@ impl Room {
         SessionNegotiationOutcome::Applied
     }
 
+    /// Refresh consumer-side media after a renegotiation answer.
+    ///
+    /// This does not update the stored RTP capability set. It revalidates that
+    /// the connection is still current, requests keyframes for active video
+    /// consumers and bootstraps any consumers that became possible after the
+    /// renegotiation.
     pub(crate) async fn apply_session_refreshed(
         &self,
         user_id: &UserId,
@@ -807,6 +1008,11 @@ impl Room {
         SessionNegotiationOutcome::Applied
     }
 
+    /// Request keyframes for active video consumers owned by one live session.
+    ///
+    /// The target list is an authoritative room-state snapshot for the current
+    /// connection. Individual transport request failures are logged but kept
+    /// best-effort because a later media packet or refresh can recover video.
     async fn request_active_video_consumer_keyframes(
         &self,
         user_id: &UserId,
@@ -845,10 +1051,12 @@ impl Room {
         true
     }
 
+    /// Return the current authoritative number of live room users.
     pub(super) async fn user_count(&self) -> usize {
         self.state.read().await.user_count()
     }
 
+    /// Return whether room state currently has no live users.
     pub(super) async fn is_empty(&self) -> bool {
         self.state.read().await.is_empty()
     }

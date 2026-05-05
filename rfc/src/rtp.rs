@@ -7,6 +7,26 @@
 //! - Video frame marking RTP header extension: <https://www.rfc-editor.org/rfc/rfc9626>
 //! - Layer Refresh Request feedback: <https://www.rfc-editor.org/rfc/rfc9627>
 //! - RTP payload format for VP8: <https://www.rfc-editor.org/rfc/rfc7741>
+//!
+//! A complete RTP packet has this outer shape:
+//!
+//! ```text
+//!  0                   1                   2                   3
+//!  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |V=2|P|X|  CC   |M|     PT      |       sequence number         |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |                           timestamp                           |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |                             SSRC                              |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |                         CSRC list ...                         |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |              extension block if X=1 ...                       |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |                         codec payload ...                     |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! ```
 
 use std::fmt;
 
@@ -120,6 +140,33 @@ pub mod codec_name {
 }
 
 /// VP8 RTP payload helpers.
+///
+/// These helpers operate on the codec payload slice, not on the full RTP
+/// packet. In runtime forwarding that slice starts after the RTP fixed header,
+/// CSRC list and any RTP header-extension block.
+///
+/// RFC 7741 puts a VP8 payload descriptor in front of the VP8 payload header.
+/// The descriptor is also where simulcast and temporal-layer packet identity is
+/// carried. o-sfu rewrites only the descriptor bytes that already exist so a
+/// downstream browser receives one continuous stream after source switches.
+///
+/// ```text
+/// VP8 payload slice passed to this module
+///
+/// +------------------+----------------------+----------------------+
+/// | descriptor byte  | extension bytes      | VP8 payload header   |
+/// +------------------+----------------------+----------------------+
+/// | X R N S PartID   | I L T K fields       | P bit and VP8 data   |
+/// +------------------+----------------------+----------------------+
+///
+/// Extension bytes when X=1
+///
+/// +-------------+-------------------+-------------+----------------+
+/// | I L T K ... | PictureID if I=1  | TL0 if L=1  | T/K if present |
+/// +-------------+-------------------+-------------+----------------+
+/// |             | 1 or 2 bytes      | 1 byte      | 1 byte         |
+/// +-------------+-------------------+-------------+----------------+
+/// ```
 pub mod vp8 {
     const X_BIT: u8 = 0b1000_0000;
     const S_BIT: u8 = 0b0001_0000;
@@ -133,18 +180,41 @@ pub mod vp8 {
     const SHORT_PICTURE_ID_MASK: u16 = 0x7f;
     const LONG_PICTURE_ID_MASK: u16 = 0x7fff;
 
+    /// Offset-carrying view of the VP8 descriptor fields that o-sfu may need
+    /// to rewrite before forwarding a packet to a browser consumer.
+    ///
+    /// The value borrows no packet data, but the stored offsets are only valid
+    /// for the payload slice that was passed to [`payload_descriptor`] or for a
+    /// byte-identical clone of that slice. Use it as a short-lived parse result
+    /// on the packet forwarding path.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct PayloadDescriptor {
         picture_id: Option<PictureId>,
         tl0_pic_idx: Option<Tl0PicIdx>,
     }
 
+    /// Replacement values for VP8 descriptor fields that already exist in the
+    /// source packet.
+    ///
+    /// The rewrite step does not add missing descriptor fields and does not
+    /// change the descriptor width. A short `PictureID` keeps its one-byte shape
+    /// and stores the low 7 bits of the requested value. A long `PictureID` keeps
+    /// its two-byte shape and stores the low 15 bits.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct PayloadDescriptorRewrite {
+        /// Receiver-local `PictureID` value to write when the packet carried a
+        /// `PictureID` field.
         pub picture_id: Option<u16>,
+        /// Receiver-local `TL0PICIDX` value to write when the packet carried a
+        /// `TL0PICIDX` field.
         pub tl0_pic_idx: Option<u8>,
     }
 
+    /// Parsed VP8 `PictureID` with the byte offset needed for in-place rewrite.
+    ///
+    /// Callers should use [`PayloadDescriptor::picture_id`] instead of relying
+    /// on this internal layout. Its fields stay private to keep offset handling
+    /// inside this module.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct PictureId {
         value: u16,
@@ -152,6 +222,7 @@ pub mod vp8 {
         offset: usize,
     }
 
+    /// Parsed VP8 `TL0PICIDX` with the byte offset needed for in-place rewrite.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct Tl0PicIdx {
         value: u8,
@@ -165,6 +236,11 @@ pub mod vp8 {
     }
 
     impl PayloadDescriptor {
+        /// Returns the VP8 `PictureID` value carried by the packet descriptor.
+        ///
+        /// `None` means the payload descriptor did not advertise a `PictureID`.
+        /// It does not mean the packet is invalid because `PictureID` is optional
+        /// in RFC 7741.
         #[must_use]
         pub const fn picture_id(self) -> Option<u16> {
             match self.picture_id {
@@ -173,6 +249,11 @@ pub mod vp8 {
             }
         }
 
+        /// Returns the VP8 `TL0PICIDX` value carried by the packet descriptor.
+        ///
+        /// `TL0PICIDX` is present only when the descriptor extension sets `L=1`.
+        /// The forwarding path uses this value with `PictureID` to preserve
+        /// temporal-layer continuity after source switches.
         #[must_use]
         pub const fn tl0_pic_idx(self) -> Option<u8> {
             match self.tl0_pic_idx {
@@ -186,7 +267,12 @@ pub mod vp8 {
     ///
     /// RFC 7741 section 4.2 defines the VP8 payload descriptor. A decodable
     /// keyframe starts at partition 0 (`S=1`, `PartID=0`) and the VP8 payload
-    /// header starts with `P=0`.
+    /// header starts with `P=0`. The input must be the RTP codec payload. It is
+    /// not a complete RTP packet.
+    ///
+    /// Truncated descriptors, missing payload headers and non-start partitions
+    /// return `false`. The helper intentionally performs only the cheap
+    /// keyframe probe needed by packet gates and decoder-refresh detection.
     #[must_use]
     pub fn payload_starts_keyframe(payload: &[u8]) -> bool {
         let Some((&descriptor, rest)) = payload.split_first() else {
@@ -203,9 +289,19 @@ pub mod vp8 {
         payload_header.is_some_and(|header| header & VP8_INTERFRAME_BIT == 0)
     }
 
-    /// Parse the RFC 7741 VP8 payload descriptor fields that must stay
+    /// Parses the RFC 7741 VP8 payload descriptor fields that must stay
     /// continuous when an SFU rewrites multiple publisher SSRCs into one
     /// downstream browser stream.
+    ///
+    /// The input must start at the VP8 descriptor byte. `Some` means the
+    /// advertised descriptor shape was internally consistent enough to locate
+    /// the optional `PictureID` and `TL0PICIDX` fields. `None` means the packet was
+    /// truncated inside the advertised descriptor and must not be rewritten.
+    ///
+    /// The returned descriptor is an offset map for this exact payload shape.
+    /// Keep it with the packet that produced it and pass it to
+    /// [`rewrite_payload_descriptor`] before the payload bytes are handed to the
+    /// downstream sender.
     #[must_use]
     pub fn payload_descriptor(payload: &[u8]) -> Option<PayloadDescriptor> {
         let (&descriptor, mut rest) = payload.split_first()?;
@@ -244,6 +340,15 @@ pub mod vp8 {
         })
     }
 
+    /// Rewrites existing VP8 descriptor identity fields in place.
+    ///
+    /// This is the mutation half of [`payload_descriptor`]. It is used after the
+    /// forwarding adapter has selected receiver-local RTP identity, while the
+    /// payload buffer is still owned by the local send path. Missing rewrite
+    /// values and absent source fields are ignored. The function never grows the
+    /// payload, never converts short `PictureID` to long `PictureID` and never
+    /// panics if the caller hands it a shorter slice than the one that produced
+    /// the descriptor.
     pub fn rewrite_payload_descriptor(
         payload: &mut [u8],
         descriptor: PayloadDescriptor,
@@ -259,6 +364,10 @@ pub mod vp8 {
         }
     }
 
+    /// Locates the VP8 payload header after an extended descriptor.
+    ///
+    /// `None` means the extension bits advertise fields that are not present in
+    /// the slice. The keyframe probe treats that as "not a keyframe".
     fn extended_payload_header(payload: &[u8]) -> Option<&u8> {
         let (&extension, mut rest) = payload.split_first()?;
         if extension & I_BIT != 0 {
@@ -278,6 +387,8 @@ pub mod vp8 {
         rest.first()
     }
 
+    /// Parses the `PictureID` field and remembers where it starts in the payload
+    /// descriptor.
     fn parse_picture_id(payload: &[u8], offset: usize) -> Option<PictureId> {
         let (&first, remaining) = payload.split_first()?;
         if first & LONG_PICTURE_ID_BIT == 0 {
@@ -295,6 +406,8 @@ pub mod vp8 {
         })
     }
 
+    /// Writes a receiver-local `PictureID` while preserving the source field
+    /// width.
     fn rewrite_picture_id(payload: &mut [u8], picture_id: PictureId, value: u16) {
         match picture_id.encoding {
             PictureIdEncoding::Short => {
@@ -450,6 +563,38 @@ pub mod fmtp {
 }
 
 /// H264 SDP and payload-format helpers derived from RFC 6184.
+///
+/// Packet helpers in this module receive the H264 RTP payload slice. The first
+/// byte of that slice identifies the packetization mode used by the packet.
+/// Decoder-refresh detection needs to recognize IDR access units in all packet
+/// shapes that browsers commonly send.
+///
+/// ```text
+/// Single NAL unit packet
+///
+/// +-------------+----------------------+
+/// | NAL header  | NAL payload          |
+/// +-------------+----------------------+
+/// | F NRI Type  | ...                  |
+/// +-------------+----------------------+
+///
+/// STAP-A aggregation packet
+///
+/// +---------------+----------+-------------+----------+-------------+
+/// | STAP-A header | NAL size | NAL bytes   | NAL size | NAL bytes   |
+/// +---------------+----------+-------------+----------+-------------+
+/// | Type=24       | 16 bits  | starts with | 16 bits  | starts with |
+/// |               |          | NAL header  |          | NAL header  |
+/// +---------------+----------+-------------+----------+-------------+
+///
+/// FU-A fragmentation packet
+///
+/// +---------------+-------------+----------------------+
+/// | FU indicator  | FU header   | fragment payload     |
+/// +---------------+-------------+----------------------+
+/// | Type=28       | S E R Type  | first fragment if S=1 |
+/// +---------------+-------------+----------------------+
+/// ```
 pub mod h264 {
     use std::cmp::Ordering;
 
@@ -573,6 +718,11 @@ pub mod h264 {
     ///
     /// RFC 6184 carries IDR frames either as a single NAL unit, inside a STAP-A
     /// aggregation packet, or as the first fragment of a FU-A packet.
+    ///
+    /// The input must be the RTP codec payload, not a complete RTP packet.
+    /// Truncated aggregation packets and incomplete FU-A packets return
+    /// `false`. The helper does not parse a full access unit. It only answers
+    /// whether this packet can refresh a decoder if forwarded.
     #[must_use]
     pub fn payload_starts_idr(payload: &[u8]) -> bool {
         let Some((&nal_header, rest)) = payload.split_first() else {
@@ -586,6 +736,11 @@ pub mod h264 {
         }
     }
 
+    /// Scans a STAP-A payload for any contained IDR NAL unit.
+    ///
+    /// Each aggregate entry is length-prefixed. A malformed length makes the
+    /// whole probe fail closed because the caller cannot safely trust later
+    /// bytes as NAL boundaries.
     fn stap_a_contains_idr(mut payload: &[u8]) -> bool {
         while payload.len() >= 2 {
             let Some((&first_len_octet, rest)) = payload.split_first() else {
@@ -609,6 +764,7 @@ pub mod h264 {
         false
     }
 
+    /// Detects whether a FU-A packet is the first fragment of an IDR NAL unit.
     fn fu_a_starts_idr(payload: &[u8]) -> bool {
         let Some((&fu_header, _fragment)) = payload.split_first() else {
             return false;
@@ -715,9 +871,12 @@ pub mod h264 {
     }
 }
 
-/// Returns `true` if `payload_type` falls in the dynamic range (96–127).
+/// Returns `true` if `payload_type` is an RTP/AVP dynamic payload type.
 ///
-/// Reference: RFC 3551sectionn 6
+/// Use this for the `PT` field from the RTP fixed header. It does not validate
+/// whether a signaling layer actually negotiated that payload type.
+///
+/// Reference: RFC 3551 section 6.
 #[must_use]
 pub const fn is_dynamic_payload_type(payload_type: u8) -> bool {
     payload_type >= RTP_DYNAMIC_PAYLOAD_TYPE_START && payload_type <= RTP_DYNAMIC_PAYLOAD_TYPE_END
@@ -780,6 +939,36 @@ pub mod rtcp_feedback_format {
 }
 
 /// RTP header-extension profile IDs from RFC 8285.
+///
+/// RTP packets carry an extension block only when the fixed-header `X` bit is
+/// set. The 16-bit profile ID then decides whether extension elements use the
+/// one-byte or two-byte element header shape.
+///
+/// ```text
+/// RTP extension block
+///
+/// +----------------+----------------+-----------------------------+
+/// | profile ID     | length in u32  | extension elements          |
+/// +----------------+----------------+-----------------------------+
+/// | 16 bits        | 16 bits        | padded to 32-bit boundary   |
+/// +----------------+----------------+-----------------------------+
+///
+/// One-byte element, profile 0xBEDE
+///
+/// +---------+---------+----------------------+
+/// | ID      | len-1   | data                 |
+/// +---------+---------+----------------------+
+/// | 4 bits  | 4 bits  | 1 to 16 bytes        |
+/// +---------+---------+----------------------+
+///
+/// Two-byte element, profile 0x1000 through 0x100F
+///
+/// +---------+---------+----------------------+
+/// | ID      | len     | data                 |
+/// +---------+---------+----------------------+
+/// | 8 bits  | 8 bits  | 0 to 255 bytes       |
+/// +---------+---------+----------------------+
+/// ```
 pub mod header_extension {
     /// RFC 8285 one-byte header extension profile ID.
     pub const ONE_BYTE_PROFILE_ID: u16 = 0xBEDE;
@@ -804,11 +993,19 @@ pub mod header_extension {
     pub const TWO_BYTE_DATA_LEN_MIN: u8 = 0;
     pub const TWO_BYTE_DATA_LEN_MAX: u8 = u8::MAX;
 
+    /// Returns whether `id` is usable as an RFC 8285 one-byte element ID.
+    ///
+    /// ID 0 is padding and ID 15 is reserved, so only 1 through 14 can identify
+    /// negotiated extension values.
     #[must_use]
     pub const fn is_one_byte_id(id: u8) -> bool {
         id >= ONE_BYTE_ID_MIN && id <= ONE_BYTE_ID_MAX
     }
 
+    /// Builds an RFC 8285 two-byte profile ID from the 4-bit appbits value.
+    ///
+    /// Returns `None` when `appbits` cannot fit in the low nibble of the
+    /// profile ID.
     #[must_use]
     pub fn two_byte_profile_id(appbits: u8) -> Option<u16> {
         if appbits > 0x0F {
@@ -820,15 +1017,35 @@ pub mod header_extension {
 
 /// Video Frame Marking RTP header-extension payload values.
 ///
+/// Frame marking is carried as the value of one negotiated RTP header
+/// extension. Packet gates use it as packet-local metadata for temporal-layer
+/// selection. The first octet is enough for the current route-control decision.
+///
+/// ```text
+/// Short form, non-scalable stream
+///
+/// +---+---+---+---+---------------+
+/// | S | E | I | D | reserved      |
+/// +---+---+---+---+---------------+
+///
+/// Long form, scalable stream
+///
+/// +---+---+---+---+---+-----------+---------------+---------------+
+/// | S | E | I | D | B | TID       | LID           | TL0PICIDX     |
+/// +---+---+---+---+---+-----------+---------------+---------------+
+/// | first octet                    | optional      | optional      |
+/// +---+---+---+---+---+-----------+---------------+---------------+
+/// ```
+///
 /// Reference: RFC 9626 section 3.
 pub mod frame_marking {
     /// Full long-form frame-marking payload length.
     pub const LONG_DATA_LEN_WITH_TL0PICIDX: u8 = 3;
 
-    /// Long-form payload length when TL0PICIDX is omitted.
+    /// Long-form payload length when `TL0PICIDX` is omitted.
     pub const LONG_DATA_LEN_WITHOUT_TL0PICIDX: u8 = 2;
 
-    /// Long-form payload length when both LID and TL0PICIDX are omitted.
+    /// Long-form payload length when both `LID` and `TL0PICIDX` are omitted.
     pub const LONG_DATA_LEN_FLAGS_ONLY: u8 = 1;
 
     /// Short-form non-scalable frame-marking payload length.
@@ -858,11 +1075,18 @@ pub mod frame_marking {
     /// Base layer identifier used for TID and LID.
     pub const BASE_LAYER_ID: u8 = 0;
 
+    /// Extracts the temporal-layer ID from the first long-form frame-marking
+    /// octet.
+    ///
+    /// Callers must only use this value as temporal metadata when signaling or
+    /// negotiated extension state proves the packet carries frame marking.
     #[must_use]
     pub const fn temporal_layer_id(first_octet: u8) -> u8 {
         first_octet & TEMPORAL_LAYER_ID_MASK
     }
 
+    /// Returns whether `value` fits in the RFC 9626 three-bit temporal-layer
+    /// field.
     #[must_use]
     pub const fn is_valid_temporal_layer_id(value: u8) -> bool {
         value <= TEMPORAL_LAYER_ID_MAX
