@@ -15,13 +15,13 @@
 //! # Boundary role
 //!
 //! `controller.rs` is the public face of the runtime `room/` domain. It
-//! defines the room facade itself (`Room`) plus the small set oftypes that
+//! defines the room facade itself (`Room`) plus the small set of types that
 //! callers need to create a room, join it, query it, or project its outbound
 //! work into websocket-user handling.
 //!
 //! The file exists to keep one clear contract at the room boundary:
 //!
-//! - imutable room identity and runtime placement live in `RoomDefinition`
+//! - immutable room identity and runtime placement live in `RoomDefinition`
 //!   and the small policy/context/config types defined here
 //! - mutable membership and media topology live behind `RoomState`
 //! - websocket and transport work must happen after room locks are released
@@ -135,7 +135,7 @@ pub enum UserOutbound {
     Close(UserCloseReason),
 }
 
-/// User-local work requested by the channel after a room-state transition.
+/// User-local work requested by the room after a room-state transition.
 ///
 /// These requests are more specific than `RoomEventMessage`. They represent
 /// work that must run in the context of one live websocket user because it
@@ -153,16 +153,16 @@ pub enum UserOutbound {
 pub enum RoomEventRequest {
     /// Bootstrap one newly visible remote track on the targeted user.
     ///
-    /// The chanel has already decided that the consumer route should exist.
+    /// The room has already decided that the consumer route should exist.
     /// The user now has to materialize the matching remote track details in
     /// its own post-auth flow.
     BootstrapRemoteTrack(RemoteTrackBootstrap),
 }
 
-/// Join failures produced by one live chanel instance.
+/// Join failures produced by one live room instance.
 ///
 /// These errors come from room-local admission or state-sync rules after the
-/// chanel has already been resolved by the manager.
+/// room has already been resolved by the manager.
 ///
 /// # Error handling guidance
 ///
@@ -203,7 +203,7 @@ pub enum RoomManagerJoinError {
     RouterState,
 }
 
-/// Admission limits that stay fixed for one chanel lifetime.
+/// Admission limits that stay fixed for one room lifetime.
 ///
 /// This is kept separate from the wider runtime policy because admission is a
 /// narrow concern with its own tests and state checks.
@@ -407,11 +407,11 @@ pub struct RoomRuntimePolicy {
     /// Feature surface the room advertises to clients.
     ///
     /// This is part of the observable room contract and feeds
-    /// `available_features()` on the public `Chanel` facade.
+    /// `available_features()` on the public `Room` facade.
     pub feature_flags: RuntimeFeatureFlags,
     /// Router-native capability baseline used for negotiation and bootstrap.
     ///
-    /// The chanel consumes router-native capabilities here so signaling code
+    /// The room consumes router-native capabilities here so signaling code
     /// does not have to leak wire-shaped capability bags into room state.
     pub router_rtp_capabilities: o_sfu_router::MediaCapabilities,
     /// Same-room local sharding policy selected at runtime boot.
@@ -455,7 +455,7 @@ impl RoomRuntimePolicy {
 /// This type exists to keep room identity separate from operator-facing knobs
 /// and compatibility toggles that may be chosen per room at creation time.
 ///
-/// Unlike `ChanelRuntimePolicy`, this config is part of the per-room create
+/// Unlike `RoomRuntimePolicy`, this config is part of the per-room create
 /// request shape rather than one validated runtime-wide policy bundle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoomConfig {
@@ -466,7 +466,7 @@ pub struct RoomConfig {
     pub web_rtc_enabled: bool,
     /// Compatibility knob from `/v1/room` for recording-enabled rooms.
     ///
-    /// The current chanel runtime treats this as an enable flag, not as a
+    /// The current room runtime treats this as an enable flag, not as a
     /// lasting recorder routing destination. The string is preserved because it
     /// matches the current HTTP contract even though the runtime does not route
     /// recording by address yet.
@@ -527,7 +527,7 @@ pub struct RoomUserStatsSnapshot {
 /// many room transitions only need a small before/after summary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RoomMediaCounts {
-    /// Number of live published streams in chanel state.
+    /// Number of live published streams in room state.
     ///
     /// A staged publish that has not been committed yet does not count here.
     pub publications: usize,
@@ -590,7 +590,7 @@ pub struct Room {
         dead_code,
         reason = "recording control-plane wiring is intentionally deferred until the replacement baseline is validated"
     )]
-    /// Chanel-owned recording service shared with topology observers.
+    /// Room-owned recording service shared with topology observers.
     ///
     /// The service is injected into the topology side so recording can observe
     /// routed media without making router state recording-aware.
@@ -611,8 +611,8 @@ pub struct Room {
     /// Staged publish reservations that live across the offer/answer gap.
     ///
     /// This stays outside `RoomState` because it tracks async transport work
-    /// that has not become live room state yet A publish only becomes real
-    /// chanel state after the later commit path succeeds.
+    /// that has not become live room state yet. A publish only becomes real
+    /// room state after the later commit path succeeds.
     pub(super) pending_publish_transactions: Mutex<PendingPublishTransactions>,
     /// Pure room state plus room-owned indexes.
     ///
@@ -628,7 +628,7 @@ impl Room {
     /// Construction wires the immutable room definition, the room-owned state
     /// model and the recording observer surface together once. After that,
     /// higher-level runtime code should interact with the room through intent
-    /// methods such as join, leave, publish, subscribe and stats queries
+    /// methods such as join, leave, publish, subscribe and stats queries.
     ///
     /// This constructor is intentionally explicit because the room boundary has
     /// three distinct input categories:
@@ -735,7 +735,7 @@ impl Room {
     #[must_use]
     /// Optional room key configured at room creation time.
     ///
-    /// This is preserved as imutable room metadata and can later be used by
+    /// This is preserved as immutable room metadata and can later be used by
     /// control-plane or permission flows that need room-scoped secrets
     ///
     /// The room itself does not reinterpret or rotate this value.
@@ -749,7 +749,7 @@ impl Room {
     /// This is the room-facing compatibility view derived from the runtime
     /// policy and room config, not a reflection of every internal capability.
     ///
-    /// Outer layers should prefer this method over recostructing feature flags
+    /// Outer layers should prefer this method over reconstructing feature flags
     /// from runtime config because it already accounts for room-local toggles
     /// such as `web_rtc_enabled`.
     pub fn available_features(&self) -> AvailableFeatures {

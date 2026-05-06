@@ -5,11 +5,11 @@
 //! |- directory / definition -> process-global lookup and immutable identity
 //! `- Room
 //!    |- controller          -> room-facing facade and immutable accessors
-//!    |- lifecycle           -> single owner of join, leave, and cleanup sequencing
+//!    |- lifecycle           -> close reasons and permission translation
+//!    |- membership          -> join, leave, readiness, cleanup, presence and fanout
 //!    |- effects             -> explicit side-effect plans for transport, fanout, and diagnostics
 //!    |- state               -> locked mutable room model
-//!    |- membership          -> user presence, permissions, and fanout
-//!    |- user_negotiation -> per-user transport readiness
+//!    |- user_negotiation    -> per-user transport readiness
 //!    |- media               -> publish and subscribe activity transitions
 //!    |- recording           -> room-scoped recording policy
 //!    |- router_state        -> bridge into the router core

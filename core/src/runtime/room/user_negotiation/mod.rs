@@ -154,7 +154,7 @@ mod tests {
     };
 
     #[test]
-    fn session_negotiation_transitions_to_ready_when_capabilities_follow_connections() {
+    fn user_negotiation_transitions_to_ready_when_capabilities_follow_connections() {
         let mut negotiation = UserNegotiation::default();
 
         let publish_update = negotiation.set_transport_ready_for_test(Publish);
@@ -173,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn session_negotiation_transitions_to_download_ready_when_download_follows_capabilities() {
+    fn user_negotiation_transitions_to_download_ready_when_download_follows_capabilities() {
         let mut negotiation = UserNegotiation::default();
 
         let capabilities_update = negotiation.set_client_rtp_capabilities_for_test();
@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn session_negotiation_preserves_publish_readiness_before_capabilities_arrive() {
+    fn user_negotiation_preserves_publish_readiness_before_capabilities_arrive() {
         let mut negotiation = UserNegotiation::default();
 
         let publish_update = negotiation.set_transport_ready_for_test(Publish);
@@ -218,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn session_negotiation_only_reports_consumer_readiness_once() {
+    fn user_negotiation_only_reports_consumer_readiness_once() {
         let mut negotiation = UserNegotiation::default();
 
         let _ = negotiation.set_transport_ready_for_test(Consume);

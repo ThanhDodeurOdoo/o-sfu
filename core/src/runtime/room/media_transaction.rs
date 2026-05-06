@@ -1,6 +1,6 @@
 //! Room-owned transaction helpers for staged publish and transport cleanup.
 //!
-//! # role (between chanel and transport)
+//! # Role
 //!
 //! This module owns the room-side unit of work for media changes that need
 //! transport calls. `RoomState` stays authoritative for live producers and
@@ -12,8 +12,8 @@
 //!
 //! # Staged publish lifecycle
 //!
-//! A publish is staged only after chanel state validates the current user
-//! and the media transport reserves a media line While the browser answers
+//! A publish is staged only after room state validates the current user and
+//! the media transport reserves a media line While the browser answers
 //! renegotiation, that reservation lives in `PendingPublishTransactions`.
 //! Answer handling later drains the transaction and either commits it into
 //! room state or consumes it through transport cleanup.
@@ -65,7 +65,7 @@ mod test_support;
 /// facing user id.
 ///
 /// This registry owns only in-flight reservations. Once a publish commits, the
-/// producer and its transport media belong to chanel state Once a publish is
+/// producer and its transport media belong to room state. Once a publish is
 /// rolled back, the transaction must be consumed through reservation cleanup.
 #[derive(Debug, Default)]
 pub(super) struct PendingPublishTransactions {
@@ -114,9 +114,9 @@ pub(super) struct PendingPublishTransaction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StagedMediaReservationState {
     /// The media line exists in the media transport but is not committed in
-    /// chanel state.
+    /// room state.
     Reserved,
-    /// The chanel committed the producer, so normal unpublish or leave cleanup
+    /// The room committed the producer, so normal unpublish or leave cleanup
     /// owns the transport media from this point onward.
     Committed,
     /// The transaction made an explicit cleanup decision.
@@ -142,7 +142,7 @@ struct StagedMediaReservation {
     /// Protocol-facing user identity used to rebuild the transport user
     /// key for cleanup.
     owner_user_id: UserId,
-    /// Runtime-local conection identity that prevents a replacement socket
+    /// Runtime-local connection identity that prevents a replacement socket
     /// from inheriting stale transport media.
     owner_connection_id: ConnectionId,
     /// Transport-owned media handle that must be removed unless the publish
@@ -473,7 +473,7 @@ impl StagedMediaReservation {
     }
 
     /// Transfers ownership from the staged transaction to the committed
-    /// producer stored in chanel state
+    /// producer stored in room state.
     fn commit(mut self) {
         self.state = StagedMediaReservationState::Committed;
     }
@@ -525,7 +525,7 @@ impl CommittedPublish {
 }
 
 impl Room {
-    /// Records the live media gauge delta after a chanel state transition.
+    /// Records the live media gauge delta after a room state transition.
     ///
     /// Callers pass both snapshots because the state lock should already be
     /// released by the time metrics and transport side effects run.
@@ -704,7 +704,7 @@ impl Room {
     ///
     /// The registry is drained before commit work starts so a later websocket
     /// message cannot commit the same reservation twice. Each transaction then
-    /// re-checks current chanel state before creating a live producer. If that
+    /// re-checks current room state before creating a live producer. If that
     /// state is stale, the transaction consumes its transport reservation
     /// through cleanup instead.
     pub(crate) async fn commit_staged_publishes(
@@ -755,11 +755,11 @@ impl Room {
         self.record_media_count_delta(media_counts_before, media_counts_after);
     }
 
-    /// Best-effort transport-media cleanup for a known chanel owner.
+    /// Best-effort transport-media cleanup for a known room owner.
     ///
-    /// The chanel has already decided that the media should no longer be
+    /// The room has already decided that the media should no longer be
     /// owned by room state. A transport failure is logged but does not rebuild
-    /// previous chanel state
+    /// previous room state.
     pub(super) async fn cleanup_transport_media(
         &self,
         user_id: &UserId,
