@@ -98,6 +98,16 @@ impl RoomTopology {
         self.routers.len()
     }
 
+    #[cfg(test)]
+    pub(in crate::runtime::room) fn mapped_session_count_for_router(
+        &self,
+        router_id: RouterId,
+    ) -> Option<usize> {
+        self.routers
+            .get(&router_id)
+            .map(super::RoomRouterState::mapped_session_count_for_test)
+    }
+
     pub(in crate::runtime::room) fn home_router_id_for_user(
         &self,
         user_id: &UserId,

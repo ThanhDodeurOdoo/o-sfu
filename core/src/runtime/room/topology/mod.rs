@@ -63,6 +63,7 @@ use crate::{
 };
 
 mod policy;
+mod shadow;
 #[cfg(any(test, feature = "testing-transport"))]
 mod test_support;
 
@@ -70,6 +71,7 @@ mod test_support;
 pub(in crate::runtime::room) use policy::LoadPressureReason;
 pub(in crate::runtime::room) use policy::TopologyPressureSnapshot;
 use policy::{CleanupInput, HomePlacementInput, PlacementPolicy};
+use shadow::{ShadowSessionKey, ShadowSessionTracker};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::room) enum RoomTopologyError {
@@ -117,7 +119,7 @@ impl From<RoomRouterStateError> for RoomTopologyError {
 /// The router id is authoritative. A producer never moves between routers
 /// after creation, because producer state drives dependent consumer state in
 /// the pure router.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct RoutedProducerId {
     router_id: RouterId,
     producer_id: RouterProducerId,
@@ -152,7 +154,7 @@ impl RoutedProducerId {
 /// This is the main cross-router subscription rule: receiver transport
 /// placement and consumer route ownership can differ. Room code must use this
 /// routed id for later pause, resume and teardown operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct RoutedConsumerId {
     router_id: RouterId,
     consumer_id: RouterConsumerId,
@@ -257,6 +259,9 @@ pub(super) struct RoomTopology {
     /// source router, so router-local session ids remain derived from the same
     /// user connection.
     session_seed_by_user: BTreeMap<UserId, u64>,
+    /// Tracks cross-router receiver sessions that exist only to host consumer
+    /// edges on a producer's source router.
+    shadow_sessions: ShadowSessionTracker,
 }
 
 /// Attachment role for one router inside a room topology.
@@ -336,6 +341,7 @@ impl RoomTopology {
             router_memberships,
             session_home_router: BTreeMap::new(),
             session_seed_by_user: BTreeMap::new(),
+            shadow_sessions: ShadowSessionTracker::default(),
         }
     }
 
@@ -469,7 +475,10 @@ impl RoomTopology {
         let producer_id = self
             .router_mut_for_user(user_id, router_id)?
             .add_producer(user_id, media_kind)?;
-        Ok(RoutedProducerId::new(router_id, producer_id))
+        let routed_producer_id = RoutedProducerId::new(router_id, producer_id);
+        self.shadow_sessions
+            .register_producer(user_id, routed_producer_id);
+        Ok(routed_producer_id)
     }
 
     /// Add a consumer route on the source producer's router.
@@ -485,14 +494,31 @@ impl RoomTopology {
         media_kind: RouterMediaKind,
         capability: ConsumerCapability,
     ) -> Result<RoutedConsumerId, RoomTopologyError> {
-        self.ensure_session_on_router(consumer_user_id, producer_id.router_id())?;
-        let consumer_id = self.router_mut(producer_id.router_id())?.add_consumer(
+        let receiver_session =
+            self.ensure_session_on_router(consumer_user_id, producer_id.router_id())?;
+        let consumer_result = self.router_mut(producer_id.router_id())?.add_consumer(
             consumer_user_id,
             producer_id.producer_id(),
             media_kind,
             capability,
-        )?;
-        Ok(RoutedConsumerId::new(producer_id.router_id(), consumer_id))
+        );
+        let consumer_id = match consumer_result {
+            Ok(consumer_id) => consumer_id,
+            Err(error) => {
+                if receiver_session.created_untracked_shadow {
+                    self.router_mut_for_user(consumer_user_id, producer_id.router_id())?
+                        .remove_session(consumer_user_id)?;
+                }
+                return Err(error.into());
+            }
+        };
+        let routed_consumer_id = RoutedConsumerId::new(producer_id.router_id(), consumer_id);
+        self.shadow_sessions.register_consumer(
+            producer_id,
+            routed_consumer_id,
+            receiver_session.shadow_key,
+        );
+        Ok(routed_consumer_id)
     }
 
     /// Forward a producer route-state change to the router that owns it.
@@ -523,21 +549,37 @@ impl RoomTopology {
         Ok(())
     }
 
+    /// Remove a routed consumer and prune its receiver shadow if it was the
+    /// last edge using that shadow.
+    ///
+    /// The pure router mutation happens first so topology shadow state only
+    /// changes after the router accepted the teardown. Returned shadow cleanup
+    /// stays local to the topology layer and does not involve transport media.
     pub(super) fn remove_consumer(
         &mut self,
         consumer_id: RoutedConsumerId,
     ) -> Result<(), RoomTopologyError> {
         self.router_mut(consumer_id.router_id())?
             .remove_consumer(consumer_id.consumer_id())?;
+        let shadow_sessions = self.shadow_sessions.unregister_consumer(consumer_id);
+        self.prune_shadow_sessions(shadow_sessions)?;
         Ok(())
     }
 
+    /// Remove a routed producer and reconcile the shadows of dependent
+    /// cross-router consumers.
+    ///
+    /// The pure router already removes dependent consumers when a producer is
+    /// removed. The shadow tracker mirrors that derived ownership so source
+    /// teardown cannot leave receiver shadows behind on the source router.
     pub(super) fn remove_producer(
         &mut self,
         producer_id: RoutedProducerId,
     ) -> Result<(), RoomTopologyError> {
         self.router_mut(producer_id.router_id())?
             .remove_producer(producer_id.producer_id())?;
+        let shadow_sessions = self.shadow_sessions.unregister_producer(producer_id);
+        self.prune_shadow_sessions(shadow_sessions)?;
         Ok(())
     }
 
@@ -563,6 +605,8 @@ impl RoomTopology {
             self.router_mut_for_user(user_id, router_id)?
                 .remove_session(user_id)?;
         }
+        let shadow_sessions = self.shadow_sessions.unregister_session(user_id);
+        self.prune_shadow_sessions(shadow_sessions)?;
         self.session_home_router.remove(user_id);
         self.session_seed_by_user.remove(user_id);
         self.detach_idle_spillover_routers();
@@ -612,22 +656,51 @@ impl RoomTopology {
         &mut self,
         user_id: &UserId,
         router_id: RouterId,
-    ) -> Result<(), RoomTopologyError> {
+    ) -> Result<ReceiverRouterSession, RoomTopologyError> {
         let Some(router_session_seed) = self.session_seed_by_user.get(user_id).copied() else {
             return Err(RoomTopologyError::MissingSessionPlacement {
                 user_id: user_id.clone(),
             });
         };
-        if !self.session_home_router.contains_key(user_id) {
-            return Err(RoomTopologyError::MissingSessionPlacement {
-                user_id: user_id.clone(),
-            });
-        }
+        let home_router_id = self.require_home_router_id(user_id)?;
+        let shadow_key = (home_router_id != router_id)
+            .then(|| ShadowSessionKey::new(router_id, user_id.clone()));
         self.attach_router(router_id)?;
+        let created_untracked_shadow = shadow_key
+            .as_ref()
+            .is_some_and(|key| !self.shadow_sessions.contains_shadow_session(key));
         self.router_mut_for_user(user_id, router_id)?
             .ensure_session(user_id, router_session_seed)?;
-        self.router_mut_for_user(user_id, router_id)?
-            .ensure_session_transports(user_id)?;
+        if let Err(error) = self
+            .router_mut_for_user(user_id, router_id)?
+            .ensure_session_transports(user_id)
+        {
+            if created_untracked_shadow {
+                self.router_mut_for_user(user_id, router_id)?
+                    .remove_session(user_id)?;
+            }
+            return Err(error.into());
+        }
+        Ok(ReceiverRouterSession {
+            shadow_key,
+            created_untracked_shadow,
+        })
+    }
+
+    /// Remove receiver shadows that no routed consumer edge still justifies.
+    ///
+    /// This is topology cleanup only. The room membership and media indexes
+    /// remain authoritative for live users, sources and subscriptions. A pruned
+    /// shadow removes only the receiver's router-local records on the source
+    /// router.
+    fn prune_shadow_sessions(
+        &mut self,
+        shadow_sessions: BTreeSet<ShadowSessionKey>,
+    ) -> Result<(), RoomTopologyError> {
+        for shadow_session in shadow_sessions {
+            self.router_mut_for_user(shadow_session.user_id(), shadow_session.router_id())?
+                .remove_session(shadow_session.user_id())?;
+        }
         Ok(())
     }
 
@@ -706,6 +779,20 @@ impl RoomTopology {
                 router_id,
             })
     }
+}
+
+/// Result of materializing a receiver on the source router for consumer setup.
+///
+/// A cross-router consumer needs a router-local receiver session before the
+/// pure router can create the consumer edge. If the edge creation later fails,
+/// `created_untracked_shadow` tells `RoomTopology` whether it may remove the
+/// newly materialized shadow without disrupting an older tracked edge.
+#[derive(Debug, Clone)]
+struct ReceiverRouterSession {
+    /// Shadow identity when the receiver home router differs from the source router.
+    shadow_key: Option<ShadowSessionKey>,
+    /// Whether this call created a shadow not yet owned by the tracker.
+    created_untracked_shadow: bool,
 }
 
 fn empty_router_capabilities() -> &'static MediaCapabilities {

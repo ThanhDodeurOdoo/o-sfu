@@ -34,4 +34,8 @@ impl RoomRouterState {
     pub(in crate::runtime::room) fn remove_transport_mapping_for_test(&mut self, user_id: &UserId) {
         self.transport_ids_by_user_id.remove(user_id);
     }
+
+    pub(in crate::runtime::room) fn mapped_session_count_for_test(&self) -> usize {
+        self.router_user_ids_by_user_id.len()
+    }
 }

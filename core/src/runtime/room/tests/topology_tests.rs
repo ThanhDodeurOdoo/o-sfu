@@ -207,6 +207,122 @@ fn topology_routes_cross_router_consumers_through_source_router() {
 }
 
 #[test]
+fn topology_prunes_receiver_shadow_when_cross_router_source_leaves_first() {
+    let mut topology = RoomTopology::new_with_bounded_spillover(RouterId(9), 2);
+    let producer_user_id = UserId::Integer(10);
+    let consumer_user_id = UserId::Integer(20);
+
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &producer_user_id,
+                0,
+                TopologyPressureSnapshot::default(),
+            )
+            .is_ok()
+    );
+    assert!(
+        topology
+            .apply_client_join_with_pressure(
+                &consumer_user_id,
+                1,
+                TopologyPressureSnapshot::default(),
+            )
+            .is_ok()
+    );
+
+    let producer = topology
+        .add_producer(&producer_user_id, RouterMediaKind::Audio)
+        .ok();
+    assert!(producer.is_some());
+    let Some(producer) = producer else {
+        return;
+    };
+    let consumer = topology
+        .add_consumer(
+            &consumer_user_id,
+            producer,
+            RouterMediaKind::Audio,
+            ConsumerCapability::Compatible,
+        )
+        .ok();
+    assert!(consumer.is_some());
+
+    assert_eq!(
+        topology.mapped_session_count_for_router(RouterId(9)),
+        Some(2)
+    );
+    assert!(topology.remove_session(&producer_user_id).is_ok());
+
+    assert_eq!(
+        topology.mapped_session_count_for_router(RouterId(9)),
+        Some(0)
+    );
+    assert_eq!(
+        topology.mapped_session_count_for_router(RouterId(10)),
+        Some(1)
+    );
+    assert_eq!(
+        topology.home_router_id_for_user(&consumer_user_id),
+        Some(RouterId(10))
+    );
+}
+
+#[test]
+fn topology_keeps_receiver_shadow_until_last_source_router_consumer_is_removed() {
+    let mut topology = RoomTopology::new_with_bounded_spillover(RouterId(9), 2);
+    let producer_user_id = UserId::Integer(10);
+    let consumer_user_id = UserId::Integer(20);
+
+    for (seed, user_id) in [(0, &producer_user_id), (1, &consumer_user_id)] {
+        assert!(
+            topology
+                .apply_client_join_with_pressure(user_id, seed, TopologyPressureSnapshot::default())
+                .is_ok()
+        );
+    }
+    let first_producer = topology
+        .add_producer(&producer_user_id, RouterMediaKind::Audio)
+        .ok();
+    let second_producer = topology
+        .add_producer(&producer_user_id, RouterMediaKind::Audio)
+        .ok();
+    assert!(first_producer.is_some());
+    assert!(second_producer.is_some());
+    let (Some(first_producer), Some(second_producer)) = (first_producer, second_producer) else {
+        return;
+    };
+
+    for producer in [first_producer, second_producer] {
+        assert!(
+            topology
+                .add_consumer(
+                    &consumer_user_id,
+                    producer,
+                    RouterMediaKind::Audio,
+                    ConsumerCapability::Compatible,
+                )
+                .is_ok()
+        );
+    }
+
+    assert_eq!(
+        topology.mapped_session_count_for_router(RouterId(9)),
+        Some(2)
+    );
+    assert!(topology.remove_producer(first_producer).is_ok());
+    assert_eq!(
+        topology.mapped_session_count_for_router(RouterId(9)),
+        Some(2)
+    );
+    assert!(topology.remove_producer(second_producer).is_ok());
+    assert_eq!(
+        topology.mapped_session_count_for_router(RouterId(9)),
+        Some(1)
+    );
+}
+
+#[test]
 fn topology_rejects_shadow_consumer_without_receiver_home_placement() {
     let mut topology = RoomTopology::new(RouterId(9));
     let missing_consumer_user_id = UserId::Integer(20);
