@@ -28,6 +28,6 @@ pub use session_types::{
     WebSocketCloseCode,
 };
 #[cfg(any(test, feature = "testing-transport"))]
-pub(crate) use session_types::{DownloadStates, StreamType};
+pub use source_model::test_support::{TestSourceKind, TestSubscriptionStates};
 
 pub use crate::{ConnectionId, RoomInstanceId};

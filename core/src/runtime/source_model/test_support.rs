@@ -12,70 +12,92 @@ use super::{
     SourceLayoutPolicy, SourcePolicy, SourcePublishIntent, SourceRoomPolicySelector,
     SourceSubscriptionIntent, UserStreamId,
 };
-use crate::runtime::{DownloadStates, StreamType};
+use crate::runtime::VideoLayoutIntent;
 
-pub(crate) fn source_publish_intent_for_stream_type(
-    stream_type: StreamType,
-) -> SourcePublishIntent {
+const AUDIO_DETECTOR_SOURCE_ID: &str = "test-audio-detector";
+const SCALABLE_VIDEO_SOURCE_ID: &str = "test-scalable-video";
+const READABLE_VIDEO_SOURCE_ID: &str = "test-readable-video";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TestSourceKind {
+    AudioDetector,
+    ScalableVideo,
+    ReadableVideo,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TestSubscriptionStates {
+    pub audio_detector: Option<bool>,
+    pub scalable_video: Option<bool>,
+    pub readable_video: Option<bool>,
+    pub scalable_video_layout: Option<VideoLayoutIntent>,
+    pub readable_video_layout: Option<VideoLayoutIntent>,
+}
+
+#[must_use]
+pub fn source_publish_intent_for_source(source: TestSourceKind) -> SourcePublishIntent {
     SourcePublishIntent::new(
-        stream_id_for_stream_type(stream_type),
-        media_kind_for_stream_type(stream_type),
-        source_policy_for_stream_type(stream_type),
+        stream_id_for_source(source),
+        media_kind_for_source(source),
+        source_policy_for_source(source),
     )
 }
 
-pub(crate) fn stream_id_for_stream_type(stream_type: StreamType) -> UserStreamId {
-    match stream_type {
-        StreamType::Audio => UserStreamId::new("audio"),
-        StreamType::Camera => UserStreamId::new("camera"),
-        StreamType::Screen => UserStreamId::new("screen"),
+#[must_use]
+pub fn stream_id_for_source(source: TestSourceKind) -> UserStreamId {
+    match source {
+        TestSourceKind::AudioDetector => UserStreamId::new(AUDIO_DETECTOR_SOURCE_ID),
+        TestSourceKind::ScalableVideo => UserStreamId::new(SCALABLE_VIDEO_SOURCE_ID),
+        TestSourceKind::ReadableVideo => UserStreamId::new(READABLE_VIDEO_SOURCE_ID),
     }
 }
 
-pub(crate) fn stream_type_for_stream_id(stream_id: &UserStreamId) -> Option<StreamType> {
+#[must_use]
+pub fn source_kind_for_stream_id(stream_id: &UserStreamId) -> Option<TestSourceKind> {
     match stream_id.as_str() {
-        "audio" => Some(StreamType::Audio),
-        "camera" => Some(StreamType::Camera),
-        "screen" => Some(StreamType::Screen),
+        AUDIO_DETECTOR_SOURCE_ID => Some(TestSourceKind::AudioDetector),
+        SCALABLE_VIDEO_SOURCE_ID => Some(TestSourceKind::ScalableVideo),
+        READABLE_VIDEO_SOURCE_ID => Some(TestSourceKind::ReadableVideo),
         _ => None,
     }
 }
 
-pub(crate) fn subscription_intents_from_download_states(
-    states: &DownloadStates,
+#[must_use]
+pub fn subscription_intents_from_test_states(
+    states: &TestSubscriptionStates,
 ) -> BTreeMap<UserStreamId, SourceSubscriptionIntent> {
     let mut intents = BTreeMap::new();
-    if states.audio.is_some() {
+    if states.audio_detector.is_some() {
         intents.insert(
-            stream_id_for_stream_type(StreamType::Audio),
-            SourceSubscriptionIntent::new(states.audio, None),
+            stream_id_for_source(TestSourceKind::AudioDetector),
+            SourceSubscriptionIntent::new(states.audio_detector, None),
         );
     }
-    if states.camera.is_some() || states.camera_layout.is_some() {
+    if states.scalable_video.is_some() || states.scalable_video_layout.is_some() {
         intents.insert(
-            stream_id_for_stream_type(StreamType::Camera),
-            SourceSubscriptionIntent::new(states.camera, states.camera_layout),
+            stream_id_for_source(TestSourceKind::ScalableVideo),
+            SourceSubscriptionIntent::new(states.scalable_video, states.scalable_video_layout),
         );
     }
-    if states.screen.is_some() || states.screen_layout.is_some() {
+    if states.readable_video.is_some() || states.readable_video_layout.is_some() {
         intents.insert(
-            stream_id_for_stream_type(StreamType::Screen),
-            SourceSubscriptionIntent::new(states.screen, states.screen_layout),
+            stream_id_for_source(TestSourceKind::ReadableVideo),
+            SourceSubscriptionIntent::new(states.readable_video, states.readable_video_layout),
         );
     }
     intents
 }
 
-const fn media_kind_for_stream_type(stream_type: StreamType) -> MediaKind {
-    match stream_type {
-        StreamType::Audio => MediaKind::Audio,
-        StreamType::Camera | StreamType::Screen => MediaKind::Video,
+const fn media_kind_for_source(source: TestSourceKind) -> MediaKind {
+    match source {
+        TestSourceKind::AudioDetector => MediaKind::Audio,
+        TestSourceKind::ScalableVideo | TestSourceKind::ReadableVideo => MediaKind::Video,
     }
 }
 
-const fn source_policy_for_stream_type(stream_type: StreamType) -> SourcePolicy {
-    match stream_type {
-        StreamType::Audio => SourcePolicy::new(
+const fn source_policy_for_source(source: TestSourceKind) -> SourcePolicy {
+    match source {
+        TestSourceKind::AudioDetector => SourcePolicy::new(
             None,
             SourceAdaptationPolicy::None,
             Some(ActiveSpeakerPolicy::new(
@@ -83,7 +105,7 @@ const fn source_policy_for_stream_type(stream_type: StreamType) -> SourcePolicy 
                 ActiveSpeakerSourceRole::Detector,
             )),
         ),
-        StreamType::Camera => SourcePolicy::new(
+        TestSourceKind::ScalableVideo => SourcePolicy::new(
             Some(SourceLayoutPolicy::new(
                 SourceRoomPolicySelector::VisibleThumbnail,
                 Some(SourceRoomPolicySelector::ActiveSpeaker),
@@ -94,7 +116,7 @@ const fn source_policy_for_stream_type(stream_type: StreamType) -> SourcePolicy 
                 ActiveSpeakerSourceRole::Promotable,
             )),
         ),
-        StreamType::Screen => SourcePolicy::new(
+        TestSourceKind::ReadableVideo => SourcePolicy::new(
             Some(SourceLayoutPolicy::new(
                 SourceRoomPolicySelector::ReadableDetail,
                 None,

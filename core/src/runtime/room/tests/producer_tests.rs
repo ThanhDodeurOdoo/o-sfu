@@ -32,13 +32,13 @@ use crate::{
 fn assert_track_binding_activity_update(
     message: &UserOutbound,
     user_id: &UserId,
-    stream_type: StreamType,
+    stream_type: TestSourceKind,
     active: Option<bool>,
 ) {
     match message {
         UserOutbound::TrackBindingUpdate(update) => {
             assert_eq!(&update.user_id, user_id);
-            assert_eq!(update.stream_id, stream_id_for_stream_type(stream_type));
+            assert_eq!(update.stream_id, stream_id_for_source(stream_type));
             assert_eq!(update.active, active);
         }
         other => panic!("expected TrackBindingUpdate, got {other:?}"),
@@ -54,7 +54,7 @@ async fn production_change_pauses_producer_and_broadcasts_track_binding() {
         .media()
         .publish_track(
             &UserId::Integer(1),
-            StreamType::Camera,
+            TestSourceKind::ScalableVideo,
             MediaKind::Video,
             test_video_rtp_parameters(),
             &adapter,
@@ -73,7 +73,12 @@ async fn production_change_pauses_producer_and_broadcasts_track_binding() {
 
     room.test_api()
         .media()
-        .set_publication_active(&UserId::Integer(1), StreamType::Camera, false, &adapter)
+        .set_publication_active(
+            &UserId::Integer(1),
+            TestSourceKind::ScalableVideo,
+            false,
+            &adapter,
+        )
         .await;
 
     let msgs1 = drain_outbound(&mut rx1);
@@ -83,26 +88,31 @@ async fn production_change_pauses_producer_and_broadcasts_track_binding() {
     assert_track_binding_activity_update(
         &msgs1[0],
         &UserId::Integer(1),
-        StreamType::Camera,
+        TestSourceKind::ScalableVideo,
         Some(false),
     );
     assert_track_binding_activity_update(
         &msgs2[0],
         &UserId::Integer(1),
-        StreamType::Camera,
+        TestSourceKind::ScalableVideo,
         Some(false),
     );
 
     room.test_api()
         .media()
-        .set_publication_active(&UserId::Integer(1), StreamType::Camera, true, &adapter)
+        .set_publication_active(
+            &UserId::Integer(1),
+            TestSourceKind::ScalableVideo,
+            true,
+            &adapter,
+        )
         .await;
 
     let msgs1 = drain_outbound(&mut rx1);
     assert_track_binding_activity_update(
         &msgs1[0],
         &UserId::Integer(1),
-        StreamType::Camera,
+        TestSourceKind::ScalableVideo,
         Some(true),
     );
 }
@@ -117,7 +127,7 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
                 &adapter,
@@ -137,7 +147,7 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
         .producer_transport_media_id(
             &UserId::Integer(1),
             test_connection_id(0),
-            StreamType::Camera,
+            TestSourceKind::ScalableVideo,
         )
         .await
     else {
@@ -148,7 +158,7 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
         room.unpublish_track(
             &UserId::Integer(1),
             test_connection_id(0),
-            &stream_id_for_stream_type(StreamType::Camera),
+            &stream_id_for_source(TestSourceKind::ScalableVideo),
             &adapter,
         )
         .await,
@@ -164,7 +174,7 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
             .has_producer_route_target(
                 &UserId::Integer(1),
                 test_connection_id(0),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
             )
             .await
     );
@@ -177,14 +187,14 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
         message,
         UserOutbound::TrackBindingUpdate(update)
             if update.user_id == UserId::Integer(1)
-                && update.stream_id == stream_id_for_stream_type(StreamType::Camera)
+                && update.stream_id == stream_id_for_source(TestSourceKind::ScalableVideo)
                 && update.active.is_none()
     )));
     assert!(subscriber_messages.iter().any(|message| matches!(
         message,
         UserOutbound::TrackBindingUpdate(update)
             if update.user_id == UserId::Integer(1)
-                && update.stream_id == stream_id_for_stream_type(StreamType::Camera)
+                && update.stream_id == stream_id_for_source(TestSourceKind::ScalableVideo)
                 && update.active.is_none()
     )));
     let removed_media_events = fake
@@ -218,7 +228,7 @@ async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_simulcast_video_rtp_parameters(),
                 &adapter,
@@ -282,7 +292,7 @@ async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_simulcast_video_rtp_parameters(),
                 &adapter,
@@ -319,7 +329,7 @@ async fn joining_a_third_user_lowers_existing_thumbnail_consumers() {
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_simulcast_video_rtp_parameters(),
                 &adapter,
@@ -391,7 +401,7 @@ async fn leaving_a_multiparty_room_restores_the_highest_consumer_layer() {
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_simulcast_video_rtp_parameters(),
                 &adapter,
@@ -657,7 +667,7 @@ async fn publish_audio_and_camera(room: &Arc<Room>, user_id: &UserId, adapter: &
             .media()
             .publish_track(
                 user_id,
-                StreamType::Audio,
+                TestSourceKind::AudioDetector,
                 MediaKind::Audio,
                 test_audio_rtp_parameters(),
                 adapter,
@@ -674,7 +684,7 @@ async fn publish_camera(room: &Arc<Room>, user_id: &UserId, adapter: &MediaTrans
             .media()
             .publish_track(
                 user_id,
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_simulcast_video_rtp_parameters(),
                 adapter,
@@ -694,7 +704,7 @@ async fn source_media_ids(
     let Some(audio_media_id) = room
         .test_api()
         .inspect()
-        .producer_transport_media_id(user_id, connection_id, StreamType::Audio)
+        .producer_transport_media_id(user_id, connection_id, TestSourceKind::AudioDetector)
         .await
     else {
         panic!("audio producer should expose a transport media id");
@@ -702,7 +712,7 @@ async fn source_media_ids(
     let Some(camera_media_id) = room
         .test_api()
         .inspect()
-        .producer_transport_media_id(user_id, connection_id, StreamType::Camera)
+        .producer_transport_media_id(user_id, connection_id, TestSourceKind::ScalableVideo)
         .await
     else {
         panic!("camera producer should expose a transport media id");
@@ -747,7 +757,7 @@ async fn assert_user_has_no_producer_route_target(
     room: &Arc<Room>,
     user_id: &UserId,
     connection_id: ConnectionId,
-    stream_type: StreamType,
+    stream_type: TestSourceKind,
 ) {
     assert!(
         !room
@@ -819,7 +829,7 @@ async fn assert_subscription_layout(
     room: &Arc<Room>,
     adapter: &MediaTransport,
     consumer_user_id: &UserId,
-    stream_type: StreamType,
+    stream_type: TestSourceKind,
     expected_role: DiagnosticsVideoLayoutRole,
     expected_priority: DiagnosticsVideoRoutePriority,
 ) {
@@ -832,7 +842,7 @@ async fn assert_subscription_layout(
     };
     assert!(
         user.subscriptions.iter().any(|subscription| {
-            subscription.stream_id == stream_id_for_stream_type(stream_type).to_string()
+            subscription.stream_id == stream_id_for_source(stream_type).to_string()
                 && subscription.layout_role == Some(expected_role)
                 && subscription.layout_priority == Some(expected_priority)
         }),
@@ -980,9 +990,9 @@ async fn pinned_camera_layout_overrides_active_speaker_bias_for_that_receiver() 
         .update_subscription(
             &UserId::Integer(2),
             &UserId::Integer(1),
-            &DownloadStates {
-                camera_layout: Some(VideoLayoutIntent::Pinned),
-                ..DownloadStates::default()
+            &TestSubscriptionStates {
+                scalable_video_layout: Some(VideoLayoutIntent::Pinned),
+                ..TestSubscriptionStates::default()
             },
             &adapter,
         )
@@ -1020,9 +1030,9 @@ async fn hidden_camera_layout_suppresses_active_speaker_featured_quality() {
         .update_subscription(
             &UserId::Integer(2),
             &UserId::Integer(1),
-            &DownloadStates {
-                camera_layout: Some(VideoLayoutIntent::Hidden),
-                ..DownloadStates::default()
+            &TestSubscriptionStates {
+                scalable_video_layout: Some(VideoLayoutIntent::Hidden),
+                ..TestSubscriptionStates::default()
             },
             &adapter,
         )
@@ -1060,9 +1070,9 @@ async fn explicit_visible_thumbnail_camera_layout_stays_on_thumbnail_quality() {
         .update_subscription(
             &UserId::Integer(2),
             &UserId::Integer(1),
-            &DownloadStates {
-                camera_layout: Some(VideoLayoutIntent::VisibleThumbnail),
-                ..DownloadStates::default()
+            &TestSubscriptionStates {
+                scalable_video_layout: Some(VideoLayoutIntent::VisibleThumbnail),
+                ..TestSubscriptionStates::default()
             },
             &adapter,
         )
@@ -1088,7 +1098,7 @@ async fn screen_share_layout_uses_screen_specific_priority_in_diagnostics() {
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Screen,
+                TestSourceKind::ReadableVideo,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
                 &adapter,
@@ -1103,7 +1113,7 @@ async fn screen_share_layout_uses_screen_specific_priority_in_diagnostics() {
         &room,
         &adapter,
         &UserId::Integer(2),
-        StreamType::Screen,
+        TestSourceKind::ReadableVideo,
         DiagnosticsVideoLayoutRole::ReadableDetail,
         DiagnosticsVideoRoutePriority::ReadableDetail,
     )
@@ -1121,7 +1131,7 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
             .media()
             .publish_track(
                 &scenario.publisher_user_id,
-                StreamType::Audio,
+                TestSourceKind::AudioDetector,
                 MediaKind::Audio,
                 test_audio_rtp_parameters(),
                 &scenario.media_transport,
@@ -1152,7 +1162,7 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
         .producer_transport_media_id(
             &scenario.publisher_user_id,
             connection_id,
-            StreamType::Audio,
+            TestSourceKind::AudioDetector,
         )
         .await
     else {
@@ -1173,7 +1183,7 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
             .unpublish_track(
                 &scenario.publisher_user_id,
                 connection_id,
-                &stream_id_for_stream_type(StreamType::Audio),
+                &stream_id_for_source(TestSourceKind::AudioDetector),
                 &scenario.media_transport,
             )
             .await,
@@ -1191,7 +1201,7 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
             .has_producer_route_target(
                 &scenario.publisher_user_id,
                 connection_id,
-                StreamType::Audio,
+                TestSourceKind::AudioDetector,
             )
             .await
     );
@@ -1225,7 +1235,7 @@ async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
         .media()
         .publish_track(
             &UserId::Integer(1),
-            StreamType::Camera,
+            TestSourceKind::ScalableVideo,
             MediaKind::Video,
             test_video_rtp_parameters(),
             &adapter,
@@ -1258,7 +1268,7 @@ async fn user_replacement_purges_stale_published_media_state() {
         .media()
         .publish_track(
             &UserId::Integer(1),
-            StreamType::Camera,
+            TestSourceKind::ScalableVideo,
             MediaKind::Video,
             test_video_rtp_parameters(),
             &adapter,
@@ -1286,7 +1296,7 @@ async fn user_replacement_purges_stale_published_media_state() {
             .has_producer_route_target(
                 &UserId::Integer(1),
                 test_connection_id(0),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
             )
             .await
     );
@@ -1318,7 +1328,7 @@ async fn user_replacement_purges_stale_published_media_state() {
             .has_producer_route_target(
                 &UserId::Integer(1),
                 test_connection_id(0),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
             )
             .await
     );
@@ -1333,7 +1343,7 @@ async fn user_replacement_purges_all_published_stream_mappings() {
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
                 &adapter,
@@ -1346,7 +1356,7 @@ async fn user_replacement_purges_all_published_stream_mappings() {
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Audio,
+                TestSourceKind::AudioDetector,
                 MediaKind::Audio,
                 test_audio_rtp_parameters(),
                 &adapter,
@@ -1370,7 +1380,7 @@ async fn user_replacement_purges_all_published_stream_mappings() {
         .producer_transport_media_id(
             &UserId::Integer(1),
             test_connection_id(0),
-            StreamType::Camera,
+            TestSourceKind::ScalableVideo,
         )
         .await;
     let audio_transport_media_id = room
@@ -1379,7 +1389,7 @@ async fn user_replacement_purges_all_published_stream_mappings() {
         .producer_transport_media_id(
             &UserId::Integer(1),
             test_connection_id(0),
-            StreamType::Audio,
+            TestSourceKind::AudioDetector,
         )
         .await;
     assert!(camera_transport_media_id.is_some());
@@ -1415,14 +1425,14 @@ async fn user_replacement_purges_all_published_stream_mappings() {
         &room,
         &UserId::Integer(1),
         test_connection_id(0),
-        StreamType::Camera,
+        TestSourceKind::ScalableVideo,
     )
     .await;
     assert_user_has_no_producer_route_target(
         &room,
         &UserId::Integer(1),
         test_connection_id(0),
-        StreamType::Audio,
+        TestSourceKind::AudioDetector,
     )
     .await;
 }
@@ -1444,7 +1454,7 @@ async fn publish_track_releases_room_lock_while_waiting_on_media_transport() {
                 .media()
                 .publish_track(
                     &UserId::Integer(1),
-                    StreamType::Camera,
+                    TestSourceKind::ScalableVideo,
                     MediaKind::Video,
                     test_video_rtp_parameters(),
                     &adapter,
@@ -1514,7 +1524,7 @@ async fn publish_track_defers_producer_commit_until_transport_publish_succeeds()
                 .media()
                 .publish_track(
                     &UserId::Integer(1),
-                    StreamType::Camera,
+                    TestSourceKind::ScalableVideo,
                     MediaKind::Video,
                     test_video_rtp_parameters(),
                     &adapter,
@@ -1552,7 +1562,7 @@ async fn publish_track_defers_producer_commit_until_transport_publish_succeeds()
                 transport_media_id.expect("published track should have a transport id")
             )
             .await,
-        Some(StreamType::Camera)
+        Some(TestSourceKind::ScalableVideo)
     );
     assert!(
         room.test_api()
@@ -1560,7 +1570,7 @@ async fn publish_track_defers_producer_commit_until_transport_publish_succeeds()
             .has_producer_route_target(
                 &UserId::Integer(1),
                 test_connection_id(0),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
             )
             .await
     );
@@ -1579,7 +1589,7 @@ async fn publish_track_cleans_up_transport_media_when_user_leaves_mid_publish() 
                 .media()
                 .publish_track(
                     &UserId::Integer(1),
-                    StreamType::Camera,
+                    TestSourceKind::ScalableVideo,
                     MediaKind::Video,
                     test_video_rtp_parameters(),
                     &adapter,
@@ -1627,7 +1637,7 @@ async fn production_change_updates_screen_track_binding_activity() {
         .media()
         .publish_track(
             &UserId::Integer(1),
-            StreamType::Screen,
+            TestSourceKind::ReadableVideo,
             MediaKind::Video,
             test_video_rtp_parameters(),
             &adapter,
@@ -1639,14 +1649,19 @@ async fn production_change_updates_screen_track_binding_activity() {
 
     room.test_api()
         .media()
-        .set_publication_active(&UserId::Integer(1), StreamType::Screen, false, &adapter)
+        .set_publication_active(
+            &UserId::Integer(1),
+            TestSourceKind::ReadableVideo,
+            false,
+            &adapter,
+        )
         .await;
 
     let msgs = drain_outbound(&mut rx1);
     assert_track_binding_activity_update(
         &msgs[0],
         &UserId::Integer(1),
-        StreamType::Screen,
+        TestSourceKind::ReadableVideo,
         Some(false),
     );
 }
@@ -1659,7 +1674,7 @@ async fn production_change_updates_transport_route_activity() {
         .media()
         .publish_track(
             &UserId::Integer(1),
-            StreamType::Camera,
+            TestSourceKind::ScalableVideo,
             MediaKind::Video,
             test_video_rtp_parameters(),
             &adapter,
@@ -1670,7 +1685,12 @@ async fn production_change_updates_transport_route_activity() {
 
     room.test_api()
         .media()
-        .set_publication_active(&UserId::Integer(1), StreamType::Camera, false, &adapter)
+        .set_publication_active(
+            &UserId::Integer(1),
+            TestSourceKind::ScalableVideo,
+            false,
+            &adapter,
+        )
         .await;
 
     wait_for_fake_event(&fake, |event| {
@@ -1693,7 +1713,7 @@ async fn production_change_commits_user_state_before_transport_update_finishes()
         .media()
         .publish_track(
             &UserId::Integer(1),
-            StreamType::Camera,
+            TestSourceKind::ScalableVideo,
             MediaKind::Video,
             test_video_rtp_parameters(),
             &adapter,
@@ -1710,7 +1730,12 @@ async fn production_change_commits_user_state_before_transport_update_finishes()
         async move {
             room.test_api()
                 .media()
-                .set_publication_active(&UserId::Integer(1), StreamType::Camera, false, &adapter)
+                .set_publication_active(
+                    &UserId::Integer(1),
+                    TestSourceKind::ScalableVideo,
+                    false,
+                    &adapter,
+                )
                 .await;
         }
     });
@@ -1919,7 +1944,7 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
                 .media()
                 .publish_track(
                     &UserId::Integer(1),
-                    StreamType::Camera,
+                    TestSourceKind::ScalableVideo,
                     MediaKind::Video,
                     test_video_rtp_parameters(),
                     &adapter,
@@ -1981,7 +2006,7 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
         room.unpublish_track(
             &UserId::Integer(1),
             test_connection_id(0),
-            &stream_id_for_stream_type(StreamType::Camera),
+            &stream_id_for_source(TestSourceKind::ScalableVideo),
             &media_transport
         )
         .await,
@@ -2008,7 +2033,12 @@ async fn production_change_ignores_unknown_stream_type() {
     // No producer published for audio. PRODUCTION_CHANGE should be a no-op.
     room.test_api()
         .media()
-        .set_publication_active(&UserId::Integer(1), StreamType::Audio, false, &adapter)
+        .set_publication_active(
+            &UserId::Integer(1),
+            TestSourceKind::AudioDetector,
+            false,
+            &adapter,
+        )
         .await;
 
     assert!(
@@ -2171,7 +2201,7 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
             .media()
             .publish_track(
                 &scenario.publisher_user_id,
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 video_rtp_parameters_with_mid("cam-refresh-retry", 22_222),
                 &scenario.media_transport,
@@ -2182,7 +2212,7 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
     assert!(drain_outbound(&mut scenario.publisher_rx).is_empty());
     assert_bootstrap_for_stream(
         &drain_outbound(&mut scenario.subscriber_rx),
-        StreamType::Camera,
+        TestSourceKind::ScalableVideo,
     );
     assert_eq!(scenario.room.test_api().inspect().consumer_count().await, 1);
 
@@ -2199,7 +2229,7 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
             .media()
             .publish_track(
                 &scenario.publisher_user_id,
-                StreamType::Screen,
+                TestSourceKind::ReadableVideo,
                 MediaKind::Video,
                 video_rtp_parameters_with_mid("screen-refresh-retry", 33_333),
                 &scenario.media_transport,
@@ -2222,7 +2252,7 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
     assert_eq!(scenario.room.test_api().inspect().consumer_count().await, 2);
     assert_bootstrap_for_stream(
         &drain_outbound(&mut scenario.subscriber_rx),
-        StreamType::Screen,
+        TestSourceKind::ReadableVideo,
     );
 
     let second_refresh_offer = scenario
@@ -2303,7 +2333,7 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
                 &scenario.publisher_user_id,
                 NegotiatedPublish {
                     connection_id: publisher_connection_id,
-                    stream_type: StreamType::Camera,
+                    stream_type: TestSourceKind::ScalableVideo,
                     media_kind: MediaKind::Video,
                     transport_media_id,
                     consumable_rtp_parameters: negotiated_parameters,
@@ -2316,7 +2346,7 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
     assert!(drain_outbound(&mut scenario.publisher_rx).is_empty());
     assert_bootstrap_for_stream(
         &drain_outbound(&mut scenario.subscriber_rx),
-        StreamType::Camera,
+        TestSourceKind::ScalableVideo,
     );
     assert_eq!(scenario.room.test_api().inspect().consumer_count().await, 1);
 }
@@ -2449,8 +2479,14 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
         .expect("publisher should have a live connection");
 
     assert!(
-        stage_negotiated_publish(&room, &user_id, connection_id, StreamType::Camera, &adapter,)
-            .await
+        stage_negotiated_publish(
+            &room,
+            &user_id,
+            connection_id,
+            TestSourceKind::ScalableVideo,
+            &adapter,
+        )
+        .await
     );
     assert_eq!(
         staged_publish_count(&room, &user_id, connection_id).await,
@@ -2461,7 +2497,7 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
         room.rollback_staged_publish(
             &user_id,
             connection_id,
-            &stream_id_for_stream_type(StreamType::Camera),
+            &stream_id_for_source(TestSourceKind::ScalableVideo),
             &adapter
         )
         .await,
@@ -2513,7 +2549,7 @@ async fn duplicate_staged_publish_is_ignored_before_transport_reservation() {
         room.stage_negotiated_publish(
             &user_id,
             connection_id,
-            &source_publish_intent_for_stream_type(StreamType::Camera),
+            &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
             &adapter
         )
         .await
@@ -2524,7 +2560,7 @@ async fn duplicate_staged_publish_is_ignored_before_transport_reservation() {
         room.stage_negotiated_publish(
             &user_id,
             connection_id,
-            &source_publish_intent_for_stream_type(StreamType::Camera),
+            &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
             &adapter
         )
         .await
@@ -2551,7 +2587,7 @@ async fn duplicate_staged_publish_is_ignored_before_transport_reservation() {
         room.rollback_staged_publish(
             &user_id,
             connection_id,
-            &stream_id_for_stream_type(StreamType::Camera),
+            &stream_id_for_source(TestSourceKind::ScalableVideo),
             &adapter
         )
         .await,
@@ -2577,7 +2613,7 @@ async fn explicit_unpublish_missing_publication_is_a_domain_noop() {
         room.unpublish_track(
             &user_id,
             connection_id,
-            &stream_id_for_stream_type(StreamType::Camera),
+            &stream_id_for_source(TestSourceKind::ScalableVideo),
             &adapter
         )
         .await,
@@ -2598,20 +2634,30 @@ async fn staged_publish_rollback_reports_cleanup_failure_without_state_ownership
         .expect("publisher should have a live connection");
 
     assert!(
-        stage_negotiated_publish(&room, &user_id, connection_id, StreamType::Camera, &adapter,)
-            .await
+        stage_negotiated_publish(
+            &room,
+            &user_id,
+            connection_id,
+            TestSourceKind::ScalableVideo,
+            &adapter,
+        )
+        .await
     );
-    let transport_media_id =
-        staged_publish_transport_media_id(&room, &user_id, connection_id, StreamType::Camera)
-            .await
-            .expect("staged publish should expose its transport media id");
+    let transport_media_id = staged_publish_transport_media_id(
+        &room,
+        &user_id,
+        connection_id,
+        TestSourceKind::ScalableVideo,
+    )
+    .await
+    .expect("staged publish should expose its transport media id");
     fake.fail_remove_media_until_allowed(transport_media_id);
 
     assert_eq!(
         room.rollback_staged_publish(
             &user_id,
             connection_id,
-            &stream_id_for_stream_type(StreamType::Camera),
+            &stream_id_for_source(TestSourceKind::ScalableVideo),
             &adapter
         )
         .await,
@@ -2662,8 +2708,14 @@ async fn staged_negotiated_publish_commit_moves_through_room_owned_transaction()
         .expect("publisher should have a live connection");
 
     assert!(
-        stage_negotiated_publish(&room, &user_id, connection_id, StreamType::Camera, &adapter,)
-            .await
+        stage_negotiated_publish(
+            &room,
+            &user_id,
+            connection_id,
+            TestSourceKind::ScalableVideo,
+            &adapter,
+        )
+        .await
     );
     assert_eq!(
         staged_publish_count(&room, &user_id, connection_id).await,
@@ -2677,11 +2729,17 @@ async fn staged_negotiated_publish_commit_moves_through_room_owned_transaction()
         0
     );
     assert!(
-        room.is_stream_published(&user_id, &stream_id_for_stream_type(StreamType::Camera))
-            .await
+        room.is_stream_published(
+            &user_id,
+            &stream_id_for_source(TestSourceKind::ScalableVideo)
+        )
+        .await
     );
     assert!(drain_outbound(&mut publisher_rx).is_empty());
-    assert_bootstrap_for_stream(&drain_outbound(&mut subscriber_rx), StreamType::Camera);
+    assert_bootstrap_for_stream(
+        &drain_outbound(&mut subscriber_rx),
+        TestSourceKind::ScalableVideo,
+    );
     assert!(
         !fake.snapshot_events().iter().any(|event| matches!(
             event,
@@ -2705,13 +2763,23 @@ async fn staged_negotiated_publish_commit_materializes_all_negotiated_encodings(
         .expect("publisher should have a live connection");
 
     assert!(
-        stage_negotiated_publish(&room, &user_id, connection_id, StreamType::Camera, &adapter,)
-            .await
+        stage_negotiated_publish(
+            &room,
+            &user_id,
+            connection_id,
+            TestSourceKind::ScalableVideo,
+            &adapter,
+        )
+        .await
     );
-    let transport_media_id =
-        staged_publish_transport_media_id(&room, &user_id, connection_id, StreamType::Camera)
-            .await
-            .expect("staged publish should expose its transport media id");
+    let transport_media_id = staged_publish_transport_media_id(
+        &room,
+        &user_id,
+        connection_id,
+        TestSourceKind::ScalableVideo,
+    )
+    .await
+    .expect("staged publish should expose its transport media id");
     fake.set_negotiated_producer_parameters(
         transport_media_id,
         test_simulcast_video_rtp_parameters(),
@@ -2724,8 +2792,11 @@ async fn staged_negotiated_publish_commit_materializes_all_negotiated_encodings(
         0
     );
     assert!(
-        room.is_stream_published(&user_id, &stream_id_for_stream_type(StreamType::Camera))
-            .await
+        room.is_stream_published(
+            &user_id,
+            &stream_id_for_source(TestSourceKind::ScalableVideo)
+        )
+        .await
     );
     assert_eq!(
         room.test_api()
@@ -2738,7 +2809,7 @@ async fn staged_negotiated_publish_commit_materializes_all_negotiated_encodings(
     );
     assert!(drain_outbound(&mut publisher_rx).is_empty());
     let subscriber_messages = drain_outbound(&mut subscriber_rx);
-    assert_bootstrap_for_stream(&subscriber_messages, StreamType::Camera);
+    assert_bootstrap_for_stream(&subscriber_messages, TestSourceKind::ScalableVideo);
     assert!(
         subscriber_messages.iter().any(|message| matches!(
             message,
@@ -2766,13 +2837,23 @@ async fn staged_negotiated_publish_commit_cleans_up_when_transport_parameters_ar
         .expect("publisher should have a live connection");
 
     assert!(
-        stage_negotiated_publish(&room, &user_id, connection_id, StreamType::Camera, &adapter,)
-            .await
+        stage_negotiated_publish(
+            &room,
+            &user_id,
+            connection_id,
+            TestSourceKind::ScalableVideo,
+            &adapter,
+        )
+        .await
     );
-    let transport_media_id =
-        staged_publish_transport_media_id(&room, &user_id, connection_id, StreamType::Camera)
-            .await
-            .expect("staged publish should expose its transport media id");
+    let transport_media_id = staged_publish_transport_media_id(
+        &room,
+        &user_id,
+        connection_id,
+        TestSourceKind::ScalableVideo,
+    )
+    .await
+    .expect("staged publish should expose its transport media id");
     fake.clear_negotiated_producer_parameters(transport_media_id);
 
     commit_staged_publishes(&room, &user_id, connection_id, &adapter).await;
@@ -2783,7 +2864,10 @@ async fn staged_negotiated_publish_commit_cleans_up_when_transport_parameters_ar
     );
     assert!(
         !room
-            .is_stream_published(&user_id, &stream_id_for_stream_type(StreamType::Camera))
+            .is_stream_published(
+                &user_id,
+                &stream_id_for_source(TestSourceKind::ScalableVideo)
+            )
             .await
     );
     assert!(drain_outbound(&mut publisher_rx).is_empty());
@@ -2813,8 +2897,14 @@ async fn staged_negotiated_publish_commit_cleans_up_when_user_state_rejects_it()
         .expect("publisher should have a live connection");
 
     assert!(
-        stage_negotiated_publish(&room, &user_id, connection_id, StreamType::Camera, &adapter,)
-            .await
+        stage_negotiated_publish(
+            &room,
+            &user_id,
+            connection_id,
+            TestSourceKind::ScalableVideo,
+            &adapter,
+        )
+        .await
     );
     assert!(
         room.test_api()
@@ -2858,13 +2948,23 @@ async fn staged_negotiated_publish_commit_rejects_replaced_connection() {
         .expect("publisher should have a live connection");
 
     assert!(
-        stage_negotiated_publish(&room, &user_id, connection_id, StreamType::Camera, &adapter,)
-            .await
+        stage_negotiated_publish(
+            &room,
+            &user_id,
+            connection_id,
+            TestSourceKind::ScalableVideo,
+            &adapter,
+        )
+        .await
     );
-    let transport_media_id =
-        staged_publish_transport_media_id(&room, &user_id, connection_id, StreamType::Camera)
-            .await
-            .expect("staged publish should expose its transport media id");
+    let transport_media_id = staged_publish_transport_media_id(
+        &room,
+        &user_id,
+        connection_id,
+        TestSourceKind::ScalableVideo,
+    )
+    .await
+    .expect("staged publish should expose its transport media id");
     let (replacement_sender, _replacement_rx) = test_sender();
     let replacement_connection_id = room
         .test_api()
@@ -2891,7 +2991,10 @@ async fn staged_negotiated_publish_commit_rejects_replaced_connection() {
     assert_eq!(room.test_api().inspect().producer_count().await, 0);
     assert!(
         !room
-            .is_stream_published(&user_id, &stream_id_for_stream_type(StreamType::Camera))
+            .is_stream_published(
+                &user_id,
+                &stream_id_for_source(TestSourceKind::ScalableVideo)
+            )
             .await
     );
     assert_eq!(
@@ -2928,12 +3031,24 @@ async fn staged_publish_connection_cleanup_rolls_back_every_staged_stream() {
         .expect("publisher should have a live connection");
 
     assert!(
-        stage_negotiated_publish(&room, &user_id, connection_id, StreamType::Camera, &adapter,)
-            .await
+        stage_negotiated_publish(
+            &room,
+            &user_id,
+            connection_id,
+            TestSourceKind::ScalableVideo,
+            &adapter,
+        )
+        .await
     );
     assert!(
-        stage_negotiated_publish(&room, &user_id, connection_id, StreamType::Screen, &adapter,)
-            .await
+        stage_negotiated_publish(
+            &room,
+            &user_id,
+            connection_id,
+            TestSourceKind::ReadableVideo,
+            &adapter,
+        )
+        .await
     );
     assert_eq!(
         staged_publish_count(&room, &user_id, connection_id).await,
@@ -2976,8 +3091,8 @@ async fn staged_negotiated_publish_duplicate_race_keeps_one_staged_entry_and_one
         .await
         .expect("publisher should have a live connection");
 
-    let first_intent = source_publish_intent_for_stream_type(StreamType::Camera);
-    let second_intent = source_publish_intent_for_stream_type(StreamType::Camera);
+    let first_intent = source_publish_intent_for_source(TestSourceKind::ScalableVideo);
+    let second_intent = source_publish_intent_for_source(TestSourceKind::ScalableVideo);
     let (first_stage, second_stage) = tokio::join!(
         room.stage_negotiated_publish(&user_id, connection_id, &first_intent, &adapter),
         room.stage_negotiated_publish(&user_id, connection_id, &second_intent, &adapter),
@@ -3024,8 +3139,14 @@ async fn staged_negotiated_publish_duplicate_race_keeps_one_staged_entry_and_one
         "the duplicate staged transport media should be compensated exactly once"
     );
     assert!(
-        rollback_staged_publish(&room, &user_id, connection_id, StreamType::Camera, &adapter,)
-            .await
+        rollback_staged_publish(
+            &room,
+            &user_id,
+            connection_id,
+            TestSourceKind::ScalableVideo,
+            &adapter,
+        )
+        .await
     );
 }
 
@@ -3066,7 +3187,7 @@ async fn bootstrap_real_rtc_user(
         .expect("rtc user should produce an initial offer")
 }
 
-fn assert_bootstrap_for_stream(messages: &[UserOutbound], stream_type: StreamType) {
+fn assert_bootstrap_for_stream(messages: &[UserOutbound], stream_type: TestSourceKind) {
     assert!(
         messages.iter().any(|message| matches!(
             message,
@@ -3074,7 +3195,7 @@ fn assert_bootstrap_for_stream(messages: &[UserOutbound], stream_type: StreamTyp
                 if matches!(
                     request.as_ref(),
                     RoomEventRequest::BootstrapRemoteTrack(payload)
-                        if payload.stream_id() == &stream_id_for_stream_type(stream_type)
+                        if payload.stream_id() == &stream_id_for_source(stream_type)
                 )
         )),
         "expected a bootstrap request for {stream_type:?}"

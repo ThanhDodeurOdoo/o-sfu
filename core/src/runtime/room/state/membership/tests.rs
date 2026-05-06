@@ -15,7 +15,7 @@ use super::*;
 use crate::{
     MediaCodecFlags,
     runtime::{
-        ConnectionId, RoomInstanceId, StreamType, UserPermissions,
+        ConnectionId, RoomInstanceId, TestSourceKind, UserPermissions,
         media_transport::TransportMediaId,
         metrics::RuntimeMetrics,
         recording::{MediaSource, MediaTap, RecordingService},
@@ -32,7 +32,7 @@ use crate::{
             PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
             PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
             SourceEncodingId,
-            test_support::{source_publish_intent_for_stream_type, stream_id_for_stream_type},
+            test_support::{source_publish_intent_for_source, stream_id_for_source},
         },
     },
 };
@@ -64,14 +64,14 @@ fn install_test_published_producer(
     state: &mut RoomState,
     user_id: &UserId,
     connection_id: ConnectionId,
-    stream_type: StreamType,
+    stream_type: TestSourceKind,
     routed_producer_id: RoutedProducerId,
     transport_media_id: Option<TransportMediaId>,
 ) -> (ProducerRuntimeId, PublishedSourceId) {
     let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
     let source_id = PublishedSourceId::allocate(&mut state.next_source_id);
     let encoding_id = SourceEncodingId::allocate(&mut state.next_source_encoding_id);
-    let intent = source_publish_intent_for_stream_type(stream_type);
+    let intent = source_publish_intent_for_source(stream_type);
     let source = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
         source_id,
         owner: PublishedSourceOwner::new(user_id.clone()),
@@ -110,7 +110,7 @@ fn install_test_published_producer(
             source_id,
             owner_user_id: user_id.clone(),
             owner_connection_id: connection_id,
-            stream_id: stream_id_for_stream_type(stream_type),
+            stream_id: stream_id_for_source(stream_type),
             media_kind: MediaKind::Video,
             consumable_rtp_parameters: MediaStream::new(vec![], vec![], vec![]),
             routed_producer_id,
@@ -127,7 +127,7 @@ fn install_test_published_producer(
                 vec![encoding_id],
                 user_id.clone(),
                 connection_id,
-                stream_id_for_stream_type(stream_type),
+                stream_id_for_source(stream_type),
             ),
         );
     }
@@ -214,7 +214,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
         &mut state,
         &UserId::Integer(1),
         producer_connection_id,
-        StreamType::Camera,
+        TestSourceKind::ScalableVideo,
         routed_producer_id,
         Some(TransportMediaId::new(11)),
     );
@@ -323,7 +323,7 @@ fn replacement_join_clears_transport_media_owner_index() {
         &mut state,
         &user_id,
         connection_id,
-        StreamType::Camera,
+        TestSourceKind::ScalableVideo,
         routed_producer_id,
         Some(transport_media_id),
     );

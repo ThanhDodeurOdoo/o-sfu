@@ -28,7 +28,8 @@ use super::super::{
 use crate::{
     MediaCodecFlags,
     runtime::{
-        ConnectionId, DownloadStates, RoomInstanceId, StreamType, UserId, UserPermissions,
+        ConnectionId, RoomInstanceId, TestSourceKind, TestSubscriptionStates, UserId,
+        UserPermissions,
         media_transport::TransportMediaId,
         metrics::RuntimeMetrics,
         recording::{MediaSource, MediaTap, RecordingService},
@@ -43,8 +44,8 @@ use crate::{
             PublishedSourceId, PublishedSourceOwner, SourceEncodingDescriptor,
             SourceEncodingDescriptorParts, SourceEncodingId, SourceSelector,
             test_support::{
-                source_publish_intent_for_stream_type, stream_id_for_stream_type,
-                stream_type_for_stream_id, subscription_intents_from_download_states,
+                source_kind_for_stream_id, source_publish_intent_for_source, stream_id_for_source,
+                subscription_intents_from_test_states,
             },
         },
     },
@@ -111,7 +112,7 @@ fn install_test_consumer_route(
         state,
         producer_user_id,
         producer_connection_id,
-        StreamType::Camera,
+        TestSourceKind::ScalableVideo,
         producer_id,
         TransportMediaId::new(1),
     );
@@ -121,7 +122,7 @@ fn install_test_consumer_route(
             source_id,
             owner_user_id: producer_user_id.clone(),
             owner_connection_id: producer_connection_id,
-            stream_id: stream_id_for_stream_type(StreamType::Camera),
+            stream_id: stream_id_for_source(TestSourceKind::ScalableVideo),
             media_kind: RouterMediaKind::Video,
             consumable_rtp_parameters: sample_video_rtp_parameters(None, 77_777),
             routed_producer_id,
@@ -149,13 +150,13 @@ fn install_test_source_graph(
     state: &mut RoomState,
     user_id: &UserId,
     connection_id: ConnectionId,
-    stream_type: StreamType,
+    stream_type: TestSourceKind,
     producer_id: ProducerRuntimeId,
     transport_media_id: TransportMediaId,
 ) -> PublishedSourceId {
     let source_id = PublishedSourceId::allocate(&mut state.next_source_id);
     let encoding_id = SourceEncodingId::allocate(&mut state.next_source_encoding_id);
-    let intent = source_publish_intent_for_stream_type(stream_type);
+    let intent = source_publish_intent_for_source(stream_type);
     let source = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
         source_id,
         owner: PublishedSourceOwner::new(user_id.clone()),
@@ -204,7 +205,7 @@ fn install_test_source_graph(
 fn install_test_published_producer(
     state: &mut RoomState,
     user_id: &UserId,
-    stream_type: StreamType,
+    stream_type: TestSourceKind,
     transport_media_id: TransportMediaId,
 ) -> (ProducerRuntimeId, PublishedSourceId) {
     let connection_id = state
@@ -229,7 +230,7 @@ fn install_test_published_producer(
             source_id,
             owner_user_id: user_id.clone(),
             owner_connection_id: connection_id,
-            stream_id: stream_id_for_stream_type(stream_type),
+            stream_id: stream_id_for_source(stream_type),
             media_kind: RouterMediaKind::Video,
             consumable_rtp_parameters: sample_video_rtp_parameters(None, 77_777),
             routed_producer_id,
@@ -289,7 +290,7 @@ fn producer_activity_does_not_flip_room_state_when_router_update_fails() {
         &mut state,
         &user_id,
         connection_id,
-        StreamType::Camera,
+        TestSourceKind::ScalableVideo,
         producer_id,
         transport_media_id,
     );
@@ -299,7 +300,7 @@ fn producer_activity_does_not_flip_room_state_when_router_update_fails() {
             source_id,
             owner_user_id: user_id.clone(),
             owner_connection_id: connection_id,
-            stream_id: stream_id_for_stream_type(StreamType::Camera),
+            stream_id: stream_id_for_source(TestSourceKind::ScalableVideo),
             media_kind: RouterMediaKind::Video,
             consumable_rtp_parameters: sample_video_rtp_parameters(None, 77_777),
             routed_producer_id,
@@ -313,13 +314,13 @@ fn producer_activity_does_not_flip_room_state_when_router_update_fails() {
         .producer_route_target(
             &user_id,
             connection_id,
-            &stream_id_for_stream_type(StreamType::Camera),
+            &stream_id_for_source(TestSourceKind::ScalableVideo),
         )
         .expect("inserted producer should resolve back to a route target");
     let outcome = state.apply_producer_activity(
         &user_id,
         &producer_target,
-        &stream_id_for_stream_type(StreamType::Camera),
+        &stream_id_for_source(TestSourceKind::ScalableVideo),
         false,
     );
     assert!(outcome.is_none());
@@ -356,13 +357,13 @@ fn stale_replaced_connection_cannot_update_download_state() {
             .is_ok()
     );
 
-    let states = DownloadStates {
-        camera: Some(false),
-        audio: None,
-        screen: None,
-        ..DownloadStates::default()
+    let states = TestSubscriptionStates {
+        scalable_video: Some(false),
+        audio_detector: None,
+        readable_video: None,
+        ..TestSubscriptionStates::default()
     };
-    let intents = subscription_intents_from_download_states(&states);
+    let intents = subscription_intents_from_test_states(&states);
     let (committed_updates, planned_bootstraps) = state
         .plan_subscription_change(
             &consumer_user_id,
@@ -378,7 +379,7 @@ fn stale_replaced_connection_cannot_update_download_state() {
         state.desired_source_subscription_active(
             &consumer_user_id,
             &producer_user_id,
-            &stream_id_for_stream_type(StreamType::Camera),
+            &stream_id_for_source(TestSourceKind::ScalableVideo),
         ),
         "stale subscription updates must not overwrite the replacement user's stored preferences"
     );
@@ -439,7 +440,7 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
         &mut state,
         &publisher_user_id,
         publisher_connection_id,
-        StreamType::Camera,
+        TestSourceKind::ScalableVideo,
         producer_id,
         TransportMediaId::new(10),
     );
@@ -449,7 +450,7 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
             source_id,
             owner_user_id: publisher_user_id.clone(),
             owner_connection_id: publisher_connection_id,
-            stream_id: stream_id_for_stream_type(StreamType::Camera),
+            stream_id: stream_id_for_source(TestSourceKind::ScalableVideo),
             media_kind: RouterMediaKind::Video,
             consumable_rtp_parameters,
             routed_producer_id,
@@ -459,13 +460,13 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
     );
     state.register_producer_owner(&publisher_user_id, producer_id);
 
-    let states = DownloadStates {
-        camera: Some(false),
-        audio: None,
-        screen: None,
-        ..DownloadStates::default()
+    let states = TestSubscriptionStates {
+        scalable_video: Some(false),
+        audio_detector: None,
+        readable_video: None,
+        ..TestSubscriptionStates::default()
     };
-    let intents = subscription_intents_from_download_states(&states);
+    let intents = subscription_intents_from_test_states(&states);
     let (route_updates, planned_bootstraps) = state
         .plan_subscription_change(
             &subscriber_user_id,
@@ -526,7 +527,7 @@ fn commit_published_track_populates_transport_media_owner_index() {
         .validate_publish_descriptor(
             &user_id,
             connection_id,
-            &source_publish_intent_for_stream_type(StreamType::Camera),
+            &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
         )
         .expect("publish descriptor should validate once the user is publish-ready")
         .into_prepared_track(consumable_rtp_parameters);
@@ -540,8 +541,8 @@ fn commit_published_track_populates_transport_media_owner_index() {
     assert_eq!(
         state
             .producer_stream_id_for_transport_media_id(transport_media_id)
-            .and_then(|stream_id| stream_type_for_stream_id(&stream_id)),
-        Some(StreamType::Camera),
+            .and_then(|stream_id| source_kind_for_stream_id(&stream_id)),
+        Some(TestSourceKind::ScalableVideo),
     );
     assert_eq!(
         state.inspect_producer_owner_user_id_for_transport_media_id(transport_media_id),
@@ -601,7 +602,7 @@ fn commit_published_track_registers_all_source_encodings() {
         .validate_publish_descriptor(
             &user_id,
             connection_id,
-            &source_publish_intent_for_stream_type(StreamType::Camera),
+            &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
         )
         .expect("publish descriptor should validate once the user is publish-ready")
         .into_prepared_track(consumable_rtp_parameters);
@@ -622,8 +623,8 @@ fn commit_published_track_registers_all_source_encodings() {
         .expect("source registry should own the committed source");
     assert_eq!(source.owner().user_id(), &user_id);
     assert_eq!(
-        stream_type_for_stream_id(source.stream_id()),
-        Some(StreamType::Camera)
+        source_kind_for_stream_id(source.stream_id()),
+        Some(TestSourceKind::ScalableVideo)
     );
     assert_eq!(
         source.mid().map(o_sfu_router::Mid::as_str),
@@ -693,7 +694,7 @@ fn unpublish_track_clears_transport_media_owner_index() {
         .validate_publish_descriptor(
             &user_id,
             connection_id,
-            &source_publish_intent_for_stream_type(StreamType::Camera),
+            &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
         )
         .expect("publish descriptor should validate once the user is publish-ready")
         .into_prepared_track(consumable_rtp_parameters);
@@ -709,7 +710,7 @@ fn unpublish_track_clears_transport_media_owner_index() {
             .unpublish_track(
                 &user_id,
                 connection_id,
-                &stream_id_for_stream_type(StreamType::Camera),
+                &stream_id_for_source(TestSourceKind::ScalableVideo),
             )
             .is_some()
     );
@@ -752,13 +753,13 @@ fn purge_user_media_state_removes_only_indexed_user_and_source_entries() {
     let (_publisher_producer_id, publisher_source_id) = install_test_published_producer(
         &mut state,
         &publisher_id,
-        StreamType::Camera,
+        TestSourceKind::ScalableVideo,
         TransportMediaId::new(10),
     );
     let (other_producer_id, other_source_id) = install_test_published_producer(
         &mut state,
         &other_publisher_id,
-        StreamType::Screen,
+        TestSourceKind::ReadableVideo,
         TransportMediaId::new(30),
     );
 

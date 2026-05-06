@@ -1,7 +1,7 @@
 use super::{PendingPublishTransactions, Room};
 use crate::runtime::{
-    ConnectionId, StreamType, UserId, media_transport::TransportMediaId,
-    source_model::test_support::stream_id_for_stream_type,
+    ConnectionId, TestSourceKind, UserId, media_transport::TransportMediaId,
+    source_model::test_support::stream_id_for_source,
 };
 
 impl PendingPublishTransactions {
@@ -20,9 +20,9 @@ impl PendingPublishTransactions {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_type: TestSourceKind,
     ) -> Option<TransportMediaId> {
-        let stream_id = stream_id_for_stream_type(stream_type);
+        let stream_id = stream_id_for_source(stream_type);
         self.staged
             .iter()
             .find(|(key, _)| {
@@ -48,7 +48,7 @@ impl Room {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_type: TestSourceKind,
     ) -> Option<TransportMediaId> {
         self.pending_publish_transactions
             .lock()

@@ -2,11 +2,11 @@ use o_sfu_router::RouterId;
 
 use super::super::super::{Room, RoomUserPermissions};
 use crate::runtime::{
-    ConnectionId, StreamType, UserId, UserInfo,
+    ConnectionId, TestSourceKind, UserId, UserInfo,
     media_transport::TransportMediaId,
     source_model::{
         SourceEncodingId,
-        test_support::{stream_id_for_stream_type, stream_type_for_stream_id},
+        test_support::{source_kind_for_stream_id, stream_id_for_source},
     },
 };
 
@@ -68,7 +68,7 @@ impl RoomTestInspect<'_> {
         self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_type: TestSourceKind,
     ) -> Option<TransportMediaId> {
         self.room.state.read().await.producer_transport_media_id(
             user_id,
@@ -81,7 +81,7 @@ impl RoomTestInspect<'_> {
         self,
         owner_user_id: &UserId,
         owner_connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_type: TestSourceKind,
     ) -> bool {
         self.room
             .state
@@ -90,7 +90,7 @@ impl RoomTestInspect<'_> {
             .producer_route_target(
                 owner_user_id,
                 owner_connection_id,
-                &stream_id_for_stream_type(stream_type),
+                &stream_id_for_source(stream_type),
             )
             .is_some()
     }
@@ -98,13 +98,13 @@ impl RoomTestInspect<'_> {
     pub async fn producer_stream_type_for_transport_media_id(
         self,
         transport_media_id: TransportMediaId,
-    ) -> Option<StreamType> {
+    ) -> Option<TestSourceKind> {
         self.room
             .state
             .read()
             .await
             .producer_stream_id_for_transport_media_id(transport_media_id)
-            .and_then(|stream_id| stream_type_for_stream_id(&stream_id))
+            .and_then(|stream_id| source_kind_for_stream_id(&stream_id))
     }
 
     pub async fn producer_owner_user_id_for_transport_media_id(

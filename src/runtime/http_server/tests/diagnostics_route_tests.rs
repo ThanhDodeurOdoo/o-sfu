@@ -19,6 +19,7 @@ use serde_json::Value;
 
 use super::fixtures::*;
 use crate::{
+    application::stream_catalog::source_publish_intent_for_stream_type,
     core::{
         SessionNegotiationOutcome,
         server::session::{UserId, UserInfo, UserPermissions},
@@ -60,9 +61,9 @@ async fn publish_media_stream(
     assert!(
         room.test_api()
             .media()
-            .publish_track(
+            .publish_intent(
                 user_id,
-                stream_type,
+                &source_publish_intent_for_stream_type(stream_type),
                 MediaKind::Video,
                 parameters,
                 media_transport,

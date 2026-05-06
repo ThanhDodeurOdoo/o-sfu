@@ -52,9 +52,9 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
     let producer_id = room
         .test_api()
         .media()
-        .publish_track(
+        .publish_intent(
             &UserId::Integer(61),
-            StreamType::Camera,
+            &source_publish_intent_for_stream_type(StreamType::Camera),
             MediaKind::Video,
             sample_video_rtp_parameters("cam-1"),
             &server.media_transport,

@@ -89,7 +89,7 @@ impl From<String> for UserStreamId {
 
 #[cfg(any(test, feature = "testing-transport"))]
 #[path = "source_model/test_support.rs"]
-pub(crate) mod test_support;
+pub mod test_support;
 
 /// Orchestration-provided publish intent for one user stream.
 ///

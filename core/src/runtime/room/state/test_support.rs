@@ -4,10 +4,10 @@ use super::shared::{RoomState, SourceKey};
 #[cfg(test)]
 use crate::runtime::source_model::PublishedSourceId;
 use crate::runtime::{
-    ConnectionId, StreamType, UserId,
+    ConnectionId, TestSourceKind, UserId,
     media_transport::TransportMediaId,
     room::RoomUserPermissions,
-    source_model::{SourceEncodingId, test_support::stream_id_for_stream_type},
+    source_model::{SourceEncodingId, test_support::stream_id_for_source},
 };
 
 impl RoomState {
@@ -72,11 +72,11 @@ impl RoomState {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        stream_type: StreamType,
+        stream_type: TestSourceKind,
     ) -> Option<TransportMediaId> {
         let producer_id = self.producer_id_for_source_key(&SourceKey::new(
             user_id,
-            &stream_id_for_stream_type(stream_type),
+            &stream_id_for_source(stream_type),
         ))?;
         let producer = self.producers.get(&producer_id)?;
         if producer.owner_connection_id != connection_id {

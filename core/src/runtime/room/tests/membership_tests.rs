@@ -301,7 +301,7 @@ async fn publish_camera(
         .media()
         .publish_track(
             &UserId::Integer(1),
-            StreamType::Camera,
+            TestSourceKind::ScalableVideo,
             MediaKind::Video,
             test_video_rtp_parameters(),
             media_transport,
@@ -319,7 +319,7 @@ async fn leave_user_runtime_removes_surviving_consumer_media() {
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
                 &media_transport,
@@ -384,7 +384,7 @@ async fn leave_user_runtime_removes_departing_consumer_media() {
             .media()
             .publish_track(
                 &UserId::Integer(2),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
                 &media_transport,
@@ -442,7 +442,7 @@ async fn join_user_runtime_replacement_removes_surviving_consumer_media() {
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
                 &media_transport,
@@ -505,7 +505,7 @@ async fn media_cleanup_failure_retries_until_success() {
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
                 &media_transport,
@@ -522,7 +522,11 @@ async fn media_cleanup_failure_retries_until_success() {
     let transport_media_id = room
         .test_api()
         .inspect()
-        .producer_transport_media_id(&UserId::Integer(1), connection_id, StreamType::Camera)
+        .producer_transport_media_id(
+            &UserId::Integer(1),
+            connection_id,
+            TestSourceKind::ScalableVideo,
+        )
         .await
         .expect("published camera should expose a transport media id");
     fake.fail_next_remove_media(transport_media_id);
@@ -590,7 +594,7 @@ async fn cleanup_retry_exhaustion_drops_pending_retry() {
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
                 &media_transport,
@@ -607,7 +611,11 @@ async fn cleanup_retry_exhaustion_drops_pending_retry() {
     let transport_media_id = room
         .test_api()
         .inspect()
-        .producer_transport_media_id(&UserId::Integer(1), connection_id, StreamType::Camera)
+        .producer_transport_media_id(
+            &UserId::Integer(1),
+            connection_id,
+            TestSourceKind::ScalableVideo,
+        )
         .await
         .expect("published camera should expose a transport media id");
     fake.fail_remove_media_until_allowed(transport_media_id);
@@ -695,7 +703,7 @@ async fn state_only_cleanup_does_not_enqueue_transport_retry() {
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
                 &media_transport,
@@ -712,7 +720,11 @@ async fn state_only_cleanup_does_not_enqueue_transport_retry() {
     let transport_media_id = room
         .test_api()
         .inspect()
-        .producer_transport_media_id(&UserId::Integer(1), connection_id, StreamType::Camera)
+        .producer_transport_media_id(
+            &UserId::Integer(1),
+            connection_id,
+            TestSourceKind::ScalableVideo,
+        )
         .await
         .expect("published camera should expose a transport media id");
     fake.fail_next_remove_media(transport_media_id);
@@ -942,7 +954,7 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
                 &media_transport,

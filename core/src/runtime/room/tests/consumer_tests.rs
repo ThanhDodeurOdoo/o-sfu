@@ -9,7 +9,7 @@ async fn consumption_change_pauses_and_resumes_consumer() {
         .media()
         .publish_track(
             &UserId::Integer(1),
-            StreamType::Camera,
+            TestSourceKind::ScalableVideo,
             MediaKind::Video,
             test_video_rtp_parameters(),
             &adapter,
@@ -26,11 +26,11 @@ async fn consumption_change_pauses_and_resumes_consumer() {
         .update_subscription(
             &UserId::Integer(2),
             &UserId::Integer(1),
-            &DownloadStates {
-                camera: Some(false),
-                audio: None,
-                screen: None,
-                ..DownloadStates::default()
+            &TestSubscriptionStates {
+                scalable_video: Some(false),
+                audio_detector: None,
+                readable_video: None,
+                ..TestSubscriptionStates::default()
             },
             &adapter,
         )
@@ -46,11 +46,11 @@ async fn consumption_change_pauses_and_resumes_consumer() {
         .update_subscription(
             &UserId::Integer(2),
             &UserId::Integer(1),
-            &DownloadStates {
-                camera: Some(true),
-                audio: None,
-                screen: None,
-                ..DownloadStates::default()
+            &TestSubscriptionStates {
+                scalable_video: Some(true),
+                audio_detector: None,
+                readable_video: None,
+                ..TestSubscriptionStates::default()
             },
             &adapter,
         )
@@ -69,7 +69,7 @@ async fn consumption_change_updates_transport_route_activity() {
         .media()
         .publish_track(
             &UserId::Integer(1),
-            StreamType::Camera,
+            TestSourceKind::ScalableVideo,
             MediaKind::Video,
             test_video_rtp_parameters(),
             &adapter,
@@ -83,11 +83,11 @@ async fn consumption_change_updates_transport_route_activity() {
         .update_subscription(
             &UserId::Integer(2),
             &UserId::Integer(1),
-            &DownloadStates {
-                camera: Some(false),
-                audio: None,
-                screen: None,
-                ..DownloadStates::default()
+            &TestSubscriptionStates {
+                scalable_video: Some(false),
+                audio_detector: None,
+                readable_video: None,
+                ..TestSubscriptionStates::default()
             },
             &adapter,
         )
@@ -114,7 +114,7 @@ async fn consumption_change_resume_requests_video_keyframe_refresh() {
         .media()
         .publish_track(
             &UserId::Integer(1),
-            StreamType::Camera,
+            TestSourceKind::ScalableVideo,
             MediaKind::Video,
             test_video_rtp_parameters(),
             &adapter,
@@ -128,11 +128,11 @@ async fn consumption_change_resume_requests_video_keyframe_refresh() {
         .update_subscription(
             &UserId::Integer(2),
             &UserId::Integer(1),
-            &DownloadStates {
-                camera: Some(false),
-                audio: None,
-                screen: None,
-                ..DownloadStates::default()
+            &TestSubscriptionStates {
+                scalable_video: Some(false),
+                audio_detector: None,
+                readable_video: None,
+                ..TestSubscriptionStates::default()
             },
             &adapter,
         )
@@ -155,11 +155,11 @@ async fn consumption_change_resume_requests_video_keyframe_refresh() {
         .update_subscription(
             &UserId::Integer(2),
             &UserId::Integer(1),
-            &DownloadStates {
-                camera: Some(true),
-                audio: None,
-                screen: None,
-                ..DownloadStates::default()
+            &TestSubscriptionStates {
+                scalable_video: Some(true),
+                audio_detector: None,
+                readable_video: None,
+                ..TestSubscriptionStates::default()
             },
             &adapter,
         )
@@ -187,11 +187,11 @@ async fn consumption_change_ignores_nonexistent_consumer() {
         .update_subscription(
             &UserId::Integer(2),
             &UserId::Integer(1),
-            &DownloadStates {
-                camera: Some(false),
-                audio: Some(false),
-                screen: None,
-                ..DownloadStates::default()
+            &TestSubscriptionStates {
+                scalable_video: Some(false),
+                audio_detector: Some(false),
+                readable_video: None,
+                ..TestSubscriptionStates::default()
             },
             &adapter,
         )
@@ -210,11 +210,11 @@ async fn consumption_change_persists_preference_for_future_consumer_bootstrap() 
         .update_subscription(
             &UserId::Integer(2),
             &UserId::Integer(1),
-            &DownloadStates {
-                camera: Some(false),
-                audio: None,
-                screen: None,
-                ..DownloadStates::default()
+            &TestSubscriptionStates {
+                scalable_video: Some(false),
+                audio_detector: None,
+                readable_video: None,
+                ..TestSubscriptionStates::default()
             },
             &adapter,
         )
@@ -224,7 +224,7 @@ async fn consumption_change_persists_preference_for_future_consumer_bootstrap() 
         .media()
         .publish_track(
             &UserId::Integer(1),
-            StreamType::Camera,
+            TestSourceKind::ScalableVideo,
             MediaKind::Video,
             test_video_rtp_parameters(),
             &adapter,
@@ -255,7 +255,7 @@ async fn consumption_change_handles_multiple_stream_types() {
         .media()
         .publish_track(
             &UserId::Integer(1),
-            StreamType::Camera,
+            TestSourceKind::ScalableVideo,
             MediaKind::Video,
             test_video_rtp_parameters(),
             &adapter,
@@ -265,7 +265,7 @@ async fn consumption_change_handles_multiple_stream_types() {
         .media()
         .publish_track(
             &UserId::Integer(1),
-            StreamType::Audio,
+            TestSourceKind::AudioDetector,
             MediaKind::Audio,
             test_audio_rtp_parameters(),
             &adapter,
@@ -281,11 +281,11 @@ async fn consumption_change_handles_multiple_stream_types() {
         .update_subscription(
             &UserId::Integer(2),
             &UserId::Integer(1),
-            &DownloadStates {
-                camera: Some(false),
-                audio: Some(false),
-                screen: None,
-                ..DownloadStates::default()
+            &TestSubscriptionStates {
+                scalable_video: Some(false),
+                audio_detector: Some(false),
+                readable_video: None,
+                ..TestSubscriptionStates::default()
             },
             &adapter,
         )
@@ -304,7 +304,7 @@ async fn user_leave_purges_producer_and_consumer_indexes() {
         .media()
         .publish_track(
             &UserId::Integer(1),
-            StreamType::Camera,
+            TestSourceKind::ScalableVideo,
             MediaKind::Video,
             test_video_rtp_parameters(),
             &adapter,
@@ -327,11 +327,11 @@ async fn user_leave_purges_producer_and_consumer_indexes() {
         .update_subscription(
             &UserId::Integer(2),
             &UserId::Integer(1),
-            &DownloadStates {
-                camera: Some(false),
-                audio: None,
-                screen: None,
-                ..DownloadStates::default()
+            &TestSubscriptionStates {
+                scalable_video: Some(false),
+                audio_detector: None,
+                readable_video: None,
+                ..TestSubscriptionStates::default()
             },
             &adapter,
         )
@@ -340,7 +340,12 @@ async fn user_leave_purges_producer_and_consumer_indexes() {
     // Similarly, a production change for user 1 should be a no-op.
     room.test_api()
         .media()
-        .set_publication_active(&UserId::Integer(1), StreamType::Camera, false, &adapter)
+        .set_publication_active(
+            &UserId::Integer(1),
+            TestSourceKind::ScalableVideo,
+            false,
+            &adapter,
+        )
         .await;
 
     // No crashes, no stale state — both operations are silent no-ops.

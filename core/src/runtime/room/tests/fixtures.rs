@@ -20,7 +20,7 @@ use crate::runtime::room::user_negotiation::{UserNegotiationUpdate, UserTranspor
 pub(super) use crate::{
     PublishStageOutcome, RollbackStagedPublishOutcome, SessionNegotiationOutcome, UnpublishOutcome,
     runtime::{
-        ConnectionId, DownloadStates, StreamType, UserId, UserInfo, UserPermissions,
+        ConnectionId, TestSourceKind, TestSubscriptionStates, UserId, UserInfo, UserPermissions,
         VideoLayoutIntent,
         media_transport::{
             ActiveSpeakerSource, MediaTransport, TransportMediaId,
@@ -28,7 +28,7 @@ pub(super) use crate::{
         },
         source_model::{
             UserStreamId,
-            test_support::{source_publish_intent_for_stream_type, stream_id_for_stream_type},
+            test_support::{source_publish_intent_for_source, stream_id_for_source},
         },
     },
     transport::NegotiationPort,
@@ -221,13 +221,13 @@ pub(super) async fn stage_negotiated_publish(
     room: &super::super::Room,
     user_id: &UserId,
     connection_id: ConnectionId,
-    stream_type: StreamType,
+    stream_type: TestSourceKind,
     media_transport: &MediaTransport,
 ) -> bool {
     room.stage_negotiated_publish(
         user_id,
         connection_id,
-        &source_publish_intent_for_stream_type(stream_type),
+        &source_publish_intent_for_source(stream_type),
         media_transport,
     )
     .await
@@ -238,14 +238,14 @@ pub(super) async fn rollback_staged_publish(
     room: &super::super::Room,
     user_id: &UserId,
     connection_id: ConnectionId,
-    stream_type: StreamType,
+    stream_type: TestSourceKind,
     media_transport: &MediaTransport,
 ) -> bool {
     matches!(
         room.rollback_staged_publish(
             user_id,
             connection_id,
-            &stream_id_for_stream_type(stream_type),
+            &stream_id_for_source(stream_type),
             media_transport,
         )
         .await,
@@ -297,7 +297,7 @@ pub(super) async fn staged_publish_transport_media_id(
     room: &super::super::Room,
     user_id: &UserId,
     connection_id: ConnectionId,
-    stream_type: StreamType,
+    stream_type: TestSourceKind,
 ) -> Option<TransportMediaId> {
     room.staged_publish_transport_media_id(user_id, connection_id, stream_type)
         .await
@@ -382,7 +382,7 @@ async fn setup_ready_user_scenario(options: ReadySessionScenarioOptions) -> Read
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
                 &adapter,

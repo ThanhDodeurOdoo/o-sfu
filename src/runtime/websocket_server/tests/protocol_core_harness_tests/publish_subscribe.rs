@@ -44,9 +44,9 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
     let producer_id = room
         .test_api()
         .media()
-        .publish_track(
+        .publish_intent(
             &UserId::Integer(51),
-            StreamType::Camera,
+            &source_publish_intent_for_stream_type(StreamType::Camera),
             MediaKind::Video,
             sample_video_rtp_parameters("cam-0"),
             &server.media_transport,

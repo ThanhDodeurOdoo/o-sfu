@@ -21,7 +21,7 @@ async fn publish_audio_and_camera(
             .media()
             .publish_track(
                 user_id,
-                StreamType::Audio,
+                TestSourceKind::AudioDetector,
                 MediaKind::Audio,
                 test_audio_rtp_parameters(),
                 media_transport,
@@ -34,7 +34,7 @@ async fn publish_audio_and_camera(
             .media()
             .publish_track(
                 user_id,
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_simulcast_video_rtp_parameters(),
                 media_transport,
@@ -54,7 +54,7 @@ async fn source_media_ids(
     let Some(audio_media_id) = room
         .test_api()
         .inspect()
-        .producer_transport_media_id(user_id, connection_id, StreamType::Audio)
+        .producer_transport_media_id(user_id, connection_id, TestSourceKind::AudioDetector)
         .await
     else {
         panic!("audio producer should expose a transport media id");
@@ -62,7 +62,7 @@ async fn source_media_ids(
     let Some(camera_media_id) = room
         .test_api()
         .inspect()
-        .producer_transport_media_id(user_id, connection_id, StreamType::Camera)
+        .producer_transport_media_id(user_id, connection_id, TestSourceKind::ScalableVideo)
         .await
     else {
         panic!("camera producer should expose a transport media id");
@@ -473,7 +473,7 @@ async fn room_spillover_publish_subscribe_and_leave_cleanup_stay_aligned() {
             .media()
             .publish_track(
                 &publisher_id,
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
                 &adapter,
@@ -819,7 +819,7 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_video_rtp_parameters(),
                 &media_transport,
@@ -901,7 +901,7 @@ async fn manager_metrics_track_receiver_source_selection_updates() {
             .media()
             .publish_track(
                 &UserId::Integer(1),
-                StreamType::Camera,
+                TestSourceKind::ScalableVideo,
                 MediaKind::Video,
                 test_simulcast_video_rtp_parameters(),
                 &media_transport,

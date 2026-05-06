@@ -6,6 +6,7 @@ use o_sfu_router::{
 
 use super::fixtures::*;
 use crate::{
+    application::stream_catalog::source_publish_intent_for_stream_type,
     core::{
         SessionNegotiationOutcome,
         server::session::{UserId, UserPermissions},
@@ -38,9 +39,9 @@ async fn publish_video_stream(
     assert!(
         room.test_api()
             .media()
-            .publish_track(
+            .publish_intent(
                 user_id,
-                stream_type,
+                &source_publish_intent_for_stream_type(stream_type),
                 MediaKind::Video,
                 test_video_rtp_parameters(ssrc),
                 media_transport,

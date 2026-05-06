@@ -117,9 +117,9 @@ async fn publish_until_ready(
             if room
                 .test_api()
                 .media()
-                .publish_track(
+                .publish_intent(
                     &UserId::Integer(81),
-                    stream_type,
+                    &source_publish_intent_for_stream_type(stream_type),
                     MediaKind::Video,
                     sample_video_rtp_parameters(mid),
                     &server.media_transport,
