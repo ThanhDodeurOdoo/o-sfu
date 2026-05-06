@@ -1,8 +1,8 @@
-//! Worker-local incoming bitrate accounting for RTC media.
+//! Worker-local bitrate accounting for RTC media.
 //!
-//! The packet loop owns the write side and updates per-media counters through
-//! atomics. The shared state lock protects only the cold registration and
-//! snapshot map, so operator polling cannot contend with per-packet writes.
+//! The packet loop owns the write side and updates counters through atomics. The
+//! shared state lock protects only cold registration and snapshot maps, so
+//! operator polling cannot contend with per-packet writes.
 
 use std::{
     collections::BTreeMap,
@@ -21,14 +21,14 @@ use crate::runtime::media_transport::{
 const BITRATE_WINDOW_NANOS: u64 = 1_000_000_000;
 
 #[derive(Debug)]
-pub(super) struct IncomingMediaBitrate {
+pub(super) struct MediaBitrateCounter {
     origin: Instant,
     window_start_nanos: AtomicU64,
     bytes_in_window: AtomicU64,
     observed: AtomicBool,
 }
 
-impl IncomingMediaBitrate {
+impl MediaBitrateCounter {
     fn new(now: Instant) -> Self {
         Self {
             origin: now,
@@ -75,7 +75,7 @@ impl IncomingMediaBitrate {
 
 #[derive(Debug, Default)]
 pub(super) struct SessionIncomingBitrates {
-    per_media: BTreeMap<TransportMediaId, Arc<IncomingMediaBitrate>>,
+    per_media: BTreeMap<TransportMediaId, Arc<MediaBitrateCounter>>,
 }
 
 impl SessionIncomingBitrates {
@@ -83,11 +83,11 @@ impl SessionIncomingBitrates {
         &mut self,
         transport_media_id: TransportMediaId,
         now: Instant,
-    ) -> Arc<IncomingMediaBitrate> {
+    ) -> Arc<MediaBitrateCounter> {
         Arc::clone(
             self.per_media
                 .entry(transport_media_id)
-                .or_insert_with(|| Arc::new(IncomingMediaBitrate::new(now))),
+                .or_insert_with(|| Arc::new(MediaBitrateCounter::new(now))),
         )
     }
 
@@ -124,6 +124,7 @@ impl SessionIncomingBitrates {
 #[derive(Debug, Default)]
 pub struct RtcBitrateState {
     pub(super) incoming_bitrates_by_session: BTreeMap<TransportSessionKey, SessionIncomingBitrates>,
+    pub(super) egress_bitrates_by_session: BTreeMap<TransportSessionKey, Arc<MediaBitrateCounter>>,
 }
 
 impl RtcBitrateState {
@@ -132,11 +133,23 @@ impl RtcBitrateState {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
         now: Instant,
-    ) -> Arc<IncomingMediaBitrate> {
+    ) -> Arc<MediaBitrateCounter> {
         self.incoming_bitrates_by_session
             .entry(session_key.clone())
             .or_default()
             .register(transport_media_id, now)
+    }
+
+    pub(super) fn register_session_egress(
+        &mut self,
+        session_key: &TransportSessionKey,
+        now: Instant,
+    ) -> Arc<MediaBitrateCounter> {
+        Arc::clone(
+            self.egress_bitrates_by_session
+                .entry(session_key.clone())
+                .or_insert_with(|| Arc::new(MediaBitrateCounter::new(now))),
+        )
     }
 
     pub(super) fn remove_incoming_media(
@@ -155,6 +168,7 @@ impl RtcBitrateState {
 
     pub(super) fn remove_session(&mut self, session_key: &TransportSessionKey) {
         self.incoming_bitrates_by_session.remove(session_key);
+        self.egress_bitrates_by_session.remove(session_key);
     }
 
     pub fn transport_bitrate_snapshot_at(
@@ -172,16 +186,41 @@ impl RtcBitrateState {
         }
         snapshot
     }
+
+    pub fn egress_bitrate_snapshot_at(
+        &self,
+        session_keys: &[TransportSessionKey],
+        now: Instant,
+    ) -> u64 {
+        session_keys
+            .iter()
+            .filter_map(|session_key| self.egress_bitrates_by_session.get(session_key))
+            .fold(0_u64, |total, bitrate| {
+                total.saturating_add(bitrate.snapshot(now))
+            })
+    }
 }
 
 impl RtcBootstrapState {
     pub(super) fn register_incoming_bitrate_counter(
         &mut self,
         transport_media_id: TransportMediaId,
-        counter: Arc<IncomingMediaBitrate>,
+        counter: Arc<MediaBitrateCounter>,
     ) {
         self.incoming_bitrate_counters
             .insert(transport_media_id, counter);
+    }
+
+    pub(super) fn register_egress_bitrate_counter(
+        &mut self,
+        session_key: TransportSessionKey,
+        counter: Arc<MediaBitrateCounter>,
+    ) {
+        self.egress_bitrate_counters.insert(session_key, counter);
+    }
+
+    pub(super) fn remove_egress_bitrate_counter(&mut self, session_key: &TransportSessionKey) {
+        self.egress_bitrate_counters.remove(session_key);
     }
 
     pub(super) fn remove_incoming_bitrate_counter(&mut self, transport_media_id: TransportMediaId) {
@@ -198,6 +237,17 @@ impl RtcBootstrapState {
             .get(&transport_media_id)
             .map(|bitrate| bitrate.record(now, payload_bytes))
     }
+
+    pub(super) fn record_egress_bitrate(
+        &self,
+        session_key: &TransportSessionKey,
+        now: Instant,
+        payload_bytes: usize,
+    ) -> Option<bool> {
+        self.egress_bitrate_counters
+            .get(session_key)
+            .map(|bitrate| bitrate.record(now, payload_bytes))
+    }
 }
 
 #[cfg(test)]
@@ -210,7 +260,7 @@ mod tests {
     #[test]
     fn incoming_media_bitrate_reports_recent_bits() {
         let now = Instant::now();
-        let bitrate = IncomingMediaBitrate::new(now);
+        let bitrate = MediaBitrateCounter::new(now);
 
         assert!(bitrate.record(now, 120));
 
@@ -220,7 +270,7 @@ mod tests {
     #[test]
     fn incoming_media_bitrate_expires_after_the_window() {
         let now = Instant::now();
-        let bitrate = IncomingMediaBitrate::new(now);
+        let bitrate = MediaBitrateCounter::new(now);
 
         assert!(bitrate.record(now, 64));
 
@@ -231,9 +281,21 @@ mod tests {
     }
 
     #[test]
+    fn egress_bitrate_snapshot_reports_recent_session_bits() {
+        let now = Instant::now();
+        let session_key = test_transport_session_key(0, 0, 0, UserId::Integer(7));
+        let mut state = RtcBitrateState::default();
+        let counter = state.register_session_egress(&session_key, now);
+
+        assert!(counter.record(now, 125));
+
+        assert_eq!(state.egress_bitrate_snapshot_at(&[session_key], now), 1_000);
+    }
+
+    #[test]
     fn incoming_media_bitrate_first_observation_fires_once() {
         let now = Instant::now();
-        let bitrate = IncomingMediaBitrate::new(now);
+        let bitrate = MediaBitrateCounter::new(now);
 
         assert!(bitrate.record(now, 1));
         assert!(!bitrate.record(now, 1));

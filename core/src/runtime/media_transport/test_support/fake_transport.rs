@@ -22,7 +22,7 @@ use crate::{
             ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
             ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerPacketGateUpdate,
             ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate, TransportAdapterError,
-            TransportMediaId, TransportSessionKey,
+            TransportMediaId, TransportPlacementPressureSnapshot, TransportSessionKey,
         },
     },
     transport::SourcePolicySignal,
@@ -83,6 +83,7 @@ pub struct FakeMediaTransport {
     negotiated_producer_parameters: Arc<Mutex<BTreeMap<TransportMediaId, RouterRtpParameters>>>,
     active_speaker_sources: Arc<Mutex<Vec<ActiveSpeakerSource>>>,
     receiver_bandwidth_estimates: Arc<Mutex<BTreeMap<UserId, u64>>>,
+    placement_pressure: Arc<Mutex<TransportPlacementPressureSnapshot>>,
     delays: Arc<Mutex<FakeMediaTransportDelays>>,
     source_policy_signal: Arc<SourcePolicySignal>,
 }
@@ -342,6 +343,18 @@ impl FakeMediaTransport {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
+    pub fn set_placement_pressure_snapshot(&self, snapshot: TransportPlacementPressureSnapshot) {
+        match self.placement_pressure.lock() {
+            Ok(mut pressure) => {
+                *pressure = snapshot;
+            }
+            Err(poisoned) => {
+                *poisoned.into_inner() = snapshot;
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
     pub fn mark_source_policy_dirty(&self, room_instance_id: RoomInstanceId) {
         self.source_policy_signal.mark_dirty(room_instance_id);
     }
@@ -396,6 +409,19 @@ impl FakeMediaTransport {
                         .map(|estimate_bps| (session_key.clone(), estimate_bps))
                 })
                 .collect(),
+        }
+    }
+
+    pub(crate) fn placement_pressure_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportPlacementPressureSnapshot {
+        if session_keys.is_empty() {
+            return TransportPlacementPressureSnapshot::default();
+        }
+        match self.placement_pressure.lock() {
+            Ok(pressure) => *pressure,
+            Err(poisoned) => *poisoned.into_inner(),
         }
     }
 

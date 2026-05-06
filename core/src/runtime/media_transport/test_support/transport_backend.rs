@@ -18,7 +18,8 @@ use crate::{
         ConsumerPacketGateUpdate, MediaPort, NegotiationPort, ObservabilityPort, ProducerActivity,
         ReceiverBandwidthSnapshot, SessionOffer, SessionPort, SourcePacketGate, SourcePolicyPort,
         SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
-        TransportMediaId, TransportSessionHealth, TransportSessionKey,
+        TransportMediaId, TransportPlacementPressureSnapshot, TransportSessionHealth,
+        TransportSessionKey,
     },
 };
 
@@ -352,6 +353,16 @@ impl ObservabilityPort for MediaTransportBackend {
         match self {
             Self::Rtc(transport) => transport.receiver_bandwidth_snapshot(session_keys),
             Self::Fake(transport) => transport.receiver_bandwidth_snapshot(session_keys),
+        }
+    }
+
+    fn placement_pressure_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportPlacementPressureSnapshot {
+        match self {
+            Self::Rtc(transport) => transport.placement_pressure_snapshot(session_keys),
+            Self::Fake(transport) => transport.placement_pressure_snapshot(session_keys),
         }
     }
 

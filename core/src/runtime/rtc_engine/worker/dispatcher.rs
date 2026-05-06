@@ -138,6 +138,7 @@ fn handle_negotiation_command(
             response,
         } => negotiation::respond_create_initial_session_offer(
             state,
+            context.bitrate_state,
             context.snapshot_state,
             OfferBootstrapConfig {
                 public_ip: context.public_ip,

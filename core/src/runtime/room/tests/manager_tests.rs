@@ -5,7 +5,7 @@ use crate::{
     LocalSpilloverPolicy, MediaCodecFlags, RuntimeFeatureFlags,
     runtime::{
         diagnostics::DiagnosticsStore,
-        media_transport::{SourcePacketGate, TransportMediaId},
+        media_transport::{SourcePacketGate, TransportMediaId, TransportPlacementPressureSnapshot},
         metrics::RuntimeMetrics,
         recording::MediaTap,
     },
@@ -369,6 +369,54 @@ async fn load_triggered_room_keeps_small_room_transport_on_primary_worker() {
             Some(RouterId(0))
         );
     }
+}
+
+#[tokio::test]
+async fn load_triggered_room_uses_transport_pressure_for_new_placement() {
+    let manager = load_spillover_room_manager(
+        2,
+        LocalSpilloverPolicy::conservative()
+            .with_min_receiver_count(99)
+            .with_max_active_consumers_per_router(99)
+            .with_max_fanout_per_source(99)
+            .with_egress_bitrate_threshold_bps(128)
+            .with_activation_window(1),
+    );
+    let (media_transport, fake) = fake_adapter();
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+
+    let (first_tx, _first_rx) = test_sender();
+    let first_join = room
+        .add_user(
+            UserId::Integer(10),
+            None,
+            UserPermissions::default(),
+            first_tx,
+            &media_transport,
+        )
+        .await;
+    assert!(first_join.is_ok());
+    assert_user_placement(&room, &UserId::Integer(10), RouterId(0), 0).await;
+
+    fake.set_placement_pressure_snapshot(TransportPlacementPressureSnapshot {
+        egress_bitrate_bps: 256,
+        ..Default::default()
+    });
+
+    let (second_tx, _second_rx) = test_sender();
+    let second_join = room
+        .add_user(
+            UserId::Integer(20),
+            None,
+            UserPermissions::default(),
+            second_tx,
+            &media_transport,
+        )
+        .await;
+    assert!(second_join.is_ok());
+    assert_user_placement(&room, &UserId::Integer(20), RouterId(1), 1).await;
 }
 
 #[tokio::test]

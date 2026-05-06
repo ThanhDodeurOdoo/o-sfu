@@ -325,6 +325,7 @@ fn snapshot_and_pump(
     buffers: &mut PacketLoopBuffers,
     packet_sink_cache: &mut PacketSinkRouteCache,
 ) -> Option<SnapshotInfo> {
+    let turn_started_at = Instant::now();
     buffers.clear();
     let (socket, candidate_addr) = {
         let shared_socket = state.shared_socket.as_ref()?;
@@ -365,11 +366,25 @@ fn snapshot_and_pump(
         &mut buffers.forwards,
     );
     flush_forward_routes(state, &config.metrics, buffers);
+    record_packet_loop_lag(snapshot_state, turn_started_at);
     Some(SnapshotInfo {
         socket,
         candidate_addr,
         next_timeout: next_timeout_deadline(state),
     })
+}
+
+fn record_packet_loop_lag(snapshot_state: &Arc<Mutex<RtcSnapshotState>>, turn_started_at: Instant) {
+    let observed_at = Instant::now();
+    let lag_ms = u64::try_from(
+        observed_at
+            .saturating_duration_since(turn_started_at)
+            .as_millis(),
+    )
+    .map_or(u64::MAX, |value| value);
+    if let Ok(mut snapshot) = snapshot_state.lock() {
+        snapshot.set_packet_loop_lag_ms(lag_ms, observed_at);
+    }
 }
 
 /// Return the next time the loop must wake without external input.

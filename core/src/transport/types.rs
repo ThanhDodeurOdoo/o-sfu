@@ -126,6 +126,31 @@ pub struct ReceiverBandwidthSnapshot {
     pub per_session: Vec<(TransportSessionKey, u64)>,
 }
 
+/// Transport-observed pressure used by room-local placement policy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TransportPlacementPressureSnapshot {
+    pub egress_bitrate_bps: u64,
+    pub packet_loop_lag_ms: u64,
+    pub command_backlog_depth: usize,
+    pub relay_mailbox_depth: usize,
+    pub worker_pressure_score: u8,
+}
+
+impl TransportPlacementPressureSnapshot {
+    #[must_use]
+    pub fn merged_with(self, other: Self) -> Self {
+        Self {
+            egress_bitrate_bps: self
+                .egress_bitrate_bps
+                .saturating_add(other.egress_bitrate_bps),
+            packet_loop_lag_ms: self.packet_loop_lag_ms.max(other.packet_loop_lag_ms),
+            command_backlog_depth: self.command_backlog_depth.max(other.command_backlog_depth),
+            relay_mailbox_depth: self.relay_mailbox_depth.max(other.relay_mailbox_depth),
+            worker_pressure_score: self.worker_pressure_score.max(other.worker_pressure_score),
+        }
+    }
+}
+
 /// Opaque identifier for a media line allocated by the media transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
 pub struct TransportMediaId(u64);

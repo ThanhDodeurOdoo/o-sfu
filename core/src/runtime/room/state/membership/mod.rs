@@ -13,7 +13,9 @@ use super::{
     presence::UserPresence,
     shared::{ActiveUser, RoomState, TransportMediaRemoval},
 };
-use crate::runtime::{ConnectionId, UserId, UserInfo};
+use crate::runtime::{
+    ConnectionId, UserId, UserInfo, media_transport::TransportPlacementPressureSnapshot,
+};
 
 #[cfg(test)]
 mod test_support;
@@ -91,6 +93,7 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
         is_new: bool,
+        transport_pressure: TransportPlacementPressureSnapshot,
     ) -> Result<usize, RoomJoinError> {
         let mut topology = self.topology.clone();
         if !is_new && let Err(error) = self.reset_existing_session_routing(&mut topology, user_id) {
@@ -101,7 +104,7 @@ impl RoomState {
             );
             return Err(RoomJoinError::RouterState);
         }
-        let pressure = self.topology_pressure_snapshot(is_new);
+        let pressure = self.topology_pressure_snapshot(is_new, transport_pressure);
         let topology_result = if is_new {
             topology.apply_client_join_with_pressure(user_id, connection_id.as_u64(), pressure)
         } else {
@@ -127,7 +130,11 @@ impl RoomState {
         Ok(media_worker_id)
     }
 
-    fn topology_pressure_snapshot(&self, is_new_join: bool) -> TopologyPressureSnapshot {
+    fn topology_pressure_snapshot(
+        &self,
+        is_new_join: bool,
+        transport_pressure: TransportPlacementPressureSnapshot,
+    ) -> TopologyPressureSnapshot {
         let receiver_count = self.users.len().saturating_add(usize::from(is_new_join));
         let max_source_fanout = self
             .consumer_keys_by_source
@@ -140,7 +147,11 @@ impl RoomState {
             active_consumer_count: self.consumer_index.len(),
             pending_consumer_count: self.pending_consumer_bootstraps.len(),
             max_source_fanout,
-            ..Default::default()
+            egress_bitrate_bps: transport_pressure.egress_bitrate_bps,
+            packet_loop_lag_ms: transport_pressure.packet_loop_lag_ms,
+            command_backlog_depth: transport_pressure.command_backlog_depth,
+            relay_mailbox_depth: transport_pressure.relay_mailbox_depth,
+            worker_pressure_score: transport_pressure.worker_pressure_score,
         }
     }
 
@@ -192,6 +203,7 @@ impl RoomState {
         None
     }
 
+    #[cfg(test)]
     pub(in crate::runtime::room) fn apply_join(
         &mut self,
         user_id: &UserId,
@@ -200,13 +212,33 @@ impl RoomState {
         sender: OutboundSender,
         emit_joined_fanout: bool,
     ) -> Result<JoinUserOutcome, RoomJoinError> {
+        self.apply_join_with_transport_pressure(
+            user_id,
+            label,
+            permissions,
+            sender,
+            emit_joined_fanout,
+            TransportPlacementPressureSnapshot::default(),
+        )
+    }
+
+    pub(in crate::runtime::room) fn apply_join_with_transport_pressure(
+        &mut self,
+        user_id: &UserId,
+        label: Option<String>,
+        permissions: impl Into<RoomUserPermissions>,
+        sender: OutboundSender,
+        emit_joined_fanout: bool,
+        transport_pressure: TransportPlacementPressureSnapshot,
+    ) -> Result<JoinUserOutcome, RoomJoinError> {
         let permissions = permissions.into();
         let is_new = !self.users.contains_key(user_id);
         if is_new && self.users.len() >= self.admission_policy.max_sessions {
             return Err(RoomJoinError::RoomFull);
         }
         let connection_id = ConnectionId::allocate(&mut self.next_connection_id);
-        let transport_media_worker_id = self.apply_join_topology(user_id, connection_id, is_new)?;
+        let transport_media_worker_id =
+            self.apply_join_topology(user_id, connection_id, is_new, transport_pressure)?;
         let transport_removals = self.join_transport_removals(user_id, is_new);
 
         let previous_sender =

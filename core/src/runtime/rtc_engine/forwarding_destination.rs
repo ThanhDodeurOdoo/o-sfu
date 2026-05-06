@@ -199,7 +199,9 @@ impl LocalRtcPacketDestination {
             packet.local_send_packet(),
             is_last_destination,
         )?;
-        if payload_bytes.is_some() {
+        if let Some(payload_bytes) = payload_bytes {
+            let _ =
+                state.record_egress_bitrate(&self.session_key, packet.received_at(), payload_bytes);
             state.mark_session_dirty(&self.session_key);
         }
         Ok(ForwardSendOutcome::LocalRtc { payload_bytes })

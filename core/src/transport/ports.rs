@@ -21,7 +21,8 @@ use crate::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
         ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
         SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
-        TransportMediaId, TransportSessionHealth, TransportSessionKey,
+        TransportMediaId, TransportPlacementPressureSnapshot, TransportSessionHealth,
+        TransportSessionKey,
     },
 };
 
@@ -337,6 +338,15 @@ pub trait ObservabilityPort {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot;
+
+    /// Returns transport-worker pressure for the workers that own the sessions.
+    ///
+    /// Room placement uses this as a best-effort load signal. Missing or drained
+    /// workers return no pressure because room membership remains authoritative.
+    fn placement_pressure_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportPlacementPressureSnapshot;
 
     /// Returns recent active-speaker sources observed by transport workers.
     async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource>;

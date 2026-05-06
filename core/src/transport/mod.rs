@@ -14,5 +14,6 @@ pub use types::{
     ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerPacketGateUpdate,
     ReceiverBandwidthSnapshot, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
     SourcePacketGate, SourcePacketOperatingPoint, TransportAdapterError, TransportBitrateSnapshot,
-    TransportMediaId, TransportResult, TransportSessionHealth, TransportSessionKey,
+    TransportMediaId, TransportPlacementPressureSnapshot, TransportResult, TransportSessionHealth,
+    TransportSessionKey,
 };

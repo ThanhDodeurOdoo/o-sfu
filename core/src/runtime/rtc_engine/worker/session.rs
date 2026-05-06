@@ -49,6 +49,7 @@ fn worker_close_session(
 ) -> CloseSessionOutcome {
     let removed_session = state.users.remove(session_key);
     state.clear_session_schedule(session_key);
+    state.remove_egress_bitrate_counter(session_key);
     state
         .remote_addr_demux
         .forget_user_remote_addrs(session_key);

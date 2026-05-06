@@ -38,7 +38,7 @@ use super::{
         bitrate::RtcBitrateState,
         commands::{RtcWorkerCommand, RtcWorkerResponse},
         packet_loop::{self, PacketLoopConfig},
-        relay_registry::{RELAY_MAILBOX_CAPACITY, RelayPacketMailbox},
+        relay_registry::{RELAY_MAILBOX_CAPACITY, RelayPacketMailbox, sender_backlog_depth},
         state::TransportSessionHealth,
     },
     facade::{RtcTransportObservabilityFacade, RtcTransportShard, RtcWorkerHandle},
@@ -47,7 +47,8 @@ use crate::runtime::{
     RoomInstanceId,
     media_transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ReceiverBandwidthSnapshot,
-        TransportAdapterError, TransportBitrateSnapshot, TransportSessionKey,
+        TransportAdapterError, TransportBitrateSnapshot, TransportPlacementPressureSnapshot,
+        TransportSessionKey,
     },
 };
 
@@ -216,6 +217,14 @@ impl RtcTransportShard {
             .receiver_bandwidth_snapshot(session_keys)
     }
 
+    pub fn placement_pressure_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportPlacementPressureSnapshot {
+        self.observability()
+            .placement_pressure_snapshot(session_keys)
+    }
+
     #[cfg(test)]
     pub fn session_transport_health(
         &self,
@@ -273,6 +282,38 @@ impl RtcTransportObservabilityFacade<'_> {
             return ReceiverBandwidthSnapshot::default();
         };
         snapshot_state.receiver_bandwidth_snapshot(session_keys)
+    }
+
+    pub fn placement_pressure_snapshot(
+        self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportPlacementPressureSnapshot {
+        let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
+            return TransportPlacementPressureSnapshot::default();
+        };
+        let now = Instant::now();
+        let egress_bitrate_bps = match worker_handle.bitrate_state.lock() {
+            Ok(bitrate_state) => bitrate_state.egress_bitrate_snapshot_at(session_keys, now),
+            Err(_error) => 0,
+        };
+        let packet_loop_lag_ms = match worker_handle.snapshot_state.lock() {
+            Ok(snapshot_state) => snapshot_state.packet_loop_lag_ms_at(now),
+            Err(_error) => 0,
+        };
+        let command_backlog_depth = sender_backlog_depth(&worker_handle.command_tx);
+        let relay_mailbox_depth = worker_handle.relay_mailbox.backlog_depth();
+        TransportPlacementPressureSnapshot {
+            egress_bitrate_bps,
+            packet_loop_lag_ms,
+            command_backlog_depth,
+            relay_mailbox_depth,
+            worker_pressure_score: worker_pressure_score(
+                command_backlog_depth,
+                worker_handle.command_tx.max_capacity(),
+                relay_mailbox_depth,
+                RELAY_MAILBOX_CAPACITY,
+            ),
+        }
     }
 
     pub fn session_transport_health(
@@ -335,4 +376,24 @@ impl RtcTransportObservabilityFacade<'_> {
             .await
             .unwrap_or_default()
     }
+}
+
+fn worker_pressure_score(
+    command_backlog_depth: usize,
+    command_capacity: usize,
+    relay_mailbox_depth: usize,
+    relay_mailbox_capacity: usize,
+) -> u8 {
+    backlog_pressure_score(command_backlog_depth, command_capacity).max(backlog_pressure_score(
+        relay_mailbox_depth,
+        relay_mailbox_capacity,
+    ))
+}
+
+fn backlog_pressure_score(backlog_depth: usize, capacity: usize) -> u8 {
+    if capacity == 0 {
+        return 0;
+    }
+    let score = backlog_depth.saturating_mul(100) / capacity;
+    u8::try_from(score.min(100)).map_or(100, |value| value)
 }

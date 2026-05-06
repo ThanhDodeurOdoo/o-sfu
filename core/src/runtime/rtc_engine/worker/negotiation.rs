@@ -11,6 +11,7 @@ use std::{
     mem,
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use o_sfu_rfc::webrtc::MediaKind as ProtocolMediaKind;
@@ -25,6 +26,7 @@ use tracing::debug;
 
 use super::{
     super::{
+        bitrate::RtcBitrateState,
         bootstrap, sdp_simulcast,
         state::{RtcBootstrapState, RtcSnapshotState},
     },
@@ -57,6 +59,7 @@ pub(super) struct OfferBootstrapConfig<'a> {
 
 pub(super) fn respond_create_initial_session_offer(
     state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: OfferBootstrapConfig<'_>,
     session_key: &TransportSessionKey,
@@ -64,6 +67,7 @@ pub(super) fn respond_create_initial_session_offer(
 ) {
     let _ = response.send(worker_create_initial_session_offer(
         state,
+        bitrate_state,
         snapshot_state,
         config,
         session_key,
@@ -104,11 +108,12 @@ pub(super) fn respond_apply_session_answer(
 /// flight, callers must use the renegotiation path instead.
 fn worker_create_initial_session_offer(
     state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: OfferBootstrapConfig<'_>,
     session_key: &TransportSessionKey,
 ) -> Result<SessionOffer, TransportAdapterError> {
-    ensure_session_ready_for_offer(state, snapshot_state, config, session_key)?;
+    ensure_session_ready_for_offer(state, bitrate_state, snapshot_state, config, session_key)?;
     if state.session_has_registered_media(session_key) {
         return Err(TransportAdapterError::UnsupportedFeature);
     }
@@ -441,6 +446,7 @@ pub(super) fn offered_codecs(
 
 fn ensure_session_ready_for_offer(
     state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: OfferBootstrapConfig<'_>,
     session_key: &TransportSessionKey,
@@ -463,6 +469,10 @@ fn ensure_session_ready_for_offer(
     )?;
     if let Ok(mut snapshot) = snapshot_state.lock() {
         snapshot.add_session(session_key);
+    }
+    if let Ok(mut bitrate) = bitrate_state.lock() {
+        let counter = bitrate.register_session_egress(session_key, Instant::now());
+        state.register_egress_bitrate_counter(session_key.clone(), counter);
     }
     if let Some(session_state) = state.users.get(session_key) {
         let registered_local_ice_ufrag = state

@@ -51,7 +51,7 @@ use crate::{
         diagnostics::DiagnosticsEventData,
         media_transport::{
             MediaPort, MediaTransport, ObservabilityPort, SessionPort, TransportAdapterError,
-            TransportMediaId,
+            TransportMediaId, TransportPlacementPressureSnapshot,
         },
         metrics::TransportCleanupFailureKind,
         telemetry::schema::event as telemetry_event,
@@ -138,6 +138,7 @@ enum UserTransition<'a> {
         permissions: RoomUserPermissions,
         sender: mpsc::UnboundedSender<UserOutbound>,
         emit_joined_fanout: bool,
+        transport_pressure: TransportPlacementPressureSnapshot,
     },
     /// Close one runtime connection and clean up any matching transport owner.
     Close {
@@ -234,6 +235,9 @@ impl Room {
         cleanup: UserCleanup<'_>,
         emit_joined_fanout: bool,
     ) -> Result<ConnectionId, RoomJoinError> {
+        let transport_pressure = self
+            .transport_placement_pressure_snapshot(cleanup.media_transport())
+            .await;
         let UserTransitionResult::Joined(connection_id) = self
             .run_session_transition(
                 UserTransition::Join {
@@ -242,6 +246,7 @@ impl Room {
                     permissions: permissions.into(),
                     sender,
                     emit_joined_fanout,
+                    transport_pressure,
                 },
                 cleanup,
             )
@@ -250,6 +255,24 @@ impl Room {
             return Err(RoomJoinError::RouterState);
         };
         Ok(connection_id)
+    }
+
+    async fn transport_placement_pressure_snapshot(
+        &self,
+        media_transport: Option<&MediaTransport>,
+    ) -> TransportPlacementPressureSnapshot {
+        let Some(media_transport) = media_transport else {
+            return TransportPlacementPressureSnapshot::default();
+        };
+        let session_keys = {
+            let state = self.state.read().await;
+            state
+                .transport_user_entries()
+                .into_iter()
+                .map(|(user_id, connection_id)| self.transport_user_key(&user_id, connection_id))
+                .collect::<Vec<_>>()
+        };
+        media_transport.placement_pressure_snapshot(&session_keys)
     }
 
     /// Close one user connection through the production cleanup path.
@@ -757,10 +780,18 @@ impl Room {
                 permissions,
                 sender,
                 emit_joined_fanout,
+                transport_pressure,
             } => {
                 let outcome = {
                     let mut state = self.state.write().await;
-                    state.apply_join(user_id, label, permissions, sender, emit_joined_fanout)?
+                    state.apply_join_with_transport_pressure(
+                        user_id,
+                        label,
+                        permissions,
+                        sender,
+                        emit_joined_fanout,
+                        transport_pressure,
+                    )?
                 };
                 UserTransitionOutcome::Join(outcome)
             }

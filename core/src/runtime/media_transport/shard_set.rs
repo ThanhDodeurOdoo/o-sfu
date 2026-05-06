@@ -28,7 +28,8 @@ use crate::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
         ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
         SourcePolicySignal, SourcePolicyUpdateSubscription, TransportAdapterError,
-        TransportBitrateSnapshot, TransportMediaId, TransportSessionHealth, TransportSessionKey,
+        TransportBitrateSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
+        TransportSessionHealth, TransportSessionKey,
     },
 };
 
@@ -248,6 +249,30 @@ impl RtcTransportShardSet {
             let shard = self.shard_for_index(shard_index);
             let shard_snapshot = shard.receiver_bandwidth_snapshot(&shard_session_keys);
             snapshot.per_session.extend(shard_snapshot.per_session);
+        }
+        snapshot
+    }
+
+    /// Builds a best-effort placement-pressure snapshot across worker shards.
+    ///
+    /// Egress bitrate is additive across selected sessions. Saturation signals
+    /// use the hottest owning worker so one overloaded worker can activate
+    /// spillover.
+    pub(super) fn placement_pressure_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportPlacementPressureSnapshot {
+        let mut keys_by_shard = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
+        for session_key in session_keys {
+            keys_by_shard
+                .entry(self.shard_index_for_user(session_key))
+                .or_default()
+                .push(session_key.clone());
+        }
+        let mut snapshot = TransportPlacementPressureSnapshot::default();
+        for (shard_index, shard_session_keys) in keys_by_shard {
+            let shard = self.shard_for_index(shard_index);
+            snapshot = snapshot.merged_with(shard.placement_pressure_snapshot(&shard_session_keys));
         }
         snapshot
     }

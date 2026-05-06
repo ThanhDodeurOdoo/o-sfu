@@ -25,7 +25,7 @@ use str0m::{
 use tokio::net::UdpSocket;
 
 use super::{
-    bitrate::IncomingMediaBitrate,
+    bitrate::MediaBitrateCounter,
     demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux},
     local_send_rewrite::{LocalSendRewriteKey, LocalSendRewriteState},
     media_registry::{
@@ -39,6 +39,8 @@ use crate::runtime::media_transport::{
     ReceiverBandwidthSnapshot, SessionUploadSlot, TransportMediaId, TransportSessionKey,
 };
 pub use crate::transport::TransportSessionHealth;
+
+const PACKET_LOOP_LAG_SAMPLE_TTL: Duration = Duration::from_secs(1);
 
 pub(super) struct SharedRtcSocket {
     pub(super) socket: Arc<UdpSocket>,
@@ -107,7 +109,8 @@ pub(super) struct RtcBootstrapState {
     pub(super) pending_rid_keyframe_refresh_queue: BinaryHeap<Reverse<PendingRidKeyframeRefresh>>,
     pub(super) next_rid_keyframe_refresh_id: u64,
     pub(super) rid_readiness_scratch: RidReadinessScratch,
-    pub(super) incoming_bitrate_counters: BTreeMap<TransportMediaId, Arc<IncomingMediaBitrate>>,
+    pub(super) incoming_bitrate_counters: BTreeMap<TransportMediaId, Arc<MediaBitrateCounter>>,
+    pub(super) egress_bitrate_counters: BTreeMap<TransportSessionKey, Arc<MediaBitrateCounter>>,
     pub(super) consumer_mid_registry: BTreeMap<ConsumerMidLookupKey, TransportMediaId>,
     pub(super) remote_source_registry: BTreeMap<TransportMediaId, RemoteSourceRegistration>,
     pub(super) relay_targets: BTreeMap<TransportMediaId, RelaySourceRegistration>,
@@ -445,6 +448,8 @@ pub struct RtcSnapshotState {
     pub(super) live_sessions: BTreeSet<TransportSessionKey>,
     transport_health_by_session: BTreeMap<TransportSessionKey, TransportSessionHealth>,
     receiver_bandwidth_by_session: BTreeMap<TransportSessionKey, u64>,
+    packet_loop_lag_ms: u64,
+    packet_loop_lag_observed_at: Option<Instant>,
 }
 
 impl RtcSnapshotState {
@@ -505,6 +510,22 @@ impl RtcSnapshotState {
                         .map(|estimate_bps| (session_key.clone(), estimate_bps))
                 })
                 .collect(),
+        }
+    }
+
+    pub(super) fn set_packet_loop_lag_ms(&mut self, lag_ms: u64, observed_at: Instant) {
+        self.packet_loop_lag_ms = lag_ms;
+        self.packet_loop_lag_observed_at = Some(observed_at);
+    }
+
+    pub fn packet_loop_lag_ms_at(&self, now: Instant) -> u64 {
+        match self.packet_loop_lag_observed_at {
+            Some(observed_at)
+                if now.saturating_duration_since(observed_at) <= PACKET_LOOP_LAG_SAMPLE_TTL =>
+            {
+                self.packet_loop_lag_ms
+            }
+            Some(_) | None => 0,
         }
     }
 }

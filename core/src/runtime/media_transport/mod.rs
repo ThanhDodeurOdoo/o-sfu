@@ -49,7 +49,8 @@ pub use crate::transport::{
     ConsumerPacketGateUpdate, MediaPort, ObservabilityPort, ProducerActivity,
     ReceiverBandwidthSnapshot, SessionOffer, SessionPort, SessionUploadEncoding, SessionUploadSlot,
     SourcePacketGate, SourcePacketOperatingPoint, SourcePolicySignal, TransportAdapterError,
-    TransportBitrateSnapshot, TransportMediaId, TransportResult, TransportSessionKey,
+    TransportBitrateSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
+    TransportResult, TransportSessionKey,
 };
 
 #[cfg(test)]

@@ -34,6 +34,10 @@ impl RelayPacketMailbox {
     ) -> RelayEnqueueOutcome {
         forward_packet_to_target(&self.tx, packet, source_transport_media_id)
     }
+
+    pub(super) fn backlog_depth(&self) -> usize {
+        sender_backlog_depth(&self.tx)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +106,10 @@ fn forward_packet_to_target(
         Err(mpsc::error::TrySendError::Full(_packet)) => RelayEnqueueOutcome::Overloaded,
         Err(mpsc::error::TrySendError::Closed(_packet)) => RelayEnqueueOutcome::Closed,
     }
+}
+
+pub(super) fn sender_backlog_depth<T>(tx: &mpsc::Sender<T>) -> usize {
+    tx.max_capacity().saturating_sub(tx.capacity())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

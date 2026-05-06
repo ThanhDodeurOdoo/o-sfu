@@ -36,7 +36,8 @@ use crate::{
         ConsumerPacketGateUpdate, MediaPort, NegotiationPort, ObservabilityPort, ProducerActivity,
         ReceiverBandwidthSnapshot, SessionOffer, SessionPort, SourcePacketGate, SourcePolicyPort,
         SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
-        TransportMediaId, TransportSessionHealth, TransportSessionKey,
+        TransportMediaId, TransportPlacementPressureSnapshot, TransportSessionHealth,
+        TransportSessionKey,
     },
 };
 
@@ -516,6 +517,13 @@ impl ObservabilityPort for RtcTransport {
         self.shards.receiver_bandwidth_snapshot(session_keys)
     }
 
+    fn placement_pressure_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportPlacementPressureSnapshot {
+        self.shards.placement_pressure_snapshot(session_keys)
+    }
+
     async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         self.shards.active_speaker_source_snapshot().await
     }
@@ -872,6 +880,13 @@ impl ObservabilityPort for MediaTransport {
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
         self.backend.receiver_bandwidth_snapshot(session_keys)
+    }
+
+    fn placement_pressure_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportPlacementPressureSnapshot {
+        self.backend.placement_pressure_snapshot(session_keys)
     }
 
     async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {

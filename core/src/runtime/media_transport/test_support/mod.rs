@@ -23,7 +23,8 @@ use crate::transport::TransportSessionHealth;
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::transport::{
     ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
-    ReceiverBandwidthSnapshot, TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+    ReceiverBandwidthSnapshot, TransportBitrateSnapshot, TransportMediaId,
+    TransportPlacementPressureSnapshot, TransportSessionKey,
 };
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::transport::{
@@ -199,6 +200,13 @@ impl ObservabilityPort for FakeMediaTransport {
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
         Self::receiver_bandwidth_snapshot(self, session_keys)
+    }
+
+    fn placement_pressure_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportPlacementPressureSnapshot {
+        Self::placement_pressure_snapshot(self, session_keys)
     }
 
     async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
