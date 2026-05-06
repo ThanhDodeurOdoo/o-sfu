@@ -605,8 +605,8 @@ fn populate_forward_routes_enforces_per_consumer_rid_gates_after_aggregate_admit
         Some(destination) if destination.session_key() == Some(&lo_consumer_session)
     ));
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_layer_allowed, 2);
-    assert_eq!(snapshot.rtc_route_control_layer_dropped, 0);
+    assert_eq!(snapshot.rtc_route_control_layer_allowed(), 2);
+    assert_eq!(snapshot.rtc_route_control_layer_dropped(), 0);
 }
 
 #[allow(
@@ -718,8 +718,8 @@ fn populate_forward_routes_enforces_per_consumer_temporal_ceilings_after_aggrega
         Some(destination) if destination.session_key() == Some(&high_consumer_session)
     ));
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_layer_allowed, 2);
-    assert_eq!(snapshot.rtc_route_control_layer_dropped, 0);
+    assert_eq!(snapshot.rtc_route_control_layer_allowed(), 2);
+    assert_eq!(snapshot.rtc_route_control_layer_dropped(), 0);
 }
 
 #[allow(
@@ -793,8 +793,8 @@ fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admit
         Some(ForwardingDestination::InterNodeRelay(_))
     ));
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_layer_allowed, 2);
-    assert_eq!(snapshot.rtc_route_control_layer_dropped, 0);
+    assert_eq!(snapshot.rtc_route_control_layer_allowed(), 2);
+    assert_eq!(snapshot.rtc_route_control_layer_dropped(), 0);
 }
 
 #[allow(
@@ -913,8 +913,8 @@ fn populate_forward_routes_gates_only_the_selected_source_media() {
             if destination.session_key() == Some(&open_consumer_session)
     ));
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_layer_dropped, 1);
-    assert_eq!(snapshot.rtc_route_control_layer_allowed, 1);
+    assert_eq!(snapshot.rtc_route_control_layer_dropped(), 1);
+    assert_eq!(snapshot.rtc_route_control_layer_allowed(), 1);
 }
 
 #[test]
@@ -985,6 +985,6 @@ fn populate_forward_routes_applies_operating_point_packet_gates() {
         Some(destination) if destination.session_key() == Some(&consumer_session)
     ));
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_layer_dropped, 1);
-    assert_eq!(snapshot.rtc_route_control_layer_allowed, 1);
+    assert_eq!(snapshot.rtc_route_control_layer_dropped(), 1);
+    assert_eq!(snapshot.rtc_route_control_layer_allowed(), 1);
 }

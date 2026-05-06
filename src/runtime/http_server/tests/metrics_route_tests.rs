@@ -50,27 +50,30 @@ fn assert_transport_metrics_payload(payload: &str) {
 }
 
 fn assert_metrics_snapshot(snapshot: &RuntimeMetricsSnapshot) {
-    assert_eq!(snapshot.http_noop_requests, 1);
-    assert_eq!(snapshot.http_disconnect_requests, 1);
-    assert_eq!(snapshot.http_disconnect_unprocessable_entity, 1);
-    assert_eq!(snapshot.http_metrics_requests, 1);
-    assert_eq!(snapshot.http_inflight.metrics, 0);
-    assert_eq!(snapshot.http_request_duration.noop.count, 1);
-    assert_eq!(snapshot.http_request_duration.metrics.count, 1);
-    assert_eq!(snapshot.ws_handshake_duration.count, 0);
-    assert_eq!(snapshot.active_rooms, 0);
-    assert_eq!(snapshot.active_users, 0);
-    assert_eq!(snapshot.active_publications, 0);
-    assert_eq!(snapshot.active_subscriptions, 0);
-    assert_eq!(snapshot.active_recording_rooms, 0);
-    assert_eq!(snapshot.active_transport_users, 0);
-    assert_eq!(snapshot.connected_transport_users, 0);
-    assert_eq!(snapshot.transport_health_transitions_unset_to_connected, 0);
-    assert_eq!(snapshot.transport_ice_state_changes_checking, 0);
-    assert_eq!(snapshot.transport_dtls_connected, 0);
-    assert_eq!(snapshot.transport_user_lifetime_count, 0);
-    assert_eq!(snapshot.recording_start_accepted, 0);
-    assert_eq!(snapshot.rtp_forwarded_packets_local_rtc, 0);
+    assert_eq!(snapshot.http_noop_requests(), 1);
+    assert_eq!(snapshot.http_disconnect_requests(), 1);
+    assert_eq!(snapshot.http_disconnect_unprocessable_entity(), 1);
+    assert_eq!(snapshot.http_metrics_requests(), 1);
+    assert_eq!(snapshot.http_inflight().metrics, 0);
+    assert_eq!(snapshot.http_request_duration().noop.count, 1);
+    assert_eq!(snapshot.http_request_duration().metrics.count, 1);
+    assert_eq!(snapshot.ws_handshake_duration().count, 0);
+    assert_eq!(snapshot.active_rooms(), 0);
+    assert_eq!(snapshot.active_users(), 0);
+    assert_eq!(snapshot.active_publications(), 0);
+    assert_eq!(snapshot.active_subscriptions(), 0);
+    assert_eq!(snapshot.active_recording_rooms(), 0);
+    assert_eq!(snapshot.active_transport_users(), 0);
+    assert_eq!(snapshot.connected_transport_users(), 0);
+    assert_eq!(
+        snapshot.transport_health_transitions_unset_to_connected(),
+        0
+    );
+    assert_eq!(snapshot.transport_ice_state_changes_checking(), 0);
+    assert_eq!(snapshot.transport_dtls_connected(), 0);
+    assert_eq!(snapshot.transport_user_lifetime_count(), 0);
+    assert_eq!(snapshot.recording_start_accepted(), 0);
+    assert_eq!(snapshot.rtp_forwarded_packets_local_rtc(), 0);
 }
 
 #[tokio::test]

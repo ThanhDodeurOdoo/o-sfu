@@ -139,10 +139,10 @@ fn recent_miss_cache_skips_repeated_scans_for_the_same_source() {
 
     assert_eq!(routing_state.fallback_attempts(), 1);
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_datagram_fallback_scans, 1);
-    assert_eq!(snapshot.rtc_datagram_drops_no_user, 1);
-    assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache, 1);
-    assert_eq!(snapshot.rtc_datagram_drops_malformed, 0);
+    assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
+    assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
+    assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache(), 1);
+    assert_eq!(snapshot.rtc_datagram_drops_malformed(), 0);
 }
 
 #[test]
@@ -177,9 +177,9 @@ fn recent_miss_cache_clears_on_topology_change() {
 
     assert_eq!(routing_state.fallback_attempts(), 2);
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_datagram_fallback_scans, 2);
-    assert_eq!(snapshot.rtc_datagram_drops_no_user, 2);
-    assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache, 0);
+    assert_eq!(snapshot.rtc_datagram_fallback_scans(), 2);
+    assert_eq!(snapshot.rtc_datagram_drops_no_user(), 2);
+    assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache(), 0);
 }
 
 #[test]
@@ -212,10 +212,10 @@ fn recent_miss_cache_does_not_skip_different_packets_from_the_same_source() {
 
     assert_eq!(routing_state.fallback_attempts(), 2);
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_datagram_fallback_scans, 2);
-    assert_eq!(snapshot.rtc_datagram_drops_no_user, 2);
-    assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache, 0);
-    assert_eq!(snapshot.rtc_datagram_drops_source_rate_limited, 0);
+    assert_eq!(snapshot.rtc_datagram_fallback_scans(), 2);
+    assert_eq!(snapshot.rtc_datagram_drops_no_user(), 2);
+    assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache(), 0);
+    assert_eq!(snapshot.rtc_datagram_drops_source_rate_limited(), 0);
 }
 
 #[test]
@@ -248,10 +248,10 @@ fn source_rate_limiter_bounds_varied_unknown_source_misses() {
 
     assert_eq!(routing_state.fallback_attempts(), 4);
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_datagram_fallback_scans, 4);
-    assert_eq!(snapshot.rtc_datagram_drops_no_user, 4);
-    assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache, 0);
-    assert_eq!(snapshot.rtc_datagram_drops_source_rate_limited, 2);
+    assert_eq!(snapshot.rtc_datagram_fallback_scans(), 4);
+    assert_eq!(snapshot.rtc_datagram_drops_no_user(), 4);
+    assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache(), 0);
+    assert_eq!(snapshot.rtc_datagram_drops_source_rate_limited(), 2);
 }
 
 #[test]
@@ -275,11 +275,11 @@ fn malformed_udp_datagram_counts_as_malformed_drop_without_scan_metrics() {
 
     let snapshot = metrics.snapshot();
     assert_eq!(routing_state.fallback_attempts(), 1);
-    assert_eq!(snapshot.rtc_datagram_fallback_scans, 0);
-    assert_eq!(snapshot.rtc_datagram_scan_users, 0);
-    assert_eq!(snapshot.rtc_datagram_drops_malformed, 1);
-    assert_eq!(snapshot.rtc_datagram_drops_no_user, 0);
-    assert_eq!(snapshot.rtc_datagram_drops_source_rate_limited, 0);
+    assert_eq!(snapshot.rtc_datagram_fallback_scans(), 0);
+    assert_eq!(snapshot.rtc_datagram_scan_users(), 0);
+    assert_eq!(snapshot.rtc_datagram_drops_malformed(), 1);
+    assert_eq!(snapshot.rtc_datagram_drops_no_user(), 0);
+    assert_eq!(snapshot.rtc_datagram_drops_source_rate_limited(), 0);
 }
 
 #[test]
@@ -324,9 +324,9 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
 
     let snapshot = metrics.snapshot();
     assert_eq!(routing_state.fallback_attempts(), 1);
-    assert_eq!(snapshot.rtc_datagram_fallback_scans, 1);
-    assert_eq!(snapshot.rtc_datagram_scan_users, 0);
-    assert_eq!(snapshot.rtc_datagram_drops_no_user, 1);
+    assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
+    assert_eq!(snapshot.rtc_datagram_scan_users(), 0);
+    assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
 }
 
 #[test]
@@ -363,8 +363,8 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
 
     assert_eq!(buffers.forwards.len(), 1);
     assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
-    assert_eq!(metrics.snapshot().rtp_payload_bytes_egress, 0);
-    assert_eq!(metrics.snapshot().rtp_forwarded_packets_recording, 1);
+    assert_eq!(metrics.snapshot().rtp_payload_bytes_egress(), 0);
+    assert_eq!(metrics.snapshot().rtp_forwarded_packets_recording(), 1);
 }
 
 #[test]
@@ -454,15 +454,15 @@ fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
     assert!(inter_node_rx.try_recv().is_ok());
 
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtp_forwarded_packets_local_rtc, 0);
-    assert_eq!(snapshot.rtp_forwarded_packets_recording, 1);
-    assert_eq!(snapshot.rtp_forwarded_packets_intra_node_relay, 1);
-    assert_eq!(snapshot.rtp_forwarded_packets_inter_node_relay, 1);
-    assert_eq!(snapshot.rtp_forwarded_payload_bytes_local_rtc, 0);
-    assert_eq!(snapshot.rtp_forwarded_payload_bytes_recording, 7);
-    assert_eq!(snapshot.rtp_forwarded_payload_bytes_intra_node_relay, 7);
-    assert_eq!(snapshot.rtp_forwarded_payload_bytes_inter_node_relay, 7);
-    assert_eq!(snapshot.rtp_payload_bytes_egress, 0);
+    assert_eq!(snapshot.rtp_forwarded_packets_local_rtc(), 0);
+    assert_eq!(snapshot.rtp_forwarded_packets_recording(), 1);
+    assert_eq!(snapshot.rtp_forwarded_packets_intra_node_relay(), 1);
+    assert_eq!(snapshot.rtp_forwarded_packets_inter_node_relay(), 1);
+    assert_eq!(snapshot.rtp_forwarded_payload_bytes_local_rtc(), 0);
+    assert_eq!(snapshot.rtp_forwarded_payload_bytes_recording(), 7);
+    assert_eq!(snapshot.rtp_forwarded_payload_bytes_intra_node_relay(), 7);
+    assert_eq!(snapshot.rtp_forwarded_payload_bytes_inter_node_relay(), 7);
+    assert_eq!(snapshot.rtp_payload_bytes_egress(), 0);
 }
 
 #[test]
@@ -515,7 +515,7 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() {
     flush_forward_routes(&mut state, &metrics, &mut buffers);
 
     assert!(state.dirty_sessions.contains(&consumer_session));
-    assert_eq!(metrics.snapshot().rtp_forwarded_packets_local_rtc, 1);
+    assert_eq!(metrics.snapshot().rtp_forwarded_packets_local_rtc(), 1);
 }
 
 #[test]
@@ -591,8 +591,8 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
 
     assert!(buffers.forwards.is_empty());
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_layer_dropped, 1);
-    assert_eq!(snapshot.rtc_route_control_layer_allowed, 0);
+    assert_eq!(snapshot.rtc_route_control_layer_dropped(), 1);
+    assert_eq!(snapshot.rtc_route_control_layer_allowed(), 0);
 }
 
 #[test]
@@ -689,8 +689,8 @@ fn flush_forward_routes_records_relay_overload_drops() {
     flush_forward_routes(&mut state, &metrics, &mut buffers);
 
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtp_forwarded_packets_intra_node_relay, 0);
-    assert_eq!(snapshot.rtp_relay_overload_drops_intra_node_relay, 1);
+    assert_eq!(snapshot.rtp_forwarded_packets_intra_node_relay(), 0);
+    assert_eq!(snapshot.rtp_relay_overload_drops_intra_node_relay(), 1);
 }
 
 #[test]
@@ -744,8 +744,8 @@ fn flush_pending_keyframe_requests_marks_local_source_sessions_dirty() {
 
     assert!(state.dirty_sessions.contains(&source_session));
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_forwarded, 1);
-    assert_eq!(snapshot.rtc_route_control_absorbed, 0);
+    assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
+    assert_eq!(snapshot.rtc_route_control_absorbed(), 0);
 }
 
 #[test]
@@ -798,7 +798,7 @@ fn flush_pending_keyframe_requests_forwards_remote_sources_by_transport_media_id
             && target_id == RelayTargetId::new(1)
             && forwarded_transport_media_id == source_transport_media_id
     ));
-    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded(), 1);
 }
 
 #[test]
@@ -868,8 +868,8 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
     ));
     assert!(control_rx.try_recv().is_err());
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_forwarded, 1);
-    assert_eq!(snapshot.rtc_route_control_absorbed, 0);
+    assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
+    assert_eq!(snapshot.rtc_route_control_absorbed(), 0);
 }
 
 #[test]
@@ -936,8 +936,8 @@ fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_f
     flush_pending_keyframe_requests(&mut state, &metrics, &mut buffers);
 
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_forwarded, 1);
-    assert_eq!(snapshot.rtc_route_control_absorbed, 0);
+    assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
+    assert_eq!(snapshot.rtc_route_control_absorbed(), 0);
     assert!(state.dirty_sessions.contains(&source_session));
     assert_eq!(
         state

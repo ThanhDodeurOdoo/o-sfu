@@ -43,9 +43,9 @@ async fn websocket_rejects_unknown_protocol_envelope_tag() {
     );
 
     let metrics = server.state.metrics.snapshot();
-    assert_eq!(metrics.ws_bus_parse_failures, 1);
-    assert_eq!(metrics.ws_bus_invalid_input_failures, 0);
-    assert_eq!(metrics.ws_bus_unsupported_feature_failures, 1);
+    assert_eq!(metrics.ws_bus_parse_failures(), 1);
+    assert_eq!(metrics.ws_bus_invalid_input_failures(), 0);
+    assert_eq!(metrics.ws_bus_unsupported_feature_failures(), 1);
 }
 
 #[tokio::test]
@@ -88,9 +88,9 @@ async fn websocket_rejects_invalid_json_payload() {
     );
 
     let metrics = server.state.metrics.snapshot();
-    assert_eq!(metrics.ws_bus_parse_failures, 1);
-    assert_eq!(metrics.ws_bus_invalid_input_failures, 1);
-    assert_eq!(metrics.ws_bus_unsupported_feature_failures, 0);
+    assert_eq!(metrics.ws_bus_parse_failures(), 1);
+    assert_eq!(metrics.ws_bus_invalid_input_failures(), 1);
+    assert_eq!(metrics.ws_bus_unsupported_feature_failures(), 0);
 }
 
 #[tokio::test]
@@ -181,9 +181,9 @@ async fn websocket_rejects_batches_over_protocol_envelope_limit() {
     );
 
     let metrics = server.state.metrics.snapshot();
-    assert_eq!(metrics.ws_bus_parse_failures, 1);
-    assert_eq!(metrics.ws_bus_invalid_input_failures, 1);
-    assert_eq!(metrics.ws_bus_unsupported_feature_failures, 0);
+    assert_eq!(metrics.ws_bus_parse_failures(), 1);
+    assert_eq!(metrics.ws_bus_invalid_input_failures(), 1);
+    assert_eq!(metrics.ws_bus_unsupported_feature_failures(), 0);
 }
 
 #[tokio::test]

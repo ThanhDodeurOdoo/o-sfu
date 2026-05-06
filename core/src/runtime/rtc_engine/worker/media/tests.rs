@@ -275,9 +275,9 @@ fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
 
     assert!(!state.dirty_sessions.contains(&source_session));
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_forwarded, 0);
-    assert_eq!(snapshot.rtc_route_control_absorbed, 0);
-    assert_eq!(snapshot.rtc_route_control_route_gated_relay_drops, 1);
+    assert_eq!(snapshot.rtc_route_control_forwarded(), 0);
+    assert_eq!(snapshot.rtc_route_control_absorbed(), 0);
+    assert_eq!(snapshot.rtc_route_control_route_gated_relay_drops(), 1);
 }
 
 #[test]
@@ -319,9 +319,9 @@ fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
 
     assert!(state.dirty_sessions.contains(&source_session));
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_forwarded, 1);
-    assert_eq!(snapshot.rtc_route_control_absorbed, 1);
-    assert_eq!(snapshot.rtc_route_control_route_gated_relay_drops, 0);
+    assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
+    assert_eq!(snapshot.rtc_route_control_absorbed(), 1);
+    assert_eq!(snapshot.rtc_route_control_route_gated_relay_drops(), 0);
 }
 
 #[test]
@@ -369,7 +369,7 @@ fn consumer_keyframe_request_marks_local_video_source_dirty() {
 
     assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
     assert!(state.dirty_sessions.contains(&source_session));
-    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded(), 1);
 }
 
 #[test]
@@ -423,7 +423,7 @@ fn consumer_keyframe_request_uses_rid_scoped_local_video_source() {
 
     assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
     assert!(state.dirty_sessions.contains(&source_session));
-    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded(), 1);
 }
 
 #[test]
@@ -501,7 +501,7 @@ fn open_consumer_keyframe_request_refreshes_simulcast_video_source() {
 
     assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
     assert!(state.dirty_sessions.contains(&source_session));
-    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded(), 1);
 }
 
 #[test]
@@ -569,7 +569,7 @@ fn consumer_keyframe_request_forwards_remote_video_refresh() {
             && forwarded_transport_media_id == source_transport_media_id
             && target_id == RelayTargetId::new(11)
     ));
-    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded(), 1);
 }
 
 #[test]
@@ -639,7 +639,7 @@ fn consumer_keyframe_request_forwards_remote_video_refresh_with_selected_rid() {
             && target_id == RelayTargetId::new(12)
             && rid == selected_rid
     ));
-    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded(), 1);
 }
 
 #[test]
@@ -875,7 +875,7 @@ fn selected_rid_packet_gate_uses_bootstrap_fallback_before_becoming_strict() {
     );
 
     assert!(!state.dirty_sessions.contains(&source_session));
-    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 0);
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded(), 0);
 
     assert!(observe_source_rid_readiness(
         &mut state,
@@ -901,7 +901,7 @@ fn selected_rid_packet_gate_uses_bootstrap_fallback_before_becoming_strict() {
         Some(PacketLayerGate::Rid(fallback_rid))
     );
     assert!(state.dirty_sessions.contains(&source_session));
-    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded(), 1);
 }
 
 #[test]
@@ -1010,7 +1010,7 @@ fn selected_rid_activation_sends_bounded_follow_up_keyframe_refreshes() {
         true,
         now,
     ));
-    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded(), 1);
 
     for (elapsed_ms, expected_forwarded) in [
         (700, 1),
@@ -1030,7 +1030,7 @@ fn selected_rid_activation_sends_bounded_follow_up_keyframe_refreshes() {
             now + Duration::from_millis(elapsed_ms),
         ));
         assert_eq!(
-            metrics.snapshot().rtc_route_control_forwarded,
+            metrics.snapshot().rtc_route_control_forwarded(),
             expected_forwarded
         );
     }
@@ -1084,11 +1084,11 @@ fn selected_rid_keyframe_refreshes_are_timer_driven_after_activation() {
         true,
         now,
     ));
-    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded(), 1);
 
     drain_due_rid_keyframe_refreshes(&mut state, &metrics, now + Duration::from_millis(1_200));
 
-    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 2);
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded(), 2);
     assert!(state.dirty_sessions.contains(&source_session));
 }
 
@@ -1162,7 +1162,7 @@ fn selected_rid_packet_gate_blocks_when_selected_rid_goes_stale() {
         Some(PacketLayerGate::Block)
     );
     assert!(state.dirty_sessions.contains(&source_session));
-    assert_eq!(metrics.snapshot().rtc_route_control_forwarded, 1);
+    assert_eq!(metrics.snapshot().rtc_route_control_forwarded(), 1);
 
     assert!(!observe_source_rid_readiness(
         &mut state,
@@ -1671,8 +1671,8 @@ fn request_keyframe_ignores_wrong_source_owner() {
 
     assert!(!state.dirty_sessions.contains(&source_session));
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_forwarded, 0);
-    assert_eq!(snapshot.rtc_route_control_absorbed, 0);
+    assert_eq!(snapshot.rtc_route_control_forwarded(), 0);
+    assert_eq!(snapshot.rtc_route_control_absorbed(), 0);
 }
 
 #[test]

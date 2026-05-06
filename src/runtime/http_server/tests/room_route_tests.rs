@@ -306,7 +306,7 @@ async fn room_route_updates_metrics_for_unauthorized_and_success_paths() {
     assert_eq!(authorized_response.status(), StatusCode::OK);
 
     let metrics = state.metrics.snapshot();
-    assert_eq!(metrics.http_room_requests, 2);
-    assert_eq!(metrics.http_room_unauthorized, 1);
-    assert_eq!(metrics.http_room_success, 1);
+    assert_eq!(metrics.http_room_requests(), 2);
+    assert_eq!(metrics.http_room_unauthorized(), 1);
+    assert_eq!(metrics.http_room_success(), 1);
 }

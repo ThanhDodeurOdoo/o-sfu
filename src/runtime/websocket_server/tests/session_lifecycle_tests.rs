@@ -98,7 +98,7 @@ async fn websocket_closes_when_pong_times_out() {
 
     sleep(Duration::from_millis(20)).await;
     let metrics = server.state.metrics.snapshot();
-    assert_eq!(metrics.ws_user_loop_exits_ping_timeout, 1);
+    assert_eq!(metrics.ws_user_loop_exits_ping_timeout(), 1);
     assert!(
         !server
             .room_manager

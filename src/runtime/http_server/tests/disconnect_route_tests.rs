@@ -122,9 +122,9 @@ async fn room_route_updates_metrics_for_unauthorized_and_success_paths() {
     assert_eq!(authorized_response.status(), StatusCode::OK);
 
     let metrics = state.metrics.snapshot();
-    assert_eq!(metrics.http_room_requests, 2);
-    assert_eq!(metrics.http_room_unauthorized, 1);
-    assert_eq!(metrics.http_room_success, 1);
+    assert_eq!(metrics.http_room_requests(), 2);
+    assert_eq!(metrics.http_room_unauthorized(), 1);
+    assert_eq!(metrics.http_room_success(), 1);
 }
 
 #[tokio::test]
@@ -179,8 +179,8 @@ async fn disconnect_route_updates_metrics_for_all_outcomes() {
     assert_eq!(success_response.status(), StatusCode::OK);
 
     let metrics = state.metrics.snapshot();
-    assert_eq!(metrics.http_disconnect_requests, 3);
-    assert_eq!(metrics.http_disconnect_bad_request, 1);
-    assert_eq!(metrics.http_disconnect_unprocessable_entity, 1);
-    assert_eq!(metrics.http_disconnect_success, 1);
+    assert_eq!(metrics.http_disconnect_requests(), 3);
+    assert_eq!(metrics.http_disconnect_bad_request(), 1);
+    assert_eq!(metrics.http_disconnect_unprocessable_entity(), 1);
+    assert_eq!(metrics.http_disconnect_success(), 1);
 }

@@ -41,8 +41,8 @@ fn recording_service_counts_packets_without_recounting_streams() {
     assert_eq!(snapshot.captured_packet_count, 3);
     assert_eq!(snapshot.captured_stream_count, 2);
     let metrics_snapshot = metrics.snapshot();
-    assert_eq!(metrics_snapshot.recording_captured_packets, 3);
-    assert_eq!(metrics_snapshot.recording_captured_streams, 2);
+    assert_eq!(metrics_snapshot.recording_captured_packets(), 3);
+    assert_eq!(metrics_snapshot.recording_captured_streams(), 2);
 
     assert!(service.stop().is_ok());
     media_tap.write_packet(&ignored_packet, TransportMediaId::new(3));

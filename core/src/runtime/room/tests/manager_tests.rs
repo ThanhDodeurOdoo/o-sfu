@@ -221,7 +221,7 @@ async fn room_manager_concurrent_create_attempts_publish_one_live_room() {
     );
 
     assert_eq!(first.uuid(), second.uuid());
-    assert_eq!(metrics.snapshot().active_rooms, 1);
+    assert_eq!(metrics.snapshot().active_rooms(), 1);
 }
 
 #[tokio::test]
@@ -842,8 +842,8 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
         )
         .await;
     assert!(joined.is_ok());
-    assert_eq!(metrics.snapshot().active_rooms, 1);
-    assert_eq!(metrics.snapshot().active_users, 1);
+    assert_eq!(metrics.snapshot().active_rooms(), 1);
+    assert_eq!(metrics.snapshot().active_users(), 1);
 
     let first_user_ids = [UserId::Integer(1)];
     let second_user_ids = [UserId::Integer(1)];
@@ -863,8 +863,8 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
     tokio::join!(first_cleanup, second_cleanup);
 
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.active_rooms, 0);
-    assert_eq!(snapshot.active_users, 0);
+    assert_eq!(snapshot.active_rooms(), 0);
+    assert_eq!(snapshot.active_users(), 0);
     assert!(manager.get_by_uuid(&room_id).await.is_none());
 }
 
@@ -891,7 +891,7 @@ async fn manager_metrics_track_live_rooms_and_users_without_replacement_drift() 
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
     let room_id = room.uuid().to_owned();
-    assert_eq!(metrics.snapshot().active_rooms, 1);
+    assert_eq!(metrics.snapshot().active_rooms(), 1);
 
     let (first_tx, _first_rx) = test_sender();
     let first_join = manager
@@ -907,7 +907,7 @@ async fn manager_metrics_track_live_rooms_and_users_without_replacement_drift() 
         )
         .await;
     assert!(first_join.is_ok());
-    assert_eq!(metrics.snapshot().active_users, 1);
+    assert_eq!(metrics.snapshot().active_users(), 1);
 
     let (replacement_tx, _replacement_rx) = test_sender();
     let replacement_join = manager
@@ -923,15 +923,15 @@ async fn manager_metrics_track_live_rooms_and_users_without_replacement_drift() 
         )
         .await;
     assert!(replacement_join.is_ok());
-    assert_eq!(metrics.snapshot().active_users, 1);
+    assert_eq!(metrics.snapshot().active_users(), 1);
 
     manager
         .disconnect_users(&room_id, &[UserId::Integer(1)], &media_transport)
         .await;
 
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.active_rooms, 0);
-    assert_eq!(snapshot.active_users, 0);
+    assert_eq!(snapshot.active_rooms(), 0);
+    assert_eq!(snapshot.active_users(), 0);
 }
 
 #[tokio::test]
@@ -991,30 +991,30 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
     );
 
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.active_rooms, 1);
-    assert_eq!(snapshot.active_users, 2);
-    assert_eq!(snapshot.active_publications, 1);
-    assert_eq!(snapshot.active_subscriptions, 1);
+    assert_eq!(snapshot.active_rooms(), 1);
+    assert_eq!(snapshot.active_users(), 2);
+    assert_eq!(snapshot.active_publications(), 1);
+    assert_eq!(snapshot.active_subscriptions(), 1);
 
     manager
         .disconnect_users(&room_id, &[UserId::Integer(1)], &media_transport)
         .await;
 
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.active_rooms, 1);
-    assert_eq!(snapshot.active_users, 1);
-    assert_eq!(snapshot.active_publications, 0);
-    assert_eq!(snapshot.active_subscriptions, 0);
+    assert_eq!(snapshot.active_rooms(), 1);
+    assert_eq!(snapshot.active_users(), 1);
+    assert_eq!(snapshot.active_publications(), 0);
+    assert_eq!(snapshot.active_subscriptions(), 0);
 
     manager
         .disconnect_users(&room_id, &[UserId::Integer(2)], &media_transport)
         .await;
 
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.active_rooms, 0);
-    assert_eq!(snapshot.active_users, 0);
-    assert_eq!(snapshot.active_publications, 0);
-    assert_eq!(snapshot.active_subscriptions, 0);
+    assert_eq!(snapshot.active_rooms(), 0);
+    assert_eq!(snapshot.active_users(), 0);
+    assert_eq!(snapshot.active_publications(), 0);
+    assert_eq!(snapshot.active_subscriptions(), 0);
 }
 
 #[tokio::test]
@@ -1073,7 +1073,7 @@ async fn manager_metrics_track_receiver_source_selection_updates() {
     );
 
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.source_selection_updates_encoding, 2);
+    assert_eq!(snapshot.source_selection_updates_encoding(), 2);
 }
 
 #[tokio::test]

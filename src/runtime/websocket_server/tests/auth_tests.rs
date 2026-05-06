@@ -23,8 +23,8 @@ async fn websocket_times_out_when_client_never_authenticates() {
 
     sleep(Duration::from_millis(20)).await;
     let metrics = server.state.metrics.snapshot();
-    assert_eq!(metrics.ws_connections_accepted, 1);
-    assert_eq!(metrics.ws_handshake_rejected_timeout, 1);
+    assert_eq!(metrics.ws_connections_accepted(), 1);
+    assert_eq!(metrics.ws_handshake_rejected_timeout(), 1);
 }
 
 #[tokio::test]
@@ -80,10 +80,10 @@ async fn websocket_authenticates_with_room_key_and_sends_welcome_payload() {
     sleep(Duration::from_millis(20)).await;
 
     let metrics = server.state.metrics.snapshot();
-    assert_eq!(metrics.ws_connections_accepted, 1);
-    assert_eq!(metrics.ws_handshake_credentials_received, 1);
-    assert_eq!(metrics.ws_users_joined, 1);
-    assert_eq!(metrics.ws_user_loops_started, 1);
+    assert_eq!(metrics.ws_connections_accepted(), 1);
+    assert_eq!(metrics.ws_handshake_credentials_received(), 1);
+    assert_eq!(metrics.ws_users_joined(), 1);
+    assert_eq!(metrics.ws_user_loops_started(), 1);
 }
 
 #[tokio::test]
@@ -216,7 +216,7 @@ async fn websocket_rejects_non_auth_handshake_frame_with_protocol_metric() {
 
     sleep(Duration::from_millis(20)).await;
     let metrics = server.state.metrics.snapshot();
-    assert_eq!(metrics.ws_handshake_credentials_received, 0);
-    assert_eq!(metrics.ws_handshake_rejected_protocol_error, 1);
-    assert_eq!(metrics.ws_handshake_rejected_error, 0);
+    assert_eq!(metrics.ws_handshake_credentials_received(), 0);
+    assert_eq!(metrics.ws_handshake_rejected_protocol_error(), 1);
+    assert_eq!(metrics.ws_handshake_rejected_error(), 0);
 }

@@ -17,13 +17,13 @@ async fn rtc_metrics_track_live_transport_users_without_double_counting() {
     let adapter = RtcTransportShard::default();
     let session_key = transport_key(1, 16, UserId::Integer(16));
 
-    assert_eq!(adapter.metrics.snapshot().active_transport_users, 0);
+    assert_eq!(adapter.metrics.snapshot().active_transport_users(), 0);
     assert!(
         prepare_transport_session(&adapter, &session_key)
             .await
             .is_ok()
     );
-    assert_eq!(adapter.metrics.snapshot().active_transport_users, 1);
+    assert_eq!(adapter.metrics.snapshot().active_transport_users(), 1);
 
     assert!(matches!(
         adapter
@@ -32,7 +32,7 @@ async fn rtc_metrics_track_live_transport_users_without_double_counting() {
             .await,
         Err(TransportAdapterError::InvalidInput)
     ));
-    assert_eq!(adapter.metrics.snapshot().active_transport_users, 1);
+    assert_eq!(adapter.metrics.snapshot().active_transport_users(), 1);
 
     assert!(
         adapter
@@ -42,9 +42,9 @@ async fn rtc_metrics_track_live_transport_users_without_double_counting() {
             .is_ok()
     );
     let snapshot = adapter.metrics.snapshot();
-    assert_eq!(snapshot.active_transport_users, 0);
-    assert_eq!(snapshot.transport_user_lifetime_le_1_second, 1);
-    assert_eq!(snapshot.transport_user_lifetime_count, 1);
+    assert_eq!(snapshot.active_transport_users(), 0);
+    assert_eq!(snapshot.transport_user_lifetime_le_1_second(), 1);
+    assert_eq!(snapshot.transport_user_lifetime_count(), 1);
 }
 
 #[tokio::test]

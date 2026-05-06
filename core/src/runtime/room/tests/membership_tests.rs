@@ -689,8 +689,8 @@ async fn manager_shutdown_abandons_pending_cleanup_retry_for_removed_room() {
     );
 
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.active_rooms, 0);
-    assert_eq!(snapshot.transport_cleanup_failures_shutdown, 1);
+    assert_eq!(snapshot.active_rooms(), 0);
+    assert_eq!(snapshot.transport_cleanup_failures_shutdown(), 1);
 }
 
 #[tokio::test]

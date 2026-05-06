@@ -143,8 +143,8 @@ async fn recording_start_and_stop_update_room_state_for_all_users() {
     assert_eq!(publisher_start.stop_code, None);
     assert_eq!(observer_start, publisher_start);
     let metrics_snapshot = metrics.snapshot();
-    assert_eq!(metrics_snapshot.recording_start_accepted, 1);
-    assert_eq!(metrics_snapshot.active_recording_rooms, 1);
+    assert_eq!(metrics_snapshot.recording_start_accepted(), 1);
+    assert_eq!(metrics_snapshot.active_recording_rooms(), 1);
 
     assert!(
         room.test_api()
@@ -167,8 +167,8 @@ async fn recording_start_and_stop_update_room_state_for_all_users() {
     assert_eq!(publisher_stop.stop_code, Some(StopCode::UserRequest));
     assert_eq!(observer_stop, publisher_stop);
     let metrics_snapshot = metrics.snapshot();
-    assert_eq!(metrics_snapshot.recording_stop_accepted, 1);
-    assert_eq!(metrics_snapshot.active_recording_rooms, 0);
+    assert_eq!(metrics_snapshot.recording_stop_accepted(), 1);
+    assert_eq!(metrics_snapshot.active_recording_rooms(), 0);
 }
 
 #[tokio::test]
@@ -235,9 +235,9 @@ async fn recording_allows_transcription_toggle_but_rejects_new_media_while_activ
         "no extra recording update should be emitted for rejected reconfiguration"
     );
     let metrics_snapshot = metrics.snapshot();
-    assert_eq!(metrics_snapshot.recording_start_accepted, 2);
-    assert_eq!(metrics_snapshot.recording_start_rejected, 1);
-    assert_eq!(metrics_snapshot.active_recording_rooms, 1);
+    assert_eq!(metrics_snapshot.recording_start_accepted(), 2);
+    assert_eq!(metrics_snapshot.recording_start_rejected(), 1);
+    assert_eq!(metrics_snapshot.active_recording_rooms(), 1);
 }
 
 #[tokio::test]
@@ -337,8 +337,8 @@ async fn stale_replaced_connection_cannot_start_or_stop_recording() {
     let _observer_stop = expect_recording_message(&mut observer_rx).await;
 
     let metrics_snapshot = metrics.snapshot();
-    assert_eq!(metrics_snapshot.recording_start_rejected, 1);
-    assert_eq!(metrics_snapshot.recording_stop_rejected, 1);
+    assert_eq!(metrics_snapshot.recording_start_rejected(), 1);
+    assert_eq!(metrics_snapshot.recording_stop_rejected(), 1);
 }
 
 #[tokio::test]
@@ -390,9 +390,9 @@ async fn recording_start_rejects_users_without_recording_permissions() {
     .await;
 
     let metrics_snapshot = metrics.snapshot();
-    assert_eq!(metrics_snapshot.recording_start_accepted, 0);
-    assert_eq!(metrics_snapshot.recording_start_rejected, 1);
-    assert_eq!(metrics_snapshot.active_recording_rooms, 0);
+    assert_eq!(metrics_snapshot.recording_start_accepted(), 0);
+    assert_eq!(metrics_snapshot.recording_start_rejected(), 1);
+    assert_eq!(metrics_snapshot.active_recording_rooms(), 0);
 }
 
 #[tokio::test]
@@ -470,9 +470,9 @@ async fn recording_start_rejects_requests_for_disabled_features() {
         .await;
 
         let metrics_snapshot = metrics.snapshot();
-        assert_eq!(metrics_snapshot.recording_start_accepted, 0);
-        assert_eq!(metrics_snapshot.recording_start_rejected, 1);
-        assert_eq!(metrics_snapshot.active_recording_rooms, 0);
+        assert_eq!(metrics_snapshot.recording_start_accepted(), 0);
+        assert_eq!(metrics_snapshot.recording_start_rejected(), 1);
+        assert_eq!(metrics_snapshot.active_recording_rooms(), 0);
     }
 }
 
@@ -529,9 +529,9 @@ async fn recording_start_rejects_rooms_without_recording_address() {
     .await;
 
     let metrics_snapshot = metrics.snapshot();
-    assert_eq!(metrics_snapshot.recording_start_accepted, 0);
-    assert_eq!(metrics_snapshot.recording_start_rejected, 1);
-    assert_eq!(metrics_snapshot.active_recording_rooms, 0);
+    assert_eq!(metrics_snapshot.recording_start_accepted(), 0);
+    assert_eq!(metrics_snapshot.recording_start_rejected(), 1);
+    assert_eq!(metrics_snapshot.active_recording_rooms(), 0);
 }
 
 #[tokio::test]
@@ -582,8 +582,8 @@ async fn recording_stop_rejects_users_without_stop_authority() {
     .await;
 
     let metrics_snapshot = metrics.snapshot();
-    assert_eq!(metrics_snapshot.recording_start_accepted, 1);
-    assert_eq!(metrics_snapshot.recording_stop_accepted, 0);
-    assert_eq!(metrics_snapshot.recording_stop_rejected, 1);
-    assert_eq!(metrics_snapshot.active_recording_rooms, 1);
+    assert_eq!(metrics_snapshot.recording_start_accepted(), 1);
+    assert_eq!(metrics_snapshot.recording_stop_accepted(), 0);
+    assert_eq!(metrics_snapshot.recording_stop_rejected(), 1);
+    assert_eq!(metrics_snapshot.active_recording_rooms(), 1);
 }
