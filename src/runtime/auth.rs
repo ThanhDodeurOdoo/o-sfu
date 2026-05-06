@@ -16,10 +16,14 @@ use crate::time::secs_since_epoch;
 
 type HmacSha256 = Hmac<Sha256>;
 
+pub const MAX_JWT_TOKEN_BYTES: usize = 16 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum AuthenticationError {
     #[error("invalid JWT format")]
     InvalidJwtFormat,
+    #[error("JWT token exceeds maximum byte length")]
+    TokenTooLarge { actual: usize, limit: usize },
     #[error("invalid base64 encoding")]
     InvalidBase64Encoding,
     #[error("invalid JSON payload")]
@@ -124,6 +128,7 @@ pub fn verify<T>(token: &str, key_b64: &str) -> Result<T, AuthenticationError>
 where
     T: DeserializeOwned,
 {
+    validate_token_length(token)?;
     let key = decode_base64(key_b64)?;
     let (header_b64, claims_b64, signature_b64) = split_token(token)?;
     let header_bytes = decode_jwt_segment(header_b64)?;
@@ -132,19 +137,27 @@ where
     if header.alg != ALGORITHM_HS256 {
         return Err(AuthenticationError::UnsupportedAlgorithm(header.alg));
     }
-    let claims_bytes = decode_jwt_segment(claims_b64)?;
-    let claims_value: serde_json::Value = serde_json::from_slice(&claims_bytes)
-        .map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
-    let registered_claims: RegisteredJwtClaims = serde_json::from_value(claims_value.clone())
-        .map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
     let actual_signature = decode_jwt_segment(signature_b64)?;
     verify_hs256(
         format!("{header_b64}.{claims_b64}").as_bytes(),
         &key,
         &actual_signature,
     )?;
+    let claims_bytes = decode_jwt_segment(claims_b64)?;
+    let registered_claims: RegisteredJwtClaims = serde_json::from_slice(&claims_bytes)
+        .map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
     validate_registered_claims(&registered_claims)?;
-    serde_json::from_value(claims_value).map_err(|_error| AuthenticationError::InvalidJsonPayload)
+    serde_json::from_slice(&claims_bytes).map_err(|_error| AuthenticationError::InvalidJsonPayload)
+}
+
+fn validate_token_length(token: &str) -> Result<(), AuthenticationError> {
+    if token.len() > MAX_JWT_TOKEN_BYTES {
+        return Err(AuthenticationError::TokenTooLarge {
+            actual: token.len(),
+            limit: MAX_JWT_TOKEN_BYTES,
+        });
+    }
+    Ok(())
 }
 
 fn validate_registered_claims(claims: &RegisteredJwtClaims) -> Result<(), AuthenticationError> {
@@ -225,8 +238,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AuthenticationError, HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims,
-        WebSocketConnectClaims, decode_base64, secs_since_epoch, sign, sign_hs256, verify,
+        AuthenticationError, HttpDisconnectClaims, HttpRoomClaims, MAX_JWT_TOKEN_BYTES,
+        RegisteredJwtClaims, WebSocketConnectClaims, decode_base64, secs_since_epoch, sign,
+        sign_hs256, verify,
     };
 
     const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
@@ -501,6 +515,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn verify_rejects_oversized_token_before_jwt_parsing() {
+        let token = "a".repeat(MAX_JWT_TOKEN_BYTES + 1);
+
+        let error = verify::<HttpRoomClaims>(&token, TEST_AUTH_KEY).err();
+        assert_eq!(
+            error,
+            Some(AuthenticationError::TokenTooLarge {
+                actual: MAX_JWT_TOKEN_BYTES + 1,
+                limit: MAX_JWT_TOKEN_BYTES,
+            })
+        );
+    }
+
+    #[test]
+    fn verify_does_not_parse_claims_before_signature_verification() {
+        let claims = HttpRoomClaims {
+            registered: RegisteredJwtClaims::default(),
+            key: None,
+        };
+        let token = sign(&claims, TEST_AUTH_KEY);
+        assert!(token.is_ok());
+        let Some(token) = token.ok() else {
+            return;
+        };
+        let invalid_claims_json = replace_token_segment(&token, 1, &URL_SAFE_NO_PAD.encode(b"{"));
+        assert!(invalid_claims_json.is_some());
+        let Some(invalid_claims_json) = invalid_claims_json else {
+            return;
+        };
+
+        let error = verify::<HttpRoomClaims>(&invalid_claims_json, TEST_AUTH_KEY).err();
+        assert_eq!(error, Some(AuthenticationError::InvalidSignature));
+    }
+
+    #[test]
+    fn verify_rejects_signed_invalid_claims_json_after_signature_verification() {
+        let token = sign_raw_claims_token_for_test(b"{", TEST_AUTH_KEY);
+        assert!(token.is_some());
+        let Some(token) = token else {
+            return;
+        };
+
+        let error = verify::<HttpRoomClaims>(&token, TEST_AUTH_KEY).err();
+        assert_eq!(error, Some(AuthenticationError::InvalidJsonPayload));
+    }
+
     #[derive(Clone, Copy)]
     enum SegmentEncoding {
         Jose,
@@ -525,6 +586,35 @@ mod tests {
         let signature = sign_hs256(signed_data.as_bytes(), &key).ok()?;
         let signature_b64 = encode_segment(&signature, segment_encoding);
         Some(format!("{signed_data}.{signature_b64}"))
+    }
+
+    fn sign_raw_claims_token_for_test(claims_json: &[u8], key_b64: &str) -> Option<String> {
+        let key = decode_base64(key_b64).ok()?;
+        let header = JwtHeader {
+            alg: ALGORITHM_HS256.to_owned(),
+            typ: Some(TYPE_JWT.to_owned()),
+        };
+        let header_json = serde_json::to_vec(&header).ok()?;
+        let header_b64 = URL_SAFE_NO_PAD.encode(header_json);
+        let claims_b64 = URL_SAFE_NO_PAD.encode(claims_json);
+        let signed_data = format!("{header_b64}.{claims_b64}");
+        let signature = sign_hs256(signed_data.as_bytes(), &key).ok()?;
+        let signature_b64 = URL_SAFE_NO_PAD.encode(signature);
+        Some(format!("{signed_data}.{signature_b64}"))
+    }
+
+    fn replace_token_segment(
+        token: &str,
+        segment_index: usize,
+        replacement: &str,
+    ) -> Option<String> {
+        let mut parts = token.split('.').map(str::to_owned).collect::<Vec<_>>();
+        if parts.len() != 3 {
+            return None;
+        }
+        let part = parts.get_mut(segment_index)?;
+        replacement.clone_into(part);
+        Some(parts.join("."))
     }
 
     fn encode_segment(bytes: &[u8], encoding: SegmentEncoding) -> String {

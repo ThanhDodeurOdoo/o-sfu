@@ -41,7 +41,7 @@ async fn disconnect_requires_valid_jwt() {
 
 #[tokio::test]
 async fn disconnect_rejects_oversized_body_before_auth_decode() {
-    let oversized_body = "x".repeat((16 * 1024) + 1);
+    let oversized_body = "x".repeat(auth::MAX_JWT_TOKEN_BYTES + 1);
     let request = build_request(Request::post(DISCONNECT_PATH), Body::from(oversized_body));
     assert!(request.is_some());
     let Some(request) = request else {

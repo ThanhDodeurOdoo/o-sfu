@@ -1,4 +1,5 @@
 use super::fixtures::*;
+use crate::runtime::auth::MAX_JWT_TOKEN_BYTES;
 
 #[tokio::test]
 async fn websocket_times_out_when_client_never_authenticates() {
@@ -130,6 +131,26 @@ async fn websocket_rejects_explicit_room_id_that_disagrees_with_claims() {
         return;
     };
     let authenticated = authenticate_with_room(&server, &token, Some(second_room.uuid())).await;
+    assert!(authenticated.is_some());
+    let Some(mut websocket) = authenticated else {
+        return;
+    };
+
+    assert_eq!(
+        read_close_code(&mut websocket).await,
+        Some(CloseCode::Library(4106)),
+    );
+}
+
+#[tokio::test]
+async fn websocket_rejects_oversized_auth_token_with_auth_failure() {
+    let server = spawn_test_server(1_000, 100).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let token = "a".repeat(MAX_JWT_TOKEN_BYTES + 1);
+    let authenticated = authenticate_with_jwt(&server, &token).await;
     assert!(authenticated.is_some());
     let Some(mut websocket) = authenticated else {
         return;

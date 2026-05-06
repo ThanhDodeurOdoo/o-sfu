@@ -7,8 +7,8 @@ pub(crate) mod time;
 /// Runtime authentication claims and JWT signing/verification helpers.
 pub mod auth {
     pub use crate::runtime::auth::{
-        AuthenticationError, HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims,
-        WebSocketConnectClaims, sign, verify,
+        AuthenticationError, HttpDisconnectClaims, HttpRoomClaims, MAX_JWT_TOKEN_BYTES,
+        RegisteredJwtClaims, WebSocketConnectClaims, sign, verify,
     };
 }
 

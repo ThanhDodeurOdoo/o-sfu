@@ -5,7 +5,10 @@
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use o_sfu::{
-    auth::{AuthenticationError, RegisteredJwtClaims, WebSocketConnectClaims, sign, verify},
+    auth::{
+        AuthenticationError, MAX_JWT_TOKEN_BYTES, RegisteredJwtClaims, WebSocketConnectClaims,
+        sign, verify,
+    },
     websocket::{
         ClientBatchDecodeError, ClientBatchDecodeFailureKind, MAX_CLIENT_FRAME_BYTES,
         decode_client_batch,
@@ -132,7 +135,7 @@ fn jwt_segment_failures_are_classified_semantically() {
     };
     assert_eq!(
         verify::<WebSocketConnectClaims>(&invalid_claims_json, TEST_AUTH_KEY),
-        Err(AuthenticationError::InvalidJsonPayload)
+        Err(AuthenticationError::InvalidSignature)
     );
 
     let unsupported_algorithm = replace_token_segment(
@@ -157,6 +160,19 @@ fn jwt_segment_failures_are_classified_semantically() {
     assert_eq!(
         verify::<WebSocketConnectClaims>(&invalid_signature, TEST_AUTH_KEY),
         Err(AuthenticationError::InvalidSignature)
+    );
+}
+
+#[test]
+fn jwt_rejects_oversized_token_before_parsing() {
+    let token = "a".repeat(MAX_JWT_TOKEN_BYTES + 1);
+
+    assert_eq!(
+        verify::<WebSocketConnectClaims>(&token, TEST_AUTH_KEY),
+        Err(AuthenticationError::TokenTooLarge {
+            actual: MAX_JWT_TOKEN_BYTES + 1,
+            limit: MAX_JWT_TOKEN_BYTES,
+        })
     );
 }
 
