@@ -131,6 +131,7 @@ pub struct ReceiverBandwidthSnapshot {
 pub struct TransportMediaId(u64);
 
 impl TransportMediaId {
+    #[must_use]
     pub fn new(raw: u64) -> Self {
         Self(raw)
     }

@@ -74,6 +74,7 @@ impl RtcTransportConfig {
         self.public_ip
     }
 
+    #[must_use]
     pub const fn max_bitrate_in_bps(&self) -> u64 {
         self.bitrate_limits.max_bitrate_in_bps()
     }

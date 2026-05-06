@@ -49,9 +49,9 @@ pub(super) struct RtcSessionState {
     pub(super) rtc: Rtc,
     pub(super) started_at: Instant,
     pub(super) local_ice_ufrag: String,
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub(super) max_bitrate_in_bps: Option<u64>,
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub(super) max_bitrate_out_bps: Option<u64>,
     pub(super) dtls_started: bool,
     pub(super) sdp_negotiation: SessionSdpNegotiationState,

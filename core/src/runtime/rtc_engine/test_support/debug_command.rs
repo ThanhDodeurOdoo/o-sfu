@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::{net::SocketAddr, time::Instant};
 
 use str0m::media::Mid;
@@ -6,44 +7,52 @@ use tokio::sync::oneshot;
 use crate::runtime::media_transport::{TransportMediaId, TransportSessionKey};
 
 pub(in crate::runtime::rtc_engine) enum DebugRtcWorkerCommand {
+    #[cfg(test)]
     ResolveMid {
         transport_media_id: TransportMediaId,
         response: oneshot::Sender<Option<Mid>>,
     },
+    #[cfg(test)]
     RemoteAddrOwner {
         source_addr: SocketAddr,
         response: oneshot::Sender<Option<TransportSessionKey>>,
     },
-    HasAnyRemoteAddrSession {
-        response: oneshot::Sender<bool>,
-    },
+    #[cfg(test)]
+    HasAnyRemoteAddrSession { response: oneshot::Sender<bool> },
+    #[cfg(test)]
     RememberRemoteAddr {
         source_addr: SocketAddr,
         session_key: TransportSessionKey,
         response: oneshot::Sender<()>,
     },
+    #[cfg(test)]
     SessionStreamRxSsrc {
         session_key: TransportSessionKey,
         mid: Mid,
         response: oneshot::Sender<Option<u32>>,
     },
+    #[cfg(test)]
     SessionStreamTxSsrc {
         session_key: TransportSessionKey,
         mid: Mid,
         response: oneshot::Sender<Option<u32>>,
     },
+    #[cfg(test)]
     SessionMaxBitrateIn {
         session_key: TransportSessionKey,
         response: oneshot::Sender<Option<u64>>,
     },
+    #[cfg(test)]
     SessionMaxBitrateOut {
         session_key: TransportSessionKey,
         response: oneshot::Sender<Option<u64>>,
     },
+    #[cfg(test)]
     RemoteSourceOwner {
         source_transport_media_id: TransportMediaId,
         response: oneshot::Sender<Option<TransportSessionKey>>,
     },
+    #[cfg(test)]
     RouteEntry {
         source_session_key: TransportSessionKey,
         source_mid: Mid,
@@ -54,10 +63,12 @@ pub(in crate::runtime::rtc_engine) enum DebugRtcWorkerCommand {
         consumer_mid: Mid,
         response: oneshot::Sender<Option<DebugRouteEntry>>,
     },
+    #[cfg(test)]
     RouteEntryByMediaId {
         source_transport_media_id: TransportMediaId,
         response: oneshot::Sender<Option<DebugRouteEntry>>,
     },
+    #[cfg(test)]
     RecordIncomingMedia {
         session_key: TransportSessionKey,
         transport_media_id: TransportMediaId,
@@ -65,6 +76,7 @@ pub(in crate::runtime::rtc_engine) enum DebugRtcWorkerCommand {
         now: Instant,
         response: oneshot::Sender<()>,
     },
+    #[cfg(test)]
     ObserveAudioActivity {
         transport_media_id: TransportMediaId,
         voice_activity: Option<bool>,
@@ -72,10 +84,12 @@ pub(in crate::runtime::rtc_engine) enum DebugRtcWorkerCommand {
         now: Instant,
         response: oneshot::Sender<()>,
     },
+    #[cfg(test)]
     RelayTargetCount {
         source_transport_media_id: TransportMediaId,
         response: oneshot::Sender<usize>,
     },
+    #[cfg(test)]
     ActiveRelayTargetCount {
         source_transport_media_id: TransportMediaId,
         response: oneshot::Sender<usize>,

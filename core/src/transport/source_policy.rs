@@ -116,6 +116,7 @@ impl SourcePolicyUpdateSubscription {
         }
     }
 
+    #[must_use]
     pub fn take_pending_updates(&self) -> BTreeSet<RoomInstanceId> {
         if self.dirty.take_dirty() {
             return self.dirty_rooms.drain();

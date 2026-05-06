@@ -32,10 +32,12 @@ const HEADER_EXTENSION_ID_ABS_SEND_TIME: u8 = 4;
 const HEADER_EXTENSION_ID_TRANSPORT_WIDE_CC: u8 = 5;
 const HEADER_EXTENSION_ID_SSRC_AUDIO_LEVEL: u8 = 10;
 
+#[must_use]
 pub fn router_rtp_capabilities(codec_flags: MediaCodecFlags) -> MediaCapabilities {
     router_rtp_capabilities_with_preferences(codec_flags, CodecPreferences::default())
 }
 
+#[must_use]
 pub fn router_rtp_capabilities_with_preferences(
     codec_flags: MediaCodecFlags,
     codec_preferences: CodecPreferences,

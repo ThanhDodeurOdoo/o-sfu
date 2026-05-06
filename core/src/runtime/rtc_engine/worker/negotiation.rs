@@ -290,7 +290,7 @@ fn apply_pending_recv_streams(
     for (mid, stream) in &pending_recv_streams {
         apply_pending_recv_stream(&mut api, *mid, stream, max_bitrate_in_bps);
     }
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     {
         session_state.max_bitrate_in_bps = Some(max_bitrate_in_bps);
     }

@@ -1,7 +1,8 @@
+#[cfg(test)]
+use std::{net::SocketAddr, time::Instant};
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr},
     sync::Arc,
-    time::Instant,
 };
 
 use str0m::media::Mid;
@@ -14,13 +15,14 @@ use super::{
     },
     facade::RtcTransportShard,
 };
+#[cfg(test)]
+use crate::runtime::media_transport::TransportMediaId;
 use crate::{
-    MediaCodecFlags, RtcPortRange,
+    MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
     runtime::{
         diagnostics::DiagnosticsStore,
         media_transport::{
-            MediaTransportDeps, RtcTransportConfig, SessionBitrateLimits, SourcePolicySignal,
-            TransportMediaId, TransportSessionKey,
+            MediaTransportDeps, RtcTransportConfig, SourcePolicySignal, TransportSessionKey,
         },
         metrics::{self, RuntimeMetrics},
         packet_sink_registry::RoomPacketSinkRegistry as MediaTap,
@@ -54,6 +56,7 @@ impl RtcTransportShard {
         worker_handle.debug_handle.request(build_command).await
     }
 
+    #[cfg(test)]
     pub async fn debug_resolve_mid(&self, transport_media_id: TransportMediaId) -> Option<Mid> {
         self.request_debug_worker(|response| DebugRtcWorkerCommand::ResolveMid {
             transport_media_id,
@@ -63,6 +66,7 @@ impl RtcTransportShard {
         .flatten()
     }
 
+    #[cfg(test)]
     pub async fn debug_remote_addr_owner(
         &self,
         source_addr: SocketAddr,
@@ -75,6 +79,7 @@ impl RtcTransportShard {
         .flatten()
     }
 
+    #[cfg(test)]
     pub async fn debug_has_any_remote_addr_session(&self) -> bool {
         self.request_debug_worker(|response| DebugRtcWorkerCommand::HasAnyRemoteAddrSession {
             response,
@@ -83,6 +88,7 @@ impl RtcTransportShard {
         .unwrap_or(false)
     }
 
+    #[cfg(test)]
     pub async fn debug_remember_remote_addr(
         &self,
         source_addr: SocketAddr,
@@ -97,6 +103,7 @@ impl RtcTransportShard {
             .await;
     }
 
+    #[cfg(test)]
     pub async fn debug_session_stream_rx_ssrc(
         &self,
         session_key: &TransportSessionKey,
@@ -111,6 +118,7 @@ impl RtcTransportShard {
         .flatten()
     }
 
+    #[cfg(test)]
     pub async fn debug_session_stream_tx_ssrc(
         &self,
         session_key: &TransportSessionKey,
@@ -125,6 +133,7 @@ impl RtcTransportShard {
         .flatten()
     }
 
+    #[cfg(test)]
     pub async fn debug_session_max_bitrate_in(
         &self,
         session_key: &TransportSessionKey,
@@ -137,6 +146,7 @@ impl RtcTransportShard {
         .flatten()
     }
 
+    #[cfg(test)]
     pub async fn debug_session_max_bitrate_out(
         &self,
         session_key: &TransportSessionKey,
@@ -149,6 +159,7 @@ impl RtcTransportShard {
         .flatten()
     }
 
+    #[cfg(test)]
     pub async fn debug_remote_source_owner(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -161,6 +172,7 @@ impl RtcTransportShard {
         .flatten()
     }
 
+    #[cfg(test)]
     pub async fn debug_route_entry(
         &self,
         source_session_key: &TransportSessionKey,
@@ -189,6 +201,7 @@ impl RtcTransportShard {
         .flatten()
     }
 
+    #[cfg(test)]
     pub async fn debug_route_entry_by_media_id(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -201,6 +214,7 @@ impl RtcTransportShard {
         .flatten()
     }
 
+    #[cfg(test)]
     pub async fn debug_record_incoming_media(
         &self,
         session_key: &TransportSessionKey,
@@ -219,6 +233,7 @@ impl RtcTransportShard {
             .await;
     }
 
+    #[cfg(test)]
     pub async fn debug_observe_audio_activity(
         &self,
         transport_media_id: TransportMediaId,
@@ -237,6 +252,7 @@ impl RtcTransportShard {
             .await;
     }
 
+    #[cfg(test)]
     pub async fn debug_relay_target_count_for_source(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -249,6 +265,7 @@ impl RtcTransportShard {
         .unwrap_or(0)
     }
 
+    #[cfg(test)]
     pub async fn debug_active_relay_target_count_for_source(
         &self,
         source_transport_media_id: TransportMediaId,

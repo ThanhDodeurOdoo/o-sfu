@@ -132,6 +132,7 @@ impl FakeMediaTransport {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
+    #[must_use]
     pub fn snapshot_events(&self) -> Vec<FakeMediaTransportEvent> {
         match self.events.lock() {
             Ok(events) => events.clone(),
@@ -351,14 +352,16 @@ impl FakeMediaTransport {
         clippy::unused_async,
         reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
-    pub async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
+    pub(crate) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         match self.active_speaker_sources.lock() {
             Ok(active_speaker_sources) => active_speaker_sources.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         }
     }
 
-    pub async fn active_speaker_diagnostic_snapshot(&self) -> Vec<ActiveSpeakerSourceDiagnostic> {
+    pub(crate) async fn active_speaker_diagnostic_snapshot(
+        &self,
+    ) -> Vec<ActiveSpeakerSourceDiagnostic> {
         self.active_speaker_source_snapshot()
             .await
             .into_iter()
@@ -375,7 +378,7 @@ impl FakeMediaTransport {
             .collect()
     }
 
-    pub fn receiver_bandwidth_snapshot(
+    pub(crate) fn receiver_bandwidth_snapshot(
         &self,
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
@@ -396,11 +399,11 @@ impl FakeMediaTransport {
         }
     }
 
-    pub fn source_policy_signal(&self) -> Arc<SourcePolicySignal> {
+    pub(crate) fn source_policy_signal(&self) -> Arc<SourcePolicySignal> {
         Arc::clone(&self.source_policy_signal)
     }
 
-    pub fn project_answered_client_rtp_capabilities(
+    pub(crate) fn project_answered_client_rtp_capabilities(
         answer_sdp: &str,
         offered_router_capabilities: &o_sfu_router::MediaCapabilities,
     ) -> Result<o_sfu_router::MediaCapabilities, TransportAdapterError> {
@@ -414,7 +417,7 @@ impl FakeMediaTransport {
         clippy::unused_async,
         reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
-    pub async fn create_initial_session_offer(
+    pub(crate) async fn create_initial_session_offer(
         &self,
         _session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
@@ -427,7 +430,7 @@ impl FakeMediaTransport {
         clippy::unused_async,
         reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
-    pub async fn create_session_renegotiation_offer(
+    pub(crate) async fn create_session_renegotiation_offer(
         &self,
         _session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
@@ -440,7 +443,7 @@ impl FakeMediaTransport {
         clippy::unused_async,
         reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
-    pub async fn apply_session_answer(
+    pub(crate) async fn apply_session_answer(
         &self,
         _session_key: &TransportSessionKey,
         _answer_sdp: &str,
@@ -458,7 +461,7 @@ impl FakeMediaTransport {
         clippy::unused_async,
         reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
-    pub async fn close_session(
+    pub(crate) async fn close_session(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
@@ -493,7 +496,7 @@ impl FakeMediaTransport {
         clippy::unused_async,
         reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
-    pub async fn remove_media(
+    pub(crate) async fn remove_media(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
@@ -532,12 +535,12 @@ impl FakeMediaTransport {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     #[allow(
         clippy::unused_async,
         reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
-    pub async fn negotiated_producer_parameters(
+    pub(crate) async fn negotiated_producer_parameters(
         &self,
         _session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
@@ -559,7 +562,7 @@ impl FakeMediaTransport {
         clippy::unused_async,
         reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
-    pub async fn publish_media(
+    pub(crate) async fn publish_media(
         &self,
         session_key: &TransportSessionKey,
         media_kind: MediaKind,
@@ -600,7 +603,7 @@ impl FakeMediaTransport {
         clippy::unused_async,
         reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
-    pub async fn consume_media(
+    pub(crate) async fn consume_media(
         &self,
         consumer_session_key: &TransportSessionKey,
         media_kind: MediaKind,
@@ -624,7 +627,7 @@ impl FakeMediaTransport {
         clippy::unused_async,
         reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
-    pub async fn set_producer_active(
+    pub(crate) async fn set_producer_active(
         &self,
         session_key: &TransportSessionKey,
         _transport_media_id: TransportMediaId,
@@ -644,7 +647,7 @@ impl FakeMediaTransport {
         clippy::unused_async,
         reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
-    pub async fn set_consumer_active(
+    pub(crate) async fn set_consumer_active(
         &self,
         consumer_session_key: &TransportSessionKey,
         _consumer_transport_media_id: TransportMediaId,
@@ -664,7 +667,7 @@ impl FakeMediaTransport {
         clippy::unused_async,
         reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
-    pub async fn set_consumer_packet_gate(
+    pub(crate) async fn set_consumer_packet_gate(
         &self,
         consumer_session_key: &TransportSessionKey,
         _consumer_transport_media_id: TransportMediaId,
@@ -680,7 +683,7 @@ impl FakeMediaTransport {
         Ok(())
     }
 
-    pub async fn set_consumer_packet_gates(
+    pub(crate) async fn set_consumer_packet_gates(
         &self,
         updates: &[ConsumerPacketGateUpdate],
     ) -> Vec<Result<(), TransportAdapterError>> {
@@ -704,7 +707,7 @@ impl FakeMediaTransport {
         clippy::unused_async,
         reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
-    pub async fn request_consumer_keyframe(
+    pub(crate) async fn request_consumer_keyframe(
         &self,
         consumer_session_key: &TransportSessionKey,
         _consumer_transport_media_id: TransportMediaId,

@@ -142,6 +142,11 @@ pub trait NegotiationPort {
     /// This method does not mutate transport state. It validates the answer
     /// against the router capabilities offered to the browser and returns the
     /// capability set room policy may use for future consumer creation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportAdapterError`] when the answer cannot be parsed or
+    /// cannot be projected onto the offered capabilities.
     fn negotiated_client_rtp_capabilities(
         &self,
         answer_sdp: &str,

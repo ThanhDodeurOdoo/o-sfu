@@ -634,7 +634,7 @@ fn drain_relay_packets_ingests_owned_forwarded_packets_from_the_mailbox() {
         return;
     };
     assert_eq!(forwarded.source_session_key(), &source_session);
-    assert_eq!(forwarded.payload().as_slice(), b"payload");
+    assert_eq!(forwarded.payload(), b"payload");
     assert_eq!(
         forwarded.resolve_source_transport_media_id(&RtcBootstrapState::default()),
         Some(TransportMediaId::new(17))

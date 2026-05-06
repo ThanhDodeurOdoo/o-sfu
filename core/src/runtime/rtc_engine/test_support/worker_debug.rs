@@ -1,8 +1,6 @@
-use std::{
-    net::SocketAddr,
-    sync::{Arc, Mutex},
-    time::Instant,
-};
+use std::sync::{Arc, Mutex};
+#[cfg(test)]
+use std::{net::SocketAddr, time::Instant};
 
 use str0m::media::Mid;
 use tokio::sync::oneshot;
@@ -20,6 +18,7 @@ use crate::runtime::{
     },
 };
 
+#[cfg(test)]
 pub(in crate::runtime::rtc_engine) fn handle_debug_worker_command(
     state: &mut RtcBootstrapState,
     context: &WorkerCommandContext<'_>,
@@ -33,9 +32,77 @@ pub(in crate::runtime::rtc_engine) fn handle_debug_worker_command(
     );
 }
 
+#[cfg(not(test))]
+pub(in crate::runtime::rtc_engine) fn handle_debug_worker_command(
+    state: &RtcBootstrapState,
+    context: &WorkerCommandContext<'_>,
+    command: DebugRtcWorkerCommand,
+) {
+    handle_debug_command(
+        state,
+        context.bitrate_state,
+        context.snapshot_state,
+        command,
+    );
+}
+
+#[cfg(test)]
 fn handle_debug_command(
     state: &mut RtcBootstrapState,
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    command: DebugRtcWorkerCommand,
+) {
+    match command {
+        DebugRtcWorkerCommand::ResolveMid { .. }
+        | DebugRtcWorkerCommand::RemoteAddrOwner { .. }
+        | DebugRtcWorkerCommand::HasAnyRemoteAddrSession { .. }
+        | DebugRtcWorkerCommand::RememberRemoteAddr { .. } => {
+            handle_debug_demux_command(state, snapshot_state, command);
+        }
+        DebugRtcWorkerCommand::SessionStreamRxSsrc { .. }
+        | DebugRtcWorkerCommand::SessionStreamTxSsrc { .. }
+        | DebugRtcWorkerCommand::SessionMaxBitrateIn { .. }
+        | DebugRtcWorkerCommand::SessionMaxBitrateOut { .. }
+        | DebugRtcWorkerCommand::RemoteSourceOwner { .. } => {
+            handle_debug_session_command(state, command);
+        }
+        DebugRtcWorkerCommand::RouteEntry { .. }
+        | DebugRtcWorkerCommand::RouteEntryByConsumerMid { .. }
+        | DebugRtcWorkerCommand::RouteEntryByMediaId { .. } => {
+            handle_debug_route_command(state, command);
+        }
+        DebugRtcWorkerCommand::RecordIncomingMedia { .. } => {
+            handle_debug_bitrate_command(state, bitrate_state, command);
+        }
+        DebugRtcWorkerCommand::ObserveAudioActivity { .. } => {
+            handle_debug_route_control_command(state, command);
+        }
+        DebugRtcWorkerCommand::RelayTargetCount { .. }
+        | DebugRtcWorkerCommand::ActiveRelayTargetCount { .. } => {
+            handle_debug_relay_command(state, command);
+        }
+    }
+}
+
+#[cfg(not(test))]
+fn handle_debug_command(
+    state: &RtcBootstrapState,
+    _bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    _snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    command: DebugRtcWorkerCommand,
+) {
+    let DebugRtcWorkerCommand::RouteEntryByConsumerMid {
+        consumer_session_key,
+        consumer_mid,
+        response,
+    } = command;
+    respond_debug_route_entry_by_consumer_mid(state, &consumer_session_key, consumer_mid, response);
+}
+
+#[cfg(test)]
+fn handle_debug_demux_command(
+    state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     command: DebugRtcWorkerCommand,
 ) {
@@ -62,6 +129,13 @@ fn handle_debug_command(
             &session_key,
             response,
         ),
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+fn handle_debug_session_command(state: &mut RtcBootstrapState, command: DebugRtcWorkerCommand) {
+    match command {
         DebugRtcWorkerCommand::SessionStreamRxSsrc {
             session_key,
             mid,
@@ -84,6 +158,13 @@ fn handle_debug_command(
             source_transport_media_id,
             response,
         } => respond_debug_remote_source_owner(state, source_transport_media_id, response),
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+fn handle_debug_route_command(state: &RtcBootstrapState, command: DebugRtcWorkerCommand) {
+    match command {
         DebugRtcWorkerCommand::RouteEntry {
             source_session_key,
             source_mid,
@@ -103,13 +184,25 @@ fn handle_debug_command(
             source_transport_media_id,
             response,
         } => respond_debug_route_entry_by_media_id(state, source_transport_media_id, response),
-        DebugRtcWorkerCommand::RecordIncomingMedia {
-            session_key,
-            transport_media_id,
-            payload_bytes,
-            now,
-            response,
-        } => respond_debug_record_incoming_media(
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+fn handle_debug_bitrate_command(
+    state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    command: DebugRtcWorkerCommand,
+) {
+    if let DebugRtcWorkerCommand::RecordIncomingMedia {
+        session_key,
+        transport_media_id,
+        payload_bytes,
+        now,
+        response,
+    } = command
+    {
+        respond_debug_record_incoming_media(
             state,
             bitrate_state,
             &session_key,
@@ -117,28 +210,35 @@ fn handle_debug_command(
             payload_bytes,
             now,
             response,
-        ),
-        DebugRtcWorkerCommand::ObserveAudioActivity {
-            transport_media_id,
-            voice_activity,
-            audio_level_dbov,
-            now,
-            response,
-        } => respond_debug_observe_audio_activity(
+        );
+    }
+}
+
+#[cfg(test)]
+fn handle_debug_route_control_command(
+    state: &mut RtcBootstrapState,
+    command: DebugRtcWorkerCommand,
+) {
+    if let DebugRtcWorkerCommand::ObserveAudioActivity {
+        transport_media_id,
+        voice_activity,
+        audio_level_dbov,
+        now,
+        response,
+    } = command
+    {
+        respond_debug_observe_audio_activity(
             state,
             transport_media_id,
             voice_activity,
             audio_level_dbov,
             now,
             response,
-        ),
-        DebugRtcWorkerCommand::RelayTargetCount { .. }
-        | DebugRtcWorkerCommand::ActiveRelayTargetCount { .. } => {
-            handle_debug_relay_command(state, command);
-        }
+        );
     }
 }
 
+#[cfg(test)]
 fn handle_debug_relay_command(state: &RtcBootstrapState, command: DebugRtcWorkerCommand) {
     match command {
         DebugRtcWorkerCommand::RelayTargetCount {
@@ -153,6 +253,7 @@ fn handle_debug_relay_command(state: &RtcBootstrapState, command: DebugRtcWorker
     }
 }
 
+#[cfg(test)]
 fn respond_debug_resolve_mid(
     state: &RtcBootstrapState,
     transport_media_id: TransportMediaId,
@@ -161,6 +262,7 @@ fn respond_debug_resolve_mid(
     let _ = response.send(state.resolve_mid(transport_media_id));
 }
 
+#[cfg(test)]
 fn respond_debug_relay_target_count(
     state: &RtcBootstrapState,
     source_transport_media_id: TransportMediaId,
@@ -169,6 +271,7 @@ fn respond_debug_relay_target_count(
     let _ = response.send(state.relay_target_count_for_source(source_transport_media_id));
 }
 
+#[cfg(test)]
 fn respond_debug_active_relay_target_count(
     state: &RtcBootstrapState,
     source_transport_media_id: TransportMediaId,
@@ -177,6 +280,7 @@ fn respond_debug_active_relay_target_count(
     let _ = response.send(state.active_relay_target_count_for_source(source_transport_media_id));
 }
 
+#[cfg(test)]
 fn respond_debug_remote_addr_owner(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     source_addr: SocketAddr,
@@ -191,6 +295,7 @@ fn respond_debug_remote_addr_owner(
     let _ = response.send(value);
 }
 
+#[cfg(test)]
 fn respond_debug_has_any_remote_addr_session(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     response: oneshot::Sender<bool>,
@@ -202,6 +307,7 @@ fn respond_debug_has_any_remote_addr_session(
     let _ = response.send(value);
 }
 
+#[cfg(test)]
 fn respond_debug_remember_remote_addr(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
@@ -221,6 +327,7 @@ fn respond_debug_remember_remote_addr(
     let _ = response.send(());
 }
 
+#[cfg(test)]
 fn respond_debug_session_stream_rx_ssrc(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
@@ -236,6 +343,7 @@ fn respond_debug_session_stream_rx_ssrc(
     let _ = response.send(value);
 }
 
+#[cfg(test)]
 fn respond_debug_session_stream_tx_ssrc(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
@@ -251,6 +359,7 @@ fn respond_debug_session_stream_tx_ssrc(
     let _ = response.send(value);
 }
 
+#[cfg(test)]
 fn respond_debug_session_max_bitrate_in(
     state: &RtcBootstrapState,
     session_key: &TransportSessionKey,
@@ -263,6 +372,7 @@ fn respond_debug_session_max_bitrate_in(
     let _ = response.send(value);
 }
 
+#[cfg(test)]
 fn respond_debug_session_max_bitrate_out(
     state: &RtcBootstrapState,
     session_key: &TransportSessionKey,
@@ -275,6 +385,7 @@ fn respond_debug_session_max_bitrate_out(
     let _ = response.send(value);
 }
 
+#[cfg(test)]
 fn respond_debug_remote_source_owner(
     state: &RtcBootstrapState,
     source_transport_media_id: TransportMediaId,
@@ -286,6 +397,7 @@ fn respond_debug_remote_source_owner(
     let _ = response.send(value);
 }
 
+#[cfg(test)]
 fn respond_debug_route_entry(
     state: &RtcBootstrapState,
     source_session_key: &TransportSessionKey,
@@ -314,6 +426,7 @@ fn respond_debug_route_entry_by_consumer_mid(
     let _ = response.send(value);
 }
 
+#[cfg(test)]
 fn respond_debug_route_entry_by_media_id(
     state: &RtcBootstrapState,
     source_transport_media_id: TransportMediaId,
@@ -362,6 +475,7 @@ fn into_debug_packet_gate(packet_gate: &PacketLayerGate) -> DebugPacketGate {
     }
 }
 
+#[cfg(test)]
 fn respond_debug_record_incoming_media(
     state: &mut RtcBootstrapState,
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
@@ -383,6 +497,7 @@ fn respond_debug_record_incoming_media(
     let _ = response.send(());
 }
 
+#[cfg(test)]
 fn respond_debug_observe_audio_activity(
     state: &mut RtcBootstrapState,
     transport_media_id: TransportMediaId,

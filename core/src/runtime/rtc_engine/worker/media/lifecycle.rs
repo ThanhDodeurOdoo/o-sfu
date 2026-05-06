@@ -312,7 +312,7 @@ fn worker_add_recv_media(
                 if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
                     stream_rx.request_remb(Bitrate::bps(policy.max_bitrate_in_bps));
                 }
-                #[cfg(any(test, feature = "testing-transport"))]
+                #[cfg(test)]
                 {
                     session_state.max_bitrate_in_bps = Some(policy.max_bitrate_in_bps);
                 }

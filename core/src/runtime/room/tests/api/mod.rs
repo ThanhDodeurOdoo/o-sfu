@@ -7,9 +7,7 @@ mod media;
 
 pub use inspect::RoomTestInspect;
 pub use lifecycle::RoomTestLifecycle;
-#[cfg(test)]
-pub use media::NegotiatedPublish;
-pub use media::RoomTestMedia;
+pub use media::{NegotiatedPublish, RoomTestMedia};
 
 #[derive(Clone, Copy)]
 pub struct RoomTestApi<'a> {

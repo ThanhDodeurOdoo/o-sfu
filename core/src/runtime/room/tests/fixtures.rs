@@ -23,7 +23,7 @@ pub(super) use crate::{
         ConnectionId, DownloadStates, StreamType, UserId, UserInfo, UserPermissions,
         VideoLayoutIntent,
         media_transport::{
-            ActiveSpeakerSource, MediaTransport, NegotiationPort, TransportMediaId,
+            ActiveSpeakerSource, MediaTransport, TransportMediaId,
             test_support::{FakeMediaTransport, FakeMediaTransportEvent},
         },
         source_model::{
@@ -31,6 +31,7 @@ pub(super) use crate::{
             test_support::{source_publish_intent_for_stream_type, stream_id_for_stream_type},
         },
     },
+    transport::NegotiationPort,
 };
 
 /// Realistic client RTP capabilities (default codecs)

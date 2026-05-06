@@ -43,18 +43,13 @@ pub use runtime_adapter::{
     MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,
 };
 
-pub use crate::{
-    SessionBitrateLimits,
-    transport::{
-        ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
-        ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerActivity,
-        ConsumerPacketGateUpdate, MediaPort, NegotiationPort, ObservabilityPort, ProducerActivity,
-        ReceiverBandwidthSnapshot, SessionOffer, SessionPort, SessionUploadEncoding,
-        SessionUploadSlot, SourcePacketGate, SourcePacketOperatingPoint, SourcePolicyDirtyState,
-        SourcePolicyPort, SourcePolicySignal, SourcePolicyUpdateSubscription,
-        TransportAdapterError, TransportBitrateSnapshot, TransportMediaId, TransportResult,
-        TransportSessionKey,
-    },
+pub use crate::transport::{
+    ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
+    ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerActivity,
+    ConsumerPacketGateUpdate, MediaPort, ObservabilityPort, ProducerActivity,
+    ReceiverBandwidthSnapshot, SessionOffer, SessionPort, SessionUploadEncoding, SessionUploadSlot,
+    SourcePacketGate, SourcePacketOperatingPoint, SourcePolicySignal, TransportAdapterError,
+    TransportBitrateSnapshot, TransportMediaId, TransportResult, TransportSessionKey,
 };
 
 #[cfg(test)]

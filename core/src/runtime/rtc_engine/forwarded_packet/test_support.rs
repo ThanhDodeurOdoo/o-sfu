@@ -10,6 +10,7 @@ use crate::runtime::{
     media_transport::TransportSessionKey, rtc_engine::shared_payload::SharedPayload,
 };
 
+#[must_use]
 pub fn sample_forwarded_packet(
     source_session_key: TransportSessionKey,
     mid: &str,
@@ -18,6 +19,7 @@ pub fn sample_forwarded_packet(
     sample_forwarded_packet_with_rid(source_session_key, mid, None, payload)
 }
 
+#[must_use]
 pub fn sample_forwarded_packet_with_rid(
     source_session_key: TransportSessionKey,
     mid: &str,
@@ -33,6 +35,7 @@ pub fn sample_forwarded_packet_with_rid(
     )
 }
 
+#[must_use]
 pub fn sample_forwarded_packet_with_audio_activity(
     source_session_key: TransportSessionKey,
     mid: &str,
@@ -53,6 +56,7 @@ pub fn sample_forwarded_packet_with_audio_activity(
     )
 }
 
+#[must_use]
 pub fn sample_forwarded_packet_with_frame_mark(
     source_session_key: TransportSessionKey,
     mid: &str,
@@ -110,6 +114,7 @@ fn sample_forwarded_packet_with_extensions(
     }
 }
 
+#[must_use]
 pub fn sample_forwarded_packet_without_mid(
     source_session_key: TransportSessionKey,
     ssrc: u32,

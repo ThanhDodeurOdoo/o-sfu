@@ -58,7 +58,7 @@ pub(super) enum RelayTargetTransport {
 }
 
 #[derive(Debug, Clone)]
-pub struct ActiveRelayTarget<TargetId, Target> {
+pub(super) struct ActiveRelayTarget<TargetId, Target> {
     target_id: TargetId,
     target: Target,
 }
@@ -68,14 +68,14 @@ impl<TargetId, Target> ActiveRelayTarget<TargetId, Target> {
         Self { target_id, target }
     }
 
-    pub const fn target_id(&self) -> TargetId
+    pub(super) const fn target_id(&self) -> TargetId
     where
         TargetId: Copy,
     {
         self.target_id
     }
 
-    pub const fn target(&self) -> &Target {
+    pub(super) const fn target(&self) -> &Target {
         &self.target
     }
 }
@@ -123,7 +123,7 @@ struct RelayTargetRegistration<Target> {
 /// Per-source relay target state stored by the source worker and reused by the
 /// Loom model that validates publication and reference-count transitions.
 #[derive(Debug, Clone)]
-pub struct RelayTargetRegistry<TargetId, Target> {
+pub(super) struct RelayTargetRegistry<TargetId, Target> {
     targets: BTreeMap<TargetId, RelayTargetRegistration<Target>>,
     active_targets: Arc<[ActiveRelayTarget<TargetId, Target>]>,
 }
@@ -142,7 +142,7 @@ where
     TargetId: Copy + Ord,
     Target: Clone,
 {
-    pub fn add_target(&mut self, target_id: TargetId, target: Target) {
+    pub(super) fn add_target(&mut self, target_id: TargetId, target: Target) {
         if let Some(registration) = self.targets.get_mut(&target_id) {
             registration.reference_count = registration.reference_count.saturating_add(1);
         } else {
@@ -157,7 +157,7 @@ where
         }
     }
 
-    pub fn remove_target(&mut self, target_id: TargetId) -> bool {
+    pub(super) fn remove_target(&mut self, target_id: TargetId) -> bool {
         let Some(registration) = self.targets.get_mut(&target_id) else {
             return self.targets.is_empty();
         };
@@ -174,7 +174,7 @@ where
         self.targets.is_empty()
     }
 
-    pub fn set_target_active(&mut self, target_id: TargetId, active: bool) {
+    pub(super) fn set_target_active(&mut self, target_id: TargetId, active: bool) {
         let Some(registration) = self.targets.get_mut(&target_id) else {
             return;
         };
@@ -194,37 +194,34 @@ where
     }
 
     #[must_use]
-    pub fn active_targets(&self) -> Arc<[ActiveRelayTarget<TargetId, Target>]> {
-        Arc::clone(&self.active_targets)
-    }
-
-    #[must_use]
-    pub fn active_targets_slice(&self) -> &[ActiveRelayTarget<TargetId, Target>] {
+    pub(super) fn active_targets_slice(&self) -> &[ActiveRelayTarget<TargetId, Target>] {
         &self.active_targets
     }
 
     #[must_use]
-    pub fn has_active_targets(&self) -> bool {
+    pub(super) fn has_active_targets(&self) -> bool {
         !self.active_targets.is_empty()
     }
 
-    pub fn contains_target(&self, target_id: TargetId) -> bool {
+    pub(super) fn contains_target(&self, target_id: TargetId) -> bool {
         self.targets.contains_key(&target_id)
     }
 
-    pub fn is_target_active(&self, target_id: TargetId) -> bool {
+    pub(super) fn is_target_active(&self, target_id: TargetId) -> bool {
         self.targets
             .get(&target_id)
             .is_some_and(|registration| registration.active_reference_count > 0)
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub fn target_count(&self) -> usize {
+    pub(super) fn target_count(&self) -> usize {
         self.targets.len()
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub fn active_target_count(&self) -> usize {
+    pub(super) fn active_target_count(&self) -> usize {
         self.targets
             .values()
             .filter(|registration| registration.active_reference_count > 0)
@@ -335,7 +332,7 @@ impl RtcBootstrapState {
             .is_some_and(|source_registration| source_registration.is_target_active(target_id))
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub(super) fn relay_target_count_for_source(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -345,7 +342,7 @@ impl RtcBootstrapState {
             .map_or(0, RelaySourceRegistration::target_count)
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub(super) fn active_relay_target_count_for_source(
         &self,
         source_transport_media_id: TransportMediaId,

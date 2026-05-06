@@ -282,6 +282,11 @@ impl RoomManager {
     /// The join runs under the room lifecycle lock so it cannot overlap another
     /// room-level mutation. On success this returns the locked room and its
     /// new runtime connection id.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RoomManagerJoinError`] when the room is missing or when room
+    /// admission rejects the user.
     pub async fn join_user(
         &self,
         room_id: &str,

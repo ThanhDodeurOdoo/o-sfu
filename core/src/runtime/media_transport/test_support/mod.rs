@@ -267,8 +267,8 @@ impl MediaTransport {
         }
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub async fn negotiated_producer_parameters(
+    #[cfg(test)]
+    pub(crate) async fn negotiated_producer_parameters(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
@@ -312,11 +312,7 @@ impl MediaTransport {
         }
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
-    #[allow(
-        dead_code,
-        reason = "test-only route inspection stays available for targeted RTC engine assertions even when one edit removes its current call sites"
-    )]
+    #[cfg(test)]
     pub async fn debug_route_entry(
         &self,
         source_session_key: &TransportSessionKey,
@@ -358,11 +354,7 @@ impl MediaTransport {
         }
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
-    #[allow(
-        dead_code,
-        reason = "test-only route inspection stays available for targeted RTC engine assertions even when one edit removes its current call sites"
-    )]
+    #[cfg(test)]
     pub async fn debug_route_entry_by_media_id(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -385,6 +377,7 @@ impl MediaTransport {
 
 #[cfg(any(test, feature = "testing-transport"))]
 impl RtcTransportShardSet {
+    #[cfg(test)]
     pub(super) async fn debug_route_entry(
         &self,
         source_session_key: &TransportSessionKey,
@@ -411,6 +404,7 @@ impl RtcTransportShardSet {
         None
     }
 
+    #[cfg(test)]
     pub(super) async fn debug_route_entry_by_media_id(
         &self,
         source_transport_media_id: TransportMediaId,

@@ -823,6 +823,7 @@ impl ConsumerBootstrapProducerSnapshot {
 }
 
 impl RemoteTrackBootstrap {
+    #[must_use]
     pub fn mid(&self) -> &str {
         &self.mid
     }
@@ -832,22 +833,27 @@ impl RemoteTrackBootstrap {
         &self.rtp_parameters
     }
 
+    #[must_use]
     pub fn user_id(&self) -> &UserId {
         &self.user_id
     }
 
+    #[must_use]
     pub fn source_descriptor(&self) -> &PublishedSourceDescriptor {
         &self.source_descriptor
     }
 
+    #[must_use]
     pub const fn active(&self) -> bool {
         self.active
     }
 
+    #[must_use]
     pub fn stream_id(&self) -> &UserStreamId {
         &self.stream_id
     }
 
+    #[must_use]
     pub fn into_room_event_request(self) -> RoomEventRequest {
         RoomEventRequest::BootstrapRemoteTrack(self)
     }

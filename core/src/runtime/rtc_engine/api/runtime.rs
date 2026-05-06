@@ -94,7 +94,7 @@ impl RtcTransportShard {
         Ok(worker_handle.worker_handle())
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub fn packet_loop_started(&self) -> bool {
         let Ok(worker_handle) = self.worker_handle.lock() else {
             return false;
@@ -216,7 +216,7 @@ impl RtcTransportShard {
             .receiver_bandwidth_snapshot(session_keys)
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub fn session_transport_health(
         &self,
         session_key: &TransportSessionKey,

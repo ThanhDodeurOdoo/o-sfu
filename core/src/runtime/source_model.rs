@@ -999,6 +999,11 @@ impl PublishedSourceDescriptor {
     /// Failure means the caller assembled an invalid room-domain source and
     /// should abort the surrounding publish commit before any registry state is
     /// made authoritative.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceModelError`] when the descriptor has no encodings or
+    /// when its encoding identities are duplicated.
     pub fn new(parts: PublishedSourceDescriptorParts) -> Result<Self, SourceModelError> {
         if parts.encodings.is_empty() {
             return Err(SourceModelError::SourceWithoutEncodings {

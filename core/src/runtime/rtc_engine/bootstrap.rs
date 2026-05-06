@@ -97,9 +97,9 @@ pub(super) fn ensure_session_rtc_state(
             rtc,
             started_at,
             local_ice_ufrag,
-            #[cfg(any(test, feature = "testing-transport"))]
+            #[cfg(test)]
             max_bitrate_in_bps: None,
-            #[cfg(any(test, feature = "testing-transport"))]
+            #[cfg(test)]
             max_bitrate_out_bps: Some(max_bitrate_out_bps),
             dtls_started: false,
             sdp_negotiation: SessionSdpNegotiationState::default(),

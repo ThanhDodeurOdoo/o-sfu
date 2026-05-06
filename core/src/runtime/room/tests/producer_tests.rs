@@ -11,21 +11,22 @@ use str0m::{Candidate, Rtc, change::SdpOffer};
 
 use super::{api::NegotiatedPublish, fixtures::*};
 use crate::{
-    MediaCodecFlags, RtcPortRange,
+    MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
     runtime::{
         diagnostics::{
             DiagnosticsPolicyPauseReason, DiagnosticsStore, DiagnosticsVideoLayoutRole,
             DiagnosticsVideoRoutePriority,
         },
         media_transport::{
-            MediaPort, MediaTransportDeps, NegotiationPort, RtcTransport, RtcTransportConfig,
-            SessionBitrateLimits, SessionOffer, SessionPort, SourcePacketGate, TransportMediaId,
-            TransportSessionKey, test_support::FakeMediaTransportEvent,
+            MediaPort, MediaTransportDeps, RtcTransport, RtcTransportConfig, SessionOffer,
+            SessionPort, SourcePacketGate, TransportMediaId, TransportSessionKey,
+            test_support::FakeMediaTransportEvent,
         },
         metrics::RuntimeMetrics,
         recording::MediaTap,
         room::Room,
     },
+    transport::NegotiationPort,
 };
 
 fn assert_track_binding_activity_update(

@@ -6,7 +6,7 @@
     reason = "test assertions use panic, unwrap, expect, and direct indexing for clear failure messages"
 )]
 
-mod api;
+pub(super) mod api;
 #[cfg(test)]
 mod consumer_tests;
 #[cfg(test)]

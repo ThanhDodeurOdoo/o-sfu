@@ -298,6 +298,11 @@ where
     ///
     /// `Ok(None)` is an ordinary no-op for backends or states that cannot emit
     /// a renegotiation offer. Other transport failures are returned as errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SfuCoreError`] when the transport rejects renegotiation for a
+    /// reason other than unsupported follow-up offers.
     pub async fn create_renegotiation_offer(
         &self,
     ) -> Result<Option<NegotiationOffer>, SfuCoreError> {
@@ -477,8 +482,12 @@ where
     ///
     /// The intent is the business-layer policy handoff. Core stores the stream
     /// id as opaque identity and later uses the attached
-    /// [`crate::runtime::source_model::SourcePolicy`] when applying receiver
-    /// layout and bandwidth decisions.
+    /// [`crate::SourcePolicy`] when applying receiver layout and bandwidth decisions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SfuCoreError`] when the room or transport cannot reserve the
+    /// publish transaction.
     pub async fn stage_publish(
         &self,
         intent: &SourcePublishIntent,

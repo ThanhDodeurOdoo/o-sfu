@@ -288,6 +288,12 @@ impl LocalRoomRouterPlacements {
         Self { primary, spillover }
     }
 
+    /// Builds a placement set from the primary-first runtime placement list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocalRoomRouterPlacementsError::Empty`] when no primary
+    /// placement is supplied.
     pub fn try_from_vec(
         placements: Vec<LocalRouterRuntimeContext>,
     ) -> Result<Self, LocalRoomRouterPlacementsError> {
@@ -348,6 +354,12 @@ impl RoomRuntimeContext {
         }
     }
 
+    /// Builds a runtime context from an explicit instance id and placements.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocalRoomRouterPlacementsError::Empty`] when the placement
+    /// list has no primary router.
     pub fn try_from_placements(
         instance: RoomInstanceId,
         placements: Vec<LocalRouterRuntimeContext>,

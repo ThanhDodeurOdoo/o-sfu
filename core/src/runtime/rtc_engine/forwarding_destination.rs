@@ -216,7 +216,7 @@ impl PacketSinkDestination {
             packet.source_session_key(),
             self.transport_media_id,
             packet.received_at(),
-            packet.payload().as_slice(),
+            packet.payload(),
         );
         ForwardSendOutcome::SideEffect
     }

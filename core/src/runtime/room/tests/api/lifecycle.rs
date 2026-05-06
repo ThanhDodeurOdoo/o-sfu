@@ -15,6 +15,12 @@ pub struct RoomTestLifecycle<'a> {
 }
 
 impl RoomTestLifecycle<'_> {
+    /// Join one user through the room lifecycle path used by production calls.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RoomJoinError`] when admission fails or router state rejects
+    /// the user.
     pub async fn join_user(
         self,
         user_id: UserId,
@@ -34,6 +40,12 @@ impl RoomTestLifecycle<'_> {
             .await
     }
 
+    /// Join one user while keeping transport cleanup outside the lifecycle path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RoomJoinError`] when admission fails or router state rejects
+    /// the user.
     pub async fn join_session_without_transport_cleanup(
         self,
         user_id: UserId,
@@ -154,6 +166,7 @@ impl RoomTestLifecycle<'_> {
             .await;
     }
 
+    #[must_use]
     pub fn pending_cleanup_retry_count(self) -> usize {
         self.room.pending_cleanup_retry_count_for_test()
     }

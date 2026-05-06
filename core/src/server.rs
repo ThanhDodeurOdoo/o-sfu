@@ -21,7 +21,7 @@ pub mod recording {
     //! Recording packet-sink boundary shared by the room engine and server runtime.
 
     pub use crate::runtime::{
-        packet_sink_registry::ActiveRoomRegistry,
+        packet_sink_registry::{ActiveRoomRegistry, RegisteredPacketSink},
         recording::{MediaPacketSink, MediaTap, into_packet_sink},
     };
 }
@@ -30,13 +30,18 @@ pub mod room {
     //! Room orchestration facade used by HTTP, websocket, and application code.
 
     pub use crate::runtime::room::{
-        ConsumerRouteState, JoinUserRequest, LocalRoomRouterPlacements,
+        ConsumerRouteState, IncomingBitrateSnapshot, JoinUserRequest, LocalRoomRouterPlacements,
         LocalRoomRouterPlacementsError, LocalRouterRuntimeContext, RemoteTrackBootstrap, Room,
         RoomAdmissionPolicy, RoomConfig, RoomEventMessage, RoomEventRequest, RoomJoinError,
         RoomManager, RoomManagerConfig, RoomManagerDeps, RoomManagerJoinError, RoomMediaCounts,
         RoomRuntimeContext, RoomRuntimePolicy, RoomUserPermissions, RoomUserStatsSnapshot,
         RuntimeRoomDirectorySnapshot, RuntimeRoomStatsSnapshot, TrackBindingUpdate,
         UserCloseReason, UserOutbound, rtp_capabilities,
+    };
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub use crate::runtime::room::{
+        NegotiatedPublish, RoomManagerTestApi, RoomTestApi, RoomTestInspect, RoomTestLifecycle,
+        RoomTestMedia,
     };
 }
 
@@ -67,7 +72,7 @@ pub mod transport {
     pub mod test_support {
         pub use crate::runtime::{
             media_transport::test_support::{FakeMediaTransport, FakeMediaTransportEvent},
-            rtc_engine::test_support::*,
+            rtc_engine::{ForwardedPacket, test_support::*},
         };
     }
     pub use crate::{
@@ -77,10 +82,7 @@ pub mod transport {
                 MediaTransport, MediaTransportDeps, RtcTransport, RtcTransportBuildError,
                 RtcTransportBuilder, RtcTransportConfig, RtcTransportShardSetConfig,
             },
-            rtc_engine::{
-                RelayTargetRegistry, RemoteAddrDemux, WorkerHandleSlot,
-                client_rtp_capabilities_from_answer,
-            },
+            rtc_engine::{RemoteAddrDemux, WorkerHandleSlot, client_rtp_capabilities_from_answer},
         },
         transport::*,
     };

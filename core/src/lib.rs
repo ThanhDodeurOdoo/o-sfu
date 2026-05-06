@@ -27,14 +27,13 @@
 //!   diagnostics, metrics, room orchestration, recording taps, source
 //!   descriptors, and current transport construction seams.
 //!
-//! The broad [`runtime`] module is still public because integration tests and
-//! unfinished migration work consume it directly. Production server code should
-//! use [`server`] for in-repository integration and crate-root re-exports for
-//! the stable media-core front door. The older media-signal vocabulary has moved
-//! under [`unstable::signals`] because it is not the current server
-//! orchestration path. New public items should first fit the front door above or
-//! the explicit server-integration namespace. Otherwise they need an
-//! architecture note explaining why they are intentionally exposed.
+//! The implementation-heavy runtime tree is private. Integration tests and
+//! server code use [`server`] for in-repository integration and crate-root
+//! re-exports for the stable media-core front door. The older media-signal
+//! vocabulary has moved under [`unstable::signals`] because it is not the
+//! current server orchestration path. New public items should first fit the
+//! front door above or the explicit server-integration namespace. Otherwise
+//! they need an architecture note explaining why they are intentionally exposed.
 //!
 //! # Server-facing example
 //!
@@ -66,16 +65,10 @@
 //! [`server::room::Room`] implementation. Normal server application code should
 //! use [`MediaCore`] and should not become generic over transport backends
 //! just because the core can be.
-#![allow(
-    clippy::missing_errors_doc,
-    clippy::must_use_candidate,
-    clippy::return_self_not_must_use,
-    reason = "The physical core split temporarily exposes former server-internal media APIs; the next room-media migration will narrow and document the stable public surface."
-)]
 mod ids;
 mod options;
 mod room;
-pub mod runtime;
+mod runtime;
 pub mod server;
 mod sfu;
 pub mod transport;

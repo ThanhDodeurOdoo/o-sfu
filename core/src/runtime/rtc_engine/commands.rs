@@ -227,7 +227,7 @@ pub(super) enum RtcWorkerCommand {
         transport_media_id: TransportMediaId,
         response: RtcWorkerResponse<RemoveMediaOutcome>,
     },
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     ResolveNegotiatedProducerParameters {
         session_key: TransportSessionKey,
         transport_media_id: TransportMediaId,

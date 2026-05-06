@@ -71,6 +71,11 @@ impl RtcTransport {
     /// This associated function exists for call sites that prefer passing the
     /// builder as one value. Normal fluent construction can call
     /// [`RtcTransportBuilder::build`] directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RtcTransportBuildError`] when the builder is missing required
+    /// inputs or describes an invalid worker topology.
     pub fn build(builder: RtcTransportBuilder) -> Result<Self, RtcTransportBuildError> {
         builder.build()
     }
@@ -182,6 +187,11 @@ impl RtcTransportBuilder {
     /// The method is cold-path only. It allocates shard state, creates one
     /// shared source-policy signal for the shard set and does no packet-loop
     /// work by itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RtcTransportBuildError`] when transport config or dependency
+    /// inputs are missing or when worker placement cannot fit the port range.
     pub fn build(self) -> Result<RtcTransport, RtcTransportBuildError> {
         let transport = self
             .transport
@@ -268,6 +278,11 @@ impl MediaTransport {
     /// This is the production server construction path. It intentionally
     /// returns the opaque media transport handle so the orchestration layer does
     /// not import RTC-specific construction types.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RtcTransportBuildError`] when the derived RTC transport cannot
+    /// be built from the supplied options and dependencies.
     pub fn from_core_options(
         options: &CoreOptions,
         deps: MediaTransportDeps,

@@ -57,7 +57,7 @@ fn worker_local_relay_targets_forward_packets_through_registered_mailboxes() {
     let forwarded = relay_rx.try_recv().ok();
     assert!(forwarded.is_some());
     if let Some(mut forwarded) = forwarded {
-        assert_eq!(forwarded.payload().as_slice(), b"payload");
+        assert_eq!(forwarded.payload(), b"payload");
         assert_eq!(
             forwarded.resolve_source_transport_media_id(&RtcBootstrapState::default()),
             Some(TransportMediaId::new(9))
@@ -262,7 +262,7 @@ fn worker_local_relay_targets_forward_packets_through_registered_inter_node_targ
     let Some(mut forwarded) = forwarded else {
         return;
     };
-    assert_eq!(forwarded.payload().as_slice(), b"payload");
+    assert_eq!(forwarded.payload(), b"payload");
     assert_eq!(
         forwarded.resolve_source_transport_media_id(&RtcBootstrapState::default()),
         Some(source_transport_media_id)

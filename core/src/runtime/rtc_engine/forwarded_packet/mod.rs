@@ -58,16 +58,19 @@ impl ForwardedPacket {
         }
     }
 
+    #[must_use]
     pub fn source_session_key(&self) -> &TransportSessionKey {
         &self.source_session_key
     }
 
+    #[must_use]
     pub const fn received_at(&self) -> Instant {
         self.received_at
     }
 
-    pub fn payload(&self) -> &SharedPayload {
-        &self.payload
+    #[must_use]
+    pub fn payload(&self) -> &[u8] {
+        self.payload.as_slice()
     }
 
     pub(super) fn resolve_route_control_layer_metadata(
@@ -149,7 +152,7 @@ impl ForwardedPacket {
     }
 
     pub(super) fn payload_len(&self) -> usize {
-        self.payload().len()
+        self.payload.len()
     }
 
     pub(super) const fn visits_origin_sinks(&self) -> bool {
@@ -356,7 +359,7 @@ mod tests {
         let packet = sample_forwarded_packet(session_key.clone(), "aud-up", b"payload");
 
         assert_eq!(packet.source_session_key(), &session_key);
-        assert_eq!(packet.payload().as_slice(), b"payload");
+        assert_eq!(packet.payload(), b"payload");
         assert_eq!(packet.payload_len(), 7);
         assert!(packet.received_at() <= Instant::now());
     }
@@ -368,7 +371,7 @@ mod tests {
         let mut relay_packet = packet.share_for_relay(TransportMediaId::new(18));
 
         assert_eq!(relay_packet.source_session_key(), &session_key);
-        assert_eq!(relay_packet.payload().as_slice(), b"payload");
+        assert_eq!(relay_packet.payload(), b"payload");
         assert_eq!(
             relay_packet.resolve_source_transport_media_id(&RtcBootstrapState::default()),
             Some(TransportMediaId::new(18))

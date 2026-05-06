@@ -8,6 +8,7 @@ use str0m::{
     format::{Codec, PayloadParams},
 };
 
+#[must_use]
 pub fn client_rtp_capabilities_from_answer(answer_sdp: &str) -> Option<MediaCapabilities> {
     let answer = SdpAnswer::from_sdp_string(answer_sdp).ok()?;
     let mut codecs = Vec::new();

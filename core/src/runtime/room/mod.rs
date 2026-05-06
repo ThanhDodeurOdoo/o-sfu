@@ -42,10 +42,10 @@ mod topology;
 mod user_negotiation;
 
 pub use controller::{
-    LocalRoomRouterPlacements, LocalRoomRouterPlacementsError, LocalRouterRuntimeContext, Room,
-    RoomAdmissionPolicy, RoomConfig, RoomEventRequest, RoomJoinError, RoomManagerJoinError,
-    RoomMediaCounts, RoomRuntimeContext, RoomRuntimePolicy, RoomUserStatsSnapshot,
-    TrackBindingUpdate, UserOutbound,
+    IncomingBitrateSnapshot, LocalRoomRouterPlacements, LocalRoomRouterPlacementsError,
+    LocalRouterRuntimeContext, Room, RoomAdmissionPolicy, RoomConfig, RoomEventRequest,
+    RoomJoinError, RoomManagerJoinError, RoomMediaCounts, RoomRuntimeContext, RoomRuntimePolicy,
+    RoomUserStatsSnapshot, TrackBindingUpdate, UserOutbound,
 };
 pub use events::RoomEventMessage;
 pub use lifecycle::{RoomUserPermissions, UserCloseReason};
@@ -56,3 +56,8 @@ pub use manager::{
 #[cfg(any(test, feature = "testing-transport"))]
 pub(in crate::runtime::room) use membership::UserCleanup;
 pub use state::{ConsumerRouteState, RemoteTrackBootstrap};
+#[cfg(any(test, feature = "testing-transport"))]
+pub use tests::api::{
+    NegotiatedPublish, RoomManagerTestApi, RoomTestApi, RoomTestInspect, RoomTestLifecycle,
+    RoomTestMedia,
+};

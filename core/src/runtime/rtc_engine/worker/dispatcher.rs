@@ -14,7 +14,7 @@ use std::{
 
 use tokio::sync::oneshot;
 
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(test)]
 use super::publication;
 use super::{
     super::{
@@ -80,7 +80,7 @@ pub fn handle_worker_command(
             context.metrics,
             response,
         ),
-        #[cfg(any(test, feature = "testing-transport"))]
+        #[cfg(test)]
         RtcWorkerCommand::ResolveNegotiatedProducerParameters {
             session_key,
             transport_media_id,

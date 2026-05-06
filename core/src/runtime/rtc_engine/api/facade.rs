@@ -257,7 +257,7 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub async fn negotiated_producer_parameters(
         self,
         session_key: &TransportSessionKey,

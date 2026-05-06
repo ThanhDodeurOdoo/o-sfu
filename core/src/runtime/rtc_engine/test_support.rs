@@ -6,7 +6,7 @@ mod debug_mailbox;
 mod worker_debug;
 
 pub(super) use debug_command::DebugRtcWorkerCommand;
-pub use debug_command::{DebugPacketGate, DebugRouteEntry};
+pub use debug_command::{DebugPacketGate, DebugRouteDestination, DebugRouteEntry};
 pub(super) use debug_mailbox::{RtcWorkerDebugChannels, RtcWorkerDebugHandle};
 pub(super) use worker_debug::handle_debug_worker_command;
 

@@ -239,7 +239,7 @@ impl RemoteAddrDemux {
             .map(Vec::as_slice)
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub(super) fn is_empty(&self) -> bool {
         self.remote_addrs_by_session.is_empty()
             && self.local_ice_ufrag_by_session.is_empty()

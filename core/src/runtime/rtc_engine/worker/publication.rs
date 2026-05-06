@@ -20,25 +20,22 @@ use str0m::{
     media::{Direction, MediaKind as Str0mMediaKind, Mid, Rid},
     rtp::Extension,
 };
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(test)]
 use tokio::sync::oneshot;
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(test)]
 use tracing::warn;
 
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(test)]
 use super::super::media_registry::RegisteredMediaHandle;
 use super::super::{
     sdp_simulcast,
     state::{RtcBootstrapState, RtcSessionState},
 };
-#[cfg(not(any(test, feature = "testing-transport")))]
 use crate::runtime::media_transport::TransportSessionKey;
-#[cfg(any(test, feature = "testing-transport"))]
-use crate::runtime::media_transport::{
-    TransportAdapterError, TransportMediaId, TransportSessionKey,
-};
+#[cfg(test)]
+use crate::runtime::media_transport::{TransportAdapterError, TransportMediaId};
 
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(test)]
 pub(super) fn respond_resolve_negotiated_producer_parameters(
     state: &RtcBootstrapState,
     session_key: &TransportSessionKey,
@@ -169,7 +166,7 @@ fn apply_projected_recv_streams(
     for binding in bindings {
         apply_projected_recv_stream(&mut api, mid, binding, max_bitrate_in_bps);
     }
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     {
         session_state.max_bitrate_in_bps = Some(max_bitrate_in_bps);
     }
@@ -199,7 +196,7 @@ fn apply_projected_recv_stream(
 
 /// Resolve the router-native RTP parameters for one producer after answer-side
 /// projection has populated them for the owning user.
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(test)]
 fn worker_resolve_negotiated_producer_parameters(
     state: &RtcBootstrapState,
     session_key: &TransportSessionKey,

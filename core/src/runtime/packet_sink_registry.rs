@@ -182,7 +182,7 @@ impl RoomPacketSinkRegistry {
             packet.source_session_key(),
             transport_media_id,
             packet.received_at(),
-            packet.payload().as_slice(),
+            packet.payload(),
         );
     }
 
