@@ -10,12 +10,15 @@ use str0m::media::{KeyframeRequestKind, Mid, Rid};
 use tracing::debug;
 
 use super::{
-    super::super::{route_control::KeyframeRequestDecision, state::RtcBootstrapState},
-    control::owned_local_producer_mid,
-    types::RemoteKeyframeRequest,
+    super::super::{
+        demux::MediaRouteDestination, media_registry::RegisteredMediaHandle,
+        route_control::KeyframeRequestDecision, state::RtcBootstrapState,
+    },
+    control::{ensure_existing_route_source, owned_local_producer_mid, packet_gate_rid},
+    types::{RemoteKeyframeRequest, RouteSourceKind},
 };
 use crate::runtime::{
-    media_transport::{TransportMediaId, TransportSessionKey},
+    media_transport::{TransportAdapterError, TransportMediaId, TransportSessionKey},
     metrics::{RtcRouteControlOutcome, RuntimeMetrics},
 };
 
@@ -95,6 +98,111 @@ pub fn request_keyframe_for_source(
         &target_rids,
         kind,
     );
+}
+
+/// Request a refresh frame for an already-declared consumer route.
+///
+/// The worker revalidates consumer/source ownership and skips paused routes.
+/// RID-gated destinations are mapped back into the keyframe target before the
+/// local source is marked dirty or the remote keyframe request is forwarded with
+/// the normal coalescing rules.
+pub(in crate::runtime::rtc_engine::worker::media) fn worker_request_consumer_keyframe(
+    state: &mut RtcBootstrapState,
+    metrics: &RuntimeMetrics,
+    consumer_session_key: &TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+) -> Result<(), TransportAdapterError> {
+    let route_source = ensure_existing_route_source(
+        state,
+        consumer_session_key,
+        source_session_key,
+        source_transport_media_id,
+    )?;
+    match state
+        .mid_registry
+        .get(&consumer_transport_media_id.as_u64())
+    {
+        Some(RegisteredMediaHandle::Consumer {
+            session_key,
+            source_transport_media_id: consumer_source_transport_media_id,
+            ..
+        }) if session_key == consumer_session_key
+            && *consumer_source_transport_media_id == source_transport_media_id => {}
+        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
+            return Err(TransportAdapterError::InvalidInput);
+        }
+        None => return Err(TransportAdapterError::TransportUnavailable),
+    }
+    let (destination_active, destination_rid) = state
+        .media_route_index
+        .get(&source_transport_media_id)
+        .and_then(|route_entry| {
+            route_entry.destinations.iter().find(|destination| {
+                destination.dest_session == *consumer_session_key
+                    && destination.dest_transport_media_id == consumer_transport_media_id
+            })
+        })
+        .map(|destination| (destination.active, keyframe_request_rid(destination)))
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    if !destination_active {
+        return Ok(());
+    }
+    let now = Instant::now();
+    match route_source {
+        RouteSourceKind::Local => {
+            request_keyframe_for_source(
+                state,
+                metrics,
+                source_session_key,
+                source_transport_media_id,
+                destination_rid,
+                KeyframeRequestKind::Pli,
+                now,
+            );
+        }
+        RouteSourceKind::Remote => {
+            let Some((source_session_key, source_control)) = state
+                .remote_source_registration(source_transport_media_id)
+                .map(|registration| {
+                    (
+                        registration.source_session_key().clone(),
+                        registration.source_control().clone(),
+                    )
+                })
+            else {
+                return Err(TransportAdapterError::TransportUnavailable);
+            };
+            match state.route_control.decide_keyframe_request_for_rid(
+                source_transport_media_id,
+                destination_rid,
+                now,
+            ) {
+                KeyframeRequestDecision::Forward => {
+                    source_control.request_keyframe(
+                        source_session_key,
+                        source_transport_media_id,
+                        destination_rid,
+                        KeyframeRequestKind::Pli,
+                    );
+                    metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
+                }
+                KeyframeRequestDecision::Absorb => {
+                    metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn keyframe_request_rid(destination: &MediaRouteDestination) -> Option<Rid> {
+    destination
+        .pending_packet_gate
+        .as_ref()
+        .and_then(packet_gate_rid)
+        .or_else(|| packet_gate_rid(&destination.packet_gate))
 }
 
 fn local_keyframe_request_mid(

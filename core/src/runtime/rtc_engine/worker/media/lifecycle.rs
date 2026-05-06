@@ -1,8 +1,8 @@
 //! Worker-local media lifecycle for one RTC shard.
 //!
 //! This module owns producer and consumer media declaration plus transport-handle
-//! teardown inside `RtcBootstrapState`. Route ownership and relay traking
-//! stay in `control.rs`, while offer/answer transitions remain in
+//! teardown inside `RtcBootstrapState`. Route ownership and relay tracking
+//! stay in `control/`, while offer/answer transitions remain in
 //! `worker/negotiation.rs`.
 //!
 //! The helpers here rely on two invariants:
