@@ -23,9 +23,10 @@ npm --prefix client run verify
 
 ## CI tests
 
-The default CI test workflow use `cargo nextest` for the pure library
-crates and keeps the root `o-sfu` crate, the `o-sfu-tests` integration crate
-and doctests on plain `cargo test`.
+The default CI test workflow uses `cargo nextest` for `o-sfu-cluster`,
+`o-sfu-core`, `o-sfu-protocol`, `o-sfu-rfc` plus `o-sfu-router`. The root
+`o-sfu` crate plus the `o-sfu-tests` integration crate and doctests stay on
+plain `cargo test`.
 
 Install
 
@@ -36,7 +37,7 @@ cargo install cargo-nextest --locked
 Run the same split locally:
 
 ```bash
-cargo nextest run -p o-sfu-protocol -p o-sfu-rfc -p o-sfu-router
+cargo nextest run -p o-sfu-cluster -p o-sfu-core -p o-sfu-protocol -p o-sfu-rfc -p o-sfu-router
 cargo test -p o-sfu
 cargo test -p o-sfu-tests
 cargo test --workspace --doc

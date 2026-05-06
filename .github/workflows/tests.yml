@@ -42,7 +42,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Run library crates with nextest
-        run: cargo nextest run -p o-sfu-cluster -p o-sfu-protocol -p o-sfu-rfc -p o-sfu-router
+        run: cargo nextest run -p o-sfu-cluster -p o-sfu-core -p o-sfu-protocol -p o-sfu-rfc -p o-sfu-router
 
       - name: Run root crate tests
         run: cargo test -p o-sfu

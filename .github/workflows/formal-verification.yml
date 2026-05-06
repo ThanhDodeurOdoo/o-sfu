@@ -29,6 +29,7 @@ jobs:
               cargo kani -p o-sfu-proofs
               --harness session_teardown_clears_reverse_indices_and_dependents
               --harness removing_a_producer_clears_dependents_but_keeps_live_transports
+              --harness removing_a_producer_rejects_missing_owner_transport
               --harness removing_a_consumer_preserves_other_routes_and_indices
           - shard: router-pause
             command: >-
