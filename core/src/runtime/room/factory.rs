@@ -20,7 +20,8 @@ use o_sfu_router::RouterId;
 
 use super::{LocalRouterRuntimeContext, Room, RoomConfig, RoomRuntimeContext, RoomRuntimePolicy};
 use crate::runtime::{
-    RoomInstanceId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics, recording::MediaTap,
+    RoomInstanceId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
+    packet_sink_registry::RoomPacketSinkRegistry,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,11 +109,11 @@ pub(crate) struct RoomFactory {
     /// Room creation events are emitted by the manager after directory
     /// publication, not by this factory.
     diagnostics: Arc<DiagnosticsStore>,
-    /// Shared packet tap used by room-owned recording services.
+    /// Shared packet-sink registry used by room-owned recording services.
     ///
     /// The factory wires the service dependency, while each room decides
     /// when recording state should subscribe to its instance id.
-    recording_media_tap: Arc<MediaTap>,
+    packet_sink_registry: Arc<RoomPacketSinkRegistry>,
     /// Process metrics handle passed into room-owned services.
     ///
     /// Keeping this as an injected dependency avoids global metric lookup
@@ -136,7 +137,7 @@ impl RoomFactory {
     pub(crate) fn new(
         media_worker_count: usize,
         runtime_policy: RoomRuntimePolicy,
-        recording_media_tap: Arc<MediaTap>,
+        packet_sink_registry: Arc<RoomPacketSinkRegistry>,
         diagnostics: Arc<DiagnosticsStore>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
@@ -144,7 +145,7 @@ impl RoomFactory {
             media_worker_count: media_worker_count.max(1),
             runtime_policy,
             diagnostics,
-            recording_media_tap,
+            packet_sink_registry,
             metrics,
             allocator: Mutex::new(RoomRuntimeAllocator {
                 next_room_instance_id: 0,
@@ -169,7 +170,7 @@ impl RoomFactory {
             intent.key,
             intent.config,
             Arc::clone(&self.diagnostics),
-            Arc::clone(&self.recording_media_tap),
+            Arc::clone(&self.packet_sink_registry),
             Arc::clone(&self.metrics),
         ))
     }

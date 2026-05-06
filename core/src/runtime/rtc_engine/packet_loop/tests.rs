@@ -35,8 +35,8 @@ use crate::{
         media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
         metrics::{RtpForwardDestinationKind, RuntimeMetrics},
         packet_sink_registry::{
-            PacketSink as MediaPacketSink, RegisteredPacketSink,
-            RoomPacketSinkRegistry as MediaTap, into_packet_sink,
+            PacketSink as MediaPacketSink, RegisteredPacketSink, RoomPacketSinkRegistry,
+            into_packet_sink,
         },
         rtc_engine::{
             bootstrap,
@@ -83,7 +83,7 @@ trait MediaSource {
     fn activate_room(&self, room_instance_id: RoomInstanceId, sink: Arc<dyn MediaPacketSink>);
 }
 
-impl MediaSource for MediaTap {
+impl MediaSource for RoomPacketSinkRegistry {
     fn activate_room(&self, room_instance_id: RoomInstanceId, sink: Arc<dyn MediaPacketSink>) {
         self.register_room(room_instance_id, sink, RtpForwardDestinationKind::Recording);
     }
@@ -333,7 +333,7 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
 fn recording_forward_destination_captures_packets_without_bypassing_the_contract() {
     let producer_session = test_transport_session_key(18, 0, 19, UserId::Integer(20));
     let mut state = RtcBootstrapState::default();
-    let media_tap = MediaTap::default();
+    let packet_sink_registry = RoomPacketSinkRegistry::default();
     let sink = Arc::new(CountingSink::new());
     let _source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: producer_session.clone(),
@@ -342,7 +342,7 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
 
-    media_tap.activate_room(
+    packet_sink_registry.activate_room(
         producer_session.room_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&sink)),
     );
@@ -354,7 +354,7 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
 
     super::super::forwarding_planner::populate_forward_routes(
         &state,
-        &media_tap,
+        &packet_sink_registry,
         &metrics,
         &mut buffers.pending_packets,
         &mut buffers.forwards,
@@ -537,7 +537,7 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
     let producer_session = test_transport_session_key(28, 0, 29, UserId::Integer(30));
     let consumer_session = test_transport_session_key(28, 0, 31, UserId::Integer(32));
     let mut state = RtcBootstrapState::default();
-    let media_tap = MediaTap::default();
+    let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: producer_session.clone(),
@@ -583,7 +583,7 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
     );
     super::super::forwarding_planner::populate_forward_routes(
         &state,
-        &media_tap,
+        &packet_sink_registry,
         &metrics,
         &mut buffers.pending_packets,
         &mut buffers.forwards,

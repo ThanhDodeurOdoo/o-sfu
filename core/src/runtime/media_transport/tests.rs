@@ -25,7 +25,7 @@ use crate::{
             test_support::FakeMediaTransport,
         },
         metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry as MediaTap,
+        packet_sink_registry::RoomPacketSinkRegistry,
         rtc_engine::RtcTransportShard,
     },
     transport::{NegotiationPort, SourcePolicyPort, SourcePolicyUpdateSubscription},
@@ -198,7 +198,7 @@ fn test_rtc_engine(worker_count: usize, rtc_port_range: RtcPortRange) -> MediaTr
         })
         .deps(MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(MediaTap::default()),
+            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
         })
         .worker_count(worker_count)
@@ -275,7 +275,7 @@ fn rtc_transport_builder_uses_one_worker_by_default() {
         })
         .deps(MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(MediaTap::default()),
+            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
         })
         .build();
@@ -296,7 +296,7 @@ fn rtc_transport_builder_rejects_invalid_worker_count() {
         })
         .deps(MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(MediaTap::default()),
+            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
         })
         .worker_count(0)
@@ -321,7 +321,7 @@ fn rtc_transport_builder_rejects_invalid_port_split() {
         })
         .deps(MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(MediaTap::default()),
+            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
         })
         .worker_count(3)

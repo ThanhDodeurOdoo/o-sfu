@@ -9,7 +9,7 @@ use super::{
     super::{
         RoomAdmissionPolicy, RoomUserPermissions,
         outbound::OutboundSender,
-        topology::{RoomRouterObserverFactory, RoomTopology, RoutedConsumerId, RoutedProducerId},
+        topology::{RoomRouterStateFactory, RoomTopology, RoutedConsumerId, RoutedProducerId},
         user_negotiation::UserNegotiation,
     },
     ids::ProducerRuntimeId,
@@ -21,7 +21,7 @@ use crate::{
     runtime::{
         ConnectionId, RecordingState, UserId,
         media_transport::TransportMediaId,
-        recording::RecordingService,
+        router_events::RoomRouterEventSink,
         source_model::{
             ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
             SourceEncodingId, SourceSubscriptionIntent, UserStreamId,
@@ -178,7 +178,7 @@ impl RoomState {
         admission_policy: RoomAdmissionPolicy,
         router_rtp_capabilities: MediaCapabilities,
         room_sharding_policy: RoomShardingPolicy,
-        recording_service: Arc<RecordingService>,
+        router_event_sink: Arc<dyn RoomRouterEventSink>,
     ) -> Self {
         Self {
             admission_policy,
@@ -206,11 +206,11 @@ impl RoomState {
             pending_consumer_bootstraps: BTreeSet::new(),
             consumer_keys_by_user: BTreeMap::new(),
             consumer_keys_by_source: BTreeMap::new(),
-            topology: RoomTopology::new_with_recording_observer_factory(
+            topology: RoomTopology::new_with_router_state_factory(
                 runtime_context.local_routers().clone(),
                 room_sharding_policy,
                 router_rtp_capabilities,
-                &RoomRouterObserverFactory::new(recording_service),
+                &RoomRouterStateFactory::new(router_event_sink),
             ),
         }
     }

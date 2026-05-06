@@ -34,7 +34,7 @@ pub(super) use crate::{
         UserConfig, VideoBitrateLimits,
     },
     runtime::{
-        RuntimeState,
+        RoomPacketSinkRegistry, RuntimeState,
         auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
         diagnostics::DiagnosticsStore,
         http_server::app,
@@ -44,7 +44,6 @@ pub(super) use crate::{
             test_support::{FakeMediaTransport, FakeMediaTransportEvent},
         },
         metrics::RuntimeMetrics,
-        recording::MediaTap,
         room::{
             Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomManagerDeps,
             RoomRuntimePolicy, rtp_capabilities,
@@ -182,7 +181,7 @@ async fn spawn_test_server_impl(
             .with_room_sharding_policy(config.transport.room_sharding_policy),
         ),
         RoomManagerDeps {
-            recording_media_tap: Arc::new(MediaTap::default()),
+            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
             diagnostics: Arc::clone(&diagnostics),
             metrics: Arc::clone(&metrics),
         },
@@ -276,7 +275,7 @@ pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
         })
         .deps(MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(MediaTap::default()),
+            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
         })
         .worker_count(1)

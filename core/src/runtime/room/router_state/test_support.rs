@@ -8,22 +8,24 @@ use crate::{
     runtime::{
         RoomInstanceId, UserId,
         metrics::RuntimeMetrics,
-        recording::{MediaSource, MediaTap, RecordingService},
+        packet_sink_registry::RoomPacketSinkRegistry,
+        recording::{MediaSource, RecordingService},
         room::rtp_capabilities::router_rtp_capabilities,
     },
 };
 
 impl RoomRouterState {
     pub(in crate::runtime::room) fn new_for_test(router_id: RouterId) -> Self {
-        let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
-        Self::new_with_recording_service(
+        let media_source: Arc<dyn MediaSource> = Arc::new(RoomPacketSinkRegistry::default());
+        let event_sink = Arc::new(RecordingService::new(
+            RoomInstanceId::from_raw(0),
+            media_source,
+            Arc::new(RuntimeMetrics::default()),
+        ));
+        Self::new(
             router_id,
             router_rtp_capabilities(MediaCodecFlags::default()),
-            Arc::new(RecordingService::new(
-                RoomInstanceId::from_raw(0),
-                media_source,
-                Arc::new(RuntimeMetrics::default()),
-            )),
+            event_sink,
         )
     }
 

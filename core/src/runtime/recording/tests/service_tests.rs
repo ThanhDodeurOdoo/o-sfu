@@ -12,6 +12,7 @@ use crate::runtime::{
             RecordingLifecycleState, into_media_source, is_room_active, transition_error_state,
         },
     },
+    router_events::RoomRouterEventSink,
     rtc_engine::test_support::{sample_forwarded_packet, test_transport_session_key},
 };
 
@@ -81,7 +82,7 @@ fn recording_service_allows_only_legal_state_machine_transitions() {
 }
 
 #[test]
-fn recording_service_tracks_router_observer_inventory() {
+fn recording_service_tracks_router_event_sink_inventory() {
     let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
     let service = RecordingService::new(
         RoomInstanceId::from_raw(22),
@@ -90,29 +91,41 @@ fn recording_service_tracks_router_observer_inventory() {
     );
     let user_id = RouterSessionId(9);
 
-    service.handle_router_event(RouterEvent::SessionJoined {
-        session_id: user_id,
-    });
-    service.handle_router_event(RouterEvent::ProducerAdded {
-        session_id: user_id,
-        transport_id: TransportId(3),
-        producer_id: ProducerId(4),
-        media_kind: MediaKind::Video,
-    });
+    RoomRouterEventSink::handle_room_router_event(
+        &service,
+        RouterEvent::SessionJoined {
+            session_id: user_id,
+        },
+    );
+    RoomRouterEventSink::handle_room_router_event(
+        &service,
+        RouterEvent::ProducerAdded {
+            session_id: user_id,
+            transport_id: TransportId(3),
+            producer_id: ProducerId(4),
+            media_kind: MediaKind::Video,
+        },
+    );
 
     let snapshot = service.snapshot();
     assert_eq!(snapshot.user_count, 1);
     assert_eq!(snapshot.producer_count, 1);
 
-    service.handle_router_event(RouterEvent::ProducerRemoved {
-        session_id: user_id,
-        transport_id: TransportId(3),
-        producer_id: ProducerId(4),
-        media_kind: MediaKind::Video,
-    });
-    service.handle_router_event(RouterEvent::SessionLeft {
-        session_id: user_id,
-    });
+    RoomRouterEventSink::handle_room_router_event(
+        &service,
+        RouterEvent::ProducerRemoved {
+            session_id: user_id,
+            transport_id: TransportId(3),
+            producer_id: ProducerId(4),
+            media_kind: MediaKind::Video,
+        },
+    );
+    RoomRouterEventSink::handle_room_router_event(
+        &service,
+        RouterEvent::SessionLeft {
+            session_id: user_id,
+        },
+    );
 
     let snapshot = service.snapshot();
     assert_eq!(snapshot.user_count, 0);

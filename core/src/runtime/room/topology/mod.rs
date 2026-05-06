@@ -45,6 +45,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt,
     sync::{Arc, OnceLock},
 };
 
@@ -59,7 +60,7 @@ use super::{
 };
 use crate::{
     RoomShardingPolicy,
-    runtime::{UserId, recording::RecordingService},
+    runtime::{UserId, router_events::RoomRouterEventSink},
 };
 
 mod policy;
@@ -237,10 +238,10 @@ pub(super) struct RoomTopology {
     local_routers: LocalRoomRouterPlacements,
     /// Builder for router state attached after room construction.
     ///
-    /// Lazy spillover attachment needs the same recording observer wiring as
-    /// the primary router. Keeping a factory here avoids giving room state
-    /// direct access to router internals.
-    router_observer_factory: RoomRouterObserverFactory,
+    /// Lazy spillover attachment needs the same router event sink as the
+    /// primary router. Keeping a factory here avoids giving room state direct
+    /// access to router internals.
+    router_state_factory: RoomRouterStateFactory,
     /// Currently attached pure router states.
     ///
     /// This map can be smaller than `local_routers` because idle spillover
@@ -278,21 +279,29 @@ pub(super) enum RouterMembershipState {
     ActiveSpillover,
 }
 
-/// Factory for router states that need room-owned observers.
+/// Factory for router states that need room-owned event sinks.
 ///
 /// `RoomTopology` can attach spillover routers after room construction. Each
-/// new router state must still report recording observer events through the
-/// room's recording service, so the observer dependency is stored as a small
-/// cloneable factory instead of being threaded through every topology call.
-#[derive(Debug, Clone)]
-pub(super) struct RoomRouterObserverFactory {
-    recording_service: Arc<RecordingService>,
+/// new router state must still report router lifecycle events through the
+/// room-owned sink, so the dependency is stored as a small cloneable factory
+/// instead of being threaded through every topology call.
+#[derive(Clone)]
+pub(super) struct RoomRouterStateFactory {
+    event_sink: Arc<dyn RoomRouterEventSink>,
 }
 
-impl RoomRouterObserverFactory {
+impl fmt::Debug for RoomRouterStateFactory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RoomRouterStateFactory")
+            .finish_non_exhaustive()
+    }
+}
+
+impl RoomRouterStateFactory {
     #[must_use]
-    pub(super) fn new(recording_service: Arc<RecordingService>) -> Self {
-        Self { recording_service }
+    pub(super) fn new(event_sink: Arc<dyn RoomRouterEventSink>) -> Self {
+        Self { event_sink }
     }
 
     fn build_router_state(
@@ -300,10 +309,10 @@ impl RoomRouterObserverFactory {
         router_id: RouterId,
         router_rtp_capabilities: MediaCapabilities,
     ) -> RoomRouterState {
-        RoomRouterState::new_with_recording_service(
+        RoomRouterState::new(
             router_id,
             router_rtp_capabilities,
-            Arc::clone(&self.recording_service),
+            Arc::clone(&self.event_sink),
         )
     }
 }
@@ -318,17 +327,17 @@ impl RoomTopology {
     ///
     /// The returned topology owns router state only. It does not register users
     /// and it does not allocate transport sessions.
-    pub(super) fn new_with_recording_observer_factory(
+    pub(super) fn new_with_router_state_factory(
         local_routers: LocalRoomRouterPlacements,
         room_sharding_policy: RoomShardingPolicy,
         router_rtp_capabilities: MediaCapabilities,
-        router_observer_factory: &RoomRouterObserverFactory,
+        router_state_factory: &RoomRouterStateFactory,
     ) -> Self {
         let primary_router_id = local_routers.primary().router;
         let mut routers = BTreeMap::new();
         routers.insert(
             primary_router_id,
-            router_observer_factory.build_router_state(primary_router_id, router_rtp_capabilities),
+            router_state_factory.build_router_state(primary_router_id, router_rtp_capabilities),
         );
         let mut router_memberships = BTreeMap::new();
         router_memberships.insert(primary_router_id, RouterMembershipState::Primary);
@@ -336,7 +345,7 @@ impl RoomTopology {
             primary_router: primary_router_id,
             placement_policy: PlacementPolicy::new(room_sharding_policy),
             local_routers,
-            router_observer_factory: router_observer_factory.clone(),
+            router_state_factory: router_state_factory.clone(),
             routers,
             router_memberships,
             session_home_router: BTreeMap::new(),
@@ -453,7 +462,7 @@ impl RoomTopology {
         let router_rtp_capabilities = self.rtp_capabilities().clone();
         self.routers.insert(
             router_id,
-            self.router_observer_factory
+            self.router_state_factory
                 .build_router_state(router_id, router_rtp_capabilities),
         );
         self.router_memberships

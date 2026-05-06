@@ -17,6 +17,7 @@ pub mod metrics;
 pub mod packet_sink_registry;
 pub mod recording;
 pub mod room;
+pub(in crate::runtime) mod router_events;
 pub mod rtc_engine;
 pub mod session_types;
 pub mod source_model;

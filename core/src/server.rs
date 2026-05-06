@@ -20,9 +20,15 @@ pub mod metrics {
 pub mod recording {
     //! Recording packet-sink boundary shared by the room engine and server runtime.
 
-    pub use crate::runtime::{
-        packet_sink_registry::{ActiveRoomRegistry, RegisteredPacketSink},
-        recording::{MediaPacketSink, MediaTap, into_packet_sink},
+    pub use crate::runtime::recording::MediaPacketSink;
+}
+
+pub mod packet_sinks {
+    //! Generic room packet-sink registry consumed by transport and room services.
+
+    pub use crate::runtime::packet_sink_registry::{
+        ActiveRoomRegistry, PacketSink, RegisteredPacketSink, RoomPacketSinkRegistry,
+        into_packet_sink,
     };
 }
 

@@ -61,7 +61,9 @@ use crate::{
             ActiveSpeakerSourceDiagnostic, ObservabilityPort, TransportMediaId, TransportSessionKey,
         },
         metrics::RuntimeMetrics,
-        recording::{MediaSource, MediaTap, RecordingService},
+        packet_sink_registry::RoomPacketSinkRegistry,
+        recording::{MediaSource, RecordingService},
+        router_events::RoomRouterEventSink,
         source_model::UserStreamId,
     },
 };
@@ -645,16 +647,18 @@ impl Room {
         key: Option<String>,
         config: RoomConfig,
         diagnostics: Arc<DiagnosticsStore>,
-        recording_media_tap: Arc<MediaTap>,
+        packet_sink_registry: Arc<RoomPacketSinkRegistry>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         let definition = RoomDefinition::new(runtime_context, &runtime_policy, issuer, key, config);
-        let recording_media_source: Arc<dyn MediaSource> = recording_media_tap;
+        let recording_media_source: Arc<dyn MediaSource> = packet_sink_registry;
         let recording_service = Arc::new(RecordingService::new(
             definition.instance_id(),
             recording_media_source,
             Arc::clone(&metrics),
         ));
+        let recording_event_sink = Arc::<RecordingService>::clone(&recording_service);
+        let router_event_sink: Arc<dyn RoomRouterEventSink> = recording_event_sink;
         Self {
             diagnostics,
             definition,
@@ -667,7 +671,7 @@ impl Room {
                 runtime_policy.admission_policy,
                 runtime_policy.router_rtp_capabilities,
                 runtime_policy.room_sharding_policy,
-                recording_service,
+                router_event_sink,
             )),
         }
     }

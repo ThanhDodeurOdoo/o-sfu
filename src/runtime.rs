@@ -42,12 +42,12 @@ pub(crate) use media_transport::{
 pub(crate) use metrics::RuntimeMetrics;
 pub(crate) use o_sfu_core::{
     ConnectionId, RoomInstanceId, SessionBitrateLimits,
-    server::{metrics, recording, room, transport as media_transport},
+    server::{metrics, packet_sinks, room, transport as media_transport},
 };
 pub(crate) use o_sfu_telemetry as telemetry;
 pub(crate) use o_sfu_telemetry::prometheus;
 use options::{HttpOptions, RuntimeOptions, SocketOptions};
-pub(crate) use recording::MediaTap;
+pub(crate) use packet_sinks::RoomPacketSinkRegistry;
 use room::{
     RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy,
     rtp_capabilities,
@@ -83,7 +83,7 @@ pub(super) struct RuntimeState {
 pub(super) struct RuntimeServices {
     diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
-    recording_media_tap: Arc<MediaTap>,
+    packet_sink_registry: Arc<RoomPacketSinkRegistry>,
 }
 
 impl Default for RuntimeServices {
@@ -91,7 +91,7 @@ impl Default for RuntimeServices {
         Self {
             diagnostics: Arc::new(DiagnosticsStore::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
-            recording_media_tap: Arc::new(MediaTap::default()),
+            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
         }
     }
 }
@@ -289,7 +289,7 @@ fn build_media_transport(
         options,
         MediaTransportDeps {
             diagnostics: Arc::clone(&services.diagnostics),
-            packet_sink_registry: Arc::clone(&services.recording_media_tap),
+            packet_sink_registry: Arc::clone(&services.packet_sink_registry),
             metrics: Arc::clone(&services.metrics),
         },
     )?)
@@ -315,7 +315,7 @@ fn build_room_manager(
     Arc::new(RoomManager::new(
         RoomManagerConfig::new(options.core.routing.media_worker_count, runtime_policy),
         RoomManagerDeps {
-            recording_media_tap: Arc::clone(&services.recording_media_tap),
+            packet_sink_registry: Arc::clone(&services.packet_sink_registry),
             diagnostics: Arc::clone(&services.diagnostics),
             metrics: Arc::clone(&services.metrics),
         },

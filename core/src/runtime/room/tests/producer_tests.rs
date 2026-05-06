@@ -23,7 +23,7 @@ use crate::{
             test_support::FakeMediaTransportEvent,
         },
         metrics::RuntimeMetrics,
-        recording::MediaTap,
+        packet_sink_registry::RoomPacketSinkRegistry,
         room::Room,
     },
     transport::NegotiationPort,
@@ -3166,7 +3166,7 @@ fn build_real_rtc_media_transport() -> MediaTransport {
         })
         .deps(MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(MediaTap::default()),
+            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
         })
         .worker_count(1)

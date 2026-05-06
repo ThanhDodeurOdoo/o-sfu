@@ -11,7 +11,7 @@ use o_sfu_router::{
 
 use crate::runtime::{
     UserId,
-    recording::{RecordingRouterObserver, RecordingService},
+    router_events::{RoomRouterEventSink, RoomRouterObserver},
 };
 
 #[cfg(test)]
@@ -38,7 +38,7 @@ impl From<RouterError> for RoomRouterStateError {
 /// router mutations line up with the room state that already accepted the
 /// signaling transition.
 pub(super) struct RoomRouterState {
-    router: Router<RecordingRouterObserver>,
+    router: Router<RoomRouterObserver>,
     rtp_capabilities: MediaCapabilities,
     router_user_ids_by_user_id: BTreeMap<UserId, RouterSessionId>,
     transport_ids_by_user_id: BTreeMap<UserId, SessionTransportIds>,
@@ -54,16 +54,13 @@ struct SessionTransportIds {
 }
 
 impl RoomRouterState {
-    pub(super) fn new_with_recording_service(
+    pub(super) fn new(
         router_id: RouterId,
         rtp_capabilities: MediaCapabilities,
-        recording_service: Arc<RecordingService>,
+        event_sink: Arc<dyn RoomRouterEventSink>,
     ) -> Self {
         Self {
-            router: Router::new_with_observer(
-                router_id,
-                RecordingRouterObserver::new(recording_service),
-            ),
+            router: Router::new_with_observer(router_id, RoomRouterObserver::new(event_sink)),
             rtp_capabilities,
             router_user_ids_by_user_id: BTreeMap::new(),
             transport_ids_by_user_id: BTreeMap::new(),

@@ -9,13 +9,14 @@ use std::{
     time::Instant,
 };
 
-use o_sfu_router::{ProducerId, RouterEvent, RouterObserver, SessionId as UserId, TransportId};
+use o_sfu_router::{ProducerId, RouterEvent, SessionId as UserId, TransportId};
 
 use super::{MediaPacketSink, MediaSource, into_packet_sink, user::RecordingSession};
 use crate::runtime::{
     RoomInstanceId,
     media_transport::{TransportMediaId, TransportSessionKey},
     metrics::RuntimeMetrics,
+    router_events::RoomRouterEventSink,
 };
 
 const RECENT_CAPTURED_STREAM_CACHE_SLOTS: usize = 64;
@@ -244,8 +245,7 @@ impl RecordingService {
         }
     }
 
-    // TODO: needs documentation:
-    pub(crate) fn handle_router_event(&self, event: RouterEvent) {
+    fn handle_router_event(&self, event: RouterEvent) {
         let mut state = self.lock_sessions();
         match event {
             RouterEvent::SessionJoined {
@@ -323,29 +323,9 @@ fn add_tracked_producer(
         .add_producer(producer_id, transport_id, media_kind);
 }
 
-#[derive(Clone)]
-pub(crate) struct RecordingRouterObserver {
-    service: Arc<RecordingService>,
-}
-
-impl RecordingRouterObserver {
-    pub(crate) fn new(service: Arc<RecordingService>) -> Self {
-        Self { service }
-    }
-}
-
-impl RouterObserver for RecordingRouterObserver {
-    fn on_event(&mut self, event: RouterEvent) {
-        self.service.handle_router_event(event);
-    }
-}
-
-impl fmt::Debug for RecordingRouterObserver {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RecordingRouterObserver")
-            .field("room_instance_id", &self.service.room_instance_id)
-            .finish()
+impl RoomRouterEventSink for RecordingService {
+    fn handle_room_router_event(&self, event: RouterEvent) {
+        self.handle_router_event(event);
     }
 }
 

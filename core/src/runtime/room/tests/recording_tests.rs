@@ -5,7 +5,7 @@ use crate::{
         RecordingOptions, RecordingState, RecordingStateUpdate, StopCode,
         diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
-        recording::MediaTap,
+        packet_sink_registry::RoomPacketSinkRegistry,
         room::{RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy, rtp_capabilities},
     },
 };
@@ -55,7 +55,7 @@ async fn build_recording_room_with(
             ),
         ),
         RoomManagerDeps {
-            recording_media_tap: Arc::new(MediaTap::default()),
+            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
             diagnostics: Arc::new(DiagnosticsStore::default()),
             metrics: Arc::clone(&metrics),
         },

@@ -25,7 +25,7 @@ use crate::{
             MediaTransportDeps, RtcTransportConfig, SourcePolicySignal, TransportSessionKey,
         },
         metrics::{self, RuntimeMetrics},
-        packet_sink_registry::RoomPacketSinkRegistry as MediaTap,
+        packet_sink_registry::RoomPacketSinkRegistry,
     },
 };
 
@@ -292,7 +292,7 @@ impl Default for RtcTransportShard {
             },
             &MediaTransportDeps {
                 diagnostics: Arc::new(DiagnosticsStore::default()),
-                packet_sink_registry: Arc::new(MediaTap::default()),
+                packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
                 metrics: Arc::new(RuntimeMetrics::default()),
             },
             Arc::new(SourcePolicySignal::default()),

@@ -20,7 +20,7 @@ use crate::runtime::{
     diagnostics::{self, DiagnosticsEventData, DiagnosticsStore},
     media_transport::{MediaPort, MediaTransport, ObservabilityPort},
     metrics::RuntimeMetrics,
-    recording::MediaTap,
+    packet_sink_registry::RoomPacketSinkRegistry,
     telemetry::schema::event as telemetry_event,
 };
 
@@ -48,7 +48,7 @@ impl RoomManagerConfig {
 
 #[derive(Debug, Clone)]
 pub struct RoomManagerDeps {
-    pub recording_media_tap: Arc<MediaTap>,
+    pub packet_sink_registry: Arc<RoomPacketSinkRegistry>,
     pub diagnostics: Arc<DiagnosticsStore>,
     pub metrics: Arc<RuntimeMetrics>,
 }
@@ -127,7 +127,7 @@ impl RoomManager {
         let factory = RoomFactory::new(
             config.media_worker_count,
             config.runtime_policy,
-            deps.recording_media_tap,
+            deps.packet_sink_registry,
             Arc::clone(&deps.diagnostics),
             Arc::clone(&deps.metrics),
         );

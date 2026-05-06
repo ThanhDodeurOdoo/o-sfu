@@ -6,7 +6,10 @@ use super::{
 };
 use crate::{
     MediaCodecFlags, RuntimeFeatureFlags,
-    runtime::{diagnostics::DiagnosticsStore, metrics::RuntimeMetrics, recording::MediaTap},
+    runtime::{
+        diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
+        packet_sink_registry::RoomPacketSinkRegistry,
+    },
 };
 
 const DEFAULT_TEST_MAX_SESSIONS: usize = 100;
@@ -46,7 +49,7 @@ impl RoomManager {
         Self::new(
             config,
             RoomManagerDeps {
-                recording_media_tap: Arc::new(MediaTap::default()),
+                packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
                 diagnostics: Arc::new(DiagnosticsStore::default()),
                 metrics: Arc::new(RuntimeMetrics::default()),
             },

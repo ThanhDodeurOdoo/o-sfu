@@ -23,7 +23,7 @@ pub(super) use crate::{
         UserConfig, VideoBitrateLimits,
     },
     runtime::{
-        ConnectionId, RuntimeState,
+        ConnectionId, RoomPacketSinkRegistry, RuntimeState,
         auth::{self, HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims},
         diagnostics::{
             DiagnosticsStore,
@@ -40,7 +40,6 @@ pub(super) use crate::{
         },
         media_transport::MediaTransport,
         metrics::RuntimeMetrics,
-        recording::MediaTap,
         room::{
             JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig,
             RoomManagerDeps, RoomRuntimePolicy, rtp_capabilities,
@@ -112,7 +111,7 @@ pub(super) fn test_state_with_handles() -> TestRuntimeState {
             .with_room_sharding_policy(config.transport.room_sharding_policy),
         ),
         RoomManagerDeps {
-            recording_media_tap: Arc::new(MediaTap::default()),
+            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
             diagnostics: Arc::clone(&diagnostics),
             metrics: Arc::clone(&metrics),
         },

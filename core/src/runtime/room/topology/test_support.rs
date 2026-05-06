@@ -4,7 +4,7 @@ use std::sync::Arc;
 use o_sfu_router::RouterId;
 
 #[cfg(test)]
-use super::RoomRouterObserverFactory;
+use super::RoomRouterStateFactory;
 use super::RoomTopology;
 use crate::runtime::UserId;
 #[cfg(test)]
@@ -13,7 +13,8 @@ use crate::{
     runtime::{
         RoomInstanceId,
         metrics::RuntimeMetrics,
-        recording::{MediaSource, MediaTap, RecordingService},
+        packet_sink_registry::RoomPacketSinkRegistry,
+        recording::{MediaSource, RecordingService},
         room::{
             LocalRoomRouterPlacements, LocalRouterRuntimeContext,
             rtp_capabilities::router_rtp_capabilities,
@@ -37,7 +38,12 @@ impl RoomTopology {
         room_sharding_policy: RoomShardingPolicy,
         local_router_count: usize,
     ) -> Self {
-        let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
+        let media_source: Arc<dyn MediaSource> = Arc::new(RoomPacketSinkRegistry::default());
+        let event_sink = Arc::new(RecordingService::new(
+            RoomInstanceId::from_raw(0),
+            media_source,
+            Arc::new(RuntimeMetrics::default()),
+        ));
         let primary = LocalRouterRuntimeContext {
             router: primary_router_id,
             media_worker: 0,
@@ -52,15 +58,11 @@ impl RoomTopology {
                 media_worker: offset,
             })
             .collect::<Vec<_>>();
-        Self::new_with_recording_observer_factory(
+        Self::new_with_router_state_factory(
             LocalRoomRouterPlacements::new(primary, spillover),
             room_sharding_policy,
             router_rtp_capabilities(MediaCodecFlags::default()),
-            &RoomRouterObserverFactory::new(Arc::new(RecordingService::new(
-                RoomInstanceId::from_raw(0),
-                media_source,
-                Arc::new(RuntimeMetrics::default()),
-            ))),
+            &RoomRouterStateFactory::new(event_sink),
         )
     }
 

@@ -34,7 +34,7 @@ pub(super) use crate::{
             SourcePolicySignal, TransportAdapterError, TransportMediaId, TransportSessionKey,
         },
         metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry as MediaTap,
+        packet_sink_registry::RoomPacketSinkRegistry,
     },
 };
 
@@ -122,7 +122,7 @@ fn rtc_engine_for_test(
         },
         &MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(MediaTap::default()),
+            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
         },
         Arc::new(SourcePolicySignal::default()),

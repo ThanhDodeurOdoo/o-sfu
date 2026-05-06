@@ -18,7 +18,8 @@ use crate::{
         ConnectionId, RoomInstanceId, TestSourceKind, UserPermissions,
         media_transport::TransportMediaId,
         metrics::RuntimeMetrics,
-        recording::{MediaSource, MediaTap, RecordingService},
+        packet_sink_registry::RoomPacketSinkRegistry,
+        recording::{MediaSource, RecordingService},
         room::{
             LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext,
             rtp_capabilities::router_rtp_capabilities,
@@ -38,7 +39,7 @@ use crate::{
 };
 
 fn test_state() -> RoomState {
-    let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
+    let media_source: Arc<dyn MediaSource> = Arc::new(RoomPacketSinkRegistry::default());
     let runtime_context = RoomRuntimeContext::new(
         RoomInstanceId::from_raw(0),
         LocalRouterRuntimeContext {
