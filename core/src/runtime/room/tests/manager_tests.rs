@@ -135,6 +135,53 @@ fn assert_featured_snapshot_update(messages: &[UserOutbound], user_id: &UserId, 
     }));
 }
 
+async fn assert_user_placement(
+    room: &Arc<super::super::Room>,
+    user_id: &UserId,
+    expected_router_id: RouterId,
+    expected_media_worker_id: usize,
+) {
+    let Some(connection_id) = room.test_api().inspect().user_connection_id(user_id).await else {
+        panic!("user should be joined");
+    };
+    assert_eq!(
+        room.test_api()
+            .inspect()
+            .topology_home_router_id(user_id)
+            .await,
+        Some(expected_router_id)
+    );
+    assert_eq!(
+        room.test_api()
+            .inspect()
+            .topology_home_media_worker_id(user_id)
+            .await,
+        Some(expected_media_worker_id)
+    );
+    assert_eq!(
+        room.transport_user_key(user_id, connection_id)
+            .media_worker_id(),
+        expected_media_worker_id
+    );
+}
+
+async fn join_users_for_placement(room: &Arc<super::super::Room>, raw_user_ids: &[i64]) {
+    for raw_user_id in raw_user_ids {
+        let (tx, _rx) = test_sender();
+        let joined = room
+            .test_api()
+            .lifecycle()
+            .join_user(
+                UserId::Integer(*raw_user_id),
+                None,
+                UserPermissions::default(),
+                tx,
+            )
+            .await;
+        assert!(joined.is_ok());
+    }
+}
+
 #[tokio::test]
 async fn room_manager_is_idempotent_by_issuer() {
     let manager = RoomManager::for_test();
@@ -207,6 +254,73 @@ async fn room_spillover_policy_places_user_transport_on_local_workers() {
 
     assert_eq!(first_key.media_worker_id(), 0);
     assert_eq!(second_key.media_worker_id(), 1);
+}
+
+#[tokio::test]
+async fn strict_room_placement_keeps_topology_and_transport_on_primary_worker() {
+    let manager = RoomManager::for_test_with_media_workers(3);
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+
+    join_users_for_placement(&room, &[10, 20, 30]).await;
+
+    for raw_user_id in [10_i64, 20, 30] {
+        assert_user_placement(&room, &UserId::Integer(raw_user_id), RouterId(0), 0).await;
+    }
+}
+
+#[tokio::test]
+async fn bounded_room_placement_keeps_topology_and_transport_aligned() {
+    let manager = spillover_room_manager(3);
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+
+    join_users_for_placement(&room, &[10, 20, 30]).await;
+
+    for (raw_user_id, router_id, media_worker_id) in [
+        (10_i64, RouterId(0), 0),
+        (20, RouterId(1), 1),
+        (30, RouterId(2), 2),
+    ] {
+        assert_user_placement(
+            &room,
+            &UserId::Integer(raw_user_id),
+            router_id,
+            media_worker_id,
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn load_triggered_room_placement_keeps_topology_and_transport_aligned() {
+    let manager = load_spillover_room_manager(
+        3,
+        LocalSpilloverPolicy::conservative()
+            .with_min_receiver_count(2)
+            .with_activation_window(1),
+    );
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+
+    join_users_for_placement(&room, &[10, 20, 30]).await;
+
+    for (raw_user_id, router_id, media_worker_id) in [
+        (10_i64, RouterId(0), 0),
+        (20, RouterId(1), 1),
+        (30, RouterId(2), 2),
+    ] {
+        assert_user_placement(
+            &room,
+            &UserId::Integer(raw_user_id),
+            router_id,
+            media_worker_id,
+        )
+        .await;
+    }
 }
 
 #[tokio::test]

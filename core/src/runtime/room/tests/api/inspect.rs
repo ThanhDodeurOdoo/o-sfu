@@ -156,6 +156,14 @@ impl RoomTestInspect<'_> {
             .topology_home_router_id(user_id)
     }
 
+    pub async fn topology_home_media_worker_id(self, user_id: &UserId) -> Option<usize> {
+        self.room
+            .state
+            .read()
+            .await
+            .topology_home_media_worker_id(user_id)
+    }
+
     pub async fn topology_router_count(self) -> usize {
         self.room.state.read().await.topology_router_count()
     }
