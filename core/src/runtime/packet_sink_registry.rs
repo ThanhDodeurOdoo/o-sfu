@@ -4,7 +4,7 @@ use std::{
     hash::Hash,
     sync::{
         Arc, PoisonError, RwLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Instant,
 };
@@ -124,6 +124,7 @@ impl fmt::Debug for RegisteredPacketSink {
 
 pub struct RoomPacketSinkRegistry {
     any_active: AtomicBool,
+    generation: AtomicU64,
     active_rooms: RwLock<ActiveRoomRegistry<RoomInstanceId, RegisteredPacketSink>>,
 }
 
@@ -131,9 +132,49 @@ impl Default for RoomPacketSinkRegistry {
     fn default() -> Self {
         Self {
             any_active: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
             active_rooms: RwLock::new(ActiveRoomRegistry::default()),
         }
     }
+}
+
+pub(in crate::runtime) trait PacketSinkLookup {
+    fn sink_for_room(&self, room_instance_id: RoomInstanceId) -> Option<RegisteredPacketSink>;
+}
+
+#[derive(Default)]
+pub(in crate::runtime) struct PacketSinkRouteCache {
+    generation: u64,
+    active_rooms: ActiveRoomRegistry<RoomInstanceId, RegisteredPacketSink>,
+}
+
+impl PacketSinkRouteCache {
+    pub(in crate::runtime) fn refresh_from(&mut self, registry: &RoomPacketSinkRegistry) {
+        let generation = registry.generation();
+        if self.generation == generation {
+            return;
+        }
+        let snapshot = registry.snapshot();
+        self.generation = snapshot.generation;
+        self.active_rooms = snapshot.active_rooms;
+    }
+}
+
+impl PacketSinkLookup for PacketSinkRouteCache {
+    fn sink_for_room(&self, room_instance_id: RoomInstanceId) -> Option<RegisteredPacketSink> {
+        self.active_rooms.get(&room_instance_id)
+    }
+}
+
+impl PacketSinkLookup for RoomPacketSinkRegistry {
+    fn sink_for_room(&self, room_instance_id: RoomInstanceId) -> Option<RegisteredPacketSink> {
+        Self::sink_for_room(self, room_instance_id)
+    }
+}
+
+struct PacketSinkRegistrySnapshot {
+    generation: u64,
+    active_rooms: ActiveRoomRegistry<RoomInstanceId, RegisteredPacketSink>,
 }
 
 impl RoomPacketSinkRegistry {
@@ -147,20 +188,44 @@ impl RoomPacketSinkRegistry {
             .get(&room_instance_id)
     }
 
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    fn snapshot(&self) -> PacketSinkRegistrySnapshot {
+        loop {
+            let generation = self.generation();
+            let active_rooms = self
+                .active_rooms
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            if generation == self.generation() {
+                return PacketSinkRegistrySnapshot {
+                    generation,
+                    active_rooms,
+                };
+            }
+        }
+    }
+
     pub fn register_room(
         &self,
         room_instance_id: RoomInstanceId,
         sink: Arc<dyn PacketSink>,
         forward_destination_kind: RtpForwardDestinationKind,
     ) {
-        self.active_rooms
+        let mut active_rooms = self
+            .active_rooms
             .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(
-                room_instance_id,
-                RegisteredPacketSink::new(sink, forward_destination_kind),
-            );
+            .unwrap_or_else(PoisonError::into_inner);
+        active_rooms.insert(
+            room_instance_id,
+            RegisteredPacketSink::new(sink, forward_destination_kind),
+        );
         self.any_active.store(true, Ordering::Release);
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        drop(active_rooms);
     }
 
     pub fn unregister_room(&self, room_instance_id: RoomInstanceId) {
@@ -171,6 +236,8 @@ impl RoomPacketSinkRegistry {
         active_rooms.remove(&room_instance_id);
         self.any_active
             .store(!active_rooms.is_empty(), Ordering::Release);
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        drop(active_rooms);
     }
 
     #[cfg(any(test, feature = "testing-transport"))]

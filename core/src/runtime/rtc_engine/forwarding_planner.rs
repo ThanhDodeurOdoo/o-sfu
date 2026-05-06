@@ -36,12 +36,12 @@ use super::{
 use crate::runtime::{
     media_transport::TransportMediaId as RouteTransportMediaId,
     metrics::{RtcRouteControlOutcome, RuntimeMetrics},
-    packet_sink_registry::{RegisteredPacketSink, RoomPacketSinkRegistry},
+    packet_sink_registry::{PacketSinkLookup, RegisteredPacketSink},
 };
 
 pub(super) fn populate_forward_routes(
     state: &RtcBootstrapState,
-    packet_sink_registry: &RoomPacketSinkRegistry,
+    packet_sinks: &impl PacketSinkLookup,
     metrics: &RuntimeMetrics,
     pending_packets: &mut [ForwardedPacket],
     forwards: &mut Vec<PacketForward>,
@@ -49,7 +49,7 @@ pub(super) fn populate_forward_routes(
     for (packet_idx, packet) in pending_packets.iter_mut().enumerate() {
         populate_forward_routes_for_packet(
             state,
-            packet_sink_registry,
+            packet_sinks,
             metrics,
             packet_idx,
             packet,
@@ -69,7 +69,7 @@ pub(super) fn populate_forward_routes(
 /// effects and must not be sent back into second-hop relay sinks.
 fn populate_forward_routes_for_packet(
     state: &RtcBootstrapState,
-    packet_sink_registry: &RoomPacketSinkRegistry,
+    packet_sinks: &impl PacketSinkLookup,
     metrics: &RuntimeMetrics,
     packet_idx: usize,
     packet: &mut ForwardedPacket,
@@ -80,7 +80,7 @@ fn populate_forward_routes_for_packet(
     };
     let origin_sink = packet
         .visits_origin_sinks()
-        .then(|| packet_sink_registry.sink_for_room(packet.source_session_key().room_instance_id()))
+        .then(|| packet_sinks.sink_for_room(packet.source_session_key().room_instance_id()))
         .flatten();
     let relay_targets = packet
         .visits_origin_sinks()

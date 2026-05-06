@@ -35,7 +35,10 @@
 //! worker dispatcher. The lower worker functions keep the ownership checks close
 //! to the state they protect.
 
-use std::time::{Duration, Instant};
+use std::{
+    mem::take,
+    time::{Duration, Instant},
+};
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{KeyframeRequestKind, Mid, Pt, Rid};
@@ -49,7 +52,7 @@ use super::{
         media_registry::RegisteredMediaHandle,
         relay_registry::{RelayTargetId, RelayTargetTransport},
         route_control::{PacketLayerGate, aggregate_packet_gates},
-        state::RtcBootstrapState,
+        state::{RidReadinessScratch, RtcBootstrapState},
     },
     keyframe::request_keyframe_for_source,
     types::RouteSourceKind,
@@ -70,6 +73,61 @@ use crate::runtime::{
 enum RouteSourceAccess {
     Existing,
     Register(Option<RemoteSourceControl>),
+}
+
+#[derive(Default)]
+struct RidReadinessRouteUpdate {
+    suspended_stale_gate: bool,
+    selected_gate: RidReadinessSelectedGateUpdate,
+}
+
+impl RidReadinessRouteUpdate {
+    fn mark_pending_selected_gate(&mut self) {
+        if matches!(self.selected_gate, RidReadinessSelectedGateUpdate::None) {
+            self.selected_gate = RidReadinessSelectedGateUpdate::Pending;
+        }
+    }
+
+    fn mark_activated_pending_gate(&mut self) {
+        self.selected_gate = RidReadinessSelectedGateUpdate::Activated;
+    }
+
+    fn mark_activated_bootstrap_fallback_gate(&mut self) {
+        self.selected_gate = RidReadinessSelectedGateUpdate::BootstrapFallback;
+    }
+
+    fn activated_pending_gate(&self) -> bool {
+        matches!(
+            self.selected_gate,
+            RidReadinessSelectedGateUpdate::Activated
+        )
+    }
+
+    fn activated_bootstrap_fallback_gate(&self) -> bool {
+        matches!(
+            self.selected_gate,
+            RidReadinessSelectedGateUpdate::BootstrapFallback
+        )
+    }
+
+    fn has_pending_selected_gate(&self) -> bool {
+        matches!(self.selected_gate, RidReadinessSelectedGateUpdate::Pending)
+    }
+
+    fn changed_gate(&self) -> bool {
+        self.activated_pending_gate()
+            || self.activated_bootstrap_fallback_gate()
+            || self.suspended_stale_gate
+    }
+}
+
+#[derive(Default)]
+enum RidReadinessSelectedGateUpdate {
+    #[default]
+    None,
+    Pending,
+    Activated,
+    BootstrapFallback,
 }
 
 const SELECTED_RID_READY_MAX_AGE: Duration = Duration::from_secs(2);
@@ -272,22 +330,26 @@ pub fn observe_source_rid_readiness(
             "observed first live RTP for producer RID"
         );
     }
-    let suspended_stale_gate = suspend_stale_packet_gates(
+    let mut scratch = take(&mut state.rid_readiness_scratch);
+    let route_update = update_rid_readiness_routes(
         state,
-        metrics,
-        source_session_key,
         source_transport_media_id,
         rid,
+        is_keyframe,
         now,
+        &mut scratch,
     );
-    let has_pending_selected_gate =
-        has_pending_packet_gate_for_rid(state, source_transport_media_id, rid);
-    let activated_pending_gate =
-        is_keyframe && activate_pending_packet_gates_for_rid(state, source_transport_media_id, rid);
-    let activated_bootstrap_fallback_gate = !activated_pending_gate
-        && is_keyframe
-        && activate_bootstrap_fallback_packet_gates_for_rid(state, source_transport_media_id, rid);
-    if activated_pending_gate {
+    for stale_rid in scratch.stale.iter().copied() {
+        request_live_rid_keyframe(
+            state,
+            metrics,
+            source_session_key,
+            source_transport_media_id,
+            stale_rid,
+            now,
+        );
+    }
+    if route_update.activated_pending_gate() {
         refresh_source_packet_gate(state, source_transport_media_id);
         request_live_rid_keyframe(
             state,
@@ -298,16 +360,19 @@ pub fn observe_source_rid_readiness(
             now,
         );
         schedule_live_rid_keyframe_retries(state, source_transport_media_id, rid, now);
-    } else if activated_bootstrap_fallback_gate {
+    } else if route_update.activated_bootstrap_fallback_gate() {
         refresh_source_packet_gate(state, source_transport_media_id);
-        request_pending_selected_rid_keyframes(
-            state,
-            metrics,
-            source_session_key,
-            source_transport_media_id,
-            now,
-        );
-    } else if has_pending_selected_gate {
+        for pending_rid in scratch.pending_selected.iter().copied() {
+            request_live_rid_keyframe(
+                state,
+                metrics,
+                source_session_key,
+                source_transport_media_id,
+                pending_rid,
+                now,
+            );
+        }
+    } else if route_update.has_pending_selected_gate() {
         request_live_rid_keyframe(
             state,
             metrics,
@@ -316,7 +381,7 @@ pub fn observe_source_rid_readiness(
             rid,
             now,
         );
-    } else if suspended_stale_gate {
+    } else if route_update.suspended_stale_gate {
         refresh_source_packet_gate(state, source_transport_media_id);
     }
     drain_live_rid_keyframe_retries(
@@ -327,7 +392,9 @@ pub fn observe_source_rid_readiness(
         rid,
         now,
     );
-    activated_pending_gate || activated_bootstrap_fallback_gate || suspended_stale_gate
+    scratch.clear();
+    state.rid_readiness_scratch = scratch;
+    route_update.changed_gate()
 }
 
 /// Drain selected-RID keyframe retries whose packet-loop deadlines have passed.
@@ -971,77 +1038,133 @@ fn packet_gate_rid(packet_gate: &PacketLayerGate) -> Option<Rid> {
     }
 }
 
-fn has_pending_packet_gate_for_rid(
-    state: &RtcBootstrapState,
+/// Update RID-gated routes with one scan over the source destinations.
+///
+/// Packet observation can activate a selected RID, open a temporary bootstrap
+/// fallback or suspend a stale selected RID. Keeping those decisions in one
+/// route pass makes the packet-loop cost proportional to the source fanout once
+/// per observed RID packet instead of once per sub-decision.
+fn update_rid_readiness_routes(
+    state: &mut RtcBootstrapState,
     source_transport_media_id: TransportMediaId,
-    live_rid: Rid,
-) -> bool {
+    incoming_rid: Rid,
+    is_keyframe: bool,
+    now: Instant,
+    scratch: &mut RidReadinessScratch,
+) -> RidReadinessRouteUpdate {
+    scratch.clear();
+    state.collect_ready_producer_rids(
+        source_transport_media_id,
+        now,
+        SELECTED_RID_READY_MAX_AGE,
+        &mut scratch.ready,
+    );
     state
         .media_route_index
-        .get(&source_transport_media_id)
-        .is_some_and(|route_entry| {
-            route_entry.destinations.iter().any(|destination| {
-                destination
-                    .pending_packet_gate
-                    .as_ref()
-                    .and_then(packet_gate_rid)
-                    == Some(live_rid)
-            })
+        .get_mut(&source_transport_media_id)
+        .map_or_else(RidReadinessRouteUpdate::default, |route_entry| {
+            update_selected_rid_destinations(
+                route_entry,
+                source_transport_media_id,
+                incoming_rid,
+                is_keyframe,
+                scratch,
+            )
         })
 }
 
-/// Make the selected strict RID gate effective after a keyframe for that RID.
-///
-/// A RID can become live on delta frames before it is decodable by a receiver.
-/// Activation waits for the VP8 keyframe check performed by the caller.
-fn activate_pending_packet_gates_for_rid(
-    state: &mut RtcBootstrapState,
+fn update_selected_rid_destinations(
+    route_entry: &mut MediaRouteEntry,
     source_transport_media_id: TransportMediaId,
-    live_rid: Rid,
-) -> bool {
-    let Some(route_entry) = state.media_route_index.get_mut(&source_transport_media_id) else {
-        return false;
-    };
-    let mut changed = false;
+    incoming_rid: Rid,
+    is_keyframe: bool,
+    scratch: &mut RidReadinessScratch,
+) -> RidReadinessRouteUpdate {
+    let mut update = RidReadinessRouteUpdate::default();
     for destination in &mut route_entry.destinations {
-        if destination
+        suspend_stale_destination_gate(
+            destination,
+            source_transport_media_id,
+            incoming_rid,
+            &scratch.ready,
+            &mut scratch.stale,
+            &mut update,
+        );
+        let Some(selected_rid) = destination
             .pending_packet_gate
             .as_ref()
             .and_then(packet_gate_rid)
-            != Some(live_rid)
-        {
+        else {
+            continue;
+        };
+        add_unique_rid(&mut scratch.pending_selected, selected_rid);
+        if selected_rid != incoming_rid {
             continue;
         }
-        if let Some(packet_gate) = destination.pending_packet_gate.take() {
+        update.mark_pending_selected_gate();
+        if is_keyframe && let Some(packet_gate) = destination.pending_packet_gate.take() {
             debug!(
                 ?source_transport_media_id,
                 consumer_session_key = ?destination.dest_session,
                 consumer_transport_media_id = ?destination.dest_transport_media_id,
-                ?live_rid,
+                ?incoming_rid,
                 activated_packet_gate = ?packet_gate,
                 "activated deferred strict RID packet gate after producer RID became live"
             );
             destination.packet_gate = packet_gate;
-            changed = true;
+            update.mark_activated_pending_gate();
         }
     }
-    changed
+    if is_keyframe && !update.activated_pending_gate() {
+        activate_bootstrap_fallback_destinations(
+            route_entry,
+            source_transport_media_id,
+            incoming_rid,
+            &mut update,
+        );
+    }
+    update
 }
 
-/// Allow one decodable fallback RID while the selected RID remains pending.
-///
-/// This is a bootstrap-only compromise. It avoids black screens when Chrome
-/// starts `lo` first, but still keeps each consumer on exactly one publisher RID
-/// at a time.
-fn activate_bootstrap_fallback_packet_gates_for_rid(
-    state: &mut RtcBootstrapState,
+fn suspend_stale_destination_gate(
+    destination: &mut MediaRouteDestination,
     source_transport_media_id: TransportMediaId,
-    live_rid: Rid,
-) -> bool {
-    let Some(route_entry) = state.media_route_index.get_mut(&source_transport_media_id) else {
-        return false;
+    incoming_rid: Rid,
+    ready_rids: &[Rid],
+    stale_rids: &mut Vec<Rid>,
+    update: &mut RidReadinessRouteUpdate,
+) {
+    if destination.pending_packet_gate.is_some() {
+        return;
+    }
+    let Some(selected_rid) = packet_gate_rid(&destination.packet_gate) else {
+        return;
     };
-    let mut changed = false;
+    if selected_rid == incoming_rid || ready_rids.contains(&selected_rid) {
+        return;
+    }
+    let selected_packet_gate = destination.packet_gate.clone();
+    debug!(
+        ?source_transport_media_id,
+        consumer_session_key = ?destination.dest_session,
+        consumer_transport_media_id = ?destination.dest_transport_media_id,
+        ?incoming_rid,
+        stale_rid = ?selected_rid,
+        pending_packet_gate = ?selected_packet_gate,
+        "blocked stale selected RID route until selected producer RID resumes"
+    );
+    destination.packet_gate = PacketLayerGate::Block;
+    destination.pending_packet_gate = Some(selected_packet_gate);
+    add_unique_rid(stale_rids, selected_rid);
+    update.suspended_stale_gate = true;
+}
+
+fn activate_bootstrap_fallback_destinations(
+    route_entry: &mut MediaRouteEntry,
+    source_transport_media_id: TransportMediaId,
+    incoming_rid: Rid,
+    update: &mut RidReadinessRouteUpdate,
+) {
     for destination in &mut route_entry.destinations {
         let Some(selected_rid) = destination
             .pending_packet_gate
@@ -1050,147 +1173,28 @@ fn activate_bootstrap_fallback_packet_gates_for_rid(
         else {
             continue;
         };
-        if selected_rid == live_rid || !matches!(destination.packet_gate, PacketLayerGate::Block) {
+        if selected_rid == incoming_rid
+            || !matches!(destination.packet_gate, PacketLayerGate::Block)
+        {
             continue;
         }
         debug!(
             ?source_transport_media_id,
             consumer_session_key = ?destination.dest_session,
             consumer_transport_media_id = ?destination.dest_transport_media_id,
-            fallback_rid = ?live_rid,
+            fallback_rid = ?incoming_rid,
             pending_selected_rid = ?selected_rid,
             "activated bootstrap fallback RID packet gate while selected producer RID is pending"
         );
-        destination.packet_gate = PacketLayerGate::Rid(live_rid);
-        changed = true;
-    }
-    changed
-}
-
-/// Move stale strict gates back to pending when their selected RID goes quiet.
-///
-/// Browser encoders can pause a simulcast layer after it was once live. When
-/// packets arrive for another RID and the selected RID is no longer fresh, this
-/// prevents the consumer route from staying strict on a silent layer.
-fn suspend_stale_packet_gates(
-    state: &mut RtcBootstrapState,
-    metrics: &RuntimeMetrics,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
-    incoming_rid: Rid,
-    now: Instant,
-) -> bool {
-    let Some(route_entry) = state.media_route_index.get(&source_transport_media_id) else {
-        return false;
-    };
-    let stale_rids = route_entry
-        .destinations
-        .iter()
-        .filter(|destination| destination.pending_packet_gate.is_none())
-        .filter_map(|destination| packet_gate_rid(&destination.packet_gate))
-        .filter(|selected_rid| *selected_rid != incoming_rid)
-        .filter(|selected_rid| {
-            !state.producer_rid_is_ready(
-                source_transport_media_id,
-                *selected_rid,
-                now,
-                SELECTED_RID_READY_MAX_AGE,
-            )
-        })
-        .fold(Vec::new(), |mut stale_rids, selected_rid| {
-            if !stale_rids.contains(&selected_rid) {
-                stale_rids.push(selected_rid);
-            }
-            stale_rids
-        });
-    if stale_rids.is_empty() {
-        return false;
-    }
-    let Some(route_entry) = state.media_route_index.get_mut(&source_transport_media_id) else {
-        return false;
-    };
-    let mut changed = false;
-    for destination in &mut route_entry.destinations {
-        if destination.pending_packet_gate.is_some() {
-            continue;
-        }
-        let Some(selected_rid) = packet_gate_rid(&destination.packet_gate) else {
-            continue;
-        };
-        if !stale_rids.contains(&selected_rid) {
-            continue;
-        }
-        let selected_packet_gate = destination.packet_gate.clone();
-        debug!(
-            ?source_transport_media_id,
-            consumer_session_key = ?destination.dest_session,
-            consumer_transport_media_id = ?destination.dest_transport_media_id,
-            ?incoming_rid,
-            stale_rid = ?selected_rid,
-            pending_packet_gate = ?selected_packet_gate,
-            "blocked stale selected RID route until selected producer RID resumes"
-        );
-        destination.packet_gate = PacketLayerGate::Block;
-        destination.pending_packet_gate = Some(selected_packet_gate);
-        changed = true;
-    }
-    for stale_rid in stale_rids {
-        request_live_rid_keyframe(
-            state,
-            metrics,
-            source_session_key,
-            source_transport_media_id,
-            stale_rid,
-            now,
-        );
-    }
-    changed
-}
-
-fn request_pending_selected_rid_keyframes(
-    state: &mut RtcBootstrapState,
-    metrics: &RuntimeMetrics,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
-    now: Instant,
-) {
-    for rid in pending_selected_rids(state, source_transport_media_id) {
-        request_live_rid_keyframe(
-            state,
-            metrics,
-            source_session_key,
-            source_transport_media_id,
-            rid,
-            now,
-        );
+        destination.packet_gate = PacketLayerGate::Rid(incoming_rid);
+        update.mark_activated_bootstrap_fallback_gate();
     }
 }
 
-fn pending_selected_rids(
-    state: &RtcBootstrapState,
-    source_transport_media_id: TransportMediaId,
-) -> Vec<Rid> {
-    state
-        .media_route_index
-        .get(&source_transport_media_id)
-        .map(|route_entry| {
-            route_entry
-                .destinations
-                .iter()
-                .filter_map(|destination| {
-                    destination
-                        .pending_packet_gate
-                        .as_ref()
-                        .and_then(packet_gate_rid)
-                })
-                .fold(Vec::new(), |mut rids, rid| {
-                    if !rids.contains(&rid) {
-                        rids.push(rid);
-                    }
-                    rids
-                })
-        })
-        .unwrap_or_default()
+fn add_unique_rid(rids: &mut Vec<Rid>, rid: Rid) {
+    if !rids.contains(&rid) {
+        rids.push(rid);
+    }
 }
 
 fn request_live_rid_keyframe(

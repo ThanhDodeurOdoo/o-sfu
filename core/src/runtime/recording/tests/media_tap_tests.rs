@@ -9,6 +9,7 @@ use std::{
 use crate::runtime::{
     RoomInstanceId, UserId,
     media_transport::{TransportMediaId, TransportSessionKey},
+    packet_sink_registry::{PacketSinkLookup, PacketSinkRouteCache},
     recording::{MediaPacketSink, MediaSource, MediaTap, into_packet_sink},
     rtc_engine::test_support::{sample_forwarded_packet, test_transport_session_key},
 };
@@ -111,6 +112,29 @@ fn media_tap_exposes_the_active_room_sink_for_forwarding_destinations() {
 
     assert!(tap.sink_for_room(RoomInstanceId::from_raw(10)).is_some());
     assert!(tap.sink_for_room(RoomInstanceId::from_raw(11)).is_none());
+}
+
+#[test]
+fn packet_sink_route_cache_refreshes_after_registry_changes() {
+    let tap = MediaTap::default();
+    let sink = Arc::new(CountingSink::new());
+    let mut cache = PacketSinkRouteCache::default();
+    let room_id = RoomInstanceId::from_raw(13);
+
+    cache.refresh_from(&tap);
+    assert!(cache.sink_for_room(room_id).is_none());
+
+    tap.activate_room(room_id, into_packet_sink(Arc::<CountingSink>::clone(&sink)));
+
+    assert!(cache.sink_for_room(room_id).is_none());
+    cache.refresh_from(&tap);
+    assert!(cache.sink_for_room(room_id).is_some());
+
+    tap.deactivate_room(room_id);
+
+    assert!(cache.sink_for_room(room_id).is_some());
+    cache.refresh_from(&tap);
+    assert!(cache.sink_for_room(room_id).is_none());
 }
 
 #[test]

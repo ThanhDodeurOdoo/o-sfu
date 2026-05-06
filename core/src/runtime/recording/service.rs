@@ -1,4 +1,5 @@
 use std::{
+    array::from_fn,
     collections::{BTreeMap, BTreeSet},
     fmt,
     sync::{
@@ -16,6 +17,9 @@ use crate::runtime::{
     media_transport::{TransportMediaId, TransportSessionKey},
     metrics::RuntimeMetrics,
 };
+
+const RECENT_CAPTURED_STREAM_CACHE_SLOTS: usize = 64;
+const EMPTY_CAPTURED_STREAM_CACHE_ENTRY: u64 = 0;
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,14 +77,15 @@ pub(crate) struct RecordingServiceSnapshot {
 struct RecordingPacketCollector {
     lifecycle: Arc<AtomicU8>,
     captured_packet_count: Arc<AtomicU64>,
-    captured_streams: Arc<RwLock<BTreeSet<(TransportSessionKey, TransportMediaId)>>>,
+    captured_streams: Arc<RwLock<BTreeSet<TransportMediaId>>>,
+    recent_captured_streams: [AtomicU64; RECENT_CAPTURED_STREAM_CACHE_SLOTS],
     metrics: Arc<RuntimeMetrics>,
 }
 
 impl MediaPacketSink for RecordingPacketCollector {
     fn record_packet(
         &self,
-        session_key: &TransportSessionKey,
+        _session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
         _received_at: Instant,
         _payload: &[u8],
@@ -94,25 +99,48 @@ impl MediaPacketSink for RecordingPacketCollector {
         self.captured_packet_count.fetch_add(1, Ordering::Relaxed);
         self.metrics.record_recording_captured_packet();
 
-        let key = (session_key.clone(), transport_media_id);
-        {
-            let captured_streams = self
-                .captured_streams
-                .read()
-                .unwrap_or_else(PoisonError::into_inner);
-            if captured_streams.contains(&key) {
-                return;
-            }
+        if self.recent_stream_cache_contains(transport_media_id) {
+            return;
         }
 
-        let mut captured_streams = self
-            .captured_streams
-            .write()
-            .unwrap_or_else(PoisonError::into_inner);
-        if captured_streams.insert(key) {
+        let is_new_stream = {
+            let mut captured_streams = self
+                .captured_streams
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            captured_streams.insert(transport_media_id)
+        };
+        if is_new_stream {
             self.metrics.record_recording_captured_stream();
         }
+        self.remember_recent_stream(transport_media_id);
     }
+}
+
+impl RecordingPacketCollector {
+    fn recent_stream_cache_contains(&self, transport_media_id: TransportMediaId) -> bool {
+        let slot = self.recent_stream_cache_slot(transport_media_id);
+        self.recent_captured_streams.get(slot).is_some_and(|entry| {
+            entry.load(Ordering::Relaxed) == stream_cache_entry(transport_media_id)
+        })
+    }
+
+    fn remember_recent_stream(&self, transport_media_id: TransportMediaId) {
+        let slot = self.recent_stream_cache_slot(transport_media_id);
+        if let Some(entry) = self.recent_captured_streams.get(slot) {
+            entry.store(stream_cache_entry(transport_media_id), Ordering::Relaxed);
+        }
+    }
+
+    fn recent_stream_cache_slot(&self, transport_media_id: TransportMediaId) -> usize {
+        let slot_count = u64::try_from(self.recent_captured_streams.len()).unwrap_or(1);
+        let slot = transport_media_id.as_u64() % slot_count;
+        usize::try_from(slot).unwrap_or(0)
+    }
+}
+
+fn stream_cache_entry(transport_media_id: TransportMediaId) -> u64 {
+    transport_media_id.as_u64().saturating_add(1)
 }
 
 struct RecordingServiceState {
@@ -126,7 +154,7 @@ pub(crate) struct RecordingService {
     lifecycle: Arc<AtomicU8>,
     users: Arc<Mutex<RecordingServiceState>>,
     captured_packet_count: Arc<AtomicU64>,
-    captured_streams: Arc<RwLock<BTreeSet<(TransportSessionKey, TransportMediaId)>>>,
+    captured_streams: Arc<RwLock<BTreeSet<TransportMediaId>>>,
     packet_collector: Arc<RecordingPacketCollector>,
 }
 
@@ -153,6 +181,9 @@ impl RecordingService {
                 lifecycle,
                 captured_packet_count,
                 captured_streams,
+                recent_captured_streams: from_fn(|_| {
+                    AtomicU64::new(EMPTY_CAPTURED_STREAM_CACHE_ENTRY)
+                }),
                 metrics,
             }),
         }

@@ -7,7 +7,7 @@
 pub(in crate::runtime::rtc_engine) mod test_support;
 
 use std::{
-    cmp::Reverse,
+    cmp::{Ordering as CmpOrdering, Reverse},
     collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap},
     mem::take,
     net::SocketAddr,
@@ -104,6 +104,9 @@ pub(super) struct RtcBootstrapState {
     /// without adding room-policy work to the hot path.
     pub(super) pending_rid_keyframe_refreshes:
         BTreeMap<TransportMediaId, Vec<PendingRidKeyframeRefresh>>,
+    pub(super) pending_rid_keyframe_refresh_queue: BinaryHeap<Reverse<PendingRidKeyframeRefresh>>,
+    pub(super) next_rid_keyframe_refresh_id: u64,
+    pub(super) rid_readiness_scratch: RidReadinessScratch,
     pub(super) incoming_bitrate_counters: BTreeMap<TransportMediaId, Arc<IncomingMediaBitrate>>,
     pub(super) consumer_mid_registry: BTreeMap<ConsumerMidLookupKey, TransportMediaId>,
     pub(super) remote_source_registry: BTreeMap<TransportMediaId, RemoteSourceRegistration>,
@@ -211,6 +214,25 @@ impl RtcBootstrapState {
             .is_some_and(|liveness| liveness.is_ready(now, max_age))
     }
 
+    pub(super) fn collect_ready_producer_rids(
+        &self,
+        transport_media_id: TransportMediaId,
+        now: Instant,
+        max_age: Duration,
+        ready_rids: &mut Vec<Rid>,
+    ) {
+        ready_rids.clear();
+        let Some(live_rids) = self.live_producer_rids.get(&transport_media_id) else {
+            return;
+        };
+        ready_rids.extend(
+            live_rids
+                .iter()
+                .filter(|liveness| liveness.is_ready(now, max_age))
+                .map(ProducerRidLiveness::rid),
+        );
+    }
+
     pub(super) fn forget_live_producer_rids(&mut self, transport_media_id: TransportMediaId) {
         self.live_producer_rids.remove(&transport_media_id);
         self.pending_rid_keyframe_refreshes
@@ -223,10 +245,19 @@ impl RtcBootstrapState {
         rid: Rid,
         request_at: Instant,
     ) {
+        let refresh = PendingRidKeyframeRefresh::new(
+            self.next_rid_keyframe_refresh_id,
+            transport_media_id,
+            rid,
+            request_at,
+        );
+        self.next_rid_keyframe_refresh_id = self.next_rid_keyframe_refresh_id.saturating_add(1);
         self.pending_rid_keyframe_refreshes
             .entry(transport_media_id)
             .or_default()
-            .push(PendingRidKeyframeRefresh::new(rid, request_at));
+            .push(refresh);
+        self.pending_rid_keyframe_refresh_queue
+            .push(Reverse(refresh));
     }
 
     pub(super) fn drain_due_rid_keyframe_refreshes(
@@ -261,32 +292,65 @@ impl RtcBootstrapState {
         now: Instant,
     ) -> Vec<(TransportMediaId, Rid)> {
         let mut due_refreshes = Vec::new();
-        let mut empty_sources = Vec::new();
-        for (transport_media_id, refreshes) in &mut self.pending_rid_keyframe_refreshes {
-            refreshes.retain(|refresh| {
-                if refresh.is_due(now) {
-                    due_refreshes.push((*transport_media_id, refresh.rid()));
-                    false
-                } else {
-                    true
-                }
-            });
-            if refreshes.is_empty() {
-                empty_sources.push(*transport_media_id);
+        while let Some(Reverse(refresh)) = self.pending_rid_keyframe_refresh_queue.peek().copied() {
+            if !refresh.is_due(now) {
+                break;
             }
-        }
-        for transport_media_id in empty_sources {
-            self.pending_rid_keyframe_refreshes
-                .remove(&transport_media_id);
+            self.pending_rid_keyframe_refresh_queue.pop();
+            if self.remove_pending_rid_keyframe_refresh(refresh) {
+                due_refreshes.push((refresh.transport_media_id(), refresh.rid()));
+            }
         }
         due_refreshes
     }
 
-    pub(super) fn next_rid_keyframe_refresh_deadline(&self) -> Option<Instant> {
+    pub(super) fn next_rid_keyframe_refresh_deadline(&mut self) -> Option<Instant> {
+        while let Some(Reverse(refresh)) = self.pending_rid_keyframe_refresh_queue.peek().copied() {
+            if self.has_pending_rid_keyframe_refresh(refresh) {
+                return Some(refresh.request_at());
+            }
+            self.pending_rid_keyframe_refresh_queue.pop();
+        }
+        None
+    }
+
+    fn has_pending_rid_keyframe_refresh(&self, refresh: PendingRidKeyframeRefresh) -> bool {
         self.pending_rid_keyframe_refreshes
-            .values()
-            .flat_map(|refreshes| refreshes.iter().map(PendingRidKeyframeRefresh::request_at))
-            .min()
+            .get(&refresh.transport_media_id())
+            .is_some_and(|refreshes| refreshes.contains(&refresh))
+    }
+
+    fn remove_pending_rid_keyframe_refresh(&mut self, refresh: PendingRidKeyframeRefresh) -> bool {
+        let Some(refreshes) = self
+            .pending_rid_keyframe_refreshes
+            .get_mut(&refresh.transport_media_id())
+        else {
+            return false;
+        };
+        let Some(position) = refreshes.iter().position(|pending| *pending == refresh) else {
+            return false;
+        };
+        refreshes.swap_remove(position);
+        if refreshes.is_empty() {
+            self.pending_rid_keyframe_refreshes
+                .remove(&refresh.transport_media_id());
+        }
+        true
+    }
+}
+
+#[derive(Default)]
+pub(super) struct RidReadinessScratch {
+    pub(super) ready: Vec<Rid>,
+    pub(super) stale: Vec<Rid>,
+    pub(super) pending_selected: Vec<Rid>,
+}
+
+impl RidReadinessScratch {
+    pub(super) fn clear(&mut self) {
+        self.ready.clear();
+        self.stale.clear();
+        self.pending_selected.clear();
     }
 }
 
@@ -326,27 +390,52 @@ impl ProducerRidLiveness {
 ///
 /// The retry is tied to the source media id by the surrounding map. It is not a
 /// room policy update and it should not outlive source removal.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct PendingRidKeyframeRefresh {
+    id: u64,
+    transport_media_id: TransportMediaId,
     rid: Rid,
     request_at: Instant,
 }
 
 impl PendingRidKeyframeRefresh {
-    fn new(rid: Rid, request_at: Instant) -> Self {
-        Self { rid, request_at }
+    fn new(id: u64, transport_media_id: TransportMediaId, rid: Rid, request_at: Instant) -> Self {
+        Self {
+            id,
+            transport_media_id,
+            rid,
+            request_at,
+        }
     }
 
-    const fn rid(&self) -> Rid {
+    const fn transport_media_id(self) -> TransportMediaId {
+        self.transport_media_id
+    }
+
+    const fn rid(self) -> Rid {
         self.rid
     }
 
-    const fn request_at(&self) -> Instant {
+    const fn request_at(self) -> Instant {
         self.request_at
     }
 
-    fn is_due(&self, now: Instant) -> bool {
+    fn is_due(self, now: Instant) -> bool {
         self.request_at <= now
+    }
+}
+
+impl PartialOrd for PendingRidKeyframeRefresh {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PendingRidKeyframeRefresh {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        self.request_at
+            .cmp(&other.request_at)
+            .then_with(|| self.id.cmp(&other.id))
     }
 }
 

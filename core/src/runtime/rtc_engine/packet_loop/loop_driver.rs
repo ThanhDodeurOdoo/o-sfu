@@ -46,8 +46,10 @@ use super::{
 use crate::{
     CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
     runtime::{
-        diagnostics::DiagnosticsStore, media_transport::SourcePolicySignal,
-        metrics::RuntimeMetrics, packet_sink_registry::RoomPacketSinkRegistry,
+        diagnostics::DiagnosticsStore,
+        media_transport::SourcePolicySignal,
+        metrics::RuntimeMetrics,
+        packet_sink_registry::{PacketSinkRouteCache, RoomPacketSinkRegistry},
     },
 };
 
@@ -142,6 +144,7 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
     let mut routing_state = PacketLoopRoutingState::new();
     let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
     let mut buffers = PacketLoopBuffers::new();
+    let mut packet_sink_cache = PacketSinkRouteCache::default();
 
     loop {
         drain_pending_control_inputs(
@@ -159,6 +162,7 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
             &config,
             inputs.relay_rx(),
             &mut buffers,
+            &mut packet_sink_cache,
         );
 
         if let Some(info) = snapshot.as_ref() {
@@ -318,6 +322,7 @@ fn snapshot_and_pump(
     config: &PacketLoopConfig,
     relay_rx: &mut mpsc::Receiver<super::super::forwarded_packet::ForwardedPacket>,
     buffers: &mut PacketLoopBuffers,
+    packet_sink_cache: &mut PacketSinkRouteCache,
 ) -> Option<SnapshotInfo> {
     buffers.clear();
     let (socket, candidate_addr) = {
@@ -350,9 +355,10 @@ fn snapshot_and_pump(
         &config.metrics,
         buffers,
     );
+    packet_sink_cache.refresh_from(&config.packet_sink_registry);
     populate_forward_routes(
         state,
-        &config.packet_sink_registry,
+        packet_sink_cache,
         &config.metrics,
         &mut buffers.pending_packets,
         &mut buffers.forwards,
