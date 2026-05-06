@@ -45,12 +45,13 @@ use super::{
     user_negotiation::UserNegotiationUpdate,
 };
 use crate::{
-    SessionNegotiationOutcome, UserInfoRefresh,
+    SessionNegotiationOutcome, TransportEffectOutcome, UserInfoRefresh,
     runtime::{
         ConnectionId, UserId, UserInfo, UserPermissions,
         diagnostics::DiagnosticsEventData,
         media_transport::{
             MediaPort, MediaTransport, ObservabilityPort, SessionPort, TransportAdapterError,
+            TransportMediaId,
         },
         metrics::TransportCleanupFailureKind,
         telemetry::schema::event as telemetry_event,
@@ -425,6 +426,45 @@ impl Room {
             .await;
     }
 
+    /// Removes one staged media reservation after room ownership was consumed.
+    ///
+    /// Staged rollback already decided that the reservation cannot commit.
+    /// A recoverable adapter failure therefore needs the same room-owned retry
+    /// owner as committed teardown cleanup.
+    pub(in crate::runtime::room) async fn cleanup_transport_media_with_retry(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+        transport_media_id: TransportMediaId,
+        media_transport: &(impl MediaPort + SessionPort),
+        failure_message: &str,
+    ) -> TransportEffectOutcome {
+        let operation = TransportCleanupOperation::RemoveMedia {
+            user_id: user_id.clone(),
+            connection_id,
+            transport_media_id,
+        };
+        match self
+            .execute_transport_cleanup_operation(&operation, media_transport)
+            .await
+        {
+            Ok(()) => TransportEffectOutcome::Applied,
+            Err(error) => {
+                warn!(
+                    ?user_id,
+                    connection_id = ?connection_id,
+                    ?transport_media_id,
+                    "{failure_message}"
+                );
+                self.record_cleanup_failure(&operation, error, media_transport)
+                    .await;
+                self.reconcile_transport_cleanup_retries(media_transport)
+                    .await;
+                TransportEffectOutcome::Failed
+            }
+        }
+    }
+
     /// Closes the transport user that belonged to a room user after membership
     /// teardown has been committed.
     ///
@@ -469,7 +509,7 @@ impl Room {
     async fn execute_transport_cleanup_operation(
         &self,
         operation: &TransportCleanupOperation,
-        media_transport: &MediaTransport,
+        media_transport: &(impl MediaPort + SessionPort),
     ) -> Result<(), TransportAdapterError> {
         match operation {
             TransportCleanupOperation::RemoveMedia {
@@ -507,7 +547,7 @@ impl Room {
         &self,
         operation: &TransportCleanupOperation,
         error: TransportAdapterError,
-        media_transport: &MediaTransport,
+        media_transport: &(impl MediaPort + SessionPort),
     ) {
         let action = self
             .cleanup_reconciler()
@@ -550,7 +590,10 @@ impl Room {
     /// retry result. Transport adapter calls happen between those bookkeeping
     /// steps, which prevents adapter latency from blocking other room cleanup
     /// decisions.
-    async fn reconcile_transport_cleanup_retries(&self, media_transport: &MediaTransport) {
+    async fn reconcile_transport_cleanup_retries(
+        &self,
+        media_transport: &(impl MediaPort + SessionPort),
+    ) {
         loop {
             let retries = self.cleanup_reconciler().due_retries();
             if retries.is_empty() {
@@ -579,7 +622,7 @@ impl Room {
         &self,
         operation: &TransportCleanupOperation,
         action: CleanupRetryAction,
-        media_transport: &MediaTransport,
+        media_transport: &(impl MediaPort + SessionPort),
     ) {
         match action {
             CleanupRetryAction::Succeeded => {
@@ -623,7 +666,7 @@ impl Room {
     async fn force_transport_cleanup_owner_drop(
         &self,
         operation: &TransportCleanupOperation,
-        media_transport: &MediaTransport,
+        media_transport: &(impl MediaPort + SessionPort),
     ) {
         if !operation.is_media_removal() {
             return;

@@ -2605,7 +2605,7 @@ async fn staged_publish_rollback_reports_cleanup_failure_without_state_ownership
         staged_publish_transport_media_id(&room, &user_id, connection_id, StreamType::Camera)
             .await
             .expect("staged publish should expose its transport media id");
-    fake.fail_next_remove_media(transport_media_id);
+    fake.fail_remove_media_until_allowed(transport_media_id);
 
     assert_eq!(
         room.rollback_staged_publish(
@@ -2624,6 +2624,29 @@ async fn staged_publish_rollback_reports_cleanup_failure_without_state_ownership
         0
     );
     assert_eq!(room.test_api().inspect().producer_count().await, 0);
+    assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 1);
+    assert!(!fake.snapshot_events().iter().any(|event| matches!(
+        event,
+        FakeMediaTransportEvent::MediaRemoved {
+            transport_media_id: removed_media_id,
+            ..
+        } if *removed_media_id == transport_media_id
+    )));
+
+    fake.allow_remove_media(transport_media_id);
+    room.test_api()
+        .lifecycle()
+        .force_cleanup_retry_cycle(&adapter)
+        .await;
+
+    assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 0);
+    assert!(fake.snapshot_events().iter().any(|event| matches!(
+        event,
+        FakeMediaTransportEvent::MediaRemoved {
+            user_id: removed_user_id,
+            transport_media_id: removed_media_id,
+        } if *removed_user_id == user_id && *removed_media_id == transport_media_id
+    )));
 }
 
 #[tokio::test]

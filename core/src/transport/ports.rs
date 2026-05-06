@@ -27,16 +27,16 @@ use crate::{
 
 /// Full transport backend contract required by the media-core facade.
 ///
-/// `SfuCore` needs negotiation, media mutation and read-only transport
-/// observability against the same backend. Code that only needs one concern
-/// should keep depending on the narrower port trait instead.
+/// `SfuCore` needs negotiation, media mutation, session cleanup and read-only
+/// transport observability against the same backend. Code that only needs one
+/// concern should keep depending on the narrower port trait instead.
 pub trait TransportFacade:
-    Clone + MediaPort + NegotiationPort + ObservabilityPort + Send + Sync
+    Clone + MediaPort + NegotiationPort + ObservabilityPort + SessionPort + Send + Sync
 {
 }
 
 impl<T> TransportFacade for T where
-    T: Clone + MediaPort + NegotiationPort + ObservabilityPort + Send + Sync
+    T: Clone + MediaPort + NegotiationPort + ObservabilityPort + SessionPort + Send + Sync
 {
 }
 

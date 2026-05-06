@@ -43,7 +43,7 @@ use crate::{
         ConnectionId, UserId,
         diagnostics::DiagnosticsEventData,
         media_transport::{
-            AppliedSessionAnswer, ConsumerActivity, MediaPort, ObservabilityPort,
+            AppliedSessionAnswer, ConsumerActivity, MediaPort, ObservabilityPort, SessionPort,
             TransportAdapterError, TransportMediaId,
         },
         source_model::{SourcePublishIntent, UserStreamId},
@@ -303,7 +303,7 @@ impl PendingPublishTransaction {
         room: &Room,
         applied_answer: &AppliedSessionAnswer,
         observability_port: &impl ObservabilityPort,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
     ) -> Option<UserStreamId> {
         let owner_user_id = self.descriptor.owner_user_id().clone();
         let owner_connection_id = self.descriptor.owner_connection_id();
@@ -343,7 +343,7 @@ impl PendingPublishTransaction {
         self,
         room: &Room,
         observability_port: &impl ObservabilityPort,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
         consumable_rtp_parameters: RouterRtpParameters,
     ) -> Option<UserStreamId> {
         let Self {
@@ -418,7 +418,7 @@ impl PendingPublishTransaction {
     async fn cleanup_reserved_media(
         self,
         room: &Room,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
         failure_message: &str,
     ) -> TransportEffectOutcome {
         self.reservation
@@ -456,11 +456,11 @@ impl StagedMediaReservation {
     async fn cleanup(
         mut self,
         room: &Room,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
         failure_message: &str,
     ) -> TransportEffectOutcome {
         let outcome = room
-            .cleanup_transport_media(
+            .cleanup_transport_media_with_retry(
                 &self.owner_user_id,
                 self.owner_connection_id,
                 self.transport_media_id,
@@ -574,7 +574,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         intent: &SourcePublishIntent,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
     ) -> Result<PublishStageOutcome, TransportAdapterError> {
         let validated_descriptor = {
             let state = self.state.read().await;
@@ -649,7 +649,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         stream_id: &UserStreamId,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
     ) -> RollbackStagedPublishOutcome {
         // Explicit unpublish before commit only needs transport cleanup because
         // the producer never became live in room state.
@@ -681,7 +681,7 @@ impl Room {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
     ) {
         let staged_publishes = self
             .pending_publish_transactions
@@ -713,7 +713,7 @@ impl Room {
         connection_id: ConnectionId,
         applied_answer: &AppliedSessionAnswer,
         observability_port: &impl ObservabilityPort,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
     ) -> Vec<UserStreamId> {
         let staged_publishes = self
             .pending_publish_transactions
