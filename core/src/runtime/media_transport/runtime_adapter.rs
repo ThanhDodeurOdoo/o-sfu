@@ -84,7 +84,10 @@ impl RtcTransport {
     fn from_shard_set_config(
         config: &RtcTransportShardSetConfig,
     ) -> Result<Self, RtcTransportBuildError> {
-        validate_worker_split(config.transport.rtc_port_range(), config.worker_count)?;
+        validate_worker_split(
+            config.transport_config().rtc_port_range(),
+            config.worker_count(),
+        )?;
         Ok(Self::from_unchecked_shard_set_config(config))
     }
 
@@ -198,11 +201,11 @@ impl RtcTransportBuilder {
             .transport
             .ok_or(RtcTransportBuildError::MissingTransportConfig)?;
         let deps = self.deps.ok_or(RtcTransportBuildError::MissingDeps)?;
-        RtcTransport::from_shard_set_config(&RtcTransportShardSetConfig {
-            worker_count: self.worker_count,
+        RtcTransport::from_shard_set_config(&RtcTransportShardSetConfig::new(
             transport,
             deps,
-        })
+            self.worker_count,
+        ))
     }
 }
 
@@ -293,15 +296,6 @@ impl MediaTransport {
             .deps(deps)
             .build()
             .map(Self::from_rtc_transport)
-    }
-
-    /// Wraps a pre-built RTC shard-set config without validation.
-    ///
-    /// This remains for transitional in-repository fixtures. Production code
-    /// should use [`Self::from_core_options`] or [`RtcTransport::builder`].
-    #[must_use]
-    pub fn rtc(config: &RtcTransportShardSetConfig) -> Self {
-        Self::from_rtc_transport(RtcTransport::from_unchecked_shard_set_config(config))
     }
 
     /// Wraps a production RTC implementation in the opaque media transport

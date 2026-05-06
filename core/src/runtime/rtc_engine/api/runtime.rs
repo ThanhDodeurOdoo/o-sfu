@@ -82,6 +82,7 @@ impl<T: Clone> WorkerHandleSlot<T> {
         self.handle = None;
     }
 
+    #[cfg(test)]
     pub fn is_started(&self) -> bool {
         self.handle.is_some()
     }

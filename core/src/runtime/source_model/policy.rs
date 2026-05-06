@@ -96,9 +96,10 @@ impl SourceLayoutPolicy {
 
 /// Receiver bandwidth behavior for one published source.
 ///
-/// Orchestration chooses this once, when building [`SourcePublishIntent`]. Core
-/// then uses it to decide whether the source participates in receiver-video
-/// layer selection, route pausing and over-budget diagnostics.
+/// Orchestration chooses this once, when building
+/// [`SourcePublishIntent`](crate::SourcePublishIntent). Core then uses it to
+/// decide whether the source participates in receiver-video layer selection,
+/// route pausing and over-budget diagnostics.
 ///
 /// # Example situations
 ///

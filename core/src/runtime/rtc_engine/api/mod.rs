@@ -33,4 +33,3 @@ mod runtime;
 mod test_support;
 
 pub use facade::RtcTransportShard;
-pub use runtime::WorkerHandleSlot;

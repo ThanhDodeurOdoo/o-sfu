@@ -8,6 +8,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
+fuzzing = []
 testing-transport = []
 
 [dependencies]

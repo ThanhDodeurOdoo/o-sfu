@@ -153,18 +153,18 @@ impl MediaTransportDeps {
 /// builder to the shard set, where worker-local RTC shards are actually
 /// created.
 #[derive(Debug, Clone)]
-pub struct RtcTransportShardSetConfig {
+pub(in crate::runtime::media_transport) struct RtcTransportShardSetConfig {
     /// Number of media workers that should receive transport shards.
-    pub worker_count: usize,
+    worker_count: usize,
     /// Shared operator policy before shard-local port splitting.
-    pub transport: RtcTransportConfig,
+    transport: RtcTransportConfig,
     /// Shared process services cloned into each shard.
-    pub deps: MediaTransportDeps,
+    deps: MediaTransportDeps,
 }
 
 impl RtcTransportShardSetConfig {
     #[must_use]
-    pub fn new(
+    pub(in crate::runtime::media_transport) fn new(
         transport: RtcTransportConfig,
         deps: MediaTransportDeps,
         worker_count: usize,
@@ -177,22 +177,22 @@ impl RtcTransportShardSetConfig {
     }
 
     #[must_use]
-    pub(super) fn worker_count(&self) -> usize {
+    pub(in crate::runtime::media_transport) fn worker_count(&self) -> usize {
         self.worker_count
     }
 
     #[must_use]
-    pub(super) fn transport_config(&self) -> &RtcTransportConfig {
+    pub(in crate::runtime::media_transport) fn transport_config(&self) -> &RtcTransportConfig {
         &self.transport
     }
 
     #[must_use]
-    pub(super) fn transport_deps(&self) -> &MediaTransportDeps {
+    pub(in crate::runtime::media_transport) fn transport_deps(&self) -> &MediaTransportDeps {
         &self.deps
     }
 
     #[must_use]
-    pub(super) fn shard_config_with_port_range(
+    pub(in crate::runtime::media_transport) fn shard_config_with_port_range(
         &self,
         rtc_port_range: RtcPortRange,
     ) -> RtcTransportConfig {

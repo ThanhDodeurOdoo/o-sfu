@@ -206,12 +206,6 @@ impl RemoteAddrDemux {
         }
     }
 
-    pub fn session_entries(&self) -> impl Iterator<Item = (&TransportSessionKey, &[SocketAddr])> {
-        self.remote_addrs_by_session
-            .iter()
-            .map(|(session_key, addrs)| (session_key, addrs.as_slice()))
-    }
-
     #[cfg(test)]
     pub(super) fn session_addrs_for(
         &self,

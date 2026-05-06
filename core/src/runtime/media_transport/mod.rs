@@ -38,7 +38,7 @@ use transport_backend::MediaTransportBackend;
 #[cfg(not(any(test, feature = "testing-transport")))]
 pub(super) type MediaTransportBackend = runtime_adapter::RtcTransport;
 
-pub use config::{MediaTransportDeps, RtcTransportConfig, RtcTransportShardSetConfig};
+pub use config::{MediaTransportDeps, RtcTransportConfig};
 pub use runtime_adapter::{
     MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,
 };

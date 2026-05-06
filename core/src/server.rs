@@ -68,11 +68,11 @@ pub mod source_model {
 }
 
 pub mod transport {
-    //! Current media transport construction and extension boundary.
+    //! Curated media transport construction and extension boundary.
     //!
-    //! The construction types remain server-integration API until the typed
-    //! media transport boundary replaces them. The concern traits and transport
-    //! DTOs are the lasting extension surface.
+    //! Production server code gets the opaque transport handles, named
+    //! construction inputs and concern-oriented transport ports from here.
+    //! RTC worker internals stay below the media transport boundary.
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub mod test_support {
@@ -81,15 +81,30 @@ pub mod transport {
             rtc_engine::{ForwardedPacket, test_support::*},
         };
     }
+
+    #[cfg(any(test, feature = "fuzzing"))]
+    pub mod fuzz_support {
+        //! Fuzz-only RTC answer projection seam.
+
+        pub use crate::runtime::rtc_engine::client_rtp_capabilities_from_answer;
+    }
+
     pub use crate::{
         SessionBitrateLimits,
-        runtime::{
-            media_transport::{
-                MediaTransport, MediaTransportDeps, RtcTransport, RtcTransportBuildError,
-                RtcTransportBuilder, RtcTransportConfig, RtcTransportShardSetConfig,
-            },
-            rtc_engine::{RemoteAddrDemux, WorkerHandleSlot, client_rtp_capabilities_from_answer},
+        runtime::media_transport::{
+            MediaTransport, MediaTransportDeps, RtcTransport, RtcTransportBuildError,
+            RtcTransportBuilder, RtcTransportConfig,
         },
-        transport::*,
+        transport::{
+            ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
+            ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerActivity,
+            ConsumerPacketGateUpdate, MediaPort, NegotiationPort, ObservabilityPort,
+            ProducerActivity, ReceiverBandwidthSnapshot, SessionOffer, SessionPort,
+            SessionUploadEncoding, SessionUploadSlot, SourcePacketGate, SourcePacketOperatingPoint,
+            SourcePolicyDirtyState, SourcePolicyPort, SourcePolicySignal,
+            SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
+            TransportFacade, TransportMediaId, TransportPlacementPressureSnapshot, TransportResult,
+            TransportSessionHealth, TransportSessionKey,
+        },
     };
 }
