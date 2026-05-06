@@ -101,24 +101,6 @@ pub struct UploadEncoding {
     pub policy_role: Option<UploadLayerPolicyRole>,
 }
 
-#[deprecated(
-    since = "0.3.0",
-    note = "use NegotiationOffer; MediaNegotiationOffer was the transitional Workstream 2 name"
-)]
-pub type MediaNegotiationOffer = NegotiationOffer;
-
-#[deprecated(
-    since = "0.3.0",
-    note = "use UploadSlot; MediaUploadSlot was the transitional Workstream 2 name"
-)]
-pub type MediaUploadSlot = UploadSlot;
-
-#[deprecated(
-    since = "0.3.0",
-    note = "use UploadEncoding; MediaUploadEncoding was the transitional Workstream 2 name"
-)]
-pub type MediaUploadEncoding = UploadEncoding;
-
 /// Best-effort transport health for a media endpoint.
 ///
 /// This reports what the transport backend currently knows about the endpoint.

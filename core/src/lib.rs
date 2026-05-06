@@ -29,11 +29,10 @@
 //!
 //! The implementation-heavy runtime tree is private. Integration tests and
 //! server code use [`server`] for in-repository integration and crate-root
-//! re-exports for the stable media-core front door. The older media-signal
-//! vocabulary has moved under [`unstable::signals`] because it is not the
-//! current server orchestration path. New public items should first fit the
-//! front door above or the explicit server-integration namespace. Otherwise
-//! they need an architecture note explaining why they are intentionally exposed.
+//! re-exports for the stable media-core front door. New public items should
+//! first fit the front door above or the explicit server-integration namespace.
+//! Otherwise they need an architecture note explaining why they are
+//! intentionally exposed.
 //!
 //! # Server-facing example
 //!
@@ -73,19 +72,6 @@ pub mod server;
 mod sfu;
 pub mod transport;
 
-mod signals;
-
-pub mod unstable {
-    //! Unstable media-core surfaces with no compatibility guarantee yet.
-    //!
-    //! These names remain available for experiments and migration work, but
-    //! they are not part of the supported `o-sfu-core` front door.
-
-    pub mod signals {
-        pub use crate::signals::*;
-    }
-}
-
 pub use ids::{ConnectionId, RoomInstanceId};
 pub use options::{
     AudioCodecPreference, CodecOptions, CodecPreferences, CoreOptions, LocalSpilloverPolicy,
@@ -110,11 +96,6 @@ pub use sfu::{
     MediaEndpointHealth, MediaSession, NegotiationOffer, OfferedMediaCapabilities, SfuCore,
     SfuCoreError, UploadEncoding, UploadSlot,
 };
-#[allow(
-    deprecated,
-    reason = "The aliases are intentionally re-exported for one migration cycle."
-)]
-pub use sfu::{MediaNegotiationOffer, MediaUploadEncoding, MediaUploadSlot};
 pub use transport::TransportFacade;
 
 /// Production media-core facade used by the server runtime.
