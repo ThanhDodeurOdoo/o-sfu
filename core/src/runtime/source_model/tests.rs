@@ -1,0 +1,178 @@
+#![allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    reason = "test assertions use expect, unwrap and direct indexing for direct fixture failures"
+)]
+
+use o_sfu_rfc::rtp::frame_marking;
+use o_sfu_router::{MediaCodec, MediaFormat, MediaKind, Mid, PayloadType, Rid, Ssrc};
+
+use super::*;
+use crate::runtime::UserId;
+
+fn video_format(payload_type: u8) -> MediaFormat {
+    MediaFormat::new(
+        MediaKind::Video,
+        MediaCodec::from("VP8"),
+        PayloadType::new(payload_type),
+        90_000,
+    )
+}
+
+fn source_encoding(
+    source_id: PublishedSourceId,
+    encoding_id: SourceEncodingId,
+    rid: &str,
+) -> SourceEncodingDescriptor {
+    let raw_encoding_id =
+        u32::try_from(encoding_id.as_u64()).expect("test encoding id should fit in u32");
+    SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
+        encoding_id,
+        source_id,
+        rid: Some(Rid::new(rid)),
+        primary_ssrc: Some(Ssrc::new(100 + raw_encoding_id)),
+        repair_ssrc: Some(Ssrc::new(200 + raw_encoding_id)),
+        max_bitrate: Some(150_000 * encoding_id.as_u64()),
+        resolution_scale: None,
+        max_framerate: None,
+        policy_role: None,
+        max_temporal_layer_id: None,
+        negotiated_format: Some(video_format(96)),
+    })
+}
+
+#[test]
+fn descriptor_keeps_source_encoding_identity_separate() {
+    let source_id = PublishedSourceId::from_raw(7);
+    let low_encoding_id = SourceEncodingId::from_raw(1);
+    let high_encoding_id = SourceEncodingId::from_raw(2);
+    let owner = PublishedSourceOwner::new(UserId::Integer(42));
+    let descriptor = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+        source_id,
+        owner,
+        stream_id: UserStreamId::new("main-video"),
+        media_kind: MediaKind::Video,
+        policy: SourcePolicy::hidden(),
+        mid: Some(Mid::new("video-0")),
+        encodings: vec![
+            source_encoding(source_id, low_encoding_id, "lo"),
+            source_encoding(source_id, high_encoding_id, "hi"),
+        ],
+    })
+    .expect("source descriptor should be valid");
+
+    assert_eq!(descriptor.source_id(), source_id);
+    assert_eq!(descriptor.owner().user_id(), &UserId::Integer(42));
+    assert_eq!(descriptor.stream_id().as_str(), "main-video");
+    assert_eq!(descriptor.media_kind(), MediaKind::Video);
+    assert_eq!(
+        descriptor.mid().map(Mid::as_str),
+        Some("video-0"),
+        "the source owns the SDP media-section identity separately from RID"
+    );
+
+    let encodings = descriptor.encodings().collect::<Vec<_>>();
+    assert_eq!(encodings.len(), 2);
+    assert_eq!(encodings[0].source_id(), source_id);
+    assert_eq!(encodings[0].rid().map(Rid::as_str), Some("lo"));
+    assert_eq!(encodings[0].primary_ssrc(), Some(Ssrc::new(101)));
+    assert_eq!(encodings[0].repair_ssrc(), Some(Ssrc::new(201)));
+    assert_eq!(encodings[0].max_bitrate(), Some(150_000));
+    assert_eq!(encodings[0].max_temporal_layer_id(), None);
+    assert_eq!(
+        encodings[0]
+            .negotiated_format()
+            .map(MediaFormat::payload_type_id),
+        Some(PayloadType::new(96))
+    );
+    assert_eq!(
+        descriptor
+            .encoding(high_encoding_id)
+            .and_then(SourceEncodingDescriptor::rid)
+            .map(Rid::as_str),
+        Some("hi")
+    );
+}
+
+#[test]
+fn descriptor_rejects_encoding_from_another_source() {
+    let source_id = PublishedSourceId::from_raw(7);
+    let other_source_id = PublishedSourceId::from_raw(8);
+    let encoding_id = SourceEncodingId::from_raw(1);
+    let result = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+        source_id,
+        owner: PublishedSourceOwner::new(UserId::Integer(42)),
+        stream_id: UserStreamId::new("main-video"),
+        media_kind: MediaKind::Video,
+        policy: SourcePolicy::hidden(),
+        mid: None,
+        encodings: vec![source_encoding(other_source_id, encoding_id, "lo")],
+    });
+
+    assert_eq!(
+        result.unwrap_err(),
+        SourceModelError::EncodingSourceMismatch {
+            source_id,
+            encoding_id,
+            encoding_source_id: other_source_id,
+        }
+    );
+}
+
+#[test]
+fn selector_targets_runtime_encoding_identity_not_transport_or_rid() {
+    let encoding_id = SourceEncodingId::from_raw(3);
+    let temporal_layer = SourceTemporalLayerId::new(2)
+        .expect("test temporal layer should fit the RFC 9626 TID range");
+    let operating_point = SourceOperatingPoint::new(encoding_id, temporal_layer);
+
+    assert_eq!(
+        SourceSelector::Encoding(encoding_id).selected_encoding(),
+        Some(encoding_id)
+    );
+    assert_eq!(
+        SourceSelector::OperatingPoint(operating_point).selected_encoding(),
+        Some(encoding_id)
+    );
+    assert_eq!(
+        SourceSelector::OperatingPoint(operating_point).selected_operating_point(),
+        Some(operating_point)
+    );
+    assert_eq!(SourceSelector::Open.selected_encoding(), None);
+    assert_eq!(
+        SourceSelector::RoomPolicy(SourceRoomPolicySelector::VisibleThumbnail).selected_encoding(),
+        None
+    );
+}
+
+#[test]
+fn temporal_layer_ids_follow_the_rfc_frame_marking_range() {
+    assert_eq!(SourceTemporalLayerId::base().as_u8(), 0);
+    assert_eq!(
+        SourceTemporalLayerId::new(frame_marking::TEMPORAL_LAYER_ID_MAX)
+            .map(SourceTemporalLayerId::as_u8),
+        Some(frame_marking::TEMPORAL_LAYER_ID_MAX)
+    );
+    assert_eq!(
+        SourceTemporalLayerId::new(frame_marking::TEMPORAL_LAYER_ID_MAX + 1),
+        None
+    );
+}
+
+#[test]
+fn id_allocation_is_monotonic_and_topology_neutral() {
+    let mut next_source_id = 1;
+    let mut next_encoding_id = 1;
+
+    assert_eq!(PublishedSourceId::allocate(&mut next_source_id).as_u64(), 1);
+    assert_eq!(PublishedSourceId::allocate(&mut next_source_id).as_u64(), 2);
+    assert_eq!(
+        SourceEncodingId::allocate(&mut next_encoding_id).as_u64(),
+        1
+    );
+    assert_eq!(
+        SourceEncodingId::allocate(&mut next_encoding_id).as_u64(),
+        2
+    );
+}
