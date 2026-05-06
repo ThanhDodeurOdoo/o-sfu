@@ -294,6 +294,7 @@ fn handle_control_input_and_clear_routing_cache(
         &WorkerCommandContext {
             bitrate_state,
             snapshot_state,
+            now: Instant::now(),
             public_ip: config.public_ip,
             max_bitrate_in_bps: config.max_bitrate_in_bps,
             max_bitrate_out_bps: config.max_bitrate_out_bps,

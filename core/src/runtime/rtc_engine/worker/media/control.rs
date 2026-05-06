@@ -55,7 +55,7 @@ use super::{
         state::{RidReadinessScratch, RtcBootstrapState},
     },
     keyframe::request_keyframe_for_source,
-    types::RouteSourceKind,
+    types::{ConsumerPacketGateRequest, RouteSourceKind},
 };
 use crate::runtime::{
     media_transport::{
@@ -73,6 +73,17 @@ use crate::runtime::{
 enum RouteSourceAccess {
     Existing,
     Register(Option<RemoteSourceControl>),
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ConsumerRouteRegistration<'a> {
+    pub(super) consumer_session_key: &'a TransportSessionKey,
+    pub(super) consumer_transport_media_id: TransportMediaId,
+    pub(super) consumer_mid: Mid,
+    pub(super) source_transport_media_id: TransportMediaId,
+    pub(super) route_source: RouteSourceKind,
+    pub(super) consumer_rtp_parameters: &'a RouterRtpParameters,
+    pub(super) now: Instant,
 }
 
 #[derive(Default)]
@@ -180,21 +191,11 @@ pub fn respond_set_consumer_active(
 /// revalidates the route before mutating packet-gate state.
 pub fn respond_set_consumer_packet_gate(
     state: &mut RtcBootstrapState,
-    consumer_session_key: &TransportSessionKey,
-    consumer_transport_media_id: TransportMediaId,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
-    packet_gate: PacketLayerGate,
+    request: ConsumerPacketGateRequest<'_>,
+    now: Instant,
     response: oneshot::Sender<Result<(), TransportAdapterError>>,
 ) {
-    let _ = response.send(worker_set_consumer_packet_gate(
-        state,
-        consumer_session_key,
-        consumer_transport_media_id,
-        source_session_key,
-        source_transport_media_id,
-        packet_gate,
-    ));
+    let _ = response.send(worker_set_consumer_packet_gate(state, request, now));
 }
 
 pub fn respond_set_consumer_packet_gates(
@@ -202,6 +203,7 @@ pub fn respond_set_consumer_packet_gates(
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     updates: Vec<ConsumerPacketGateCommand>,
+    now: Instant,
     response: oneshot::Sender<TransportResult<Vec<TransportResult<()>>>>,
 ) {
     let _ = response.send(Ok(worker_set_consumer_packet_gates(
@@ -209,6 +211,7 @@ pub fn respond_set_consumer_packet_gates(
         source_session_key,
         source_transport_media_id,
         updates,
+        now,
     )));
 }
 
@@ -483,11 +486,13 @@ fn consumer_packet_gate_for_source(
     state: &RtcBootstrapState,
     source_transport_media_id: TransportMediaId,
     consumer_rtp_parameters: &RouterRtpParameters,
+    now: Instant,
 ) -> (PacketLayerGate, Option<PacketLayerGate>) {
     guarded_packet_gate(
         state,
         source_transport_media_id,
         consumer_packet_gate(consumer_rtp_parameters),
+        now,
     )
 }
 
@@ -500,6 +505,7 @@ fn guarded_packet_gate(
     state: &RtcBootstrapState,
     source_transport_media_id: TransportMediaId,
     packet_gate: PacketLayerGate,
+    now: Instant,
 ) -> (PacketLayerGate, Option<PacketLayerGate>) {
     let Some(rid) = packet_gate_rid(&packet_gate) else {
         return (packet_gate, None);
@@ -507,7 +513,7 @@ fn guarded_packet_gate(
     if state.producer_rid_is_ready(
         source_transport_media_id,
         rid,
-        Instant::now(),
+        now,
         SELECTED_RID_READY_MAX_AGE,
     ) {
         return (packet_gate, None);
@@ -556,15 +562,23 @@ pub(super) fn ensure_route_source_registered(
 /// gate remains blocked or temporarily points at one decodable fallback RID.
 pub(super) fn register_consumer_route(
     state: &mut RtcBootstrapState,
-    consumer_session_key: &TransportSessionKey,
-    consumer_transport_media_id: TransportMediaId,
-    consumer_mid: Mid,
-    source_transport_media_id: TransportMediaId,
-    route_source: RouteSourceKind,
-    consumer_rtp_parameters: &RouterRtpParameters,
+    registration: ConsumerRouteRegistration<'_>,
 ) {
-    let (packet_gate, pending_packet_gate) =
-        consumer_packet_gate_for_source(state, source_transport_media_id, consumer_rtp_parameters);
+    let ConsumerRouteRegistration {
+        consumer_session_key,
+        consumer_transport_media_id,
+        consumer_mid,
+        source_transport_media_id,
+        route_source,
+        consumer_rtp_parameters,
+        now,
+    } = registration;
+    let (packet_gate, pending_packet_gate) = consumer_packet_gate_for_source(
+        state,
+        source_transport_media_id,
+        consumer_rtp_parameters,
+        now,
+    );
     let dest_payload_type = consumer_payload_type(consumer_rtp_parameters);
     state
         .media_route_index
@@ -818,21 +832,19 @@ fn worker_set_consumer_active(
 /// only when the destination gate actually changed
 fn worker_set_consumer_packet_gate(
     state: &mut RtcBootstrapState,
-    consumer_session_key: &TransportSessionKey,
-    consumer_transport_media_id: TransportMediaId,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
-    packet_gate: PacketLayerGate,
+    request: ConsumerPacketGateRequest<'_>,
+    now: Instant,
 ) -> Result<(), TransportAdapterError> {
     if update_consumer_packet_gate(
         state,
-        consumer_session_key,
-        consumer_transport_media_id,
-        source_session_key,
-        source_transport_media_id,
-        packet_gate,
+        request.consumer_session_key,
+        request.consumer_transport_media_id,
+        request.source_session_key,
+        request.source_transport_media_id,
+        request.packet_gate,
+        now,
     )? {
-        refresh_source_packet_gate(state, source_transport_media_id);
+        refresh_source_packet_gate(state, request.source_transport_media_id);
     }
     Ok(())
 }
@@ -842,6 +854,7 @@ fn worker_set_consumer_packet_gates(
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     updates: Vec<ConsumerPacketGateCommand>,
+    now: Instant,
 ) -> Vec<TransportResult<()>> {
     let mut route_changed = false;
     let mut results = Vec::with_capacity(updates.len());
@@ -854,6 +867,7 @@ fn worker_set_consumer_packet_gates(
             source_session_key,
             source_transport_media_id,
             packet_gate,
+            now,
         ) {
             Ok(changed) => {
                 route_changed |= changed;
@@ -875,6 +889,7 @@ fn update_consumer_packet_gate(
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     packet_gate: PacketLayerGate,
+    now: Instant,
 ) -> Result<bool, TransportAdapterError> {
     ensure_route_source(
         state,
@@ -899,7 +914,7 @@ fn update_consumer_packet_gate(
         None => return Err(TransportAdapterError::TransportUnavailable),
     }
     let (packet_gate, pending_packet_gate) =
-        guarded_packet_gate(state, source_transport_media_id, packet_gate);
+        guarded_packet_gate(state, source_transport_media_id, packet_gate, now);
     {
         let route_entry = state
             .media_route_index

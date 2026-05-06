@@ -23,4 +23,4 @@ pub(super) use lifecycle::{
     RecvMediaPolicy, respond_add_recv_media, respond_add_send_media, respond_remove_media,
     respond_resolve_media_mid,
 };
-pub(super) use types::{AddSendMediaRequest, RemoteKeyframeRequest};
+pub(super) use types::{AddSendMediaRequest, ConsumerPacketGateRequest, RemoteKeyframeRequest};

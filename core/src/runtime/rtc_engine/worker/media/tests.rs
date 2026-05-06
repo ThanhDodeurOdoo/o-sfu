@@ -12,10 +12,10 @@ use str0m::{
 use tokio::sync::{mpsc, oneshot};
 
 use super::{
-    AddSendMediaRequest, RemoteKeyframeRequest, control::consumer_packet_gate,
-    drain_due_rid_keyframe_refreshes, observe_source_rid_readiness, refresh_source_packet_gate,
-    request_keyframe_for_source, respond_add_send_media, respond_remove_media,
-    respond_request_consumer_keyframe, respond_request_remote_keyframe,
+    AddSendMediaRequest, ConsumerPacketGateRequest, RemoteKeyframeRequest,
+    control::consumer_packet_gate, drain_due_rid_keyframe_refreshes, observe_source_rid_readiness,
+    refresh_source_packet_gate, request_keyframe_for_source, respond_add_send_media,
+    respond_remove_media, respond_request_consumer_keyframe, respond_request_remote_keyframe,
     respond_set_consumer_packet_gate, respond_set_consumer_packet_gates,
     respond_set_remote_source_packet_gate,
 };
@@ -225,14 +225,18 @@ fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
             }],
         },
     );
+    let command_now = Instant::now();
     let (response_tx, response_rx) = oneshot::channel();
     respond_set_consumer_packet_gate(
         &mut state,
-        &consumer_session,
-        consumer_transport_media_id,
-        &source_session,
-        source_transport_media_id,
-        PacketLayerGate::Rid(selected_rid),
+        ConsumerPacketGateRequest {
+            consumer_session_key: &consumer_session,
+            consumer_transport_media_id,
+            source_session_key: &source_session,
+            source_transport_media_id,
+            packet_gate: PacketLayerGate::Rid(selected_rid),
+        },
+        command_now,
         response_tx,
     );
     assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
@@ -687,16 +691,20 @@ fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate(
             ],
         },
     );
-    state.observe_producer_rid_packet(source_transport_media_id, Rid::from("lo"), Instant::now());
+    let observed_at = Instant::now();
+    state.observe_producer_rid_packet(source_transport_media_id, Rid::from("lo"), observed_at);
 
     let (response_tx, response_rx) = oneshot::channel();
     respond_set_consumer_packet_gate(
         &mut state,
-        &first_consumer_session,
-        first_consumer_transport_media_id,
-        &source_session,
-        source_transport_media_id,
-        PacketLayerGate::Rid("lo".into()),
+        ConsumerPacketGateRequest {
+            consumer_session_key: &first_consumer_session,
+            consumer_transport_media_id: first_consumer_transport_media_id,
+            source_session_key: &source_session,
+            source_transport_media_id,
+            packet_gate: PacketLayerGate::Rid("lo".into()),
+        },
+        observed_at + Duration::from_millis(20),
         response_tx,
     );
 
@@ -720,6 +728,92 @@ fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate(
             .route_control
             .effective_packet_gate(source_transport_media_id),
         Some(PacketLayerGate::Open)
+    );
+}
+
+#[test]
+fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
+    let source_session = test_transport_session_key(531, 0, 532, UserId::Integer(533));
+    let consumer_session = test_transport_session_key(531, 0, 534, UserId::Integer(535));
+    let source_mid = Mid::from("cam-up");
+    let consumer_mid = Mid::from("cam-down");
+    let selected_rid = Rid::from("hi");
+    let mut state = RtcBootstrapState::default();
+    let source_transport_media_id = prepare_source_session_with_rid(
+        &mut state,
+        &source_session,
+        source_mid,
+        88_921,
+        Some(selected_rid),
+    );
+    let consumer_transport_media_id =
+        state.register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: consumer_session.clone(),
+            mid: consumer_mid,
+            source_transport_media_id,
+        });
+    state.media_route_index.insert(
+        source_transport_media_id,
+        MediaRouteEntry {
+            source_active: true,
+            destinations: vec![MediaRouteDestination {
+                dest_session: consumer_session.clone(),
+                dest_transport_media_id: consumer_transport_media_id,
+                dest_mid: consumer_mid,
+                dest_payload_type: None,
+                active: true,
+                packet_gate: PacketLayerGate::Open,
+                pending_packet_gate: None,
+            }],
+        },
+    );
+    let observed_at = Instant::now();
+    state.observe_producer_rid_packet(source_transport_media_id, selected_rid, observed_at);
+
+    let (live_response_tx, live_response_rx) = oneshot::channel();
+    respond_set_consumer_packet_gate(
+        &mut state,
+        ConsumerPacketGateRequest {
+            consumer_session_key: &consumer_session,
+            consumer_transport_media_id,
+            source_session_key: &source_session,
+            source_transport_media_id,
+            packet_gate: PacketLayerGate::Rid(selected_rid),
+        },
+        observed_at + Duration::from_millis(500),
+        live_response_tx,
+    );
+
+    assert_eq!(live_response_rx.blocking_recv(), Ok(Ok(())));
+    assert_consumer_packet_gate(
+        &state,
+        source_transport_media_id,
+        &consumer_session,
+        &PacketLayerGate::Rid(selected_rid),
+        None,
+    );
+
+    let (stale_response_tx, stale_response_rx) = oneshot::channel();
+    respond_set_consumer_packet_gate(
+        &mut state,
+        ConsumerPacketGateRequest {
+            consumer_session_key: &consumer_session,
+            consumer_transport_media_id,
+            source_session_key: &source_session,
+            source_transport_media_id,
+            packet_gate: PacketLayerGate::Rid(selected_rid),
+        },
+        observed_at + Duration::from_secs(3),
+        stale_response_tx,
+    );
+
+    assert_eq!(stale_response_rx.blocking_recv(), Ok(Ok(())));
+    assert_consumer_packet_gate(
+        &state,
+        source_transport_media_id,
+        &consumer_session,
+        &PacketLayerGate::Block,
+        Some(&PacketLayerGate::Rid(selected_rid)),
     );
 }
 
@@ -1181,6 +1275,7 @@ fn batched_consumer_packet_gates_keep_remote_relay_open_during_rid_bootstrap() {
                 PacketLayerGate::Rid("hi".into()),
             ),
         ],
+        Instant::now(),
         response_tx,
     );
 
@@ -1330,6 +1425,7 @@ fn add_send_media_rolls_back_remote_source_registration_when_consumer_session_is
             remote_source_control: Some(remote_source_control),
             consumer_rtp_parameters: &consumer_rtp_parameters,
         },
+        Instant::now(),
         response_tx,
     );
 
@@ -1390,6 +1486,7 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
             remote_source_control: None,
             consumer_rtp_parameters: &consumer_rtp_parameters,
         },
+        Instant::now(),
         response_tx,
     );
 
@@ -1430,6 +1527,70 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
         &consumer_session,
         &PacketLayerGate::Block,
         Some(&PacketLayerGate::Rid("lo".into())),
+    );
+}
+
+#[test]
+fn add_send_media_uses_supplied_time_for_initial_selected_rid_gate() {
+    let source_session = test_transport_session_key(751, 0, 752, UserId::Integer(753));
+    let consumer_session = test_transport_session_key(751, 0, 754, UserId::Integer(755));
+    let source_mid = Mid::from("cam-up");
+    let consumer_mid = Mid::from("cam-down");
+    let selected_rid = Rid::from("lo");
+    let mut state = RtcBootstrapState::default();
+    let source_transport_media_id = prepare_source_session_with_rid(
+        &mut state,
+        &source_session,
+        source_mid,
+        71_101,
+        Some(selected_rid),
+    );
+    let observed_at = Instant::now();
+    state.observe_producer_rid_packet(source_transport_media_id, selected_rid, observed_at);
+    assert!(
+        bootstrap::ensure_session_rtc_state(
+            &mut state.users,
+            &consumer_session,
+            SocketAddr::from(([127, 0, 0, 1], 47_102)),
+            10_000_000,
+            MediaCodecFlags::default(),
+        )
+        .is_ok()
+    );
+    let consumer_rtp_parameters = RouterRtpParameters::new(
+        vec![],
+        vec![],
+        vec![
+            StreamBinding::new()
+                .with_ssrc(72_101)
+                .with_rid("lo")
+                .with_payload_type(96),
+        ],
+    )
+    .with_mid(consumer_mid.to_string());
+    let (response_tx, response_rx) = oneshot::channel();
+
+    respond_add_send_media(
+        &mut state,
+        AddSendMediaRequest {
+            consumer_session_key: &consumer_session,
+            media_kind: MediaKind::Video,
+            source_session_key: &source_session,
+            source_transport_media_id,
+            remote_source_control: None,
+            consumer_rtp_parameters: &consumer_rtp_parameters,
+        },
+        observed_at + Duration::from_millis(250),
+        response_tx,
+    );
+
+    assert!(matches!(response_rx.blocking_recv(), Ok(Ok(_))));
+    assert_consumer_packet_gate(
+        &state,
+        source_transport_media_id,
+        &consumer_session,
+        &PacketLayerGate::Rid(selected_rid),
+        None,
     );
 }
 

@@ -3,7 +3,9 @@
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
 
-use super::super::super::{commands::RemoteSourceControl, relay_registry::RelayTargetId};
+use super::super::super::{
+    commands::RemoteSourceControl, relay_registry::RelayTargetId, route_control::PacketLayerGate,
+};
 use crate::runtime::media_transport::{TransportMediaId, TransportSessionKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +21,14 @@ pub struct AddSendMediaRequest<'a> {
     pub source_transport_media_id: TransportMediaId,
     pub remote_source_control: Option<RemoteSourceControl>,
     pub consumer_rtp_parameters: &'a RouterRtpParameters,
+}
+
+pub struct ConsumerPacketGateRequest<'a> {
+    pub consumer_session_key: &'a TransportSessionKey,
+    pub consumer_transport_media_id: TransportMediaId,
+    pub source_session_key: &'a TransportSessionKey,
+    pub source_transport_media_id: TransportMediaId,
+    pub packet_gate: PacketLayerGate,
 }
 
 pub struct RemoteKeyframeRequest<'a> {

@@ -29,7 +29,7 @@ use super::{
     super::{
         super::{
             bitrate::RtcBitrateState,
-            commands::{RemoteSourceControl, RemoveMediaOutcome, RtcWorkerResponse},
+            commands::{RemoveMediaOutcome, RtcWorkerResponse},
             local_send_rewrite::forget_transport_media_rewrites,
             media_registry::RegisteredMediaHandle,
             sdp_simulcast,
@@ -37,7 +37,10 @@ use super::{
         },
         negotiation,
     },
-    control::{ensure_route_source_registered, register_consumer_route, remove_consumer_route},
+    control::{
+        ConsumerRouteRegistration, ensure_route_source_registered, register_consumer_route,
+        remove_consumer_route,
+    },
     types::AddSendMediaRequest,
 };
 use crate::{
@@ -93,17 +96,10 @@ pub fn respond_add_recv_media(
 pub fn respond_add_send_media(
     state: &mut RtcBootstrapState,
     request: AddSendMediaRequest<'_>,
+    now: Instant,
     response: RtcWorkerResponse<TransportMediaId>,
 ) {
-    let _ = response.send(worker_add_send_media(
-        state,
-        request.consumer_session_key,
-        request.media_kind,
-        request.source_session_key,
-        request.source_transport_media_id,
-        request.remote_source_control,
-        request.consumer_rtp_parameters,
-    ));
+    let _ = response.send(worker_add_send_media(state, request, now));
 }
 
 pub fn respond_resolve_media_mid(
@@ -413,13 +409,17 @@ fn worker_stage_native_recv_media(
 /// error escapes.
 fn worker_add_send_media(
     state: &mut RtcBootstrapState,
-    consumer_session_key: &TransportSessionKey,
-    media_kind: MediaKind,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
-    remote_source_control: Option<RemoteSourceControl>,
-    consumer_rtp_parameters: &RouterRtpParameters,
+    request: AddSendMediaRequest<'_>,
+    now: Instant,
 ) -> TransportResult<TransportMediaId> {
+    let AddSendMediaRequest {
+        consumer_session_key,
+        media_kind,
+        source_session_key,
+        source_transport_media_id,
+        remote_source_control,
+        consumer_rtp_parameters,
+    } = request;
     let previous_remote_source_registration = (source_session_key.media_worker_id()
         != consumer_session_key.media_worker_id())
     .then(|| {
@@ -483,12 +483,15 @@ fn worker_add_send_media(
     });
     register_consumer_route(
         state,
-        consumer_session_key,
-        transport_media_id,
-        mid,
-        source_transport_media_id,
-        route_source,
-        consumer_rtp_parameters,
+        ConsumerRouteRegistration {
+            consumer_session_key,
+            consumer_transport_media_id: transport_media_id,
+            consumer_mid: mid,
+            source_transport_media_id,
+            route_source,
+            consumer_rtp_parameters,
+            now,
+        },
     );
     debug!(
         consumer_user_id = ?consumer_session_key.user_id(),
