@@ -2204,129 +2204,55 @@ async fn settle_refresh_offer(scenario: &mut RealRtcRefreshScenario, offer: Sess
 
 #[tokio::test]
 async fn staged_negotiated_publish_rollback_cleans_transport_media_without_committing_state() {
-    let (room, adapter, fake, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_users_with_fake().await;
-    let user_id = UserId::Integer(1);
-    let connection_id = room
-        .test_api()
-        .inspect()
-        .user_connection_id(&user_id)
-        .await
-        .expect("publisher should have a live connection");
-
-    assert!(
-        stage_negotiated_publish(
-            &room,
-            &user_id,
-            connection_id,
-            TestSourceKind::ScalableVideo,
-            &adapter,
-        )
-        .await
-    );
-    assert_eq!(
-        staged_publish_count(&room, &user_id, connection_id).await,
-        1
-    );
+    let mut scenario = StagedPublishScenario::new().await;
 
     assert_eq!(
-        room.rollback_staged_publish(
-            &user_id,
-            connection_id,
-            &stream_id_for_source(TestSourceKind::ScalableVideo),
-            &adapter
-        )
-        .await,
+        scenario.stage_scalable_video().await,
+        PublishStageOutcome::Staged
+    );
+    assert_eq!(scenario.staged_count().await, 1);
+
+    assert_eq!(
+        scenario.rollback_scalable_video().await,
         RollbackStagedPublishOutcome::RolledBack {
             cleanup: crate::TransportEffectOutcome::Applied
         }
     );
 
-    assert_eq!(
-        staged_publish_count(&room, &user_id, connection_id).await,
-        0
-    );
-    assert_eq!(room.test_api().inspect().producer_count().await, 0);
-    assert!(drain_outbound(&mut publisher_rx).is_empty());
-    assert!(drain_outbound(&mut subscriber_rx).is_empty());
+    assert_eq!(scenario.staged_count().await, 0);
+    assert_eq!(scenario.room.test_api().inspect().producer_count().await, 0);
+    scenario.assert_no_outbound();
 
-    let events = fake.snapshot_events();
     assert!(
-        events.iter().any(|event| matches!(
-            event,
-            FakeMediaTransportEvent::PublishMediaRequested { user_id: owner, .. }
-                if *owner == user_id
-        )),
+        scenario.publish_media_requested_count() > 0,
         "staging should declare producer media on the transport"
     );
     assert!(
-        events.iter().any(|event| matches!(
-            event,
-            FakeMediaTransportEvent::MediaRemoved { user_id: owner, .. }
-                if *owner == user_id
-        )),
+        scenario.removed_media_count() > 0,
         "rolling back a staged publish should remove the staged transport media"
     );
 }
 
 #[tokio::test]
 async fn duplicate_staged_publish_is_ignored_before_transport_reservation() {
-    let (room, adapter, fake, _publisher_rx, _subscriber_rx) =
-        setup_two_ready_users_with_fake().await;
-    let user_id = UserId::Integer(1);
-    let connection_id = room
-        .test_api()
-        .inspect()
-        .user_connection_id(&user_id)
-        .await
-        .expect("publisher should have a live connection");
+    let scenario = StagedPublishScenario::new().await;
 
     assert_eq!(
-        room.stage_negotiated_publish(
-            &user_id,
-            connection_id,
-            &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
-            &adapter
-        )
-        .await
-        .expect("first stage should not hit transport failure"),
-        crate::PublishStageOutcome::Staged
+        scenario.stage_scalable_video().await,
+        PublishStageOutcome::Staged
     );
     assert_eq!(
-        room.stage_negotiated_publish(
-            &user_id,
-            connection_id,
-            &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
-            &adapter
-        )
-        .await
-        .expect("duplicate stage should not hit transport failure"),
-        crate::PublishStageOutcome::Duplicate
+        scenario.stage_scalable_video().await,
+        PublishStageOutcome::Duplicate
     );
+    assert_eq!(scenario.staged_count().await, 1);
     assert_eq!(
-        staged_publish_count(&room, &user_id, connection_id).await,
-        1
-    );
-    assert_eq!(
-        fake.snapshot_events()
-            .iter()
-            .filter(|event| matches!(
-                event,
-                FakeMediaTransportEvent::PublishMediaRequested { user_id: owner, .. }
-                    if *owner == user_id
-            ))
-            .count(),
+        scenario.publish_media_requested_count(),
         1,
         "the pre-await duplicate check should avoid reserving a second transport media"
     );
     assert_eq!(
-        room.rollback_staged_publish(
-            &user_id,
-            connection_id,
-            &stream_id_for_source(TestSourceKind::ScalableVideo),
-            &adapter
-        )
-        .await,
+        scenario.rollback_scalable_video().await,
         RollbackStagedPublishOutcome::RolledBack {
             cleanup: crate::TransportEffectOutcome::Applied
         }
@@ -2335,207 +2261,128 @@ async fn duplicate_staged_publish_is_ignored_before_transport_reservation() {
 
 #[tokio::test]
 async fn explicit_unpublish_missing_publication_is_a_domain_noop() {
-    let (room, adapter, _fake, _publisher_rx, _subscriber_rx) =
-        setup_two_ready_users_with_fake().await;
-    let user_id = UserId::Integer(1);
-    let connection_id = room
-        .test_api()
-        .inspect()
-        .user_connection_id(&user_id)
-        .await
-        .expect("publisher should have a live connection");
+    let scenario = StagedPublishScenario::new().await;
 
     assert_eq!(
-        room.unpublish_track(
-            &user_id,
-            connection_id,
-            &stream_id_for_source(TestSourceKind::ScalableVideo),
-            &adapter
-        )
-        .await,
+        scenario.unpublish_scalable_video().await,
         UnpublishOutcome::MissingPublication
     );
 }
 
 #[tokio::test]
 async fn staged_publish_rollback_reports_cleanup_failure_without_state_ownership() {
-    let (room, adapter, fake, _publisher_rx, _subscriber_rx) =
-        setup_two_ready_users_with_fake().await;
-    let user_id = UserId::Integer(1);
-    let connection_id = room
-        .test_api()
-        .inspect()
-        .user_connection_id(&user_id)
-        .await
-        .expect("publisher should have a live connection");
-
-    assert!(
-        stage_negotiated_publish(
-            &room,
-            &user_id,
-            connection_id,
-            TestSourceKind::ScalableVideo,
-            &adapter,
-        )
-        .await
-    );
-    let transport_media_id = staged_publish_transport_media_id(
-        &room,
-        &user_id,
-        connection_id,
-        TestSourceKind::ScalableVideo,
-    )
-    .await
-    .expect("staged publish should expose its transport media id");
-    fake.fail_remove_media_until_allowed(transport_media_id);
+    let scenario = StagedPublishScenario::new().await;
 
     assert_eq!(
-        room.rollback_staged_publish(
-            &user_id,
-            connection_id,
-            &stream_id_for_source(TestSourceKind::ScalableVideo),
-            &adapter
-        )
-        .await,
+        scenario.stage_scalable_video().await,
+        PublishStageOutcome::Staged
+    );
+    let transport_media_id = scenario
+        .staged_transport_media_id(TestSourceKind::ScalableVideo)
+        .await;
+    scenario
+        .fake
+        .fail_remove_media_until_allowed(transport_media_id);
+
+    assert_eq!(
+        scenario.rollback_scalable_video().await,
         RollbackStagedPublishOutcome::RolledBack {
             cleanup: crate::TransportEffectOutcome::Failed
         }
     );
+    assert_eq!(scenario.staged_count().await, 0);
+    assert_eq!(scenario.room.test_api().inspect().producer_count().await, 0);
     assert_eq!(
-        staged_publish_count(&room, &user_id, connection_id).await,
-        0
+        scenario
+            .room
+            .test_api()
+            .lifecycle()
+            .pending_cleanup_retry_count(),
+        1
     );
-    assert_eq!(room.test_api().inspect().producer_count().await, 0);
-    assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 1);
-    assert!(!fake.snapshot_events().iter().any(|event| matches!(
-        event,
-        FakeMediaTransportEvent::MediaRemoved {
-            transport_media_id: removed_media_id,
-            ..
-        } if *removed_media_id == transport_media_id
-    )));
+    assert!(!scenario.has_removed_media(transport_media_id));
 
-    fake.allow_remove_media(transport_media_id);
-    room.test_api()
+    scenario.fake.allow_remove_media(transport_media_id);
+    scenario
+        .room
+        .test_api()
         .lifecycle()
-        .force_cleanup_retry_cycle(&adapter)
+        .force_cleanup_retry_cycle(&scenario.adapter)
         .await;
 
-    assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 0);
-    assert!(fake.snapshot_events().iter().any(|event| matches!(
-        event,
-        FakeMediaTransportEvent::MediaRemoved {
-            user_id: removed_user_id,
-            transport_media_id: removed_media_id,
-        } if *removed_user_id == user_id && *removed_media_id == transport_media_id
-    )));
+    assert_eq!(
+        scenario
+            .room
+            .test_api()
+            .lifecycle()
+            .pending_cleanup_retry_count(),
+        0
+    );
+    assert!(scenario.has_removed_media(transport_media_id));
 }
 
 #[tokio::test]
 async fn staged_negotiated_publish_commit_moves_through_room_owned_transaction() {
-    let (room, adapter, fake, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_users_with_fake().await;
-    let user_id = UserId::Integer(1);
-    let connection_id = room
-        .test_api()
-        .inspect()
-        .user_connection_id(&user_id)
-        .await
-        .expect("publisher should have a live connection");
-
-    assert!(
-        stage_negotiated_publish(
-            &room,
-            &user_id,
-            connection_id,
-            TestSourceKind::ScalableVideo,
-            &adapter,
-        )
-        .await
-    );
-    assert_eq!(
-        staged_publish_count(&room, &user_id, connection_id).await,
-        1
-    );
-
-    commit_staged_publishes(&room, &user_id, connection_id, &adapter).await;
+    let mut scenario = StagedPublishScenario::new().await;
 
     assert_eq!(
-        staged_publish_count(&room, &user_id, connection_id).await,
-        0
+        scenario.stage_scalable_video().await,
+        PublishStageOutcome::Staged
     );
+    assert_eq!(scenario.staged_count().await, 1);
+
+    scenario.commit().await;
+
+    assert_eq!(scenario.staged_count().await, 0);
     assert!(
-        room.is_stream_published(
-            &user_id,
-            &stream_id_for_source(TestSourceKind::ScalableVideo)
-        )
-        .await
+        scenario
+            .room
+            .is_stream_published(
+                &scenario.user_id,
+                &stream_id_for_source(TestSourceKind::ScalableVideo)
+            )
+            .await
     );
-    assert!(drain_outbound(&mut publisher_rx).is_empty());
-    assert_bootstrap_for_stream(
-        &drain_outbound(&mut subscriber_rx),
-        TestSourceKind::ScalableVideo,
-    );
+    assert!(scenario.drain_publisher().is_empty());
+    assert_bootstrap_for_stream(&scenario.drain_subscriber(), TestSourceKind::ScalableVideo);
     assert!(
-        !fake.snapshot_events().iter().any(|event| matches!(
-            event,
-            FakeMediaTransportEvent::MediaRemoved { user_id: owner, .. }
-                if *owner == user_id
-        )),
+        scenario.removed_media_count() == 0,
         "successful commit should not compensate the staged producer media"
     );
 }
 
 #[tokio::test]
 async fn staged_negotiated_publish_commit_materializes_all_negotiated_encodings() {
-    let (room, adapter, fake, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_users_with_fake().await;
-    let user_id = UserId::Integer(1);
-    let connection_id = room
-        .test_api()
-        .inspect()
-        .user_connection_id(&user_id)
-        .await
-        .expect("publisher should have a live connection");
+    let mut scenario = StagedPublishScenario::new().await;
 
-    assert!(
-        stage_negotiated_publish(
-            &room,
-            &user_id,
-            connection_id,
-            TestSourceKind::ScalableVideo,
-            &adapter,
-        )
-        .await
+    assert_eq!(
+        scenario.stage_scalable_video().await,
+        PublishStageOutcome::Staged
     );
-    let transport_media_id = staged_publish_transport_media_id(
-        &room,
-        &user_id,
-        connection_id,
-        TestSourceKind::ScalableVideo,
-    )
-    .await
-    .expect("staged publish should expose its transport media id");
-    fake.set_negotiated_producer_parameters(
+    let transport_media_id = scenario
+        .staged_transport_media_id(TestSourceKind::ScalableVideo)
+        .await;
+    scenario.fake.set_negotiated_producer_parameters(
         transport_media_id,
         test_simulcast_video_rtp_parameters(),
     );
 
-    commit_staged_publishes(&room, &user_id, connection_id, &adapter).await;
+    scenario.commit().await;
 
-    assert_eq!(
-        staged_publish_count(&room, &user_id, connection_id).await,
-        0
-    );
+    assert_eq!(scenario.staged_count().await, 0);
     assert!(
-        room.is_stream_published(
-            &user_id,
-            &stream_id_for_source(TestSourceKind::ScalableVideo)
-        )
-        .await
+        scenario
+            .room
+            .is_stream_published(
+                &scenario.user_id,
+                &stream_id_for_source(TestSourceKind::ScalableVideo)
+            )
+            .await
     );
     assert_eq!(
-        room.test_api()
+        scenario
+            .room
+            .test_api()
             .inspect()
             .source_encoding_ids_for_transport_media_id(transport_media_id)
             .await
@@ -2543,8 +2390,8 @@ async fn staged_negotiated_publish_commit_materializes_all_negotiated_encodings(
             .len(),
         2
     );
-    assert!(drain_outbound(&mut publisher_rx).is_empty());
-    let subscriber_messages = drain_outbound(&mut subscriber_rx);
+    assert!(scenario.drain_publisher().is_empty());
+    let subscriber_messages = scenario.drain_subscriber();
     assert_bootstrap_for_stream(&subscriber_messages, TestSourceKind::ScalableVideo);
     assert!(
         subscriber_messages.iter().any(|message| matches!(
@@ -2562,253 +2409,159 @@ async fn staged_negotiated_publish_commit_materializes_all_negotiated_encodings(
 
 #[tokio::test]
 async fn staged_negotiated_publish_commit_cleans_up_when_transport_parameters_are_missing() {
-    let (room, adapter, fake, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_users_with_fake().await;
-    let user_id = UserId::Integer(1);
-    let connection_id = room
-        .test_api()
-        .inspect()
-        .user_connection_id(&user_id)
-        .await
-        .expect("publisher should have a live connection");
-
-    assert!(
-        stage_negotiated_publish(
-            &room,
-            &user_id,
-            connection_id,
-            TestSourceKind::ScalableVideo,
-            &adapter,
-        )
-        .await
-    );
-    let transport_media_id = staged_publish_transport_media_id(
-        &room,
-        &user_id,
-        connection_id,
-        TestSourceKind::ScalableVideo,
-    )
-    .await
-    .expect("staged publish should expose its transport media id");
-    fake.clear_negotiated_producer_parameters(transport_media_id);
-
-    commit_staged_publishes(&room, &user_id, connection_id, &adapter).await;
+    let mut scenario = StagedPublishScenario::new().await;
 
     assert_eq!(
-        staged_publish_count(&room, &user_id, connection_id).await,
-        0
+        scenario.stage_scalable_video().await,
+        PublishStageOutcome::Staged
     );
+    let transport_media_id = scenario
+        .staged_transport_media_id(TestSourceKind::ScalableVideo)
+        .await;
+    scenario
+        .fake
+        .clear_negotiated_producer_parameters(transport_media_id);
+
+    scenario.commit().await;
+
+    assert_eq!(scenario.staged_count().await, 0);
     assert!(
-        !room
+        !scenario
+            .room
             .is_stream_published(
-                &user_id,
+                &scenario.user_id,
                 &stream_id_for_source(TestSourceKind::ScalableVideo)
             )
             .await
     );
-    assert!(drain_outbound(&mut publisher_rx).is_empty());
-    assert!(drain_outbound(&mut subscriber_rx).is_empty());
+    scenario.assert_no_outbound();
     assert!(
-        fake.snapshot_events().iter().any(|event| matches!(
-            event,
-            FakeMediaTransportEvent::MediaRemoved {
-                user_id: owner,
-                transport_media_id: removed_media_id,
-            } if *owner == user_id && *removed_media_id == transport_media_id
-        )),
+        scenario.has_removed_media(transport_media_id),
         "commit should clean up the staged transport media when negotiated parameters are unavailable"
     );
 }
 
 #[tokio::test]
 async fn staged_negotiated_publish_commit_cleans_up_when_user_state_rejects_it() {
-    let (room, adapter, fake, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_users_with_fake().await;
-    let user_id = UserId::Integer(1);
-    let connection_id = room
-        .test_api()
-        .inspect()
-        .user_connection_id(&user_id)
-        .await
-        .expect("publisher should have a live connection");
-
-    assert!(
-        stage_negotiated_publish(
-            &room,
-            &user_id,
-            connection_id,
-            TestSourceKind::ScalableVideo,
-            &adapter,
-        )
-        .await
-    );
-    assert!(
-        room.test_api()
-            .lifecycle()
-            .leave_session_without_transport_cleanup(&user_id, connection_id, &adapter)
-            .await
-    );
-    let _ = drain_outbound(&mut publisher_rx);
-    let _ = drain_outbound(&mut subscriber_rx);
-
-    commit_staged_publishes(&room, &user_id, connection_id, &adapter).await;
+    let mut scenario = StagedPublishScenario::new().await;
 
     assert_eq!(
-        staged_publish_count(&room, &user_id, connection_id).await,
-        0
+        scenario.stage_scalable_video().await,
+        PublishStageOutcome::Staged
     );
-    assert_eq!(room.test_api().inspect().producer_count().await, 0);
-    assert!(!room.test_api().inspect().has_session(&user_id).await);
-    assert!(drain_outbound(&mut publisher_rx).is_empty());
-    assert!(drain_outbound(&mut subscriber_rx).is_empty());
     assert!(
-        fake.snapshot_events().iter().any(|event| matches!(
-            event,
-            FakeMediaTransportEvent::MediaRemoved { user_id: owner, .. }
-                if *owner == user_id
-        )),
+        scenario
+            .room
+            .test_api()
+            .lifecycle()
+            .leave_session_without_transport_cleanup(
+                &scenario.user_id,
+                scenario.connection_id,
+                &scenario.adapter
+            )
+            .await
+    );
+    let _ = scenario.drain_publisher();
+    let _ = scenario.drain_subscriber();
+
+    scenario.commit().await;
+
+    assert_eq!(scenario.staged_count().await, 0);
+    assert_eq!(scenario.room.test_api().inspect().producer_count().await, 0);
+    assert!(
+        !scenario
+            .room
+            .test_api()
+            .inspect()
+            .has_session(&scenario.user_id)
+            .await
+    );
+    scenario.assert_no_outbound();
+    assert!(
+        scenario.removed_media_count() > 0,
         "commit rejection should clean up the staged transport media"
     );
 }
 
 #[tokio::test]
 async fn staged_negotiated_publish_commit_rejects_replaced_connection() {
-    let (room, adapter, fake, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_users_with_fake().await;
-    let user_id = UserId::Integer(1);
-    let connection_id = room
-        .test_api()
-        .inspect()
-        .user_connection_id(&user_id)
-        .await
-        .expect("publisher should have a live connection");
+    let mut scenario = StagedPublishScenario::new().await;
 
-    assert!(
-        stage_negotiated_publish(
-            &room,
-            &user_id,
-            connection_id,
-            TestSourceKind::ScalableVideo,
-            &adapter,
-        )
-        .await
+    assert_eq!(
+        scenario.stage_scalable_video().await,
+        PublishStageOutcome::Staged
     );
-    let transport_media_id = staged_publish_transport_media_id(
-        &room,
-        &user_id,
-        connection_id,
-        TestSourceKind::ScalableVideo,
-    )
-    .await
-    .expect("staged publish should expose its transport media id");
+    let transport_media_id = scenario
+        .staged_transport_media_id(TestSourceKind::ScalableVideo)
+        .await;
     let (replacement_sender, _replacement_rx) = test_sender();
-    let replacement_connection_id = room
+    let replacement_connection_id = scenario
+        .room
         .test_api()
         .lifecycle()
         .join_session_without_transport_cleanup(
-            user_id.clone(),
+            scenario.user_id.clone(),
             None,
             UserPermissions::default(),
             replacement_sender,
-            &adapter,
+            &scenario.adapter,
         )
         .await
         .expect("replacement user should join");
-    let _ = drain_outbound(&mut publisher_rx);
-    let _ = drain_outbound(&mut subscriber_rx);
+    let _ = scenario.drain_publisher();
+    let _ = scenario.drain_subscriber();
 
-    commit_staged_publishes(&room, &user_id, connection_id, &adapter).await;
+    scenario.commit().await;
 
-    assert_ne!(replacement_connection_id, connection_id);
-    assert_eq!(
-        staged_publish_count(&room, &user_id, connection_id).await,
-        0
-    );
-    assert_eq!(room.test_api().inspect().producer_count().await, 0);
+    assert_ne!(replacement_connection_id, scenario.connection_id);
+    assert_eq!(scenario.staged_count().await, 0);
+    assert_eq!(scenario.room.test_api().inspect().producer_count().await, 0);
     assert!(
-        !room
+        !scenario
+            .room
             .is_stream_published(
-                &user_id,
+                &scenario.user_id,
                 &stream_id_for_source(TestSourceKind::ScalableVideo)
             )
             .await
     );
     assert_eq!(
-        room.test_api()
+        scenario
+            .room
+            .test_api()
             .inspect()
             .source_encoding_ids_for_transport_media_id(transport_media_id)
             .await,
         None
     );
-    assert!(drain_outbound(&mut publisher_rx).is_empty());
-    assert!(drain_outbound(&mut subscriber_rx).is_empty());
+    scenario.assert_no_outbound();
     assert!(
-        fake.snapshot_events().iter().any(|event| matches!(
-            event,
-            FakeMediaTransportEvent::MediaRemoved {
-                user_id: owner,
-                transport_media_id: removed_media_id,
-            } if *owner == user_id && *removed_media_id == transport_media_id
-        )),
+        scenario.has_removed_media(transport_media_id),
         "stale replaced publish commit should clean up the staged transport media"
     );
 }
 
 #[tokio::test]
 async fn staged_publish_connection_cleanup_rolls_back_every_staged_stream() {
-    let (room, adapter, fake, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_users_with_fake().await;
-    let user_id = UserId::Integer(1);
-    let connection_id = room
-        .test_api()
-        .inspect()
-        .user_connection_id(&user_id)
-        .await
-        .expect("publisher should have a live connection");
-
-    assert!(
-        stage_negotiated_publish(
-            &room,
-            &user_id,
-            connection_id,
-            TestSourceKind::ScalableVideo,
-            &adapter,
-        )
-        .await
-    );
-    assert!(
-        stage_negotiated_publish(
-            &room,
-            &user_id,
-            connection_id,
-            TestSourceKind::ReadableVideo,
-            &adapter,
-        )
-        .await
-    );
-    assert_eq!(
-        staged_publish_count(&room, &user_id, connection_id).await,
-        2
-    );
-
-    rollback_staged_publishes_for_connection(&room, &user_id, connection_id, &adapter).await;
+    let mut scenario = StagedPublishScenario::new().await;
 
     assert_eq!(
-        staged_publish_count(&room, &user_id, connection_id).await,
-        0
+        scenario.stage_scalable_video().await,
+        PublishStageOutcome::Staged
     );
-    assert_eq!(room.test_api().inspect().producer_count().await, 0);
-    assert!(drain_outbound(&mut publisher_rx).is_empty());
-    assert!(drain_outbound(&mut subscriber_rx).is_empty());
     assert_eq!(
-        fake.snapshot_events()
-            .iter()
-            .filter(|event| matches!(
-                event,
-                FakeMediaTransportEvent::MediaRemoved { user_id: owner, .. }
-                    if *owner == user_id
-            ))
-            .count(),
+        scenario.stage_source(TestSourceKind::ReadableVideo).await,
+        PublishStageOutcome::Staged
+    );
+    assert_eq!(scenario.staged_count().await, 2);
+
+    scenario.rollback_connection().await;
+
+    assert_eq!(scenario.staged_count().await, 0);
+    assert_eq!(scenario.room.test_api().inspect().producer_count().await, 0);
+    scenario.assert_no_outbound();
+    assert_eq!(
+        scenario.removed_media_count(),
         2,
         "connection cleanup should remove every staged publish transport media"
     );
@@ -2816,74 +2569,38 @@ async fn staged_publish_connection_cleanup_rolls_back_every_staged_stream() {
 
 #[tokio::test]
 async fn staged_negotiated_publish_duplicate_race_keeps_one_staged_entry_and_one_cleanup() {
-    let (room, adapter, fake, _publisher_rx, _subscriber_rx) =
-        setup_two_ready_users_with_fake().await;
-    fake.set_publish_media_delay(Some(Duration::from_millis(200)));
-    let user_id = UserId::Integer(1);
-    let connection_id = room
-        .test_api()
-        .inspect()
-        .user_connection_id(&user_id)
-        .await
-        .expect("publisher should have a live connection");
-
-    let first_intent = source_publish_intent_for_source(TestSourceKind::ScalableVideo);
-    let second_intent = source_publish_intent_for_source(TestSourceKind::ScalableVideo);
+    let scenario = StagedPublishScenario::new().await;
+    scenario
+        .fake
+        .set_publish_media_delay(Some(Duration::from_millis(200)));
     let (first_stage, second_stage) = tokio::join!(
-        room.stage_negotiated_publish(&user_id, connection_id, &first_intent, &adapter),
-        room.stage_negotiated_publish(&user_id, connection_id, &second_intent, &adapter),
+        scenario.stage_scalable_video(),
+        scenario.stage_scalable_video(),
     );
 
-    let outcomes = [
-        first_stage.expect("first stage attempt should not hit transport failure"),
-        second_stage.expect("second stage attempt should not hit transport failure"),
-    ];
-    assert!(outcomes.contains(&crate::PublishStageOutcome::Staged));
+    let outcomes = [first_stage, second_stage];
+    assert!(outcomes.contains(&PublishStageOutcome::Staged));
     assert!(
-        outcomes.contains(&crate::PublishStageOutcome::DuplicateAfterReservation {
+        outcomes.contains(&PublishStageOutcome::DuplicateAfterReservation {
             cleanup: crate::TransportEffectOutcome::Applied,
         })
     );
-    assert_eq!(
-        staged_publish_count(&room, &user_id, connection_id).await,
-        1
-    );
+    assert_eq!(scenario.staged_count().await, 1);
 
-    let events = fake.snapshot_events();
     assert_eq!(
-        events
-            .iter()
-            .filter(|event| matches!(
-                event,
-                FakeMediaTransportEvent::PublishMediaRequested { user_id: owner, .. }
-                    if *owner == user_id
-            ))
-            .count(),
+        scenario.publish_media_requested_count(),
         2,
         "both racing stage attempts should declare transport media before the post-await duplicate re-check"
     );
     assert_eq!(
-        events
-            .iter()
-            .filter(|event| matches!(
-                event,
-                FakeMediaTransportEvent::MediaRemoved { user_id: owner, .. }
-                    if *owner == user_id
-            ))
-            .count(),
+        scenario.removed_media_count(),
         1,
         "the duplicate staged transport media should be compensated exactly once"
     );
-    assert!(
-        rollback_staged_publish(
-            &room,
-            &user_id,
-            connection_id,
-            TestSourceKind::ScalableVideo,
-            &adapter,
-        )
-        .await
-    );
+    assert!(matches!(
+        scenario.rollback_scalable_video().await,
+        RollbackStagedPublishOutcome::RolledBack { .. }
+    ));
 }
 
 #[allow(

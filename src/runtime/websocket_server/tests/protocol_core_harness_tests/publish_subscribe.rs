@@ -328,42 +328,34 @@ async fn protocol_handshake_uses_answer_derived_client_capabilities_for_user_sta
             .is_some()
     );
 
-    let parsed_client_rtp_capabilities = timeout(Duration::from_secs(1), async {
+    let client_rtp_codec_names = timeout(Duration::from_secs(1), async {
         loop {
-            if let Some(capabilities) = room
+            if let Some(codec_names) = room
                 .test_api()
                 .inspect()
-                .parsed_client_rtp_capabilities(&UserId::Integer(75))
+                .session_client_rtp_codec_names(&UserId::Integer(75))
                 .await
             {
-                return capabilities;
+                return codec_names;
             }
             sleep(Duration::from_millis(10)).await;
         }
     })
     .await;
     assert!(
-        parsed_client_rtp_capabilities.is_ok(),
+        client_rtp_codec_names.is_ok(),
         "protocol handshake should store parsed client RTP capabilities"
     );
-    let Some(parsed_client_rtp_capabilities) = parsed_client_rtp_capabilities.ok() else {
+    let Some(codec_names) = client_rtp_codec_names.ok() else {
         return;
     };
-    let codec_names = parsed_client_rtp_capabilities
-        .codecs()
-        .map(|codec| codec.codec_name().to_owned())
-        .collect::<Vec<_>>();
     assert_eq!(codec_names, vec![String::from("opus"), String::from("VP8")]);
     assert!(
-        parsed_client_rtp_capabilities
-            .codecs()
-            .all(|codec| codec.codec_name() != "rtx"),
+        codec_names.iter().all(|codec| codec != "rtx"),
         "the production VP8 receive surface should not preserve RTX while RID repair demux is disabled"
     );
     assert!(
-        parsed_client_rtp_capabilities
-            .codecs()
-            .all(|codec| codec.codec_name() != "H264"),
+        codec_names.iter().all(|codec| codec != "H264"),
         "the stored client RTP capabilities must reflect the real RTC answer"
     );
 }

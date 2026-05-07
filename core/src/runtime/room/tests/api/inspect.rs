@@ -33,15 +33,12 @@ impl RoomTestInspect<'_> {
             .session_has_parsed_client_rtp_capabilities(user_id)
     }
 
-    pub async fn parsed_client_rtp_capabilities(
-        self,
-        user_id: &UserId,
-    ) -> Option<o_sfu_router::MediaCapabilities> {
+    pub async fn session_client_rtp_codec_names(self, user_id: &UserId) -> Option<Vec<String>> {
         self.room
             .state
             .read()
             .await
-            .parsed_client_rtp_capabilities(user_id)
+            .session_client_rtp_codec_names(user_id)
     }
 
     pub async fn user_connection_id(self, user_id: &UserId) -> Option<ConnectionId> {

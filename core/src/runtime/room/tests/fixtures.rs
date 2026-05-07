@@ -295,90 +295,169 @@ pub(super) async fn refresh_session_consumers(
         == SessionNegotiationOutcome::Applied
 }
 
-pub(super) async fn stage_negotiated_publish(
-    room: &super::super::Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    stream_type: TestSourceKind,
-    media_transport: &MediaTransport,
-) -> bool {
-    room.stage_negotiated_publish(
-        user_id,
-        connection_id,
-        &source_publish_intent_for_source(stream_type),
-        media_transport,
-    )
-    .await
-    .is_ok_and(PublishStageOutcome::staged)
+pub(super) struct StagedPublishScenario {
+    pub(super) room: Arc<super::super::Room>,
+    pub(super) adapter: MediaTransport,
+    pub(super) fake: Arc<FakeMediaTransport>,
+    pub(super) user_id: UserId,
+    pub(super) connection_id: ConnectionId,
+    publisher_rx: mpsc::UnboundedReceiver<UserOutbound>,
+    subscriber_rx: mpsc::UnboundedReceiver<UserOutbound>,
 }
 
-pub(super) async fn rollback_staged_publish(
-    room: &super::super::Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    stream_type: TestSourceKind,
-    media_transport: &MediaTransport,
-) -> bool {
-    matches!(
-        room.rollback_staged_publish(
+impl StagedPublishScenario {
+    pub(super) async fn new() -> Self {
+        let (room, adapter, fake, publisher_rx, subscriber_rx) =
+            setup_two_ready_users_with_fake().await;
+        let user_id = UserId::Integer(1);
+        let connection_id = user_connection_id(&room, &user_id).await;
+        Self {
+            room,
+            adapter,
+            fake,
             user_id,
             connection_id,
-            &stream_id_for_source(stream_type),
-            media_transport,
-        )
-        .await,
-        RollbackStagedPublishOutcome::RolledBack { .. }
-    )
-}
+            publisher_rx,
+            subscriber_rx,
+        }
+    }
 
-pub(super) async fn commit_staged_publishes(
-    room: &super::super::Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    media_transport: &MediaTransport,
-) {
-    let session_key = room.transport_user_key(user_id, connection_id);
-    let applied_answer = media_transport
-        .apply_session_answer(&session_key, "")
-        .await
-        .unwrap_or_default();
-    room.commit_staged_publishes(
-        user_id,
-        connection_id,
-        &applied_answer,
-        media_transport,
-        media_transport,
-    )
-    .await;
-}
+    pub(super) async fn stage_source(&self, stream_type: TestSourceKind) -> PublishStageOutcome {
+        self.room
+            .stage_negotiated_publish(
+                &self.user_id,
+                self.connection_id,
+                &source_publish_intent_for_source(stream_type),
+                &self.adapter,
+            )
+            .await
+            .expect("stage publish should not hit transport failure")
+    }
 
-pub(super) async fn rollback_staged_publishes_for_connection(
-    room: &super::super::Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    media_transport: &MediaTransport,
-) {
-    room.rollback_staged_publishes_for_connection(user_id, connection_id, media_transport)
-        .await;
-}
+    pub(super) async fn stage_scalable_video(&self) -> PublishStageOutcome {
+        self.stage_source(TestSourceKind::ScalableVideo).await
+    }
 
-pub(super) async fn staged_publish_count(
-    room: &super::super::Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-) -> usize {
-    room.staged_publish_count_for_connection(user_id, connection_id)
-        .await
-}
+    pub(super) async fn rollback_scalable_video(&self) -> RollbackStagedPublishOutcome {
+        self.room
+            .rollback_staged_publish(
+                &self.user_id,
+                self.connection_id,
+                &stream_id_for_source(TestSourceKind::ScalableVideo),
+                &self.adapter,
+            )
+            .await
+    }
 
-pub(super) async fn staged_publish_transport_media_id(
-    room: &super::super::Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    stream_type: TestSourceKind,
-) -> Option<TransportMediaId> {
-    room.staged_publish_transport_media_id(user_id, connection_id, stream_type)
-        .await
+    pub(super) async fn unpublish_scalable_video(&self) -> UnpublishOutcome {
+        self.room
+            .unpublish_track(
+                &self.user_id,
+                self.connection_id,
+                &stream_id_for_source(TestSourceKind::ScalableVideo),
+                &self.adapter,
+            )
+            .await
+    }
+
+    pub(super) async fn commit(&self) {
+        let session_key = self
+            .room
+            .transport_user_key(&self.user_id, self.connection_id);
+        let applied_answer = self
+            .adapter
+            .apply_session_answer(&session_key, "")
+            .await
+            .unwrap_or_default();
+        self.room
+            .commit_staged_publishes(
+                &self.user_id,
+                self.connection_id,
+                &applied_answer,
+                &self.adapter,
+                &self.adapter,
+            )
+            .await;
+    }
+
+    pub(super) async fn rollback_connection(&self) {
+        self.room
+            .rollback_staged_publishes_for_connection(
+                &self.user_id,
+                self.connection_id,
+                &self.adapter,
+            )
+            .await;
+    }
+
+    pub(super) async fn staged_count(&self) -> usize {
+        self.room
+            .staged_publish_count_for_connection(&self.user_id, self.connection_id)
+            .await
+    }
+
+    pub(super) async fn staged_transport_media_id(
+        &self,
+        stream_type: TestSourceKind,
+    ) -> TransportMediaId {
+        self.room
+            .staged_publish_transport_media_id(&self.user_id, self.connection_id, stream_type)
+            .await
+            .expect("staged publish should expose its transport media id")
+    }
+
+    pub(super) fn drain_publisher(&mut self) -> Vec<UserOutbound> {
+        drain_outbound(&mut self.publisher_rx)
+    }
+
+    pub(super) fn drain_subscriber(&mut self) -> Vec<UserOutbound> {
+        drain_outbound(&mut self.subscriber_rx)
+    }
+
+    pub(super) fn assert_no_outbound(&mut self) {
+        assert!(self.drain_publisher().is_empty());
+        assert!(self.drain_subscriber().is_empty());
+    }
+
+    pub(super) fn publish_media_requested_count(&self) -> usize {
+        self.fake
+            .snapshot_events()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    FakeMediaTransportEvent::PublishMediaRequested { user_id, .. }
+                        if user_id == &self.user_id
+                )
+            })
+            .count()
+    }
+
+    pub(super) fn removed_media_count(&self) -> usize {
+        self.fake
+            .snapshot_events()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    FakeMediaTransportEvent::MediaRemoved { user_id, .. }
+                        if user_id == &self.user_id
+                )
+            })
+            .count()
+    }
+
+    pub(super) fn has_removed_media(&self, transport_media_id: TransportMediaId) -> bool {
+        self.fake.snapshot_events().iter().any(|event| {
+            matches!(
+                event,
+                FakeMediaTransportEvent::MediaRemoved {
+                    user_id,
+                    transport_media_id: removed_media_id,
+                } if user_id == &self.user_id && *removed_media_id == transport_media_id
+            )
+        })
+    }
 }
 
 #[derive(Clone, Copy)]

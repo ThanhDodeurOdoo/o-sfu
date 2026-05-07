@@ -1,4 +1,4 @@
-use o_sfu_router::{MediaCapabilities as RouterRtpCapabilities, RouterId};
+use o_sfu_router::RouterId;
 
 use super::shared::{RoomState, SourceKey};
 #[cfg(test)]
@@ -28,13 +28,19 @@ impl RoomState {
             .is_some()
     }
 
-    pub(in crate::runtime::room) fn parsed_client_rtp_capabilities(
+    pub(in crate::runtime::room) fn session_client_rtp_codec_names(
         &self,
         user_id: &UserId,
-    ) -> Option<RouterRtpCapabilities> {
+    ) -> Option<Vec<String>> {
         self.users
             .get(user_id)
-            .and_then(|user| user.parsed_client_rtp_capabilities.clone())
+            .and_then(|user| user.parsed_client_rtp_capabilities.as_ref())
+            .map(|capabilities| {
+                capabilities
+                    .codecs()
+                    .map(|codec| codec.codec_name().to_owned())
+                    .collect()
+            })
     }
 
     pub(in crate::runtime::room) fn producer_count(&self) -> usize {
