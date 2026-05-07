@@ -38,33 +38,34 @@ pub(super) enum MediaTransportBackend {
     Fake(Arc<FakeMediaTransport>),
 }
 
+macro_rules! delegate_backend {
+    ($self:expr, $method:ident($($arg:expr),* $(,)?).await) => {
+        match $self {
+            Self::Rtc(transport) => transport.$method($($arg),*).await,
+            Self::Fake(transport) => transport.$method($($arg),*).await,
+        }
+    };
+    ($self:expr, $method:ident($($arg:expr),* $(,)?)) => {
+        match $self {
+            Self::Rtc(transport) => transport.$method($($arg),*),
+            Self::Fake(transport) => transport.$method($($arg),*),
+        }
+    };
+}
+
 impl NegotiationPort for MediaTransportBackend {
     async fn create_initial_session_offer(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        match self {
-            Self::Rtc(transport) => transport.create_initial_session_offer(session_key).await,
-            Self::Fake(transport) => transport.create_initial_session_offer(session_key).await,
-        }
+        delegate_backend!(self, create_initial_session_offer(session_key).await)
     }
 
     async fn create_session_renegotiation_offer(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        match self {
-            Self::Rtc(transport) => {
-                transport
-                    .create_session_renegotiation_offer(session_key)
-                    .await
-            }
-            Self::Fake(transport) => {
-                transport
-                    .create_session_renegotiation_offer(session_key)
-                    .await
-            }
-        }
+        delegate_backend!(self, create_session_renegotiation_offer(session_key).await)
     }
 
     async fn apply_session_answer(
@@ -72,18 +73,7 @@ impl NegotiationPort for MediaTransportBackend {
         session_key: &TransportSessionKey,
         answer_sdp: &str,
     ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-        match self {
-            Self::Rtc(transport) => {
-                transport
-                    .apply_session_answer(session_key, answer_sdp)
-                    .await
-            }
-            Self::Fake(transport) => {
-                transport
-                    .apply_session_answer(session_key, answer_sdp)
-                    .await
-            }
-        }
+        delegate_backend!(self, apply_session_answer(session_key, answer_sdp).await)
     }
 
     fn negotiated_client_rtp_capabilities(
@@ -91,12 +81,10 @@ impl NegotiationPort for MediaTransportBackend {
         answer_sdp: &str,
         offered_router_capabilities: &MediaCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
-        match self {
-            Self::Rtc(transport) => transport
-                .negotiated_client_rtp_capabilities(answer_sdp, offered_router_capabilities),
-            Self::Fake(transport) => transport
-                .negotiated_client_rtp_capabilities(answer_sdp, offered_router_capabilities),
-        }
+        delegate_backend!(
+            self,
+            negotiated_client_rtp_capabilities(answer_sdp, offered_router_capabilities)
+        )
     }
 }
 
@@ -105,10 +93,7 @@ impl SessionPort for MediaTransportBackend {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
-        match self {
-            Self::Rtc(transport) => transport.close_session(session_key).await,
-            Self::Fake(transport) => transport.close_session(session_key).await,
-        }
+        delegate_backend!(self, close_session(session_key).await)
     }
 }
 
@@ -118,18 +103,7 @@ impl MediaPort for MediaTransportBackend {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        match self {
-            Self::Rtc(transport) => {
-                transport
-                    .remove_media(session_key, transport_media_id)
-                    .await
-            }
-            Self::Fake(transport) => {
-                transport
-                    .remove_media(session_key, transport_media_id)
-                    .await
-            }
-        }
+        delegate_backend!(self, remove_media(session_key, transport_media_id).await)
     }
 
     async fn publish_media(
@@ -138,18 +112,10 @@ impl MediaPort for MediaTransportBackend {
         media_kind: MediaKind,
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        match self {
-            Self::Rtc(transport) => {
-                transport
-                    .publish_media(session_key, media_kind, rtp_parameters)
-                    .await
-            }
-            Self::Fake(transport) => {
-                transport
-                    .publish_media(session_key, media_kind, rtp_parameters)
-                    .await
-            }
-        }
+        delegate_backend!(
+            self,
+            publish_media(session_key, media_kind, rtp_parameters).await
+        )
     }
 
     async fn consume_media(
@@ -160,30 +126,17 @@ impl MediaPort for MediaTransportBackend {
         source_media_id: TransportMediaId,
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        match self {
-            Self::Rtc(transport) => {
-                transport
-                    .consume_media(
-                        consumer_session_key,
-                        media_kind,
-                        source_session_key,
-                        source_media_id,
-                        consumer_rtp_parameters,
-                    )
-                    .await
-            }
-            Self::Fake(transport) => {
-                transport
-                    .consume_media(
-                        consumer_session_key,
-                        media_kind,
-                        source_session_key,
-                        source_media_id,
-                        consumer_rtp_parameters,
-                    )
-                    .await
-            }
-        }
+        delegate_backend!(
+            self,
+            consume_media(
+                consumer_session_key,
+                media_kind,
+                source_session_key,
+                source_media_id,
+                consumer_rtp_parameters,
+            )
+            .await
+        )
     }
 
     async fn set_producer_active(
@@ -248,40 +201,24 @@ impl MediaPort for MediaTransportBackend {
         source_transport_media_id: TransportMediaId,
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
-        match self {
-            Self::Rtc(transport) => {
-                transport
-                    .set_consumer_packet_gate(
-                        consumer_session_key,
-                        consumer_transport_media_id,
-                        source_session_key,
-                        source_transport_media_id,
-                        packet_gate,
-                    )
-                    .await
-            }
-            Self::Fake(transport) => {
-                transport
-                    .set_consumer_packet_gate(
-                        consumer_session_key,
-                        consumer_transport_media_id,
-                        source_session_key,
-                        source_transport_media_id,
-                        packet_gate,
-                    )
-                    .await
-            }
-        }
+        delegate_backend!(
+            self,
+            set_consumer_packet_gate(
+                consumer_session_key,
+                consumer_transport_media_id,
+                source_session_key,
+                source_transport_media_id,
+                packet_gate,
+            )
+            .await
+        )
     }
 
     async fn set_consumer_packet_gates(
         &self,
         updates: &[ConsumerPacketGateUpdate],
     ) -> Vec<Result<(), TransportAdapterError>> {
-        match self {
-            Self::Rtc(transport) => transport.set_consumer_packet_gates(updates).await,
-            Self::Fake(transport) => transport.set_consumer_packet_gates(updates).await,
-        }
+        delegate_backend!(self, set_consumer_packet_gates(updates).await)
     }
 
     async fn request_consumer_keyframe(
@@ -291,28 +228,16 @@ impl MediaPort for MediaTransportBackend {
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        match self {
-            Self::Rtc(transport) => {
-                transport
-                    .request_consumer_keyframe(
-                        consumer_session_key,
-                        consumer_transport_media_id,
-                        source_session_key,
-                        source_transport_media_id,
-                    )
-                    .await
-            }
-            Self::Fake(transport) => {
-                transport
-                    .request_consumer_keyframe(
-                        consumer_session_key,
-                        consumer_transport_media_id,
-                        source_session_key,
-                        source_transport_media_id,
-                    )
-                    .await
-            }
-        }
+        delegate_backend!(
+            self,
+            request_consumer_keyframe(
+                consumer_session_key,
+                consumer_transport_media_id,
+                source_session_key,
+                source_transport_media_id,
+            )
+            .await
+        )
     }
 
     async fn transport_media_mid(
@@ -320,18 +245,10 @@ impl MediaPort for MediaTransportBackend {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Option<String> {
-        match self {
-            Self::Rtc(transport) => {
-                transport
-                    .transport_media_mid(session_key, transport_media_id)
-                    .await
-            }
-            Self::Fake(transport) => {
-                transport
-                    .transport_media_mid(session_key, transport_media_id)
-                    .await
-            }
-        }
+        delegate_backend!(
+            self,
+            transport_media_mid(session_key, transport_media_id).await
+        )
     }
 }
 
@@ -340,87 +257,52 @@ impl ObservabilityPort for MediaTransportBackend {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
-        match self {
-            Self::Rtc(transport) => transport.transport_bitrate_snapshot(session_keys),
-            Self::Fake(transport) => transport.transport_bitrate_snapshot(session_keys),
-        }
+        delegate_backend!(self, transport_bitrate_snapshot(session_keys))
     }
 
     fn receiver_bandwidth_snapshot(
         &self,
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
-        match self {
-            Self::Rtc(transport) => transport.receiver_bandwidth_snapshot(session_keys),
-            Self::Fake(transport) => transport.receiver_bandwidth_snapshot(session_keys),
-        }
+        delegate_backend!(self, receiver_bandwidth_snapshot(session_keys))
     }
 
     fn placement_pressure_snapshot(
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportPlacementPressureSnapshot {
-        match self {
-            Self::Rtc(transport) => transport.placement_pressure_snapshot(session_keys),
-            Self::Fake(transport) => transport.placement_pressure_snapshot(session_keys),
-        }
+        delegate_backend!(self, placement_pressure_snapshot(session_keys))
     }
 
     async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
-        match self {
-            Self::Rtc(transport) => transport.active_speaker_source_snapshot().await,
-            Self::Fake(transport) => transport.active_speaker_source_snapshot().await,
-        }
+        delegate_backend!(self, active_speaker_source_snapshot().await)
     }
 
     async fn active_speaker_diagnostic_snapshot(&self) -> Vec<ActiveSpeakerSourceDiagnostic> {
-        match self {
-            Self::Rtc(transport) => transport.active_speaker_diagnostic_snapshot().await,
-            Self::Fake(transport) => transport.active_speaker_diagnostic_snapshot().await,
-        }
+        delegate_backend!(self, active_speaker_diagnostic_snapshot().await)
     }
 
     async fn next_active_speaker_deadline(&self) -> Option<Instant> {
-        match self {
-            Self::Rtc(transport) => transport.next_active_speaker_deadline().await,
-            Self::Fake(transport) => transport.next_active_speaker_deadline().await,
-        }
+        delegate_backend!(self, next_active_speaker_deadline().await)
     }
 
     async fn expired_active_speaker_room_instance_ids(
         &self,
         now: Instant,
     ) -> BTreeSet<RoomInstanceId> {
-        match self {
-            Self::Rtc(transport) => {
-                transport
-                    .expired_active_speaker_room_instance_ids(now)
-                    .await
-            }
-            Self::Fake(transport) => {
-                transport
-                    .expired_active_speaker_room_instance_ids(now)
-                    .await
-            }
-        }
+        delegate_backend!(self, expired_active_speaker_room_instance_ids(now).await)
     }
 
     fn session_transport_health(
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
-        match self {
-            Self::Rtc(transport) => transport.session_transport_health(session_key),
-            Self::Fake(transport) => transport.session_transport_health(session_key),
-        }
+        delegate_backend!(self, session_transport_health(session_key))
     }
 }
 
 impl SourcePolicyPort for MediaTransportBackend {
     fn source_policy_subscription(&self) -> SourcePolicyUpdateSubscription {
-        match self {
-            Self::Rtc(transport) => transport.source_policy_subscription(),
-            Self::Fake(transport) => transport.source_policy_subscription(),
-        }
+        delegate_backend!(self, source_policy_subscription())
     }
 }
