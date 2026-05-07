@@ -33,10 +33,10 @@ use crate::{
     runtime::{
         RoomInstanceId, UserId,
         media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
-        metrics::{RtpForwardDestinationKind, RuntimeMetrics},
+        metrics::{MetricName, RtpForwardDestinationKind, RuntimeMetrics, RuntimeMetricsSnapshot},
         packet_sink_registry::{
-            PacketSink as MediaPacketSink, RegisteredPacketSink, RoomPacketSinkRegistry,
-            into_packet_sink,
+            PacketSink as MediaPacketSink, PacketSinkLookup, RegisteredPacketSink,
+            RoomPacketSinkRegistry, into_packet_sink,
         },
         rtc_engine::{
             bootstrap,
@@ -86,6 +86,160 @@ trait MediaSource {
 impl MediaSource for RoomPacketSinkRegistry {
     fn activate_room(&self, room_instance_id: RoomInstanceId, sink: Arc<dyn MediaPacketSink>) {
         self.register_room(room_instance_id, sink, RtpForwardDestinationKind::Recording);
+    }
+}
+
+trait RuntimeMetricsSnapshotTestExt {
+    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
+
+    fn rtc_datagram_fallback_scans(&self) -> u64 {
+        self.counter_value(MetricName::RtcDatagramFallbackScansTotal, &[])
+    }
+
+    fn rtc_datagram_scan_users(&self) -> u64 {
+        self.counter_value(MetricName::RtcDatagramScanUsersTotal, &[])
+    }
+
+    fn rtc_datagram_drops_recent_miss_cache(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtcDatagramDropsTotal,
+            &[("reason", "recent_miss_cache")],
+        )
+    }
+
+    fn rtc_datagram_drops_source_rate_limited(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtcDatagramDropsTotal,
+            &[("reason", "source_rate_limited")],
+        )
+    }
+
+    fn rtc_datagram_drops_no_user(&self) -> u64 {
+        self.counter_value(MetricName::RtcDatagramDropsTotal, &[("reason", "no_user")])
+    }
+
+    fn rtc_datagram_drops_malformed(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtcDatagramDropsTotal,
+            &[("reason", "malformed")],
+        )
+    }
+
+    fn rtc_route_control_absorbed(&self) -> u64 {
+        self.counter_value(MetricName::RtcRouteControlTotal, &[("outcome", "absorbed")])
+    }
+
+    fn rtc_route_control_forwarded(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtcRouteControlTotal,
+            &[("outcome", "forwarded")],
+        )
+    }
+
+    fn rtc_route_control_layer_allowed(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtcRouteControlTotal,
+            &[("outcome", "layer_allowed")],
+        )
+    }
+
+    fn rtc_route_control_layer_dropped(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtcRouteControlTotal,
+            &[("outcome", "layer_dropped")],
+        )
+    }
+
+    fn rtp_forwarded_packets_local_rtc(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtpForwardedPacketsTotal,
+            &[("destination", "local_rtc")],
+        )
+    }
+
+    fn rtp_forwarded_packets_recording(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtpForwardedPacketsTotal,
+            &[("destination", "recording")],
+        )
+    }
+
+    fn rtp_forwarded_packets_intra_node_relay(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtpForwardedPacketsTotal,
+            &[("destination", "intra_node_relay")],
+        )
+    }
+
+    fn rtp_forwarded_packets_inter_node_relay(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtpForwardedPacketsTotal,
+            &[("destination", "inter_node_relay")],
+        )
+    }
+
+    fn rtp_forwarded_payload_bytes_local_rtc(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtpForwardedPayloadBytesTotal,
+            &[("destination", "local_rtc")],
+        )
+    }
+
+    fn rtp_forwarded_payload_bytes_recording(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtpForwardedPayloadBytesTotal,
+            &[("destination", "recording")],
+        )
+    }
+
+    fn rtp_forwarded_payload_bytes_intra_node_relay(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtpForwardedPayloadBytesTotal,
+            &[("destination", "intra_node_relay")],
+        )
+    }
+
+    fn rtp_forwarded_payload_bytes_inter_node_relay(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtpForwardedPayloadBytesTotal,
+            &[("destination", "inter_node_relay")],
+        )
+    }
+
+    fn rtp_payload_bytes_egress(&self) -> u64 {
+        self.counter_value(MetricName::RtpPayloadBytesTotal, &[("direction", "egress")])
+    }
+
+    fn rtp_relay_overload_drops_intra_node_relay(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtpRelayOverloadDropsTotal,
+            &[("destination", "intra_node_relay")],
+        )
+    }
+}
+
+impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {
+    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
+        self.counter(name, labels).unwrap_or(0)
+    }
+}
+
+fn populate_forward_routes(
+    state: &RtcBootstrapState,
+    packet_sinks: &impl PacketSinkLookup,
+    metrics: &RuntimeMetrics,
+    pending_packets: &mut [super::super::forwarded_packet::ForwardedPacket],
+    forwards: &mut Vec<super::super::forwarding_destination::PacketForward>,
+) {
+    for (packet_idx, packet) in pending_packets.iter_mut().enumerate() {
+        super::super::forwarding_planner::populate_forward_routes_for_packet(
+            state,
+            packet_sinks,
+            metrics,
+            packet_idx,
+            packet,
+            forwards,
+        );
     }
 }
 
@@ -352,7 +506,7 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
         b"payload",
     ));
 
-    super::super::forwarding_planner::populate_forward_routes(
+    populate_forward_routes(
         &state,
         &packet_sink_registry,
         &metrics,
@@ -581,7 +735,7 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
         &metrics,
         &mut buffers,
     );
-    super::super::forwarding_planner::populate_forward_routes(
+    populate_forward_routes(
         &state,
         &packet_sink_registry,
         &metrics,

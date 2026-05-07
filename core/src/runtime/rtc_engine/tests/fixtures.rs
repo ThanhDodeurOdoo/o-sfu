@@ -33,10 +33,92 @@ pub(super) use crate::{
             ActiveSpeakerSource, MediaTransportDeps, RtcTransportConfig, SessionOffer,
             SourcePolicySignal, TransportAdapterError, TransportMediaId, TransportSessionKey,
         },
-        metrics::RuntimeMetrics,
+        metrics::{MetricName, RuntimeMetrics, RuntimeMetricsSnapshot},
         packet_sink_registry::RoomPacketSinkRegistry,
     },
 };
+
+pub(super) trait RuntimeMetricsSnapshotTestExt {
+    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
+    fn gauge_value(&self, name: MetricName, labels: &[(&str, &str)]) -> i64;
+    fn histogram_bucket_value(
+        &self,
+        name: MetricName,
+        labels: &[(&str, &str)],
+        upper_bound: &str,
+    ) -> u64;
+    fn histogram_count_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
+
+    fn connected_transport_users(&self) -> i64 {
+        self.gauge_value(MetricName::TransportHealthUsers, &[("state", "connected")])
+    }
+
+    fn disconnected_transport_users(&self) -> i64 {
+        self.gauge_value(
+            MetricName::TransportHealthUsers,
+            &[("state", "disconnected")],
+        )
+    }
+
+    fn active_transport_users(&self) -> i64 {
+        self.gauge_value(MetricName::TransportUsersActive, &[])
+    }
+
+    fn transport_user_lifetime_le_1_second(&self) -> u64 {
+        self.histogram_bucket("1")
+    }
+
+    fn transport_user_lifetime_count(&self) -> u64 {
+        self.histogram_count()
+    }
+
+    fn rtc_route_control_layer_allowed(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtcRouteControlTotal,
+            &[("outcome", "layer_allowed")],
+        )
+    }
+
+    fn rtc_route_control_layer_dropped(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtcRouteControlTotal,
+            &[("outcome", "layer_dropped")],
+        )
+    }
+
+    fn histogram_bucket(&self, upper_bound: &str) -> u64 {
+        self.histogram_bucket_value(MetricName::TransportUserLifetimeSeconds, &[], upper_bound)
+    }
+
+    fn histogram_count(&self) -> u64 {
+        self.histogram_count_value(MetricName::TransportUserLifetimeSeconds, &[])
+    }
+}
+
+impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {
+    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
+        self.counter(name, labels).unwrap_or(0)
+    }
+
+    fn gauge_value(&self, name: MetricName, labels: &[(&str, &str)]) -> i64 {
+        self.gauge(name, labels).unwrap_or(0)
+    }
+
+    fn histogram_bucket_value(
+        &self,
+        name: MetricName,
+        labels: &[(&str, &str)],
+        upper_bound: &str,
+    ) -> u64 {
+        self.histogram(name, labels)
+            .map_or(0, |histogram| histogram.bucket(upper_bound))
+    }
+
+    fn histogram_count_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
+        self.histogram(name, labels)
+            .map_or(0, |histogram| histogram.count)
+    }
+}
 
 pub(super) fn transport_key(
     room_instance_id: u64,

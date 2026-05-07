@@ -39,13 +39,187 @@ pub(super) use crate::{
             StatsResponse,
         },
         media_transport::MediaTransport,
-        metrics::RuntimeMetrics,
+        metrics::{MetricName, RuntimeMetrics, RuntimeMetricsSnapshot},
         room::{
             JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig,
             RoomManagerDeps, RoomRuntimePolicy, rtp_capabilities,
         },
     },
 };
+
+#[derive(Default)]
+pub(super) struct DurationHistogramSnapshot {
+    pub(super) count: u64,
+}
+
+pub(super) struct HttpInflightSnapshot {
+    pub(super) metrics: i64,
+}
+
+pub(super) struct HttpRequestDurationSnapshot {
+    pub(super) noop: DurationHistogramSnapshot,
+    pub(super) metrics: DurationHistogramSnapshot,
+}
+
+pub(super) trait RuntimeMetricsSnapshotTestExt {
+    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
+    fn gauge_value(&self, name: MetricName, labels: &[(&str, &str)]) -> i64;
+    fn histogram_count(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
+
+    fn http_noop_requests(&self) -> u64 {
+        self.counter_value(MetricName::HttpNoopRequestsTotal, &[])
+    }
+
+    fn http_room_requests(&self) -> u64 {
+        self.counter_value(MetricName::HttpRoomRequestsTotal, &[])
+    }
+
+    fn http_room_unauthorized(&self) -> u64 {
+        self.counter_value(
+            MetricName::HttpRoomResponsesTotal,
+            &[("status", "unauthorized")],
+        )
+    }
+
+    fn http_room_success(&self) -> u64 {
+        self.counter_value(MetricName::HttpRoomResponsesTotal, &[("status", "success")])
+    }
+
+    fn http_disconnect_requests(&self) -> u64 {
+        self.counter_value(MetricName::HttpDisconnectRequestsTotal, &[])
+    }
+
+    fn http_disconnect_success(&self) -> u64 {
+        self.counter_value(
+            MetricName::HttpDisconnectResponsesTotal,
+            &[("status", "success")],
+        )
+    }
+
+    fn http_disconnect_bad_request(&self) -> u64 {
+        self.counter_value(
+            MetricName::HttpDisconnectResponsesTotal,
+            &[("status", "bad_request")],
+        )
+    }
+
+    fn http_disconnect_unprocessable_entity(&self) -> u64 {
+        self.counter_value(
+            MetricName::HttpDisconnectResponsesTotal,
+            &[("status", "unprocessable_entity")],
+        )
+    }
+
+    fn http_metrics_requests(&self) -> u64 {
+        self.counter_value(MetricName::HttpMetricsRequestsTotal, &[])
+    }
+
+    fn http_inflight(&self) -> HttpInflightSnapshot {
+        HttpInflightSnapshot {
+            metrics: self.gauge_value(MetricName::HttpInflightRequests, &[("route", "metrics")]),
+        }
+    }
+
+    fn http_request_duration(&self) -> HttpRequestDurationSnapshot {
+        HttpRequestDurationSnapshot {
+            noop: DurationHistogramSnapshot {
+                count: self
+                    .histogram_count(MetricName::HttpRequestDurationSeconds, &[("route", "noop")]),
+            },
+            metrics: DurationHistogramSnapshot {
+                count: self.histogram_count(
+                    MetricName::HttpRequestDurationSeconds,
+                    &[("route", "metrics")],
+                ),
+            },
+        }
+    }
+
+    fn ws_handshake_duration(&self) -> DurationHistogramSnapshot {
+        DurationHistogramSnapshot {
+            count: self.histogram_count(MetricName::WsHandshakeDurationSeconds, &[]),
+        }
+    }
+
+    fn active_rooms(&self) -> i64 {
+        self.gauge_value(MetricName::RoomsActive, &[])
+    }
+
+    fn active_users(&self) -> i64 {
+        self.gauge_value(MetricName::UsersActive, &[])
+    }
+
+    fn active_publications(&self) -> i64 {
+        self.gauge_value(MetricName::PublicationsActive, &[])
+    }
+
+    fn active_subscriptions(&self) -> i64 {
+        self.gauge_value(MetricName::SubscriptionsActive, &[])
+    }
+
+    fn active_recording_rooms(&self) -> i64 {
+        self.gauge_value(MetricName::RecordingRoomsActive, &[])
+    }
+
+    fn active_transport_users(&self) -> i64 {
+        self.gauge_value(MetricName::TransportUsersActive, &[])
+    }
+
+    fn connected_transport_users(&self) -> i64 {
+        self.gauge_value(MetricName::TransportHealthUsers, &[("state", "connected")])
+    }
+
+    fn transport_health_transitions_unset_to_connected(&self) -> u64 {
+        self.counter_value(
+            MetricName::TransportHealthTransitionsTotal,
+            &[("from", "unset"), ("to", "connected")],
+        )
+    }
+
+    fn transport_ice_state_changes_checking(&self) -> u64 {
+        self.counter_value(
+            MetricName::TransportIceStateChangesTotal,
+            &[("state", "checking")],
+        )
+    }
+
+    fn transport_dtls_connected(&self) -> u64 {
+        self.counter_value(MetricName::TransportDtlsConnectedTotal, &[])
+    }
+
+    fn transport_user_lifetime_count(&self) -> u64 {
+        self.histogram_count(MetricName::TransportUserLifetimeSeconds, &[])
+    }
+
+    fn recording_start_accepted(&self) -> u64 {
+        self.counter_value(
+            MetricName::RecordingActionsTotal,
+            &[("action", "start"), ("outcome", "accepted")],
+        )
+    }
+
+    fn rtp_forwarded_packets_local_rtc(&self) -> u64 {
+        self.counter_value(
+            MetricName::RtpForwardedPacketsTotal,
+            &[("destination", "local_rtc")],
+        )
+    }
+}
+
+impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {
+    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
+        self.counter(name, labels).unwrap_or(0)
+    }
+
+    fn gauge_value(&self, name: MetricName, labels: &[(&str, &str)]) -> i64 {
+        self.gauge(name, labels).unwrap_or(0)
+    }
+
+    fn histogram_count(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
+        self.histogram(name, labels)
+            .map_or(0, |histogram| histogram.count)
+    }
+}
 
 pub(super) const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 

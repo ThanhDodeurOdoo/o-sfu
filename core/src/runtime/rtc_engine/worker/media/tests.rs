@@ -24,7 +24,7 @@ use crate::{
     runtime::{
         UserId,
         media_transport::{TransportAdapterError, TransportMediaId, TransportSessionKey},
-        metrics::RuntimeMetrics,
+        metrics::{MetricName, RuntimeMetrics, RuntimeMetricsSnapshot},
         rtc_engine::{
             bitrate::RtcBitrateState,
             bootstrap,
@@ -115,6 +115,35 @@ fn assert_consumer_packet_gate(
                 })
             )
     );
+}
+
+trait RuntimeMetricsSnapshotTestExt {
+    fn rtc_route_control_absorbed(&self) -> u64;
+    fn rtc_route_control_forwarded(&self) -> u64;
+    fn rtc_route_control_route_gated_relay_drops(&self) -> u64;
+}
+
+impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {
+    fn rtc_route_control_absorbed(&self) -> u64 {
+        self.counter(MetricName::RtcRouteControlTotal, &[("outcome", "absorbed")])
+            .unwrap_or(0)
+    }
+
+    fn rtc_route_control_forwarded(&self) -> u64 {
+        self.counter(
+            MetricName::RtcRouteControlTotal,
+            &[("outcome", "forwarded")],
+        )
+        .unwrap_or(0)
+    }
+
+    fn rtc_route_control_route_gated_relay_drops(&self) -> u64 {
+        self.counter(
+            MetricName::RtcRouteControlTotal,
+            &[("outcome", "route_gated_relay_drop")],
+        )
+        .unwrap_or(0)
+    }
 }
 
 #[test]

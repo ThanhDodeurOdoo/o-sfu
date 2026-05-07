@@ -39,7 +39,6 @@ use crate::runtime::{
     packet_sink_registry::{PacketSinkLookup, RegisteredPacketSink},
 };
 
-
 /// Plans destinations for one packet using already-projected transport state.
 ///
 /// Missing source identity is treated as a best-effort miss. The ingress path

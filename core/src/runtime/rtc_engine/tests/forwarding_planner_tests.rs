@@ -8,16 +8,20 @@ use std::{
 
 use str0m::media::Mid;
 
-use super::super::forwarding_planner::populate_forward_routes;
+use super::{
+    super::forwarding_planner::populate_forward_routes_for_packet,
+    fixtures::RuntimeMetricsSnapshotTestExt,
+};
 use crate::runtime::{
     ConnectionId, RoomInstanceId, UserId,
     media_transport::{TransportMediaId, TransportSessionKey},
     metrics::{RtpForwardDestinationKind, RuntimeMetrics},
     packet_sink_registry::{
-        PacketSink as MediaPacketSink, RoomPacketSinkRegistry, into_packet_sink,
+        PacketSink as MediaPacketSink, PacketSinkLookup, RoomPacketSinkRegistry, into_packet_sink,
     },
     rtc_engine::{
         demux::{MediaRouteDestination, MediaRouteEntry},
+        forwarded_packet::ForwardedPacket,
         forwarding_destination::{ForwardingDestination, PacketForward},
         media_registry::RegisteredMediaHandle,
         relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayTargetId},
@@ -61,6 +65,25 @@ impl MediaPacketSink for CountingSink {
         _payload: &[u8],
     ) {
         self.packets.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn populate_forward_routes(
+    state: &RtcBootstrapState,
+    packet_sinks: &impl PacketSinkLookup,
+    metrics: &RuntimeMetrics,
+    pending_packets: &mut [ForwardedPacket],
+    forwards: &mut Vec<PacketForward>,
+) {
+    for (packet_idx, packet) in pending_packets.iter_mut().enumerate() {
+        populate_forward_routes_for_packet(
+            state,
+            packet_sinks,
+            metrics,
+            packet_idx,
+            packet,
+            forwards,
+        );
     }
 }
 

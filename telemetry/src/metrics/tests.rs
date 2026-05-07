@@ -3,11 +3,264 @@ use std::time::Duration;
 use o_sfu_model::WebSocketCloseCode;
 
 use super::{
-    BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
+    BudgetSolverOutcome, HttpRoute, MetricName, RtcDatagramDropReason, RtcDatagramRoutePath,
     RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetrics,
     RuntimeMetricsSnapshot, SourceSelectionKind, TransportHealthState, TransportIceState,
     WsSessionLoopExitReason,
 };
+
+#[derive(Default)]
+struct DurationHistogramSnapshot {
+    le_10_millis: u64,
+    le_50_millis: u64,
+    le_100_millis: u64,
+    le_250_millis: u64,
+    count: u64,
+    sum_micros: u64,
+}
+
+struct HttpInflightSnapshot {
+    noop: i64,
+    metrics: i64,
+}
+
+struct HttpRequestDurationSnapshot {
+    noop: DurationHistogramSnapshot,
+}
+
+macro_rules! counter_accessors {
+    ($($method:ident => $metric:ident $labels:expr),+ $(,)?) => {
+        $(fn $method(&self) -> u64 {
+            self.counter_value(MetricName::$metric, $labels)
+        })+
+    };
+}
+
+macro_rules! gauge_accessors {
+    ($($method:ident => $metric:ident $labels:expr),+ $(,)?) => {
+        $(fn $method(&self) -> i64 {
+            self.gauge_value(MetricName::$metric, $labels)
+        })+
+    };
+}
+
+trait RuntimeMetricsSnapshotTestExt {
+    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
+    fn gauge_value(&self, name: MetricName, labels: &[(&str, &str)]) -> i64;
+    fn duration_snapshot(
+        &self,
+        name: MetricName,
+        labels: &[(&str, &str)],
+    ) -> DurationHistogramSnapshot;
+    fn histogram_bucket_value(
+        &self,
+        name: MetricName,
+        labels: &[(&str, &str)],
+        upper_bound: &str,
+    ) -> u64;
+    fn histogram_count_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
+    fn histogram_sum_micros_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
+
+    fn http_inflight(&self) -> HttpInflightSnapshot {
+        HttpInflightSnapshot {
+            noop: self.gauge_value(MetricName::HttpInflightRequests, &[("route", "noop")]),
+            metrics: self.gauge_value(MetricName::HttpInflightRequests, &[("route", "metrics")]),
+        }
+    }
+
+    fn http_request_duration(&self) -> HttpRequestDurationSnapshot {
+        HttpRequestDurationSnapshot {
+            noop: self
+                .duration_snapshot(MetricName::HttpRequestDurationSeconds, &[("route", "noop")]),
+        }
+    }
+
+    fn ws_handshake_duration(&self) -> DurationHistogramSnapshot {
+        self.duration_snapshot(MetricName::WsHandshakeDurationSeconds, &[])
+    }
+
+    fn ws_auth_duration(&self) -> DurationHistogramSnapshot {
+        self.duration_snapshot(MetricName::WsAuthDurationSeconds, &[])
+    }
+
+    fn ws_user_initialize_duration(&self) -> DurationHistogramSnapshot {
+        self.duration_snapshot(MetricName::WsUserInitializeDurationSeconds, &[])
+    }
+
+    counter_accessors! {
+        http_room_requests => HttpRoomRequestsTotal &[],
+        http_room_unauthorized => HttpRoomResponsesTotal &[("status", "unauthorized")],
+        http_disconnect_requests => HttpDisconnectRequestsTotal &[],
+        http_disconnect_unprocessable_entity => HttpDisconnectResponsesTotal &[("status", "unprocessable_entity")],
+        http_metrics_requests => HttpMetricsRequestsTotal &[],
+        ws_connections_accepted => WsConnectionsTotal &[("stage", "accepted")],
+        ws_handshake_credentials_received => WsConnectionsTotal &[("stage", "credentials_received")],
+        ws_users_joined => WsConnectionsTotal &[("stage", "joined")],
+        ws_handshake_rejected_timeout => WsHandshakeRejectionsTotal &[("close_code", "auth_timeout")],
+        ws_handshake_rejected_authentication_failed => WsHandshakeRejectionsTotal &[("close_code", "auth_failed")],
+        ws_handshake_rejected_protocol_error => WsHandshakeRejectionsTotal &[("close_code", "protocol_error")],
+        ws_handshake_rejected_room_full => WsHandshakeRejectionsTotal &[("close_code", "room_full")],
+        ws_handshake_rejected_error => WsHandshakeRejectionsTotal &[("close_code", "error")],
+        ws_user_loops_started => WsUserLoopsStartedTotal &[],
+        ws_user_loop_exits_user_closed => WsUserLoopExitsTotal &[("reason", "user_closed")],
+        ws_user_loop_exits_ping_timeout => WsUserLoopExitsTotal &[("reason", "ping_timeout")],
+        ws_user_loop_exits_transport_disconnected => WsUserLoopExitsTotal &[("reason", "transport_disconnected")],
+        ws_bus_parse_failures => WsBusParseFailuresTotal &[],
+        ws_bus_invalid_input_failures => WsBusFailuresTotal &[("kind", "invalid_input")],
+        ws_bus_unsupported_feature_failures => WsBusFailuresTotal &[("kind", "unsupported_feature")],
+        ws_bus_batches_received => WsBusBatchesTotal &[("direction", "received")],
+        ws_bus_envelopes_received => WsBusEnvelopesTotal &[("direction", "received")],
+        ws_bus_client_requests => WsBusClientFramesTotal &[("kind", "request")],
+        ws_bus_client_messages => WsBusClientFramesTotal &[("kind", "message")],
+        ws_bus_batches_sent => WsBusBatchesTotal &[("direction", "sent")],
+        ws_bus_envelopes_sent => WsBusEnvelopesTotal &[("direction", "sent")],
+        ws_bus_send_failures => WsBusFailuresTotal &[("kind", "send")],
+        recording_start_accepted => RecordingActionsTotal &[("action", "start"), ("outcome", "accepted")],
+        recording_captured_packets => RecordingCapturedPacketsTotal &[],
+        recording_captured_streams => RecordingCapturedStreamsTotal &[],
+        rtp_packets_ingress => RtpPacketsTotal &[("direction", "ingress")],
+        rtp_packets_egress => RtpPacketsTotal &[("direction", "egress")],
+        rtp_payload_bytes_ingress => RtpPayloadBytesTotal &[("direction", "ingress")],
+        rtp_payload_bytes_egress => RtpPayloadBytesTotal &[("direction", "egress")],
+        rtp_forwarded_packets_local_rtc => RtpForwardedPacketsTotal &[("destination", "local_rtc")],
+        rtp_forwarded_packets_recording => RtpForwardedPacketsTotal &[("destination", "recording")],
+        rtp_forwarded_packets_intra_node_relay => RtpForwardedPacketsTotal &[("destination", "intra_node_relay")],
+        rtp_forwarded_packets_inter_node_relay => RtpForwardedPacketsTotal &[("destination", "inter_node_relay")],
+        rtp_forwarded_payload_bytes_local_rtc => RtpForwardedPayloadBytesTotal &[("destination", "local_rtc")],
+        rtp_forwarded_payload_bytes_recording => RtpForwardedPayloadBytesTotal &[("destination", "recording")],
+        rtp_forwarded_payload_bytes_intra_node_relay => RtpForwardedPayloadBytesTotal &[("destination", "intra_node_relay")],
+        rtp_forwarded_payload_bytes_inter_node_relay => RtpForwardedPayloadBytesTotal &[("destination", "inter_node_relay")],
+        rtp_relay_overload_drops_intra_node_relay => RtpRelayOverloadDropsTotal &[("destination", "intra_node_relay")],
+        rtp_relay_overload_drops_inter_node_relay => RtpRelayOverloadDropsTotal &[("destination", "inter_node_relay")],
+        transport_health_transitions_unset_to_connected => TransportHealthTransitionsTotal &[("from", "unset"), ("to", "connected")],
+        transport_health_transitions_unset_to_disconnected => TransportHealthTransitionsTotal &[("from", "unset"), ("to", "disconnected")],
+        transport_health_transitions_connected_to_disconnected => TransportHealthTransitionsTotal &[("from", "connected"), ("to", "disconnected")],
+        transport_health_transitions_disconnected_to_connected => TransportHealthTransitionsTotal &[("from", "disconnected"), ("to", "connected")],
+        transport_health_transitions_connected_to_unset => TransportHealthTransitionsTotal &[("from", "connected"), ("to", "unset")],
+        transport_health_transitions_disconnected_to_unset => TransportHealthTransitionsTotal &[("from", "disconnected"), ("to", "unset")],
+        transport_ice_state_changes_new => TransportIceStateChangesTotal &[("state", "new")],
+        transport_ice_state_changes_checking => TransportIceStateChangesTotal &[("state", "checking")],
+        transport_ice_state_changes_connected => TransportIceStateChangesTotal &[("state", "connected")],
+        transport_ice_state_changes_completed => TransportIceStateChangesTotal &[("state", "completed")],
+        transport_ice_state_changes_disconnected => TransportIceStateChangesTotal &[("state", "disconnected")],
+        transport_dtls_connected => TransportDtlsConnectedTotal &[],
+        transport_cleanup_retries => TransportCleanupRetriesTotal &[],
+        transport_cleanup_retry_successes => TransportCleanupRetrySuccessesTotal &[],
+        transport_cleanup_failures_terminal => TransportCleanupFailuresTotal &[("kind", "terminal")],
+        transport_cleanup_failures_retry_exhausted => TransportCleanupFailuresTotal &[("kind", "retry_exhausted")],
+        transport_cleanup_failures_queue_full => TransportCleanupFailuresTotal &[("kind", "queue_full")],
+        transport_cleanup_failures_shutdown => TransportCleanupFailuresTotal &[("kind", "shutdown")],
+        rtc_datagram_routes_indexed => RtcDatagramRoutesTotal &[("path", "indexed")],
+        rtc_datagram_routes_scan => RtcDatagramRoutesTotal &[("path", "scan")],
+        rtc_datagram_drops_recent_miss_cache => RtcDatagramDropsTotal &[("reason", "recent_miss_cache")],
+        rtc_datagram_drops_source_rate_limited => RtcDatagramDropsTotal &[("reason", "source_rate_limited")],
+        rtc_datagram_drops_no_user => RtcDatagramDropsTotal &[("reason", "no_user")],
+        rtc_datagram_drops_malformed => RtcDatagramDropsTotal &[("reason", "malformed")],
+        rtc_datagram_fallback_scans => RtcDatagramFallbackScansTotal &[],
+        rtc_datagram_scan_users => RtcDatagramScanUsersTotal &[],
+        rtc_route_control_absorbed => RtcRouteControlTotal &[("outcome", "absorbed")],
+        rtc_route_control_forwarded => RtcRouteControlTotal &[("outcome", "forwarded")],
+        rtc_route_control_route_gated_relay_drops => RtcRouteControlTotal &[("outcome", "route_gated_relay_drop")],
+        rtc_route_control_layer_allowed => RtcRouteControlTotal &[("outcome", "layer_allowed")],
+        rtc_route_control_layer_dropped => RtcRouteControlTotal &[("outcome", "layer_dropped")],
+        source_selection_updates_open => SourceSelectionUpdatesTotal &[("selector", "open")],
+        source_selection_updates_encoding => SourceSelectionUpdatesTotal &[("selector", "encoding")],
+        source_selection_updates_operating_point => SourceSelectionUpdatesTotal &[("selector", "operating_point")],
+        source_selection_updates_room_policy_featured => SourceSelectionUpdatesTotal &[("selector", "room_policy_featured")],
+        source_selection_updates_room_policy_thumbnail => SourceSelectionUpdatesTotal &[("selector", "room_policy_thumbnail")],
+        budget_solver_outcomes_degraded => BudgetSolverOutcomesTotal &[("outcome", "degraded")],
+        budget_solver_outcomes_paused => BudgetSolverOutcomesTotal &[("outcome", "paused")],
+        budget_solver_outcomes_resumed => BudgetSolverOutcomesTotal &[("outcome", "resumed")],
+        budget_solver_outcomes_protected_over_budget => BudgetSolverOutcomesTotal &[("outcome", "protected_over_budget")],
+    }
+
+    gauge_accessors! {
+        active_rooms => RoomsActive &[],
+        active_users => UsersActive &[],
+        active_publications => PublicationsActive &[],
+        active_subscriptions => SubscriptionsActive &[],
+        active_recording_rooms => RecordingRoomsActive &[],
+        active_transport_users => TransportUsersActive &[],
+        connected_transport_users => TransportHealthUsers &[("state", "connected")],
+        disconnected_transport_users => TransportHealthUsers &[("state", "disconnected")],
+    }
+
+    fn transport_user_lifetime_le_1_second(&self) -> u64 {
+        self.transport_user_lifetime_bucket("1")
+    }
+
+    fn transport_user_lifetime_le_10_seconds(&self) -> u64 {
+        self.transport_user_lifetime_bucket("10")
+    }
+
+    fn transport_user_lifetime_le_60_seconds(&self) -> u64 {
+        self.transport_user_lifetime_bucket("60")
+    }
+
+    fn transport_user_lifetime_le_300_seconds(&self) -> u64 {
+        self.transport_user_lifetime_bucket("300")
+    }
+
+    fn transport_user_lifetime_count(&self) -> u64 {
+        self.histogram_count_value(MetricName::TransportUserLifetimeSeconds, &[])
+    }
+
+    fn transport_user_lifetime_sum_micros(&self) -> u64 {
+        self.histogram_sum_micros_value(MetricName::TransportUserLifetimeSeconds, &[])
+    }
+
+    fn transport_user_lifetime_bucket(&self, upper_bound: &str) -> u64 {
+        self.histogram_bucket_value(MetricName::TransportUserLifetimeSeconds, &[], upper_bound)
+    }
+}
+
+impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {
+    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
+        self.counter(name, labels).unwrap_or(0)
+    }
+
+    fn gauge_value(&self, name: MetricName, labels: &[(&str, &str)]) -> i64 {
+        self.gauge(name, labels).unwrap_or(0)
+    }
+
+    fn duration_snapshot(
+        &self,
+        name: MetricName,
+        labels: &[(&str, &str)],
+    ) -> DurationHistogramSnapshot {
+        let Some(histogram) = self.histogram(name, labels) else {
+            return DurationHistogramSnapshot::default();
+        };
+        DurationHistogramSnapshot {
+            le_10_millis: histogram.bucket("0.01"),
+            le_50_millis: histogram.bucket("0.05"),
+            le_100_millis: histogram.bucket("0.1"),
+            le_250_millis: histogram.bucket("0.25"),
+            count: histogram.count,
+            sum_micros: histogram.sum_micros,
+        }
+    }
+
+    fn histogram_bucket_value(
+        &self,
+        name: MetricName,
+        labels: &[(&str, &str)],
+        upper_bound: &str,
+    ) -> u64 {
+        self.histogram(name, labels)
+            .map_or(0, |histogram| histogram.bucket(upper_bound))
+    }
+
+    fn histogram_count_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
+        self.histogram(name, labels)
+            .map_or(0, |histogram| histogram.count)
+    }
+
+    fn histogram_sum_micros_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
+        self.histogram(name, labels)
+            .map_or(0, |histogram| histogram.sum_micros)
+    }
+}
 
 fn assert_live_gauges(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.active_rooms(), 1);

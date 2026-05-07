@@ -26,6 +26,7 @@ pub(super) use crate::{
             ActiveSpeakerSource, MediaTransport, SourcePacketGate, TransportMediaId,
             test_support::{FakeMediaTransport, FakeMediaTransportEvent},
         },
+        metrics::{MetricName, RuntimeMetricsSnapshot},
         source_model::{
             UserStreamId,
             test_support::{source_publish_intent_for_source, stream_id_for_source},
@@ -33,6 +34,83 @@ pub(super) use crate::{
     },
     transport::NegotiationPort,
 };
+
+pub(super) trait RuntimeMetricsSnapshotTestExt {
+    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
+    fn gauge_value(&self, name: MetricName, labels: &[(&str, &str)]) -> i64;
+
+    fn active_rooms(&self) -> i64 {
+        self.gauge_value(MetricName::RoomsActive, &[])
+    }
+
+    fn active_users(&self) -> i64 {
+        self.gauge_value(MetricName::UsersActive, &[])
+    }
+
+    fn active_publications(&self) -> i64 {
+        self.gauge_value(MetricName::PublicationsActive, &[])
+    }
+
+    fn active_subscriptions(&self) -> i64 {
+        self.gauge_value(MetricName::SubscriptionsActive, &[])
+    }
+
+    fn active_recording_rooms(&self) -> i64 {
+        self.gauge_value(MetricName::RecordingRoomsActive, &[])
+    }
+
+    fn recording_start_accepted(&self) -> u64 {
+        self.counter_value(
+            MetricName::RecordingActionsTotal,
+            &[("action", "start"), ("outcome", "accepted")],
+        )
+    }
+
+    fn recording_start_rejected(&self) -> u64 {
+        self.counter_value(
+            MetricName::RecordingActionsTotal,
+            &[("action", "start"), ("outcome", "rejected")],
+        )
+    }
+
+    fn recording_stop_accepted(&self) -> u64 {
+        self.counter_value(
+            MetricName::RecordingActionsTotal,
+            &[("action", "stop"), ("outcome", "accepted")],
+        )
+    }
+
+    fn recording_stop_rejected(&self) -> u64 {
+        self.counter_value(
+            MetricName::RecordingActionsTotal,
+            &[("action", "stop"), ("outcome", "rejected")],
+        )
+    }
+
+    fn transport_cleanup_failures_shutdown(&self) -> u64 {
+        self.counter_value(
+            MetricName::TransportCleanupFailuresTotal,
+            &[("kind", "shutdown")],
+        )
+    }
+
+    fn source_selection_updates_encoding(&self) -> u64 {
+        self.counter_value(
+            MetricName::SourceSelectionUpdatesTotal,
+            &[("selector", "encoding")],
+        )
+    }
+}
+
+impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {
+    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
+        self.counter(name, labels).unwrap_or(0)
+    }
+
+    fn gauge_value(&self, name: MetricName, labels: &[(&str, &str)]) -> i64 {
+        self.gauge(name, labels).unwrap_or(0)
+    }
+}
 
 /// Realistic client RTP capabilities (default codecs)
 pub(super) fn test_client_rtp_capabilities() -> MediaCapabilities {

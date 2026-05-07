@@ -15,7 +15,6 @@ pub use labels::{
     TransportCleanupFailureKind, TransportHealthState, TransportIceState, WsSessionLoopExitReason,
 };
 pub use snapshot::{
-    DurationHistogramSnapshot, HttpInflightSnapshot, MetricFamilySnapshot,
-    MetricHistogramBucketSnapshot, MetricHistogramSnapshot, MetricKind, MetricLabel, MetricSample,
-    MetricValue, RuntimeMetricsSnapshot,
+    MetricFamilySnapshot, MetricHistogramBucketSnapshot, MetricHistogramSnapshot, MetricKind,
+    MetricLabel, MetricSample, MetricValue, RuntimeMetricsSnapshot,
 };

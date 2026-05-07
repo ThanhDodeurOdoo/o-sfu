@@ -43,7 +43,7 @@ pub(super) use crate::{
             SessionBitrateLimits,
             test_support::{FakeMediaTransport, FakeMediaTransportEvent},
         },
-        metrics::RuntimeMetrics,
+        metrics::{MetricName, RuntimeMetrics, RuntimeMetricsSnapshot},
         room::{
             Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomManagerDeps,
             RoomRuntimePolicy, rtp_capabilities,
@@ -56,6 +56,78 @@ pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
 pub(super) type TestWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
 pub(super) type CreateRoomQuery = RoomConfig;
+
+pub(super) trait RuntimeMetricsSnapshotTestExt {
+    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
+
+    fn ws_connections_accepted(&self) -> u64 {
+        self.counter_value(MetricName::WsConnectionsTotal, &[("stage", "accepted")])
+    }
+
+    fn ws_handshake_credentials_received(&self) -> u64 {
+        self.counter_value(
+            MetricName::WsConnectionsTotal,
+            &[("stage", "credentials_received")],
+        )
+    }
+
+    fn ws_users_joined(&self) -> u64 {
+        self.counter_value(MetricName::WsConnectionsTotal, &[("stage", "joined")])
+    }
+
+    fn ws_handshake_rejected_timeout(&self) -> u64 {
+        self.counter_value(
+            MetricName::WsHandshakeRejectionsTotal,
+            &[("close_code", "auth_timeout")],
+        )
+    }
+
+    fn ws_handshake_rejected_protocol_error(&self) -> u64 {
+        self.counter_value(
+            MetricName::WsHandshakeRejectionsTotal,
+            &[("close_code", "protocol_error")],
+        )
+    }
+
+    fn ws_handshake_rejected_error(&self) -> u64 {
+        self.counter_value(
+            MetricName::WsHandshakeRejectionsTotal,
+            &[("close_code", "error")],
+        )
+    }
+
+    fn ws_user_loops_started(&self) -> u64 {
+        self.counter_value(MetricName::WsUserLoopsStartedTotal, &[])
+    }
+
+    fn ws_user_loop_exits_ping_timeout(&self) -> u64 {
+        self.counter_value(
+            MetricName::WsUserLoopExitsTotal,
+            &[("reason", "ping_timeout")],
+        )
+    }
+
+    fn ws_bus_parse_failures(&self) -> u64 {
+        self.counter_value(MetricName::WsBusParseFailuresTotal, &[])
+    }
+
+    fn ws_bus_invalid_input_failures(&self) -> u64 {
+        self.counter_value(MetricName::WsBusFailuresTotal, &[("kind", "invalid_input")])
+    }
+
+    fn ws_bus_unsupported_feature_failures(&self) -> u64 {
+        self.counter_value(
+            MetricName::WsBusFailuresTotal,
+            &[("kind", "unsupported_feature")],
+        )
+    }
+}
+
+impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {
+    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
+        self.counter(name, labels).unwrap_or(0)
+    }
+}
 
 /// App-level WebSocket subsystem fixture.
 ///
