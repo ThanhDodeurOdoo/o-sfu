@@ -14,7 +14,7 @@ use crate::runtime::{
         TransportAdapterError, TransportMediaId, TransportResult, TransportSessionKey,
     },
     rtc_engine::{
-        commands::{ConsumerPacketGateCommand, RelayCleanup, RemoteSourceControl},
+        commands::{ConsumerPacketGateCommand, RemoteSourceControl},
         demux::{MediaRouteDestination, MediaRouteEntry},
         media_registry::RegisteredMediaHandle,
         route_control::{PacketLayerGate, aggregate_packet_gates},
@@ -38,7 +38,6 @@ pub(in crate::runtime::rtc_engine::worker::media) struct ConsumerRouteRegistrati
     pub(in crate::runtime::rtc_engine::worker::media) consumer_transport_media_id: TransportMediaId,
     pub(in crate::runtime::rtc_engine::worker::media) consumer_mid: Mid,
     pub(in crate::runtime::rtc_engine::worker::media) source_transport_media_id: TransportMediaId,
-    pub(in crate::runtime::rtc_engine::worker::media) route_source: RouteSourceKind,
     pub(in crate::runtime::rtc_engine::worker::media) consumer_rtp_parameters:
         &'a RouterRtpParameters,
     pub(in crate::runtime::rtc_engine::worker::media) now: Instant,
@@ -158,7 +157,6 @@ pub(in crate::runtime::rtc_engine::worker::media) fn register_consumer_route(
         consumer_transport_media_id,
         consumer_mid,
         source_transport_media_id,
-        route_source,
         consumer_rtp_parameters,
         now,
     } = registration;
@@ -187,9 +185,6 @@ pub(in crate::runtime::rtc_engine::worker::media) fn register_consumer_route(
             pending_packet_gate,
         });
     refresh_source_packet_gate(state, source_transport_media_id);
-    if matches!(route_source, RouteSourceKind::Remote) {
-        remote_source::update_remote_route_active(state, source_transport_media_id, true);
-    }
 }
 
 pub(in crate::runtime::rtc_engine::worker::media) fn consumer_payload_type(
@@ -211,42 +206,26 @@ pub(in crate::runtime::rtc_engine::worker::media) fn remove_consumer_route(
     consumer_session_key: &TransportSessionKey,
     consumer_transport_media_id: TransportMediaId,
     source_transport_media_id: TransportMediaId,
-) -> Option<RelayCleanup> {
-    let relay_cleanup = state
-        .remote_source_registration(source_transport_media_id)
-        .map(|registration| {
-            RelayCleanup::new(
-                registration.source_session_key().clone(),
-                source_transport_media_id,
-            )
-        });
+) {
     let Some(route_entry) = state.media_route_index.get_mut(&source_transport_media_id) else {
         state.prune_remote_source_if_unrouted(source_transport_media_id);
-        return relay_cleanup;
+        return;
     };
-    let (removed_active_route, remove_route_entry) = {
+    let remove_route_entry = {
         let Some(position) = route_entry.destinations.iter().position(|destination| {
             destination.dest_session == *consumer_session_key
                 && destination.dest_transport_media_id == consumer_transport_media_id
         }) else {
-            return relay_cleanup;
+            return;
         };
-        let removed_active_route = route_entry
-            .destinations
-            .get(position)
-            .is_some_and(|destination| destination.active);
         route_entry.destinations.remove(position);
-        (removed_active_route, route_entry.destinations.is_empty())
+        route_entry.destinations.is_empty()
     };
-    if removed_active_route {
-        remote_source::update_remote_route_active(state, source_transport_media_id, false);
-    }
     if remove_route_entry {
         state.media_route_index.remove(&source_transport_media_id);
     }
     refresh_source_packet_gate(state, source_transport_media_id);
     state.prune_remote_source_if_unrouted(source_transport_media_id);
-    relay_cleanup
 }
 
 /// Recompute the effective packet gate for one source after consumer-route
@@ -352,7 +331,6 @@ pub(super) fn worker_set_consumer_active(
         return Ok(());
     }
     refresh_source_packet_gate(state, source_transport_media_id);
-    remote_source::update_remote_route_active(state, source_transport_media_id, active);
     Ok(())
 }
 

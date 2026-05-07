@@ -21,8 +21,8 @@ use crate::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
         ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
         SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
-        TransportMediaId, TransportPlacementPressureSnapshot, TransportSessionHealth,
-        TransportSessionKey,
+        TransportMediaId, TransportPlacementPressureSnapshot, TransportRelayRouteEffect,
+        TransportSessionHealth, TransportSessionKey,
     },
 };
 
@@ -222,6 +222,15 @@ pub trait MediaPort {
         source_media_id: TransportMediaId,
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError>;
+
+    /// Applies a room-owned relay route mutation.
+    ///
+    /// The transport may install, release or gate the packet-loop relay target.
+    /// Room state remains the lifecycle owner.
+    async fn apply_relay_route_effect(
+        &self,
+        effect: &TransportRelayRouteEffect,
+    ) -> Result<(), TransportAdapterError>;
 
     /// Updates whether a producer may forward packets.
     ///

@@ -25,7 +25,7 @@ use crate::{
     runtime::{
         ConnectionId, UserId,
         diagnostics::DiagnosticsEventData,
-        media_transport::{MediaPort, ObservabilityPort, ProducerActivity},
+        media_transport::{MediaPort, ObservabilityPort, ProducerActivity, SessionPort},
         source_model::{SourceSubscriptionIntent, UserStreamId},
         telemetry::schema::event as telemetry_event,
     },
@@ -36,7 +36,7 @@ impl Room {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
     ) -> bool {
         let mut state = self.state.write().await;
         let media_counts_before = RoomMediaCounts {
@@ -65,7 +65,7 @@ impl Room {
 
     pub(super) async fn bootstrap_consumer_targets(
         &self,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
         origin: ConsumerBootstrapOrigin,
         targets: Vec<super::state::PendingConsumerBootstrapTarget>,
     ) {
@@ -161,7 +161,7 @@ impl Room {
         connection_id: ConnectionId,
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
-        media_port: &(impl MediaPort + ObservabilityPort),
+        media_port: &(impl MediaPort + ObservabilityPort + SessionPort),
     ) -> SubscriptionUpdateOutcome {
         let effect_plan = {
             let mut state = self.state.write().await;
@@ -211,7 +211,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         stream_id: &UserStreamId,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
     ) -> UnpublishOutcome {
         let Some(effect_plan) = ({
             let state = self.state.read().await;

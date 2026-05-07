@@ -34,8 +34,8 @@ use crate::{
         ConsumerPacketGateUpdate, MediaPort, NegotiationPort, ObservabilityPort, ProducerActivity,
         ReceiverBandwidthSnapshot, SessionOffer, SessionPort, SourcePacketGate, SourcePolicyPort,
         SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
-        TransportMediaId, TransportPlacementPressureSnapshot, TransportSessionHealth,
-        TransportSessionKey,
+        TransportMediaId, TransportPlacementPressureSnapshot, TransportRelayRouteEffect,
+        TransportSessionHealth, TransportSessionKey,
     },
 };
 
@@ -461,6 +461,24 @@ impl MediaPort for MediaTransport {
                 mid = consumer_rtp_parameters.mid(),
                 ?error,
                 "media transport failed to declare consumer media"
+            );
+        }
+        result
+    }
+
+    async fn apply_relay_route_effect(
+        &self,
+        effect: &TransportRelayRouteEffect,
+    ) -> Result<(), TransportAdapterError> {
+        let result = self.backend.apply_relay_route_effect(effect).await;
+        if let Err(error) = &result {
+            warn!(
+                source_session_key = ?effect.source_session_key,
+                source_transport_media_id = ?effect.source_transport_media_id,
+                target_media_worker_id = effect.target_media_worker_id,
+                action = ?effect.action,
+                ?error,
+                "media transport failed to apply relay route effect"
             );
         }
         result

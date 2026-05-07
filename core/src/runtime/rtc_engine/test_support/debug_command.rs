@@ -48,11 +48,6 @@ pub(in crate::runtime::rtc_engine) enum DebugRtcWorkerCommand {
         response: oneshot::Sender<Option<u64>>,
     },
     #[cfg(test)]
-    RemoteSourceOwner {
-        source_transport_media_id: TransportMediaId,
-        response: oneshot::Sender<Option<TransportSessionKey>>,
-    },
-    #[cfg(test)]
     RouteEntry {
         source_session_key: TransportSessionKey,
         source_mid: Mid,

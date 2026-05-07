@@ -24,16 +24,56 @@ use super::{
     state::{
         ConsumerBootstrapOrigin, ConsumerRouteUpdate, PendingConsumerBootstrap,
         PendingConsumerBootstrapTarget, PlannedConsumerBootstrap, PlannedSubscriptionChange,
-        PreparedConsumerBootstrap, TransportMediaRemoval,
+        PreparedConsumerBootstrap, RelayRouteEffect, TransportMediaRemoval,
     },
 };
-use crate::runtime::{
-    ConnectionId,
-    diagnostics::DiagnosticsEventData,
-    media_transport::{ConsumerActivity, MediaPort, TransportMediaId},
-    source_model::UserStreamId,
-    telemetry::schema::event as telemetry_event,
+use crate::{
+    runtime::{
+        ConnectionId,
+        diagnostics::DiagnosticsEventData,
+        media_transport::{ConsumerActivity, MediaPort, SessionPort, TransportMediaId},
+        source_model::UserStreamId,
+        telemetry::schema::event as telemetry_event,
+    },
+    transport::{TransportRelayRouteAction, TransportRelayRouteEffect},
 };
+
+pub(super) async fn execute_relay_route_effects(
+    room: &Room,
+    media_port: &(impl MediaPort + SessionPort),
+    effects: &[RelayRouteEffect],
+) -> bool {
+    let mut applied = true;
+    for effect in effects {
+        let transport_effect = TransportRelayRouteEffect {
+            source_session_key: room
+                .transport_user_key(&effect.route.source_user, effect.route.source_connection),
+            source_transport_media_id: effect.route.source_media,
+            target_media_worker_id: effect.route.target_worker,
+            action: effect.action,
+        };
+        let result = media_port.apply_relay_route_effect(&transport_effect).await;
+        if let Err(error) = result {
+            applied = false;
+            if effect.action == TransportRelayRouteAction::Release {
+                room.record_relay_route_release_failure(
+                    effect,
+                    error,
+                    media_port,
+                    "media transport failed to release relay route",
+                )
+                .await;
+                continue;
+            }
+            warn!(
+                ?effect,
+                ?error,
+                "media transport failed to apply relay route effect"
+            );
+        }
+    }
+    applied
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct MediaCountDelta {
@@ -78,6 +118,7 @@ pub(super) struct SubscriptionEffectContext<'a> {
 #[derive(Debug, Default)]
 pub(super) struct SubscriptionEffectPlan {
     media_count_delta: Option<MediaCountDelta>,
+    relay_ops: Vec<RelayRouteEffect>,
     transport_ops: Vec<SubscriptionTransportOp>,
     bootstrap_ops: Vec<ConsumerBootstrapOp>,
 }
@@ -87,6 +128,7 @@ struct ConsumerBootstrapOp {
     target: PendingConsumerBootstrapTarget,
     prepared: PreparedConsumerBootstrap,
     pending_bootstrap: PendingConsumerBootstrap,
+    relay_effects: Vec<RelayRouteEffect>,
     origin: ConsumerBootstrapOrigin,
 }
 
@@ -136,6 +178,7 @@ impl SubscriptionEffectPlan {
             .collect();
         Self {
             media_count_delta: None,
+            relay_ops: Vec::new(),
             transport_ops,
             bootstrap_ops: Vec::new(),
         }
@@ -146,7 +189,7 @@ impl SubscriptionEffectPlan {
         context: SubscriptionEffectContext<'_>,
         planned_change: PlannedSubscriptionChange,
     ) -> Self {
-        let (route_updates, planned_bootstraps) = planned_change.into_parts();
+        let (route_updates, planned_bootstraps, relay_effects) = planned_change.into_parts();
         let mut effect_plan = Self::from_route_updates(
             room,
             context.user_id,
@@ -158,6 +201,7 @@ impl SubscriptionEffectPlan {
             context.media_counts_before,
             context.media_counts_after,
         ));
+        effect_plan.relay_ops = relay_effects;
         effect_plan.bootstrap_ops = planned_bootstraps
             .into_iter()
             .map(|planned_bootstrap| ConsumerBootstrapOp::new(planned_bootstrap, context.origin))
@@ -176,6 +220,7 @@ impl SubscriptionEffectPlan {
                 media_counts_before,
                 media_counts_after,
             )),
+            relay_ops: Vec::new(),
             transport_ops: Vec::new(),
             bootstrap_ops: planned_bootstraps
                 .into_iter()
@@ -190,10 +235,11 @@ impl SubscriptionEffectPlan {
     /// long pause the receiver may need a fresh decodable frame before it can
     /// render again, so successful video resumes trigger an immediate keyframe
     /// request on the underlying consumer route.
-    pub(super) async fn execute(self, room: &Room, media_port: &impl MediaPort) {
+    pub(super) async fn execute(self, room: &Room, media_port: &(impl MediaPort + SessionPort)) {
         if let Some(media_count_delta) = self.media_count_delta {
             media_count_delta.record(room);
         }
+        execute_relay_route_effects(room, media_port, &self.relay_ops).await;
         for transport_op in self.transport_ops {
             // Transport activity is best-effort here because the room intent has
             // already been committed, so the failure path is to surface it to
@@ -257,22 +303,29 @@ impl SubscriptionEffectPlan {
 
 impl ConsumerBootstrapOp {
     fn new(planned_bootstrap: PlannedConsumerBootstrap, origin: ConsumerBootstrapOrigin) -> Self {
-        let (target, prepared, pending_bootstrap) = planned_bootstrap.into_parts();
+        let (target, prepared, pending_bootstrap, relay_effects) = planned_bootstrap.into_parts();
         Self {
             target,
             prepared,
             pending_bootstrap,
+            relay_effects,
             origin,
         }
     }
 
-    async fn execute(self, room: &Room, media_port: &impl MediaPort) {
+    async fn execute(self, room: &Room, media_port: &(impl MediaPort + SessionPort)) {
         let Self {
             target,
             prepared,
             pending_bootstrap,
+            relay_effects,
             origin,
         } = self;
+        if !execute_relay_route_effects(room, media_port, &relay_effects).await {
+            room.release_pending_consumer_bootstrap(&target, media_port)
+                .await;
+            return;
+        }
         let Some((consumer_transport_media_id, consumer_mid)) =
             Self::declare_consumer_transport_media(&target, &prepared, origin, room, media_port)
                 .await
@@ -322,7 +375,7 @@ impl ConsumerBootstrapOp {
         prepared: &PreparedConsumerBootstrap,
         origin: ConsumerBootstrapOrigin,
         room: &Room,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
     ) -> Option<(TransportMediaId, Option<String>)> {
         let consumer_session_key =
             room.transport_user_key(target.consumer_user_id(), target.consumer_connection_id());
@@ -339,7 +392,8 @@ impl ConsumerBootstrapOp {
         {
             Ok(transport_media_id) => transport_media_id,
             Err(error) => {
-                room.release_pending_consumer_bootstrap(target).await;
+                room.release_pending_consumer_bootstrap(target, media_port)
+                    .await;
                 warn!(
                     consumer_user_id = ?target.consumer_user_id(),
                     consumer_connection_id = ?target.consumer_connection_id(),
@@ -368,7 +422,7 @@ impl ConsumerBootstrapOp {
     /// callbacks.
     async fn finish(
         room: &Room,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
         target: &PendingConsumerBootstrapTarget,
         origin: ConsumerBootstrapOrigin,
         consumer_transport_media_id: TransportMediaId,
@@ -381,6 +435,8 @@ impl ConsumerBootstrapOp {
     ) {
         let Some((sender, bootstrap, consumer_active)) = outbound else {
             media_count_delta.record(room);
+            room.release_pending_consumer_bootstrap(target, media_port)
+                .await;
             room
                 .cleanup_transport_media(
                     target.consumer_user_id(),
@@ -453,7 +509,7 @@ impl UnpublishEffectPlan {
     pub(super) async fn execute(
         self,
         room: &Room,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
     ) -> UnpublishOutcome {
         // Explicit unpublish tears down transport state first so a later state
         // commit failure cannot leave routable media alive for a track the room
@@ -488,6 +544,7 @@ impl UnpublishEffectPlan {
             return UnpublishOutcome::StateCommitRejected;
         };
         MediaCountDelta::new(media_counts_before, media_counts_after).record(room);
+        execute_relay_route_effects(room, media_port, outcome.relay_effects()).await;
         outcome.emit(&self.user_id, &self.stream_id);
         UnpublishOutcome::Unpublished
     }

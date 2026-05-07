@@ -10,6 +10,7 @@ use super::{
         user_negotiation::{UserNegotiation, UserNegotiationUpdate},
     },
     layout::UserLayout,
+    media::relay::RelayRouteEffect,
     presence::UserPresence,
     shared::{ActiveUser, RoomState, TransportMediaRemoval},
 };
@@ -55,12 +56,14 @@ pub(in crate::runtime::room) struct JoinUserOutcome {
     pub(in crate::runtime::room) user_id: UserId,
     pub(in crate::runtime::room) transport_media_worker_id: usize,
     pub(in crate::runtime::room) transport_removals: Vec<TransportMediaRemoval>,
+    pub(in crate::runtime::room) relay_effects: Vec<RelayRouteEffect>,
 }
 
 #[derive(Debug)]
 pub(in crate::runtime::room) struct LeaveUserOutcome {
     pub(in crate::runtime::room) effects: LifecycleEffects,
     pub(in crate::runtime::room) transport_removals: Vec<TransportMediaRemoval>,
+    pub(in crate::runtime::room) relay_effects: Vec<RelayRouteEffect>,
 }
 
 #[derive(Debug)]
@@ -85,6 +88,7 @@ pub(in crate::runtime::room) struct DisconnectUsersOutcome {
     pub(in crate::runtime::room) disconnected_users: Vec<DisconnectedUser>,
     pub(in crate::runtime::room) effects: LifecycleEffects,
     pub(in crate::runtime::room) transport_removals: Vec<TransportMediaRemoval>,
+    pub(in crate::runtime::room) relay_effects: Vec<RelayRouteEffect>,
 }
 
 impl RoomState {
@@ -244,9 +248,11 @@ impl RoomState {
         let previous_sender =
             self.install_joined_session(user_id, label, permissions, sender, connection_id);
         let had_previous_sender = previous_sender.is_some();
-        if had_previous_sender {
-            self.purge_user_media_state(user_id);
-        }
+        let relay_effects = if had_previous_sender {
+            self.purge_user_media_state(user_id)
+        } else {
+            Vec::new()
+        };
 
         let mut effects = LifecycleEffects {
             close_requests: Vec::new(),
@@ -284,6 +290,7 @@ impl RoomState {
             user_id: user_id.clone(),
             transport_media_worker_id,
             transport_removals,
+            relay_effects,
         })
     }
 
@@ -333,7 +340,7 @@ impl RoomState {
             );
             return None;
         }
-        self.purge_user_media_state(user_id);
+        let relay_effects = self.purge_user_media_state(user_id);
         let user = self.users.remove(user_id)?;
         let mut effects = LifecycleEffects {
             close_requests: Vec::new(),
@@ -349,6 +356,7 @@ impl RoomState {
         Some(LeaveUserOutcome {
             effects,
             transport_removals,
+            relay_effects,
         })
     }
 
@@ -423,6 +431,7 @@ impl RoomState {
         let mut close_requests = Vec::new();
         let mut disconnected_users = Vec::new();
         let mut fanouts = Vec::new();
+        let mut relay_effects = Vec::new();
         for user_id in user_ids {
             if !self.users.contains_key(user_id) {
                 continue;
@@ -439,7 +448,7 @@ impl RoomState {
                 .extend(self.collect_user_transport_removals(&BTreeSet::from([user_id.clone()])));
             if let Some(user) = self.users.remove(user_id) {
                 let connection_id = user.connection_id;
-                self.purge_user_media_state(user_id);
+                relay_effects.extend(self.purge_user_media_state(user_id));
                 disconnected_users.push(DisconnectedUser {
                     user_id: user_id.clone(),
                     connection_id,
@@ -460,6 +469,7 @@ impl RoomState {
                 fanouts,
             },
             transport_removals,
+            relay_effects,
         }
     }
 

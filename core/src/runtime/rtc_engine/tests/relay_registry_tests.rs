@@ -101,7 +101,7 @@ fn worker_local_relay_targets_keep_multiple_target_mailboxes_per_source() {
 }
 
 #[test]
-fn worker_local_relay_targets_reference_count_target_mailboxes_before_cleanup() {
+fn worker_local_relay_targets_do_not_reference_count_room_owners() {
     let mut state = RtcBootstrapState::default();
     let (mailbox, _rx) = RelayPacketMailbox::channel_for_test();
     let source_transport_media_id = TransportMediaId::new(12);
@@ -122,13 +122,6 @@ fn worker_local_relay_targets_reference_count_target_mailboxes_before_cleanup() 
     assert_eq!(
         state.active_relay_target_count_for_source(source_transport_media_id),
         1
-    );
-
-    state.remove_relay_target(source_transport_media_id, relay_target);
-    assert!(
-        state
-            .relay_targets_for_source(source_transport_media_id)
-            .is_some()
     );
 
     state.remove_relay_target(source_transport_media_id, relay_target);

@@ -773,7 +773,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
     assert!(
         adapter
             .media()
-            .remove_media_with_outcome(&consumer_session_key, consumer_media_id)
+            .remove_media(&consumer_session_key, consumer_media_id)
             .await
             .is_ok()
     );
@@ -833,7 +833,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_producer_removal() {
     assert!(
         adapter
             .media()
-            .remove_media_with_outcome(&session_key, producer_media_id)
+            .remove_media(&session_key, producer_media_id)
             .await
             .is_ok()
     );
@@ -906,7 +906,7 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
     assert!(
         adapter
             .media()
-            .remove_media_with_outcome(&session_key, producer_media_id)
+            .remove_media(&session_key, producer_media_id)
             .await
             .is_ok()
     );
@@ -1003,7 +1003,7 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
     assert!(
         adapter
             .media()
-            .remove_media_with_outcome(&consumer_session_key, first_consumer_media_id)
+            .remove_media(&consumer_session_key, first_consumer_media_id)
             .await
             .is_ok()
     );

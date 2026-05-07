@@ -19,10 +19,13 @@ use o_sfu_router::{
 };
 use tracing::{error, warn};
 
-use super::super::{
-    super::{RoomEventRequest, outbound::OutboundSender, topology::RoutedProducerId},
-    ids::{ConsumerRuntimeId, ProducerRuntimeId},
-    shared::{ConsumerKey, ConsumerState, PublishedProducer, RoomState, SourceKey},
+use super::{
+    super::{
+        super::{RoomEventRequest, outbound::OutboundSender, topology::RoutedProducerId},
+        ids::{ConsumerRuntimeId, ProducerRuntimeId},
+        shared::{ConsumerKey, ConsumerState, PublishedProducer, RoomState, SourceKey},
+    },
+    relay::RelayRouteEffect,
 };
 use crate::runtime::{
     ConnectionId, UserId,
@@ -76,6 +79,7 @@ pub(in crate::runtime::room) struct ConsumerKeyframeRefreshTarget {
 pub(in crate::runtime::room) struct PlannedSubscriptionChange {
     route_updates: Vec<ConsumerRouteUpdate>,
     bootstraps: Vec<PlannedConsumerBootstrap>,
+    relay_effects: Vec<RelayRouteEffect>,
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +121,7 @@ pub(in crate::runtime::room) struct PlannedConsumerBootstrap {
     target: PendingConsumerBootstrapTarget,
     prepared: PreparedConsumerBootstrap,
     pending_bootstrap: PendingConsumerBootstrap,
+    relay_effects: Vec<RelayRouteEffect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,7 +156,7 @@ impl RoomState {
             return PlannedSubscriptionChange::default();
         }
         self.persist_source_subscription_intents(user_id, target_user_id, intents);
-        let route_updates =
+        let (route_updates, relay_effects) =
             self.apply_subscription_route_updates(user_id, connection_id, target_user_id, intents);
         let bootstraps = self.plan_consumer_bootstraps_for_targets(
             self.collect_missing_consumer_targets_for_peer(user_id, connection_id, target_user_id),
@@ -159,6 +164,7 @@ impl RoomState {
         PlannedSubscriptionChange {
             route_updates,
             bootstraps,
+            relay_effects,
         }
     }
 
@@ -220,8 +226,9 @@ impl RoomState {
         connection_id: ConnectionId,
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
-    ) -> Vec<ConsumerRouteUpdate> {
+    ) -> (Vec<ConsumerRouteUpdate>, Vec<RelayRouteEffect>) {
         let mut accepted_updates = Vec::new();
+        let mut relay_effects = Vec::new();
         for (stream_id, intent) in intents {
             let Some(active) = intent.active() else {
                 continue;
@@ -266,8 +273,14 @@ impl RoomState {
                 media_kind,
                 active,
             });
+            relay_effects.extend(self.relay_routes.set_consumer_active(
+                user_id,
+                connection_id,
+                source_id,
+                active,
+            ));
         }
-        accepted_updates
+        (accepted_updates, relay_effects)
     }
 
     fn collect_missing_consumer_targets(
@@ -406,6 +419,7 @@ impl RoomState {
             .insert(consumer_key.clone());
         self.register_consumer_key(&consumer_key);
         let consumer_id = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
+        let relay_effects = self.reserve_relay_route(target, consumer_active);
         Some(PlannedConsumerBootstrap {
             target: target.clone(),
             prepared: PreparedConsumerBootstrap {
@@ -430,7 +444,49 @@ impl RoomState {
                 consumer_active,
                 producer: prepared_producer,
             },
+            relay_effects,
         })
+    }
+
+    fn reserve_relay_route(
+        &mut self,
+        target: &PendingConsumerBootstrapTarget,
+        consumer_active: bool,
+    ) -> Vec<RelayRouteEffect> {
+        let Some((source_connection, source_media, target_worker)) =
+            self.relay_route_for_target(target)
+        else {
+            return Vec::new();
+        };
+        self.relay_routes.reserve_consumer(
+            target,
+            source_connection,
+            source_media,
+            target_worker,
+            consumer_active,
+        )
+    }
+
+    fn relay_route_for_target(
+        &self,
+        target: &PendingConsumerBootstrapTarget,
+    ) -> Option<(ConnectionId, TransportMediaId, usize)> {
+        let source_worker = self
+            .topology
+            .home_placement_for_user(target.producer_user_id())?
+            .media_worker;
+        let target_worker = self
+            .topology
+            .home_placement_for_user(target.consumer_user_id())?
+            .media_worker;
+        if source_worker == target_worker {
+            return None;
+        }
+        Some((
+            target.producer_connection_id(),
+            target.transport_media_id(),
+            target_worker,
+        ))
     }
 
     fn consumer_source_selection_for_bootstrap(
@@ -528,10 +584,11 @@ impl RoomState {
     pub(in crate::runtime::room) fn release_pending_consumer_bootstrap(
         &mut self,
         target: &PendingConsumerBootstrapTarget,
-    ) {
+    ) -> Vec<RelayRouteEffect> {
         let consumer_key = ConsumerKey::new(&target.consumer_user_id, target.source_id());
         self.pending_consumer_bootstraps.remove(&consumer_key);
         self.prune_consumer_key_indexes_if_unused(&consumer_key);
+        self.relay_routes.release_target(target)
     }
 
     pub(in crate::runtime::room) fn desired_source_subscription_active(
@@ -650,8 +707,12 @@ impl RoomState {
 impl PlannedSubscriptionChange {
     pub(in crate::runtime::room) fn into_parts(
         self,
-    ) -> (Vec<ConsumerRouteUpdate>, Vec<PlannedConsumerBootstrap>) {
-        (self.route_updates, self.bootstraps)
+    ) -> (
+        Vec<ConsumerRouteUpdate>,
+        Vec<PlannedConsumerBootstrap>,
+        Vec<RelayRouteEffect>,
+    ) {
+        (self.route_updates, self.bootstraps, self.relay_effects)
     }
 }
 
@@ -748,8 +809,14 @@ impl PlannedConsumerBootstrap {
         PendingConsumerBootstrapTarget,
         PreparedConsumerBootstrap,
         PendingConsumerBootstrap,
+        Vec<RelayRouteEffect>,
     ) {
-        (self.target, self.prepared, self.pending_bootstrap)
+        (
+            self.target,
+            self.prepared,
+            self.pending_bootstrap,
+            self.relay_effects,
+        )
     }
 }
 

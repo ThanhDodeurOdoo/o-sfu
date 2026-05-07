@@ -7,6 +7,10 @@ use crate::{
         diagnostics::DiagnosticsStore, media_transport::TransportPlacementPressureSnapshot,
         metrics::RuntimeMetrics, packet_sink_registry::RoomPacketSinkRegistry,
     },
+    transport::{
+        TransportRelayRouteAction,
+        TransportRelayRouteAction::{Install, Release, SetActive},
+    },
 };
 
 fn spillover_room_manager(local_router_count: usize) -> RoomManager {
@@ -74,21 +78,151 @@ async fn assert_user_placement(
     );
 }
 
-async fn join_users_for_placement(room: &Arc<super::super::Room>, raw_user_ids: &[i64]) {
+async fn join_users_for_placement(
+    room: &Arc<super::super::Room>,
+    raw_user_ids: &[i64],
+) -> Vec<(UserId, ConnectionId)> {
+    let mut users = Vec::with_capacity(raw_user_ids.len());
     for raw_user_id in raw_user_ids {
+        let user_id = UserId::Integer(*raw_user_id);
         let (tx, _rx) = test_sender();
         let joined = room
             .test_api()
             .lifecycle()
-            .join_user(
-                UserId::Integer(*raw_user_id),
-                None,
-                UserPermissions::default(),
-                tx,
-            )
+            .join_user(user_id.clone(), None, UserPermissions::default(), tx)
             .await;
-        assert!(joined.is_ok());
+        users.push((user_id, joined.expect("user should join")));
     }
+    users
+}
+
+async fn join_ready_users(
+    room: &Arc<super::super::Room>,
+    raw_user_ids: &[i64],
+) -> Vec<(UserId, ConnectionId)> {
+    let users = join_users_for_placement(room, raw_user_ids).await;
+    for (user_id, _connection_id) in &users {
+        make_session_ready(room, user_id).await;
+    }
+    users
+}
+
+async fn camera_media_id(room: &Arc<super::super::Room>, user_id: &UserId) -> TransportMediaId {
+    let Some(connection_id) = room.test_api().inspect().user_connection_id(user_id).await else {
+        panic!("user should have a connection");
+    };
+    room.test_api()
+        .inspect()
+        .producer_transport_media_id(user_id, connection_id, TestSourceKind::ScalableVideo)
+        .await
+        .expect("camera producer should expose a transport media id")
+}
+
+type RelayRoute<'a> = (&'a UserId, TransportMediaId, usize);
+
+fn relay_matches(
+    event: &FakeMediaTransportEvent,
+    route: RelayRoute<'_>,
+    action: TransportRelayRouteAction,
+) -> bool {
+    matches!(
+        event,
+        FakeMediaTransportEvent::RelayRouteEffectApplied {
+            source_user_id: event_source_user_id,
+            source_transport_media_id,
+            target_media_worker_id: event_target_media_worker_id,
+            action: event_action,
+        } if event_source_user_id == route.0
+            && *source_transport_media_id == route.1
+            && *event_target_media_worker_id == route.2
+            && *event_action == action
+    )
+}
+
+fn relay_count(
+    fake: &FakeMediaTransport,
+    route: RelayRoute<'_>,
+    action: TransportRelayRouteAction,
+) -> usize {
+    fake.snapshot_events()
+        .iter()
+        .filter(|event| relay_matches(event, route, action))
+        .count()
+}
+
+fn assert_relay_count(
+    fake: &FakeMediaTransport,
+    route: RelayRoute<'_>,
+    action: TransportRelayRouteAction,
+    expected: usize,
+) {
+    assert_eq!(relay_count(fake, route, action), expected);
+}
+
+async fn set_camera_active(
+    room: &Arc<super::super::Room>,
+    consumer_id: &UserId,
+    publisher_id: &UserId,
+    active: bool,
+    media_transport: &MediaTransport,
+) {
+    room.test_api()
+        .media()
+        .update_subscription(
+            consumer_id,
+            publisher_id,
+            &TestSubscriptionStates {
+                scalable_video: Some(active),
+                ..TestSubscriptionStates::default()
+            },
+            media_transport,
+        )
+        .await;
+}
+
+async fn wait_video(fake: &FakeMediaTransport, consumer_id: &UserId, publisher_id: &UserId) {
+    wait_for_fake_event(fake, |event| {
+        matches!(
+            event,
+            FakeMediaTransportEvent::ConsumeMediaRequested {
+                consumer_user_id,
+                source_user_id,
+                media_kind: MediaKind::Video,
+            } if consumer_user_id == consumer_id && source_user_id == publisher_id
+        )
+    })
+    .await;
+}
+
+async fn wait_relay(
+    fake: &FakeMediaTransport,
+    route: RelayRoute<'_>,
+    action: TransportRelayRouteAction,
+) {
+    wait_for_fake_event(fake, |event| relay_matches(event, route, action)).await;
+}
+
+async fn leave(
+    room: &Arc<super::super::Room>,
+    user_id: &UserId,
+    connection_id: ConnectionId,
+    media_transport: &MediaTransport,
+) {
+    assert!(
+        room.test_api()
+            .lifecycle()
+            .leave_session_runtime(user_id, connection_id, media_transport)
+            .await
+    );
+}
+
+fn joined_connection(users: &[(UserId, ConnectionId)], expected_user_id: &UserId) -> ConnectionId {
+    users
+        .iter()
+        .find_map(|(user_id, connection_id)| {
+            (user_id == expected_user_id).then_some(*connection_id)
+        })
+        .expect("user should have joined")
 }
 
 #[tokio::test]
@@ -601,6 +735,148 @@ async fn room_spillover_publish_subscribe_and_leave_cleanup_stay_aligned() {
         None
     );
     assert_eq!(room.test_api().inspect().topology_router_count().await, 1);
+}
+
+#[tokio::test]
+async fn room_owned_relay_route_shares_remote_worker_lifecycle() {
+    let manager = spillover_room_manager(2);
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+    let (media_transport, fake) = fake_adapter();
+    let users = join_ready_users(&room, &[10, 20, 30, 40]).await;
+    let publisher_id = UserId::Integer(10);
+    let first_remote_id = UserId::Integer(20);
+    let second_remote_id = UserId::Integer(40);
+    let first_remote_connection = joined_connection(&users, &first_remote_id);
+    let second_remote_connection = joined_connection(&users, &second_remote_id);
+    let target_worker_id = room
+        .transport_user_key(&first_remote_id, first_remote_connection)
+        .media_worker_id();
+    assert_eq!(
+        room.transport_user_key(&second_remote_id, second_remote_connection)
+            .media_worker_id(),
+        target_worker_id
+    );
+
+    publish_track(
+        &room,
+        &publisher_id,
+        TestSourceKind::ScalableVideo,
+        MediaKind::Video,
+        test_video_rtp_parameters(),
+        &media_transport,
+    )
+    .await;
+    wait_video(&fake, &first_remote_id, &publisher_id).await;
+    wait_video(&fake, &second_remote_id, &publisher_id).await;
+
+    let source_media_id = camera_media_id(&room, &publisher_id).await;
+    let route = (&publisher_id, source_media_id, target_worker_id);
+    assert_relay_count(&fake, route, Install, 1);
+    assert_relay_count(&fake, route, SetActive(true), 1);
+
+    set_camera_active(
+        &room,
+        &first_remote_id,
+        &publisher_id,
+        false,
+        &media_transport,
+    )
+    .await;
+    assert_relay_count(&fake, route, SetActive(false), 0);
+
+    set_camera_active(
+        &room,
+        &second_remote_id,
+        &publisher_id,
+        false,
+        &media_transport,
+    )
+    .await;
+    wait_relay(&fake, route, SetActive(false)).await;
+
+    set_camera_active(
+        &room,
+        &first_remote_id,
+        &publisher_id,
+        true,
+        &media_transport,
+    )
+    .await;
+    wait_relay(&fake, route, SetActive(true)).await;
+
+    leave(
+        &room,
+        &second_remote_id,
+        second_remote_connection,
+        &media_transport,
+    )
+    .await;
+    assert_relay_count(&fake, route, Release, 0);
+
+    fake.fail_next_relay_release(publisher_id.clone(), source_media_id, target_worker_id);
+    leave(
+        &room,
+        &first_remote_id,
+        first_remote_connection,
+        &media_transport,
+    )
+    .await;
+    wait_relay(&fake, route, Release).await;
+    assert_relay_count(&fake, route, Release, 1);
+}
+
+#[tokio::test]
+async fn room_owned_relay_route_is_released_when_bootstrap_turns_stale() {
+    let manager = spillover_room_manager(2);
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+    let (media_transport, fake) = fake_adapter();
+    let users = join_ready_users(&room, &[10, 20]).await;
+    let publisher_id = UserId::Integer(10);
+    let subscriber_id = UserId::Integer(20);
+    let subscriber_connection = joined_connection(&users, &subscriber_id);
+    let target_worker_id = room
+        .transport_user_key(&subscriber_id, subscriber_connection)
+        .media_worker_id();
+
+    fake.set_consume_media_delay(Some(Duration::from_millis(200)));
+    let publish_room = Arc::clone(&room);
+    let publish_transport = media_transport.clone();
+    let publish_user_id = publisher_id.clone();
+    let publish_task = tokio::spawn(async move {
+        publish_track(
+            &publish_room,
+            &publish_user_id,
+            TestSourceKind::ScalableVideo,
+            MediaKind::Video,
+            test_video_rtp_parameters(),
+            &publish_transport,
+        )
+        .await
+    });
+    wait_video(&fake, &subscriber_id, &publisher_id).await;
+
+    let source_media_id = camera_media_id(&room, &publisher_id).await;
+    let route = (&publisher_id, source_media_id, target_worker_id);
+    assert_relay_count(&fake, route, Install, 1);
+
+    fake.fail_next_relay_release(publisher_id.clone(), source_media_id, target_worker_id);
+    leave(
+        &room,
+        &subscriber_id,
+        subscriber_connection,
+        &media_transport,
+    )
+    .await;
+    wait_relay(&fake, route, Release).await;
+    assert_relay_count(&fake, route, Release, 1);
+
+    fake.set_consume_media_delay(None);
+    let _ = publish_task.await.expect("publish task should finish");
+    assert_eq!(room.test_api().inspect().consumer_count().await, 0);
 }
 
 #[tokio::test]

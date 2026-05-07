@@ -63,8 +63,7 @@ fn handle_debug_command(
         DebugRtcWorkerCommand::SessionStreamRxSsrc { .. }
         | DebugRtcWorkerCommand::SessionStreamTxSsrc { .. }
         | DebugRtcWorkerCommand::SessionMaxBitrateIn { .. }
-        | DebugRtcWorkerCommand::SessionMaxBitrateOut { .. }
-        | DebugRtcWorkerCommand::RemoteSourceOwner { .. } => {
+        | DebugRtcWorkerCommand::SessionMaxBitrateOut { .. } => {
             handle_debug_session_command(state, command);
         }
         DebugRtcWorkerCommand::RouteEntry { .. }
@@ -154,10 +153,6 @@ fn handle_debug_session_command(state: &mut RtcBootstrapState, command: DebugRtc
             session_key,
             response,
         } => respond_debug_session_max_bitrate_out(state, &session_key, response),
-        DebugRtcWorkerCommand::RemoteSourceOwner {
-            source_transport_media_id,
-            response,
-        } => respond_debug_remote_source_owner(state, source_transport_media_id, response),
         _ => {}
     }
 }
@@ -382,18 +377,6 @@ fn respond_debug_session_max_bitrate_out(
         .users
         .get(session_key)
         .and_then(|session_state| session_state.max_bitrate_out_bps);
-    let _ = response.send(value);
-}
-
-#[cfg(test)]
-fn respond_debug_remote_source_owner(
-    state: &RtcBootstrapState,
-    source_transport_media_id: TransportMediaId,
-    response: oneshot::Sender<Option<TransportSessionKey>>,
-) {
-    let value = state
-        .remote_source_registration(source_transport_media_id)
-        .map(|registration| registration.source_session_key().clone());
     let _ = response.send(value);
 }
 

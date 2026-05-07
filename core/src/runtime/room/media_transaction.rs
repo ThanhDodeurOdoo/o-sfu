@@ -509,7 +509,7 @@ impl CommittedPublish {
         self,
         room: &Room,
         observability_port: &impl ObservabilityPort,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
     ) {
         room.record_media_count_delta(self.media_counts_before, self.media_counts_after);
         room.bootstrap_consumer_targets(
@@ -740,19 +740,24 @@ impl Room {
     pub(super) async fn release_pending_consumer_bootstrap(
         &self,
         target: &PendingConsumerBootstrapTarget,
+        media_port: &(impl MediaPort + SessionPort),
     ) {
-        let mut state = self.state.write().await;
-        let media_counts_before = RoomMediaCounts {
-            publications: state.publication_count(),
-            subscriptions: state.subscription_count(),
+        let (media_counts_before, media_counts_after, relay_effects) = {
+            let mut state = self.state.write().await;
+            let media_counts_before = RoomMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            let relay_effects = state.release_pending_consumer_bootstrap(target);
+            let media_counts_after = RoomMediaCounts {
+                publications: state.publication_count(),
+                subscriptions: state.subscription_count(),
+            };
+            drop(state);
+            (media_counts_before, media_counts_after, relay_effects)
         };
-        state.release_pending_consumer_bootstrap(target);
-        let media_counts_after = RoomMediaCounts {
-            publications: state.publication_count(),
-            subscriptions: state.subscription_count(),
-        };
-        drop(state);
         self.record_media_count_delta(media_counts_before, media_counts_after);
+        super::effects::execute_relay_route_effects(self, media_port, &relay_effects).await;
     }
 
     /// Best-effort transport-media cleanup for a known room owner.

@@ -365,7 +365,7 @@ fn stale_replaced_connection_cannot_update_download_state() {
         ..TestSubscriptionStates::default()
     };
     let intents = subscription_intents_from_test_states(&states);
-    let (committed_updates, planned_bootstraps) = state
+    let (committed_updates, planned_bootstraps, relay_effects) = state
         .plan_subscription_change(
             &consumer_user_id,
             stale_connection_id,
@@ -376,6 +376,7 @@ fn stale_replaced_connection_cannot_update_download_state() {
 
     assert!(committed_updates.is_empty());
     assert!(planned_bootstraps.is_empty());
+    assert!(relay_effects.is_empty());
     assert!(
         state.desired_source_subscription_active(
             &consumer_user_id,
@@ -468,7 +469,7 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
         ..TestSubscriptionStates::default()
     };
     let intents = subscription_intents_from_test_states(&states);
-    let (route_updates, planned_bootstraps) = state
+    let (route_updates, planned_bootstraps, relay_effects) = state
         .plan_subscription_change(
             &subscriber_user_id,
             subscriber_connection_id,
@@ -478,6 +479,7 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
         .into_parts();
 
     assert!(route_updates.is_empty());
+    assert!(relay_effects.is_empty());
     assert_eq!(planned_bootstraps.len(), 1);
     let selection = state
         .consumer_source_selections

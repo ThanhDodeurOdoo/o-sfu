@@ -1,9 +1,9 @@
 //! worker teardown at user level and auxiliary user bookkeeping.
 //!
 //! Closing a user is more than removing `RtcSessionState`: the worker also
-//! has to clear demux indexes, media registries, route ownership, relay cleanup
-//! hints, snapshot state, bitrate tracking, and lifetime metrics without
-//! leaving packet-loop-visible stuff behind
+//! has to clear demux indexes, media registries, route ownership, snapshot
+//! state, bitrate tracking, and lifetime metrics without leaving
+//! packet-loop-visible stuff behind
 
 use std::{
     collections::BTreeSet,
@@ -16,14 +16,13 @@ use tokio::sync::oneshot;
 use super::{
     super::{
         bitrate::RtcBitrateState,
-        commands::{CloseSessionOutcome, CloseSessionState, RelayCleanup},
-        media_registry::RegisteredMediaHandle,
+        commands::{CloseSessionOutcome, CloseSessionState},
         state::{RtcBootstrapState, RtcSnapshotState},
     },
     media::refresh_source_packet_gate,
 };
 use crate::runtime::{
-    media_transport::{TransportAdapterError, TransportMediaId, TransportSessionKey},
+    media_transport::{TransportAdapterError, TransportSessionKey},
     metrics::{self, RuntimeMetrics},
 };
 
@@ -60,7 +59,6 @@ fn worker_close_session(
         .remote_addr_demux
         .forget_user_remote_candidate_addrs(session_key);
     let removed_media_handles = state.remove_session_media_handles(session_key);
-    let relay_cleanup = relay_cleanup_for_removed_media(state, &removed_media_handles);
     let removed_media_ids = removed_media_handles
         .iter()
         .map(|(transport_media_id, _handle)| *transport_media_id)
@@ -107,31 +105,8 @@ fn worker_close_session(
         metrics.add_active_transport_users(-1);
     }
     if state.users.is_empty() {
-        CloseSessionOutcome::new(CloseSessionState::WorkerDrained, relay_cleanup)
+        CloseSessionOutcome::new(CloseSessionState::WorkerDrained)
     } else {
-        CloseSessionOutcome::new(CloseSessionState::SessionClosed, relay_cleanup)
+        CloseSessionOutcome::new(CloseSessionState::SessionClosed)
     }
-}
-
-fn relay_cleanup_for_removed_media(
-    state: &RtcBootstrapState,
-    removed_media_handles: &[(TransportMediaId, RegisteredMediaHandle)],
-) -> Vec<RelayCleanup> {
-    removed_media_handles
-        .iter()
-        .filter_map(|(_transport_media_id, handle)| match handle {
-            RegisteredMediaHandle::Producer { .. } => None,
-            RegisteredMediaHandle::Consumer {
-                source_transport_media_id,
-                ..
-            } => state
-                .remote_source_registration(*source_transport_media_id)
-                .map(|registration| {
-                    RelayCleanup::new(
-                        registration.source_session_key().clone(),
-                        *source_transport_media_id,
-                    )
-                }),
-        })
-        .collect()
 }

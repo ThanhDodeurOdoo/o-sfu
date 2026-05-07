@@ -27,6 +27,7 @@ use super::{
             TransportMediaRemoval,
         },
     },
+    relay::RelayRouteEffect,
     subscription::{ConsumerBootstrapProducerSnapshot, PendingConsumerBootstrapTarget},
 };
 use crate::runtime::{
@@ -122,6 +123,7 @@ pub(in crate::runtime::room) struct ProducerActivityOutcome {
 /// update stays outside the state lock.
 pub(in crate::runtime::room) struct UnpublishTrackOutcome {
     recipients: Vec<OutboundSender>,
+    relay_effects: Vec<RelayRouteEffect>,
 }
 
 impl RoomState {
@@ -519,13 +521,15 @@ impl RoomState {
             );
             return None;
         }
-        self.remove_source_registry_entry(producer_target.source_id)?;
+        let (_producer, relay_effects) =
+            self.remove_source_registry_entry(producer_target.source_id)?;
         Some(UnpublishTrackOutcome {
             recipients: self
                 .users
                 .values()
                 .map(|user| user.sender.clone())
                 .collect(),
+            relay_effects,
         })
     }
 
@@ -641,6 +645,10 @@ impl ProducerActivityOutcome {
 }
 
 impl UnpublishTrackOutcome {
+    pub(in crate::runtime::room) fn relay_effects(&self) -> &[RelayRouteEffect] {
+        &self.relay_effects
+    }
+
     /// Emits the unpublish side effects after state cleanup already landed
     ///
     /// Recipients always get the track binding removal.

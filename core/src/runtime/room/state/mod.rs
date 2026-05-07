@@ -31,7 +31,7 @@ pub(in crate::runtime::room) use self::{
     media::{
         ConsumerBootstrapOrigin, ConsumerRouteUpdate, PendingConsumerBootstrap,
         PendingConsumerBootstrapTarget, PlannedConsumerBootstrap, PlannedSubscriptionChange,
-        PreparedConsumerBootstrap, ValidatedPublishDescriptor,
+        PreparedConsumerBootstrap, RelayRouteEffect, RelayRouteKey, ValidatedPublishDescriptor,
     },
     membership::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, LifecycleEffects},
     shared::{RoomState, TransportMediaRemoval},

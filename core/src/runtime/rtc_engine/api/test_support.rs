@@ -160,19 +160,6 @@ impl RtcTransportShard {
     }
 
     #[cfg(test)]
-    pub async fn debug_remote_source_owner(
-        &self,
-        source_transport_media_id: TransportMediaId,
-    ) -> Option<TransportSessionKey> {
-        self.request_debug_worker(|response| DebugRtcWorkerCommand::RemoteSourceOwner {
-            source_transport_media_id,
-            response,
-        })
-        .await
-        .flatten()
-    }
-
-    #[cfg(test)]
     pub async fn debug_route_entry(
         &self,
         source_session_key: &TransportSessionKey,

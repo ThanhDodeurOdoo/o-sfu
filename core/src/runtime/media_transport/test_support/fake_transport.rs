@@ -22,7 +22,7 @@ use crate::{
             TransportMediaId, TransportPlacementPressureSnapshot, TransportSessionKey,
         },
     },
-    transport::SourcePolicySignal,
+    transport::{SourcePolicySignal, TransportRelayRouteAction, TransportRelayRouteEffect},
 };
 
 const FAKE_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-fake-offer\r\n";
@@ -42,6 +42,12 @@ pub enum FakeMediaTransportEvent {
         consumer_user_id: UserId,
         source_user_id: UserId,
         media_kind: MediaKind,
+    },
+    RelayRouteEffectApplied {
+        source_user_id: UserId,
+        source_transport_media_id: TransportMediaId,
+        target_media_worker_id: usize,
+        action: TransportRelayRouteAction,
     },
     MediaRemoved {
         user_id: UserId,
@@ -80,6 +86,7 @@ struct FakeMediaTransportState {
     next_media_id: u64,
     media_owners: BTreeMap<TransportMediaId, TransportSessionKey>,
     failed_media_removals: BTreeSet<TransportMediaId>,
+    failed_relay_route_releases: BTreeSet<FakeRelayRouteKey>,
     blocked_media_removals: BTreeSet<TransportMediaId>,
     failed_session_closes: BTreeSet<TransportSessionKey>,
     blocked_session_closes: BTreeSet<TransportSessionKey>,
@@ -88,6 +95,13 @@ struct FakeMediaTransportState {
     receiver_bandwidth_estimates: BTreeMap<UserId, u64>,
     placement_pressure: TransportPlacementPressureSnapshot,
     delays: FakeMediaTransportDelays,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct FakeRelayRouteKey {
+    source_user: UserId,
+    source_media: TransportMediaId,
+    target_worker: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -149,6 +163,22 @@ impl FakeMediaTransport {
     pub fn fail_next_remove_media(&self, transport_media_id: TransportMediaId) {
         self.mutate_state(|state| {
             state.failed_media_removals.insert(transport_media_id);
+        });
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub fn fail_next_relay_release(
+        &self,
+        source_user_id: UserId,
+        source_transport_media_id: TransportMediaId,
+        target_media_worker_id: usize,
+    ) {
+        self.mutate_state(|state| {
+            state.failed_relay_route_releases.insert(FakeRelayRouteKey {
+                source_user: source_user_id,
+                source_media: source_transport_media_id,
+                target_worker: target_media_worker_id,
+            });
         });
     }
 
@@ -517,6 +547,35 @@ impl FakeMediaTransport {
             state.next_media_id = state.next_media_id.wrapping_add(1);
             transport_media_id
         }))
+    }
+
+    #[allow(
+        clippy::unused_async,
+        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+    )]
+    pub(crate) async fn apply_relay_route_effect(
+        &self,
+        effect: &TransportRelayRouteEffect,
+    ) -> Result<(), TransportAdapterError> {
+        if effect.action == TransportRelayRouteAction::Release {
+            let release_key = FakeRelayRouteKey {
+                source_user: effect.source_session_key.user_id().clone(),
+                source_media: effect.source_transport_media_id,
+                target_worker: effect.target_media_worker_id,
+            };
+            let should_fail_once =
+                self.mutate_state(|state| state.failed_relay_route_releases.remove(&release_key));
+            if should_fail_once {
+                return Err(TransportAdapterError::TransportUnavailable);
+            }
+        }
+        self.record_event(FakeMediaTransportEvent::RelayRouteEffectApplied {
+            source_user_id: effect.source_session_key.user_id().clone(),
+            source_transport_media_id: effect.source_transport_media_id,
+            target_media_worker_id: effect.target_media_worker_id,
+            action: effect.action,
+        });
+        Ok(())
     }
 
     #[allow(

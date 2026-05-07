@@ -291,6 +291,22 @@ pub enum SourcePacketGate {
     OperatingPoint(SourcePacketOperatingPoint),
 }
 
+/// Room-owned relay route mutation applied by the media transport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransportRelayRouteEffect {
+    pub source_session_key: TransportSessionKey,
+    pub source_transport_media_id: TransportMediaId,
+    pub target_media_worker_id: usize,
+    pub action: TransportRelayRouteAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportRelayRouteAction {
+    Install,
+    Release,
+    SetActive(bool),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsumerPacketGateUpdate {
     consumer_session_key: TransportSessionKey,

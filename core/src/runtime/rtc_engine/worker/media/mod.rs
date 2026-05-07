@@ -15,7 +15,7 @@ pub(super) use control::{
     respond_request_consumer_keyframe, respond_set_consumer_active,
     respond_set_consumer_packet_gate, respond_set_consumer_packet_gates,
     respond_set_producer_active, respond_set_relay_target_active,
-    respond_set_remote_source_packet_gate, respond_set_remote_source_route_active,
+    respond_set_remote_source_packet_gate,
 };
 pub use keyframe::request_keyframe_for_source;
 pub(super) use keyframe::respond_request_remote_keyframe;

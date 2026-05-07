@@ -29,7 +29,7 @@ use super::{
     super::{
         super::{
             bitrate::RtcBitrateState,
-            commands::{RemoveMediaOutcome, RtcWorkerResponse},
+            commands::RtcWorkerResponse,
             local_send_rewrite::forget_transport_media_rewrites,
             media_registry::RegisteredMediaHandle,
             sdp_simulcast,
@@ -64,7 +64,7 @@ pub fn respond_remove_media(
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
-    response: RtcWorkerResponse<RemoveMediaOutcome>,
+    response: RtcWorkerResponse<()>,
 ) {
     let _ = response.send(worker_remove_media(
         state,
@@ -120,7 +120,7 @@ fn worker_remove_media(
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
-) -> Result<RemoveMediaOutcome, TransportAdapterError> {
+) -> Result<(), TransportAdapterError> {
     let Some(handle) = state.media_handle(transport_media_id).cloned() else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
@@ -144,7 +144,7 @@ fn worker_remove_media(
             }
             state.media_route_index.remove(&transport_media_id);
             state.mark_session_dirty(&session_key);
-            Ok(RemoveMediaOutcome::without_relay_cleanup())
+            Ok(())
         }
         RegisteredMediaHandle::Consumer {
             session_key,
@@ -157,22 +157,14 @@ fn worker_remove_media(
                     transport_media_id,
                 );
             }
-            let relay_cleanup = remove_consumer_route(
+            remove_consumer_route(
                 state,
                 &session_key,
                 transport_media_id,
                 source_transport_media_id,
             );
             state.mark_session_dirty(&session_key);
-            relay_cleanup.map_or_else(
-                || Ok(RemoveMediaOutcome::without_relay_cleanup()),
-                |cleanup| {
-                    Ok(RemoveMediaOutcome::with_relay_cleanup(
-                        cleanup.source_session_key().clone(),
-                        source_transport_media_id,
-                    ))
-                },
-            )
+            Ok(())
         }
     }
 }
@@ -488,7 +480,6 @@ fn worker_add_send_media(
             consumer_transport_media_id: transport_media_id,
             consumer_mid: mid,
             source_transport_media_id,
-            route_source,
             consumer_rtp_parameters,
             now,
         },

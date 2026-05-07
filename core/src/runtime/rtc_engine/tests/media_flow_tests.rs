@@ -723,7 +723,7 @@ async fn rtc_relay_route_facade_registers_and_removes_target_mailboxes() {
     assert!(
         source_adapter
             .media()
-            .set_relay_route_active(
+            .apply_relay_target_activity(
                 &source_session,
                 source_transport_media_id,
                 &target_adapter,

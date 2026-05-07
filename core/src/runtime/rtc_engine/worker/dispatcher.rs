@@ -103,7 +103,6 @@ pub fn handle_worker_command(
         | RtcWorkerCommand::RemoveRelayTarget { .. }
         | RtcWorkerCommand::SetRelayTargetActive { .. }
         | RtcWorkerCommand::RequestRemoteKeyframe { .. }
-        | RtcWorkerCommand::SetRemoteSourceRouteActive { .. }
         | RtcWorkerCommand::SetRemoteSourcePacketGate { .. }
         | RtcWorkerCommand::SetProducerActive { .. }
         | RtcWorkerCommand::SetConsumerActive { .. }
@@ -277,7 +276,6 @@ fn handle_media_command(
         | RtcWorkerCommand::RemoveRelayTarget { .. }
         | RtcWorkerCommand::SetRelayTargetActive { .. }
         | RtcWorkerCommand::RequestRemoteKeyframe { .. }
-        | RtcWorkerCommand::SetRemoteSourceRouteActive { .. }
         | RtcWorkerCommand::SetRemoteSourcePacketGate { .. }
         | RtcWorkerCommand::SetProducerActive { .. }
         | RtcWorkerCommand::SetConsumerActive { .. }
@@ -318,18 +316,6 @@ fn handle_media_route_control_command(
                 rid,
                 kind,
             },
-        ),
-        RtcWorkerCommand::SetRemoteSourceRouteActive {
-            source_session_key,
-            source_transport_media_id,
-            target_id,
-            active,
-        } => media::respond_set_remote_source_route_active(
-            state,
-            &source_session_key,
-            source_transport_media_id,
-            target_id,
-            active,
         ),
         RtcWorkerCommand::SetRemoteSourcePacketGate {
             source_session_key,

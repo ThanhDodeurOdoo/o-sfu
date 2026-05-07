@@ -124,12 +124,10 @@ impl RelayTargetId {
 #[derive(Debug, Clone)]
 struct RelayTargetRegistration<Target> {
     target: Target,
-    reference_count: usize,
-    active_reference_count: usize,
+    active: bool,
 }
 
-/// Per-source relay target state stored by the source worker and reused by the
-/// Loom model that validates publication and reference-count transitions.
+/// Source-worker cache for relay target handles and active bits.
 #[derive(Debug, Clone)]
 pub(super) struct RelayTargetRegistry<TargetId, Target> {
     targets: BTreeMap<TargetId, RelayTargetRegistration<Target>>,
@@ -151,32 +149,15 @@ where
     Target: Clone,
 {
     pub(super) fn add_target(&mut self, target_id: TargetId, target: Target) {
-        if let Some(registration) = self.targets.get_mut(&target_id) {
-            registration.reference_count = registration.reference_count.saturating_add(1);
-        } else {
-            self.targets.insert(
-                target_id,
-                RelayTargetRegistration {
-                    target,
-                    reference_count: 1,
-                    active_reference_count: 0,
-                },
-            );
-        }
+        self.targets
+            .entry(target_id)
+            .or_insert(RelayTargetRegistration {
+                target,
+                active: false,
+            });
     }
 
     pub(super) fn remove_target(&mut self, target_id: TargetId) -> bool {
-        let Some(registration) = self.targets.get_mut(&target_id) else {
-            return self.targets.is_empty();
-        };
-        if registration.reference_count > 1 {
-            registration.reference_count -= 1;
-            if registration.active_reference_count > registration.reference_count {
-                registration.active_reference_count = registration.reference_count;
-                self.rebuild_mailboxes();
-            }
-            return false;
-        }
         self.targets.remove(&target_id);
         self.rebuild_mailboxes();
         self.targets.is_empty()
@@ -186,17 +167,8 @@ where
         let Some(registration) = self.targets.get_mut(&target_id) else {
             return;
         };
-        let was_forwarding = registration.active_reference_count > 0;
-        if active {
-            registration.active_reference_count = registration
-                .active_reference_count
-                .saturating_add(1)
-                .min(registration.reference_count);
-        } else if registration.active_reference_count > 0 {
-            registration.active_reference_count -= 1;
-        }
-        let is_forwarding = registration.active_reference_count > 0;
-        if was_forwarding != is_forwarding {
+        if registration.active != active {
+            registration.active = active;
             self.rebuild_mailboxes();
         }
     }
@@ -218,7 +190,7 @@ where
     pub(super) fn is_target_active(&self, target_id: TargetId) -> bool {
         self.targets
             .get(&target_id)
-            .is_some_and(|registration| registration.active_reference_count > 0)
+            .is_some_and(|registration| registration.active)
     }
 
     #[cfg(test)]
@@ -232,7 +204,7 @@ where
     pub(super) fn active_target_count(&self) -> usize {
         self.targets
             .values()
-            .filter(|registration| registration.active_reference_count > 0)
+            .filter(|registration| registration.active)
             .count()
     }
 
@@ -240,7 +212,7 @@ where
         self.active_targets = self
             .targets
             .iter()
-            .filter(|(_target_id, registration)| registration.active_reference_count > 0)
+            .filter(|(_target_id, registration)| registration.active)
             .map(|(target_id, registration)| {
                 ActiveRelayTarget::new(*target_id, registration.target.clone())
             })

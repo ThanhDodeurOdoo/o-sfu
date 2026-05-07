@@ -14,6 +14,7 @@ use super::{
     },
     ids::ProducerRuntimeId,
     layout::UserLayout,
+    media::relay::{RelayRouteEffect, RoomRelayRoutes},
     presence::UserPresence,
 };
 use crate::{
@@ -86,6 +87,7 @@ pub(in crate::runtime::room) struct RoomState {
     /// A key stays indexed while any of those stores contains it.
     pub(super) consumer_keys_by_user: BTreeMap<UserId, BTreeSet<ConsumerKey>>,
     pub(super) consumer_keys_by_source: BTreeMap<PublishedSourceId, BTreeSet<ConsumerKey>>,
+    pub(super) relay_routes: RoomRelayRoutes,
     /// Shadow of user/producer/consumer state inside the pure router core.
     pub(super) topology: RoomTopology,
 }
@@ -206,6 +208,7 @@ impl RoomState {
             pending_consumer_bootstraps: BTreeSet::new(),
             consumer_keys_by_user: BTreeMap::new(),
             consumer_keys_by_source: BTreeMap::new(),
+            relay_routes: RoomRelayRoutes::default(),
             topology: RoomTopology::new_with_router_state_factory(
                 runtime_context.local_routers().clone(),
                 room_sharding_policy,
@@ -273,7 +276,11 @@ impl RoomState {
         removals
     }
 
-    pub(in crate::runtime::room) fn purge_user_media_state(&mut self, user_id: &UserId) {
+    pub(in crate::runtime::room) fn purge_user_media_state(
+        &mut self,
+        user_id: &UserId,
+    ) -> Vec<RelayRouteEffect> {
+        let mut relay_effects = Vec::new();
         let source_ids = self
             .source_ids_by_owner
             .remove(user_id)
@@ -281,7 +288,9 @@ impl RoomState {
             .into_iter()
             .collect::<Vec<_>>();
         for source_id in source_ids {
-            self.remove_source_registry_entry(source_id);
+            if let Some((_producer, effects)) = self.remove_source_registry_entry(source_id) {
+                relay_effects.extend(effects);
+            }
         }
         let consumer_keys = self
             .consumer_keys_by_user
@@ -290,8 +299,9 @@ impl RoomState {
             .into_iter()
             .collect::<Vec<_>>();
         for key in consumer_keys {
-            self.remove_consumer_key_state(&key);
+            relay_effects.extend(self.remove_consumer_key_state(&key));
         }
+        relay_effects
     }
 
     pub(in crate::runtime::room) fn user_for_connection(
@@ -480,12 +490,14 @@ impl RoomState {
         remove_from_index_set(&mut self.consumer_keys_by_source, &key.source_id, key);
     }
 
-    pub(super) fn remove_consumer_key_state(&mut self, key: &ConsumerKey) {
+    pub(super) fn remove_consumer_key_state(&mut self, key: &ConsumerKey) -> Vec<RelayRouteEffect> {
         self.consumer_index.remove(key);
         self.pending_consumer_bootstraps.remove(key);
         self.consumer_source_selections.remove(key);
         remove_from_index_set(&mut self.consumer_keys_by_user, &key.consumer_user_id, key);
         remove_from_index_set(&mut self.consumer_keys_by_source, &key.source_id, key);
+        self.relay_routes
+            .release_consumer_key(&key.consumer_user_id, key.source_id)
     }
 
     pub(super) fn consumer_keys_for_user(&self, user_id: &UserId) -> Vec<ConsumerKey> {
@@ -523,11 +535,12 @@ impl RoomState {
     pub(super) fn remove_source_registry_entry(
         &mut self,
         source_id: PublishedSourceId,
-    ) -> Option<PublishedProducer> {
+    ) -> Option<(PublishedProducer, Vec<RelayRouteEffect>)> {
         let source = self.sources.remove(&source_id)?;
         let consumer_keys = self.consumer_keys_for_source(source_id);
+        let mut relay_effects = Vec::new();
         for key in consumer_keys {
-            self.remove_consumer_key_state(&key);
+            relay_effects.extend(self.remove_consumer_key_state(&key));
         }
         let source_key = SourceKey::new(source.owner().user_id(), source.stream_id());
         self.source_ids_by_owner_stream.remove(&source_key);
@@ -539,7 +552,7 @@ impl RoomState {
             self.source_transport_media_index
                 .remove(&transport_media_id);
         }
-        Some(producer)
+        Some((producer, relay_effects))
     }
 }
 

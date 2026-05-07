@@ -28,7 +28,10 @@ use crate::{
         packet_sink_registry::RoomPacketSinkRegistry,
         rtc_engine::RtcTransportShard,
     },
-    transport::{NegotiationPort, SourcePolicyPort, SourcePolicyUpdateSubscription},
+    transport::{
+        NegotiationPort, SourcePolicyPort, SourcePolicyUpdateSubscription,
+        TransportRelayRouteAction, TransportRelayRouteEffect,
+    },
 };
 
 fn test_session_key(
@@ -108,6 +111,109 @@ async fn consume_audio(
     result.ok()
 }
 
+async fn apply_relay_route_effect(
+    adapter: &MediaTransport,
+    source_session_key: &TransportSessionKey,
+    source_media_id: TransportMediaId,
+    target_session_key: &TransportSessionKey,
+    action: TransportRelayRouteAction,
+) {
+    let effect = TransportRelayRouteEffect {
+        source_session_key: source_session_key.clone(),
+        source_transport_media_id: source_media_id,
+        target_media_worker_id: target_session_key.media_worker_id(),
+        action,
+    };
+    assert!(adapter.apply_relay_route_effect(&effect).await.is_ok());
+}
+
+async fn install_active_relay_route(
+    adapter: &MediaTransport,
+    source_session_key: &TransportSessionKey,
+    source_media_id: TransportMediaId,
+    target_session_key: &TransportSessionKey,
+) {
+    apply_relay_route_effect(
+        adapter,
+        source_session_key,
+        source_media_id,
+        target_session_key,
+        TransportRelayRouteAction::Install,
+    )
+    .await;
+    apply_relay_route_effect(
+        adapter,
+        source_session_key,
+        source_media_id,
+        target_session_key,
+        TransportRelayRouteAction::SetActive(true),
+    )
+    .await;
+}
+
+async fn remove_consumer_media(
+    adapter: &MediaTransport,
+    session_key: &TransportSessionKey,
+    consumer_media_id: TransportMediaId,
+) {
+    assert!(
+        adapter
+            .remove_media(session_key, consumer_media_id)
+            .await
+            .is_ok()
+    );
+}
+
+async fn apply_release_effect_and_assert_counts(
+    adapter: &MediaTransport,
+    source_shard: &RtcTransportShard,
+    source_session_key: &TransportSessionKey,
+    source_media_id: TransportMediaId,
+    target_session_key: &TransportSessionKey,
+    total: usize,
+    active: usize,
+) {
+    apply_relay_route_effect(
+        adapter,
+        source_session_key,
+        source_media_id,
+        target_session_key,
+        TransportRelayRouteAction::Release,
+    )
+    .await;
+    assert_relay_target_counts(source_shard, source_media_id, total, active).await;
+}
+
+async fn set_remote_relay_and_consumer_active(
+    adapter: &MediaTransport,
+    remote_consumer_session: &TransportSessionKey,
+    remote_consumer_media_id: TransportMediaId,
+    source_session: &TransportSessionKey,
+    source_media_id: TransportMediaId,
+    active: bool,
+) {
+    apply_relay_route_effect(
+        adapter,
+        source_session,
+        source_media_id,
+        remote_consumer_session,
+        TransportRelayRouteAction::SetActive(active),
+    )
+    .await;
+    assert!(
+        adapter
+            .set_consumer_active(
+                remote_consumer_session,
+                remote_consumer_media_id,
+                source_session,
+                source_media_id,
+                ConsumerActivity::from_active(active),
+            )
+            .await
+            .is_ok()
+    );
+}
+
 async fn assert_relay_target_counts(
     source_shard: &RtcTransportShard,
     source_media_id: TransportMediaId,
@@ -125,19 +231,6 @@ async fn assert_relay_target_counts(
             .debug_active_relay_target_count_for_source(source_media_id)
             .await,
         active
-    );
-}
-
-async fn assert_remote_source_owner(
-    consumer_shard: &RtcTransportShard,
-    source_media_id: TransportMediaId,
-    expected: Option<&TransportSessionKey>,
-) {
-    assert_eq!(
-        consumer_shard
-            .debug_remote_source_owner(source_media_id)
-            .await,
-        expected.cloned()
     );
 }
 
@@ -362,6 +455,46 @@ fn fake_adapter_rejects_answers_without_minimal_sdp_shape() {
     assert_eq!(projected, Err(TransportAdapterError::InvalidInput));
 }
 
+async fn assert_remote_route_inactive(
+    remote_consumer_shard: &RtcTransportShard,
+    source_media_id: TransportMediaId,
+    remote_consumer_session: &TransportSessionKey,
+    remote_consumer_media_id: TransportMediaId,
+) {
+    assert_remote_route_activity(
+        remote_consumer_shard,
+        source_media_id,
+        remote_consumer_session,
+        remote_consumer_media_id,
+        false,
+    )
+    .await;
+}
+
+async fn assert_local_active_and_remote_inactive(
+    source_shard: &RtcTransportShard,
+    remote_consumer_shard: &RtcTransportShard,
+    source_session: &TransportSessionKey,
+    source_media_id: TransportMediaId,
+    local_consumer: (&TransportSessionKey, TransportMediaId),
+    remote_consumer: (&TransportSessionKey, TransportMediaId),
+) {
+    assert_local_route_active(
+        source_shard,
+        source_session,
+        local_consumer.0,
+        local_consumer.1,
+    )
+    .await;
+    assert_remote_route_inactive(
+        remote_consumer_shard,
+        source_media_id,
+        remote_consumer.0,
+        remote_consumer.1,
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn media_transport_exposes_split_ports_to_callers() {
     let fake = Arc::new(FakeMediaTransport::default());
@@ -537,194 +670,6 @@ async fn fake_transport_source_policy_subscription_wakes_on_active_speaker_updat
 }
 
 #[tokio::test]
-async fn rtc_engine_registers_and_prunes_cross_worker_remote_sources() {
-    let adapter = test_rtc_engine(2, RtcPortRange::new(46_200, 46_299));
-    let source_session = test_session_key(20, 0, 1, UserId::Integer(1));
-    let consumer_session = test_session_key(20, 1, 2, UserId::Integer(2));
-    let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 41_000);
-    let consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down", 42_000);
-
-    prepare_rtc_session(&adapter, &source_session).await;
-    prepare_rtc_session(&adapter, &consumer_session).await;
-
-    let Some(source_media_id) =
-        publish_audio(&adapter, &source_session, &producer_rtp_parameters).await
-    else {
-        return;
-    };
-    let Some(consumer_media_id) = consume_audio(
-        &adapter,
-        &consumer_session,
-        &source_session,
-        source_media_id,
-        &consumer_rtp_parameters,
-    )
-    .await
-    else {
-        return;
-    };
-    let Some(shards) = adapter.as_rtc_shard_set() else {
-        return;
-    };
-    let source_shard = shards.shard_for_user(&source_session);
-    let consumer_shard = shards.shard_for_user(&consumer_session);
-
-    assert_eq!(
-        source_shard
-            .debug_relay_target_count_for_source(source_media_id)
-            .await,
-        1
-    );
-    assert_eq!(
-        source_shard
-            .debug_active_relay_target_count_for_source(source_media_id)
-            .await,
-        1
-    );
-    assert_eq!(
-        consumer_shard
-            .debug_remote_source_owner(source_media_id)
-            .await,
-        Some(source_session.clone())
-    );
-    let route_entry = consumer_shard
-        .debug_route_entry_by_media_id(source_media_id)
-        .await;
-    assert!(route_entry.is_some());
-    let Some(route_entry) = route_entry else {
-        return;
-    };
-    assert!(route_entry.source_active);
-    assert!(route_entry.destinations.iter().any(|destination| {
-        destination.dest_session == consumer_session
-            && destination.dest_transport_media_id == consumer_media_id
-    }));
-
-    assert!(
-        adapter
-            .remove_media(&consumer_session, consumer_media_id)
-            .await
-            .is_ok()
-    );
-    assert_eq!(
-        consumer_shard
-            .debug_remote_source_owner(source_media_id)
-            .await,
-        None
-    );
-    assert!(
-        consumer_shard
-            .debug_route_entry_by_media_id(source_media_id)
-            .await
-            .is_none()
-    );
-    assert_eq!(
-        source_shard
-            .debug_relay_target_count_for_source(source_media_id)
-            .await,
-        0
-    );
-    assert_eq!(
-        source_shard
-            .debug_active_relay_target_count_for_source(source_media_id)
-            .await,
-        0
-    );
-}
-
-#[tokio::test]
-async fn rtc_engine_keeps_independent_relay_targets_per_remote_worker() {
-    let adapter = test_rtc_engine(3, RtcPortRange::new(46_300, 46_599));
-    let source_session = test_session_key(30, 0, 1, UserId::Integer(1));
-    let first_consumer_session = test_session_key(30, 1, 2, UserId::Integer(2));
-    let second_consumer_session = test_session_key(30, 2, 3, UserId::Integer(3));
-    let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 51_000);
-    let first_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-1", 52_000);
-    let second_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-2", 53_000);
-
-    prepare_rtc_sessions(
-        &adapter,
-        &[
-            &source_session,
-            &first_consumer_session,
-            &second_consumer_session,
-        ],
-    )
-    .await;
-
-    let Some(source_media_id) =
-        publish_audio(&adapter, &source_session, &producer_rtp_parameters).await
-    else {
-        return;
-    };
-    let Some(first_consumer_media_id) = consume_audio(
-        &adapter,
-        &first_consumer_session,
-        &source_session,
-        source_media_id,
-        &first_consumer_rtp_parameters,
-    )
-    .await
-    else {
-        return;
-    };
-    let Some(second_consumer_media_id) = consume_audio(
-        &adapter,
-        &second_consumer_session,
-        &source_session,
-        source_media_id,
-        &second_consumer_rtp_parameters,
-    )
-    .await
-    else {
-        return;
-    };
-
-    let Some(shards) = adapter.as_rtc_shard_set() else {
-        return;
-    };
-    let source_shard = shards.shard_for_user(&source_session);
-    let first_consumer_shard = shards.shard_for_user(&first_consumer_session);
-    let second_consumer_shard = shards.shard_for_user(&second_consumer_session);
-
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 2, 2).await;
-    assert_remote_source_owner(
-        first_consumer_shard.as_ref(),
-        source_media_id,
-        Some(&source_session),
-    )
-    .await;
-    assert_remote_source_owner(
-        second_consumer_shard.as_ref(),
-        source_media_id,
-        Some(&source_session),
-    )
-    .await;
-
-    assert!(
-        adapter
-            .remove_media(&first_consumer_session, first_consumer_media_id)
-            .await
-            .is_ok()
-    );
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 1).await;
-    assert_remote_source_owner(
-        second_consumer_shard.as_ref(),
-        source_media_id,
-        Some(&source_session),
-    )
-    .await;
-
-    assert!(
-        adapter
-            .remove_media(&second_consumer_session, second_consumer_media_id)
-            .await
-            .is_ok()
-    );
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 0, 0).await;
-}
-
-#[tokio::test]
 async fn rtc_engine_rejects_stale_session_removal_without_dropping_consumer_handle() {
     let adapter = test_rtc_engine(1, RtcPortRange::new(46_600, 46_649));
     let source_session = test_session_key(35, 0, 1, UserId::Integer(1));
@@ -806,6 +751,13 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
     else {
         return;
     };
+    install_active_relay_route(
+        &adapter,
+        &source_session,
+        source_media_id,
+        &remote_consumer_session,
+    )
+    .await;
     let Some(local_consumer_media_id) = consume_audio(
         &adapter,
         &local_consumer_session,
@@ -837,55 +789,48 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
 
     assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 1).await;
 
-    assert!(
-        adapter
-            .set_consumer_active(
-                &remote_consumer_session,
-                remote_consumer_media_id,
-                &source_session,
-                source_media_id,
-                ConsumerActivity::Inactive,
-            )
-            .await
-            .is_ok()
-    );
-
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 0).await;
-    assert_local_route_active(
-        source_shard.as_ref(),
-        &source_session,
-        &local_consumer_session,
-        local_consumer_media_id,
-    )
-    .await;
-    assert_remote_route_activity(
-        remote_consumer_shard.as_ref(),
-        source_media_id,
+    set_remote_relay_and_consumer_active(
+        &adapter,
         &remote_consumer_session,
         remote_consumer_media_id,
+        &source_session,
+        source_media_id,
         false,
     )
     .await;
 
-    assert!(
-        adapter
-            .set_consumer_active(
-                &remote_consumer_session,
-                remote_consumer_media_id,
-                &source_session,
-                source_media_id,
-                ConsumerActivity::Active,
-            )
-            .await
-            .is_ok()
-    );
+    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 0).await;
+    assert_local_active_and_remote_inactive(
+        source_shard.as_ref(),
+        remote_consumer_shard.as_ref(),
+        &source_session,
+        source_media_id,
+        (&local_consumer_session, local_consumer_media_id),
+        (&remote_consumer_session, remote_consumer_media_id),
+    )
+    .await;
+
+    set_remote_relay_and_consumer_active(
+        &adapter,
+        &remote_consumer_session,
+        remote_consumer_media_id,
+        &source_session,
+        source_media_id,
+        true,
+    )
+    .await;
     assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 1).await;
 
-    assert!(
-        adapter
-            .remove_media(&remote_consumer_session, remote_consumer_media_id)
-            .await
-            .is_ok()
-    );
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 0, 0).await;
+    remove_consumer_media(&adapter, &remote_consumer_session, remote_consumer_media_id).await;
+    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 1).await;
+    apply_release_effect_and_assert_counts(
+        &adapter,
+        source_shard.as_ref(),
+        &source_session,
+        source_media_id,
+        &remote_consumer_session,
+        0,
+        0,
+    )
+    .await;
 }

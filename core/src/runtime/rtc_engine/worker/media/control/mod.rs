@@ -4,9 +4,8 @@
 //! state that must stay consistent:
 //!
 //! - `media_route_index` records which consumer transports depend on a source
-//! - remote-source registrations track cross-worker ownership and relay control
+//! - remote-source registrations track cross-worker packet gates and keyframes
 //! - `route_control` keeps the effective local, relay and server-owned gates
-//! - relay cleanup must be emitted when the last remote-backed route disappears
 //!
 //! `lifecycle.rs` owns media declaration and teardown against `RtcSessionState`.
 //! Once a producer or consumer handle exists, this module contain the routing-side
@@ -25,7 +24,7 @@
 //!   |-- validate source ownership (local vs remote)
 //!   |-- mutate media_route_index
 //!   |-- refresh route_control packet gates
-//!   `-- propagate remote relay state / cleanup
+//!   `-- keep remote-source packet gates executable
 //!
 //! keyframe.rs
 //!   `-- reads the same source-ownership rules for feedback routing
@@ -45,7 +44,6 @@ pub(in crate::runtime::rtc_engine::worker) use responses::{
     respond_set_consumer_active, respond_set_consumer_packet_gate,
     respond_set_consumer_packet_gates, respond_set_producer_active,
     respond_set_relay_target_active, respond_set_remote_source_packet_gate,
-    respond_set_remote_source_route_active,
 };
 #[cfg(test)]
 pub(super) use routes::consumer_packet_gate;

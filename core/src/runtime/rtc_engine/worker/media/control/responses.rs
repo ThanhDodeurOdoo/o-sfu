@@ -105,22 +105,6 @@ pub fn respond_request_consumer_keyframe(
     ));
 }
 
-pub fn respond_set_remote_source_route_active(
-    state: &mut RtcBootstrapState,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
-    target_id: RelayTargetId,
-    active: bool,
-) {
-    remote_source::set_remote_source_route_active(
-        state,
-        source_session_key,
-        source_transport_media_id,
-        target_id,
-        active,
-    );
-}
-
 pub fn respond_add_relay_target(
     state: &mut RtcBootstrapState,
     source_session_key: &TransportSessionKey,

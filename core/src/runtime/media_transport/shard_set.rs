@@ -22,14 +22,15 @@ use crate::{
     runtime::{
         RoomInstanceId,
         media_transport::config::RtcTransportShardSetConfig,
-        rtc_engine::{RelayCleanup, RtcTransportShard, client_rtp_capabilities_from_answer},
+        rtc_engine::{RtcTransportShard, client_rtp_capabilities_from_answer},
     },
     transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
         ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
         SourcePolicySignal, SourcePolicyUpdateSubscription, TransportAdapterError,
         TransportBitrateSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
-        TransportSessionHealth, TransportSessionKey,
+        TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionHealth,
+        TransportSessionKey,
     },
 };
 
@@ -178,29 +179,6 @@ impl RtcTransportShardSet {
             return None;
         }
         Some((source_shard, consumer_shard))
-    }
-
-    /// Releases relay registrations created for routes removed on another
-    /// shard.
-    ///
-    /// Cleanup records are produced by the shard that owns the removed session
-    /// or media handle. The shard set uses them to clear source-side relay
-    /// state without requiring the caller to understand worker topology.
-    pub(super) async fn release_relay_cleanup(
-        &self,
-        target_shard: &Arc<RtcTransportShard>,
-        relay_cleanup: &[RelayCleanup],
-    ) {
-        for cleanup in relay_cleanup {
-            let source_shard = self.shard_for_user(cleanup.source_session_key());
-            if Arc::ptr_eq(&source_shard, target_shard) {
-                continue;
-            }
-            let _ = source_shard
-                .media()
-                .deactivate_relay_route(cleanup.source_transport_media_id(), target_shard.as_ref())
-                .await;
-        }
     }
 
     /// Builds a best-effort bitrate snapshot across the shards that own the
@@ -470,34 +448,23 @@ impl RtcTransportShardSet {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
-        let session_shard = self.shard_for_user(session_key);
-        let close_outcome = session_shard
+        self.shard_for_user(session_key)
             .users()
             .close_session_with_outcome(session_key)
-            .await?;
-        self.release_relay_cleanup(&session_shard, close_outcome.relay_cleanup())
-            .await;
-        Ok(())
+            .await
+            .map(|_outcome| ())
     }
 
-    /// Removes one transport media handle and compensates relay state when the
-    /// removed handle was relayed across workers.
+    /// Removes one transport media handle from the owning shard.
     pub(super) async fn remove_media(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        let session_shard = self.shard_for_user(session_key);
-        let remove_outcome = session_shard
+        self.shard_for_user(session_key)
             .media()
-            .remove_media_with_outcome(session_key, transport_media_id)
-            .await?;
-        if let Some(cleanup) = remove_outcome.relay_cleanup() {
-            let relay_cleanup = [cleanup.clone()];
-            self.release_relay_cleanup(&session_shard, &relay_cleanup)
-                .await;
-        }
-        Ok(())
+            .remove_media(session_key, transport_media_id)
+            .await
     }
 
     /// Declares published media on the shard that owns the publishing session.
@@ -555,14 +522,8 @@ impl RtcTransportShardSet {
                     .remote_source_control(consumer_shard.as_ref())
             })
             .transpose()?;
-        if let Some((source_shard, consumer_shard)) = &relay_route {
-            source_shard
-                .media()
-                .activate_relay_route(source_session_key, source_media_id, consumer_shard.as_ref())
-                .await?;
-        }
         let consumer_shard = self.shard_for_user(consumer_session_key);
-        let add_result = consumer_shard
+        consumer_shard
             .media()
             .add_send_media(
                 consumer_session_key,
@@ -572,33 +533,48 @@ impl RtcTransportShardSet {
                 remote_source_control,
                 consumer_rtp_parameters,
             )
-            .await;
-        if let Some((source_shard, consumer_shard)) = relay_route {
-            if add_result.is_ok() {
-                if let Err(error) = source_shard
+            .await
+    }
+
+    /// Applies one room-owned relay route mutation to worker packet-loop cache.
+    pub(super) async fn apply_relay_route_effect(
+        &self,
+        effect: &TransportRelayRouteEffect,
+    ) -> Result<(), TransportAdapterError> {
+        let source_shard = self.shard_for_user(&effect.source_session_key);
+        let target_shard = self.shard_for_media_worker_id(effect.target_media_worker_id);
+        if Arc::ptr_eq(&source_shard, &target_shard) {
+            return Ok(());
+        }
+        match effect.action {
+            TransportRelayRouteAction::Install => {
+                source_shard
                     .media()
-                    .set_relay_route_active(
-                        source_session_key,
-                        source_media_id,
-                        consumer_shard.as_ref(),
-                        true,
+                    .activate_relay_route(
+                        &effect.source_session_key,
+                        effect.source_transport_media_id,
+                        target_shard.as_ref(),
                     )
                     .await
-                {
-                    let _ = source_shard
-                        .media()
-                        .deactivate_relay_route(source_media_id, consumer_shard.as_ref())
-                        .await;
-                    return Err(error);
-                }
-            } else {
-                let _ = source_shard
+            }
+            TransportRelayRouteAction::Release => {
+                source_shard
                     .media()
-                    .deactivate_relay_route(source_media_id, consumer_shard.as_ref())
-                    .await;
+                    .deactivate_relay_route(effect.source_transport_media_id, target_shard.as_ref())
+                    .await
+            }
+            TransportRelayRouteAction::SetActive(active) => {
+                source_shard
+                    .media()
+                    .apply_relay_target_activity(
+                        &effect.source_session_key,
+                        effect.source_transport_media_id,
+                        target_shard.as_ref(),
+                        active,
+                    )
+                    .await
             }
         }
-        add_result
     }
 
     /// Updates producer route activity on the producer's owning shard.

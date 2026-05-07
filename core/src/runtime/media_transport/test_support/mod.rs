@@ -30,6 +30,7 @@ use crate::transport::{
 use crate::transport::{
     ConsumerActivity, MediaPort, NegotiationPort, ObservabilityPort, ProducerActivity,
     SessionOffer, SessionPort, SourcePacketGate, SourcePolicyPort, TransportAdapterError,
+    TransportRelayRouteEffect,
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
@@ -111,6 +112,13 @@ impl MediaPort for FakeMediaTransport {
             consumer_rtp_parameters,
         )
         .await
+    }
+
+    async fn apply_relay_route_effect(
+        &self,
+        effect: &TransportRelayRouteEffect,
+    ) -> Result<(), TransportAdapterError> {
+        Self::apply_relay_route_effect(self, effect).await
     }
 
     async fn set_producer_active(

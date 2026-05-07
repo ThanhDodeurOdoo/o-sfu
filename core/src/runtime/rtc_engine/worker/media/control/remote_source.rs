@@ -1,6 +1,6 @@
 //! Remote-source relay control for worker-local route state.
 
-use super::routes::{ensure_owned_local_producer_mid, owned_local_producer_mid};
+use super::routes::ensure_owned_local_producer_mid;
 use crate::runtime::{
     media_transport::{TransportAdapterError, TransportMediaId, TransportSessionKey},
     rtc_engine::{
@@ -10,19 +10,6 @@ use crate::runtime::{
         state::RtcBootstrapState,
     },
 };
-
-pub(super) fn set_remote_source_route_active(
-    state: &mut RtcBootstrapState,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
-    target_id: RelayTargetId,
-    active: bool,
-) {
-    if owned_local_producer_mid(state, source_session_key, source_transport_media_id).is_none() {
-        return;
-    }
-    state.set_relay_target_active(source_transport_media_id, target_id, active);
-}
 
 pub(super) fn remove_relay_target(
     state: &mut RtcBootstrapState,
@@ -39,7 +26,9 @@ pub(super) fn set_remote_source_packet_gate(
     target_id: RelayTargetId,
     packet_gate: PacketLayerGate,
 ) {
-    if owned_local_producer_mid(state, source_session_key, source_transport_media_id).is_none() {
+    if ensure_owned_local_producer_mid(state, source_session_key, source_transport_media_id)
+        .is_err()
+    {
         return;
     }
     state
@@ -104,23 +93,5 @@ pub(super) fn remote_source_packet_gate_for_route(
         }
         (_route_entry, Some(packet_gate)) => packet_gate,
         (None | Some(_), None) => PacketLayerGate::Block,
-    }
-}
-
-pub(super) fn update_remote_route_active(
-    state: &RtcBootstrapState,
-    source_transport_media_id: TransportMediaId,
-    active: bool,
-) {
-    if let Some(remote_source_registration) =
-        state.remote_source_registration(source_transport_media_id)
-    {
-        remote_source_registration
-            .source_control()
-            .set_route_active(
-                remote_source_registration.source_session_key().clone(),
-                source_transport_media_id,
-                active,
-            );
     }
 }

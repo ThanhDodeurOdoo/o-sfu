@@ -21,7 +21,7 @@ use crate::{
         ConsumerPacketGateUpdate, ProducerActivity, ReceiverBandwidthSnapshot, SessionOffer,
         SourcePacketGate, SourcePolicyUpdateSubscription, TransportAdapterError,
         TransportBitrateSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
-        TransportSessionHealth, TransportSessionKey,
+        TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey,
     },
 };
 
@@ -206,6 +206,17 @@ impl MediaTransportBackend {
                     )
                     .await
             }
+        }
+    }
+
+    pub(in crate::runtime::media_transport) async fn apply_relay_route_effect(
+        &self,
+        effect: &TransportRelayRouteEffect,
+    ) -> Result<(), TransportAdapterError> {
+        match self {
+            Self::Rtc(transport) => transport.shards.apply_relay_route_effect(effect).await,
+            #[cfg(any(test, feature = "testing-transport"))]
+            Self::Fake(transport) => transport.apply_relay_route_effect(effect).await,
         }
     }
 

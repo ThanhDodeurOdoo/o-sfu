@@ -63,7 +63,7 @@
 //! Each pending operation is keyed by the runtime-local transport identity that
 //! the adapter understands. A media cleanup retry is keyed by user id,
 //! connection id and transport media id. A user close retry is keyed by user id
-//! and connection id.
+//! and connection id. A relay release retry is keyed by route.
 //!
 //! The queue is bounded because cleanup recovery is a cold-path safety net, not
 //! an unbounded task system. If the queue fills, room orchestration must
@@ -72,6 +72,7 @@
 
 use std::collections::{BTreeMap, btree_map::Entry};
 
+use super::state::RelayRouteKey;
 use crate::runtime::{
     ConnectionId, UserId,
     media_transport::{TransportAdapterError, TransportMediaId},
@@ -124,6 +125,9 @@ pub(super) enum TransportCleanupOperation {
         user_id: UserId,
         connection_id: ConnectionId,
     },
+    ReleaseRelayRoute {
+        route: RelayRouteKey,
+    },
 }
 
 impl TransportCleanupOperation {
@@ -131,6 +135,7 @@ impl TransportCleanupOperation {
     pub(super) const fn user_id(&self) -> &UserId {
         match self {
             Self::RemoveMedia { user_id, .. } | Self::CloseUser { user_id, .. } => user_id,
+            Self::ReleaseRelayRoute { route } => &route.source_user,
         }
     }
 
@@ -140,6 +145,7 @@ impl TransportCleanupOperation {
             Self::RemoveMedia { connection_id, .. } | Self::CloseUser { connection_id, .. } => {
                 *connection_id
             }
+            Self::ReleaseRelayRoute { route, .. } => route.source_connection,
         }
     }
 
@@ -149,13 +155,17 @@ impl TransportCleanupOperation {
             Self::RemoveMedia {
                 transport_media_id, ..
             } => Some(*transport_media_id),
+            Self::ReleaseRelayRoute { route, .. } => Some(route.source_media),
             Self::CloseUser { .. } => None,
         }
     }
 
     #[must_use]
-    pub(super) const fn is_media_removal(&self) -> bool {
-        matches!(self, Self::RemoveMedia { .. })
+    pub(super) const fn needs_owner_drop(&self) -> bool {
+        matches!(
+            self,
+            Self::RemoveMedia { .. } | Self::ReleaseRelayRoute { .. }
+        )
     }
 }
 

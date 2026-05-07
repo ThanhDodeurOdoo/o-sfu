@@ -31,7 +31,7 @@ use super::super::{
     bitrate::RtcBitrateState,
     commands::{
         CloseSessionOutcome, CloseSessionState, ConsumerPacketGateCommand, RemoteSourceControl,
-        RemoveMediaOutcome, RtcWorkerCommand,
+        RtcWorkerCommand,
     },
     relay_registry::{RelayPacketMailbox, RelayTargetId, RelayTargetTransport},
     state::RtcSnapshotState,
@@ -220,10 +220,7 @@ impl RtcTransportSessionFacade<'_> {
         session_key: &TransportSessionKey,
     ) -> Result<CloseSessionOutcome, TransportAdapterError> {
         let Some(worker_handle) = self.adapter.worker_handle()? else {
-            return Ok(CloseSessionOutcome::new(
-                CloseSessionState::SessionClosed,
-                Vec::new(),
-            ));
+            return Ok(CloseSessionOutcome::new(CloseSessionState::SessionClosed));
         };
         let close_outcome = self
             .adapter
@@ -243,11 +240,11 @@ impl RtcTransportSessionFacade<'_> {
 }
 
 impl RtcTransportMediaFacade<'_> {
-    pub async fn remove_media_with_outcome(
+    pub async fn remove_media(
         self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
-    ) -> Result<RemoveMediaOutcome, TransportAdapterError> {
+    ) -> Result<(), TransportAdapterError> {
         self.adapter
             .request_worker(|response| RtcWorkerCommand::RemoveMedia {
                 session_key: session_key.clone(),
@@ -468,7 +465,7 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
-    pub async fn set_relay_route_active(
+    pub async fn apply_relay_target_activity(
         self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,

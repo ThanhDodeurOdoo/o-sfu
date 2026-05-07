@@ -31,9 +31,10 @@ use super::{
     cleanup::{
         CleanupFailureAction, CleanupReconciler, CleanupRetryAction, TransportCleanupOperation,
     },
+    effects::execute_relay_route_effects,
     state::{
         DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, LifecycleEffects,
-        TransportMediaRemoval,
+        RelayRouteEffect, TransportMediaRemoval,
     },
     user_negotiation::UserNegotiationUpdate,
 };
@@ -49,6 +50,7 @@ use crate::{
         metrics::TransportCleanupFailureKind,
         telemetry::schema::event as telemetry_event,
     },
+    transport::{TransportRelayRouteAction, TransportRelayRouteEffect},
 };
 
 fn warn_transport_cleanup_failure(operation: &TransportCleanupOperation, message: &'static str) {
@@ -548,7 +550,35 @@ impl Room {
                     .close_session(&self.transport_user_key(user_id, *connection_id))
                     .await
             }
+            TransportCleanupOperation::ReleaseRelayRoute { route } => {
+                let effect = TransportRelayRouteEffect {
+                    source_session_key: self
+                        .transport_user_key(&route.source_user, route.source_connection),
+                    source_transport_media_id: route.source_media,
+                    target_media_worker_id: route.target_worker,
+                    action: TransportRelayRouteAction::Release,
+                };
+                media_transport.apply_relay_route_effect(&effect).await
+            }
         }
+    }
+
+    pub(in crate::runtime::room) async fn record_relay_route_release_failure(
+        &self,
+        effect: &RelayRouteEffect,
+        error: TransportAdapterError,
+        media_transport: &(impl MediaPort + SessionPort),
+        failure_message: &str,
+    ) -> TransportEffectOutcome {
+        let operation = TransportCleanupOperation::ReleaseRelayRoute {
+            route: effect.route.clone(),
+        };
+        warn!(?effect, "{failure_message}");
+        self.record_cleanup_failure(&operation, error, media_transport)
+            .await;
+        self.reconcile_transport_cleanup_retries(media_transport)
+            .await;
+        TransportEffectOutcome::Failed
     }
 
     /// Records a failed first cleanup attempt and performs any immediate
@@ -631,9 +661,9 @@ impl Room {
     /// Converts a retry outcome into metrics and final escalation.
     ///
     /// Requeued operations remain owned by the room. Exhausted or terminal media
-    /// cleanup operations are escalated by closing the owning transport user
-    /// because the exact media resource may no longer be recoverable from room
-    /// state.
+    /// cleanup operations are escalated by closing the owning transport user.
+    /// That user is the only remaining precise owner when room state has already
+    /// forgotten the detached media or relay target.
     async fn record_cleanup_retry_action(
         &self,
         operation: &TransportCleanupOperation,
@@ -671,10 +701,10 @@ impl Room {
         }
     }
 
-    /// Asks the transport boundary to release the owner of an unrecovered media
+    /// Asks the transport boundary to release the owner of an unrecovered
     /// cleanup operation.
     ///
-    /// This is a last-resort cleanup path. It only applies to media removal
+    /// This is a last-resort cleanup path. It applies to media and relay target
     /// failures because closing a user cleanup operation cannot be made stronger
     /// by closing the same user again. The room records the escalation even when
     /// the adapter refuses the close so operators can correlate unrecovered
@@ -684,7 +714,7 @@ impl Room {
         operation: &TransportCleanupOperation,
         media_transport: &(impl MediaPort + SessionPort),
     ) {
-        if !operation.is_media_removal() {
+        if !operation.needs_owner_drop() {
             return;
         }
         let close_result = media_transport
@@ -855,6 +885,11 @@ impl Room {
         let connection_id = outcome.connection_id;
         self.definition
             .register_transport_worker(connection_id, outcome.transport_media_worker_id);
+        if let Some(media_transport) = cleanup.media_transport()
+            && cleanup.cleans_transport_state()
+        {
+            execute_relay_route_effects(self, media_transport, &outcome.relay_effects).await;
+        }
         self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
             .await;
         if let Some(media_transport) = cleanup.media_transport() {
@@ -890,6 +925,11 @@ impl Room {
             .definition
             .media_worker_id_for_connection(connection_id);
         if let Some(outcome) = outcome {
+            if let Some(media_transport) = cleanup.media_transport()
+                && cleanup.cleans_transport_state()
+            {
+                execute_relay_route_effects(self, media_transport, &outcome.relay_effects).await;
+            }
             self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
                 .await;
             Self::emit_lifecycle_effects(outcome.effects);
@@ -938,6 +978,11 @@ impl Room {
         outcome: DisconnectUsersOutcome,
         cleanup: UserCleanup<'_>,
     ) -> UserTransitionResult {
+        if let Some(media_transport) = cleanup.media_transport()
+            && cleanup.cleans_transport_state()
+        {
+            execute_relay_route_effects(self, media_transport, &outcome.relay_effects).await;
+        }
         self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
             .await;
         for disconnected_session in &outcome.disconnected_users {
@@ -1010,7 +1055,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         capabilities: MediaCapabilities,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
     ) -> SessionNegotiationOutcome {
         let update = {
             let mut state = self.state.write().await;
@@ -1030,7 +1075,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         update: UserNegotiationUpdate,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
     ) -> SessionNegotiationOutcome {
         if !update.session_present {
             return SessionNegotiationOutcome::StaleConnection;
@@ -1058,7 +1103,7 @@ impl Room {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        media_port: &impl MediaPort,
+        media_port: &(impl MediaPort + SessionPort),
     ) -> SessionNegotiationOutcome {
         if !self
             .request_active_video_consumer_keyframes(user_id, connection_id, media_port)
