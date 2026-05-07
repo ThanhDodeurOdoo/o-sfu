@@ -19,7 +19,7 @@ use crate::{
         },
         media_transport::{
             MediaPort, MediaTransportDeps, RtcTransport, RtcTransportConfig, SessionOffer,
-            SessionPort, SourcePacketGate, TransportMediaId, TransportSessionKey,
+            SessionPort, TransportMediaId, TransportSessionKey,
             test_support::FakeMediaTransportEvent,
         },
         metrics::RuntimeMetrics,
@@ -49,18 +49,15 @@ fn assert_track_binding_activity_update(
 async fn production_change_pauses_producer_and_broadcasts_track_binding() {
     let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
-    let producer_id = room
-        .test_api()
-        .media()
-        .publish_track(
-            &UserId::Integer(1),
-            TestSourceKind::ScalableVideo,
-            MediaKind::Video,
-            test_video_rtp_parameters(),
-            &adapter,
-        )
-        .await;
-    assert!(producer_id.is_some());
+    publish_track(
+        &room,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        MediaKind::Video,
+        test_video_rtp_parameters(),
+        &adapter,
+    )
+    .await;
 
     let bootstrap_msgs = drain_outbound(&mut rx2);
     assert!(
@@ -122,19 +119,15 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
     let (room, adapter, fake, mut publisher_rx, mut subscriber_rx) =
         setup_two_ready_users_with_fake().await;
 
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_video_rtp_parameters(),
-                &adapter,
-            )
-            .await
-            .is_some()
-    );
+    publish_track(
+        &room,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        MediaKind::Video,
+        test_video_rtp_parameters(),
+        &adapter,
+    )
+    .await;
     assert!(drain_outbound(&mut publisher_rx).is_empty());
     assert!(
         drain_outbound(&mut subscriber_rx)
@@ -207,35 +200,8 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
 
 #[tokio::test]
 async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
-    let manager = RoomManager::for_test();
-    let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
-        .await;
-    let (adapter, fake) = fake_adapter();
-    for raw_user_id in [1_i64, 2, 3] {
-        let (sender, _receiver) = test_sender();
-        let user_id = UserId::Integer(raw_user_id);
-        room.test_api()
-            .lifecycle()
-            .join_user(user_id.clone(), None, UserPermissions::default(), sender)
-            .await
-            .expect("user should join");
-        make_session_ready(&room, &user_id).await;
-    }
-
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_simulcast_video_rtp_parameters(),
-                &adapter,
-            )
-            .await
-            .is_some()
-    );
+    let (room, adapter, fake) = setup_three_ready_users_with_fake().await;
+    publish_simulcast_camera(&room, &UserId::Integer(1), &adapter).await;
 
     assert_consumer_packet_selection_update(
         &fake.snapshot_events(),
@@ -254,8 +220,8 @@ async fn multiparty_camera_publish_installs_the_initial_simulcast_selection() {
 #[tokio::test]
 async fn multiparty_without_active_audio_uses_thumbnail_policy_without_featured_camera() {
     let (room, adapter, fake) = setup_three_ready_users_with_fake().await;
-    publish_camera(&room, &UserId::Integer(1), &adapter).await;
-    publish_camera(&room, &UserId::Integer(2), &adapter).await;
+    publish_simulcast_camera(&room, &UserId::Integer(1), &adapter).await;
+    publish_simulcast_camera(&room, &UserId::Integer(2), &adapter).await;
 
     let events = fake.snapshot_events();
     assert_consumer_packet_selection_update(
@@ -287,19 +253,7 @@ async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
     let (room, adapter, fake, mut publisher_rx, mut subscriber_rx) =
         setup_two_ready_users_with_fake().await;
 
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_simulcast_video_rtp_parameters(),
-                &adapter,
-            )
-            .await
-            .is_some()
-    );
+    publish_simulcast_camera(&room, &UserId::Integer(1), &adapter).await;
     assert!(drain_outbound(&mut publisher_rx).is_empty());
     assert!(
         drain_outbound(&mut subscriber_rx)
@@ -324,19 +278,7 @@ async fn joining_a_third_user_lowers_existing_thumbnail_consumers() {
     let (room, adapter, fake, mut publisher_rx, mut subscriber_rx) =
         setup_two_ready_users_with_fake().await;
 
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_simulcast_video_rtp_parameters(),
-                &adapter,
-            )
-            .await
-            .is_some()
-    );
+    publish_simulcast_camera(&room, &UserId::Integer(1), &adapter).await;
     assert!(drain_outbound(&mut publisher_rx).is_empty());
     assert!(
         drain_outbound(&mut subscriber_rx)
@@ -374,41 +316,8 @@ async fn joining_a_third_user_lowers_existing_thumbnail_consumers() {
 
 #[tokio::test]
 async fn leaving_a_multiparty_room_restores_the_highest_consumer_layer() {
-    let manager = RoomManager::for_test();
-    let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
-        .await;
-    let (adapter, fake) = fake_adapter();
-    for raw_user_id in [1_i64, 2, 3] {
-        let (sender, _receiver) = test_sender();
-        let user_id = UserId::Integer(raw_user_id);
-        room.test_api()
-            .lifecycle()
-            .join_session_without_transport_cleanup(
-                user_id.clone(),
-                None,
-                UserPermissions::default(),
-                sender,
-                &adapter,
-            )
-            .await
-            .expect("user should join");
-        make_session_ready(&room, &user_id).await;
-    }
-
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_simulcast_video_rtp_parameters(),
-                &adapter,
-            )
-            .await
-            .is_some()
-    );
+    let (room, adapter, fake) = setup_three_ready_users_with_fake().await;
+    publish_simulcast_camera(&room, &UserId::Integer(1), &adapter).await;
 
     let baseline_event_count = fake.snapshot_events().len();
     assert!(
@@ -530,7 +439,7 @@ async fn receiver_bandwidth_recovery_upswitches_conservatively_with_keyframe() {
 async fn receiver_budget_pauses_visible_thumbnail_after_cheapest_layers_do_not_fit() {
     let (room, adapter, fake) = setup_ready_users_with_fake(&[1, 2, 3, 4]).await;
     for raw_user_id in [1_i64, 3, 4] {
-        publish_camera(&room, &UserId::Integer(raw_user_id), &adapter).await;
+        publish_simulcast_camera(&room, &UserId::Integer(raw_user_id), &adapter).await;
     }
 
     fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 200_000);
@@ -592,7 +501,7 @@ async fn receiver_budget_pauses_visible_thumbnail_after_cheapest_layers_do_not_f
 async fn receiver_budget_resumes_policy_paused_route_without_erasing_subscription_state() {
     let (room, adapter, fake) = setup_ready_users_with_fake(&[1, 2, 3, 4]).await;
     for raw_user_id in [1_i64, 3, 4] {
-        publish_camera(&room, &UserId::Integer(raw_user_id), &adapter).await;
+        publish_simulcast_camera(&room, &UserId::Integer(raw_user_id), &adapter).await;
     }
 
     fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 200_000);
@@ -627,97 +536,6 @@ async fn receiver_budget_resumes_policy_paused_route_without_erasing_subscriptio
         true,
     );
     assert_consumer_keyframe_request(recovery_events, &UserId::Integer(2), &UserId::Integer(1));
-}
-
-async fn setup_ready_users_with_fake(
-    user_ids: &[i64],
-) -> (Arc<Room>, MediaTransport, Arc<FakeMediaTransport>) {
-    let manager = RoomManager::for_test();
-    let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
-        .await;
-    let (adapter, fake) = fake_adapter();
-    for &raw_user_id in user_ids {
-        let (sender, _receiver) = test_sender();
-        let user_id = UserId::Integer(raw_user_id);
-        room.test_api()
-            .lifecycle()
-            .join_session_without_transport_cleanup(
-                user_id.clone(),
-                None,
-                UserPermissions::default(),
-                sender,
-                &adapter,
-            )
-            .await
-            .expect("user should join");
-        make_session_ready(&room, &user_id).await;
-    }
-    (room, adapter, fake)
-}
-
-async fn setup_three_ready_users_with_fake() -> (Arc<Room>, MediaTransport, Arc<FakeMediaTransport>)
-{
-    setup_ready_users_with_fake(&[1, 2, 3]).await
-}
-
-async fn publish_audio_and_camera(room: &Arc<Room>, user_id: &UserId, adapter: &MediaTransport) {
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                user_id,
-                TestSourceKind::AudioDetector,
-                MediaKind::Audio,
-                test_audio_rtp_parameters(),
-                adapter,
-            )
-            .await
-            .is_some()
-    );
-    publish_camera(room, user_id, adapter).await;
-}
-
-async fn publish_camera(room: &Arc<Room>, user_id: &UserId, adapter: &MediaTransport) {
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                user_id,
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_simulcast_video_rtp_parameters(),
-                adapter,
-            )
-            .await
-            .is_some()
-    );
-}
-
-async fn source_media_ids(
-    room: &Arc<Room>,
-    user_id: &UserId,
-) -> (TransportMediaId, TransportMediaId) {
-    let Some(connection_id) = room.test_api().inspect().user_connection_id(user_id).await else {
-        panic!("user should exist");
-    };
-    let Some(audio_media_id) = room
-        .test_api()
-        .inspect()
-        .producer_transport_media_id(user_id, connection_id, TestSourceKind::AudioDetector)
-        .await
-    else {
-        panic!("audio producer should expose a transport media id");
-    };
-    let Some(camera_media_id) = room
-        .test_api()
-        .inspect()
-        .producer_transport_media_id(user_id, connection_id, TestSourceKind::ScalableVideo)
-        .await
-    else {
-        panic!("camera producer should expose a transport media id");
-    };
-    (audio_media_id, camera_media_id)
 }
 
 async fn assert_transport_media_mapping_is_missing(
@@ -766,63 +584,6 @@ async fn assert_user_has_no_producer_route_target(
             .has_producer_route_target(user_id, connection_id, stream_type)
             .await
     );
-}
-
-fn assert_consumer_packet_selection_update(
-    events: &[FakeMediaTransportEvent],
-    consumer_user_id: &UserId,
-    source_user_id: &UserId,
-    expected_rid: &str,
-) {
-    assert!(events.iter().any(|event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ConsumerPacketGateUpdated {
-                consumer_user_id: updated_consumer_user_id,
-                source_user_id: updated_source_user_id,
-                packet_gate: SourcePacketGate::Rid(rid),
-            } if updated_consumer_user_id == consumer_user_id
-                && updated_source_user_id == source_user_id
-                && rid == expected_rid
-        )
-    }));
-}
-
-fn assert_consumer_keyframe_request(
-    events: &[FakeMediaTransportEvent],
-    expected_consumer_user_id: &UserId,
-    expected_source_user_id: &UserId,
-) {
-    assert!(events.iter().any(|event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ConsumerKeyframeRequested {
-                consumer_user_id,
-                source_user_id,
-            } if consumer_user_id == expected_consumer_user_id
-                && source_user_id == expected_source_user_id
-        )
-    }));
-}
-
-fn assert_consumer_activity_update(
-    events: &[FakeMediaTransportEvent],
-    expected_consumer_user_id: &UserId,
-    expected_source_user_id: &UserId,
-    expected_active: bool,
-) {
-    assert!(events.iter().any(|event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ConsumerActivityUpdated {
-                consumer_user_id,
-                source_user_id,
-                active,
-            } if consumer_user_id == expected_consumer_user_id
-                && source_user_id == expected_source_user_id
-                && *active == expected_active
-        )
-    }));
 }
 
 async fn assert_subscription_layout(
@@ -1093,19 +854,15 @@ async fn screen_share_layout_uses_screen_specific_priority_in_diagnostics() {
     let (room, adapter, _fake, mut publisher_rx, mut subscriber_rx) =
         setup_two_ready_users_with_fake().await;
 
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::ReadableVideo,
-                MediaKind::Video,
-                test_video_rtp_parameters(),
-                &adapter,
-            )
-            .await
-            .is_some()
-    );
+    publish_track(
+        &room,
+        &UserId::Integer(1),
+        TestSourceKind::ReadableVideo,
+        MediaKind::Video,
+        test_video_rtp_parameters(),
+        &adapter,
+    )
+    .await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
 
@@ -1124,21 +881,15 @@ async fn screen_share_layout_uses_screen_specific_priority_in_diagnostics() {
 async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
     let mut scenario = setup_real_rtc_refresh_scenario().await;
 
-    assert!(
-        scenario
-            .room
-            .test_api()
-            .media()
-            .publish_track(
-                &scenario.publisher_user_id,
-                TestSourceKind::AudioDetector,
-                MediaKind::Audio,
-                test_audio_rtp_parameters(),
-                &scenario.media_transport,
-            )
-            .await
-            .is_some()
-    );
+    publish_track(
+        &scenario.room,
+        &scenario.publisher_user_id,
+        TestSourceKind::AudioDetector,
+        MediaKind::Audio,
+        test_audio_rtp_parameters(),
+        &scenario.media_transport,
+    )
+    .await;
     assert!(drain_outbound(&mut scenario.publisher_rx).is_empty());
     assert!(
         drain_outbound(&mut scenario.subscriber_rx)
@@ -1231,16 +982,15 @@ async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
         .session_present
     );
 
-    room.test_api()
-        .media()
-        .publish_track(
-            &UserId::Integer(1),
-            TestSourceKind::ScalableVideo,
-            MediaKind::Video,
-            test_video_rtp_parameters(),
-            &adapter,
-        )
-        .await;
+    publish_track(
+        &room,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        MediaKind::Video,
+        test_video_rtp_parameters(),
+        &adapter,
+    )
+    .await;
 
     assert!(drain_outbound(&mut rx1).is_empty());
     let request = drain_outbound(&mut rx2)
@@ -1263,18 +1013,15 @@ async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
 async fn user_replacement_purges_stale_published_media_state() {
     let (room, adapter, mut publisher_rx, mut subscriber_rx) = setup_two_ready_users().await;
 
-    let producer_id = room
-        .test_api()
-        .media()
-        .publish_track(
-            &UserId::Integer(1),
-            TestSourceKind::ScalableVideo,
-            MediaKind::Video,
-            test_video_rtp_parameters(),
-            &adapter,
-        )
-        .await;
-    assert!(producer_id.is_some());
+    publish_track(
+        &room,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        MediaKind::Video,
+        test_video_rtp_parameters(),
+        &adapter,
+    )
+    .await;
     assert!(drain_outbound(&mut publisher_rx).is_empty());
     assert!(
         drain_outbound(&mut subscriber_rx)
@@ -1338,32 +1085,24 @@ async fn user_replacement_purges_stale_published_media_state() {
 async fn user_replacement_purges_all_published_stream_mappings() {
     let (room, adapter, mut publisher_rx, mut subscriber_rx) = setup_two_ready_users().await;
 
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_video_rtp_parameters(),
-                &adapter,
-            )
-            .await
-            .is_some()
-    );
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::AudioDetector,
-                MediaKind::Audio,
-                test_audio_rtp_parameters(),
-                &adapter,
-            )
-            .await
-            .is_some()
-    );
+    publish_track(
+        &room,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        MediaKind::Video,
+        test_video_rtp_parameters(),
+        &adapter,
+    )
+    .await;
+    publish_track(
+        &room,
+        &UserId::Integer(1),
+        TestSourceKind::AudioDetector,
+        MediaKind::Audio,
+        test_audio_rtp_parameters(),
+        &adapter,
+    )
+    .await;
     assert!(drain_outbound(&mut publisher_rx).is_empty());
     assert_eq!(
         drain_outbound(&mut subscriber_rx)
@@ -1633,16 +1372,15 @@ async fn publish_track_cleans_up_transport_media_when_user_leaves_mid_publish() 
 async fn production_change_updates_screen_track_binding_activity() {
     let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
-    room.test_api()
-        .media()
-        .publish_track(
-            &UserId::Integer(1),
-            TestSourceKind::ReadableVideo,
-            MediaKind::Video,
-            test_video_rtp_parameters(),
-            &adapter,
-        )
-        .await;
+    publish_track(
+        &room,
+        &UserId::Integer(1),
+        TestSourceKind::ReadableVideo,
+        MediaKind::Video,
+        test_video_rtp_parameters(),
+        &adapter,
+    )
+    .await;
 
     drain_outbound(&mut rx1);
     drain_outbound(&mut rx2);
@@ -1670,16 +1408,15 @@ async fn production_change_updates_screen_track_binding_activity() {
 async fn production_change_updates_transport_route_activity() {
     let (room, adapter, fake, mut rx1, mut rx2) = setup_two_ready_users_with_fake().await;
 
-    room.test_api()
-        .media()
-        .publish_track(
-            &UserId::Integer(1),
-            TestSourceKind::ScalableVideo,
-            MediaKind::Video,
-            test_video_rtp_parameters(),
-            &adapter,
-        )
-        .await;
+    publish_track(
+        &room,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        MediaKind::Video,
+        test_video_rtp_parameters(),
+        &adapter,
+    )
+    .await;
     drain_outbound(&mut rx1);
     drain_outbound(&mut rx2);
 
@@ -1709,16 +1446,15 @@ async fn production_change_updates_transport_route_activity() {
 async fn production_change_commits_user_state_before_transport_update_finishes() {
     let (room, adapter, fake, mut rx1, mut rx2) = setup_two_ready_users_with_fake().await;
 
-    room.test_api()
-        .media()
-        .publish_track(
-            &UserId::Integer(1),
-            TestSourceKind::ScalableVideo,
-            MediaKind::Video,
-            test_video_rtp_parameters(),
-            &adapter,
-        )
-        .await;
+    publish_track(
+        &room,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        MediaKind::Video,
+        test_video_rtp_parameters(),
+        &adapter,
+    )
+    .await;
     drain_outbound(&mut rx1);
     drain_outbound(&mut rx2);
 

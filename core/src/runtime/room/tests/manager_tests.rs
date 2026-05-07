@@ -4,71 +4,10 @@ use super::fixtures::*;
 use crate::{
     LocalSpilloverPolicy, MediaCodecFlags, RuntimeFeatureFlags,
     runtime::{
-        diagnostics::DiagnosticsStore,
-        media_transport::{SourcePacketGate, TransportMediaId, TransportPlacementPressureSnapshot},
-        metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
+        diagnostics::DiagnosticsStore, media_transport::TransportPlacementPressureSnapshot,
+        metrics::RuntimeMetrics, packet_sink_registry::RoomPacketSinkRegistry,
     },
 };
-
-async fn publish_audio_and_camera(
-    room: &Arc<super::super::Room>,
-    user_id: &UserId,
-    media_transport: &MediaTransport,
-) {
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                user_id,
-                TestSourceKind::AudioDetector,
-                MediaKind::Audio,
-                test_audio_rtp_parameters(),
-                media_transport,
-            )
-            .await
-            .is_some()
-    );
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                user_id,
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_simulcast_video_rtp_parameters(),
-                media_transport,
-            )
-            .await
-            .is_some()
-    );
-}
-
-async fn source_media_ids(
-    room: &Arc<super::super::Room>,
-    user_id: &UserId,
-) -> (TransportMediaId, TransportMediaId) {
-    let Some(connection_id) = room.test_api().inspect().user_connection_id(user_id).await else {
-        panic!("user should exist");
-    };
-    let Some(audio_media_id) = room
-        .test_api()
-        .inspect()
-        .producer_transport_media_id(user_id, connection_id, TestSourceKind::AudioDetector)
-        .await
-    else {
-        panic!("audio producer should expose a transport media id");
-    };
-    let Some(camera_media_id) = room
-        .test_api()
-        .inspect()
-        .producer_transport_media_id(user_id, connection_id, TestSourceKind::ScalableVideo)
-        .await
-    else {
-        panic!("camera producer should expose a transport media id");
-    };
-    (audio_media_id, camera_media_id)
-}
 
 fn spillover_room_manager(local_router_count: usize) -> RoomManager {
     RoomManager::for_test_with_config(super::super::RoomManagerConfig::new(
@@ -103,36 +42,6 @@ fn load_spillover_room_manager(
             crate::RoomShardingPolicy::load_triggered_local_spillover(local_router_count, policy),
         ),
     ))
-}
-
-fn assert_consumer_packet_selection_update(
-    events: &[FakeMediaTransportEvent],
-    consumer_user_id: &UserId,
-    source_user_id: &UserId,
-    expected_rid: &str,
-) {
-    assert!(events.iter().any(|event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ConsumerPacketGateUpdated {
-                consumer_user_id: updated_consumer_user_id,
-                source_user_id: updated_source_user_id,
-                packet_gate: SourcePacketGate::Rid(rid),
-            } if updated_consumer_user_id == consumer_user_id
-                && updated_source_user_id == source_user_id
-                && rid == expected_rid
-        )
-    }));
-}
-
-fn assert_featured_snapshot_update(messages: &[UserOutbound], user_id: &UserId, is_featured: bool) {
-    assert!(messages.iter().any(|message| {
-        matches!(
-            message,
-            UserOutbound::Message(RoomEventMessage::UserInfoChanged(snapshot))
-                if snapshot.get(user_id).is_some_and(|info| info.is_featured == Some(is_featured))
-        )
-    }));
 }
 
 async fn assert_user_placement(
@@ -1058,19 +967,7 @@ async fn manager_metrics_track_receiver_source_selection_updates() {
         make_session_ready(&room, &user_id).await;
     }
 
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_simulcast_video_rtp_parameters(),
-                &media_transport,
-            )
-            .await
-            .is_some()
-    );
+    publish_simulcast_camera(&room, &UserId::Integer(1), &media_transport).await;
 
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.source_selection_updates_encoding(), 2);

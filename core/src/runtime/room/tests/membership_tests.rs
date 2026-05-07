@@ -293,22 +293,6 @@ async fn join_same_user_twice(room: &Arc<super::super::Room>) -> (ConnectionId, 
     (first_connection, second_connection)
 }
 
-async fn publish_camera(
-    room: &Arc<super::super::Room>,
-    media_transport: &MediaTransport,
-) -> Option<UserStreamId> {
-    room.test_api()
-        .media()
-        .publish_track(
-            &UserId::Integer(1),
-            TestSourceKind::ScalableVideo,
-            MediaKind::Video,
-            test_video_rtp_parameters(),
-            media_transport,
-        )
-        .await
-}
-
 #[tokio::test]
 async fn leave_user_runtime_removes_surviving_consumer_media() {
     let (room, media_transport, fake, _publisher_rx, _subscriber_rx) =
@@ -805,7 +789,9 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_user() {
             .await
     );
     assert!(
-        publish_camera(&room, &media_transport).await.is_none(),
+        try_publish_camera(&room, &UserId::Integer(1), &media_transport)
+            .await
+            .is_none(),
         "stale negotiation callbacks must not make the replacement user publish-ready"
     );
 
@@ -826,7 +812,9 @@ async fn stale_negotiation_callbacks_do_not_ready_a_replaced_user() {
             .await
     );
     assert!(
-        publish_camera(&room, &media_transport).await.is_some(),
+        try_publish_camera(&room, &UserId::Integer(1), &media_transport)
+            .await
+            .is_some(),
         "the current connection should become publish-ready after its own negotiation answer"
     );
 }

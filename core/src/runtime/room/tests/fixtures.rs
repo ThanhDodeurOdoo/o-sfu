@@ -23,7 +23,7 @@ pub(super) use crate::{
         ConnectionId, TestSourceKind, TestSubscriptionStates, UserId, UserInfo, UserPermissions,
         VideoLayoutIntent,
         media_transport::{
-            ActiveSpeakerSource, MediaTransport, TransportMediaId,
+            ActiveSpeakerSource, MediaTransport, SourcePacketGate, TransportMediaId,
             test_support::{FakeMediaTransport, FakeMediaTransportEvent},
         },
         source_model::{
@@ -454,6 +454,227 @@ pub(super) async fn setup_late_join_bootstrap_scenario() -> (
         scenario.first_rx,
         scenario.second_rx,
     )
+}
+
+pub(super) async fn setup_ready_users_with_fake(
+    user_ids: &[i64],
+) -> (
+    Arc<super::super::Room>,
+    MediaTransport,
+    Arc<FakeMediaTransport>,
+) {
+    let (room, adapter, fake, _receivers) = setup_ready_users_with_fake_receivers(user_ids).await;
+    (room, adapter, fake)
+}
+
+pub(super) async fn setup_ready_users_with_fake_receivers(
+    user_ids: &[i64],
+) -> (
+    Arc<super::super::Room>,
+    MediaTransport,
+    Arc<FakeMediaTransport>,
+    Vec<mpsc::UnboundedReceiver<UserOutbound>>,
+) {
+    let manager = RoomManager::for_test();
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+    let (adapter, fake) = fake_adapter();
+    let mut receivers = Vec::with_capacity(user_ids.len());
+    for &raw_user_id in user_ids {
+        let (sender, receiver) = test_sender();
+        receivers.push(receiver);
+        let user_id = UserId::Integer(raw_user_id);
+        room.test_api()
+            .lifecycle()
+            .join_session_without_transport_cleanup(
+                user_id.clone(),
+                None,
+                UserPermissions::default(),
+                sender,
+                &adapter,
+            )
+            .await
+            .expect("user should join");
+        make_session_ready(&room, &user_id).await;
+    }
+    (room, adapter, fake, receivers)
+}
+
+pub(super) async fn setup_three_ready_users_with_fake() -> (
+    Arc<super::super::Room>,
+    MediaTransport,
+    Arc<FakeMediaTransport>,
+) {
+    setup_ready_users_with_fake(&[1, 2, 3]).await
+}
+
+pub(super) async fn try_publish_camera(
+    room: &Arc<super::super::Room>,
+    user_id: &UserId,
+    media_transport: &MediaTransport,
+) -> Option<UserStreamId> {
+    room.test_api()
+        .media()
+        .publish_track(
+            user_id,
+            TestSourceKind::ScalableVideo,
+            MediaKind::Video,
+            test_video_rtp_parameters(),
+            media_transport,
+        )
+        .await
+}
+
+pub(super) async fn publish_simulcast_camera(
+    room: &Arc<super::super::Room>,
+    user_id: &UserId,
+    media_transport: &MediaTransport,
+) -> UserStreamId {
+    publish_track(
+        room,
+        user_id,
+        TestSourceKind::ScalableVideo,
+        MediaKind::Video,
+        test_simulcast_video_rtp_parameters(),
+        media_transport,
+    )
+    .await
+}
+
+pub(super) async fn publish_audio_and_camera(
+    room: &Arc<super::super::Room>,
+    user_id: &UserId,
+    media_transport: &MediaTransport,
+) {
+    publish_track(
+        room,
+        user_id,
+        TestSourceKind::AudioDetector,
+        MediaKind::Audio,
+        test_audio_rtp_parameters(),
+        media_transport,
+    )
+    .await;
+    publish_simulcast_camera(room, user_id, media_transport).await;
+}
+
+pub(super) async fn publish_track(
+    room: &Arc<super::super::Room>,
+    user_id: &UserId,
+    stream_type: TestSourceKind,
+    media_kind: MediaKind,
+    rtp_parameters: MediaStream,
+    media_transport: &MediaTransport,
+) -> UserStreamId {
+    room.test_api()
+        .media()
+        .publish_track(
+            user_id,
+            stream_type,
+            media_kind,
+            rtp_parameters,
+            media_transport,
+        )
+        .await
+        .expect("publication should succeed")
+}
+
+pub(super) async fn source_media_ids(
+    room: &Arc<super::super::Room>,
+    user_id: &UserId,
+) -> (TransportMediaId, TransportMediaId) {
+    let Some(connection_id) = room.test_api().inspect().user_connection_id(user_id).await else {
+        panic!("user should exist");
+    };
+    let Some(audio_media_id) = room
+        .test_api()
+        .inspect()
+        .producer_transport_media_id(user_id, connection_id, TestSourceKind::AudioDetector)
+        .await
+    else {
+        panic!("audio producer should expose a transport media id");
+    };
+    let Some(camera_media_id) = room
+        .test_api()
+        .inspect()
+        .producer_transport_media_id(user_id, connection_id, TestSourceKind::ScalableVideo)
+        .await
+    else {
+        panic!("camera producer should expose a transport media id");
+    };
+    (audio_media_id, camera_media_id)
+}
+
+pub(super) fn assert_consumer_packet_selection_update(
+    events: &[FakeMediaTransportEvent],
+    consumer_user_id: &UserId,
+    source_user_id: &UserId,
+    expected_rid: &str,
+) {
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            FakeMediaTransportEvent::ConsumerPacketGateUpdated {
+                consumer_user_id: updated_consumer_user_id,
+                source_user_id: updated_source_user_id,
+                packet_gate: SourcePacketGate::Rid(rid),
+            } if updated_consumer_user_id == consumer_user_id
+                && updated_source_user_id == source_user_id
+                && rid == expected_rid
+        )
+    }));
+}
+
+pub(super) fn assert_consumer_keyframe_request(
+    events: &[FakeMediaTransportEvent],
+    expected_consumer_user_id: &UserId,
+    expected_source_user_id: &UserId,
+) {
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            FakeMediaTransportEvent::ConsumerKeyframeRequested {
+                consumer_user_id,
+                source_user_id,
+            } if consumer_user_id == expected_consumer_user_id
+                && source_user_id == expected_source_user_id
+        )
+    }));
+}
+
+pub(super) fn assert_consumer_activity_update(
+    events: &[FakeMediaTransportEvent],
+    expected_consumer_user_id: &UserId,
+    expected_source_user_id: &UserId,
+    expected_active: bool,
+) {
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            FakeMediaTransportEvent::ConsumerActivityUpdated {
+                consumer_user_id,
+                source_user_id,
+                active,
+            } if consumer_user_id == expected_consumer_user_id
+                && source_user_id == expected_source_user_id
+                && *active == expected_active
+        )
+    }));
+}
+
+pub(super) fn assert_featured_snapshot_update(
+    messages: &[UserOutbound],
+    user_id: &UserId,
+    is_featured: bool,
+) {
+    assert!(messages.iter().any(|message| {
+        matches!(
+            message,
+            UserOutbound::Message(RoomEventMessage::UserInfoChanged(snapshot))
+                if snapshot.get(user_id).is_some_and(|info| info.is_featured == Some(is_featured))
+        )
+    }));
 }
 
 pub(super) fn drain_outbound(rx: &mut mpsc::UnboundedReceiver<UserOutbound>) -> Vec<UserOutbound> {
