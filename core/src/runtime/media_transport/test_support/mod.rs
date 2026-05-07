@@ -262,7 +262,7 @@ impl MediaTransport {
     #[must_use]
     pub fn from_fake_transport(transport: Arc<FakeMediaTransport>) -> Self {
         Self {
-            backend: MediaTransportBackend::Fake(transport),
+            backend: MediaTransportBackend::from_fake(transport),
         }
     }
 

@@ -337,9 +337,8 @@ fn rtc_transport_builder_rejects_invalid_port_split() {
 }
 
 #[test]
-fn concrete_transports_satisfy_runtime_transport_ports() {
-    assert_runtime_transport::<RtcTransport>();
-    assert_runtime_transport::<FakeMediaTransport>();
+fn media_transport_satisfies_runtime_transport_ports() {
+    assert_runtime_transport::<MediaTransport>();
 }
 
 #[test]

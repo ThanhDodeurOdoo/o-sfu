@@ -70,9 +70,9 @@ pub mod source_model {
 pub mod transport {
     //! Curated media transport construction and extension boundary.
     //!
-    //! Production server code gets the opaque transport handles, named
-    //! construction inputs and concern-oriented transport ports from here.
-    //! RTC worker internals stay below the media transport boundary.
+    //! Production server code gets the opaque media transport handle, named RTC
+    //! construction inputs plus concern-oriented transport ports from here. RTC
+    //! worker internals stay below the media transport boundary.
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub mod test_support {

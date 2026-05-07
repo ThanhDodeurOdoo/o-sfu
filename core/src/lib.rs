@@ -17,11 +17,12 @@
 //! - semantic media intent and outcome types such as [`PublicationActivity`],
 //!   [`PublishStageOutcome`], [`UnpublishOutcome`] and [`UserInfoRefresh`] for
 //!   caller-facing control decisions.
-//! - [`MediaTransport`] and [`RtcTransport`] as the runtime media transport
-//!   boundary over the concrete RTC engine.
+//! - [`MediaTransport`] as the runtime media transport facade, with
+//!   [`RtcTransport`] and [`RtcTransportBuilder`] kept as RTC construction
+//!   handles below that facade.
 //! - the transport concern traits in [`transport`], especially
 //!   [`TransportFacade`] when a caller needs one backend with negotiation,
-//!   media, and observability capabilities, and the narrower port traits when a
+//!   media plus observability capabilities. Use the narrower port traits when a
 //!   caller only needs one concern.
 //! - server-integration DTOs and facades under [`server`], including
 //!   diagnostics, metrics, room orchestration, recording taps, source
@@ -37,7 +38,7 @@
 //! # Server-facing example
 //!
 //! ```rust,no_run
-//! use o_sfu_core::{CoreOptions, MediaCore, RtcTransport};
+//! use o_sfu_core::{CoreOptions, MediaCore, MediaTransport};
 //! use o_sfu_core::server::room::Room;
 //! use o_sfu_core::server::session::UserId;
 //! use o_sfu_core::ConnectionId;
@@ -54,8 +55,8 @@
 //!     Ok(())
 //! }
 //!
-//! fn build_core(options: CoreOptions, transport: RtcTransport) -> MediaCore {
-//!     MediaCore::new(options, o_sfu_core::MediaTransport::from_rtc_transport(transport))
+//! fn build_core(options: CoreOptions, transport: MediaTransport) -> MediaCore {
+//!     MediaCore::new(options, transport)
 //! }
 //! ```
 //!
