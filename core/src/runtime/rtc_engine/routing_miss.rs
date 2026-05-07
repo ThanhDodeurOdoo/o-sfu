@@ -211,9 +211,9 @@ impl PacketLoopRoutingMissCache {
             .push_back(PacketLoopRoutingMissRecord::new(key, packet));
     }
 
-    /// Removes one miss after a later packet from the same source routes.
+    /// Removes one miss after fallback routing later accepts the same source.
     ///
-    /// Route success means the packet loop learned something new about that
+    /// Fallback route success means the packet loop learned something new about that
     /// source tuple. Forgetting the matching negative record avoids carrying a
     /// stale "no session accepted this" result next to a fresh source pin.
     fn forget(&mut self, key: PacketLoopRoutingMissKey, packet: &[u8]) {
@@ -371,8 +371,8 @@ impl UnknownSourceRateLimiter {
 /// Callers must clear this state whenever worker topology, ICE credentials or
 /// demux indexes change. Callers must also pair `record_miss` with only packets
 /// that completed fallback recovery and found no session. A packet that routes
-/// successfully must call `record_route_success` so stale miss and rate-limit
-/// state do not outlive the learned source tuple.
+/// successfully through fallback must call `record_fallback_route_success` so
+/// stale miss and rate-limit state do not outlive the learned source tuple.
 pub(super) struct PacketLoopRoutingState {
     /// Exact recent packets that failed fallback routing.
     miss_cache: PacketLoopRoutingMissCache,
@@ -444,12 +444,12 @@ impl PacketLoopRoutingState {
         self.source_rate_limiter.record_miss(source_addr, now);
     }
 
-    /// Clears negative state for a source after a packet routes successfully.
+    /// Clears negative state for a source after fallback routing succeeds.
     ///
-    /// This keeps the hints aligned with the fast-path demux state. Once a
-    /// source is accepted, later packets should use the learned source pin or
-    /// revalidate normally instead of inheriting old fallback failures.
-    pub(super) fn record_route_success(
+    /// This keeps the hints aligned with the fast-path demux state. Once
+    /// fallback accepts a source, later packets should use the learned source
+    /// pin or revalidate normally instead of inheriting old fallback failures.
+    pub(super) fn record_fallback_route_success(
         &mut self,
         miss_key: PacketLoopRoutingMissKey,
         packet: &[u8],
@@ -520,7 +520,7 @@ mod tests {
             routing_state.should_rate_limit_source(source_addr, start + Duration::from_millis(4),)
         );
 
-        routing_state.record_route_success(miss_key, &packet, source_addr);
+        routing_state.record_fallback_route_success(miss_key, &packet, source_addr);
 
         assert!(!routing_state.source_is_tracked(source_addr));
         assert!(

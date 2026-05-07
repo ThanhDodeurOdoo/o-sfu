@@ -122,7 +122,6 @@ pub(super) fn route_packet_to_matching_session(
     candidate_addr: SocketAddr,
     packet: &[u8],
 ) {
-    let miss_key = PacketLoopRoutingMissKey::new(source_addr, candidate_addr, packet);
     match route_packet_with_cached_session(
         state,
         snapshot_state,
@@ -132,7 +131,6 @@ pub(super) fn route_packet_to_matching_session(
     ) {
         CachedRouteOutcome::Routed => {
             metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
-            routing_state.record_route_success(miss_key, packet, source_addr);
             return;
         }
         CachedRouteOutcome::Malformed => {
@@ -141,6 +139,7 @@ pub(super) fn route_packet_to_matching_session(
         }
         CachedRouteOutcome::NotMatched => {}
     }
+    let miss_key = PacketLoopRoutingMissKey::new(source_addr, candidate_addr, packet);
     // The recent-miss cache proves that no session accepted an identical packet
     // from this source recently. It must be cleared on topology or ICE changes
     // or a stale negative result could hide a newly valid route.
@@ -558,7 +557,7 @@ fn route_packet_by_single_session(
         return;
     }
     if route_packet_to_session(state, &session_key, route, "single-user-scan") {
-        routing_state.record_route_success(miss_key, route.packet, route.source_addr);
+        routing_state.record_fallback_route_success(miss_key, route.packet, route.source_addr);
     }
 }
 
@@ -614,7 +613,7 @@ fn route_packet_by_recovery_index(
         }
     };
     if route_packet_to_session(state, &session_key, route, "recovery-index") {
-        routing_state.record_route_success(miss_key, route.packet, route.source_addr);
+        routing_state.record_fallback_route_success(miss_key, route.packet, route.source_addr);
     }
 }
 

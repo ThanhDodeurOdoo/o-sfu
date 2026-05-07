@@ -17,6 +17,8 @@ use std::{
 };
 
 use str0m::{
+    crypto::from_feature_flags,
+    ice::{StunMessage, TransId},
     media::{KeyframeRequestKind, MediaKind, Mid, Rid},
     rtp::Ssrc,
 };
@@ -94,6 +96,10 @@ trait RuntimeMetricsSnapshotTestExt {
 
     fn rtc_datagram_fallback_scans(&self) -> u64 {
         self.counter_value(MetricName::RtcDatagramFallbackScansTotal, &[])
+    }
+
+    fn rtc_datagram_routes_indexed(&self) -> u64 {
+        self.counter_value(MetricName::RtcDatagramRoutesTotal, &[("path", "indexed")])
     }
 
     fn rtc_datagram_scan_users(&self) -> u64 {
@@ -260,6 +266,16 @@ fn valid_rtp_packet(sequence_number: u16, ssrc: u32) -> Vec<u8> {
         ssrc[2],
         ssrc[3],
     ]
+}
+
+fn serialize_stun_message(message: &StunMessage<'_>, password: Option<&[u8]>) -> Option<Vec<u8>> {
+    let mut buffer = [0_u8; 1024];
+    let crypto_provider = from_feature_flags();
+    let sha1_hmac = |key: &[u8], payloads: &[&[u8]]| {
+        crypto_provider.sha1_hmac_provider.sha1_hmac(key, payloads)
+    };
+    let len = message.to_bytes(password, &mut buffer, sha1_hmac).ok()?;
+    buffer.get(..len).map(<[u8]>::to_vec)
 }
 
 #[test]
@@ -481,6 +497,71 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
     assert_eq!(snapshot.rtc_datagram_scan_users(), 0);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
+}
+
+#[test]
+fn indexed_route_does_not_touch_recent_miss_state() -> Result<(), &'static str> {
+    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_045));
+    let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_046));
+    let session_key = test_transport_session_key(51, 0, 56, UserId::Integer(57));
+    let mut bootstrap_state = RtcBootstrapState::default();
+    let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+    let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
+    let metrics = RuntimeMetrics::default();
+
+    let created = bootstrap::ensure_session_rtc_state(
+        &mut bootstrap_state.users,
+        &session_key,
+        candidate_addr,
+        10_000_000,
+        MediaCodecFlags::default(),
+    );
+    assert_eq!(created, Ok(true));
+    let local_ice_credentials = bootstrap_state
+        .users
+        .get_mut(&session_key)
+        .map(|session_state| session_state.rtc.direct_api().local_ice_credentials())
+        .ok_or("session state missing after creation")?;
+    assert!(
+        bootstrap_state
+            .remote_addr_demux
+            .remember_remote_addr(source_addr, &session_key)
+    );
+
+    let username = format!("{}:remote-ufrag", local_ice_credentials.ufrag);
+    let packet = serialize_stun_message(
+        &StunMessage::binding_request(&username, TransId::new(), true, 1, 1, false),
+        Some(local_ice_credentials.pass.as_bytes()),
+    )
+    .ok_or("failed to serialize STUN binding request")?;
+    let miss_key = super::super::routing_miss::PacketLoopRoutingMissKey::new(
+        source_addr,
+        candidate_addr,
+        &packet,
+    );
+    routing_state.record_miss(miss_key, &packet, source_addr, Instant::now());
+
+    assert!(routing_state.should_skip_scan(miss_key, &packet));
+    assert!(routing_state.source_is_tracked(source_addr));
+
+    route_packet_to_matching_session(
+        &mut bootstrap_state,
+        &snapshot_state,
+        &mut routing_state,
+        &metrics,
+        source_addr,
+        candidate_addr,
+        &packet,
+    );
+
+    assert_eq!(routing_state.fallback_attempts(), 0);
+    assert!(routing_state.should_skip_scan(miss_key, &packet));
+    assert!(routing_state.source_is_tracked(source_addr));
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.rtc_datagram_routes_indexed(), 1);
+    assert_eq!(snapshot.rtc_datagram_fallback_scans(), 0);
+    assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache(), 0);
+    Ok(())
 }
 
 #[test]
