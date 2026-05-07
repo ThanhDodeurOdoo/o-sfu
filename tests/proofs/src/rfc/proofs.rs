@@ -46,7 +46,7 @@ fn spec_normalized_level_idc(profile_idc: u8, profile_iop: u8, level_idc: u8) ->
         return if (profile_iop & CONSTRAINT_SET3_FLAG) != 0 {
             Some(LevelIdc::Level1B)
         } else {
-            Some(LevelIdc::Level1)
+            Some(LevelIdc::Level1_1)
         };
     }
     match level_idc {

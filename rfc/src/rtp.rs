@@ -823,7 +823,7 @@ pub mod h264 {
             return if (profile_iop & H264_LEVEL_1B_CONSTRAINT_SET3_FLAG) != 0 {
                 Some(LevelIdc::Level1B)
             } else {
-                Some(LevelIdc::Level1)
+                Some(LevelIdc::Level1_1)
             };
         }
         LevelIdc::try_from(level_idc).ok()
@@ -1109,6 +1109,26 @@ mod tests {
             Some(Profile::ConstrainedBaseline)
         );
         assert_eq!(parsed.map(ProfileLevelId::level), Some(LevelIdc::Level3_1));
+    }
+
+    #[test]
+    fn h264_profile_level_id_distinguishes_level_1_variants() {
+        let cases = [
+            ("42e00a", Profile::ConstrainedBaseline, LevelIdc::Level1),
+            ("42e00b", Profile::ConstrainedBaseline, LevelIdc::Level1_1),
+            ("42a00b", Profile::Baseline, LevelIdc::Level1_1),
+            ("4de00b", Profile::ConstrainedBaseline, LevelIdc::Level1_1),
+            ("58e00b", Profile::ConstrainedBaseline, LevelIdc::Level1_1),
+            ("42500b", Profile::ConstrainedBaseline, LevelIdc::Level1B),
+            ("4d100b", Profile::Main, LevelIdc::Level1B),
+            ("58100b", Profile::Extended, LevelIdc::Level1B),
+        ];
+
+        for (token, profile, level) in cases {
+            let parsed = ProfileLevelId::parse(token);
+            assert_eq!(parsed.map(ProfileLevelId::profile), Some(profile));
+            assert_eq!(parsed.map(ProfileLevelId::level), Some(level));
+        }
     }
 
     #[test]
