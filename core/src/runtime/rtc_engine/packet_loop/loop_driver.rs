@@ -31,7 +31,7 @@ use tracing::warn;
 use super::{
     super::{
         bitrate::RtcBitrateState,
-        forwarding_planner::populate_forward_routes,
+        forwarding_planner::populate_forward_routes_for_packet,
         routing_miss::PacketLoopRoutingState,
         state::{RtcBootstrapState, RtcSnapshotState},
         worker::{WorkerCommandContext, drain_due_rid_keyframe_refreshes},
@@ -147,14 +147,17 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
     let mut packet_sink_cache = PacketSinkRouteCache::default();
 
     loop {
-        drain_pending_control_inputs(
-            &mut bootstrap_state,
-            &bitrate_state,
-            &snapshot_state,
-            &config,
-            &mut inputs,
-            &mut routing_state,
-        );
+        // draining commands
+        while let Some(input) = inputs.try_recv_control() {
+            handle_control_input_and_clear_routing_cache(
+                &mut bootstrap_state,
+                &bitrate_state,
+                &snapshot_state,
+                &config,
+                input,
+                &mut routing_state,
+            );
+        }
 
         let snapshot = snapshot_and_pump(
             &mut bootstrap_state,
@@ -190,7 +193,7 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
             return;
         };
 
-        let _ = handle_loop_input(
+        let _ = apply_ingress_for_next_turn(
             &mut bootstrap_state,
             &bitrate_state,
             &snapshot_state,
@@ -202,26 +205,6 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
     }
 }
 
-fn drain_pending_control_inputs(
-    bootstrap_state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    config: &PacketLoopConfig,
-    inputs: &mut PacketLoopInputReceivers,
-    routing_state: &mut PacketLoopRoutingState,
-) {
-    while let Some(input) = inputs.try_recv_control() {
-        handle_control_input_and_clear_routing_cache(
-            bootstrap_state,
-            bitrate_state,
-            snapshot_state,
-            config,
-            input,
-            routing_state,
-        );
-    }
-}
-
 /// Apply the event that woke the worker after the pump phase.
 ///
 /// Control inputs mutate authoritative worker state and conservatively
@@ -229,7 +212,7 @@ fn drain_pending_control_inputs(
 /// `str0m::Rtc` if the receive buffer contains a non-empty packet. A
 /// zero-length datagram input is the driver's internal timeout wake and only
 /// causes the next turn to poll ready sessions.
-fn handle_loop_input(
+fn apply_ingress_for_next_turn(
     bootstrap_state: &mut RtcBootstrapState,
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
@@ -239,13 +222,13 @@ fn handle_loop_input(
     routing_state: &mut PacketLoopRoutingState,
 ) -> bool {
     match next_input {
-        NextLoopInput::Control(input) => {
+        NextLoopInput::Control(command) => {
             handle_control_input_and_clear_routing_cache(
                 bootstrap_state,
                 bitrate_state,
                 snapshot_state,
                 config,
-                input,
+                command,
                 routing_state,
             );
             true
@@ -286,10 +269,10 @@ fn handle_control_input_and_clear_routing_cache(
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: &PacketLoopConfig,
-    input: PacketLoopControlInput,
+    command: PacketLoopControlInput,
     routing_state: &mut PacketLoopRoutingState,
 ) {
-    input.dispatch(
+    command.dispatch(
         bootstrap_state,
         &WorkerCommandContext {
             bitrate_state,
@@ -358,13 +341,16 @@ fn snapshot_and_pump(
         buffers,
     );
     packet_sink_cache.refresh_from(&config.packet_sink_registry);
-    populate_forward_routes(
-        state,
-        packet_sink_cache,
-        &config.metrics,
-        &mut buffers.pending_packets,
-        &mut buffers.forwards,
-    );
+    for (packet_idx, packet) in buffers.pending_packets.iter_mut().enumerate() {
+        populate_forward_routes_for_packet(
+            state,
+            packet_sink_cache,
+            &config.metrics,
+            packet_idx,
+            packet,
+            &mut buffers.forwards,
+        );
+    }
     flush_forward_routes(state, &config.metrics, buffers);
     record_packet_loop_lag(snapshot_state, turn_started_at);
     Some(SnapshotInfo {

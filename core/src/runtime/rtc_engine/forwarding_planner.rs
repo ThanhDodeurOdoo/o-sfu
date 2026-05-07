@@ -39,24 +39,6 @@ use crate::runtime::{
     packet_sink_registry::{PacketSinkLookup, RegisteredPacketSink},
 };
 
-pub(super) fn populate_forward_routes(
-    state: &RtcBootstrapState,
-    packet_sinks: &impl PacketSinkLookup,
-    metrics: &RuntimeMetrics,
-    pending_packets: &mut [ForwardedPacket],
-    forwards: &mut Vec<PacketForward>,
-) {
-    for (packet_idx, packet) in pending_packets.iter_mut().enumerate() {
-        populate_forward_routes_for_packet(
-            state,
-            packet_sinks,
-            metrics,
-            packet_idx,
-            packet,
-            forwards,
-        );
-    }
-}
 
 /// Plans destinations for one packet using already-projected transport state.
 ///
@@ -67,7 +49,7 @@ pub(super) fn populate_forward_routes(
 /// Origin-side sinks and relay fanout only apply to packets that still visit
 /// their source worker. Relayed packets already consumed those source-side
 /// effects and must not be sent back into second-hop relay sinks.
-fn populate_forward_routes_for_packet(
+pub(super) fn populate_forward_routes_for_packet(
     state: &RtcBootstrapState,
     packet_sinks: &impl PacketSinkLookup,
     metrics: &RuntimeMetrics,

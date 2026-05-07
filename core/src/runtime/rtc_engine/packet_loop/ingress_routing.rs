@@ -198,6 +198,9 @@ fn route_packet_with_cached_session(
     let Some(session_state) = state.users.get_mut(&session_key) else {
         state.remote_addr_demux.forget_remote_addr(source_addr);
         if let Ok(mut snapshot) = snapshot_state.lock() {
+            // Stale pins must be cleared in the shared snapshot so that any
+            // control-plane observation stays consistent with the worker's
+            // routing discovery.
             snapshot.remote_addr_demux.forget_remote_addr(source_addr);
         }
         return CachedRouteOutcome::NotMatched;
@@ -223,6 +226,9 @@ fn route_packet_with_cached_session(
         );
         state.remote_addr_demux.forget_remote_addr(source_addr);
         if let Ok(mut snapshot) = snapshot_state.lock() {
+            // Stale pins must be cleared in the shared snapshot so that any
+            // control-plane observation stays consistent with the worker's
+            // routing discovery.
             snapshot.remote_addr_demux.forget_remote_addr(source_addr);
         }
         return CachedRouteOutcome::NotMatched;
@@ -470,6 +476,9 @@ fn route_packet_to_session(
         .remember_remote_addr(route.source_addr, session_key)
         && let Ok(mut snapshot) = route.snapshot_state.lock()
     {
+        // The worker is the source of truth for address pins. New pins must
+        // be mirrored in the snapshot state so they are visible to the rest
+        // of the application.
         let _ = snapshot
             .remote_addr_demux
             .remember_remote_addr(route.source_addr, session_key);
