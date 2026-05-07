@@ -202,7 +202,12 @@ fn parse_auth_payload(message: Message) -> Result<AuthPayload, WebSocketCloseCod
 
 fn auth_payload_text(message: Message) -> Result<String, WebSocketCloseCode> {
     match message {
-        Message::Text(payload) => Ok(payload.to_string()),
+        Message::Text(payload) => {
+            if payload.len() > MAX_CLIENT_FRAME_BYTES {
+                return Err(WebSocketCloseCode::ProtocolError);
+            }
+            Ok(payload.to_string())
+        }
         Message::Binary(payload) => {
             if payload.len() > MAX_CLIENT_FRAME_BYTES {
                 return Err(WebSocketCloseCode::ProtocolError);
@@ -593,7 +598,7 @@ mod tests {
     use o_sfu_protocol::signaling::WebSocketCloseCode;
     use serde_json::json;
 
-    use super::parse_auth_payload;
+    use super::{MAX_CLIENT_FRAME_BYTES, parse_auth_payload};
 
     #[test]
     fn parse_auth_payload_accepts_single_auth_message() {
@@ -645,6 +650,8 @@ mod tests {
                 .into(),
             ),
             Message::Binary(vec![0xff].into()),
+            Message::Text("x".repeat(MAX_CLIENT_FRAME_BYTES + 1).into()),
+            Message::Binary(vec![b'x'; MAX_CLIENT_FRAME_BYTES + 1].into()),
             Message::Ping(Vec::new().into()),
         ];
 

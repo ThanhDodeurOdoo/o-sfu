@@ -35,7 +35,7 @@ use o_sfu_protocol::{shared::UserId, signaling::WebSocketCloseCode};
 use tokio::sync::mpsc;
 use tracing::{Instrument, Span, field, info};
 
-use super::WsWriter;
+use super::{WsWriter, io::MAX_CLIENT_FRAME_BYTES};
 use crate::{
     application::user_session::User,
     core::server::room::{Room, UserOutbound},
@@ -71,7 +71,10 @@ pub(crate) async fn upgrade(
         state.config.http.trust_proxy_headers,
         connect_info.map(|Extension(ConnectInfo(addr))| addr),
     ));
-    websocket.on_upgrade(move |socket| handle_socket(socket, state, remote_address))
+    websocket
+        .max_message_size(MAX_CLIENT_FRAME_BYTES)
+        .max_frame_size(MAX_CLIENT_FRAME_BYTES)
+        .on_upgrade(move |socket| handle_socket(socket, state, remote_address))
 }
 
 /// Owns one upgraded WebSocket from first split through final room cleanup.

@@ -254,10 +254,18 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
 }
 
 fn authorization_token(headers: &HeaderMap) -> Option<&str> {
-    headers
+    let value = headers
         .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split_once(' ').map(|(_, token)| token))
+        .and_then(|value| value.to_str().ok())?;
+    let (scheme, token) = value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("Bearer") {
+        return None;
+    }
+    let token = token.trim_start();
+    if token.is_empty() {
+        return None;
+    }
+    Some(token)
 }
 
 async fn diagnostics_summary(State(state): State<RuntimeState>, headers: HeaderMap) -> Response {

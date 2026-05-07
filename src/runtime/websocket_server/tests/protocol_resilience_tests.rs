@@ -127,8 +127,11 @@ async fn websocket_rejects_oversized_auth_frame() {
 
     assert_eq!(
         read_close_code(&mut websocket).await,
-        Some(CloseCode::Protocol),
+        Some(CloseCode::Error),
     );
+
+    let metrics = server.state.metrics.snapshot();
+    assert_eq!(metrics.ws_handshake_rejected_error(), 1);
 }
 
 #[tokio::test]
