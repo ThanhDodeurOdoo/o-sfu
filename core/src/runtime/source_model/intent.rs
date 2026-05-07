@@ -10,8 +10,6 @@ use crate::runtime::VideoLayoutIntent;
 /// policy as one immutable decision. Core captures these values when the staged
 /// publish commits.
 ///
-/// # Boundary role
-///
 /// Compatibility concepts such as "camera" or "screen" must be translated into
 /// this type before entering core. If a product stream needs different layout
 /// or bandwidth behavior, change the orchestration catalog that builds this

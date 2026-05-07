@@ -1,14 +1,9 @@
 //! Receiver-local RTP identity rewriting for browser-bound media.
 //!
-//! # Boundary role
-//!
 //! Publisher RTP can arrive from several simulcast SSRCs while the browser
-//! consumer receives one downstream stream. This module owns the receiver-local
+//! consumer receives one downstream stream. This module contain the receiver-local
 //! identity for that stream: sequence number, RTP timestamp and the VP8 payload
 //! descriptor fields browsers use to order frames across layer switches.
-//!
-//! It does not choose which RID should be forwarded. Route control has already
-//! made that decision before packets reach the local send boundary.
 
 use std::collections::HashMap;
 

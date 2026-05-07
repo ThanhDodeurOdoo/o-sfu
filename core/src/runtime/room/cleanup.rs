@@ -1,13 +1,11 @@
 //! Room-owned reconciliation for transport cleanup effects.
 //!
-//! # Boundary role
-//!
 //! Room state is authoritative for membership and media ownership. Transport
 //! cleanup is an async effect that runs after that state has already moved on.
-//! This module owns the small amount of retry state needed when the effect
+//! This module contain the small amount of retry state needed when the effect
 //! fails after the room can no longer derive it from `RoomState`.
 //!
-//! The reconciler deliberately does not call the media transport, mutate room
+//! The reconciler does not call the media transport, mutate room
 //! state or decide when a room is removed. It only classifies cleanup failures,
 //! deduplicates pending operations and tells room orchestration which effects
 //! are due for another attempt.
@@ -202,13 +200,7 @@ pub(super) enum CleanupRetryAction {
 
 /// Bounded retry state for failed room cleanup effects.
 ///
-/// # What belongs here
-///
-/// This type owns only retry metadata: the operation key, the number of failed
-/// retry attempts and the number of cleanup cycles to wait before trying again.
-/// It does not hold room locks, spawn tasks or call async code.
-///
-/// # Concurrency model
+/// # Concurrency
 ///
 /// `Room` protects the reconciler with a standard mutex because all methods are
 /// short synchronous bookkeeping steps. Callers must drop that guard before

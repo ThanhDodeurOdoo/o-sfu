@@ -1,7 +1,5 @@
 //! Public media transport handles used by the core and server runtime.
 //!
-//! # Boundary role
-//!
 //! The runtime asks for media intent through small transport ports:
 //! negotiation, session cleanup, media wiring, observability and source-policy
 //! wakeups. This file keeps that caller-facing surface independent from the
@@ -10,7 +8,7 @@
 //! [`MediaTransport`] and [`MediaTransportDeps`], not on worker shards or fake
 //! test adapters.
 //!
-//! # Error handling guidance
+//! # Error handling
 //!
 //! Construction errors are returned before any worker state is created.
 //! Runtime transport failures are propagated through the concern traits and
@@ -104,8 +102,6 @@ impl RtcTransport {
 }
 
 /// Named construction input for the production RTC transport.
-///
-/// # Boundary role
 ///
 /// Building the RTC transport needs operator policy, process services and
 /// worker topology. The builder keeps those inputs named so the runtime does
@@ -259,8 +255,6 @@ fn validate_worker_split(
 }
 
 /// Opaque runtime media transport handle.
-///
-/// # Boundary role
 ///
 /// `MediaTransport` is the type server orchestration and `SfuCore` should hold.
 /// It hides whether the active backend is production RTC or a deterministic

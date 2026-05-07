@@ -1,6 +1,6 @@
 //! Codec-profile facade for RTC-edge simulcast negotiation.
 //!
-//! The room source graph and video policy stay codec-neutral. This module owns
+//! The room source graph and video policy stay codec-neutral. This module contain
 //! the narrow SDP and upload-layer decisions that differ between codec paths.
 
 mod common;

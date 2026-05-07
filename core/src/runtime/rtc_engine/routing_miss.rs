@@ -51,7 +51,7 @@ const UNKNOWN_SOURCE_MISS_BURST_LIMIT: usize = 4;
 
 /// Cooldown applied after one source exhausts its unresolved probe burst.
 ///
-/// The value is deliberately short. This is abuse resistance for the demux
+/// The value is intentionally short. This is abuse resistance for the demux
 /// fallback path, not a session lifecycle timeout.
 const UNKNOWN_SOURCE_RATE_LIMIT_COOLDOWN: Duration = Duration::from_millis(200);
 

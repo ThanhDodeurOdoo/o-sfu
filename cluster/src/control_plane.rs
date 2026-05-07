@@ -1,7 +1,5 @@
 //! In-memory control-plane service model for room ownership.
 //!
-//! # Boundary role
-//!
 //! [`ClusterControlPlane`] composes the node registry, room directory, topology
 //! snapshots and room-health reports behind one synchronous API. The deployable
 //! HTTP binary is only a transport wrapper around this model.
@@ -11,14 +9,12 @@
 //! and topology watch behavior. Durable storage or an HA consensus layer must
 //! preserve the same authority and fencing rules.
 //!
-//! # Concurrency model
+//! # Concurrency
 //!
 //! The service owns plain maps and has no internal locking. A caller must
 //! serialize mutation externally. The current binary uses a Tokio mutex. A
 //! storage-backed implementation can keep the same method contracts while
 //! moving serialization into transactions.
-//!
-//! # Hot-path boundary
 //!
 //! This service is never part of RTP forwarding. Media workers consume cached
 //! topology decisions that were produced here on admission or topology-update
@@ -117,10 +113,10 @@ pub enum TopologyWatchUpdate {
 
 /// Errors returned by the composed control-plane model.
 ///
-/// # Error handling guidance
+/// # Error handling
 ///
 /// `NodeRegistry` and `RoomDirectory` wrap lower-level domain rejections.
-/// `StaleHealthReporter` deliberately hides which owner fence failed because
+/// `StaleHealthReporter` hides which owner fence failed because
 /// callers should treat all stale health reports the same. `MissingTopology`
 /// means the room has not been resolved or assigned in this authority.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -140,18 +136,6 @@ pub enum ControlPlaneError {
 }
 
 /// Synchronous authority for room ownership decisions.
-///
-/// # What belongs here
-///
-/// The control plane owns node advertisements, room assignments, latest
-/// topology snapshots and owner-authored room-health reports. It makes
-/// single-writer ownership decisions and produces snapshots for media nodes.
-///
-/// # What does not belong here
-///
-/// It does not open sockets, run background lease expiry tasks, forward media,
-/// mutate local room state or store durable data. Those are responsibilities of
-/// the server binary, media runtime and production authority layer.
 #[derive(Debug, Default, Clone)]
 pub struct ClusterControlPlane {
     nodes: ClusterNodeRegistry,

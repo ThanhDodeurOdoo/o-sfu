@@ -1,9 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -73,19 +70,24 @@ pub enum FakeMediaTransportEvent {
 /// Deterministic transport backend for tests and feature-gated development.
 #[derive(Debug, Clone, Default)]
 pub struct FakeMediaTransport {
-    events: Arc<Mutex<Vec<FakeMediaTransportEvent>>>,
-    next_media_id: Arc<AtomicU64>,
-    media_owners: Arc<Mutex<BTreeMap<TransportMediaId, TransportSessionKey>>>,
-    failed_media_removals: Arc<Mutex<BTreeSet<TransportMediaId>>>,
-    blocked_media_removals: Arc<Mutex<BTreeSet<TransportMediaId>>>,
-    failed_session_closes: Arc<Mutex<BTreeSet<TransportSessionKey>>>,
-    blocked_session_closes: Arc<Mutex<BTreeSet<TransportSessionKey>>>,
-    negotiated_producer_parameters: Arc<Mutex<BTreeMap<TransportMediaId, RouterRtpParameters>>>,
-    active_speaker_sources: Arc<Mutex<Vec<ActiveSpeakerSource>>>,
-    receiver_bandwidth_estimates: Arc<Mutex<BTreeMap<UserId, u64>>>,
-    placement_pressure: Arc<Mutex<TransportPlacementPressureSnapshot>>,
-    delays: Arc<Mutex<FakeMediaTransportDelays>>,
+    state: Arc<Mutex<FakeMediaTransportState>>,
     source_policy_signal: Arc<SourcePolicySignal>,
+}
+
+#[derive(Debug, Default)]
+struct FakeMediaTransportState {
+    events: Vec<FakeMediaTransportEvent>,
+    next_media_id: u64,
+    media_owners: BTreeMap<TransportMediaId, TransportSessionKey>,
+    failed_media_removals: BTreeSet<TransportMediaId>,
+    blocked_media_removals: BTreeSet<TransportMediaId>,
+    failed_session_closes: BTreeSet<TransportSessionKey>,
+    blocked_session_closes: BTreeSet<TransportSessionKey>,
+    negotiated_producer_parameters: BTreeMap<TransportMediaId, RouterRtpParameters>,
+    active_speaker_sources: Vec<ActiveSpeakerSource>,
+    receiver_bandwidth_estimates: BTreeMap<UserId, u64>,
+    placement_pressure: TransportPlacementPressureSnapshot,
+    delays: FakeMediaTransportDelays,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -100,165 +102,108 @@ struct FakeMediaTransportDelays {
     reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
 )]
 impl FakeMediaTransport {
+    fn inspect_state<T>(&self, inspect: impl FnOnce(&FakeMediaTransportState) -> T) -> T {
+        let state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        inspect(&state)
+    }
+
+    fn mutate_state<T>(&self, mutate: impl FnOnce(&mut FakeMediaTransportState) -> T) -> T {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        mutate(&mut state)
+    }
+
     fn record_event(&self, event: FakeMediaTransportEvent) {
-        match self.events.lock() {
-            Ok(mut events) => {
-                events.push(event);
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().push(event);
-            }
-        }
+        self.mutate_state(|state| state.events.push(event));
     }
 
     fn delay_for_publish_media(&self) -> Option<Duration> {
-        match self.delays.lock() {
-            Ok(delays) => delays.publish_media,
-            Err(poisoned) => poisoned.into_inner().publish_media,
-        }
+        self.inspect_state(|state| state.delays.publish_media)
     }
 
     fn delay_for_consume_media(&self) -> Option<Duration> {
-        match self.delays.lock() {
-            Ok(delays) => delays.consume_media,
-            Err(poisoned) => poisoned.into_inner().consume_media,
-        }
+        self.inspect_state(|state| state.delays.consume_media)
     }
 
     fn delay_for_producer_activity(&self) -> Option<Duration> {
-        match self.delays.lock() {
-            Ok(delays) => delays.producer_activity,
-            Err(poisoned) => poisoned.into_inner().producer_activity,
-        }
+        self.inspect_state(|state| state.delays.producer_activity)
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     #[must_use]
     pub fn snapshot_events(&self) -> Vec<FakeMediaTransportEvent> {
-        match self.events.lock() {
-            Ok(events) => events.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        }
+        self.inspect_state(|state| state.events.clone())
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn set_publish_media_delay(&self, delay: Option<Duration>) {
-        match self.delays.lock() {
-            Ok(mut delays) => {
-                delays.publish_media = delay;
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().publish_media = delay;
-            }
-        }
+        self.mutate_state(|state| state.delays.publish_media = delay);
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn fail_next_remove_media(&self, transport_media_id: TransportMediaId) {
-        match self.failed_media_removals.lock() {
-            Ok(mut removals) => {
-                removals.insert(transport_media_id);
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().insert(transport_media_id);
-            }
-        }
+        self.mutate_state(|state| {
+            state.failed_media_removals.insert(transport_media_id);
+        });
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn fail_remove_media_until_allowed(&self, transport_media_id: TransportMediaId) {
-        match self.blocked_media_removals.lock() {
-            Ok(mut removals) => {
-                removals.insert(transport_media_id);
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().insert(transport_media_id);
-            }
-        }
+        self.mutate_state(|state| {
+            state.blocked_media_removals.insert(transport_media_id);
+        });
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn allow_remove_media(&self, transport_media_id: TransportMediaId) {
-        match self.blocked_media_removals.lock() {
-            Ok(mut removals) => {
-                removals.remove(&transport_media_id);
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().remove(&transport_media_id);
-            }
-        }
+        self.mutate_state(|state| {
+            state.blocked_media_removals.remove(&transport_media_id);
+        });
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn fail_next_close_session(&self, session_key: TransportSessionKey) {
-        match self.failed_session_closes.lock() {
-            Ok(mut sessions) => {
-                sessions.insert(session_key);
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().insert(session_key);
-            }
-        }
+        self.mutate_state(|state| {
+            state.failed_session_closes.insert(session_key);
+        });
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn fail_close_session_until_allowed(&self, session_key: TransportSessionKey) {
-        match self.blocked_session_closes.lock() {
-            Ok(mut sessions) => {
-                sessions.insert(session_key);
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().insert(session_key);
-            }
-        }
+        self.mutate_state(|state| {
+            state.blocked_session_closes.insert(session_key);
+        });
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn allow_close_session(&self, session_key: &TransportSessionKey) {
-        match self.blocked_session_closes.lock() {
-            Ok(mut sessions) => {
-                sessions.remove(session_key);
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().remove(session_key);
-            }
-        }
+        self.mutate_state(|state| {
+            state.blocked_session_closes.remove(session_key);
+        });
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn set_consume_media_delay(&self, delay: Option<Duration>) {
-        match self.delays.lock() {
-            Ok(mut delays) => {
-                delays.consume_media = delay;
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().consume_media = delay;
-            }
-        }
+        self.mutate_state(|state| state.delays.consume_media = delay);
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn set_producer_active_delay(&self, delay: Option<Duration>) {
-        match self.delays.lock() {
-            Ok(mut delays) => {
-                delays.producer_activity = delay;
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().producer_activity = delay;
-            }
-        }
+        self.mutate_state(|state| state.delays.producer_activity = delay);
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn clear_negotiated_producer_parameters(&self, transport_media_id: TransportMediaId) {
-        match self.negotiated_producer_parameters.lock() {
-            Ok(mut parameters) => {
-                parameters.remove(&transport_media_id);
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().remove(&transport_media_id);
-            }
-        }
+        self.mutate_state(|state| {
+            state
+                .negotiated_producer_parameters
+                .remove(&transport_media_id);
+        });
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
@@ -267,46 +212,28 @@ impl FakeMediaTransport {
         transport_media_id: TransportMediaId,
         parameters: RouterRtpParameters,
     ) {
-        match self.negotiated_producer_parameters.lock() {
-            Ok(mut negotiated_parameters) => {
-                negotiated_parameters.insert(transport_media_id, parameters);
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().insert(transport_media_id, parameters);
-            }
-        }
+        self.mutate_state(|state| {
+            state
+                .negotiated_producer_parameters
+                .insert(transport_media_id, parameters);
+        });
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn set_active_speaker_source_snapshot(&self, sources: Vec<ActiveSpeakerSource>) {
-        let dirty_room_instance_ids = match self.media_owners.lock() {
-            Ok(media_owners) => sources
+        let dirty_room_instance_ids = self.mutate_state(|state| {
+            let dirty_room_instance_ids = sources
                 .iter()
                 .filter_map(|source| {
-                    media_owners
+                    state
+                        .media_owners
                         .get(&source.transport_media_id())
                         .map(TransportSessionKey::room_instance_id)
                 })
-                .collect::<Vec<_>>(),
-            Err(poisoned) => poisoned
-                .into_inner()
-                .iter()
-                .filter_map(|(transport_media_id, session_key)| {
-                    sources
-                        .iter()
-                        .any(|source| source.transport_media_id() == *transport_media_id)
-                        .then_some(session_key.room_instance_id())
-                })
-                .collect::<Vec<_>>(),
-        };
-        match self.active_speaker_sources.lock() {
-            Ok(mut active_speaker_sources) => {
-                *active_speaker_sources = sources;
-            }
-            Err(poisoned) => {
-                *poisoned.into_inner() = sources;
-            }
-        }
+                .collect::<Vec<_>>();
+            state.active_speaker_sources = sources;
+            dirty_room_instance_ids
+        });
         for room_instance_id in dirty_room_instance_ids {
             self.source_policy_signal.mark_dirty(room_instance_id);
         }
@@ -314,29 +241,19 @@ impl FakeMediaTransport {
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn set_receiver_bandwidth_estimate(&self, user_id: UserId, estimate_bps: u64) {
-        let dirty_room_instance_ids = match self.media_owners.lock() {
-            Ok(media_owners) => media_owners
+        let dirty_room_instance_ids = self.mutate_state(|state| {
+            let dirty_room_instance_ids = state
+                .media_owners
                 .values()
                 .filter_map(|session_key| {
                     (session_key.user_id() == &user_id).then_some(session_key.room_instance_id())
                 })
-                .collect::<Vec<_>>(),
-            Err(poisoned) => poisoned
-                .into_inner()
-                .values()
-                .filter_map(|session_key| {
-                    (session_key.user_id() == &user_id).then_some(session_key.room_instance_id())
-                })
-                .collect::<Vec<_>>(),
-        };
-        match self.receiver_bandwidth_estimates.lock() {
-            Ok(mut estimates) => {
-                estimates.insert(user_id, estimate_bps);
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().insert(user_id, estimate_bps);
-            }
-        }
+                .collect::<Vec<_>>();
+            state
+                .receiver_bandwidth_estimates
+                .insert(user_id, estimate_bps);
+            dirty_room_instance_ids
+        });
         for room_instance_id in dirty_room_instance_ids {
             self.source_policy_signal.mark_dirty(room_instance_id);
         }
@@ -344,14 +261,7 @@ impl FakeMediaTransport {
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn set_placement_pressure_snapshot(&self, snapshot: TransportPlacementPressureSnapshot) {
-        match self.placement_pressure.lock() {
-            Ok(mut pressure) => {
-                *pressure = snapshot;
-            }
-            Err(poisoned) => {
-                *poisoned.into_inner() = snapshot;
-            }
-        }
+        self.mutate_state(|state| state.placement_pressure = snapshot);
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
@@ -366,10 +276,7 @@ impl FakeMediaTransport {
         reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
     )]
     pub(crate) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
-        match self.active_speaker_sources.lock() {
-            Ok(active_speaker_sources) => active_speaker_sources.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        }
+        self.inspect_state(|state| state.active_speaker_sources.clone())
     }
 
     pub(crate) async fn active_speaker_diagnostic_snapshot(
@@ -395,21 +302,18 @@ impl FakeMediaTransport {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
-        let estimates = match self.receiver_bandwidth_estimates.lock() {
-            Ok(estimates) => estimates.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        };
-        ReceiverBandwidthSnapshot {
+        self.inspect_state(|state| ReceiverBandwidthSnapshot {
             per_session: session_keys
                 .iter()
                 .filter_map(|session_key| {
-                    estimates
+                    state
+                        .receiver_bandwidth_estimates
                         .get(session_key.user_id())
                         .copied()
                         .map(|estimate_bps| (session_key.clone(), estimate_bps))
                 })
                 .collect(),
-        }
+        })
     }
 
     pub(crate) fn placement_pressure_snapshot(
@@ -419,10 +323,7 @@ impl FakeMediaTransport {
         if session_keys.is_empty() {
             return TransportPlacementPressureSnapshot::default();
         }
-        match self.placement_pressure.lock() {
-            Ok(pressure) => *pressure,
-            Err(poisoned) => *poisoned.into_inner(),
-        }
+        self.inspect_state(|state| state.placement_pressure)
     }
 
     pub(crate) fn source_policy_signal(&self) -> Arc<SourcePolicySignal> {
@@ -474,10 +375,8 @@ impl FakeMediaTransport {
         _session_key: &TransportSessionKey,
         _answer_sdp: &str,
     ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-        let negotiated_producer_parameters = match self.negotiated_producer_parameters.lock() {
-            Ok(parameters) => parameters.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        };
+        let negotiated_producer_parameters =
+            self.inspect_state(|state| state.negotiated_producer_parameters.clone());
         Ok(AppliedSessionAnswer::from_negotiated_producers(
             negotiated_producer_parameters,
         ))
@@ -491,30 +390,21 @@ impl FakeMediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
-        let should_fail_once = match self.failed_session_closes.lock() {
-            Ok(mut sessions) => sessions.remove(session_key),
-            Err(poisoned) => poisoned.into_inner().remove(session_key),
-        };
-        let should_fail_until_allowed = match self.blocked_session_closes.lock() {
-            Ok(sessions) => sessions.contains(session_key),
-            Err(poisoned) => poisoned.into_inner().contains(session_key),
-        };
-        if should_fail_once || should_fail_until_allowed {
+        let should_fail = self.mutate_state(|state| {
+            let should_fail_once = state.failed_session_closes.remove(session_key);
+            let should_fail_until_allowed = state.blocked_session_closes.contains(session_key);
+            if should_fail_once || should_fail_until_allowed {
+                return true;
+            }
+            state.media_owners.retain(|_, owner| owner != session_key);
+            state.events.push(FakeMediaTransportEvent::SessionClosed {
+                user_id: session_key.user_id().clone(),
+            });
+            false
+        });
+        if should_fail {
             return Err(TransportAdapterError::TransportUnavailable);
         }
-        match self.media_owners.lock() {
-            Ok(mut media_owners) => {
-                media_owners.retain(|_, owner| owner != session_key);
-            }
-            Err(poisoned) => {
-                poisoned
-                    .into_inner()
-                    .retain(|_, owner| owner != session_key);
-            }
-        }
-        self.record_event(FakeMediaTransportEvent::SessionClosed {
-            user_id: session_key.user_id().clone(),
-        });
         Ok(())
     }
 
@@ -527,37 +417,26 @@ impl FakeMediaTransport {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        let should_fail = match self.failed_media_removals.lock() {
-            Ok(mut removals) => removals.remove(&transport_media_id),
-            Err(poisoned) => poisoned.into_inner().remove(&transport_media_id),
-        };
-        let should_fail_until_allowed = match self.blocked_media_removals.lock() {
-            Ok(removals) => removals.contains(&transport_media_id),
-            Err(poisoned) => poisoned.into_inner().contains(&transport_media_id),
-        };
-        if should_fail || should_fail_until_allowed {
+        let should_fail = self.mutate_state(|state| {
+            let should_fail_once = state.failed_media_removals.remove(&transport_media_id);
+            let should_fail_until_allowed =
+                state.blocked_media_removals.contains(&transport_media_id);
+            if should_fail_once || should_fail_until_allowed {
+                return true;
+            }
+            state
+                .negotiated_producer_parameters
+                .remove(&transport_media_id);
+            state.media_owners.remove(&transport_media_id);
+            state.events.push(FakeMediaTransportEvent::MediaRemoved {
+                user_id: session_key.user_id().clone(),
+                transport_media_id,
+            });
+            false
+        });
+        if should_fail {
             return Err(TransportAdapterError::TransportUnavailable);
         }
-        match self.negotiated_producer_parameters.lock() {
-            Ok(mut parameters) => {
-                parameters.remove(&transport_media_id);
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().remove(&transport_media_id);
-            }
-        }
-        match self.media_owners.lock() {
-            Ok(mut media_owners) => {
-                media_owners.remove(&transport_media_id);
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().remove(&transport_media_id);
-            }
-        }
-        self.record_event(FakeMediaTransportEvent::MediaRemoved {
-            user_id: session_key.user_id().clone(),
-            transport_media_id,
-        });
         Ok(())
     }
 
@@ -571,17 +450,13 @@ impl FakeMediaTransport {
         _session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<RouterRtpParameters, TransportAdapterError> {
-        match self.negotiated_producer_parameters.lock() {
-            Ok(parameters) => parameters
+        self.inspect_state(|state| {
+            state
+                .negotiated_producer_parameters
                 .get(&transport_media_id)
                 .cloned()
-                .ok_or(TransportAdapterError::UnsupportedFeature),
-            Err(poisoned) => poisoned
-                .into_inner()
-                .get(&transport_media_id)
-                .cloned()
-                .ok_or(TransportAdapterError::UnsupportedFeature),
-        }
+                .ok_or(TransportAdapterError::UnsupportedFeature)
+        })
     }
 
     #[allow(
@@ -601,27 +476,19 @@ impl FakeMediaTransport {
         if let Some(delay) = self.delay_for_publish_media() {
             sleep(delay).await;
         }
-        let id = self.next_media_id.fetch_add(1, Ordering::Relaxed);
-        let transport_media_id = TransportMediaId::new(id);
-        let negotiated = synthetic_negotiated_producer_parameters(media_kind, transport_media_id);
-        match self.negotiated_producer_parameters.lock() {
-            Ok(mut parameters) => {
-                parameters.insert(transport_media_id, negotiated);
-            }
-            Err(poisoned) => {
-                poisoned.into_inner().insert(transport_media_id, negotiated);
-            }
-        }
-        match self.media_owners.lock() {
-            Ok(mut media_owners) => {
-                media_owners.insert(transport_media_id, session_key.clone());
-            }
-            Err(poisoned) => {
-                poisoned
-                    .into_inner()
-                    .insert(transport_media_id, session_key.clone());
-            }
-        }
+        let transport_media_id = self.mutate_state(|state| {
+            let transport_media_id = TransportMediaId::new(state.next_media_id);
+            state.next_media_id = state.next_media_id.wrapping_add(1);
+            let negotiated =
+                synthetic_negotiated_producer_parameters(media_kind, transport_media_id);
+            state
+                .negotiated_producer_parameters
+                .insert(transport_media_id, negotiated);
+            state
+                .media_owners
+                .insert(transport_media_id, session_key.clone());
+            transport_media_id
+        });
         Ok(transport_media_id)
     }
 
@@ -645,8 +512,11 @@ impl FakeMediaTransport {
         if let Some(delay) = self.delay_for_consume_media() {
             sleep(delay).await;
         }
-        let id = self.next_media_id.fetch_add(1, Ordering::Relaxed);
-        Ok(TransportMediaId::new(id))
+        Ok(self.mutate_state(|state| {
+            let transport_media_id = TransportMediaId::new(state.next_media_id);
+            state.next_media_id = state.next_media_id.wrapping_add(1);
+            transport_media_id
+        }))
     }
 
     #[allow(

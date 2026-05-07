@@ -1,6 +1,6 @@
 //! Concrete RTC execution engine for the media transport.
 //!
-//! This module owns the Str0m-backed implementation that turns media transport
+//! This module contain the Str0m-backed implementation that turns media transport
 //! intents into actual WebRTC state and packet movement. It sits below
 //! [`crate::runtime::media_transport`]: higher layers should not import this
 //! module to create offers, publish media, or inspect transport state unless
@@ -30,12 +30,6 @@
 //!   capability projection;
 //! - `simulcast` and `sdp_simulcast`: RTC-edge simulcast negotiation helpers
 //!   used while preserving compatibility import paths during migration.
-//!
-//! The module boundary is deliberately concrete. It may depend on Str0m, Tokio
-//! worker communication, packet-level data structures, and transport-native
-//! route-control state. Those details should remain below the media transport
-//! boundary so the pure router and room engine continue to reason in domain
-//! terms instead of backend mechanics.
 
 mod api;
 mod bitrate;

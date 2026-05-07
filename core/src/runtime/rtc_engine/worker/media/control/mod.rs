@@ -9,7 +9,7 @@
 //! - relay cleanup must be emitted when the last remote-backed route disappears
 //!
 //! `lifecycle.rs` owns media declaration and teardown against `RtcSessionState`.
-//! Once a producer or consumer handle exists, this module owns the routing-side
+//! Once a producer or consumer handle exists, this module contain the routing-side
 //! bookkeeping that validates sources, registers or removes consumer routes and
 //! recomputes packet-gate state.
 //!

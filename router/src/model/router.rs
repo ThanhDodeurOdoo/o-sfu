@@ -224,8 +224,7 @@ impl<O: RouterObserver> Router<O> {
     ///
     /// This is the authoritative producer pause transition in the pure router.
     /// It mutates the producer and then updates the producer shadow stored on
-    /// each dependent consumer. The consumer-local route state is deliberately
-    /// left unchanged.
+    /// each dependent consumer. The consumer-local route state is left unchanged.
     ///
     /// The update cost is proportional to the number of consumers attached to
     /// the producer because the router uses the reverse producer-consumer index.

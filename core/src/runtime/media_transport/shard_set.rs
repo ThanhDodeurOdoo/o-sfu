@@ -48,7 +48,7 @@ const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
 /// ports. Below it, each [`RtcTransportShard`] owns one worker-local RTC
 /// state machine and packet loop.
 ///
-/// # Concurrency model
+/// # Concurrency
 ///
 /// Cloning shard handles is cheap because each shard is stored in an `Arc`.
 /// Operations route to the selected shard and await the shard-owned async work.

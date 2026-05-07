@@ -18,8 +18,6 @@ use crate::{
 
 /// Operator-facing RTC transport policy used to build each worker shard.
 ///
-/// # Boundary role
-///
 /// This is still RTC-specific because it describes the concrete server-side
 /// WebRTC transport. The orchestration layer should normally pass
 /// [`CoreOptions`](crate::CoreOptions) into

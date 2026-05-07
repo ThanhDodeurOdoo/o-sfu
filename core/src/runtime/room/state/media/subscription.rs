@@ -6,8 +6,6 @@
 //! by target user and stream id, then plans route activity changes and
 //! bootstraps for the effect layer.
 //!
-//! # Boundary role
-//!
 //! The subscription state never decides what "camera" or "screen" means. It
 //! only knows whether a receiver wants a generic source active and which layout
 //! preference should be associated with that source.

@@ -106,7 +106,7 @@ impl<'a> Iterator for CandidateSessionKeys<'a> {
 
 /// Route an incoming UDP datagram to its owning RTC session.
 ///
-/// # Error handling guidance
+/// # Error handling
 ///
 /// Routing failure is not a transport error. Malformed packets, unknown
 /// sessions, repeated misses and rate-limited sources are dropped with metrics. A

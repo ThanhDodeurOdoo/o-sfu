@@ -10,16 +10,7 @@
 //! registries, server configuration or JSON envelope parsing. Those concerns
 //! stay in the runtime, core, router, telemetry and protocol crates.
 //!
-//! # What belongs here
-//!
-//! Add a type here only when it is part of the shared business contract and at
-//! least two production crates need the same meaning. User identity, room
-//! feature flags, presence updates, recording state, stream labels, layout
-//! intent and compatibility close codes belong here. A type that enforces a
-//! router invariant, describes transport media, models an RFC literal or only
-//! shapes one protocol envelope belongs in the crate that owns that boundary.
-//!
-//! # Compatibility model
+//! # Compatibility
 //!
 //! Several types preserve the old SFU and Odoo browser contract. They should
 //! remain small data types with explicit serde shapes and local normalization
@@ -441,7 +432,7 @@ pub enum WebSocketCloseCode {
     AuthFailed = 4106,
     /// The client did not authenticate before the server timeout.
     AuthTimeout = 4107,
-    /// The runtime deliberately removed this client from the room.
+    /// The runtime intentionally removed this client from the room.
     Kicked = 4108,
     /// Admission failed because the room cannot accept another user.
     RoomFull = 4109,

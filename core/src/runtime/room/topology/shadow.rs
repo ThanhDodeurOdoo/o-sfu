@@ -2,7 +2,7 @@
 //!
 //! `RoomTopology` creates a receiver shadow session on a producer's source
 //! router when a receiver's home router is different. The pure router owns the
-//! real session, transport, producer and consumer maps. This module owns only
+//! real session, transport, producer and consumer maps. This module contain only
 //! the derived question that the pure router cannot answer by itself:
 //! Which receiver shadows are still justified by live routed consumer edges?
 //!
@@ -50,8 +50,6 @@ impl ShadowSessionKey {
 }
 
 /// Tracks which routed consumer edges keep cross-router shadows alive.
-///
-/// # Boundary role
 ///
 /// The tracker does not call into `RoomRouterState` and it does not decide
 /// placement. `RoomTopology` registers routed producers and consumers after the

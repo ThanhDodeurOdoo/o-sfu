@@ -12,8 +12,6 @@
 //! - signaling edges own the protocol wire mapping. the room boundary consumes
 //!   browser codec baseline RTP capabilities, negotiated parameters and track bootstrap data
 //!
-//! # Boundary role
-//!
 //! `controller.rs` is the public face of the runtime `room/` domain. It
 //! defines the room facade itself (`Room`) plus the small set of types that
 //! callers need to create a room, join it, query it, or project its outbound
@@ -27,10 +25,6 @@
 //! - websocket and transport work must happen after room locks are released
 //! - signaling code consumes high-level room events instead of reaching into
 //!   room internals or depending on router-shaped state directly
-//!
-//! If a caller wants to know "what is a room, what can I ask from it and
-//! what kind of work can it send back to a user?" this is the file that
-//! should answer that without requiring a deep read of the rest of `room/`.
 
 use std::{
     collections::BTreeMap,
@@ -164,7 +158,7 @@ pub enum RoomEventRequest {
 /// These errors come from room-local admission or state-sync rules after the
 /// room has already been resolved by the manager.
 ///
-/// # Error handling guidance
+/// # Error handling
 ///
 /// `RoomFull` is an expected domain rejection. `RouterState` means the join
 /// could not be committed cleanly inside the room and should be treated as an
@@ -523,7 +517,7 @@ pub struct RoomUserStatsSnapshot {
 /// These are mostly used for diagnostics and telemetry emitted around room
 /// effect execution, so transitions can record before/after media shape.
 ///
-/// They are deliberately separate from the richer diagnostics types because
+/// They are separate from the richer diagnostics types because
 /// many room transitions only need a small before/after summary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RoomMediaCounts {
@@ -549,26 +543,7 @@ pub struct RoomMediaCounts {
 /// stores both a pure `RoomState` model and the async staging state needed
 /// around publish and recording workflows.
 ///
-/// # What belongs here
-///
-/// `Room` is responsible for:
-///
-/// - exposing immutable room identity and feature metadata
-/// - owning the mutable room model for membership, publications, subscriptions,
-///   and recording state
-/// - sequencing room-level intents such as join, leave, publish, unpublish,
-///   subscribe and diagnostics queries
-/// - handing deferred user work back to websocket code through
-///   [`UserOutbound`]
-///
-/// `Room` is not responsible for:
-///
-/// - process-global room lookup or room creation idempotence
-/// - serializing websocket envelopes
-/// - direct transport packet handling
-/// - embedding transport or websocket logic into the pure room model
-///
-/// # Concurrency model
+/// # Concurrency
 ///
 /// The room uses a `RwLock<RoomState>` for the pure mutable model and a
 /// separate `Mutex<PendingPublishTransactions>` for staged publish work that

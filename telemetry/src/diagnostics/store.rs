@@ -1,6 +1,6 @@
 //! in-memory event storage for the diagnostics
 //!
-//! This module owns the part of diagnostics that must preserve history across
+//! This module contain the part of diagnostics that must preserve history across
 //! asynchronous runtime parts: recent global events, recent per-room
 //! events, recent per-user events, etc...
 //!

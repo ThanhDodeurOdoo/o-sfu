@@ -1,13 +1,8 @@
 //! Room resolution and topology snapshot DTOs.
 //!
-//! # Boundary role
-//!
 //! A room resolution is the answer ingress needs before admitting a client. A
 //! topology snapshot is the durable subset a media node caches so an already
 //! owned room can keep operating while fresh control-plane reads are degraded.
-//!
-//! These types do not describe media routes. They identify the authoritative
-//! room owner and the owner term that media topology messages must carry.
 
 use serde::{Deserialize, Serialize};
 

@@ -264,7 +264,7 @@ pub trait MediaPort {
     /// Applies packet gates for multiple routes and preserves input order in
     /// the returned results.
     ///
-    /// The default implementation is deliberately sequential. Backends with
+    /// The default implementation is sequential. Backends with
     /// shard-local batching can override it while keeping the same result
     /// contract for room policy.
     async fn set_consumer_packet_gates(

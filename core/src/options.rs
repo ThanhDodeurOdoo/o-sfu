@@ -56,10 +56,6 @@ pub struct RoutingOptions {
 /// placements for a new room. Room state then uses the same policy to decide
 /// whether a user connection can be placed on a spillover router.
 ///
-/// The policy deliberately does not expose transport worker ids to callers.
-/// Operators configure an upper bound, while the runtime keeps the concrete
-/// router and worker assignment process-local.
-///
 /// # Invariants
 ///
 /// `max_local_routers()` never returns zero. Constructors accept raw values so

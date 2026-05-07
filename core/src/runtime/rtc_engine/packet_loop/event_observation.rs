@@ -1,16 +1,9 @@
 //! Transport event observation for packet-loop sessions.
 //!
-//! # Boundary role
-//!
 //! `str0m` emits many events while the packet loop drains a session. Only a
-//! small subset changes the SFU's observable transport state. This module owns
+//! small subset changes the SFU's observable transport state. This module contain
 //! that translation so session draining can stay focused on moving `str0m`
 //! outputs into packet-loop buffers.
-//!
-//! Observations here update read-side state only. They do not own the transport
-//! state machine and they do not decide room policy. They update metrics,
-//! best-effort snapshots, diagnostics and source-policy wakeups derived from
-//! transport events.
 
 use std::sync::{Arc, Mutex};
 

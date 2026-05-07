@@ -1,16 +1,12 @@
 //! Authoritative room-to-owner assignment state.
 //!
-//! # Boundary role
-//!
 //! The distributed room directory answers "which node owns this room right
-//! now". It is deliberately separate from the process-local `RoomDirectory` in
+//! now". It is separate from the process-local `RoomDirectory` in
 //! `o-sfu-core`, which only tracks rooms already live inside one media-server
 //! process.
 //!
-//! This module owns ownership assignment, stale-owner rejection and failover
-//! epoch advancement. It does not mutate media rooms, move WebRTC sessions or
-//! send reconnect instructions. Runtime ingress and later event delivery layers
-//! consume its decisions.
+//! This module contain ownership assignment, stale-owner rejection and failover
+//! epoch advancement.
 
 use std::collections::BTreeMap;
 
@@ -61,7 +57,7 @@ pub struct RoomAssignment {
 
 /// Rejections produced by the authoritative room directory.
 ///
-/// # Error handling guidance
+/// # Error handling
 ///
 /// Most variants are expected conflicts at the control-plane boundary. They
 /// should not crash the media server. `NoSchedulableOwner` is an admission
@@ -95,8 +91,6 @@ pub enum RoomDirectoryError {
 }
 
 /// In-memory authoritative mapping from room id to owner assignment.
-///
-/// # Concurrency model
 ///
 /// The type owns pure state and does not lock internally. The control-plane
 /// service serializes access around it. This keeps the ownership rules usable

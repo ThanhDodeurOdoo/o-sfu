@@ -1,7 +1,5 @@
 //! Packet observation and forwarding flush for the packet loop.
 //!
-//! # Boundary role
-//!
 //! This module handles packet-derived updates, bounded relay intake and
 //! destination sends during the pump phase. Local session output and relay
 //! packets are batched before planning, packet observations update worker state
@@ -201,7 +199,7 @@ pub(super) fn drain_relay_packets(
 /// the destination can move the payload when it is the last destination and
 /// clone only when an earlier destination still needs the bytes.
 ///
-/// # Error handling guidance
+/// # Error handling
 ///
 /// A missing local destination is treated as an empty local send because routes
 /// can change while packets are already batched. Relay overload is counted and

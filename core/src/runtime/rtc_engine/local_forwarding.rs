@@ -1,14 +1,9 @@
 //! Local RTP forwarding into a browser consumer `Rtc` session.
 //!
-//! # Boundary role
-//!
 //! The forwarding planner has already selected a packet and a destination when
 //! this module runs. This file owns the last translation before str0m queues a
 //! packet for the receiver: rewrite publisher metadata into the consumer MID,
 //! strip publisher RID extensions and apply receiver-local RTP identity.
-//!
-//! The module deliberately treats publisher RIDs as source-routing metadata.
-//! Browser consumers get one rid-less stream for each subscribed media route.
 
 use std::time::Instant;
 

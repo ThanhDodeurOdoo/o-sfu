@@ -1,6 +1,6 @@
 //! Packet-loop worker driver.
 //!
-//! This module owns the async task that ties the RTC worker together. It is the
+//! This module contain the async task that ties the RTC worker together. It is the
 //! only packet-loop file that awaits socket I/O or worker-channel input. The
 //! rest of the packet-loop modules are synchronous helpers that run while the
 //! worker owns mutable access to `RtcBootstrapState`.
@@ -118,7 +118,7 @@ enum NextLoopInput {
 
 /// Run the shard-local media packet loop until shutdown or worker-channel close.
 ///
-/// # Concurrency model
+/// # Concurrency
 ///
 /// This task owns `RtcBootstrapState`, routing hints, the UDP receive buffer and
 /// `PacketLoopBuffers`. Other tasks communicate with it through channels,

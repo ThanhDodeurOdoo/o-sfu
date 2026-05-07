@@ -188,13 +188,6 @@ impl RoutedConsumerId {
 /// consumer ids tied to their owning router and controls when spillover routers
 /// are attached or detached.
 ///
-/// # What belongs here
-///
-/// This type owns pure router state and placement maps. It does not own room
-/// membership, compatibility user identity, transport sessions or network I/O.
-/// Room state decides that a user, source or subscription exists. Topology
-/// decides which router instance should model the corresponding router records.
-///
 /// # Invariants
 ///
 /// The primary router is always present. A home session can only point to an

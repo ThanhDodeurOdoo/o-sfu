@@ -1,6 +1,6 @@
 //! Lifecycle transitions for the protocol core connection state machine
 //!
-//! This module owns the "outer shell" of the client connection lifecycle:
+//! This module contain the "outer shell" of the client connection lifecycle:
 //! connect, transport-ready, websocket close, explicit disconnect and delayed
 //! recovery (It does not handle signaling messages or sticky replay content by
 //! itself(

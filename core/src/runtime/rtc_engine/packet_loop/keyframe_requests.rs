@@ -1,10 +1,8 @@
 //! Route-level keyframe feedback handling.
 //!
-//! # Boundary role
-//!
 //! Consumer `str0m::Rtc` instances emit keyframe requests in consumer-local
 //! terms, usually by MID and optional RID. The packet loop must translate that
-//! feedback back to the producer source that can satisfy it. This module owns
+//! feedback back to the producer source that can satisfy it. This module contain
 //! that translation, duplicate coalescing and final dispatch to either a local
 //! producer session or a remote source-control handle.
 //!

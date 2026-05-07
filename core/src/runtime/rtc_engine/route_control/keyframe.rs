@@ -1,7 +1,7 @@
 //! Keyframe request coalescing for source routes.
 //!
 //! Receiver-driven upswitches, route resumes, and relayed feedback may all ask
-//! for a fresh decodable frame. This module owns the packet-route side of that
+//! for a fresh decodable frame. This module contain the packet-route side of that
 //! debounce so repeated requests inside a short window do not fan out
 //! redundant PLI/FIR traffic.
 

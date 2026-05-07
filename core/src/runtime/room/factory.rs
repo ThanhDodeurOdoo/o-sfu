@@ -1,7 +1,7 @@
 //! Room construction for rooms that are new to the runtime directory.
 //!
 //! `RoomManager` owns idempotent lookup, directory publication, metrics and
-//! creation diagnostics. This module owns the cold-path allocation step used
+//! creation diagnostics. This module contain the cold-path allocation step used
 //! after lookup misses, before the new room is visible to other runtime
 //! entrypoints.
 //!
@@ -80,7 +80,7 @@ struct RoomRuntimeAllocator {
 /// [`Room`] with fresh process-local placement. The caller must insert it in
 /// the directory before exposing it to other runtime entrypoints.
 ///
-/// # Concurrency model
+/// # Concurrency
 ///
 /// The factory is shared by async request tasks, but creation does not await. A
 /// small mutex protects the placement counters. The lock is held only while ids

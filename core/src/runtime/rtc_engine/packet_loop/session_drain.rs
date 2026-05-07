@@ -1,15 +1,13 @@
 //! Draining ready RTC engine sessions into packet-loop buffers.
 //!
-//! # Boundary role
-//!
 //! `str0m` is Sans-I/O. It produces transmits, RTP packets, feedback events,
 //! transport events and timeout deadlines only when the host polls it. This
-//! module owns that polling for sessions that are dirty or whose timeout has
+//! module contain that polling for sessions that are dirty or whose timeout has
 //! elapsed.
 //!
 //! The scheduler lives in `RtcBootstrapState`. This file only consumes the
 //! ready set returned by that scheduler and writes newly produced work into
-//! `PacketLoopBuffers`. It deliberately avoids scanning all sessions on every
+//! `PacketLoopBuffers`. It avoids scanning all sessions on every
 //! turn.
 
 use std::{

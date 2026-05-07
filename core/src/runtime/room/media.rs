@@ -5,8 +5,6 @@
 //! subscription intents, performs short authoritative state transitions and
 //! then delegates transport work to effect plans after locks are released.
 //!
-//! # Boundary role
-//!
 //! The room does not translate product stream labels here. A caller must already
 //! have a [`UserStreamId`] and, for subscriptions, a
 //! [`SourceSubscriptionIntent`]. That keeps business policy at the application

@@ -1,7 +1,5 @@
 //! Strong identity and version types for cluster ownership.
 //!
-//! # Boundary role
-//!
 //! These wrappers prevent the control plane from mixing identifiers that are
 //! all strings or counters at the wire boundary but mean different things in
 //! the domain. They are intentionally small, serializable and cheap to clone
@@ -110,7 +108,7 @@ impl NodeRegion {
 /// Cluster-facing room identity.
 ///
 /// This is the room key used by the distributed ownership directory. It is
-/// deliberately separate from process-local runtime ids and from media router
+/// separate from process-local runtime ids and from media router
 /// ids. The media server should translate compatibility room strings into this
 /// type at the control-plane boundary.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

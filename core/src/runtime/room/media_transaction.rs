@@ -2,7 +2,7 @@
 //!
 //! # Role
 //!
-//! This module owns the room-side unit of work for media changes that need
+//! This module contain the room-side unit of work for media changes that need
 //! transport calls. `RoomState` stays authoritative for live producers and
 //! consumers. The media transport stays authoritative for allocated media
 //! lines. This file owns the short-lived (only latts for transactions)

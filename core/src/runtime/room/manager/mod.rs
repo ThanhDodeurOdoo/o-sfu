@@ -1,6 +1,6 @@
 //! Process-global room lookup and per-room lifecycle serialization.
 //!
-//! This module owns the boundary between "find or create the right room" and
+//! This module contain the boundary between "find or create the right room" and
 //! "run one room-level mutation at a time". It keeps the directory keyed by
 //! issuer, UUID, and instance id, and it re-checks pointer identity after
 //! taking each room's lifecycle lock so stale directory handles become no-ops.

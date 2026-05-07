@@ -115,7 +115,7 @@ pub enum MediaEndpointHealth {
 
 /// Errors returned by the media-core session facade.
 ///
-/// # Error handling guidance
+/// # Error handling
 ///
 /// Transport and capability projection failures mean the media backend could
 /// not apply or interpret the SDP answer. Session negotiation rejections mean
@@ -140,8 +140,6 @@ pub enum SfuCoreError {
 /// not own websocket state, room membership or compatibility protocol mapping.
 /// Those stay in the server runtime and room engine.
 ///
-/// # Boundary role
-///
 /// Use this type to create [`MediaSession`] handles. Media operations are
 /// intentionally not exposed as tuple-heavy methods on `SfuCore`, because a
 /// room, user id and connection id must stay paired for the whole operation.
@@ -161,23 +159,13 @@ pub struct SfuCore<T> {
 /// # Lifecycle
 ///
 /// The handle does not keep the user connected. Mutating operations still ask
-/// room state whether the connection is current before they commit. This is how
-/// stale websocket callbacks become explicit outcomes instead of mutating a
-/// replacement user.
+/// room state whether the connection is current before they commit.
 ///
-/// # Concurrency model
+/// # Concurrency
 ///
 /// Session methods are cold-path orchestration calls. They may await room
 /// locks, transport commands and cleanup effects. The room boundary remains
 /// responsible for releasing state locks before awaiting transport work.
-///
-/// # Source policy
-///
-/// Publishing and subscribing are intentionally generic. A caller supplies
-/// stream ids and source policies from its orchestration catalog. The session
-/// facade validates ownership and applies transport work, but it does not
-/// decide whether a stream behaves like camera, screen share or any future
-/// product concept.
 #[derive(Debug)]
 pub struct MediaSession<'a, T>
 where

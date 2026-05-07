@@ -2,7 +2,7 @@
 //!
 //! The packet loop is a long-lived task, so temporary per-turn storage belongs
 //! in one reusable allocation surface instead of being rebuilt while packets are
-//! flowing. This module owns that surface. Callers borrow the vectors during one
+//! flowing. This module contain that surface. Callers borrow the vectors during one
 //! turn, then call [`PacketLoopBuffers::clear`] before the next turn to reset
 //! logical length while keeping capacity.
 //!
@@ -11,11 +11,6 @@
 //! packet sinks.
 //! Values stored here are staged work that must either be flushed during the
 //! current turn or dropped as part of clearing the turn.
-//!
-//! `pending_transmits` deliberately keeps physical slots beyond
-//! `pending_transmit_count`. That lets `str0m` transmit payloads overwrite
-//! previous byte buffers instead of allocating a fresh `Vec<u8>` for each
-//! outbound datagram.
 
 use std::net::SocketAddr;
 

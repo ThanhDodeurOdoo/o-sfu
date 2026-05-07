@@ -4,7 +4,7 @@ use super::{PublishedSourceId, SourceEncodingId};
 
 /// Rejection returned while assembling a source descriptor.
 ///
-/// # Error handling guidance
+/// # Error handling
 ///
 /// These are construction-time domain errors. They should be handled before a
 /// publish becomes authoritative in room state. They are not transport

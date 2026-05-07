@@ -1,6 +1,6 @@
 //! Application-owned user session orchestration.
 //!
-//! This module owns the compatibility flow for one authenticated websocket
+//! This module contain the compatibility flow for one authenticated websocket
 //! connection. It accepts Odoo protocol messages, translates stream labels
 //! through [`crate::application::stream_catalog`] and calls the core media
 //! facade with generic source intents.
@@ -15,11 +15,6 @@
 //! connection-scoped signaling state needed to answer one browser, including
 //! pending request ids, staged renegotiation decisions and compatibility track
 //! snapshots.
-//!
-//! Authoritative room membership, publication ownership and subscription intent
-//! stay in [`Room`] plus [`MediaSession`]. This boundary translates
-//! Odoo-shaped commands into core media intent, then returns [`UserOutput`] so
-//! the websocket runtime can serialize envelopes in the required order.
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -189,7 +184,7 @@ enum UnpublishMediaDisposition {
 
 /// User-session failure category reported to the websocket runtime.
 ///
-/// # Error handling guidance
+/// # Error handling
 ///
 /// These errors are already translated out of core and room outcomes. The
 /// websocket edge maps them to close codes, so callers should not inspect log
@@ -212,7 +207,7 @@ pub enum UserError {
 /// behind [`Room`] and [`MediaSession`], which keeps this boundary focused on
 /// translating Odoo websocket intent into core media intent.
 ///
-/// # Concurrency model
+/// # Concurrency
 ///
 /// Methods are cold-path orchestration calls. They may await room snapshots,
 /// media transactions and transport effects. The room and core layers remain

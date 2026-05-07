@@ -5,7 +5,7 @@
 //! `RtcBootstrapState`, drives all `str0m::Rtc` instances for that shard and
 //! performs the UDP reads and writes for the shared shard socket.
 //!
-//! The loop is deliberately below room policy and above raw `str0m` I/O. Room
+//! The loop is below room policy and above raw `str0m` I/O. Room
 //! and router code project intent into transport state before packets arrive
 //! here. This module applies that already-projected state to inbound UDP,
 //! `str0m` outputs, local fanout, relay fanout, packet sinks and transport

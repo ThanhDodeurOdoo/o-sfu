@@ -1,15 +1,11 @@
 //! Cluster node advertisement and lease registry.
 //!
-//! # Boundary role
-//!
 //! This module models node-level authority facts for the control plane. A node
 //! can advertise how clients should reach it, how relays should reach it, what
 //! role it wants to serve and whether it can receive new room ownership.
 //!
 //! The registry is an in-memory authority. It validates lease ordering and
-//! exposes schedulable media nodes for room assignment. It does not run
-//! heartbeats, timers or network probes. Those belong to the deployable
-//! control-plane service around this model.
+//! exposes schedulable media nodes for room assignment.
 
 use std::collections::BTreeMap;
 
@@ -155,7 +151,7 @@ impl NodeLease {
 
 /// Rejections produced by the node registry.
 ///
-/// # Error handling guidance
+/// # Error
 ///
 /// These are expected control-plane conflicts, not media-server failures. An
 /// edge should map `StaleLease` to a conflict response and `UnknownNode` to a
@@ -172,18 +168,10 @@ pub enum NodeRegistryError {
 
 /// In-memory node authority for the control plane.
 ///
-/// # Concurrency model
-///
 /// The type itself is synchronous and owns no locks. The deployable
 /// control-plane process decides how to serialize access. This keeps the domain
 /// rules testable without a runtime and lets storage-backed implementations
 /// reuse the same transition semantics.
-///
-/// # What belongs here
-///
-/// This registry validates node lease ordering and exposes the current
-/// advertisement set. It does not detect health, decrement room capacity or
-/// choose failover winners by itself.
 #[derive(Debug, Default, Clone)]
 pub struct ClusterNodeRegistry {
     nodes: BTreeMap<NodeId, NodeAdvertisement>,

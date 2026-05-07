@@ -13,19 +13,12 @@
 //! They only observe or complete work captured by a committed state
 //! transition.
 //!
-//! # Concurrency model
+//! # Concurrency
 //!
 //! Public and crate-visible entrypoints here are cold-path orchestration calls.
 //! They must not hold the room state lock across `.await`. Cleanup retry
 //! bookkeeping is synchronous and short, while media transport calls run after
 //! the retry or state guard has been released.
-//!
-//! # What belongs here
-//!
-//! Join, leave, disconnect and session negotiation readiness belong here
-//! because they connect room state to async runtime effects. Packet routing,
-//! wire-envelope serialization and router placement decisions stay in their
-//! own modules.
 
 use std::sync::{MutexGuard, PoisonError};
 
@@ -194,7 +187,7 @@ impl Room {
     /// runtime-local and must be paired with the same `UserId` for later room
     /// operations.
     ///
-    /// # Error handling guidance
+    /// # Error handling
     ///
     /// `RoomFull` is an admission decision made by room state. `RouterState`
     /// means the join could not be mirrored into routing topology, so callers

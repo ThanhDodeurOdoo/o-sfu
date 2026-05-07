@@ -10,7 +10,7 @@
 //! the effect plan has applied the transport work and committed only the updates
 //! that still match the live room routes.
 //!
-//! # Concurrency model
+//! # Concurrency
 //!
 //! This module must not hold a room lock across observability or media-port
 //! awaits. It takes short state snapshots, builds a cold-path effect plan and

@@ -1,7 +1,5 @@
 //! Compatibility stream catalog for the current Odoo-facing protocol.
 //!
-//! # Boundary role
-//!
 //! This module is the production ownership point for translating discuss
 //! [`StreamType`] values into generic core source intent. Business decisions
 //! such as which streams are bandwidth-scalable, which streams may become

@@ -1,6 +1,6 @@
 //! Pure room-owned video source policy.
 //!
-//! The source-selection path is deliberately split into a one-way pipeline:
+//! The source-selection path is split into a one-way pipeline:
 //! immutable input from `RoomState` and transport observations, layout
 //! intent, pure budget planning, semantic route actions, selector-to-packet-gate
 //! projection, and stale-update commits after async effects finish.

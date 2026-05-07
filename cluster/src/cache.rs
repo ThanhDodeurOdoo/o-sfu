@@ -1,7 +1,5 @@
 //! Media-node cache for room topology snapshots.
 //!
-//! # Boundary role
-//!
 //! This cache is the local degraded-mode boundary for already-owned rooms. It
 //! stores the last accepted owner snapshot per room and rejects replayed or
 //! stale updates. The cache is not an authority. It never assigns owners and it
@@ -17,8 +15,6 @@ use thiserror::Error;
 use crate::{ClusterRoomId, OwnerNodeId, RoomOwnershipEpoch, TopologySnapshot};
 
 /// Rejections produced by the topology snapshot cache.
-///
-/// # Error handling guidance
 ///
 /// Cache rejections protect a media node from acting on older control-plane
 /// views. A stale owner or epoch should normally close or refuse the local
@@ -43,9 +39,7 @@ pub enum TopologyCacheError {
 
 /// Last-known topology snapshots accepted by one media node.
 ///
-/// # Concurrency model
-///
-/// The store owns pure map state and does not lock internally. Runtime code
+/// The store contains pure map state and does not lock internally. Runtime code
 /// should put it behind the service boundary that owns topology updates. This
 /// keeps the cache easy to test and avoids leaking lock handling into ingress
 /// or room orchestration.
