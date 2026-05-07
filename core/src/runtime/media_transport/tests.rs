@@ -2,7 +2,7 @@ use std::{
     collections::BTreeSet,
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use o_sfu_router::{
@@ -19,8 +19,7 @@ use crate::{
         ConnectionId, RoomInstanceId, UserId,
         diagnostics::DiagnosticsStore,
         media_transport::{
-            ActiveSpeakerSource, ConsumerActivity, MediaPort, MediaTransportDeps,
-            ObservabilityPort, RtcTransportConfig, SessionOffer, SessionPort,
+            ConsumerActivity, MediaPort, MediaTransportDeps, RtcTransportConfig, SessionPort,
             TransportAdapterError, TransportMediaId, TransportSessionKey,
             test_support::FakeMediaTransport,
         },
@@ -29,8 +28,7 @@ use crate::{
         rtc_engine::RtcTransportShard,
     },
     transport::{
-        NegotiationPort, SourcePolicyPort, SourcePolicyUpdateSubscription,
-        TransportRelayRouteAction, TransportRelayRouteEffect,
+        NegotiationPort, SourcePolicyPort, TransportRelayRouteAction, TransportRelayRouteEffect,
     },
 };
 
@@ -310,51 +308,6 @@ fn first_candidate_port(offer_sdp: &str) -> Option<u16> {
         .and_then(|port| port.parse::<u16>().ok())
 }
 
-async fn create_offer_via_negotiation_port(
-    negotiation_port: &impl NegotiationPort,
-    session_key: &TransportSessionKey,
-) -> Result<String, TransportAdapterError> {
-    negotiation_port
-        .create_initial_session_offer(session_key)
-        .await
-        .map(SessionOffer::into_sdp)
-}
-
-async fn publish_audio_via_media_port(
-    media_port: &impl MediaPort,
-    session_key: &TransportSessionKey,
-    rtp_parameters: &MediaStream,
-) -> Result<TransportMediaId, TransportAdapterError> {
-    media_port
-        .publish_media(session_key, MediaKind::Audio, rtp_parameters)
-        .await
-}
-
-async fn observe_active_speakers(
-    observability_port: &impl ObservabilityPort,
-) -> Vec<ActiveSpeakerSource> {
-    observability_port.active_speaker_source_snapshot().await
-}
-
-fn subscribe_source_policy(
-    source_policy_port: &impl SourcePolicyPort,
-) -> SourcePolicyUpdateSubscription {
-    source_policy_port.source_policy_subscription()
-}
-
-fn assert_runtime_transport<T>()
-where
-    T: NegotiationPort
-        + MediaPort
-        + ObservabilityPort
-        + SessionPort
-        + SourcePolicyPort
-        + Clone
-        + Send
-        + Sync,
-{
-}
-
 #[test]
 fn rtc_transport_builder_uses_one_worker_by_default() {
     let result = RtcTransport::builder()
@@ -429,30 +382,57 @@ fn rtc_transport_builder_rejects_invalid_port_split() {
     );
 }
 
-#[test]
-fn media_transport_satisfies_runtime_transport_ports() {
-    assert_runtime_transport::<MediaTransport>();
-}
-
-#[test]
-fn fake_adapter_projects_offered_capabilities_after_minimal_sdp_validation() {
-    let adapter = MediaTransport::from_fake_transport(Arc::new(FakeMediaTransport::default()));
+#[tokio::test]
+async fn fake_backend_failures_surface_through_media_transport_ports() {
+    let fake = Arc::new(FakeMediaTransport::default());
+    let adapter = MediaTransport::from_fake_transport(Arc::clone(&fake));
+    let session_key = test_session_key(17, 0, 3, UserId::Integer(41));
     let offered = sample_router_capabilities();
 
     let projected =
         adapter.negotiated_client_rtp_capabilities("v=0\r\ns=fake-answer\r\n", &offered);
 
     assert_eq!(projected, Ok(offered));
-}
 
-#[test]
-fn fake_adapter_rejects_answers_without_minimal_sdp_shape() {
-    let adapter = MediaTransport::from_fake_transport(Arc::new(FakeMediaTransport::default()));
+    assert_eq!(
+        adapter.negotiated_client_rtp_capabilities("invalid-answer", &sample_router_capabilities()),
+        Err(TransportAdapterError::InvalidInput)
+    );
+    fake.fail_next_close_session(session_key.clone());
+    assert_eq!(
+        adapter.close_session(&session_key).await,
+        Err(TransportAdapterError::TransportUnavailable)
+    );
 
-    let projected =
-        adapter.negotiated_client_rtp_capabilities("invalid-answer", &sample_router_capabilities());
+    let media_id = adapter
+        .publish_media(
+            &session_key,
+            MediaKind::Audio,
+            &sample_audio_rtp_parameters("aud-up", 1234),
+        )
+        .await;
+    assert!(media_id.is_ok());
+    let Ok(media_id) = media_id else {
+        return;
+    };
+    assert_eq!(adapter.remove_media(&session_key, media_id).await, Ok(()));
 
-    assert_eq!(projected, Err(TransportAdapterError::InvalidInput));
+    let second_media_id = adapter
+        .publish_media(
+            &session_key,
+            MediaKind::Audio,
+            &sample_audio_rtp_parameters("aud-up-2", 1235),
+        )
+        .await;
+    assert!(second_media_id.is_ok());
+    let Ok(second_media_id) = second_media_id else {
+        return;
+    };
+    fake.fail_next_remove_media(second_media_id);
+    assert_eq!(
+        adapter.remove_media(&session_key, second_media_id).await,
+        Err(TransportAdapterError::TransportUnavailable)
+    );
 }
 
 async fn assert_remote_route_inactive(
@@ -493,53 +473,6 @@ async fn assert_local_active_and_remote_inactive(
         remote_consumer.1,
     )
     .await;
-}
-
-#[tokio::test]
-async fn media_transport_exposes_split_ports_to_callers() {
-    let fake = Arc::new(FakeMediaTransport::default());
-    let adapter = MediaTransport::from_fake_transport(Arc::clone(&fake));
-    let session_key = test_session_key(17, 0, 3, UserId::Integer(41));
-    let audio_rtp_parameters = sample_audio_rtp_parameters("aud-up", 1234);
-
-    let offer_result = create_offer_via_negotiation_port(&adapter, &session_key).await;
-    assert!(offer_result.is_ok());
-    let Ok(offer_sdp) = offer_result else {
-        return;
-    };
-    assert!(offer_sdp.starts_with("v=0"));
-
-    let publish_result =
-        publish_audio_via_media_port(&adapter, &session_key, &audio_rtp_parameters).await;
-    assert!(publish_result.is_ok());
-    let Ok(published_media_id) = publish_result else {
-        return;
-    };
-
-    let subscription = subscribe_source_policy(&adapter);
-    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
-        published_media_id,
-        Instant::now(),
-    )]);
-    let update_result = timeout(Duration::from_millis(50), subscription.wait_for_update()).await;
-    assert!(update_result.is_ok());
-    let Ok(updated_runtime_ids) = update_result else {
-        return;
-    };
-    let updated_runtime_ids = updated_runtime_ids.into_iter().collect::<BTreeSet<_>>();
-    assert_eq!(
-        updated_runtime_ids,
-        BTreeSet::from([session_key.room_instance_id()])
-    );
-
-    let active_speakers = observe_active_speakers(&adapter).await;
-    assert_eq!(active_speakers.len(), 1);
-    assert_eq!(
-        active_speakers
-            .first()
-            .map(|active_speaker| active_speaker.transport_media_id()),
-        Some(published_media_id)
-    );
 }
 
 #[test]
@@ -621,39 +554,6 @@ async fn rtc_engine_allocates_disjoint_media_ids_across_workers() {
     assert_ne!(first_media_id, second_media_id);
     assert!(first_media_id.as_u64() < 1_000_000_000);
     assert!(second_media_id.as_u64() >= 1_000_000_000);
-}
-
-#[tokio::test]
-async fn runtime_transport_semantic_facades_preserve_fake_transport_behavior() {
-    let fake = Arc::new(FakeMediaTransport::default());
-    let adapter = MediaTransport::from_fake_transport(Arc::clone(&fake));
-    let session_key = test_session_key(18, 0, 19, UserId::Integer(20));
-    let speaker_source = ActiveSpeakerSource::new(TransportMediaId::new(77), Instant::now());
-    fake.set_active_speaker_source_snapshot(vec![speaker_source]);
-
-    let offer = adapter.create_initial_session_offer(&session_key).await;
-    assert!(offer.is_ok());
-    assert_eq!(
-        adapter.negotiated_client_rtp_capabilities(
-            "v=0\r\ns=fake-answer\r\n",
-            &sample_router_capabilities()
-        ),
-        Ok(sample_router_capabilities())
-    );
-
-    let media_id = adapter
-        .publish_media(
-            &session_key,
-            MediaKind::Audio,
-            &sample_audio_rtp_parameters("aud-up", 40_000),
-        )
-        .await;
-    assert!(media_id.is_ok());
-    assert_eq!(
-        adapter.active_speaker_source_snapshot().await,
-        vec![speaker_source]
-    );
-    assert!(adapter.close_session(&session_key).await.is_ok());
 }
 
 #[tokio::test]

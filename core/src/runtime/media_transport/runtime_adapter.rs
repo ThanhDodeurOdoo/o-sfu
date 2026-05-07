@@ -21,6 +21,8 @@ use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParamet
 use thiserror::Error;
 use tracing::warn;
 
+#[cfg(any(test, feature = "testing-transport"))]
+use super::test_support::FakeMediaTransport;
 use super::{
     MediaTransportBackend,
     config::{MediaTransportDeps, RtcTransportConfig, RtcTransportShardSetConfig},
@@ -310,7 +312,18 @@ impl NegotiationPort for MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        let result = self.backend.create_initial_session_offer(session_key).await;
+        let result = match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport
+                    .shards
+                    .create_initial_session_offer(session_key)
+                    .await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport.create_initial_session_offer(session_key).await
+            }
+        };
         if let Err(error) = &result {
             warn!(
                 ?session_key,
@@ -325,10 +338,20 @@ impl NegotiationPort for MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        let result = self
-            .backend
-            .create_session_renegotiation_offer(session_key)
-            .await;
+        let result = match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport
+                    .shards
+                    .create_session_renegotiation_offer(session_key)
+                    .await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport
+                    .create_session_renegotiation_offer(session_key)
+                    .await
+            }
+        };
         if let Err(error) = &result {
             warn!(
                 ?session_key,
@@ -344,10 +367,20 @@ impl NegotiationPort for MediaTransport {
         session_key: &TransportSessionKey,
         answer_sdp: &str,
     ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-        let result = self
-            .backend
-            .apply_session_answer(session_key, answer_sdp)
-            .await;
+        let result = match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport
+                    .shards
+                    .apply_session_answer(session_key, answer_sdp)
+                    .await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport
+                    .apply_session_answer(session_key, answer_sdp)
+                    .await
+            }
+        };
         if let Err(error) = &result {
             warn!(
                 ?session_key,
@@ -364,9 +397,21 @@ impl NegotiationPort for MediaTransport {
         answer_sdp: &str,
         offered_router_capabilities: &MediaCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
-        let result = self
-            .backend
-            .negotiated_client_rtp_capabilities(answer_sdp, offered_router_capabilities);
+        let result = match &self.backend {
+            MediaTransportBackend::Rtc(_) => {
+                RtcTransportShardSet::negotiated_client_rtp_capabilities(
+                    answer_sdp,
+                    offered_router_capabilities,
+                )
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(_) => {
+                FakeMediaTransport::project_answered_client_rtp_capabilities(
+                    answer_sdp,
+                    offered_router_capabilities,
+                )
+            }
+        };
         if let Err(error) = &result {
             warn!(
                 answer_len = answer_sdp.len(),
@@ -383,7 +428,13 @@ impl SessionPort for MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
-        let result = self.backend.close_session(session_key).await;
+        let result = match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport.shards.close_session(session_key).await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => transport.close_session(session_key).await,
+        };
         if let Err(error) = &result {
             warn!(?session_key, ?error, "media transport failed to close user");
         }
@@ -397,10 +448,20 @@ impl MediaPort for MediaTransport {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        let result = self
-            .backend
-            .remove_media(session_key, transport_media_id)
-            .await;
+        let result = match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport
+                    .shards
+                    .remove_media(session_key, transport_media_id)
+                    .await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport
+                    .remove_media(session_key, transport_media_id)
+                    .await
+            }
+        };
         if let Err(error) = &result {
             warn!(
                 ?session_key,
@@ -418,10 +479,20 @@ impl MediaPort for MediaTransport {
         media_kind: MediaKind,
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        let result = self
-            .backend
-            .publish_media(session_key, media_kind, rtp_parameters)
-            .await;
+        let result = match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport
+                    .shards
+                    .publish_media(session_key, media_kind, rtp_parameters)
+                    .await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport
+                    .publish_media(session_key, media_kind, rtp_parameters)
+                    .await
+            }
+        };
         if let Err(error) = &result {
             warn!(
                 ?session_key,
@@ -442,16 +513,32 @@ impl MediaPort for MediaTransport {
         source_media_id: TransportMediaId,
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        let result = self
-            .backend
-            .consume_media(
-                consumer_session_key,
-                media_kind,
-                source_session_key,
-                source_media_id,
-                consumer_rtp_parameters,
-            )
-            .await;
+        let result = match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport
+                    .shards
+                    .consume_media(
+                        consumer_session_key,
+                        media_kind,
+                        source_session_key,
+                        source_media_id,
+                        consumer_rtp_parameters,
+                    )
+                    .await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport
+                    .consume_media(
+                        consumer_session_key,
+                        media_kind,
+                        source_session_key,
+                        source_media_id,
+                        consumer_rtp_parameters,
+                    )
+                    .await
+            }
+        };
         if let Err(error) = &result {
             warn!(
                 ?consumer_session_key,
@@ -470,7 +557,15 @@ impl MediaPort for MediaTransport {
         &self,
         effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
-        let result = self.backend.apply_relay_route_effect(effect).await;
+        let result = match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport.shards.apply_relay_route_effect(effect).await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport.apply_relay_route_effect(effect).await
+            }
+        };
         if let Err(error) = &result {
             warn!(
                 source_session_key = ?effect.source_session_key,
@@ -490,10 +585,20 @@ impl MediaPort for MediaTransport {
         transport_media_id: TransportMediaId,
         activity: ProducerActivity,
     ) -> Result<(), TransportAdapterError> {
-        let result = self
-            .backend
-            .set_producer_active(session_key, transport_media_id, activity)
-            .await;
+        let result = match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport
+                    .shards
+                    .set_producer_active(session_key, transport_media_id, activity.is_active())
+                    .await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport
+                    .set_producer_active(session_key, transport_media_id, activity.is_active())
+                    .await
+            }
+        };
         if let Err(error) = &result {
             warn!(
                 ?session_key,
@@ -514,16 +619,32 @@ impl MediaPort for MediaTransport {
         source_transport_media_id: TransportMediaId,
         activity: ConsumerActivity,
     ) -> Result<(), TransportAdapterError> {
-        let result = self
-            .backend
-            .set_consumer_active(
-                consumer_session_key,
-                consumer_transport_media_id,
-                source_session_key,
-                source_transport_media_id,
-                activity,
-            )
-            .await;
+        let result = match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport
+                    .shards
+                    .set_consumer_active(
+                        consumer_session_key,
+                        consumer_transport_media_id,
+                        source_session_key,
+                        source_transport_media_id,
+                        activity.is_active(),
+                    )
+                    .await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport
+                    .set_consumer_active(
+                        consumer_session_key,
+                        consumer_transport_media_id,
+                        source_session_key,
+                        source_transport_media_id,
+                        activity.is_active(),
+                    )
+                    .await
+            }
+        };
         if let Err(error) = &result {
             warn!(
                 ?consumer_session_key,
@@ -546,16 +667,32 @@ impl MediaPort for MediaTransport {
         source_transport_media_id: TransportMediaId,
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
-        let result = self
-            .backend
-            .set_consumer_packet_gate(
-                consumer_session_key,
-                consumer_transport_media_id,
-                source_session_key,
-                source_transport_media_id,
-                packet_gate.clone(),
-            )
-            .await;
+        let result = match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport
+                    .shards
+                    .set_consumer_packet_gate(
+                        consumer_session_key,
+                        consumer_transport_media_id,
+                        source_session_key,
+                        source_transport_media_id,
+                        packet_gate.clone(),
+                    )
+                    .await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport
+                    .set_consumer_packet_gate(
+                        consumer_session_key,
+                        consumer_transport_media_id,
+                        source_session_key,
+                        source_transport_media_id,
+                        packet_gate.clone(),
+                    )
+                    .await
+            }
+        };
         if let Err(error) = &result {
             warn!(
                 ?consumer_session_key,
@@ -574,7 +711,15 @@ impl MediaPort for MediaTransport {
         &self,
         updates: &[ConsumerPacketGateUpdate],
     ) -> Vec<Result<(), TransportAdapterError>> {
-        let results = self.backend.set_consumer_packet_gates(updates).await;
+        let results = match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport.shards.set_consumer_packet_gates(updates).await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport.set_consumer_packet_gates(updates).await
+            }
+        };
         for (update, result) in updates.iter().zip(results.iter()) {
             if let Err(error) = result {
                 warn!(
@@ -598,15 +743,30 @@ impl MediaPort for MediaTransport {
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        let result = self
-            .backend
-            .request_consumer_keyframe(
-                consumer_session_key,
-                consumer_transport_media_id,
-                source_session_key,
-                source_transport_media_id,
-            )
-            .await;
+        let result = match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport
+                    .shards
+                    .request_consumer_keyframe(
+                        consumer_session_key,
+                        consumer_transport_media_id,
+                        source_session_key,
+                        source_transport_media_id,
+                    )
+                    .await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport
+                    .request_consumer_keyframe(
+                        consumer_session_key,
+                        consumer_transport_media_id,
+                        source_session_key,
+                        source_transport_media_id,
+                    )
+                    .await
+            }
+        };
         if let Err(error) = &result {
             warn!(
                 ?consumer_session_key,
@@ -625,9 +785,16 @@ impl MediaPort for MediaTransport {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Option<String> {
-        self.backend
-            .transport_media_mid(session_key, transport_media_id)
-            .await
+        match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport
+                    .shards
+                    .transport_media_mid(session_key, transport_media_id)
+                    .await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(_) => None,
+        }
     }
 }
 
@@ -636,54 +803,115 @@ impl ObservabilityPort for MediaTransport {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
-        self.backend.transport_bitrate_snapshot(session_keys)
+        match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport.shards.transport_bitrate_snapshot(session_keys)
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(_) => TransportBitrateSnapshot::default(),
+        }
     }
 
     fn receiver_bandwidth_snapshot(
         &self,
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
-        self.backend.receiver_bandwidth_snapshot(session_keys)
+        match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport.shards.receiver_bandwidth_snapshot(session_keys)
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport.receiver_bandwidth_snapshot(session_keys)
+            }
+        }
     }
 
     fn placement_pressure_snapshot(
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportPlacementPressureSnapshot {
-        self.backend.placement_pressure_snapshot(session_keys)
+        match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport.shards.placement_pressure_snapshot(session_keys)
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport.placement_pressure_snapshot(session_keys)
+            }
+        }
     }
 
     async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
-        self.backend.active_speaker_source_snapshot().await
+        match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport.shards.active_speaker_source_snapshot().await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport.active_speaker_source_snapshot().await
+            }
+        }
     }
 
     async fn active_speaker_diagnostic_snapshot(&self) -> Vec<ActiveSpeakerSourceDiagnostic> {
-        self.backend.active_speaker_diagnostic_snapshot().await
+        match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport.shards.active_speaker_diagnostic_snapshot().await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => {
+                transport.active_speaker_diagnostic_snapshot().await
+            }
+        }
     }
 
     async fn next_active_speaker_deadline(&self) -> Option<Instant> {
-        self.backend.next_active_speaker_deadline().await
+        match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport.shards.next_active_speaker_deadline().await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(_) => None,
+        }
     }
 
     async fn expired_active_speaker_room_instance_ids(
         &self,
         now: Instant,
     ) -> BTreeSet<RoomInstanceId> {
-        self.backend
-            .expired_active_speaker_room_instance_ids(now)
-            .await
+        match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport
+                    .shards
+                    .expired_active_speaker_room_instance_ids(now)
+                    .await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(_) => BTreeSet::new(),
+        }
     }
 
     fn session_transport_health(
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
-        self.backend.session_transport_health(session_key)
+        match &self.backend {
+            MediaTransportBackend::Rtc(transport) => {
+                transport.shards.session_transport_health(session_key)
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(_) => None,
+        }
     }
 }
 
 impl SourcePolicyPort for MediaTransport {
     fn source_policy_subscription(&self) -> SourcePolicyUpdateSubscription {
-        self.backend.source_policy_subscription()
+        match &self.backend {
+            MediaTransportBackend::Rtc(transport) => transport.shards.source_policy_subscription(),
+            #[cfg(any(test, feature = "testing-transport"))]
+            MediaTransportBackend::Fake(transport) => transport.source_policy_signal().subscribe(),
+        }
     }
 }

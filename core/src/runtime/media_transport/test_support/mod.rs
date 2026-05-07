@@ -1,11 +1,11 @@
-use std::{collections::BTreeSet, sync::Arc, time::Instant};
+use std::sync::Arc;
 
 mod fake_transport;
 
 #[cfg(any(test, feature = "testing-transport"))]
 pub use fake_transport::{FakeMediaTransport, FakeMediaTransportEvent};
-#[cfg(any(test, feature = "testing-transport"))]
-use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
+#[cfg(test)]
+use o_sfu_router::MediaStream as RouterRtpParameters;
 #[cfg(any(test, feature = "testing-transport"))]
 use str0m::media::Mid;
 
@@ -13,243 +13,15 @@ use str0m::media::Mid;
 use super::shard_set::RtcTransportShardSet;
 use super::{MediaTransportBackend, runtime_adapter::MediaTransport};
 #[cfg(any(test, feature = "testing-transport"))]
-use crate::runtime::RoomInstanceId;
-#[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::rtc_engine::test_support::DebugRouteEntry;
-#[cfg(any(test, feature = "testing-transport"))]
-use crate::transport::SourcePolicyUpdateSubscription;
+#[cfg(test)]
+use crate::transport::TransportAdapterError;
+#[cfg(test)]
+use crate::transport::TransportMediaId;
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::transport::TransportSessionHealth;
 #[cfg(any(test, feature = "testing-transport"))]
-use crate::transport::{
-    ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
-    ReceiverBandwidthSnapshot, TransportBitrateSnapshot, TransportMediaId,
-    TransportPlacementPressureSnapshot, TransportSessionKey,
-};
-#[cfg(any(test, feature = "testing-transport"))]
-use crate::transport::{
-    ConsumerActivity, MediaPort, NegotiationPort, ObservabilityPort, ProducerActivity,
-    SessionOffer, SessionPort, SourcePacketGate, SourcePolicyPort, TransportAdapterError,
-    TransportRelayRouteEffect,
-};
-
-#[cfg(any(test, feature = "testing-transport"))]
-impl NegotiationPort for FakeMediaTransport {
-    async fn create_initial_session_offer(
-        &self,
-        session_key: &TransportSessionKey,
-    ) -> Result<SessionOffer, TransportAdapterError> {
-        Self::create_initial_session_offer(self, session_key).await
-    }
-
-    async fn create_session_renegotiation_offer(
-        &self,
-        session_key: &TransportSessionKey,
-    ) -> Result<SessionOffer, TransportAdapterError> {
-        Self::create_session_renegotiation_offer(self, session_key).await
-    }
-
-    async fn apply_session_answer(
-        &self,
-        session_key: &TransportSessionKey,
-        answer_sdp: &str,
-    ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-        Self::apply_session_answer(self, session_key, answer_sdp).await
-    }
-
-    fn negotiated_client_rtp_capabilities(
-        &self,
-        answer_sdp: &str,
-        offered_router_capabilities: &MediaCapabilities,
-    ) -> Result<MediaCapabilities, TransportAdapterError> {
-        Self::project_answered_client_rtp_capabilities(answer_sdp, offered_router_capabilities)
-    }
-}
-
-#[cfg(any(test, feature = "testing-transport"))]
-impl SessionPort for FakeMediaTransport {
-    async fn close_session(
-        &self,
-        session_key: &TransportSessionKey,
-    ) -> Result<(), TransportAdapterError> {
-        Self::close_session(self, session_key).await
-    }
-}
-
-#[cfg(any(test, feature = "testing-transport"))]
-impl MediaPort for FakeMediaTransport {
-    async fn remove_media(
-        &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-    ) -> Result<(), TransportAdapterError> {
-        Self::remove_media(self, session_key, transport_media_id).await
-    }
-
-    async fn publish_media(
-        &self,
-        session_key: &TransportSessionKey,
-        media_kind: MediaKind,
-        rtp_parameters: &RouterRtpParameters,
-    ) -> Result<TransportMediaId, TransportAdapterError> {
-        Self::publish_media(self, session_key, media_kind, rtp_parameters).await
-    }
-
-    async fn consume_media(
-        &self,
-        consumer_session_key: &TransportSessionKey,
-        media_kind: MediaKind,
-        source_session_key: &TransportSessionKey,
-        source_media_id: TransportMediaId,
-        consumer_rtp_parameters: &RouterRtpParameters,
-    ) -> Result<TransportMediaId, TransportAdapterError> {
-        Self::consume_media(
-            self,
-            consumer_session_key,
-            media_kind,
-            source_session_key,
-            source_media_id,
-            consumer_rtp_parameters,
-        )
-        .await
-    }
-
-    async fn apply_relay_route_effect(
-        &self,
-        effect: &TransportRelayRouteEffect,
-    ) -> Result<(), TransportAdapterError> {
-        Self::apply_relay_route_effect(self, effect).await
-    }
-
-    async fn set_producer_active(
-        &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-        activity: ProducerActivity,
-    ) -> Result<(), TransportAdapterError> {
-        Self::set_producer_active(self, session_key, transport_media_id, activity.is_active()).await
-    }
-
-    async fn set_consumer_active(
-        &self,
-        consumer_session_key: &TransportSessionKey,
-        consumer_transport_media_id: TransportMediaId,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        activity: ConsumerActivity,
-    ) -> Result<(), TransportAdapterError> {
-        Self::set_consumer_active(
-            self,
-            consumer_session_key,
-            consumer_transport_media_id,
-            source_session_key,
-            source_transport_media_id,
-            activity.is_active(),
-        )
-        .await
-    }
-
-    async fn set_consumer_packet_gate(
-        &self,
-        consumer_session_key: &TransportSessionKey,
-        consumer_transport_media_id: TransportMediaId,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        packet_gate: SourcePacketGate,
-    ) -> Result<(), TransportAdapterError> {
-        Self::set_consumer_packet_gate(
-            self,
-            consumer_session_key,
-            consumer_transport_media_id,
-            source_session_key,
-            source_transport_media_id,
-            packet_gate,
-        )
-        .await
-    }
-
-    async fn request_consumer_keyframe(
-        &self,
-        consumer_session_key: &TransportSessionKey,
-        consumer_transport_media_id: TransportMediaId,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-    ) -> Result<(), TransportAdapterError> {
-        Self::request_consumer_keyframe(
-            self,
-            consumer_session_key,
-            consumer_transport_media_id,
-            source_session_key,
-            source_transport_media_id,
-        )
-        .await
-    }
-
-    async fn transport_media_mid(
-        &self,
-        _session_key: &TransportSessionKey,
-        _transport_media_id: TransportMediaId,
-    ) -> Option<String> {
-        None
-    }
-}
-
-#[cfg(any(test, feature = "testing-transport"))]
-impl ObservabilityPort for FakeMediaTransport {
-    fn transport_bitrate_snapshot(
-        &self,
-        _session_keys: &[TransportSessionKey],
-    ) -> TransportBitrateSnapshot {
-        TransportBitrateSnapshot::default()
-    }
-
-    fn receiver_bandwidth_snapshot(
-        &self,
-        session_keys: &[TransportSessionKey],
-    ) -> ReceiverBandwidthSnapshot {
-        Self::receiver_bandwidth_snapshot(self, session_keys)
-    }
-
-    fn placement_pressure_snapshot(
-        &self,
-        session_keys: &[TransportSessionKey],
-    ) -> TransportPlacementPressureSnapshot {
-        Self::placement_pressure_snapshot(self, session_keys)
-    }
-
-    async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
-        Self::active_speaker_source_snapshot(self).await
-    }
-
-    async fn active_speaker_diagnostic_snapshot(&self) -> Vec<ActiveSpeakerSourceDiagnostic> {
-        Self::active_speaker_diagnostic_snapshot(self).await
-    }
-
-    async fn next_active_speaker_deadline(&self) -> Option<Instant> {
-        None
-    }
-
-    async fn expired_active_speaker_room_instance_ids(
-        &self,
-        _now: Instant,
-    ) -> BTreeSet<RoomInstanceId> {
-        BTreeSet::new()
-    }
-
-    fn session_transport_health(
-        &self,
-        _session_key: &TransportSessionKey,
-    ) -> Option<TransportSessionHealth> {
-        None
-    }
-}
-
-#[cfg(any(test, feature = "testing-transport"))]
-impl SourcePolicyPort for FakeMediaTransport {
-    fn source_policy_subscription(&self) -> SourcePolicyUpdateSubscription {
-        self.source_policy_signal().subscribe()
-    }
-}
+use crate::transport::TransportSessionKey;
 
 impl MediaTransport {
     #[cfg(any(test, feature = "testing-transport"))]
