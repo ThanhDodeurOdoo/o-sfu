@@ -68,7 +68,7 @@ pub(crate) async fn upgrade(
 ) -> Response {
     let remote_address = Arc::<str>::from(resolve_remote_address(
         &headers,
-        state.websocket_options.trust_proxy_headers,
+        state.config.http.trust_proxy_headers,
         connect_info.map(|Extension(ConnectInfo(addr))| addr),
     ));
     websocket.on_upgrade(move |socket| handle_socket(socket, state, remote_address))
@@ -125,8 +125,8 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
             outbound_rx: &mut user_session.outbound_rx,
             user: &mut user_session.user,
             media_transport: &state.media_transport,
-            user_timeout_ms: state.websocket_options.user.timeout_ms,
-            ping_interval_ms: state.websocket_options.user.ping_interval_ms,
+            user_timeout_ms: state.config.user.timeout_ms,
+            ping_interval_ms: state.config.user.ping_interval_ms,
             metrics: &state.metrics,
         })
         .await;

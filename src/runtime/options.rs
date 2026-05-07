@@ -1,129 +1,78 @@
-use std::net::SocketAddr;
-
 use crate::{
-    config::{Config, DiagnosticsConfig, RuntimeFeatureFlags},
+    config::{AuthConfig, Config, DiagnosticsConfig, HttpConfig, RuntimeFeatureFlags, UserConfig},
     core::{CodecOptions, CoreOptions, MediaOptions, ObservabilityOptions, RoutingOptions},
     runtime::SessionBitrateLimits,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeOptions {
-    pub(crate) room: RoomOptions,
-    pub(crate) recording_policy: RecordingPolicyOptions,
     pub(crate) core: CoreOptions,
-    pub(crate) http: HttpOptions,
-    pub(crate) websocket: SocketOptions,
+    effective_feature_flags: RuntimeFeatureFlags,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AuthOptions {
-    pub(crate) key: String,
-    pub(crate) authentication_timeout_ms: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RoomOptions {
-    pub(crate) max_users: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct UserOptions {
-    pub(crate) timeout_ms: u64,
-    pub(crate) ping_interval_ms: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RecordingPolicyOptions {
-    pub(crate) audio_enabled: bool,
-    pub(crate) video_enabled: bool,
-    pub(crate) transcription_enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HttpOptions {
-    pub(crate) bind_address: SocketAddr,
-    pub(crate) auth: AuthOptions,
+pub(crate) struct RuntimeConfig {
+    pub(crate) auth: AuthConfig,
+    pub(crate) http: HttpConfig,
+    pub(crate) user: UserConfig,
     pub(crate) diagnostics: DiagnosticsConfig,
-    pub(crate) trust_proxy_headers: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SocketOptions {
-    pub(crate) auth: AuthOptions,
-    pub(crate) user: UserOptions,
-    pub(crate) trust_proxy_headers: bool,
 }
 
 impl RuntimeOptions {
     #[must_use]
     pub(crate) fn from_config(config: &Config) -> Self {
-        let auth = AuthOptions {
-            key: config.auth.key.clone(),
-            authentication_timeout_ms: config.auth.authentication_timeout_ms,
-        };
-        let room = RoomOptions {
-            max_users: config.user.room_size,
-        };
-        let user = UserOptions {
-            timeout_ms: config.user.timeout_ms,
-            ping_interval_ms: config.user.ping_interval_ms,
-        };
-        let recording_policy = RecordingPolicyOptions {
-            audio_enabled: config.features.audio_recording,
-            video_enabled: config.features.video_recording,
-            transcription_enabled: config.features.transcription
-                && (config.features.audio_recording || config.features.video_recording),
-        };
-        let core = CoreOptions::new(
-            MediaOptions {
-                public_ip: config.transport.public_ip,
-                rtc_port_range: config.transport.rtc_port_range,
-                bitrate_limits: SessionBitrateLimits::new(
-                    config.transport.max_bitrate_in_bps,
-                    config.transport.max_bitrate_out_bps,
-                ),
-                video_bitrate_limits: config.transport.video_bitrate_limits,
-            },
-            RoutingOptions {
-                media_worker_count: config.transport.rtc_media_worker_count,
-                room_sharding_policy: config.transport.room_sharding_policy,
-            },
-            CodecOptions {
-                flags: config.codecs.flags,
-                preferences: config.codecs.preferences,
-            },
-            ObservabilityOptions {
-                transport_diagnostics_enabled: true,
-                transport_metrics_enabled: true,
-            },
-        );
-        let http = HttpOptions {
-            bind_address: config.http.bind_address,
-            auth: auth.clone(),
-            diagnostics: config.diagnostics.clone(),
-            trust_proxy_headers: config.http.trust_proxy_headers,
-        };
-        let websocket = SocketOptions {
-            auth,
-            user,
-            trust_proxy_headers: config.http.trust_proxy_headers,
-        };
         Self {
-            room,
-            recording_policy,
-            core,
-            http,
-            websocket,
+            core: CoreOptions::new(
+                MediaOptions {
+                    public_ip: config.transport.public_ip,
+                    rtc_port_range: config.transport.rtc_port_range,
+                    bitrate_limits: SessionBitrateLimits::new(
+                        config.transport.max_bitrate_in_bps,
+                        config.transport.max_bitrate_out_bps,
+                    ),
+                    video_bitrate_limits: config.transport.video_bitrate_limits,
+                },
+                RoutingOptions {
+                    media_worker_count: config.transport.rtc_media_worker_count,
+                    room_sharding_policy: config.transport.room_sharding_policy,
+                },
+                CodecOptions {
+                    flags: config.codecs.flags,
+                    preferences: config.codecs.preferences,
+                },
+                ObservabilityOptions {
+                    transport_diagnostics_enabled: true,
+                    transport_metrics_enabled: true,
+                },
+            ),
+            effective_feature_flags: effective_feature_flags(config.features),
         }
     }
 
     #[must_use]
-    pub(crate) const fn feature_flags(&self) -> RuntimeFeatureFlags {
-        RuntimeFeatureFlags {
-            transcription: self.recording_policy.transcription_enabled,
-            audio_recording: self.recording_policy.audio_enabled,
-            video_recording: self.recording_policy.video_enabled,
+    pub(crate) const fn effective_feature_flags(&self) -> RuntimeFeatureFlags {
+        self.effective_feature_flags
+    }
+}
+
+impl RuntimeConfig {
+    #[must_use]
+    pub(crate) fn from_config(config: &Config) -> Self {
+        Self {
+            auth: config.auth.clone(),
+            http: config.http.clone(),
+            user: config.user,
+            diagnostics: config.diagnostics.clone(),
         }
+    }
+}
+
+const fn effective_feature_flags(features: RuntimeFeatureFlags) -> RuntimeFeatureFlags {
+    RuntimeFeatureFlags {
+        transcription: features.transcription
+            && (features.audio_recording || features.video_recording),
+        audio_recording: features.audio_recording,
+        video_recording: features.video_recording,
     }
 }
 
@@ -138,9 +87,8 @@ mod tests {
         TransportConfig, UserConfig, VideoBitrateLimits,
     };
 
-    #[test]
-    fn runtime_options_group_config_by_runtime_boundary() {
-        let config = Config {
+    fn test_config() -> Config {
+        Config {
             auth: AuthConfig {
                 key: "dGVzdC1rZXk=".to_owned(),
                 authentication_timeout_ms: 1_500,
@@ -176,17 +124,15 @@ mod tests {
             diagnostics: DiagnosticsConfig {
                 auth_token: Some("operator-secret".to_owned()),
             },
-        };
+        }
+    }
+
+    #[test]
+    fn runtime_options_project_core_settings() {
+        let config = test_config();
 
         let options = RuntimeOptions::from_config(&config);
 
-        assert_eq!(options.http.auth.key, config.auth.key.as_str());
-        assert_eq!(options.room.max_users, 42);
-        assert_eq!(options.websocket.user.timeout_ms, 7_000);
-        assert!(options.recording_policy.transcription_enabled);
-        assert!(options.recording_policy.audio_enabled);
-        assert!(!options.recording_policy.video_enabled);
-        assert_eq!(options.feature_flags(), config.features);
         assert_eq!(options.core.media.public_ip, config.transport.public_ip);
         assert_eq!(
             options.core.media.rtc_port_range,
@@ -211,61 +157,21 @@ mod tests {
         );
         assert_eq!(options.core.codecs.flags, config.codecs.flags);
         assert_eq!(options.core.codecs.preferences, config.codecs.preferences);
-        assert_eq!(options.http.bind_address, config.http.bind_address);
-        assert_eq!(options.http.auth.key, config.auth.key.as_str());
-        assert_eq!(options.http.diagnostics, config.diagnostics);
-        assert!(options.http.trust_proxy_headers);
-        assert_eq!(
-            options.websocket.auth.authentication_timeout_ms,
-            config.auth.authentication_timeout_ms
-        );
-        assert_eq!(options.websocket.user.ping_interval_ms, 11_000);
-        assert!(options.websocket.trust_proxy_headers);
     }
 
     #[test]
-    fn transcription_feature_is_part_of_recording_policy() {
-        let mut config = Config {
-            auth: AuthConfig {
-                key: "dGVzdC1rZXk=".to_owned(),
-                authentication_timeout_ms: 1_500,
-            },
-            http: HttpConfig {
-                bind_address: SocketAddr::from(([127, 0, 0, 1], 8090)),
-                trust_proxy_headers: true,
-            },
-            user: UserConfig {
-                room_size: 42,
-                timeout_ms: 7_000,
-                ping_interval_ms: 11_000,
-            },
-            transport: TransportConfig {
-                public_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
-                max_bitrate_in_bps: 1_234_000,
-                max_bitrate_out_bps: 5_678_000,
-                video_bitrate_limits: VideoBitrateLimits::default(),
-                rtc_port_range: RtcPortRange::new(50_000, 50_099),
-                rtc_media_worker_count: 4,
-                room_sharding_policy: RoomShardingPolicy::strict_single_router(),
-            },
-            codecs: CodecConfig {
-                flags: MediaCodecFlags::default(),
-                preferences: CodecPreferences::default(),
-            },
-            features: RuntimeFeatureFlags {
-                transcription: true,
-                audio_recording: false,
-                video_recording: false,
-            },
-            telemetry: TelemetryConfig::default(),
-            diagnostics: DiagnosticsConfig::default(),
+    fn effective_feature_flags_disable_transcription_without_recording() {
+        let mut config = test_config();
+        config.features = RuntimeFeatureFlags {
+            transcription: true,
+            audio_recording: false,
+            video_recording: false,
         };
 
         let options = RuntimeOptions::from_config(&config);
 
-        assert!(!options.recording_policy.transcription_enabled);
         assert_eq!(
-            options.feature_flags(),
+            options.effective_feature_flags(),
             RuntimeFeatureFlags {
                 transcription: false,
                 audio_recording: false,
@@ -276,9 +182,8 @@ mod tests {
         config.features.audio_recording = true;
         let options = RuntimeOptions::from_config(&config);
 
-        assert!(options.recording_policy.transcription_enabled);
         assert_eq!(
-            options.feature_flags(),
+            options.effective_feature_flags(),
             RuntimeFeatureFlags {
                 transcription: true,
                 audio_recording: true,

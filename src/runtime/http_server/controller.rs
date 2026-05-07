@@ -15,6 +15,7 @@ use tracing::{Instrument, info};
 
 use crate::{
     application::stream_catalog::value_for_stream_type,
+    config::{DiagnosticsConfig, HttpConfig},
     runtime::{
         RuntimeState,
         auth::{self, HttpDisconnectClaims, HttpRoomClaims},
@@ -26,7 +27,6 @@ use crate::{
             RoomResponse, RoomStatsResponse, STATS_PATH, UsersStatsResponse,
         },
         metrics::HttpRoute,
-        options::HttpOptions,
         prometheus::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
         request_origin::{request_base_url, resolve_remote_address},
         room::{RoomConfig, RuntimeRoomStatsSnapshot},
@@ -38,7 +38,7 @@ use crate::{
 const MAX_DISCONNECT_BODY_BYTES: usize = 16 * 1024;
 
 pub(crate) async fn serve_http(state: RuntimeState) -> Result<()> {
-    let listener = TcpListener::bind(state.http_options.bind_address).await?;
+    let listener = TcpListener::bind(state.config.http.bind_address).await?;
     serve_http_on(listener, state).await
 }
 
@@ -46,9 +46,9 @@ pub(crate) async fn serve_http_on(listener: TcpListener, state: RuntimeState) ->
     let local_address = listener.local_addr()?;
     info!(
         event = telemetry_event::HTTP_LISTENER_READY,
-        bind_address = %state.http_options.bind_address,
+        bind_address = %state.config.http.bind_address,
         local_address = %local_address,
-        trust_proxy_headers = state.http_options.trust_proxy_headers,
+        trust_proxy_headers = state.config.http.trust_proxy_headers,
         "booted HTTP and WebSocket listener"
     );
     axum::serve(
@@ -167,7 +167,7 @@ async fn room(
             state.metrics.record_http_room_unauthorized();
             return StatusCode::UNAUTHORIZED.into_response();
         };
-        let Ok(claims) = auth::verify::<HttpRoomClaims>(token, &state.http_options.auth.key) else {
+        let Ok(claims) = auth::verify::<HttpRoomClaims>(token, &state.config.auth.key) else {
             state.metrics.record_http_room_unauthorized();
             return StatusCode::UNAUTHORIZED.into_response();
         };
@@ -182,7 +182,7 @@ async fn room(
 
         let remote_address = resolve_remote_address(
             &headers,
-            state.http_options.trust_proxy_headers,
+            state.config.http.trust_proxy_headers,
             connect_info.map(|Extension(ConnectInfo(addr))| addr),
         );
         let room_config = RoomConfig {
@@ -205,8 +205,8 @@ async fn room(
                 uuid: room.uuid().to_owned(),
                 url: request_base_url(
                     &headers,
-                    state.http_options.trust_proxy_headers,
-                    state.http_options.bind_address,
+                    state.config.http.trust_proxy_headers,
+                    state.config.http.bind_address,
                 ),
             }),
         )
@@ -234,8 +234,7 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
             state.metrics.record_http_disconnect_bad_request();
             return StatusCode::BAD_REQUEST.into_response();
         };
-        let Ok(mut claims) =
-            auth::verify::<HttpDisconnectClaims>(token, &state.http_options.auth.key)
+        let Ok(mut claims) = auth::verify::<HttpDisconnectClaims>(token, &state.config.auth.key)
         else {
             state.metrics.record_http_disconnect_unprocessable_entity();
             return StatusCode::UNPROCESSABLE_ENTITY.into_response();
@@ -263,7 +262,7 @@ fn authorization_token(headers: &HeaderMap) -> Option<&str> {
 
 async fn diagnostics_summary(State(state): State<RuntimeState>, headers: HeaderMap) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.http_options) {
+        match ensure_diagnostics_access(&headers, &state.config.http, &state.config.diagnostics) {
             DiagnosticsAccess::Allowed => {}
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
@@ -279,7 +278,7 @@ async fn diagnostics_summary(State(state): State<RuntimeState>, headers: HeaderM
 
 async fn diagnostics_rooms(State(state): State<RuntimeState>, headers: HeaderMap) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.http_options) {
+        match ensure_diagnostics_access(&headers, &state.config.http, &state.config.diagnostics) {
             DiagnosticsAccess::Allowed => {}
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
@@ -299,7 +298,7 @@ async fn diagnostics_room_detail(
     Path(room_id): Path<String>,
 ) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.http_options) {
+        match ensure_diagnostics_access(&headers, &state.config.http, &state.config.diagnostics) {
             DiagnosticsAccess::Allowed => {}
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
@@ -325,7 +324,7 @@ async fn diagnostics_room_users(
     Path(room_id): Path<String>,
 ) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.http_options) {
+        match ensure_diagnostics_access(&headers, &state.config.http, &state.config.diagnostics) {
             DiagnosticsAccess::Allowed => {}
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
@@ -351,7 +350,7 @@ async fn diagnostics_room_graph(
     Path(room_id): Path<String>,
 ) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.http_options) {
+        match ensure_diagnostics_access(&headers, &state.config.http, &state.config.diagnostics) {
             DiagnosticsAccess::Allowed => {}
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
@@ -378,7 +377,7 @@ async fn diagnostics_user_graph(
     Path((room_id, user_id)): Path<(String, String)>,
 ) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.http_options) {
+        match ensure_diagnostics_access(&headers, &state.config.http, &state.config.diagnostics) {
             DiagnosticsAccess::Allowed => {}
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
@@ -407,7 +406,7 @@ async fn diagnostics_user_detail(
     Path(user_id): Path<String>,
 ) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.http_options) {
+        match ensure_diagnostics_access(&headers, &state.config.http, &state.config.diagnostics) {
             DiagnosticsAccess::Allowed => {}
             DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
             DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
@@ -437,8 +436,12 @@ enum DiagnosticsAccess {
     Disabled,
 }
 
-fn ensure_diagnostics_access(headers: &HeaderMap, options: &HttpOptions) -> DiagnosticsAccess {
-    if let Some(expected_token) = options.diagnostics.auth_token.as_deref() {
+fn ensure_diagnostics_access(
+    headers: &HeaderMap,
+    http: &HttpConfig,
+    diagnostics: &DiagnosticsConfig,
+) -> DiagnosticsAccess {
+    if let Some(expected_token) = diagnostics.auth_token.as_deref() {
         return match authorization_token(headers) {
             Some(actual_token) if tokens_match(actual_token, expected_token) => {
                 DiagnosticsAccess::Allowed
@@ -448,7 +451,7 @@ fn ensure_diagnostics_access(headers: &HeaderMap, options: &HttpOptions) -> Diag
     }
     // Without an explicit token we only allow diagnostics on loopback listeners.
     // for example if a reverse proxy is the network boundary we expect it handle that
-    if options.bind_address.ip().is_loopback() {
+    if http.bind_address.ip().is_loopback() {
         DiagnosticsAccess::Allowed
     } else {
         DiagnosticsAccess::Disabled

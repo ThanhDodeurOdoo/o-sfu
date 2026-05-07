@@ -46,7 +46,7 @@ pub(crate) use o_sfu_core::{
 };
 pub(crate) use o_sfu_telemetry as telemetry;
 pub(crate) use o_sfu_telemetry::prometheus;
-use options::{HttpOptions, RuntimeOptions, SocketOptions};
+use options::{RuntimeConfig, RuntimeOptions};
 pub(crate) use packet_sinks::RoomPacketSinkRegistry;
 use room::{
     RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy,
@@ -61,6 +61,7 @@ use telemetry::{init_tracing, schema::event as telemetry_event};
 /// cheap clones of these dependencies through [`RuntimeState`].
 #[derive(Debug)]
 pub struct Runtime {
+    config: RuntimeConfig,
     options: RuntimeOptions,
     room_manager: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
@@ -70,8 +71,7 @@ pub struct Runtime {
 
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeState {
-    http_options: HttpOptions,
-    websocket_options: SocketOptions,
+    config: RuntimeConfig,
     rooms: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     media_transport: MediaTransport,
@@ -104,10 +104,11 @@ impl Runtime {
     /// Returns an error when the media transport cannot be constructed from the
     /// configured RTC settings.
     pub fn new(config: &Config) -> Result<Self> {
+        let runtime_config = RuntimeConfig::from_config(config);
         let options = RuntimeOptions::from_config(config);
         let services = RuntimeServices::default();
         let media_transport = build_media_transport(&options.core, &services)?;
-        let room_runtime_policy = build_room_runtime_policy(&options);
+        let room_runtime_policy = build_room_runtime_policy(&runtime_config, &options);
         info!("{}", config.log_view(process::id()));
         info!(
             event = telemetry_event::RUNTIME_BOOT,
@@ -115,6 +116,7 @@ impl Runtime {
         );
         let room_manager = build_room_manager(&options, room_runtime_policy, &services);
         Ok(Self {
+            config: runtime_config,
             options,
             room_manager,
             diagnostics: services.diagnostics,
@@ -158,6 +160,7 @@ impl Runtime {
 
     fn state(&self) -> RuntimeState {
         RuntimeState::from_parts(
+            &self.config,
             &self.options,
             Arc::clone(&self.room_manager),
             Arc::clone(&self.diagnostics),
@@ -169,6 +172,7 @@ impl Runtime {
 
 impl RuntimeState {
     fn from_parts(
+        config: &RuntimeConfig,
         options: &RuntimeOptions,
         rooms: Arc<RoomManager>,
         diagnostics: Arc<DiagnosticsStore>,
@@ -177,8 +181,7 @@ impl RuntimeState {
     ) -> Self {
         let media_core = SfuCore::new(options.core, media_transport.clone());
         Self {
-            http_options: options.http.clone(),
-            websocket_options: options.websocket.clone(),
+            config: config.clone(),
             rooms,
             diagnostics,
             media_transport,
@@ -195,8 +198,16 @@ impl RuntimeState {
         metrics: Arc<RuntimeMetrics>,
         media_transport: MediaTransport,
     ) -> Self {
+        let runtime_config = RuntimeConfig::from_config(config);
         let options = RuntimeOptions::from_config(config);
-        Self::from_parts(&options, rooms, diagnostics, metrics, media_transport)
+        Self::from_parts(
+            &runtime_config,
+            &options,
+            rooms,
+            diagnostics,
+            metrics,
+            media_transport,
+        )
     }
 }
 
@@ -295,10 +306,13 @@ fn build_media_transport(
     )?)
 }
 
-fn build_room_runtime_policy(options: &RuntimeOptions) -> RoomRuntimePolicy {
+fn build_room_runtime_policy(
+    config: &RuntimeConfig,
+    options: &RuntimeOptions,
+) -> RoomRuntimePolicy {
     RoomRuntimePolicy::new(
-        RoomAdmissionPolicy::new(options.room.max_users),
-        options.feature_flags(),
+        RoomAdmissionPolicy::new(config.user.room_size),
+        options.effective_feature_flags(),
         rtp_capabilities::router_rtp_capabilities_with_preferences(
             options.core.codecs.flags,
             options.core.codecs.preferences,

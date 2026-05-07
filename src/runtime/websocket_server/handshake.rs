@@ -141,7 +141,7 @@ async fn receive_auth(
     reader: &mut WsReader,
 ) -> Result<Option<AuthPayload>, Option<WebSocketCloseCode>> {
     match timeout(
-        Duration::from_millis(state.websocket_options.auth.authentication_timeout_ms),
+        Duration::from_millis(state.config.auth.authentication_timeout_ms),
         reader.next(),
     )
     .await
@@ -266,7 +266,7 @@ async fn authenticate(
             let room_id = room.uuid();
             let claims = authenticate_room_scoped_claims(
                 &auth_payload.jwt,
-                room.key().unwrap_or(&state.websocket_options.auth.key),
+                room.key().unwrap_or(&state.config.auth.key),
                 room_id,
                 remote_address,
             )?;
@@ -282,17 +282,15 @@ async fn resolve_handshake_room(
     remote_address: &str,
 ) -> Result<HandshakeRoomResolution, WebSocketCloseCode> {
     let Some(explicit_room_id) = auth_payload.channel.as_deref() else {
-        let mut claims = auth::verify::<WebSocketConnectClaims>(
-            &auth_payload.jwt,
-            &state.websocket_options.auth.key,
-        )
-        .map_err(|_error| {
-            warn!(
-                remote_address,
-                "failed to verify websocket auth token against the global key"
-            );
-            WebSocketCloseCode::AuthFailed
-        })?;
+        let mut claims =
+            auth::verify::<WebSocketConnectClaims>(&auth_payload.jwt, &state.config.auth.key)
+                .map_err(|_error| {
+                    warn!(
+                        remote_address,
+                        "failed to verify websocket auth token against the global key"
+                    );
+                    WebSocketCloseCode::AuthFailed
+                })?;
         claims.normalize_runtime_user_id();
         let room = resolve_global_claims_room(state, &claims, remote_address).await?;
         return Ok(HandshakeRoomResolution::GlobalClaims {
