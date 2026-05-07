@@ -53,3 +53,6 @@ jobs:
 
       - name: Run client tests
         run: npm test
+
+      - name: Build Odoo bundle
+        run: npm run build:odoo
