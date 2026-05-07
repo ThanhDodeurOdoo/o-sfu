@@ -12,7 +12,7 @@
     "build": "npm run wasm:build && tsc -p tsconfig.json && npm run wasm:check-size",
     "build:odoo": "npm run wasm:build && npm run wasm:check-size && node ./scripts/build_odoo_bundle.mjs",
     "test": "npm run test:unit",
-    "test:unit": "npm run build && node --test ./test/**/*.mjs",
+    "test:unit": "npm run build && node --test \"./test/**/*.test.mjs\"",
     "test:browser": "npm run build && playwright test",
     "test:browser:chromium": "npm run test:browser -- --project=chromium",
     "test:browser:firefox": "npm run test:browser -- --project=firefox",
