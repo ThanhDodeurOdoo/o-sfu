@@ -4,13 +4,22 @@ use std::{
     time::Duration,
 };
 
-pub(super) trait MetricLabel: Copy {
+pub(super) trait MetricLabel: Copy + 'static {
+    const VARIANTS: &'static [Self];
     const COUNT: usize;
 
     fn as_index(self) -> usize;
 }
 
-pub(super) trait HistogramBucketLabel: MetricLabel {
+pub(super) trait ExportedMetricLabel: MetricLabel {
+    fn label_value(self) -> &'static str;
+}
+
+pub(super) trait MetricBucketLabel: MetricLabel {
+    fn upper_bound(self) -> &'static str;
+}
+
+pub(super) trait HistogramBucketLabel: MetricBucketLabel {
     fn from_duration(duration: Duration) -> Self;
 }
 

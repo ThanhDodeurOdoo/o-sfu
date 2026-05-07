@@ -5,7 +5,10 @@ use o_sfu_router::{MediaKind, ProducerId, RouterEvent, SessionId as RouterSessio
 use crate::runtime::{
     RoomInstanceId, UserId as SignalingSessionId,
     media_transport::TransportMediaId,
-    metrics::{MetricName, RuntimeMetrics, RuntimeMetricsSnapshot},
+    metrics::{
+        MetricName, RuntimeMetrics, RuntimeMetricsSnapshot,
+        test_support::RuntimeMetricsSnapshotLookup,
+    },
     recording::{
         MediaSource, MediaTap, RecordingService,
         test_support::{RecordingLifecycleState, is_room_active, transition_error_state},
@@ -14,22 +17,17 @@ use crate::runtime::{
     rtc_engine::test_support::{sample_forwarded_packet, test_transport_session_key},
 };
 
-trait RuntimeMetricsSnapshotTestExt {
-    fn recording_captured_packets(&self) -> u64;
-    fn recording_captured_streams(&self) -> u64;
-}
-
-impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {
+trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
     fn recording_captured_packets(&self) -> u64 {
-        self.counter(MetricName::RecordingCapturedPacketsTotal, &[])
-            .unwrap_or(0)
+        self.counter_value(MetricName::RecordingCapturedPacketsTotal, &[])
     }
 
     fn recording_captured_streams(&self) -> u64 {
-        self.counter(MetricName::RecordingCapturedStreamsTotal, &[])
-            .unwrap_or(0)
+        self.counter_value(MetricName::RecordingCapturedStreamsTotal, &[])
     }
 }
+
+impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {}
 
 #[test]
 fn recording_service_counts_packets_without_recounting_streams() {

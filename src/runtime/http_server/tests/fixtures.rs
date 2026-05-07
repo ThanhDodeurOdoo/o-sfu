@@ -39,7 +39,10 @@ pub(super) use crate::{
             StatsResponse,
         },
         media_transport::MediaTransport,
-        metrics::{MetricName, RuntimeMetrics, RuntimeMetricsSnapshot},
+        metrics::{
+            MetricName, RuntimeMetrics, RuntimeMetricsSnapshot,
+            test_support::RuntimeMetricsSnapshotLookup,
+        },
         room::{
             JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig,
             RoomManagerDeps, RoomRuntimePolicy, rtp_capabilities,
@@ -61,11 +64,7 @@ pub(super) struct HttpRequestDurationSnapshot {
     pub(super) metrics: DurationHistogramSnapshot,
 }
 
-pub(super) trait RuntimeMetricsSnapshotTestExt {
-    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
-    fn gauge_value(&self, name: MetricName, labels: &[(&str, &str)]) -> i64;
-    fn histogram_count(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
-
+pub(super) trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
     fn http_noop_requests(&self) -> u64 {
         self.counter_value(MetricName::HttpNoopRequestsTotal, &[])
     }
@@ -123,11 +122,13 @@ pub(super) trait RuntimeMetricsSnapshotTestExt {
     fn http_request_duration(&self) -> HttpRequestDurationSnapshot {
         HttpRequestDurationSnapshot {
             noop: DurationHistogramSnapshot {
-                count: self
-                    .histogram_count(MetricName::HttpRequestDurationSeconds, &[("route", "noop")]),
+                count: self.histogram_count_value(
+                    MetricName::HttpRequestDurationSeconds,
+                    &[("route", "noop")],
+                ),
             },
             metrics: DurationHistogramSnapshot {
-                count: self.histogram_count(
+                count: self.histogram_count_value(
                     MetricName::HttpRequestDurationSeconds,
                     &[("route", "metrics")],
                 ),
@@ -137,7 +138,7 @@ pub(super) trait RuntimeMetricsSnapshotTestExt {
 
     fn ws_handshake_duration(&self) -> DurationHistogramSnapshot {
         DurationHistogramSnapshot {
-            count: self.histogram_count(MetricName::WsHandshakeDurationSeconds, &[]),
+            count: self.histogram_count_value(MetricName::WsHandshakeDurationSeconds, &[]),
         }
     }
 
@@ -188,7 +189,7 @@ pub(super) trait RuntimeMetricsSnapshotTestExt {
     }
 
     fn transport_user_lifetime_count(&self) -> u64 {
-        self.histogram_count(MetricName::TransportUserLifetimeSeconds, &[])
+        self.histogram_count_value(MetricName::TransportUserLifetimeSeconds, &[])
     }
 
     fn recording_start_accepted(&self) -> u64 {
@@ -206,20 +207,7 @@ pub(super) trait RuntimeMetricsSnapshotTestExt {
     }
 }
 
-impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {
-    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
-        self.counter(name, labels).unwrap_or(0)
-    }
-
-    fn gauge_value(&self, name: MetricName, labels: &[(&str, &str)]) -> i64 {
-        self.gauge(name, labels).unwrap_or(0)
-    }
-
-    fn histogram_count(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
-        self.histogram(name, labels)
-            .map_or(0, |histogram| histogram.count)
-    }
-}
+impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {}
 
 pub(super) const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 

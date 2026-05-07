@@ -4,6 +4,9 @@ mod descriptor;
 mod labels;
 mod snapshot;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 #[cfg(test)]
 mod tests;
 

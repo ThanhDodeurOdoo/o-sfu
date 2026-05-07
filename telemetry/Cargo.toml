@@ -10,6 +10,7 @@ version.workspace = true
 [features]
 default = ["macros"]
 macros = ["dep:o-sfu-telemetry-macros"]
+test-support = []
 otel-tracing = [
     "dep:opentelemetry",
     "dep:opentelemetry-otlp",

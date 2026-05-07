@@ -26,7 +26,7 @@ pub(super) use crate::{
             ActiveSpeakerSource, MediaTransport, SourcePacketGate, TransportMediaId,
             test_support::{FakeMediaTransport, FakeMediaTransportEvent},
         },
-        metrics::{MetricName, RuntimeMetricsSnapshot},
+        metrics::{MetricName, RuntimeMetricsSnapshot, test_support::RuntimeMetricsSnapshotLookup},
         source_model::{
             UserStreamId,
             test_support::{source_publish_intent_for_source, stream_id_for_source},
@@ -35,10 +35,7 @@ pub(super) use crate::{
     transport::NegotiationPort,
 };
 
-pub(super) trait RuntimeMetricsSnapshotTestExt {
-    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
-    fn gauge_value(&self, name: MetricName, labels: &[(&str, &str)]) -> i64;
-
+pub(super) trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
     fn active_rooms(&self) -> i64 {
         self.gauge_value(MetricName::RoomsActive, &[])
     }
@@ -102,15 +99,7 @@ pub(super) trait RuntimeMetricsSnapshotTestExt {
     }
 }
 
-impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {
-    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
-        self.counter(name, labels).unwrap_or(0)
-    }
-
-    fn gauge_value(&self, name: MetricName, labels: &[(&str, &str)]) -> i64 {
-        self.gauge(name, labels).unwrap_or(0)
-    }
-}
+impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {}
 
 /// Realistic client RTP capabilities (default codecs)
 pub(super) fn test_client_rtp_capabilities() -> MediaCapabilities {

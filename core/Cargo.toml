@@ -32,4 +32,5 @@ uuid.workspace = true
 workspace = true
 
 [dev-dependencies]
+o-sfu-telemetry = { workspace = true, features = ["test-support"] }
 o-sfu-router = { workspace = true, features = ["test-support"] }

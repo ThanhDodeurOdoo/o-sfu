@@ -52,8 +52,7 @@ pub struct RuntimeMetrics {
     pub(super) active_subscriptions: UpDownCounter,
     pub(super) active_recording_rooms: UpDownCounter,
     pub(super) active_transport_users: UpDownCounter,
-    pub(super) connected_transport_users: UpDownCounter,
-    pub(super) disconnected_transport_users: UpDownCounter,
+    pub(super) transport_health_users: UpDownCounterFamily<TransportHealthState>,
     pub(super) recording_actions: CounterFamily<RecordingActionOutcome>,
     pub(super) recording_captured_packets: Counter,
     pub(super) recording_captured_streams: Counter,
@@ -303,19 +302,11 @@ impl RuntimeMetrics {
                 Some(TransportHealthState::Disconnected),
             ) => {}
         }
-        match previous {
-            Some(TransportHealthState::Connected) => self.connected_transport_users.add(-1),
-            Some(TransportHealthState::Disconnected) => {
-                self.disconnected_transport_users.add(-1);
-            }
-            None => {}
+        if let Some(health) = previous {
+            self.transport_health_users.add(health, -1);
         }
-        match next {
-            Some(TransportHealthState::Connected) => self.connected_transport_users.add(1),
-            Some(TransportHealthState::Disconnected) => {
-                self.disconnected_transport_users.add(1);
-            }
-            None => {}
+        if let Some(health) = next {
+            self.transport_health_users.add(health, 1);
         }
     }
 

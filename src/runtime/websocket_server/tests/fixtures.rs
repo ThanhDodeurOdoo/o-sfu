@@ -43,7 +43,10 @@ pub(super) use crate::{
             SessionBitrateLimits,
             test_support::{FakeMediaTransport, FakeMediaTransportEvent},
         },
-        metrics::{MetricName, RuntimeMetrics, RuntimeMetricsSnapshot},
+        metrics::{
+            MetricName, RuntimeMetrics, RuntimeMetricsSnapshot,
+            test_support::RuntimeMetricsSnapshotLookup,
+        },
         room::{
             Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomManagerDeps,
             RoomRuntimePolicy, rtp_capabilities,
@@ -57,9 +60,7 @@ pub(super) type TestWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
 pub(super) type CreateRoomQuery = RoomConfig;
 
-pub(super) trait RuntimeMetricsSnapshotTestExt {
-    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
-
+pub(super) trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
     fn ws_connections_accepted(&self) -> u64 {
         self.counter_value(MetricName::WsConnectionsTotal, &[("stage", "accepted")])
     }
@@ -123,11 +124,7 @@ pub(super) trait RuntimeMetricsSnapshotTestExt {
     }
 }
 
-impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {
-    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
-        self.counter(name, labels).unwrap_or(0)
-    }
-}
+impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {}
 
 /// App-level WebSocket subsystem fixture.
 ///

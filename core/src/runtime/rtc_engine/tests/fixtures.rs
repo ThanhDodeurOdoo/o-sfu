@@ -33,22 +33,15 @@ pub(super) use crate::{
             ActiveSpeakerSource, MediaTransportDeps, RtcTransportConfig, SessionOffer,
             SourcePolicySignal, TransportAdapterError, TransportMediaId, TransportSessionKey,
         },
-        metrics::{MetricName, RuntimeMetrics, RuntimeMetricsSnapshot},
+        metrics::{
+            MetricName, RuntimeMetrics, RuntimeMetricsSnapshot,
+            test_support::RuntimeMetricsSnapshotLookup,
+        },
         packet_sink_registry::RoomPacketSinkRegistry,
     },
 };
 
-pub(super) trait RuntimeMetricsSnapshotTestExt {
-    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
-    fn gauge_value(&self, name: MetricName, labels: &[(&str, &str)]) -> i64;
-    fn histogram_bucket_value(
-        &self,
-        name: MetricName,
-        labels: &[(&str, &str)],
-        upper_bound: &str,
-    ) -> u64;
-    fn histogram_count_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
-
+pub(super) trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
     fn connected_transport_users(&self) -> i64 {
         self.gauge_value(MetricName::TransportHealthUsers, &[("state", "connected")])
     }
@@ -95,30 +88,7 @@ pub(super) trait RuntimeMetricsSnapshotTestExt {
     }
 }
 
-impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {
-    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
-        self.counter(name, labels).unwrap_or(0)
-    }
-
-    fn gauge_value(&self, name: MetricName, labels: &[(&str, &str)]) -> i64 {
-        self.gauge(name, labels).unwrap_or(0)
-    }
-
-    fn histogram_bucket_value(
-        &self,
-        name: MetricName,
-        labels: &[(&str, &str)],
-        upper_bound: &str,
-    ) -> u64 {
-        self.histogram(name, labels)
-            .map_or(0, |histogram| histogram.bucket(upper_bound))
-    }
-
-    fn histogram_count_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
-        self.histogram(name, labels)
-            .map_or(0, |histogram| histogram.count)
-    }
-}
+impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {}
 
 pub(super) fn transport_key(
     room_instance_id: u64,

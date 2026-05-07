@@ -35,7 +35,10 @@ use crate::{
     runtime::{
         RoomInstanceId, UserId,
         media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
-        metrics::{MetricName, RtpForwardDestinationKind, RuntimeMetrics, RuntimeMetricsSnapshot},
+        metrics::{
+            MetricName, RtpForwardDestinationKind, RuntimeMetrics, RuntimeMetricsSnapshot,
+            test_support::RuntimeMetricsSnapshotLookup,
+        },
         packet_sink_registry::{
             PacketSink as MediaPacketSink, PacketSinkLookup, RegisteredPacketSink,
             RoomPacketSinkRegistry, into_packet_sink,
@@ -91,9 +94,7 @@ impl MediaSource for RoomPacketSinkRegistry {
     }
 }
 
-trait RuntimeMetricsSnapshotTestExt {
-    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64;
-
+trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
     fn rtc_datagram_fallback_scans(&self) -> u64 {
         self.counter_value(MetricName::RtcDatagramFallbackScansTotal, &[])
     }
@@ -224,11 +225,7 @@ trait RuntimeMetricsSnapshotTestExt {
     }
 }
 
-impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {
-    fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
-        self.counter(name, labels).unwrap_or(0)
-    }
-}
+impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {}
 
 fn populate_forward_routes(
     state: &RtcBootstrapState,
