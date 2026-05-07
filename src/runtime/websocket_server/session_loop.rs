@@ -18,9 +18,7 @@ use tracing::{debug, info, warn};
 use super::{WsWriter, close_writer, controller::WsReader, io::send_user_output};
 use crate::{
     application::user_session::{User, UserError, UserOutput, UserSignal},
-    core::server::room::{
-        Room, RoomEventMessage, RoomEventRequest, RoomManager, UserCloseReason, UserOutbound,
-    },
+    core::server::room::{Room, RoomEventRequest, RoomManager, UserCloseReason, UserOutbound},
     runtime::{
         ConnectionId,
         media_transport::MediaTransport,
@@ -576,7 +574,8 @@ async fn dispatch_room_outbound(
 ) -> Result<UserOutput, WebSocketCloseCode> {
     match outbound {
         UserOutbound::Close(reason) => Err(map_room_close_reason(reason)),
-        UserOutbound::Message(message) => dispatch_room_message(user, message)
+        UserOutbound::Message(message) => user
+            .apply_room_message(message)
             .await
             .map_err(map_user_error),
         UserOutbound::Request(request) => match *request {
@@ -588,21 +587,6 @@ async fn dispatch_room_outbound(
             .update_remote_track(update)
             .await
             .map_err(map_user_error),
-    }
-}
-
-async fn dispatch_room_message(
-    user: &mut User,
-    message: RoomEventMessage,
-) -> Result<UserOutput, UserError> {
-    match message {
-        RoomEventMessage::Broadcast { sender_id, message } => {
-            user.notify_broadcast(sender_id, message).await
-        }
-        RoomEventMessage::UserJoined { user_id, info } => user.add_remote_user(user_id, info).await,
-        RoomEventMessage::UserDeparted { user_id } => user.remove_remote_user(user_id).await,
-        RoomEventMessage::UserInfoChanged(snapshot) => user.update_remote_users(snapshot).await,
-        RoomEventMessage::RecordingStateChanged(state) => user.update_recording_state(state).await,
     }
 }
 

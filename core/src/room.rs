@@ -1,7 +1,5 @@
 //! Room boundary vocabulary consumed by the media-core facade.
 //!
-//! # Boundary role
-//!
 //! `SfuCore` owns transport orchestration, while the concrete room
 //! implementation owns membership, publication state and subscription intent.
 //! This file defines the session context and domain outcomes shared by those

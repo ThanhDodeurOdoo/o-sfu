@@ -19,7 +19,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use o_sfu_protocol::{
-    shared::{DownloadStates, JsonPayload, RecordingStateUpdate, StreamType, UserId, UserInfo},
+    shared::{DownloadStates, JsonPayload, StreamType, UserId, UserInfo},
     signaling::{
         NegotiationUploadEncoding, NegotiationUploadSlot, RequestId, ServerMessage, ServerRequest,
         ServerResponse, SessionDescriptionPayload,
@@ -571,68 +571,6 @@ impl User {
         self.send_follow_up_renegotiation_if_needed(&resolved).await
     }
 
-    /// Convert a room-authorized broadcast fanout into websocket output.
-    ///
-    /// Unlike [`User::broadcast`], this path does not validate this user as the
-    /// sender. Room state already performed the sender check before emitting
-    /// the fanout.
-    pub async fn notify_broadcast(
-        &mut self,
-        sender_id: UserId,
-        message: JsonPayload,
-    ) -> Result<UserOutput, UserError> {
-        self.apply_room_message(RoomEventMessage::Broadcast { sender_id, message })
-            .await
-    }
-
-    /// Convert a room membership join into this user's peer list output.
-    ///
-    /// This updates only the connected browser. Authoritative membership has
-    /// already changed in room state.
-    pub async fn add_remote_user(
-        &mut self,
-        user_id: UserId,
-        info: UserInfo,
-    ) -> Result<UserOutput, UserError> {
-        self.apply_room_message(RoomEventMessage::UserJoined { user_id, info })
-            .await
-    }
-
-    /// Convert a room membership departure into this user's websocket output.
-    ///
-    /// If the departed user had local track bindings for this browser, the
-    /// user-local wire state will request renegotiation after the peer-left
-    /// message.
-    pub async fn remove_remote_user(&mut self, user_id: UserId) -> Result<UserOutput, UserError> {
-        self.apply_room_message(RoomEventMessage::UserDeparted { user_id })
-            .await
-    }
-
-    /// Apply a room-projected user-info snapshot for remote users.
-    ///
-    /// The local wire track state may change when camera or screen activity
-    /// flags change, so this can emit track snapshots in addition to peer-info
-    /// messages.
-    pub async fn update_remote_users(
-        &mut self,
-        snapshot: BTreeMap<UserId, UserInfo>,
-    ) -> Result<UserOutput, UserError> {
-        self.apply_room_message(RoomEventMessage::UserInfoChanged(snapshot))
-            .await
-    }
-
-    /// Convert the room recording projection into a compatibility message.
-    ///
-    /// Recording state is authoritative in the room. This adapter has no media
-    /// side effects.
-    pub async fn update_recording_state(
-        &mut self,
-        state: RecordingStateUpdate,
-    ) -> Result<UserOutput, UserError> {
-        self.apply_room_message(RoomEventMessage::RecordingStateChanged(state))
-            .await
-    }
-
     /// Bootstrap one newly visible remote track for this websocket user.
     ///
     /// The room has already decided that the receiver should see the source.
@@ -682,7 +620,12 @@ impl User {
         Err(UserError::Kicked)
     }
 
-    async fn apply_room_message(
+    /// Convert a room-authored notification into this user's websocket output.
+    ///
+    /// Room state has already authorized and applied the transition. This method
+    /// only updates the connection-local wire snapshot before the websocket edge
+    /// serializes the resulting signals.
+    pub(crate) async fn apply_room_message(
         &mut self,
         message: RoomEventMessage,
     ) -> Result<UserOutput, UserError> {
