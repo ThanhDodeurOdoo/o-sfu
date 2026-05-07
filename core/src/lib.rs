@@ -51,8 +51,17 @@
 //! ) -> Result<(), o_sfu_core::SfuCoreError> {
 //!     let session = core.session(room, user_id, connection_id);
 //!     let (offer, capabilities) = session.create_initial_offer().await?;
-//!     session.apply_initial_answer(&offer.sdp, &capabilities).await?;
+//!     let browser_answer_sdp = exchange_offer_with_browser(offer.sdp).await?;
+//!     session
+//!         .apply_initial_answer(&browser_answer_sdp, &capabilities)
+//!         .await?;
 //!     Ok(())
+//! }
+//!
+//! async fn exchange_offer_with_browser(
+//!     _offer_sdp: String,
+//! ) -> Result<String, o_sfu_core::SfuCoreError> {
+//!     Ok(String::from("v=0\r\n"))
 //! }
 //!
 //! fn build_core(options: CoreOptions, transport: MediaTransport) -> MediaCore {
