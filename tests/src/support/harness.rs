@@ -56,6 +56,12 @@ pub struct TestServer {
     handle: JoinHandle<()>,
 }
 
+#[derive(Debug)]
+pub struct TestRoomServer {
+    server: TestServer,
+    room_id: String,
+}
+
 const TEST_POLL_DEADLINE: Duration = Duration::from_secs(3);
 
 impl TestServer {
@@ -173,6 +179,13 @@ impl TestServer {
     }
 }
 
+impl TestRoomServer {
+    #[must_use]
+    pub fn into_parts(self) -> (TestServer, String) {
+        (self.server, self.room_id)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum ExpectedRouteState {
     Active,
@@ -248,6 +261,20 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
         );
     });
     Ok(TestServer { addr, handle })
+}
+
+pub async fn spawn_room_server(issuer: &str) -> Option<TestRoomServer> {
+    spawn_room_server_with_config(test_config(1_000, 10), issuer, Some(TEST_ROOM_KEY)).await
+}
+
+pub async fn spawn_room_server_with_config(
+    config: Config,
+    issuer: &str,
+    key: Option<&str>,
+) -> Option<TestRoomServer> {
+    let server = spawn_test_server(config).await.ok()?;
+    let room_id = create_room(&server, issuer, key).await?;
+    Some(TestRoomServer { server, room_id })
 }
 
 #[must_use]

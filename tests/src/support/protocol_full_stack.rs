@@ -3,7 +3,7 @@
     reason = "the protocol full-stack harness is shared by multiple RTC integration scenarios"
 )]
 
-use std::time::Duration;
+use std::{future::Future, pin::Pin, time::Duration};
 
 use futures_util::SinkExt;
 use o_sfu_protocol::{
@@ -18,11 +18,43 @@ use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
 
 use super::{
-    TestServer, TestWebSocket, connect_websocket, decode_protocol_welcome_batch,
+    TEST_ROOM_KEY, TestServer, TestWebSocket, connect_websocket, decode_protocol_welcome_batch,
     fake_media::{FakeClock, FakeMediaSource},
     fake_rtc_peer::{FakeRtcPeer, ReceivedRtpPacket},
     read_close_code, read_text_message, signed_connect_claims,
 };
+
+pub type ProtocolFakePeerPair = (ProtocolFakePeer, ProtocolFakePeer);
+pub type ProtocolFakePeerPairFuture<'a> =
+    Pin<Box<dyn Future<Output = Option<ProtocolFakePeerPair>> + 'a>>;
+
+pub async fn connect_two_fake_peers(
+    server: &TestServer,
+    room_id: &str,
+    first_user_id: UserId,
+    second_user_id: UserId,
+) -> Option<(ProtocolFakePeer, ProtocolFakePeer)> {
+    let first = connect_fake_peer(server, room_id, first_user_id, TEST_ROOM_KEY).await?;
+    let second = connect_fake_peer(server, room_id, second_user_id, TEST_ROOM_KEY).await?;
+    Some((first, second))
+}
+
+#[must_use]
+pub fn connect_two_rtc_ready_fake_peers<'a>(
+    server: &'a TestServer,
+    room_id: &'a str,
+    first_user_id: UserId,
+    second_user_id: UserId,
+    timeout_window: Duration,
+) -> ProtocolFakePeerPairFuture<'a> {
+    Box::pin(async move {
+        let (mut first, mut second) =
+            connect_two_fake_peers(server, room_id, first_user_id, second_user_id).await?;
+        first.wait_until_connected(timeout_window).await?;
+        second.wait_until_connected(timeout_window).await?;
+        Some((first, second))
+    })
+}
 
 pub async fn connect_fake_peer(
     server: &TestServer,

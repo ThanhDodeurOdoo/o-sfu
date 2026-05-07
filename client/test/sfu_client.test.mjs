@@ -1,13 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CLIENT_UPDATE, SfuClient, createProtocolCore } from "../dist/index.js";
-import {
-    FakeMediaTrack,
-    FakePeerConnection,
-    FakeSender,
-    FakeWebSocket
-} from "./support/browser_fakes.mjs";
+import { CLIENT_UPDATE, createProtocolCore } from "../dist/index.js";
+import { FakeMediaTrack, FakePeerConnection, FakeSender } from "./support/browser_fakes.mjs";
 import {
     EMPTY_FEATURES,
     FakeProtocolCore,
@@ -16,54 +11,36 @@ import {
     decodeSentFrame,
     tick
 } from "./support/protocol_fakes.mjs";
+import {
+    createCameraTrack,
+    createSfuClientHarness,
+    createScreenTrack
+} from "./support/sfu_client_harness.mjs";
 
 test("connect normalizes the URL and sends auth on WebSocket open", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const client = new SfuClient({
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { core, sockets, connect, open } = createSfuClientHarness();
 
-    client.connect("https://example.test/ws", "jwt-token", {
+    await connect("https://example.test/ws", "jwt-token", {
         channelUUID: "channel-a",
         iceServers: [{ urls: "stun:stun.example.test" }]
     });
-    await tick();
 
     assert.equal(core.connectCall.url, "wss://example.test/ws");
     assert.equal(sockets[0].url, "wss://example.test/ws");
 
-    sockets[0].open();
-    await tick();
+    await open();
 
     assert.deepEqual(sockets[0].sent, ["auth-frame"]);
 });
 
 test("startRecording resolves through the protocol request lifecycle", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const client = new SfuClient({
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, emitMessage, connectWithWelcome } = createSfuClientHarness();
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
+    await connectWithWelcome();
 
     const resultPromise = client.startRecording({ audio: true });
     await tick();
-    sockets[0].emitMessage("recording-ok");
+    await emitMessage("recording-ok");
 
     assert.equal(await resultPromise, true);
 });
@@ -92,35 +69,21 @@ test("default runtime creates the protocol core from generated wasm bindings", (
 });
 
 test("real protocol core replays sticky intents after recovery welcome", async () => {
-    const sockets = [];
     const timers = createManualTimers();
-    const client = new SfuClient({
+    const { client, sockets, connect, emitMessage, open } = createSfuClientHarness({
         clearTimer: (handle) => timers.clearTimer(handle),
         createProtocolCore: () => createProtocolCore(),
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        },
         setTimer: (callback, ms) => timers.setTimer(callback, ms)
     });
 
-    const cameraTrack = {
-        enabled: true,
-        id: "camera-track-1",
-        kind: "video",
-        muted: false
-    };
+    const cameraTrack = createCameraTrack("camera-track-1");
 
-    client.connect("ws://example.test/ws", "jwt-token", {
+    await connect("ws://example.test/ws", "jwt-token", {
         channelUUID: "channel-a"
     });
-    await tick();
 
-    sockets[0].open();
-    await tick();
-    sockets[0].emitMessage(buildWelcomeFrame());
-    await tick();
+    await open();
+    await emitMessage(buildWelcomeFrame());
 
     client.publish("camera", cameraTrack);
     client.subscribe(7, { audio: true, camera: false });
@@ -135,10 +98,8 @@ test("real protocol core replays sticky intents after recovery welcome", async (
     await tick();
 
     assert.equal(sockets.length, 2);
-    sockets[1].open();
-    await tick();
-    sockets[1].emitMessage(buildWelcomeFrame());
-    await tick();
+    await open(1);
+    await emitMessage(buildWelcomeFrame(), 1);
 
     assert.deepEqual(decodeSentFrame(sockets[1], 0), [
         {
@@ -175,33 +136,19 @@ test("real protocol core replays sticky intents after recovery welcome", async (
 });
 
 test("real protocol core replays the latest sticky intents changed while recovering", async () => {
-    const sockets = [];
     const timers = createManualTimers();
-    const client = new SfuClient({
+    const { client, sockets, connect, emitMessage, open } = createSfuClientHarness({
         clearTimer: (handle) => timers.clearTimer(handle),
         createProtocolCore: () => createProtocolCore(),
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        },
         setTimer: (callback, ms) => timers.setTimer(callback, ms)
     });
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
+    await connect();
 
-    sockets[0].open();
-    await tick();
-    sockets[0].emitMessage(buildWelcomeFrame());
-    await tick();
+    await open();
+    await emitMessage(buildWelcomeFrame());
 
-    client.publish("camera", {
-        enabled: true,
-        id: "camera-track-2",
-        kind: "video",
-        muted: false
-    });
+    client.publish("camera", createCameraTrack("camera-track-2"));
     client.subscribe(7, { audio: true });
     await tick();
 
@@ -217,10 +164,8 @@ test("real protocol core replays the latest sticky intents changed while recover
     await tick();
 
     assert.equal(sockets.length, 2);
-    sockets[1].open();
-    await tick();
-    sockets[1].emitMessage(buildWelcomeFrame());
-    await tick();
+    await open(1);
+    await emitMessage(buildWelcomeFrame(), 1);
 
     assert.deepEqual(decodeSentFrame(sockets[1], 1), [
         {
@@ -241,34 +186,14 @@ test("real protocol core replays the latest sticky intents changed while recover
 });
 
 test("negotiation creates a peer connection and emits lowercase track updates", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
+    const { client, core, emitMessage, peerConnections, updates, connectWithWelcome } =
+        createSfuClientHarness();
+
+    await connectWithWelcome({
+        connectOptions: {
+            iceServers: [{ urls: ["stun:one.example.test", "stun:two.example.test"] }]
         }
     });
-
-    const receivedUpdates = [];
-    client.addEventListener("update", (event) => {
-        receivedUpdates.push(event.detail);
-    });
-
-    client.connect("ws://example.test/ws", "jwt-token", {
-        iceServers: [{ urls: ["stun:one.example.test", "stun:two.example.test"] }]
-    });
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
 
     core.trackBindings.set("0", {
         active: true,
@@ -276,8 +201,7 @@ test("negotiation creates a peer connection and emits lowercase track updates", 
         sessionId: 42,
         type: "camera"
     });
-    sockets[0].emitMessage("offer");
-    await tick();
+    await emitMessage("offer");
 
     assert.equal(peerConnections.length, 1);
     assert.deepEqual(peerConnections[0].config, {
@@ -292,15 +216,10 @@ test("negotiation creates a peer connection and emits lowercase track updates", 
     ]);
     assert.equal(client.state, "connected");
 
-    const track = {
-        enabled: true,
-        id: "track-1",
-        kind: "video",
-        muted: false
-    };
+    const track = createCameraTrack("track-1");
     peerConnections[0].emitTrack(track, "0");
 
-    assert.deepEqual(receivedUpdates, [
+    assert.deepEqual(updates, [
         {
             name: CLIENT_UPDATE.TRACK,
             payload: {
@@ -315,33 +234,16 @@ test("negotiation creates a peer connection and emits lowercase track updates", 
 });
 
 test("offer waits for the ICE-complete local description before replying", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config, {
-                answerSdp: "answer-sdp",
-                gatheredAnswerSdp:
-                    "answer-sdp\r\na=candidate:1 1 udp 2113937151 127.0.0.1 54400 typ host"
-            });
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
+    const { core, emitMessage, peerConnections, connectWithWelcome } = createSfuClientHarness({
+        peerConnectionOptions: {
+            answerSdp: "answer-sdp",
+            gatheredAnswerSdp:
+                "answer-sdp\r\na=candidate:1 1 udp 2113937151 127.0.0.1 54400 typ host"
         }
     });
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
-    sockets[0].emitMessage("offer");
-    await tick();
+    await connectWithWelcome();
+    await emitMessage("offer");
 
     assert.equal(peerConnections.length, 1);
     assert.deepEqual(core.submittedAnswers, [
@@ -354,28 +256,12 @@ test("offer waits for the ICE-complete local description before replying", async
 });
 
 test("info_change map payloads are normalized into plain objects", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const client = new SfuClient({
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { emitMessage, updates, connect } = createSfuClientHarness();
 
-    const receivedUpdates = [];
-    client.addEventListener("update", (event) => {
-        receivedUpdates.push(event.detail);
-    });
+    await connect();
+    await emitMessage("info-change-map");
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("info-change-map");
-    await tick();
-
-    assert.deepEqual(receivedUpdates, [
+    assert.deepEqual(updates, [
         {
             name: CLIENT_UPDATE.INFO_CHANGE,
             payload: {
@@ -388,26 +274,10 @@ test("info_change map payloads are normalized into plain objects", async () => {
 });
 
 test("source descriptor updates are exposed as additive client state", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const client = new SfuClient({
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, emitMessage, updates, connect } = createSfuClientHarness();
 
-    const receivedUpdates = [];
-    client.addEventListener("update", (event) => {
-        receivedUpdates.push(event.detail);
-    });
-
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("source-descriptors");
-    await tick();
+    await connect();
+    await emitMessage("source-descriptors");
 
     const expectedSources = [
         {
@@ -422,7 +292,7 @@ test("source descriptor updates are exposed as additive client state", async () 
             type: "camera"
         }
     ];
-    assert.deepEqual(receivedUpdates, [
+    assert.deepEqual(updates, [
         {
             name: CLIENT_UPDATE.SOURCE,
             payload: {
@@ -434,29 +304,11 @@ test("source descriptor updates are exposed as additive client state", async () 
 });
 
 test("renegotiation attaches pending audio only to upload-eligible mids", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, core, emitMessage, peerConnections, connectWithWelcome } =
+        createSfuClientHarness();
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
-    sockets[0].emitMessage("offer");
-    await tick();
+    await connectWithWelcome();
+    await emitMessage("offer");
 
     const localAudioTrack = new FakeMediaTrack({
         id: "local-audio",
@@ -465,8 +317,7 @@ test("renegotiation attaches pending audio only to upload-eligible mids", async 
     client.publish("audio", localAudioTrack);
     await tick();
 
-    sockets[0].emitMessage("renegotiate-with-pending-audio");
-    await tick();
+    await emitMessage("renegotiate-with-pending-audio");
 
     const producerTransceiver = peerConnections[0].transceivers.find(
         (transceiver) => transceiver.mid === "producer-audio"
@@ -486,32 +337,10 @@ test("renegotiation attaches pending audio only to upload-eligible mids", async 
 });
 
 test("track metadata updates re-emit track state for existing remote tracks", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, core, emitMessage, peerConnections, updates, connectWithWelcome } =
+        createSfuClientHarness();
 
-    const receivedUpdates = [];
-    client.addEventListener("update", (event) => {
-        receivedUpdates.push(event.detail);
-    });
-
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
+    await connectWithWelcome();
 
     core.trackBindings.set("0", {
         active: true,
@@ -519,22 +348,15 @@ test("track metadata updates re-emit track state for existing remote tracks", as
         sessionId: 42,
         type: "camera"
     });
-    sockets[0].emitMessage("offer");
-    await tick();
+    await emitMessage("offer");
 
-    const track = {
-        enabled: true,
-        id: "track-1",
-        kind: "video",
-        muted: false
-    };
+    const track = createCameraTrack("track-1");
     peerConnections[0].emitTrack(track, "0");
     await tick();
 
-    sockets[0].emitMessage("track-inactive");
-    await tick();
+    await emitMessage("track-inactive");
 
-    assert.deepEqual(receivedUpdates, [
+    assert.deepEqual(updates, [
         {
             name: CLIENT_UPDATE.TRACK,
             payload: {
@@ -558,32 +380,10 @@ test("track metadata updates re-emit track state for existing remote tracks", as
 });
 
 test("subscribe overlays local download state onto existing remote tracks", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, core, emitMessage, peerConnections, updates, connectWithWelcome } =
+        createSfuClientHarness();
 
-    const receivedUpdates = [];
-    client.addEventListener("update", (event) => {
-        receivedUpdates.push(event.detail);
-    });
-
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
+    await connectWithWelcome();
 
     core.trackBindings.set("0", {
         active: true,
@@ -591,15 +391,9 @@ test("subscribe overlays local download state onto existing remote tracks", asyn
         sessionId: 42,
         type: "camera"
     });
-    sockets[0].emitMessage("offer");
-    await tick();
+    await emitMessage("offer");
 
-    const track = {
-        enabled: true,
-        id: "track-1",
-        kind: "video",
-        muted: false
-    };
+    const track = createCameraTrack("track-1");
     peerConnections[0].emitTrack(track, "0");
     await tick();
 
@@ -610,7 +404,7 @@ test("subscribe overlays local download state onto existing remote tracks", asyn
     await tick();
     await tick();
 
-    assert.deepEqual(receivedUpdates, [
+    assert.deepEqual(updates, [
         {
             name: CLIENT_UPDATE.TRACK,
             payload: {
@@ -642,11 +436,7 @@ test("subscribe overlays local download state onto existing remote tracks", asyn
 });
 
 test("subscribe forwards additive video layout intent to the protocol core", async () => {
-    const core = new FakeProtocolCore();
-    const client = new SfuClient({
-        createProtocolCore: () => core,
-        createWebSocket: () => new FakeWebSocket("ws://example.test/ws")
-    });
+    const { client, core } = createSfuClientHarness();
 
     client.subscribe(42, {
         camera: true,
@@ -667,32 +457,10 @@ test("subscribe forwards additive video layout intent to the protocol core", asy
 });
 
 test("subscribe preferences apply to future remote track bindings", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, core, emitMessage, peerConnections, updates, connectWithWelcome } =
+        createSfuClientHarness();
 
-    const receivedUpdates = [];
-    client.addEventListener("update", (event) => {
-        receivedUpdates.push(event.detail);
-    });
-
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
+    await connectWithWelcome();
 
     client.subscribe(42, { camera: false });
     await tick();
@@ -704,19 +472,13 @@ test("subscribe preferences apply to future remote track bindings", async () => 
         sessionId: 42,
         type: "camera"
     });
-    sockets[0].emitMessage("offer");
-    await tick();
+    await emitMessage("offer");
 
-    const track = {
-        enabled: true,
-        id: "track-1",
-        kind: "video",
-        muted: false
-    };
+    const track = createCameraTrack("track-1");
     peerConnections[0].emitTrack(track, "0");
     await tick();
 
-    assert.deepEqual(receivedUpdates, [
+    assert.deepEqual(updates, [
         {
             name: CLIENT_UPDATE.TRACK,
             payload: {
@@ -731,31 +493,15 @@ test("subscribe preferences apply to future remote track bindings", async () => 
 });
 
 test("offer waits for peer connection transport readiness before emitting connected", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config, { autoConnect: false });
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, core, emitMessage, peerConnections, connectWithWelcome } =
+        createSfuClientHarness({
+            peerConnectionOptions: { autoConnect: false }
+        });
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
+    await connectWithWelcome();
     assert.equal(client.state, "authenticated");
 
-    sockets[0].emitMessage("offer");
-    await tick();
+    await emitMessage("offer");
 
     assert.equal(core.transportReadyCalls, 0);
     assert.equal(client.state, "authenticated");
@@ -775,12 +521,9 @@ test("offer waits for peer connection transport readiness before emitting connec
 });
 
 test("initial offer with only inactive media enters connected without waiting for rtc transport", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config, {
+    const { client, core, emitMessage, peerConnections, connectWithWelcome } =
+        createSfuClientHarness({
+            peerConnectionOptions: {
                 answerSdp: [
                     "v=0",
                     "o=- 1 1 IN IP4 0.0.0.0",
@@ -793,25 +536,11 @@ test("initial offer with only inactive media enters connected without waiting fo
                     "a=inactive"
                 ].join("\r\n"),
                 autoConnect: false
-            });
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+            }
+        });
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
-
-    sockets[0].emitMessage("offer");
-    await tick();
+    await connectWithWelcome();
+    await emitMessage("offer");
 
     assert.equal(peerConnections.length, 1);
     assert.equal(core.transportReadyCalls, 1);
@@ -821,30 +550,16 @@ test("initial offer with only inactive media enters connected without waiting fo
 test("peer connection failed closes the websocket and enters recovery", async () => {
     const core = new FakeProtocolCore();
     core.transportFailureState = "recovering";
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
+    const { client, sockets, emitMessage, open, peerConnections, connect } = createSfuClientHarness(
+        {
+            protocolCore: core
         }
-    });
+    );
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].open();
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
-    sockets[0].emitMessage("offer");
-    await tick();
+    await connect();
+    await open();
+    await emitMessage("welcome");
+    await emitMessage("offer");
 
     peerConnections[0].emitConnectionState("failed");
     await tick();
@@ -858,30 +573,16 @@ test("peer connection failed closes the websocket and enters recovery", async ()
 test("peer connection disconnected does not tear down the websocket session", async () => {
     const core = new FakeProtocolCore();
     core.transportFailureState = "recovering";
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
+    const { client, sockets, emitMessage, open, peerConnections, connect } = createSfuClientHarness(
+        {
+            protocolCore: core
         }
-    });
+    );
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].open();
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
-    sockets[0].emitMessage("offer");
-    await tick();
+    await connect();
+    await open();
+    await emitMessage("welcome");
+    await emitMessage("offer");
 
     peerConnections[0].emitConnectionState("disconnected");
     await tick();
@@ -893,32 +594,10 @@ test("peer connection disconnected does not tear down the websocket session", as
 });
 
 test("track rebinding waits for a fresh track event before re-emitting state", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, core, emitMessage, peerConnections, updates, connectWithWelcome } =
+        createSfuClientHarness();
 
-    const receivedUpdates = [];
-    client.addEventListener("update", (event) => {
-        receivedUpdates.push(event.detail);
-    });
-
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
+    await connectWithWelcome();
 
     core.trackBindings.set("0", {
         active: true,
@@ -926,22 +605,15 @@ test("track rebinding waits for a fresh track event before re-emitting state", a
         sessionId: 42,
         type: "camera"
     });
-    sockets[0].emitMessage("offer");
-    await tick();
+    await emitMessage("offer");
 
-    const firstTrack = {
-        enabled: true,
-        id: "track-1",
-        kind: "video",
-        muted: false
-    };
+    const firstTrack = createCameraTrack("track-1");
     peerConnections[0].emitTrack(firstTrack, "0");
     await tick();
 
-    sockets[0].emitMessage("track-rebind");
-    await tick();
+    await emitMessage("track-rebind");
 
-    assert.deepEqual(receivedUpdates, [
+    assert.deepEqual(updates, [
         {
             name: CLIENT_UPDATE.TRACK,
             payload: {
@@ -955,16 +627,11 @@ test("track rebinding waits for a fresh track event before re-emitting state", a
     assert.equal(client._consumers.has(42), false);
     assert.equal(client._consumers.has(84), false);
 
-    const reboundTrack = {
-        enabled: true,
-        id: "track-2",
-        kind: "video",
-        muted: false
-    };
+    const reboundTrack = createScreenTrack("track-2");
     peerConnections[0].emitTrack(reboundTrack, "0");
     await tick();
 
-    assert.deepEqual(receivedUpdates, [
+    assert.deepEqual(updates, [
         {
             name: CLIENT_UPDATE.TRACK,
             payload: {
@@ -988,32 +655,10 @@ test("track rebinding waits for a fresh track event before re-emitting state", a
 });
 
 test("peer departure clears remote-track state through the host cleanup command", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, core, emitMessage, peerConnections, updates, connectWithWelcome } =
+        createSfuClientHarness();
 
-    const receivedUpdates = [];
-    client.addEventListener("update", (event) => {
-        receivedUpdates.push(event.detail);
-    });
-
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
+    await connectWithWelcome();
 
     core.trackBindings.set("0", {
         active: true,
@@ -1021,23 +666,16 @@ test("peer departure clears remote-track state through the host cleanup command"
         sessionId: 42,
         type: "camera"
     });
-    sockets[0].emitMessage("offer");
-    await tick();
+    await emitMessage("offer");
 
-    const track = {
-        enabled: true,
-        id: "track-1",
-        kind: "video",
-        muted: false
-    };
+    const track = createCameraTrack("track-1");
     peerConnections[0].emitTrack(track, "0");
     await tick();
 
-    sockets[0].emitMessage("peer-left");
-    await tick();
+    await emitMessage("peer-left");
 
     assert.equal(client._consumers.has(42), false);
-    assert.deepEqual(receivedUpdates.at(-1), {
+    assert.deepEqual(updates.at(-1), {
         name: CLIENT_UPDATE.DISCONNECT,
         payload: {
             sessionId: 42
@@ -1046,27 +684,10 @@ test("peer departure clears remote-track state through the host cleanup command"
 });
 
 test("peer connection teardown clears stale remote consumer state", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, core, emitMessage, peerConnections, connectWithWelcome } =
+        createSfuClientHarness();
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
+    await connectWithWelcome();
 
     core.trackBindings.set("0", {
         active: true,
@@ -1074,56 +695,24 @@ test("peer connection teardown clears stale remote consumer state", async () => 
         sessionId: 42,
         type: "camera"
     });
-    sockets[0].emitMessage("offer");
-    await tick();
+    await emitMessage("offer");
 
-    peerConnections[0].emitTrack(
-        {
-            enabled: true,
-            id: "track-1",
-            kind: "video",
-            muted: false
-        },
-        "0"
-    );
+    peerConnections[0].emitTrack(createCameraTrack("track-1"), "0");
     await tick();
 
     assert.equal(client._consumers.get(42).camera.track.id, "track-1");
 
-    sockets[0].emitMessage("close-peer-connection");
-    await tick();
+    await emitMessage("close-peer-connection");
 
     assert.equal(peerConnections[0].closed, true);
     assert.equal(client._consumers.size, 0);
 });
 
 test("remote track lifecycle updates re-emit when the browser unmutes the track", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const updates = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, core, emitMessage, peerConnections, updates, connectWithWelcome } =
+        createSfuClientHarness();
 
-    client.addEventListener("update", (event) => {
-        updates.push(event.detail);
-    });
-
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
+    await connectWithWelcome();
 
     core.trackBindings.set("0", {
         active: true,
@@ -1131,8 +720,7 @@ test("remote track lifecycle updates re-emit when the browser unmutes the track"
         sessionId: 42,
         type: "camera"
     });
-    sockets[0].emitMessage("offer");
-    await tick();
+    await emitMessage("offer");
 
     const track = new FakeMediaTrack({
         id: "track-1",
@@ -1159,46 +747,18 @@ test("remote track lifecycle updates re-emit when the browser unmutes the track"
 });
 
 test("publish replaces an already attached local sender track without re-publishing", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, core, emitMessage, peerConnections, connectWithWelcome } =
+        createSfuClientHarness();
 
-    const firstTrack = {
-        enabled: true,
-        id: "camera-track-1",
-        kind: "video",
-        muted: false
-    };
-    const secondTrack = {
-        enabled: true,
-        id: "camera-track-2",
-        kind: "video",
-        muted: false
-    };
+    const firstTrack = createCameraTrack("camera-track-1");
+    const secondTrack = createCameraTrack("camera-track-2");
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
+    await connectWithWelcome();
 
     client.publish("camera", firstTrack);
     await tick();
 
-    sockets[0].emitMessage("offer-with-attach-camera");
-    await tick();
+    await emitMessage("offer-with-attach-camera");
 
     assert.equal(peerConnections[0].transceivers[1].sender.track, firstTrack);
     assert.deepEqual(core.publicationUpdates, [{ active: true, type: "camera" }]);
@@ -1215,39 +775,16 @@ test("publish replaces an already attached local sender track without re-publish
 });
 
 test("publish detaches the local sender before signaling unpublish", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, core, emitMessage, peerConnections, connectWithWelcome } =
+        createSfuClientHarness();
 
-    const track = {
-        enabled: true,
-        id: "camera-track-1",
-        kind: "video",
-        muted: false
-    };
+    const track = createCameraTrack("camera-track-1");
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
+    await connectWithWelcome();
 
     client.publish("camera", track);
     await tick();
-    sockets[0].emitMessage("offer-with-attach-camera");
-    await tick();
+    await emitMessage("offer-with-attach-camera");
 
     assert.equal(peerConnections[0].transceivers[1].sender.track, track);
     assert.deepEqual(core.publicationUpdates, [{ active: true, type: "camera" }]);
@@ -1263,41 +800,17 @@ test("publish detaches the local sender before signaling unpublish", async () =>
 });
 
 test("renegotiation binds a newly published local track before answering", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, core, emitMessage, peerConnections, connectWithWelcome } =
+        createSfuClientHarness();
 
-    const track = {
-        enabled: true,
-        id: "camera-track-1",
-        kind: "video",
-        muted: false
-    };
+    const track = createCameraTrack("camera-track-1");
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
-    sockets[0].emitMessage("offer");
-    await tick();
+    await connectWithWelcome();
+    await emitMessage("offer");
 
     client.publish("camera", track);
     await tick();
-    sockets[0].emitMessage("renegotiate-with-unbound-camera");
-    await tick();
+    await emitMessage("renegotiate-with-unbound-camera");
 
     assert.equal(peerConnections[0].transceivers[2].sender.track, track);
     assert.equal(peerConnections[0].transceivers[2].direction, "sendonly");
@@ -1314,45 +827,17 @@ test("renegotiation binds a newly published local track before answering", async
 });
 
 test("renegotiation configures RID simulcast before answering supported video publishes", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const logs = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
-    client.addEventListener("log", (event) => {
-        logs.push(event.detail);
-    });
+    const { client, core, emitMessage, peerConnections, logs, connectWithWelcome } =
+        createSfuClientHarness();
 
-    const track = {
-        enabled: true,
-        id: "camera-track-simulcast",
-        kind: "video",
-        muted: false
-    };
+    const track = createCameraTrack("camera-track-simulcast");
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
-    sockets[0].emitMessage("offer");
-    await tick();
+    await connectWithWelcome();
+    await emitMessage("offer");
 
     client.publish("camera", track);
     await tick();
-    sockets[0].emitMessage("renegotiate-with-pending-simulcast-camera");
-    await tick();
+    await emitMessage("renegotiate-with-pending-simulcast-camera");
 
     const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "2");
     assert.ok(transceiver);
@@ -1407,41 +892,17 @@ test("renegotiation configures RID simulcast before answering supported video pu
 });
 
 test("renegotiation falls back to single encoding when the codec path is unsupported", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, core, emitMessage, peerConnections, connectWithWelcome } =
+        createSfuClientHarness();
 
-    const track = {
-        enabled: true,
-        id: "camera-track-single",
-        kind: "video",
-        muted: false
-    };
+    const track = createCameraTrack("camera-track-single");
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
-    sockets[0].emitMessage("offer");
-    await tick();
+    await connectWithWelcome();
+    await emitMessage("offer");
 
     client.publish("camera", track);
     await tick();
-    sockets[0].emitMessage("renegotiate-with-pending-h264-simulcast-camera");
-    await tick();
+    await emitMessage("renegotiate-with-pending-h264-simulcast-camera");
 
     const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "2");
     assert.ok(transceiver);
@@ -1458,39 +919,14 @@ test("renegotiation falls back to single encoding when the codec path is unsuppo
 });
 
 test("renegotiation falls back to single encoding when the server ladder is invalid", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, emitMessage, peerConnections, connectWithWelcome } = createSfuClientHarness();
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
-    sockets[0].emitMessage("offer");
-    await tick();
+    await connectWithWelcome();
+    await emitMessage("offer");
 
-    client.publish("camera", {
-        enabled: true,
-        id: "camera-track-invalid-profile",
-        kind: "video",
-        muted: false
-    });
+    client.publish("camera", createCameraTrack("camera-track-invalid-profile"));
     await tick();
-    sockets[0].emitMessage("renegotiate-with-invalid-simulcast-camera");
-    await tick();
+    await emitMessage("renegotiate-with-invalid-simulcast-camera");
 
     const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "2");
     assert.ok(transceiver);
@@ -1501,43 +937,20 @@ test("renegotiation falls back to single encoding when the server ladder is inva
 });
 
 test("renegotiation falls back to single encoding when sender parameters are rejected", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config, {
-                senderOptionsByMid: {
-                    2: { rejectSetParameters: true }
-                }
-            });
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
+    const { client, emitMessage, peerConnections, connectWithWelcome } = createSfuClientHarness({
+        peerConnectionOptions: {
+            senderOptionsByMid: {
+                2: { rejectSetParameters: true }
+            }
         }
     });
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
-    sockets[0].emitMessage("offer");
-    await tick();
+    await connectWithWelcome();
+    await emitMessage("offer");
 
-    client.publish("camera", {
-        enabled: true,
-        id: "camera-track-rejected-profile",
-        kind: "video",
-        muted: false
-    });
+    client.publish("camera", createCameraTrack("camera-track-rejected-profile"));
     await tick();
-    sockets[0].emitMessage("renegotiate-with-pending-simulcast-camera");
-    await tick();
+    await emitMessage("renegotiate-with-pending-simulcast-camera");
 
     const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "2");
     assert.ok(transceiver);
@@ -1548,39 +961,17 @@ test("renegotiation falls back to single encoding when sender parameters are rej
 });
 
 test("initial offer binds a pending local track before answering", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config, { autoConnect: false });
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
+    const { client, emitMessage, peerConnections, connectWithWelcome } = createSfuClientHarness({
+        peerConnectionOptions: { autoConnect: false }
     });
 
-    const track = {
-        enabled: true,
-        id: "camera-track-pending-offer",
-        kind: "video",
-        muted: false
-    };
+    const track = createCameraTrack("camera-track-pending-offer");
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
+    await connectWithWelcome();
 
     client.publish("camera", track);
     await tick();
-    sockets[0].emitMessage("offer");
-    await tick();
+    await emitMessage("offer");
 
     assert.equal(peerConnections[0].transceivers[1].sender.track, track);
     assert.equal(
@@ -1591,34 +982,16 @@ test("initial offer binds a pending local track before answering", async () => {
 });
 
 test("offer waits for ice gathering completion before submitting the final answer", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config, {
-                autoConnect: false,
-                gatheredAnswerSdp: "gathered-answer-sdp",
-                preCompleteAnswerSdp: "candidate-answer-sdp"
-            });
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
+    const { core, emitMessage, connectWithWelcome } = createSfuClientHarness({
+        peerConnectionOptions: {
+            autoConnect: false,
+            gatheredAnswerSdp: "gathered-answer-sdp",
+            preCompleteAnswerSdp: "candidate-answer-sdp"
         }
     });
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
-
-    sockets[0].emitMessage("offer");
-    await tick();
+    await connectWithWelcome();
+    await emitMessage("offer");
 
     assert.deepEqual(core.submittedAnswers, [
         {
@@ -1630,49 +1003,19 @@ test("offer waits for ice gathering completion before submitting the final answe
 });
 
 test("renegotiation binds pending camera and screen tracks to distinct offer-ordered mids", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
-    const client = new SfuClient({
-        createPeerConnection: (config) => {
-            const peerConnection = new FakePeerConnection(config);
-            peerConnections.push(peerConnection);
-            return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
+    const { client, emitMessage, peerConnections, connectWithWelcome } = createSfuClientHarness();
 
-    const cameraTrack = {
-        enabled: true,
-        id: "camera-track-distinct-mid",
-        kind: "video",
-        muted: false
-    };
-    const screenTrack = {
-        enabled: true,
-        id: "screen-track-distinct-mid",
-        kind: "video",
-        muted: false
-    };
+    const cameraTrack = createCameraTrack("camera-track-distinct-mid");
+    const screenTrack = createScreenTrack("screen-track-distinct-mid");
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
-    sockets[0].emitMessage("offer");
-    await tick();
+    await connectWithWelcome();
+    await emitMessage("offer");
 
     client.publish("camera", cameraTrack);
     await tick();
     client.publish("screen", screenTrack);
     await tick();
-    sockets[0].emitMessage("renegotiate-with-pending-camera-and-screen");
-    await tick();
+    await emitMessage("renegotiate-with-pending-camera-and-screen");
 
     assert.equal(peerConnections[0].transceivers[2].sender.track, cameraTrack);
     assert.equal(peerConnections[0].transceivers[3].sender.track, screenTrack);
@@ -1681,43 +1024,24 @@ test("renegotiation binds pending camera and screen tracks to distinct offer-ord
 });
 
 test("getStats exposes compatibility-shaped transport and producer stats", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const peerConnections = [];
     const peerConnectionStats = new Map([["transport", { type: "transport" }]]);
     const cameraProducerStats = new Map([["outbound-rtp", { type: "outbound-rtp" }]]);
-    const client = new SfuClient({
+    const { client, peerConnections, emitMessage, connectWithWelcome } = createSfuClientHarness({
         createPeerConnection: (config) => {
             const peerConnection = new FakePeerConnection(config, {
                 peerConnectionStats
             });
             peerConnection.transceivers[1].sender = new FakeSender(cameraProducerStats);
-            peerConnections.push(peerConnection);
             return peerConnection;
-        },
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
         }
     });
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].emitMessage("welcome");
+    await connectWithWelcome();
+
+    client.updateUpload("camera", createCameraTrack("camera-track-compat"));
     await tick();
 
-    client.updateUpload("camera", {
-        enabled: true,
-        id: "camera-track-compat",
-        kind: "video",
-        muted: false
-    });
-    await tick();
-
-    sockets[0].emitMessage("offer-with-attach-camera");
-    await tick();
+    await emitMessage("offer-with-attach-camera");
 
     const stats = await client.getStats();
 
@@ -1730,10 +1054,7 @@ test("getStats exposes compatibility-shaped transport and producer stats", async
 });
 
 test("updateInfo keeps the legacy needRefresh option as a compatibility no-op", async () => {
-    const core = new FakeProtocolCore();
-    const client = new SfuClient({
-        createProtocolCore: () => core
-    });
+    const { client, core } = createSfuClientHarness();
 
     client.updateInfo({ isCameraOn: true, isRaisingHand: true }, { needRefresh: true });
     await tick();
@@ -1747,27 +1068,12 @@ test("updateInfo keeps the legacy needRefresh option as a compatibility no-op", 
 });
 
 test("fatal runtime errors reset the public client surface", async () => {
-    const core = new FakeProtocolCore();
-    const sockets = [];
-    const handledErrors = [];
-    const client = new SfuClient({
-        createProtocolCore: () => core,
-        createWebSocket: (url) => {
-            const socket = new FakeWebSocket(url);
-            sockets.push(socket);
-            return socket;
-        }
-    });
-    client.addEventListener("handledError", (event) => {
-        handledErrors.push(event.detail.error);
-    });
+    const { client, core, emitMessage, handledErrors, open, sockets, connect } =
+        createSfuClientHarness();
 
-    client.connect("ws://example.test/ws", "jwt-token");
-    await tick();
-    sockets[0].open();
-    await tick();
-    sockets[0].emitMessage("welcome");
-    await tick();
+    await connect();
+    await open();
+    await emitMessage("welcome");
 
     client._consumers.set(42, {
         audio: null,
@@ -1777,8 +1083,7 @@ test("fatal runtime errors reset the public client surface", async () => {
         screen: null
     });
 
-    sockets[0].emitMessage("explode");
-    await tick();
+    await emitMessage("explode");
 
     assert.equal(core.disconnectCalls, 1);
     assert.equal(client.state, "disconnected");
@@ -1793,9 +1098,7 @@ test("fatal runtime errors reset the public client surface", async () => {
 });
 
 test("publish rejects stream-kind mismatches", () => {
-    const client = new SfuClient({
-        createProtocolCore: () => new FakeProtocolCore()
-    });
+    const { client } = createSfuClientHarness();
 
     assert.throws(() => {
         client.publish("camera", {
@@ -1806,17 +1109,9 @@ test("publish rejects stream-kind mismatches", () => {
 });
 
 test("deprecated updateUpload and updateDownload delegate to publish and subscribe", async () => {
-    const core = new FakeProtocolCore();
-    const client = new SfuClient({
-        createProtocolCore: () => core
-    });
+    const { client, core } = createSfuClientHarness();
 
-    client.updateUpload("camera", {
-        enabled: true,
-        id: "camera-track-compat",
-        kind: "video",
-        muted: false
-    });
+    client.updateUpload("camera", createCameraTrack("camera-track-compat"));
     client.updateDownload(7, { audio: true });
     await tick();
 
@@ -1825,10 +1120,7 @@ test("deprecated updateUpload and updateDownload delegate to publish and subscri
 });
 
 test("deprecated updateUpload treats undefined like the legacy no-track sentinel", async () => {
-    const core = new FakeProtocolCore();
-    const client = new SfuClient({
-        createProtocolCore: () => core
-    });
+    const { client, core } = createSfuClientHarness();
 
     client.updateUpload("camera", undefined);
     await tick();
