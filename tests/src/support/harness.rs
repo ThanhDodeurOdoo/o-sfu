@@ -24,7 +24,7 @@ use o_sfu::{
     },
     http::{
         CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DISCONNECT_PATH, METRICS_PATH,
-        RoomResponse,
+        RoomResponse, STATS_PATH, StatsResponse,
     },
 };
 use o_sfu_protocol::{
@@ -364,6 +364,15 @@ pub async fn metrics_text(server: &TestServer) -> Option<String> {
         .await
         .ok()?;
     response.text().await.ok()
+}
+
+pub async fn stats(server: &TestServer) -> Option<StatsResponse> {
+    let response = reqwest::Client::new()
+        .get(format!("{}{STATS_PATH}", server.http_base_url()))
+        .send()
+        .await
+        .ok()?;
+    response.json::<StatsResponse>().await.ok()
 }
 
 pub async fn connect_websocket(server: &TestServer) -> Option<TestWebSocket> {
