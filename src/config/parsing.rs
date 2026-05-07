@@ -19,6 +19,23 @@ where
         .transpose()
 }
 
+pub(super) fn parse_env_or_default<T>(
+    get_var: &mut impl FnMut(&str) -> Option<String>,
+    key: &str,
+    type_name: &str,
+    default: T,
+) -> Result<T>
+where
+    T: FromStr,
+{
+    let Some(value) = get_var(key) else {
+        return Ok(default);
+    };
+    value
+        .parse()
+        .map_err(|_error| anyhow!("{key} must be a valid {type_name}"))
+}
+
 pub(super) fn parse_optional_non_empty_env(
     mut get_var: impl FnMut(&str) -> Option<String>,
     key: &str,
