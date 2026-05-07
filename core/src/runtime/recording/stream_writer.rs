@@ -2,10 +2,12 @@ use std::io::{Result as IoResult, Write};
 
 use super::{OrtpFileHeader, ortp_format::OrtpFrameHeader};
 
+#[allow(dead_code, reason = "recording finalization owns staged ORTP writing")]
 pub(crate) struct StreamWriter<W> {
     inner: W,
 }
 
+#[allow(dead_code, reason = "recording finalization owns staged ORTP writing")]
 impl<W: Write> StreamWriter<W> {
     pub(crate) fn new(mut inner: W, header: OrtpFileHeader) -> IoResult<Self> {
         inner.write_all(&header.to_bytes())?;

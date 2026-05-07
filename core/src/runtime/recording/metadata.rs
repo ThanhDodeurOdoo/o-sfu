@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::runtime::source_model::UserStreamId;
 
+#[allow(
+    dead_code,
+    reason = "recording finalization owns staged manifest writing"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecordingMetadata {
@@ -22,6 +26,10 @@ pub(crate) struct RecordingMetadata {
     pub(crate) files: Vec<RecordingFileMetadata>,
 }
 
+#[allow(
+    dead_code,
+    reason = "recording finalization owns staged manifest writing"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecordingFileMetadata {
@@ -33,6 +41,10 @@ pub(crate) struct RecordingFileMetadata {
     pub(crate) segments: Vec<RecordingSegment>,
 }
 
+#[allow(
+    dead_code,
+    reason = "recording finalization owns staged manifest writing"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RecordingSegment {

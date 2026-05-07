@@ -29,17 +29,24 @@ fn stream_writer_serializes_ortp_header_and_frames() {
     assert!(writer.write_frame(123_456, &frame_payload).is_ok());
     let bytes = writer.into_inner();
 
-    let file_header = OrtpFileHeader::from_bytes(bytes.get(..32).unwrap_or_default());
-    assert_eq!(file_header.ok(), Some(header));
-    let frame_header = OrtpFrameHeader::from_bytes(bytes.get(32..44).unwrap_or_default());
+    let expected_file_header = header.to_bytes();
+    let expected_frame_header = OrtpFrameHeader {
+        reception_timestamp_us: 123_456,
+        rtp_packet_len: 4,
+    }
+    .to_bytes();
+    let frame_start = expected_file_header.len();
+    let payload_start = frame_start + expected_frame_header.len();
+
     assert_eq!(
-        frame_header.ok(),
-        Some(OrtpFrameHeader {
-            reception_timestamp_us: 123_456,
-            rtp_packet_len: 4,
-        })
+        bytes.get(..frame_start),
+        Some(expected_file_header.as_slice())
     );
-    assert_eq!(bytes.get(44..).unwrap_or_default(), frame_payload);
+    assert_eq!(
+        bytes.get(frame_start..payload_start),
+        Some(expected_frame_header.as_slice())
+    );
+    assert_eq!(bytes.get(payload_start..), Some(frame_payload.as_slice()));
 }
 
 #[test]

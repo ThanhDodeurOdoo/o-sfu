@@ -148,7 +148,6 @@ struct RecordingServiceState {
     users: BTreeMap<UserId, RecordingSession>,
 }
 
-// TODO: needs documentation:
 pub(crate) struct RecordingService {
     room_instance_id: RoomInstanceId,
     media_source: Arc<dyn MediaSource>,
@@ -190,7 +189,6 @@ impl RecordingService {
         }
     }
 
-    // TODO: needs documentation:
     pub(crate) fn start(&self) -> Result<(), RecordingTransitionError> {
         self.transition_lifecycle(
             RecordingLifecycleState::Idle,
@@ -208,7 +206,6 @@ impl RecordingService {
         Ok(())
     }
 
-    // TODO: needs documentation:
     pub(crate) fn stop(&self) -> Result<(), RecordingTransitionError> {
         self.transition_lifecycle(
             RecordingLifecycleState::Recording,
@@ -251,10 +248,7 @@ impl RecordingService {
             RouterEvent::SessionJoined {
                 session_id: user_id,
             } => {
-                state
-                    .users
-                    .entry(user_id)
-                    .or_insert_with_key(|id| RecordingSession::new(*id));
+                state.users.entry(user_id).or_default();
             }
             RouterEvent::SessionLeft {
                 session_id: user_id,
@@ -319,7 +313,7 @@ fn add_tracked_producer(
 ) {
     users
         .entry(user_id)
-        .or_insert_with_key(|id| RecordingSession::new(*id))
+        .or_default()
         .add_producer(producer_id, transport_id, media_kind);
 }
 

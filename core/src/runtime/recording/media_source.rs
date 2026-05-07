@@ -20,10 +20,3 @@ impl MediaSource for RoomPacketSinkRegistry {
         self.unregister_room(room_instance_id);
     }
 }
-
-pub(crate) fn into_media_source<T>(source: Arc<T>) -> Arc<dyn MediaSource>
-where
-    T: MediaSource + 'static,
-{
-    source
-}

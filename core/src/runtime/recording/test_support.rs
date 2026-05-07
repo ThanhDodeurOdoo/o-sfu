@@ -1,6 +1,5 @@
 use super::{MediaTap, service::RecordingTransitionError};
 pub(crate) use super::{
-    media_source::into_media_source,
     metadata::{RecordingFileMetadata, RecordingMetadata, RecordingSegment},
     ortp_format::{OrtpCodec, OrtpFrameHeader},
     service::RecordingLifecycleState,

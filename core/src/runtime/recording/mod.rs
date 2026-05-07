@@ -1,8 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "recording capture surfaces are live, but deferred finalization and federation work still leave some helpers unused on the main runtime path"
-)]
-
 mod media_source;
 mod metadata;
 mod ortp_format;

@@ -8,9 +8,7 @@ use crate::runtime::{
     metrics::RuntimeMetrics,
     recording::{
         MediaSource, MediaTap, RecordingService,
-        test_support::{
-            RecordingLifecycleState, into_media_source, is_room_active, transition_error_state,
-        },
+        test_support::{RecordingLifecycleState, is_room_active, transition_error_state},
     },
     router_events::RoomRouterEventSink,
     rtc_engine::test_support::{sample_forwarded_packet, test_transport_session_key},
@@ -19,7 +17,8 @@ use crate::runtime::{
 #[test]
 fn recording_service_counts_packets_without_recounting_streams() {
     let media_tap = Arc::new(MediaTap::default());
-    let media_source = into_media_source(Arc::<MediaTap>::clone(&media_tap));
+    let media_source = Arc::<MediaTap>::clone(&media_tap);
+    let media_source: Arc<dyn MediaSource> = media_source;
     let metrics = Arc::new(RuntimeMetrics::default());
     let service = RecordingService::new(
         RoomInstanceId::from_raw(30),
@@ -54,7 +53,8 @@ fn recording_service_counts_packets_without_recounting_streams() {
 #[test]
 fn recording_service_allows_only_legal_state_machine_transitions() {
     let media_tap = Arc::new(MediaTap::default());
-    let media_source = into_media_source(Arc::<MediaTap>::clone(&media_tap));
+    let media_source = Arc::<MediaTap>::clone(&media_tap);
+    let media_source: Arc<dyn MediaSource> = media_source;
     let service = RecordingService::new(
         RoomInstanceId::from_raw(17),
         media_source,

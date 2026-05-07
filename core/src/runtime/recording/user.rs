@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use o_sfu_router::{MediaKind, ProducerId, SessionId as UserId, TransportId};
+use o_sfu_router::{MediaKind, ProducerId, TransportId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TrackedProducer {
@@ -8,24 +8,12 @@ pub(crate) struct TrackedProducer {
     pub(crate) media_kind: MediaKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct RecordingSession {
-    user_id: UserId,
     producers: BTreeMap<ProducerId, TrackedProducer>,
 }
 
 impl RecordingSession {
-    pub(crate) fn new(user_id: UserId) -> Self {
-        Self {
-            user_id,
-            producers: BTreeMap::new(),
-        }
-    }
-
-    pub(crate) fn user_id(&self) -> UserId {
-        self.user_id
-    }
-
     pub(crate) fn add_producer(
         &mut self,
         producer_id: ProducerId,
