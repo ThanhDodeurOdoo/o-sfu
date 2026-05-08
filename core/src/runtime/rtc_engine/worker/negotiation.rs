@@ -27,7 +27,7 @@ use tracing::debug;
 use super::{
     super::{
         bitrate::RtcBitrateState,
-        bootstrap, sdp_simulcast,
+        bootstrap, simulcast,
         state::{RtcBootstrapState, RtcSnapshotState},
     },
     publication::refresh_negotiated_producer_parameters,
@@ -383,11 +383,7 @@ fn ensure_initial_negotiation_media(
                 INITIAL_NEGOTIATION_DIRECTION,
                 None,
                 None,
-                sdp_simulcast::bootstrap_recv_simulcast(
-                    media_kind,
-                    codec_flags,
-                    video_bitrate_limits,
-                ),
+                simulcast::bootstrap_recv_simulcast(media_kind, codec_flags, video_bitrate_limits),
             )
         })
         .collect();
@@ -406,7 +402,7 @@ fn initial_upload_slots(
             mid: mid.to_string(),
             kind: upload_kind(*media_kind),
             codecs: offered_codecs(*media_kind, codec_flags, codec_preferences),
-            simulcast_encodings: sdp_simulcast::bootstrap_upload_encodings(
+            simulcast_encodings: simulcast::bootstrap_upload_encodings(
                 *media_kind,
                 codec_flags,
                 video_bitrate_limits,

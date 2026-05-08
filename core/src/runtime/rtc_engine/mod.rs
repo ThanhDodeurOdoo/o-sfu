@@ -28,8 +28,7 @@
 //!   relay mailbox and target primitives, packet gates, active-speaker observations,
 //!   unknown-source recovery, observability snapshots, and answer-derived RTP
 //!   capability projection;
-//! - `simulcast` and `sdp_simulcast`: RTC-edge simulcast negotiation helpers
-//!   used while preserving compatibility import paths during migration.
+//! - `simulcast`: RTC-edge simulcast negotiation helpers.
 
 mod api;
 mod bitrate;
@@ -47,7 +46,6 @@ mod packet_loop;
 mod relay_registry;
 mod route_control;
 mod routing_miss;
-mod sdp_simulcast;
 mod shared_payload;
 mod simulcast;
 mod state;

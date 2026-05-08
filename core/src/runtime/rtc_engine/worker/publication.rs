@@ -28,7 +28,7 @@ use tracing::warn;
 #[cfg(test)]
 use super::super::media_registry::RegisteredMediaHandle;
 use super::super::{
-    sdp_simulcast,
+    simulcast,
     state::{RtcBootstrapState, RtcSessionState},
 };
 use crate::runtime::media_transport::TransportSessionKey;
@@ -96,7 +96,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
                 .into_iter()
                 .map(project_header_extension)
                 .collect::<Vec<_>>();
-            let rids = sdp_simulcast::send_rids_for_mid(answer_sdp, mid);
+            let rids = simulcast::send_rids_for_mid(answer_sdp, mid);
             let primary_ssrcs = media_line
                 .ssrc_info()
                 .into_iter()
@@ -332,7 +332,7 @@ fn project_bindings(
     session_state: &mut RtcSessionState,
     mid: Mid,
     primary_payload_type: Option<u8>,
-    rids: Vec<sdp_simulcast::NegotiatedRid>,
+    rids: Vec<simulcast::NegotiatedRid>,
     primary_ssrcs: Vec<u32>,
 ) -> Vec<StreamBinding> {
     if !rids.is_empty() {

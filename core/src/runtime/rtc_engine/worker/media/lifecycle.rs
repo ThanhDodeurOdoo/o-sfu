@@ -16,7 +16,6 @@ use std::{
     time::Instant,
 };
 
-use o_sfu_rfc::webrtc::MediaKind as ProtocolMediaKind;
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::{
     bwe::Bitrate,
@@ -32,7 +31,7 @@ use super::{
             commands::RtcWorkerResponse,
             local_send_rewrite::forget_transport_media_rewrites,
             media_registry::RegisteredMediaHandle,
-            sdp_simulcast,
+            simulcast,
             state::{PendingRecvStream, RtcBootstrapState, RtcSessionState},
         },
         negotiation,
@@ -354,7 +353,7 @@ fn worker_stage_native_recv_media(
         Direction::RecvOnly,
         None,
         None,
-        sdp_simulcast::publish_recv_simulcast_or_default(
+        simulcast::publish_recv_simulcast_or_default(
             media_kind,
             rtp_parameters,
             codec_flags,
@@ -587,22 +586,14 @@ fn upload_slot(
 ) -> SessionUploadSlot {
     SessionUploadSlot {
         mid: mid.to_string(),
-        kind: upload_kind(media_kind),
+        kind: negotiation::upload_kind(media_kind),
         codecs: upload_codecs(media_kind, rtp_parameters, codec_flags, codec_preferences),
-        simulcast_encodings: sdp_simulcast::publish_upload_encodings_or_default(
+        simulcast_encodings: simulcast::publish_upload_encodings_or_default(
             media_kind,
             rtp_parameters,
             codec_flags,
             video_bitrate_limits,
         ),
-    }
-}
-
-fn upload_kind(media_kind: MediaKind) -> ProtocolMediaKind {
-    if media_kind.is_video() {
-        ProtocolMediaKind::Video
-    } else {
-        ProtocolMediaKind::Audio
     }
 }
 

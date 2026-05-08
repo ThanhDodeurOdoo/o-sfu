@@ -7,17 +7,14 @@ use o_sfu_protocol::{
     shared::{StreamType, UserId, UserInfo},
     signaling::{
         PeerInfoPayload, PeerLeftPayload, RequestId, ServerBroadcastPayload, ServerMessage,
-        ServerRequest, SourceDescriptor, SourceEncodingDescriptor, TrackBinding,
-        UploadLayerPolicyRole as ProtocolUploadLayerPolicyRole,
+        ServerRequest, TrackBinding,
     },
 };
 
+use super::projection::source_descriptor_from_source;
 use crate::{
     application::stream_catalog::stream_type_for_stream_id,
-    core::{
-        OfferedMediaCapabilities, UploadLayerPolicyRole,
-        server::source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
-    },
+    core::{OfferedMediaCapabilities, server::source_model::PublishedSourceDescriptor},
     runtime::room::{RemoteTrackBootstrap, RoomEventMessage, TrackBindingUpdate},
 };
 
@@ -417,51 +414,6 @@ impl UserWireState {
             &binding.user_id != user_id || binding.stream_type != stream_type
         });
         self.bindings_by_mid.len() != binding_count
-    }
-}
-
-fn source_descriptor_from_source(
-    source: &PublishedSourceDescriptor,
-    user_id: UserId,
-    stream_type: StreamType,
-    active: bool,
-) -> SourceDescriptor {
-    SourceDescriptor {
-        source_id: source.source_id().to_string(),
-        user_id,
-        stream_type,
-        active,
-        mid: source.mid().map(|mid| mid.as_str().to_owned()),
-        encodings: source_encodings(source),
-    }
-}
-
-fn source_encodings(source: &PublishedSourceDescriptor) -> Vec<SourceEncodingDescriptor> {
-    source
-        .encodings()
-        .map(|encoding| SourceEncodingDescriptor {
-            encoding_id: encoding.encoding_id().to_string(),
-            rid: encoding.rid().map(|rid| rid.as_str().to_owned()),
-            max_bitrate: encoding.max_bitrate(),
-            resolution_scale: encoding.resolution_scale(),
-            max_framerate: encoding.max_framerate(),
-            policy_role: encoding
-                .policy_role()
-                .map(protocol_upload_layer_policy_role),
-            max_temporal_layer_id: encoding
-                .max_temporal_layer_id()
-                .map(SourceTemporalLayerId::as_u8),
-        })
-        .collect()
-}
-
-fn protocol_upload_layer_policy_role(role: UploadLayerPolicyRole) -> ProtocolUploadLayerPolicyRole {
-    match role {
-        UploadLayerPolicyRole::Featured => ProtocolUploadLayerPolicyRole::Featured,
-        UploadLayerPolicyRole::Thumbnail => ProtocolUploadLayerPolicyRole::Thumbnail,
-        UploadLayerPolicyRole::DegradedThumbnail => {
-            ProtocolUploadLayerPolicyRole::DegradedThumbnail
-        }
     }
 }
 

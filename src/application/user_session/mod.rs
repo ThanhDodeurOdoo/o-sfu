@@ -21,9 +21,8 @@ use std::{collections::BTreeMap, sync::Arc};
 use o_sfu_protocol::{
     shared::{DownloadStates, JsonPayload, StreamType, UserId, UserInfo},
     signaling::{
-        NegotiationUploadEncoding, NegotiationUploadSlot, RequestId, ServerMessage, ServerRequest,
-        ServerResponse, SessionDescriptionPayload,
-        UploadLayerPolicyRole as ProtocolUploadLayerPolicyRole, WelcomePayload,
+        RequestId, ServerMessage, ServerRequest, ServerResponse, SessionDescriptionPayload,
+        WelcomePayload,
     },
 };
 use tracing::{debug, error, info, instrument, warn};
@@ -36,8 +35,8 @@ use crate::{
         MediaCore, MediaEndpointHealth, MediaSession, MediaTransport, NegotiationOffer,
         PublicationActivity, PublicationActivityOutcome, RollbackStagedPublishOutcome,
         SessionNegotiationOutcome, SfuCoreError, SourceSubscriptionIntent,
-        SubscriptionUpdateOutcome, TransportEffectOutcome, UnpublishOutcome, UploadEncoding,
-        UploadLayerPolicyRole, UploadSlot, UserInfoRefresh, UserStreamId,
+        SubscriptionUpdateOutcome, TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
+        UserStreamId,
     },
     runtime::{
         ConnectionId,
@@ -46,8 +45,10 @@ use crate::{
     },
 };
 
+mod projection;
 mod state;
 
+use projection::session_description_payload;
 use state::{
     PendingUserAction, PendingUserRequest, RenegotiationDisposition, ResolvedUserNegotiation,
     UserState,
@@ -993,55 +994,6 @@ fn publication_info_update(stream_type: StreamType, active: bool) -> Option<User
             is_screen_sharing_on: Some(active),
             ..UserInfo::default()
         }),
-    }
-}
-
-/// Project a core negotiation offer into the Odoo websocket payload shape.
-///
-/// SDP stays opaque at this boundary. Typed upload-slot metadata is carried
-/// alongside it so the browser bundle can attach local tracks without parsing
-/// server policy back out of the SDP string.
-fn session_description_payload(offer: NegotiationOffer) -> SessionDescriptionPayload {
-    SessionDescriptionPayload {
-        sdp: offer.sdp,
-        upload_slots: offer
-            .upload_slots
-            .into_iter()
-            .map(protocol_upload_slot)
-            .collect(),
-    }
-}
-
-fn protocol_upload_slot(slot: UploadSlot) -> NegotiationUploadSlot {
-    NegotiationUploadSlot {
-        mid: slot.mid,
-        kind: slot.kind,
-        codecs: slot.codecs,
-        simulcast_encodings: slot
-            .simulcast_encodings
-            .into_iter()
-            .map(protocol_upload_encoding)
-            .collect(),
-    }
-}
-
-fn protocol_upload_encoding(encoding: UploadEncoding) -> NegotiationUploadEncoding {
-    NegotiationUploadEncoding {
-        rid: encoding.rid,
-        max_bitrate: encoding.max_bitrate,
-        resolution_scale: encoding.resolution_scale,
-        max_framerate: encoding.max_framerate,
-        policy_role: encoding.policy_role.map(protocol_upload_layer_policy_role),
-    }
-}
-
-fn protocol_upload_layer_policy_role(role: UploadLayerPolicyRole) -> ProtocolUploadLayerPolicyRole {
-    match role {
-        UploadLayerPolicyRole::Featured => ProtocolUploadLayerPolicyRole::Featured,
-        UploadLayerPolicyRole::Thumbnail => ProtocolUploadLayerPolicyRole::Thumbnail,
-        UploadLayerPolicyRole::DegradedThumbnail => {
-            ProtocolUploadLayerPolicyRole::DegradedThumbnail
-        }
     }
 }
 
