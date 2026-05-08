@@ -36,8 +36,7 @@ use crate::{
         RoomInstanceId, UserId,
         media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
         metrics::{
-            MetricName, RtpForwardDestinationKind, RuntimeMetrics, RuntimeMetricsSnapshot,
-            test_support::RuntimeMetricsSnapshotLookup,
+            RtpForwardDestinationKind, RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt,
         },
         packet_sink_registry::{
             PacketSink as MediaPacketSink, PacketSinkLookup, RegisteredPacketSink,
@@ -83,139 +82,6 @@ impl MediaPacketSink for CountingSink {
         self.packets.fetch_add(1, Ordering::Relaxed);
     }
 }
-
-trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
-    fn rtc_datagram_fallback_scans(&self) -> u64 {
-        self.counter_value(MetricName::RtcDatagramFallbackScansTotal, &[])
-    }
-
-    fn rtc_datagram_routes_indexed(&self) -> u64 {
-        self.counter_value(MetricName::RtcDatagramRoutesTotal, &[("path", "indexed")])
-    }
-
-    fn rtc_datagram_scan_users(&self) -> u64 {
-        self.counter_value(MetricName::RtcDatagramScanUsersTotal, &[])
-    }
-
-    fn rtc_datagram_drops_recent_miss_cache(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtcDatagramDropsTotal,
-            &[("reason", "recent_miss_cache")],
-        )
-    }
-
-    fn rtc_datagram_drops_source_rate_limited(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtcDatagramDropsTotal,
-            &[("reason", "source_rate_limited")],
-        )
-    }
-
-    fn rtc_datagram_drops_no_user(&self) -> u64 {
-        self.counter_value(MetricName::RtcDatagramDropsTotal, &[("reason", "no_user")])
-    }
-
-    fn rtc_datagram_drops_malformed(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtcDatagramDropsTotal,
-            &[("reason", "malformed")],
-        )
-    }
-
-    fn rtc_route_control_absorbed(&self) -> u64 {
-        self.counter_value(MetricName::RtcRouteControlTotal, &[("outcome", "absorbed")])
-    }
-
-    fn rtc_route_control_forwarded(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtcRouteControlTotal,
-            &[("outcome", "forwarded")],
-        )
-    }
-
-    fn rtc_route_control_layer_allowed(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtcRouteControlTotal,
-            &[("outcome", "layer_allowed")],
-        )
-    }
-
-    fn rtc_route_control_layer_dropped(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtcRouteControlTotal,
-            &[("outcome", "layer_dropped")],
-        )
-    }
-
-    fn rtp_forwarded_packets_local_rtc(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtpForwardedPacketsTotal,
-            &[("destination", "local_rtc")],
-        )
-    }
-
-    fn rtp_forwarded_packets_recording(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtpForwardedPacketsTotal,
-            &[("destination", "recording")],
-        )
-    }
-
-    fn rtp_forwarded_packets_intra_node_relay(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtpForwardedPacketsTotal,
-            &[("destination", "intra_node_relay")],
-        )
-    }
-
-    fn rtp_forwarded_packets_inter_node_relay(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtpForwardedPacketsTotal,
-            &[("destination", "inter_node_relay")],
-        )
-    }
-
-    fn rtp_forwarded_payload_bytes_local_rtc(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtpForwardedPayloadBytesTotal,
-            &[("destination", "local_rtc")],
-        )
-    }
-
-    fn rtp_forwarded_payload_bytes_recording(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtpForwardedPayloadBytesTotal,
-            &[("destination", "recording")],
-        )
-    }
-
-    fn rtp_forwarded_payload_bytes_intra_node_relay(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtpForwardedPayloadBytesTotal,
-            &[("destination", "intra_node_relay")],
-        )
-    }
-
-    fn rtp_forwarded_payload_bytes_inter_node_relay(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtpForwardedPayloadBytesTotal,
-            &[("destination", "inter_node_relay")],
-        )
-    }
-
-    fn rtp_payload_bytes_egress(&self) -> u64 {
-        self.counter_value(MetricName::RtpPayloadBytesTotal, &[("direction", "egress")])
-    }
-
-    fn rtp_relay_overload_drops_intra_node_relay(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtpRelayOverloadDropsTotal,
-            &[("destination", "intra_node_relay")],
-        )
-    }
-}
-
-impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {}
 
 fn populate_forward_routes(
     state: &RtcBootstrapState,

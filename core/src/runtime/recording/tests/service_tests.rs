@@ -5,10 +5,7 @@ use o_sfu_router::{MediaKind, ProducerId, RouterEvent, SessionId as RouterSessio
 use crate::runtime::{
     RoomInstanceId, UserId as SignalingSessionId,
     media_transport::TransportMediaId,
-    metrics::{
-        MetricName, RuntimeMetrics, RuntimeMetricsSnapshot,
-        test_support::RuntimeMetricsSnapshotLookup,
-    },
+    metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
     packet_sink_registry::RoomPacketSinkRegistry,
     recording::{
         RecordingService,
@@ -17,18 +14,6 @@ use crate::runtime::{
     router_events::RoomRouterEventSink,
     rtc_engine::test_support::{sample_forwarded_packet, test_transport_session_key},
 };
-
-trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
-    fn recording_captured_packets(&self) -> u64 {
-        self.counter_value(MetricName::RecordingCapturedPacketsTotal, &[])
-    }
-
-    fn recording_captured_streams(&self) -> u64 {
-        self.counter_value(MetricName::RecordingCapturedStreamsTotal, &[])
-    }
-}
-
-impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {}
 
 #[test]
 fn recording_service_counts_packets_without_recounting_streams() {

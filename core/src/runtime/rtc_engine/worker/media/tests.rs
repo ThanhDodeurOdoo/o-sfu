@@ -24,10 +24,7 @@ use crate::{
     runtime::{
         UserId,
         media_transport::{TransportAdapterError, TransportMediaId, TransportSessionKey},
-        metrics::{
-            MetricName, RuntimeMetrics, RuntimeMetricsSnapshot,
-            test_support::RuntimeMetricsSnapshotLookup,
-        },
+        metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
         rtc_engine::{
             bitrate::RtcBitrateState,
             bootstrap,
@@ -119,28 +116,6 @@ fn assert_consumer_packet_gate(
             )
     );
 }
-
-trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
-    fn rtc_route_control_absorbed(&self) -> u64 {
-        self.counter_value(MetricName::RtcRouteControlTotal, &[("outcome", "absorbed")])
-    }
-
-    fn rtc_route_control_forwarded(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtcRouteControlTotal,
-            &[("outcome", "forwarded")],
-        )
-    }
-
-    fn rtc_route_control_route_gated_relay_drops(&self) -> u64 {
-        self.counter_value(
-            MetricName::RtcRouteControlTotal,
-            &[("outcome", "route_gated_relay_drop")],
-        )
-    }
-}
-
-impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {}
 
 #[test]
 fn consumer_packet_gate_selects_lowest_bitrate_simulcast_rid() {
