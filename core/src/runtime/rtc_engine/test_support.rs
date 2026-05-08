@@ -2,12 +2,17 @@
 mod debug_command;
 #[path = "test_support/debug_mailbox.rs"]
 mod debug_mailbox;
+#[cfg(test)]
+#[path = "test_support/route_graph.rs"]
+mod route_graph;
 #[path = "test_support/worker_debug.rs"]
 mod worker_debug;
 
 pub(super) use debug_command::DebugRtcWorkerCommand;
 pub use debug_command::{DebugPacketGate, DebugRouteDestination, DebugRouteEntry};
 pub(super) use debug_mailbox::{RtcWorkerDebugChannels, RtcWorkerDebugHandle};
+#[cfg(test)]
+pub(in crate::runtime::rtc_engine) use route_graph::{RouteDestinationFixture, RouteSourceFixture};
 pub(super) use worker_debug::handle_debug_worker_command;
 
 #[cfg(any(test, feature = "testing-transport"))]

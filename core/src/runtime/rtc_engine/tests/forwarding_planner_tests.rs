@@ -20,16 +20,15 @@ use crate::runtime::{
         PacketSink as MediaPacketSink, PacketSinkLookup, RoomPacketSinkRegistry, into_packet_sink,
     },
     rtc_engine::{
-        demux::{MediaRouteDestination, MediaRouteEntry},
         forwarded_packet::ForwardedPacket,
         forwarding_destination::{ForwardingDestination, PacketForward},
-        media_registry::RegisteredMediaHandle,
         relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayTargetId},
         route_control::{PacketLayerGate, PacketOperatingPointGate},
         state::RtcBootstrapState,
         test_support::{
-            sample_forwarded_packet, sample_forwarded_packet_with_frame_mark,
-            sample_forwarded_packet_with_rid, test_transport_session_key,
+            RouteDestinationFixture, RouteSourceFixture, sample_forwarded_packet,
+            sample_forwarded_packet_with_frame_mark, sample_forwarded_packet_with_rid,
+            test_transport_session_key,
         },
     },
 };
@@ -94,31 +93,10 @@ fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() 
     let mut state = RtcBootstrapState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
-    let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: producer_session.clone(),
-        mid: Mid::from("aud-up"),
-    });
-    let consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: consumer_session.clone(),
-            mid: Mid::from("aud-down"),
-            source_transport_media_id,
-        });
-    state.media_route_index.insert(
-        source_transport_media_id,
-        MediaRouteEntry {
-            source_active: true,
-            destinations: vec![MediaRouteDestination {
-                dest_session: consumer_session.clone(),
-                dest_transport_media_id: consumer_transport_media_id,
-                dest_mid: Mid::from("aud-down"),
-                dest_payload_type: None,
-                active: true,
-                packet_gate: PacketLayerGate::Open,
-                pending_packet_gate: None,
-            }],
-        },
-    );
+    let source_transport_media_id =
+        RouteSourceFixture::new(producer_session.clone(), Mid::from("aud-up")).install(&mut state);
+    RouteDestinationFixture::new(consumer_session.clone(), Mid::from("aud-down"))
+        .install(&mut state, source_transport_media_id);
     let pending_packets = vec![sample_forwarded_packet(
         producer_session,
         "aud-up",
@@ -152,31 +130,10 @@ fn populate_forward_routes_keeps_recording_and_local_rtc_destinations_together()
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let sink = Arc::new(CountingSink::new());
-    let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: producer_session.clone(),
-        mid: Mid::from("aud-up"),
-    });
-    let consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: consumer_session.clone(),
-            mid: Mid::from("aud-down"),
-            source_transport_media_id,
-        });
-    state.media_route_index.insert(
-        source_transport_media_id,
-        MediaRouteEntry {
-            source_active: true,
-            destinations: vec![MediaRouteDestination {
-                dest_session: consumer_session,
-                dest_transport_media_id: consumer_transport_media_id,
-                dest_mid: Mid::from("aud-down"),
-                dest_payload_type: None,
-                active: true,
-                packet_gate: PacketLayerGate::Open,
-                pending_packet_gate: None,
-            }],
-        },
-    );
+    let source_transport_media_id =
+        RouteSourceFixture::new(producer_session.clone(), Mid::from("aud-up")).install(&mut state);
+    RouteDestinationFixture::new(consumer_session, Mid::from("aud-down"))
+        .install(&mut state, source_transport_media_id);
     packet_sink_registry.register_room(
         producer_session.room_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&sink)),
@@ -218,31 +175,12 @@ fn populate_forward_routes_reserves_dense_fanout_before_pushing_destinations() {
     let mut state = RtcBootstrapState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
-    let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: producer_session.clone(),
-        mid: Mid::from("cam-up"),
-    });
-    let mut destinations = Vec::with_capacity(DESTINATION_COUNT);
-    for destination_idx in 0..DESTINATION_COUNT {
-        let consumer_transport_media_id =
-            TransportMediaId::new(u64::try_from(destination_idx).unwrap_or_default() + 1);
-        destinations.push(MediaRouteDestination {
-            dest_session: consumer_session.clone(),
-            dest_transport_media_id: consumer_transport_media_id,
-            dest_mid: Mid::from("cam-down"),
-            dest_payload_type: None,
-            active: true,
-            packet_gate: PacketLayerGate::Open,
-            pending_packet_gate: None,
-        });
+    let source_transport_media_id =
+        RouteSourceFixture::new(producer_session.clone(), Mid::from("cam-up")).install(&mut state);
+    for _ in 0..DESTINATION_COUNT {
+        RouteDestinationFixture::new(consumer_session.clone(), Mid::from("cam-down"))
+            .install(&mut state, source_transport_media_id);
     }
-    state.media_route_index.insert(
-        source_transport_media_id,
-        MediaRouteEntry {
-            source_active: true,
-            destinations,
-        },
-    );
     let mut pending_packets = vec![sample_forwarded_packet(
         producer_session,
         "cam-up",
@@ -272,31 +210,10 @@ fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc
     let recording_sink = Arc::new(CountingSink::new());
     let (first_relay_mailbox, _first_relay_rx) = RelayPacketMailbox::channel_for_test();
     let (second_relay_mailbox, _second_relay_rx) = RelayPacketMailbox::channel_for_test();
-    let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: producer_session.clone(),
-        mid: Mid::from("aud-up"),
-    });
-    let consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: consumer_session.clone(),
-            mid: Mid::from("aud-down"),
-            source_transport_media_id,
-        });
-    state.media_route_index.insert(
-        source_transport_media_id,
-        MediaRouteEntry {
-            source_active: true,
-            destinations: vec![MediaRouteDestination {
-                dest_session: consumer_session,
-                dest_transport_media_id: consumer_transport_media_id,
-                dest_mid: Mid::from("aud-down"),
-                dest_payload_type: None,
-                active: true,
-                packet_gate: PacketLayerGate::Open,
-                pending_packet_gate: None,
-            }],
-        },
-    );
+    let source_transport_media_id =
+        RouteSourceFixture::new(producer_session.clone(), Mid::from("aud-up")).install(&mut state);
+    RouteDestinationFixture::new(consumer_session, Mid::from("aud-down"))
+        .install(&mut state, source_transport_media_id);
     packet_sink_registry.register_room(
         producer_session.room_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
@@ -359,27 +276,14 @@ fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_r
     let recording_sink = Arc::new(CountingSink::new());
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
     let source_transport_media_id = TransportMediaId::new(51);
-    let consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: consumer_session.clone(),
-            mid: Mid::from("aud-down"),
-            source_transport_media_id,
-        });
-    state.media_route_index.insert(
+    RouteSourceFixture::existing(
+        producer_session.clone(),
+        Mid::from("aud-up"),
         source_transport_media_id,
-        MediaRouteEntry {
-            source_active: true,
-            destinations: vec![MediaRouteDestination {
-                dest_session: consumer_session,
-                dest_transport_media_id: consumer_transport_media_id,
-                dest_mid: Mid::from("aud-down"),
-                dest_payload_type: None,
-                active: true,
-                packet_gate: PacketLayerGate::Open,
-                pending_packet_gate: None,
-            }],
-        },
-    );
+    )
+    .install(&mut state);
+    RouteDestinationFixture::new(consumer_session, Mid::from("aud-down"))
+        .install(&mut state, source_transport_media_id);
     packet_sink_registry.register_room(
         producer_session.room_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
@@ -423,36 +327,13 @@ fn populate_forward_routes_only_relays_the_registered_source_media() {
     let metrics = RuntimeMetrics::default();
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
     let first_source_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Producer {
-            session_key: first_producer_session.clone(),
-            mid: Mid::from("aud-up-1"),
-        });
+        RouteSourceFixture::new(first_producer_session.clone(), Mid::from("aud-up-1"))
+            .install(&mut state);
     let second_source_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Producer {
-            session_key: second_producer_session.clone(),
-            mid: Mid::from("aud-up-2"),
-        });
-    let consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: remote_consumer_session.clone(),
-            mid: Mid::from("aud-down"),
-            source_transport_media_id: first_source_transport_media_id,
-        });
-    state.media_route_index.insert(
-        first_source_transport_media_id,
-        MediaRouteEntry {
-            source_active: true,
-            destinations: vec![MediaRouteDestination {
-                dest_session: remote_consumer_session,
-                dest_transport_media_id: consumer_transport_media_id,
-                dest_mid: Mid::from("aud-down"),
-                dest_payload_type: None,
-                active: true,
-                packet_gate: PacketLayerGate::Open,
-                pending_packet_gate: None,
-            }],
-        },
-    );
+        RouteSourceFixture::new(second_producer_session.clone(), Mid::from("aud-up-2"))
+            .install(&mut state);
+    RouteDestinationFixture::new(remote_consumer_session, Mid::from("aud-down"))
+        .install(&mut state, first_source_transport_media_id);
     state.add_relay_target(
         first_source_transport_media_id,
         RelayTargetId::new(1),
@@ -498,10 +379,8 @@ fn populate_forward_routes_plans_inter_node_relay_targets_without_new_packet_sha
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let (inter_node_sender, _inter_node_rx) = InterNodeRelaySender::channel_for_test();
-    let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: producer_session.clone(),
-        mid: Mid::from("aud-up"),
-    });
+    let source_transport_media_id =
+        RouteSourceFixture::new(producer_session.clone(), Mid::from("aud-up")).install(&mut state);
 
     state.add_relay_target(
         source_transport_media_id,
@@ -545,48 +424,14 @@ fn populate_forward_routes_enforces_per_consumer_rid_gates_after_aggregate_admit
     let mut state = RtcBootstrapState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
-    let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: producer_session.clone(),
-        mid: Mid::from("cam-up"),
-    });
-    let lo_consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: lo_consumer_session.clone(),
-            mid: Mid::from("cam-down-lo"),
-            source_transport_media_id,
-        });
-    let hi_consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: hi_consumer_session.clone(),
-            mid: Mid::from("cam-down-hi"),
-            source_transport_media_id,
-        });
-    state.media_route_index.insert(
-        source_transport_media_id,
-        MediaRouteEntry {
-            source_active: true,
-            destinations: vec![
-                MediaRouteDestination {
-                    dest_session: lo_consumer_session.clone(),
-                    dest_transport_media_id: lo_consumer_transport_media_id,
-                    dest_mid: Mid::from("cam-down-lo"),
-                    dest_payload_type: None,
-                    active: true,
-                    packet_gate: PacketLayerGate::Rid("lo".into()),
-                    pending_packet_gate: None,
-                },
-                MediaRouteDestination {
-                    dest_session: hi_consumer_session.clone(),
-                    dest_transport_media_id: hi_consumer_transport_media_id,
-                    dest_mid: Mid::from("cam-down-hi"),
-                    dest_payload_type: None,
-                    active: true,
-                    packet_gate: PacketLayerGate::Rid("hi".into()),
-                    pending_packet_gate: None,
-                },
-            ],
-        },
-    );
+    let source_transport_media_id =
+        RouteSourceFixture::new(producer_session.clone(), Mid::from("cam-up")).install(&mut state);
+    RouteDestinationFixture::new(lo_consumer_session.clone(), Mid::from("cam-down-lo"))
+        .packet_gate(PacketLayerGate::Rid("lo".into()))
+        .install(&mut state, source_transport_media_id);
+    RouteDestinationFixture::new(hi_consumer_session.clone(), Mid::from("cam-down-hi"))
+        .packet_gate(PacketLayerGate::Rid("hi".into()))
+        .install(&mut state, source_transport_media_id);
     state
         .route_control
         .set_local_packet_gate(source_transport_media_id, Some(PacketLayerGate::Open));
@@ -637,54 +482,18 @@ fn populate_forward_routes_enforces_per_consumer_temporal_ceilings_after_aggrega
     let mut state = RtcBootstrapState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
-    let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: producer_session.clone(),
-        mid: Mid::from("cam-up"),
-    });
-    let base_consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: base_consumer_session.clone(),
-            mid: Mid::from("cam-down-base"),
-            source_transport_media_id,
-        });
-    let high_consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: high_consumer_session.clone(),
-            mid: Mid::from("cam-down-high"),
-            source_transport_media_id,
-        });
-    state.media_route_index.insert(
-        source_transport_media_id,
-        MediaRouteEntry {
-            source_active: true,
-            destinations: vec![
-                MediaRouteDestination {
-                    dest_session: base_consumer_session.clone(),
-                    dest_transport_media_id: base_consumer_transport_media_id,
-                    dest_mid: Mid::from("cam-down-base"),
-                    dest_payload_type: None,
-                    active: true,
-                    packet_gate: PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(
-                        Some("hi".into()),
-                        0,
-                    )),
-                    pending_packet_gate: None,
-                },
-                MediaRouteDestination {
-                    dest_session: high_consumer_session.clone(),
-                    dest_transport_media_id: high_consumer_transport_media_id,
-                    dest_mid: Mid::from("cam-down-high"),
-                    dest_payload_type: None,
-                    active: true,
-                    packet_gate: PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(
-                        Some("hi".into()),
-                        2,
-                    )),
-                    pending_packet_gate: None,
-                },
-            ],
-        },
-    );
+    let source_transport_media_id =
+        RouteSourceFixture::new(producer_session.clone(), Mid::from("cam-up")).install(&mut state);
+    RouteDestinationFixture::new(base_consumer_session.clone(), Mid::from("cam-down-base"))
+        .packet_gate(PacketLayerGate::OperatingPoint(
+            PacketOperatingPointGate::new(Some("hi".into()), 0),
+        ))
+        .install(&mut state, source_transport_media_id);
+    RouteDestinationFixture::new(high_consumer_session.clone(), Mid::from("cam-down-high"))
+        .packet_gate(PacketLayerGate::OperatingPoint(
+            PacketOperatingPointGate::new(Some("hi".into()), 2),
+        ))
+        .install(&mut state, source_transport_media_id);
     state.route_control.set_local_packet_gate(
         source_transport_media_id,
         Some(PacketLayerGate::OperatingPoint(
@@ -750,10 +559,8 @@ fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admit
     let metrics = RuntimeMetrics::default();
     let (intra_node_mailbox, _intra_node_rx) = RelayPacketMailbox::channel_for_test();
     let (inter_node_sender, _inter_node_rx) = InterNodeRelaySender::channel_for_test();
-    let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: producer_session.clone(),
-        mid: Mid::from("cam-up"),
-    });
+    let source_transport_media_id =
+        RouteSourceFixture::new(producer_session.clone(), Mid::from("cam-up")).install(&mut state);
     let hi_target_id = RelayTargetId::new(1);
     let lo_target_id = RelayTargetId::new(2);
     state.add_relay_target(
@@ -829,57 +636,15 @@ fn populate_forward_routes_gates_only_the_selected_source_media() {
     let recording_sink = Arc::new(CountingSink::new());
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
     let gated_source_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Producer {
-            session_key: gated_producer_session.clone(),
-            mid: Mid::from("cam-up"),
-        });
+        RouteSourceFixture::new(gated_producer_session.clone(), Mid::from("cam-up"))
+            .install(&mut state);
     let open_source_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Producer {
-            session_key: open_producer_session.clone(),
-            mid: Mid::from("screen-up"),
-        });
-    let gated_consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: gated_consumer_session.clone(),
-            mid: Mid::from("cam-down"),
-            source_transport_media_id: gated_source_transport_media_id,
-        });
-    let open_consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: open_consumer_session.clone(),
-            mid: Mid::from("screen-down"),
-            source_transport_media_id: open_source_transport_media_id,
-        });
-    state.media_route_index.insert(
-        gated_source_transport_media_id,
-        MediaRouteEntry {
-            source_active: true,
-            destinations: vec![MediaRouteDestination {
-                dest_session: gated_consumer_session,
-                dest_transport_media_id: gated_consumer_transport_media_id,
-                dest_mid: Mid::from("cam-down"),
-                dest_payload_type: None,
-                active: true,
-                packet_gate: PacketLayerGate::Open,
-                pending_packet_gate: None,
-            }],
-        },
-    );
-    state.media_route_index.insert(
-        open_source_transport_media_id,
-        MediaRouteEntry {
-            source_active: true,
-            destinations: vec![MediaRouteDestination {
-                dest_session: open_consumer_session.clone(),
-                dest_transport_media_id: open_consumer_transport_media_id,
-                dest_mid: Mid::from("screen-down"),
-                dest_payload_type: None,
-                active: true,
-                packet_gate: PacketLayerGate::Open,
-                pending_packet_gate: None,
-            }],
-        },
-    );
+        RouteSourceFixture::new(open_producer_session.clone(), Mid::from("screen-up"))
+            .install(&mut state);
+    RouteDestinationFixture::new(gated_consumer_session, Mid::from("cam-down"))
+        .install(&mut state, gated_source_transport_media_id);
+    RouteDestinationFixture::new(open_consumer_session.clone(), Mid::from("screen-down"))
+        .install(&mut state, open_source_transport_media_id);
     state.set_local_packet_gate(
         gated_source_transport_media_id,
         PacketLayerGate::Rid("hi".into()),
@@ -941,31 +706,10 @@ fn populate_forward_routes_applies_operating_point_packet_gates() {
     let mut state = RtcBootstrapState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
-    let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: producer_session.clone(),
-        mid: Mid::from("cam-up"),
-    });
-    let consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: consumer_session.clone(),
-            mid: Mid::from("cam-down"),
-            source_transport_media_id,
-        });
-    state.media_route_index.insert(
-        source_transport_media_id,
-        MediaRouteEntry {
-            source_active: true,
-            destinations: vec![MediaRouteDestination {
-                dest_session: consumer_session.clone(),
-                dest_transport_media_id: consumer_transport_media_id,
-                dest_mid: Mid::from("cam-down"),
-                dest_payload_type: None,
-                active: true,
-                packet_gate: PacketLayerGate::Open,
-                pending_packet_gate: None,
-            }],
-        },
-    );
+    let source_transport_media_id =
+        RouteSourceFixture::new(producer_session.clone(), Mid::from("cam-up")).install(&mut state);
+    RouteDestinationFixture::new(consumer_session.clone(), Mid::from("cam-down"))
+        .install(&mut state, source_transport_media_id);
     state.set_local_packet_gate(
         source_transport_media_id,
         PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 1)),
