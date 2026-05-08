@@ -1681,8 +1681,6 @@ async fn late_join_bootstrap_queues_transport_cleanup_retry_when_commit_cleanup_
     let _ = set_client_rtp_capabilities(&room, &UserId::Integer(2), test_client_rtp_capabilities())
         .await;
     fake.set_consume_media_delay(Some(Duration::from_millis(200)));
-    let consumer_transport_media_id = TransportMediaId::new(1);
-    fake.fail_remove_media_until_allowed(consumer_transport_media_id);
 
     let bootstrap_task = tokio::spawn({
         let room = Arc::clone(&room);
@@ -1704,6 +1702,8 @@ async fn late_join_bootstrap_queues_transport_cleanup_retry_when_commit_cleanup_
     })
     .await;
 
+    let consumer_transport_media_id = fake.next_transport_media_id();
+    fake.fail_remove_media_until_allowed(consumer_transport_media_id);
     assert!(
         room.test_api()
             .lifecycle()

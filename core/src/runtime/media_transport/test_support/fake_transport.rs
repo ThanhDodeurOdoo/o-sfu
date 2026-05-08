@@ -167,6 +167,12 @@ impl FakeMediaTransport {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
+    #[must_use]
+    pub fn next_transport_media_id(&self) -> TransportMediaId {
+        self.inspect_state(|state| TransportMediaId::new(state.next_media_id))
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
     pub fn fail_next_relay_release(
         &self,
         source_user_id: UserId,
