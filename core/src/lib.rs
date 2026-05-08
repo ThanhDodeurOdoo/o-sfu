@@ -20,10 +20,8 @@
 //! - [`MediaTransport`] as the runtime media transport facade, with
 //!   [`RtcTransport`] and [`RtcTransportBuilder`] kept as RTC construction
 //!   handles below that facade.
-//! - the transport concern traits in [`transport`], especially
-//!   [`TransportFacade`] when a caller needs one backend with negotiation,
-//!   media plus observability capabilities. Use the narrower port traits when a
-//!   caller only needs one concern.
+//! - the transport concern traits in [`transport`]. Use the narrow port trait
+//!   for the concern a caller needs.
 //! - server-integration DTOs and facades under [`server`], including
 //!   diagnostics, metrics, room orchestration, recording taps, source
 //!   descriptors, and current transport construction seams.
@@ -69,11 +67,10 @@
 //! }
 //! ```
 //!
-//! `o-sfu-core` keeps the core transport backend generic for tests and future
-//! adapters, but the session facade targets the runtime
-//! [`server::room::Room`] implementation. Normal server application code should
-//! use [`MediaCore`] and should not become generic over transport backends
-//! just because the core can be.
+//! `o-sfu-core` keeps backend selection behind [`MediaTransport`], while the
+//! session facade targets the runtime [`server::room::Room`] implementation.
+//! Normal server application code should use [`MediaCore`] and should not name
+//! concrete RTC workers or fake transport variants.
 mod ids;
 mod options;
 mod room;
@@ -106,11 +103,9 @@ pub use sfu::{
     MediaEndpointHealth, MediaSession, NegotiationOffer, OfferedMediaCapabilities, SfuCore,
     SfuCoreError, UploadEncoding, UploadSlot,
 };
-pub use transport::TransportFacade;
 
 /// Production media-core facade used by the server runtime.
 ///
-/// This alias fixes [`SfuCore`] to the cfg-selected [`MediaTransport`] backend.
-/// Normal server application code should depend on this type instead of being
-/// generic over transport backends.
-pub type MediaCore = SfuCore<MediaTransport>;
+/// Normal server application code should depend on this type instead of naming
+/// transport construction details.
+pub type MediaCore = SfuCore;

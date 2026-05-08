@@ -104,7 +104,7 @@ pub mod transport {
             SessionUploadEncoding, SessionUploadSlot, SourcePacketGate, SourcePacketOperatingPoint,
             SourcePolicyDirtyState, SourcePolicyPort, SourcePolicySignal,
             SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
-            TransportFacade, TransportMediaId, TransportPlacementPressureSnapshot, TransportResult,
+            TransportMediaId, TransportPlacementPressureSnapshot, TransportResult,
             TransportSessionHealth, TransportSessionKey,
         },
     };

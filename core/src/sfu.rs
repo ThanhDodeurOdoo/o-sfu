@@ -25,14 +25,15 @@ use crate::{
     SessionNegotiationOutcome, SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
     runtime::{
         UserId, UserInfo,
+        media_transport::MediaTransport,
         room::Room,
         source_model::{
             SourcePublishIntent, SourceSubscriptionIntent, UploadLayerPolicyRole, UserStreamId,
         },
     },
     transport::{
-        AppliedSessionAnswer, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
-        TransportAdapterError, TransportFacade, TransportSessionHealth,
+        AppliedSessionAnswer, NegotiationPort, ObservabilityPort, SessionOffer,
+        SessionUploadEncoding, SessionUploadSlot, TransportAdapterError, TransportSessionHealth,
     },
 };
 
@@ -144,9 +145,9 @@ pub enum SfuCoreError {
 /// intentionally not exposed as tuple-heavy methods on `SfuCore`, because a
 /// room, user id and connection id must stay paired for the whole operation.
 #[derive(Debug, Clone)]
-pub struct SfuCore<T> {
+pub struct SfuCore {
     _options: CoreOptions,
-    media_transport: T,
+    media_transport: MediaTransport,
 }
 
 /// Borrowed media handle for one room user connection.
@@ -167,26 +168,16 @@ pub struct SfuCore<T> {
 /// locks, transport commands and cleanup effects. The room boundary remains
 /// responsible for releasing state locks before awaiting transport work.
 #[derive(Debug)]
-pub struct MediaSession<'a, T>
-where
-    T: TransportFacade,
-{
-    core: &'a SfuCore<T>,
+pub struct MediaSession<'a> {
+    core: &'a SfuCore,
     room: &'a Room,
     context: MediaSessionContext<'a>,
 }
 
-impl<T> SfuCore<T>
-where
-    T: TransportFacade,
-{
-    /// Build a media core facade over one transport backend.
-    ///
-    /// Production server code normally uses [`crate::MediaCore`], which
-    /// fixes the backend to [`crate::MediaTransport`]. Tests and future
-    /// adapters can use any backend that satisfies [`TransportFacade`].
+impl SfuCore {
+    /// Build a media core facade over the opaque runtime transport handle.
     #[must_use]
-    pub fn new(options: CoreOptions, media_transport: T) -> Self {
+    pub fn new(options: CoreOptions, media_transport: MediaTransport) -> Self {
         Self {
             _options: options,
             media_transport,
@@ -208,7 +199,7 @@ where
         room: &'a Room,
         user_id: &'a UserId,
         connection_id: ConnectionId,
-    ) -> MediaSession<'a, T> {
+    ) -> MediaSession<'a> {
         MediaSession {
             core: self,
             room,
@@ -221,10 +212,7 @@ where
     }
 }
 
-impl<T> MediaSession<'_, T>
-where
-    T: TransportFacade,
-{
+impl MediaSession<'_> {
     /// Return the current transport health for this endpoint.
     ///
     /// `None` means the transport backend has no endpoint for this session key.

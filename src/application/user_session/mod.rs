@@ -32,11 +32,10 @@ use crate::{
         source_publish_intent_for_stream_type, stream_id_for_stream_type, stream_type_for_stream_id,
     },
     core::{
-        MediaCore, MediaEndpointHealth, MediaSession, MediaTransport, NegotiationOffer,
-        PublicationActivity, PublicationActivityOutcome, RollbackStagedPublishOutcome,
-        SessionNegotiationOutcome, SfuCoreError, SourceSubscriptionIntent,
-        SubscriptionUpdateOutcome, TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
-        UserStreamId,
+        MediaCore, MediaEndpointHealth, MediaSession, NegotiationOffer, PublicationActivity,
+        PublicationActivityOutcome, RollbackStagedPublishOutcome, SessionNegotiationOutcome,
+        SfuCoreError, SourceSubscriptionIntent, SubscriptionUpdateOutcome, TransportEffectOutcome,
+        UnpublishOutcome, UserInfoRefresh, UserStreamId,
     },
     runtime::{
         ConnectionId,
@@ -265,7 +264,7 @@ impl User {
 
     /// Rebuild a borrow-based media session for this room, user and runtime
     /// connection identity.
-    fn media(&self) -> MediaSession<'_, MediaTransport> {
+    fn media(&self) -> MediaSession<'_> {
         self.media_core
             .session(self.room.as_ref(), &self.id, self.connection_id)
     }

@@ -26,21 +26,6 @@ use crate::{
     },
 };
 
-/// Full transport backend contract required by the media-core facade.
-///
-/// `SfuCore` needs negotiation, media mutation, session cleanup and read-only
-/// transport observability against the same backend. Code that only needs one
-/// concern should keep depending on the narrower port trait instead.
-pub trait TransportFacade:
-    Clone + MediaPort + NegotiationPort + ObservabilityPort + SessionPort + Send + Sync
-{
-}
-
-impl<T> TransportFacade for T where
-    T: Clone + MediaPort + NegotiationPort + ObservabilityPort + SessionPort + Send + Sync
-{
-}
-
 /// Producer-side transport activity state.
 ///
 /// This is transport execution policy, not room membership. The room remains
