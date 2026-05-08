@@ -163,7 +163,7 @@ async fn room(
     Query(query): Query<CreateRoomQuery>,
 ) -> Response {
     async {
-        let Some(token) = authorization_token(&headers) else {
+        let Some(token) = room_authorization_token(&headers) else {
             state.metrics.record_http_room_unauthorized();
             return StatusCode::UNAUTHORIZED.into_response();
         };
@@ -253,12 +253,23 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
     .await
 }
 
-fn authorization_token(headers: &HeaderMap) -> Option<&str> {
+fn room_authorization_token(headers: &HeaderMap) -> Option<&str> {
+    authorization_token(headers, &["Bearer", "jwt"])
+}
+
+fn bearer_authorization_token(headers: &HeaderMap) -> Option<&str> {
+    authorization_token(headers, &["Bearer"])
+}
+
+fn authorization_token<'a>(headers: &'a HeaderMap, accepted_schemes: &[&str]) -> Option<&'a str> {
     let value = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())?;
     let (scheme, token) = value.split_once(' ')?;
-    if !scheme.eq_ignore_ascii_case("Bearer") {
+    if !accepted_schemes
+        .iter()
+        .any(|accepted_scheme| scheme.eq_ignore_ascii_case(accepted_scheme))
+    {
         return None;
     }
     let token = token.trim_start();
@@ -450,7 +461,7 @@ fn ensure_diagnostics_access(
     diagnostics: &DiagnosticsConfig,
 ) -> DiagnosticsAccess {
     if let Some(expected_token) = diagnostics.auth_token.as_deref() {
-        return match authorization_token(headers) {
+        return match bearer_authorization_token(headers) {
             Some(actual_token) if tokens_match(actual_token, expected_token) => {
                 DiagnosticsAccess::Allowed
             }

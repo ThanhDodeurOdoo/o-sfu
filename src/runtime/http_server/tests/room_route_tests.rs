@@ -22,7 +22,7 @@ async fn room_requires_authorization_header() {
 }
 
 #[tokio::test]
-async fn room_rejects_non_bearer_authorization_scheme() {
+async fn room_rejects_unknown_authorization_scheme() {
     let token = signed_room_claims(Some("issuer-a"), None);
     assert!(token.is_some());
     let Some(token) = token else {
@@ -47,6 +47,34 @@ async fn room_rejects_non_bearer_authorization_scheme() {
         return;
     };
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn room_accepts_legacy_jwt_authorization_scheme() {
+    let token = signed_room_claims(Some("issuer-a"), Some("Y2hhbm5lbC1rZXk="));
+    assert!(token.is_some());
+    let Some(token) = token else {
+        return;
+    };
+    let request = build_request(
+        Request::get(CHANNEL_PATH)
+            .header(header::HOST, "sfu.example.com")
+            .header(header::AUTHORIZATION, format!("jwt {token}")),
+        Body::empty(),
+    );
+    assert!(request.is_some());
+    let Some(request) = request else {
+        return;
+    };
+    let response = app(test_state()).oneshot(request).await;
+    assert!(
+        response.is_ok(),
+        "room request should complete: {response:?}"
+    );
+    let Some(response) = response.ok() else {
+        return;
+    };
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]

@@ -125,6 +125,21 @@ async fn diagnostics_routes_require_the_configured_bearer_token() {
     };
     assert_eq!(wrong_scheme_response.status(), StatusCode::UNAUTHORIZED);
 
+    let legacy_scheme = build_request(
+        Request::get(DIAGNOSTICS_SUMMARY_PATH).header(header::AUTHORIZATION, "jwt operator-secret"),
+        Body::empty(),
+    );
+    assert!(legacy_scheme.is_some());
+    let Some(legacy_scheme) = legacy_scheme else {
+        return;
+    };
+    let legacy_scheme_response = app(state.clone()).oneshot(legacy_scheme).await;
+    assert!(legacy_scheme_response.is_ok());
+    let Some(legacy_scheme_response) = legacy_scheme_response.ok() else {
+        return;
+    };
+    assert_eq!(legacy_scheme_response.status(), StatusCode::UNAUTHORIZED);
+
     let authorized = build_request(
         Request::get(DIAGNOSTICS_SUMMARY_PATH)
             .header(header::AUTHORIZATION, "Bearer operator-secret"),
