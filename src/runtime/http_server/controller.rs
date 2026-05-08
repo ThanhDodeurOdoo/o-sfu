@@ -12,6 +12,7 @@ use axum::{
 };
 use o_sfu_protocol::shared::StreamType;
 use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info};
 
 use crate::{
@@ -38,12 +39,19 @@ use crate::{
 
 const MAX_DISCONNECT_BODY_BYTES: usize = 16 * 1024;
 
-pub(crate) async fn serve_http(state: RuntimeState) -> Result<()> {
+pub(crate) async fn serve_http(
+    state: RuntimeState,
+    shutdown_token: CancellationToken,
+) -> Result<()> {
     let listener = TcpListener::bind(state.config.http.bind_address).await?;
-    serve_http_on(listener, state).await
+    serve_http_on(listener, state, shutdown_token).await
 }
 
-pub(crate) async fn serve_http_on(listener: TcpListener, state: RuntimeState) -> Result<()> {
+pub(crate) async fn serve_http_on(
+    listener: TcpListener,
+    state: RuntimeState,
+    shutdown_token: CancellationToken,
+) -> Result<()> {
     let local_address = listener.local_addr()?;
     info!(
         event = telemetry_event::HTTP_LISTENER_READY,
@@ -56,6 +64,7 @@ pub(crate) async fn serve_http_on(listener: TcpListener, state: RuntimeState) ->
         listener,
         app(state).into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_token.cancelled_owned())
     .await?;
     Ok(())
 }

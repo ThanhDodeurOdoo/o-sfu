@@ -10,7 +10,7 @@
 //! `- telemetry crate      -> tracing setup, schemas, diagnostics, metrics, and exporters
 //! ```
 
-use std::{collections::BTreeSet, future::Future, process, sync::Arc, time::Instant as StdInstant};
+use std::{future::Future, process, sync::Arc, time::Instant as StdInstant};
 
 use anyhow::Result;
 use tokio::{
@@ -19,7 +19,8 @@ use tokio::{
     task::JoinHandle,
     time::{self, Instant},
 };
-use tracing::info;
+use tokio_util::sync::CancellationToken;
+use tracing::{info, warn};
 
 use crate::{
     config::Config,
@@ -36,12 +37,10 @@ pub(crate) mod websocket_server;
 pub(crate) use diagnostics::DiagnosticsStore;
 use http_server::{serve_http, serve_http_on};
 use media_transport::SourcePolicyPort;
-pub(crate) use media_transport::{
-    MediaPort, MediaTransport, MediaTransportDeps, ObservabilityPort,
-};
+pub(crate) use media_transport::{MediaTransport, MediaTransportDeps, ObservabilityPort};
 pub(crate) use metrics::RuntimeMetrics;
 pub(crate) use o_sfu_core::{
-    ConnectionId, RoomInstanceId, SessionBitrateLimits,
+    ConnectionId, SessionBitrateLimits,
     server::{metrics, packet_sinks, room, transport as media_transport},
 };
 pub(crate) use o_sfu_telemetry as telemetry;
@@ -137,24 +136,24 @@ impl Runtime {
     /// listener.
     pub async fn serve_listener(self, listener: TcpListener) -> Result<()> {
         let state = self.state();
-        self.serve(serve_http_on(listener, state)).await
+        self.serve(|shutdown_token| serve_http_on(listener, state, shutdown_token))
+            .await
     }
 
     async fn run_until_stopped(self) -> Result<()> {
         let state = self.state();
-        self.serve(serve_http(state)).await
+        self.serve(|shutdown_token| serve_http(state, shutdown_token))
+            .await
     }
 
-    async fn serve(self, http_server: impl Future<Output = Result<()>>) -> Result<()> {
-        let source_packet_policy_sync = spawn_source_packet_policy_update_task(
-            Arc::clone(&self.room_manager),
-            self.media_transport.clone(),
-            subscribe_source_policy_updates(&self.media_transport),
-            self.media_transport.clone(),
-        );
-        let result = http_server.await;
-        source_packet_policy_sync.abort();
-        let _ = source_packet_policy_sync.await;
+    async fn serve<F, HttpServer>(self, http_server: F) -> Result<()>
+    where
+        F: FnOnce(CancellationToken) -> HttpServer,
+        HttpServer: Future<Output = Result<()>>,
+    {
+        let tasks = RuntimeTasks::spawn(&self);
+        let result = http_server(tasks.shutdown_token()).await;
+        tasks.shutdown().await;
         result
     }
 
@@ -167,6 +166,60 @@ impl Runtime {
             Arc::clone(&self.metrics),
             self.media_transport.clone(),
         )
+    }
+}
+
+/// Owns runtime background tasks for the lifetime of one server future.
+///
+/// Normal shutdown asks tasks to exit through the shared cancellation token and
+/// waits for them. Dropping the server future cancels the token and aborts any
+/// remaining task so embedders cannot detach process-owned workers by cancelling
+/// `Runtime::serve_listener`.
+struct RuntimeTasks {
+    shutdown_token: CancellationToken,
+    source_packet_policy_sync: Option<JoinHandle<()>>,
+}
+
+impl RuntimeTasks {
+    fn spawn(runtime: &Runtime) -> Self {
+        let shutdown_token = CancellationToken::new();
+        let source_packet_policy_sync = spawn_source_packet_policy_update_task(
+            Arc::clone(&runtime.room_manager),
+            runtime.media_transport.clone(),
+            runtime.media_transport.source_policy_subscription(),
+            runtime.media_transport.clone(),
+            shutdown_token.child_token(),
+        );
+        Self {
+            shutdown_token,
+            source_packet_policy_sync: Some(source_packet_policy_sync),
+        }
+    }
+
+    fn shutdown_token(&self) -> CancellationToken {
+        self.shutdown_token.child_token()
+    }
+
+    async fn shutdown(mut self) {
+        self.shutdown_token.cancel();
+        if let Some(source_packet_policy_sync) = self.source_packet_policy_sync.take()
+            && let Err(error) = source_packet_policy_sync.await
+            && !error.is_cancelled()
+        {
+            warn!(
+                ?error,
+                "source packet policy update task stopped unexpectedly"
+            );
+        }
+    }
+}
+
+impl Drop for RuntimeTasks {
+    fn drop(&mut self) {
+        self.shutdown_token.cancel();
+        if let Some(source_packet_policy_sync) = self.source_packet_policy_sync.take() {
+            source_packet_policy_sync.abort();
+        }
     }
 }
 
@@ -221,75 +274,46 @@ fn spawn_source_packet_policy_update_task(
     observability_port: MediaTransport,
     updates: media_transport::SourcePolicyUpdateSubscription,
     media_port: MediaTransport,
+    shutdown_token: CancellationToken,
 ) -> JoinHandle<()> {
     info!("booted source packet policy update task");
     tokio::spawn(async move {
         loop {
-            let next_deadline = next_active_speaker_deadline(&observability_port).await;
+            let next_deadline = observability_port.next_active_speaker_deadline().await;
             let mut dirty_room_instance_ids = match next_deadline {
                 Some(next_deadline) => {
                     tokio::select! {
+                        biased;
+                        () = shutdown_token.cancelled() => return,
                         dirty_room_instance_ids = updates.wait_for_update() => dirty_room_instance_ids,
                         () = time::sleep_until(Instant::from_std(next_deadline)) => {
-                            expired_active_speaker_room_instance_ids(
-                                &observability_port,
-                                StdInstant::now(),
-                            )
-                            .await
+                            observability_port
+                                .expired_active_speaker_room_instance_ids(StdInstant::now())
+                                .await
                         }
                     }
                 }
-                None => updates.wait_for_update().await,
+                None => {
+                    tokio::select! {
+                        biased;
+                        () = shutdown_token.cancelled() => return,
+                        dirty_room_instance_ids = updates.wait_for_update() => dirty_room_instance_ids,
+                    }
+                }
             };
             dirty_room_instance_ids.extend(updates.take_pending_updates());
             if dirty_room_instance_ids.is_empty() {
                 continue;
             }
-            sync_source_packet_selection_policies(
-                &rooms,
-                &dirty_room_instance_ids,
-                &observability_port,
-                &media_port,
-            )
-            .await;
+            rooms
+                .sync_source_packet_selection_policies_for_runtime_ids(
+                    &dirty_room_instance_ids,
+                    &observability_port,
+                    &media_port,
+                )
+                .await;
         }
     })
-}
-
-fn subscribe_source_policy_updates(
-    source_policy_port: &impl SourcePolicyPort,
-) -> media_transport::SourcePolicyUpdateSubscription {
-    source_policy_port.source_policy_subscription()
-}
-
-async fn next_active_speaker_deadline(
-    observability_port: &impl ObservabilityPort,
-) -> Option<StdInstant> {
-    observability_port.next_active_speaker_deadline().await
-}
-
-async fn expired_active_speaker_room_instance_ids(
-    observability_port: &impl ObservabilityPort,
-    now: StdInstant,
-) -> BTreeSet<RoomInstanceId> {
-    observability_port
-        .expired_active_speaker_room_instance_ids(now)
-        .await
-}
-
-async fn sync_source_packet_selection_policies(
-    rooms: &RoomManager,
-    room_instance_ids: &BTreeSet<RoomInstanceId>,
-    observability_port: &impl ObservabilityPort,
-    media_port: &impl MediaPort,
-) {
-    rooms
-        .sync_source_packet_selection_policies_for_runtime_ids(
-            room_instance_ids,
-            observability_port,
-            media_port,
-        )
-        .await;
 }
 
 fn build_media_transport(
@@ -349,4 +373,104 @@ pub fn run() -> Result<()> {
         .enable_all()
         .build()?
         .block_on(runtime.run_until_stopped())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        future::pending,
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+        sync::{Arc, Weak},
+        time::Duration,
+    };
+
+    use tokio::{
+        task::yield_now,
+        time::{sleep, timeout},
+    };
+
+    use super::{Result, RoomManager, Runtime};
+    use crate::{
+        config::{
+            AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
+            MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags,
+            TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
+        },
+        core::server::room::DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
+    };
+
+    #[tokio::test]
+    async fn cancelling_serve_future_stops_source_packet_policy_task() {
+        let runtime = Runtime::new(&test_config());
+        assert!(runtime.is_ok());
+        let Ok(runtime) = runtime else {
+            return;
+        };
+        let rooms = Arc::downgrade(&runtime.room_manager);
+        let server = tokio::spawn(runtime.serve(|_shutdown_token| pending::<Result<()>>()));
+
+        let task_started =
+            timeout(Duration::from_secs(1), wait_for_source_task_start(&rooms)).await;
+        assert!(task_started.is_ok());
+
+        server.abort();
+        assert!(server.await.is_err());
+
+        let room_manager_dropped =
+            timeout(Duration::from_secs(1), wait_for_room_manager_drop(&rooms)).await;
+        assert!(room_manager_dropped.is_ok());
+    }
+
+    async fn wait_for_source_task_start(rooms: &Weak<RoomManager>) {
+        loop {
+            if rooms.strong_count() > 1 {
+                return;
+            }
+            yield_now().await;
+        }
+    }
+
+    async fn wait_for_room_manager_drop(rooms: &Weak<RoomManager>) {
+        loop {
+            if rooms.upgrade().is_none() {
+                return;
+            }
+            sleep(Duration::from_millis(1)).await;
+        }
+    }
+
+    fn test_config() -> Config {
+        Config {
+            auth: AuthConfig {
+                key: "dGVzdC1rZXk=".to_owned(),
+                authentication_timeout_ms: 1_000,
+            },
+            http: HttpConfig {
+                bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
+                trust_proxy_headers: false,
+            },
+            user: UserConfig {
+                room_size: 10,
+                timeout_ms: 1_000,
+                ping_interval_ms: 60_000,
+                outbound_queue_capacity: DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
+            },
+            transport: TransportConfig {
+                public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                max_bitrate_in_bps: 8_000_000,
+                max_bitrate_out_bps: 10_000_000,
+                video_bitrate_limits: VideoBitrateLimits::default(),
+                rtc_port_range: RtcPortRange::new(41_000, 41_009),
+                rtc_media_worker_count: 1,
+                room_sharding_policy: RoomShardingPolicy::strict_single_router(),
+            },
+            codecs: CodecConfig {
+                flags: MediaCodecFlags::default(),
+                preferences: CodecPreferences::default(),
+            },
+            features: RuntimeFeatureFlags::default(),
+            telemetry: TelemetryConfig::default(),
+            diagnostics: DiagnosticsConfig::default(),
+        }
+    }
 }
