@@ -13,8 +13,8 @@ use crate::{
 async fn build_recording_room() -> (
     Arc<super::super::Room>,
     Arc<RuntimeMetrics>,
-    mpsc::UnboundedReceiver<UserOutbound>,
-    mpsc::UnboundedReceiver<UserOutbound>,
+    UserOutboundReceiver,
+    UserOutboundReceiver,
 ) {
     build_recording_room_with(
         RuntimeFeatureFlags {
@@ -41,8 +41,8 @@ async fn build_recording_room_with(
 ) -> (
     Arc<super::super::Room>,
     Arc<RuntimeMetrics>,
-    mpsc::UnboundedReceiver<UserOutbound>,
-    mpsc::UnboundedReceiver<UserOutbound>,
+    UserOutboundReceiver,
+    UserOutboundReceiver,
 ) {
     let metrics = Arc::new(RuntimeMetrics::default());
     let manager = RoomManager::new(
@@ -103,10 +103,7 @@ fn inactive_recording_state() -> RecordingState {
     }
 }
 
-async fn assert_no_recording_message(
-    receiver: &mut mpsc::UnboundedReceiver<UserOutbound>,
-    message: &str,
-) {
+async fn assert_no_recording_message(receiver: &mut UserOutboundReceiver, message: &str) {
     assert!(
         timeout(Duration::from_millis(50), receiver.recv())
             .await

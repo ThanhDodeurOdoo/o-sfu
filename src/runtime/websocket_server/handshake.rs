@@ -28,7 +28,7 @@ use o_sfu_protocol::{
     signaling::{AuthPayload, ClientEnvelope, ClientMessage, WebSocketCloseCode},
 };
 use serde::Deserialize;
-use tokio::{sync::mpsc, time::timeout};
+use tokio::time::timeout;
 use tracing::{Instrument, Span, debug, field, info, instrument, warn};
 
 use super::{
@@ -38,7 +38,9 @@ use super::{
 };
 use crate::{
     application::user_session::User,
-    core::server::room::{JoinUserRequest, Room, RoomManagerJoinError, UserOutbound},
+    core::server::room::{
+        JoinUserRequest, Room, RoomManagerJoinError, UserOutboundReceiver, UserOutboundSender,
+    },
     runtime::{
         ConnectionId, RuntimeState,
         auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},
@@ -74,7 +76,7 @@ struct JoinedUser {
     room: Arc<Room>,
     user_id: UserId,
     connection_id: ConnectionId,
-    outbound_rx: mpsc::UnboundedReceiver<UserOutbound>,
+    outbound_rx: UserOutboundReceiver,
     user: User,
 }
 
@@ -418,7 +420,10 @@ async fn join_user(
     claims: WebSocketConnectClaims,
     remote_address: Arc<str>,
 ) -> Option<JoinedUser> {
-    let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
+    let (outbound_tx, outbound_rx) = UserOutboundSender::channel(
+        state.config.user.outbound_queue_capacity,
+        Arc::clone(&state.metrics),
+    );
     let user_id = claims.user_id.clone();
     let permissions = claims.permissions.unwrap_or_default();
     let join_result = state

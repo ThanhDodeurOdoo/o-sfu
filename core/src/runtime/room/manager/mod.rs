@@ -7,11 +7,11 @@
 
 use std::{collections::BTreeSet, future::Future, sync::Arc};
 
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::RwLock;
 
 use super::{
     Room, RoomConfig, RoomJoinError, RoomManagerJoinError, RoomMediaCounts, RoomRuntimePolicy,
-    RoomUserStatsSnapshot, UserOutbound,
+    RoomUserStatsSnapshot, UserOutboundSender,
     directory::{RoomDirectory, RoomDirectoryEntry},
     factory::{RoomCreationIntent, RoomFactory},
 };
@@ -75,7 +75,7 @@ pub struct JoinUserRequest {
     pub user_id: UserId,
     pub label: Option<String>,
     pub permissions: UserPermissions,
-    pub sender: mpsc::UnboundedSender<UserOutbound>,
+    pub sender: UserOutboundSender,
 }
 
 /// Read-only directory snapshot for runtime-facing listing and inspection

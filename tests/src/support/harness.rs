@@ -22,6 +22,7 @@ use o_sfu::{
         MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig,
         TransportConfig, UserConfig, VideoBitrateLimits,
     },
+    core::server::room::DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
     http::{
         CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DISCONNECT_PATH, METRICS_PATH,
         RoomResponse, STATS_PATH, StatsResponse,
@@ -292,6 +293,7 @@ pub fn test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
             room_size,
             timeout_ms: 10_000,
             ping_interval_ms: 60_000,
+            outbound_queue_capacity: DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
         },
         transport: TransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),

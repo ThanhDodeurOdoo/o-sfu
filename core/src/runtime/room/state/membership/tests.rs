@@ -9,7 +9,6 @@
 use std::{slice::from_ref, sync::Arc};
 
 use o_sfu_router::{ConsumerId, MediaKind, MediaStream, ProducerId, RouterId};
-use tokio::sync::mpsc;
 
 use super::*;
 use crate::{
@@ -21,7 +20,7 @@ use crate::{
         packet_sink_registry::RoomPacketSinkRegistry,
         recording::RecordingService,
         room::{
-            LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext,
+            LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext, UserOutboundSender,
             rtp_capabilities::router_rtp_capabilities,
             state::{
                 ids::ProducerRuntimeId,
@@ -59,6 +58,10 @@ fn test_state() -> RoomState {
             Arc::new(RuntimeMetrics::default()),
         )),
     )
+}
+
+fn test_sender() -> UserOutboundSender {
+    UserOutboundSender::channel(128, Arc::new(RuntimeMetrics::default())).0
 }
 
 fn install_test_published_producer(
@@ -138,8 +141,8 @@ fn install_test_published_producer(
 #[test]
 fn disconnect_sessions_removes_current_members_and_fanouts_departures() {
     let mut state = test_state();
-    let (sender_a, _receiver_a) = mpsc::unbounded_channel();
-    let (sender_b, _receiver_b) = mpsc::unbounded_channel();
+    let sender_a = test_sender();
+    let sender_b = test_sender();
     assert!(
         state
             .apply_join(
@@ -180,7 +183,7 @@ fn disconnect_sessions_removes_current_members_and_fanouts_departures() {
 #[test]
 fn leave_repairs_missing_topology_router_and_removes_member() {
     let mut state = test_state();
-    let (sender, _receiver) = mpsc::unbounded_channel();
+    let sender = test_sender();
     let user_id = UserId::Integer(1);
     assert!(
         state
@@ -202,7 +205,7 @@ fn leave_repairs_missing_topology_router_and_removes_member() {
 #[test]
 fn disconnect_repairs_missing_topology_router_and_removes_member() {
     let mut state = test_state();
-    let (sender, _receiver) = mpsc::unbounded_channel();
+    let sender = test_sender();
     let user_id = UserId::Integer(1);
     assert!(
         state
@@ -221,8 +224,8 @@ fn disconnect_repairs_missing_topology_router_and_removes_member() {
 #[test]
 fn leave_removes_consumer_routes_for_departed_session() {
     let mut state = test_state();
-    let (producer_sender, _producer_receiver) = mpsc::unbounded_channel();
-    let (consumer_sender, _consumer_receiver) = mpsc::unbounded_channel();
+    let producer_sender = test_sender();
+    let consumer_sender = test_sender();
     assert!(
         state
             .apply_join(
@@ -284,7 +287,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
 #[test]
 fn stale_connection_cannot_broadcast() {
     let mut state = test_state();
-    let (sender, _receiver) = mpsc::unbounded_channel();
+    let sender = test_sender();
     assert!(
         state
             .apply_join(
@@ -309,7 +312,7 @@ fn stale_connection_cannot_broadcast() {
 #[test]
 fn presence_update_returns_none_for_stale_connection() {
     let mut state = test_state();
-    let (sender, _receiver) = mpsc::unbounded_channel();
+    let sender = test_sender();
     assert!(
         state
             .apply_join(
@@ -346,8 +349,8 @@ fn disconnect_sessions_ignores_missing_members() {
 fn replacement_join_clears_transport_media_owner_index() {
     let mut state = test_state();
     let user_id = UserId::Integer(1);
-    let (sender, _receiver) = mpsc::unbounded_channel();
-    let (replacement_sender, _replacement_receiver) = mpsc::unbounded_channel();
+    let sender = test_sender();
+    let replacement_sender = test_sender();
     assert!(
         state
             .apply_join(&user_id, None, UserPermissions::default(), sender, false,)

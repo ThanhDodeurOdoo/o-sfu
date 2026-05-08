@@ -1,6 +1,4 @@
-use tokio::sync::mpsc;
-
-use super::super::super::{Room, RoomJoinError, UserCleanup, UserOutbound};
+use super::super::super::{Room, RoomJoinError, UserCleanup, UserOutboundSender};
 use crate::runtime::{ConnectionId, UserId, UserPermissions, media_transport::MediaTransport};
 
 #[derive(Clone, Copy)]
@@ -20,7 +18,7 @@ impl RoomTestLifecycle<'_> {
         user_id: UserId,
         label: Option<String>,
         permissions: UserPermissions,
-        sender: mpsc::UnboundedSender<UserOutbound>,
+        sender: UserOutboundSender,
     ) -> Result<ConnectionId, RoomJoinError> {
         self.room
             .join_session_with_cleanup(
@@ -45,7 +43,7 @@ impl RoomTestLifecycle<'_> {
         user_id: UserId,
         label: Option<String>,
         permissions: UserPermissions,
-        sender: mpsc::UnboundedSender<UserOutbound>,
+        sender: UserOutboundSender,
         media_transport: &MediaTransport,
     ) -> Result<ConnectionId, RoomJoinError> {
         self.room

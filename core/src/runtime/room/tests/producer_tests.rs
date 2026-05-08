@@ -2256,8 +2256,8 @@ struct RealRtcRefreshScenario {
     subscriber_user_id: UserId,
     publisher_initial_offer: SessionOffer,
     subscriber_session_key: TransportSessionKey,
-    publisher_rx: mpsc::UnboundedReceiver<UserOutbound>,
-    subscriber_rx: mpsc::UnboundedReceiver<UserOutbound>,
+    publisher_rx: UserOutboundReceiver,
+    subscriber_rx: UserOutboundReceiver,
     subscriber_remote: Rtc,
 }
 

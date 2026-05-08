@@ -169,9 +169,9 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
             Some("203.0.113.10"),
         )
         .await;
-    let (alice_tx, _alice_rx) = mpsc::unbounded_channel();
-    let (bob_tx, _bob_rx) = mpsc::unbounded_channel();
-    let (carol_tx, _carol_rx) = mpsc::unbounded_channel();
+    let (alice_tx, _alice_rx) = test_outbound_sender(&test_state.state);
+    let (bob_tx, _bob_rx) = test_outbound_sender(&test_state.state);
+    let (carol_tx, _carol_rx) = test_outbound_sender(&test_state.state);
     let alice_session_id = UserId::Integer(1);
     let bob_session_id = UserId::Integer(2);
     let carol_session_id = UserId::Integer(3);
@@ -583,8 +583,8 @@ async fn diagnostics_user_lookup_reports_ambiguous_matches() {
             Some("203.0.113.11"),
         )
         .await;
-    let (first_tx, _first_rx) = mpsc::unbounded_channel();
-    let (second_tx, _second_rx) = mpsc::unbounded_channel();
+    let (first_tx, _first_rx) = test_outbound_sender(&test_state.state);
+    let (second_tx, _second_rx) = test_outbound_sender(&test_state.state);
     assert!(
         first_room
             .test_api()
@@ -664,8 +664,8 @@ async fn diagnostics_user_lookup_survives_user_replacement_without_conflict() {
         )
         .await;
     let user_id = UserId::Integer(9);
-    let (first_tx, _first_rx) = mpsc::unbounded_channel();
-    let (replacement_tx, _replacement_rx) = mpsc::unbounded_channel();
+    let (first_tx, _first_rx) = test_outbound_sender(&test_state.state);
+    let (replacement_tx, _replacement_rx) = test_outbound_sender(&test_state.state);
     assert!(
         room.test_api()
             .lifecycle()
@@ -720,7 +720,7 @@ async fn diagnostics_user_lookup_drops_room_teardown_entries() {
         .await;
     let room_id = room.uuid().to_owned();
     let user_id = UserId::Integer(11);
-    let (tx, _rx) = mpsc::unbounded_channel();
+    let (tx, _rx) = test_outbound_sender(&test_state.state);
     let join = test_state
         .room_manager
         .join_user(

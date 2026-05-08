@@ -9,16 +9,16 @@ use o_sfu_protocol::{
         RecordingActionResult, RecordingOptions, RequestId, ServerResponse, WebSocketCloseCode,
     },
 };
-use tokio::{
-    sync::mpsc,
-    time::{Instant, sleep_until},
-};
+use tokio::time::{Instant, sleep_until, timeout};
 use tracing::{debug, info, warn};
 
 use super::{WsWriter, close_writer, controller::WsReader, io::send_user_output};
 use crate::{
     application::user_session::{User, UserError, UserOutput, UserSignal},
-    core::server::room::{Room, RoomEventRequest, RoomManager, UserCloseReason, UserOutbound},
+    core::server::room::{
+        Room, RoomEventRequest, RoomManager, UserCloseReason, UserOutbound, UserOutboundEvent,
+        UserOutboundOverflow, UserOutboundReceiver,
+    },
     runtime::{
         ConnectionId,
         media_transport::MediaTransport,
@@ -36,6 +36,8 @@ enum LivenessState {
     WaitingForPong { deadline: Instant },
 }
 
+const OUTBOUND_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
 impl LivenessState {
     const fn pong_deadline(self) -> Option<Instant> {
         match self {
@@ -52,7 +54,7 @@ pub(super) struct UserLoop<'a> {
     pub(super) room: &'a Room,
     pub(super) user_id: &'a UserId,
     pub(super) connection_id: ConnectionId,
-    pub(super) outbound_rx: &'a mut mpsc::UnboundedReceiver<UserOutbound>,
+    pub(super) outbound_rx: &'a mut UserOutboundReceiver,
     pub(super) user: &'a mut User,
     pub(super) media_transport: &'a MediaTransport,
     pub(super) user_timeout_ms: u64,
@@ -106,7 +108,7 @@ struct UserLoopState<'a> {
     room: &'a Room,
     user_id: &'a UserId,
     connection_id: ConnectionId,
-    outbound_rx: &'a mut mpsc::UnboundedReceiver<UserOutbound>,
+    outbound_rx: &'a mut UserOutboundReceiver,
     user: &'a mut User,
     user_timeout_ms: u64,
     ping_interval_ms: u64,
@@ -164,7 +166,7 @@ async fn run_until_exit(session: UserLoopState<'_>) -> WsSessionLoopExitReason {
                 }
             }, if pong_deadline.is_some() => {
                 debug!("timed out waiting for websocket pong");
-                close_writer(writer, WebSocketCloseCode::Error).await;
+                close_writer_bounded(writer, WebSocketCloseCode::Error).await;
                 return WsSessionLoopExitReason::PingTimeout;
             }
             message = reader.next() => {
@@ -181,7 +183,7 @@ async fn run_until_exit(session: UserLoopState<'_>) -> WsSessionLoopExitReason {
                     return reason;
                 }
             }
-            outbound = outbound_rx.recv() => {
+            outbound = outbound_rx.recv_event() => {
                 if let Some(reason) = handle_outbound_event(writer, outbound, user, metrics).await {
                     return reason;
                 }
@@ -211,7 +213,7 @@ async fn handle_ping_tick(
     next_ping_at: &mut Instant,
     liveness_state: &mut LivenessState,
 ) -> Option<WsSessionLoopExitReason> {
-    if writer.send(Message::Ping(Vec::new().into())).await.is_err() {
+    if send_ping_bounded(writer).await.is_err() {
         debug!("failed to send websocket ping frame");
         return Some(WsSessionLoopExitReason::OutboundMessageSendFailure);
     }
@@ -229,7 +231,7 @@ async fn handle_transport_state_tick(
 ) -> Option<WsSessionLoopExitReason> {
     user.disconnect_reason()?;
     debug!("closing websocket because the underlying RTC transport disconnected");
-    close_writer(writer, WebSocketCloseCode::Error).await;
+    close_writer_bounded(writer, WebSocketCloseCode::Error).await;
     Some(WsSessionLoopExitReason::TransportDisconnected)
 }
 
@@ -345,7 +347,7 @@ async fn handle_binary_payload(
             max_len = MAX_CLIENT_FRAME_BYTES,
             "received oversized websocket binary frame"
         );
-        close_writer(writer, WebSocketCloseCode::ProtocolError).await;
+        close_writer_bounded(writer, WebSocketCloseCode::ProtocolError).await;
         return Some(WsSessionLoopExitReason::BusBreak);
     }
     match String::from_utf8(payload.to_vec()) {
@@ -364,7 +366,7 @@ async fn handle_binary_payload(
         Err(_error) => {
             metrics.record_ws_bus_invalid_input_failure();
             warn!("received websocket binary frame with invalid UTF-8");
-            close_writer(writer, WebSocketCloseCode::ProtocolError).await;
+            close_writer_bounded(writer, WebSocketCloseCode::ProtocolError).await;
             Some(WsSessionLoopExitReason::BusBreak)
         }
     }
@@ -396,7 +398,7 @@ async fn handle_text_payload(
                     );
                 }
             }
-            close_writer(writer, WebSocketCloseCode::ProtocolError).await;
+            close_writer_bounded(writer, WebSocketCloseCode::ProtocolError).await;
             return Some(WsSessionLoopExitReason::BusBreak);
         }
     };
@@ -408,15 +410,15 @@ async fn handle_text_payload(
             Ok(user_output) => output.extend(user_output),
             Err(error) => {
                 let close_code = map_user_error(error);
-                close_writer(writer, close_code).await;
+                close_writer_bounded(writer, close_code).await;
                 return Some(WsSessionLoopExitReason::BusBreak);
             }
         }
     }
-    match send_user_output(writer, output).await {
+    match send_user_output_bounded(writer, output).await {
         Ok(_sent) => None,
         Err(code) => {
-            close_writer(writer, code).await;
+            close_writer_bounded(writer, code).await;
             Some(WsSessionLoopExitReason::BusBreak)
         }
     }
@@ -511,16 +513,31 @@ async fn stop_recording(
 
 async fn handle_outbound_event(
     writer: &mut WsWriter,
-    outbound: Option<UserOutbound>,
+    outbound: UserOutboundEvent,
     user: &mut User,
     metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
-    if let Some(outbound) = outbound {
-        handle_outbound_payload(writer, outbound, user, metrics).await
-    } else {
-        debug!("user outbound room closed");
-        Some(WsSessionLoopExitReason::OutboundChannelClosed)
+    match outbound {
+        UserOutboundEvent::Message(outbound) => {
+            handle_outbound_payload(writer, outbound, user, metrics).await
+        }
+        UserOutboundEvent::Overflow(overflow) => {
+            handle_outbound_overflow(writer, overflow).await;
+            Some(WsSessionLoopExitReason::OutboundQueueOverflow)
+        }
+        UserOutboundEvent::Closed => {
+            debug!("user outbound room closed");
+            Some(WsSessionLoopExitReason::OutboundChannelClosed)
+        }
     }
+}
+
+async fn handle_outbound_overflow(writer: &mut WsWriter, overflow: UserOutboundOverflow) {
+    warn!(
+        capacity = overflow.capacity(),
+        "closing websocket because the outbound queue overflowed"
+    );
+    close_writer_bounded(writer, WebSocketCloseCode::Kicked).await;
 }
 
 #[allow(
@@ -534,14 +551,14 @@ async fn handle_outbound_payload(
     metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
     match dispatch_room_outbound(user, outbound).await {
-        Ok(output) => match send_user_output(writer, output).await {
+        Ok(output) => match send_user_output_bounded(writer, output).await {
             Ok(batch_len) => {
                 metrics.record_ws_bus_batch_sent(batch_len);
                 None
             }
             Err(WebSocketCloseCode::Kicked) => {
                 debug!(close_code = 4108, "closing websocket from outbound signal");
-                close_writer(writer, WebSocketCloseCode::Kicked).await;
+                close_writer_bounded(writer, WebSocketCloseCode::Kicked).await;
                 Some(WsSessionLoopExitReason::OutboundCloseSignal)
             }
             Err(code) => {
@@ -557,7 +574,7 @@ async fn handle_outbound_payload(
         Err(code) => {
             if code == WebSocketCloseCode::Kicked {
                 debug!(close_code = 4108, "closing websocket from outbound signal");
-                close_writer(writer, WebSocketCloseCode::Kicked).await;
+                close_writer_bounded(writer, WebSocketCloseCode::Kicked).await;
                 Some(WsSessionLoopExitReason::OutboundCloseSignal)
             } else {
                 metrics.record_ws_bus_send_failure();
@@ -566,6 +583,32 @@ async fn handle_outbound_payload(
             }
         }
     }
+}
+
+async fn send_ping_bounded(writer: &mut WsWriter) -> Result<(), WebSocketCloseCode> {
+    match timeout(
+        OUTBOUND_WRITE_TIMEOUT,
+        writer.send(Message::Ping(Vec::new().into())),
+    )
+    .await
+    {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) | Err(_) => Err(WebSocketCloseCode::Error),
+    }
+}
+
+async fn send_user_output_bounded(
+    writer: &mut WsWriter,
+    output: UserOutput,
+) -> Result<usize, WebSocketCloseCode> {
+    match timeout(OUTBOUND_WRITE_TIMEOUT, send_user_output(writer, output)).await {
+        Ok(result) => result,
+        Err(_elapsed) => Err(WebSocketCloseCode::Error),
+    }
+}
+
+async fn close_writer_bounded(writer: &mut WsWriter, code: WebSocketCloseCode) {
+    let _closed = timeout(OUTBOUND_WRITE_TIMEOUT, close_writer(writer, code)).await;
 }
 
 async fn dispatch_room_outbound(
@@ -600,7 +643,7 @@ async fn close_writer_if_terminal(writer: &mut WsWriter, code: WebSocketCloseCod
             | WebSocketCloseCode::AuthFailed
             | WebSocketCloseCode::AuthTimeout
     ) {
-        close_writer(writer, code).await;
+        close_writer_bounded(writer, code).await;
     }
 }
 

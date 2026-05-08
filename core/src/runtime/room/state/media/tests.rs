@@ -16,7 +16,6 @@ use o_sfu_router::{
         sample_video_rtp_parameters,
     },
 };
-use tokio::sync::mpsc;
 
 use super::super::{
     ids::ProducerRuntimeId,
@@ -34,7 +33,7 @@ use crate::{
         packet_sink_registry::RoomPacketSinkRegistry,
         recording::RecordingService,
         room::{
-            LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext,
+            LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext, UserOutboundSender,
             rtp_capabilities::router_rtp_capabilities,
             topology::{RoutedConsumerId, RoutedProducerId},
             user_negotiation::UserTransportReady,
@@ -75,8 +74,12 @@ fn test_state() -> RoomState {
     )
 }
 
+fn test_sender() -> UserOutboundSender {
+    UserOutboundSender::channel(128, Arc::new(RuntimeMetrics::default())).0
+}
+
 fn join_test_user(state: &mut RoomState, user_id: &UserId) {
-    let (sender, _rx) = mpsc::unbounded_channel();
+    let sender = test_sender();
     assert!(
         state
             .apply_join(user_id, None, UserPermissions::default(), sender, false,)
@@ -276,7 +279,7 @@ fn install_test_consumer_state(
 fn producer_activity_does_not_flip_room_state_when_router_update_fails() {
     let mut state = test_state();
     let user_id = UserId::Integer(1);
-    let (sender, _rx) = mpsc::unbounded_channel();
+    let sender = test_sender();
 
     let join = state.apply_join(&user_id, None, UserPermissions::default(), sender, false);
     assert!(join.is_ok());
@@ -339,7 +342,7 @@ fn stale_replaced_connection_cannot_update_download_state() {
     let mut state = test_state();
     let producer_user_id = UserId::Integer(1);
     let consumer_user_id = UserId::Integer(2);
-    let (replacement_sender, _replacement_rx) = mpsc::unbounded_channel();
+    let replacement_sender = test_sender();
 
     join_test_user(&mut state, &producer_user_id);
     join_test_user(&mut state, &consumer_user_id);

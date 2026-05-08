@@ -91,8 +91,8 @@ async fn stats_returns_live_room_data() {
             Some("203.0.113.10"),
         )
         .await;
-    let (alice_tx, _alice_rx) = mpsc::unbounded_channel();
-    let (bob_tx, _bob_rx) = mpsc::unbounded_channel();
+    let (alice_tx, _alice_rx) = test_outbound_sender(&test_state.state);
+    let (bob_tx, _bob_rx) = test_outbound_sender(&test_state.state);
     let alice_join = room
         .test_api()
         .lifecycle()

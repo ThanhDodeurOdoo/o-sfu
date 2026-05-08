@@ -32,13 +32,12 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt, stream::SplitStream};
 use o_sfu_protocol::{shared::UserId, signaling::WebSocketCloseCode};
-use tokio::sync::mpsc;
 use tracing::{Instrument, Span, field, info};
 
 use super::{WsWriter, io::MAX_CLIENT_FRAME_BYTES};
 use crate::{
     application::user_session::User,
-    core::server::room::{Room, UserOutbound},
+    core::server::room::{Room, UserOutboundReceiver},
     runtime::{
         ConnectionId, RuntimeState,
         request_origin::resolve_remote_address,
@@ -56,7 +55,7 @@ pub(super) struct ConnectedUser {
     pub(super) user_id: UserId,
     pub(super) connection_id: ConnectionId,
     pub(super) remote_address: Arc<str>,
-    pub(super) outbound_rx: mpsc::UnboundedReceiver<UserOutbound>,
+    pub(super) outbound_rx: UserOutboundReceiver,
     pub(super) user: User,
 }
 

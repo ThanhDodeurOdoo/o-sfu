@@ -11,7 +11,6 @@ pub(super) use axum::{
 };
 pub(super) use o_sfu_protocol::shared::UserId;
 pub(super) use serde::de::DeserializeOwned;
-pub(super) use tokio::sync::mpsc;
 pub(super) use tower::util::ServiceExt;
 
 pub(super) use super::super::app;
@@ -44,8 +43,9 @@ pub(super) use crate::{
             test_support::RuntimeMetricsSnapshotLookup,
         },
         room::{
-            JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig,
-            RoomManagerDeps, RoomRuntimePolicy, rtp_capabilities,
+            DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY, JoinUserRequest, RoomAdmissionPolicy, RoomConfig,
+            RoomManager, RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy,
+            UserOutboundReceiver, UserOutboundSender, rtp_capabilities,
         },
     },
 };
@@ -231,6 +231,7 @@ pub(super) fn test_config() -> Config {
             room_size: 100,
             timeout_ms: 10_000,
             ping_interval_ms: 60_000,
+            outbound_queue_capacity: DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
         },
         transport: TransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -291,6 +292,15 @@ pub(super) fn test_state_with_handles() -> TestRuntimeState {
         room_manager,
         media_transport,
     }
+}
+
+pub(super) fn test_outbound_sender(
+    state: &RuntimeState,
+) -> (UserOutboundSender, UserOutboundReceiver) {
+    UserOutboundSender::channel(
+        state.config.user.outbound_queue_capacity,
+        Arc::clone(&state.metrics),
+    )
 }
 
 pub(super) fn signed_room_claims(issuer: Option<&str>, key: Option<&str>) -> Option<String> {

@@ -9,6 +9,7 @@ use super::{
     parsing::parse_optional_env, settings::Config, telemetry::load_telemetry_config,
     transport::load_transport_config,
 };
+use crate::core::server::room::DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY;
 
 impl Config {
     /// # Errors
@@ -54,6 +55,12 @@ impl Config {
             "PING_INTERVAL_MS must be a valid u64",
         )?
         .unwrap_or(60_000);
+        let outbound_queue_capacity = parse_optional_env(
+            &mut get_var,
+            "USER_OUTBOUND_QUEUE_CAPACITY",
+            "USER_OUTBOUND_QUEUE_CAPACITY must be a valid usize",
+        )?
+        .unwrap_or(DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY);
         let trust_proxy_headers = parse_optional_env(
             &mut get_var,
             "PROXY",
@@ -75,6 +82,10 @@ impl Config {
             ping_interval_ms > 0,
             "PING_INTERVAL_MS must be greater than zero"
         );
+        ensure!(
+            outbound_queue_capacity > 0,
+            "USER_OUTBOUND_QUEUE_CAPACITY must be greater than zero"
+        );
         Ok(Self {
             auth: AuthConfig {
                 key: auth_key,
@@ -88,6 +99,7 @@ impl Config {
                 room_size,
                 timeout_ms: user_timeout_ms,
                 ping_interval_ms,
+                outbound_queue_capacity,
             },
             transport,
             codecs: CodecConfig {
@@ -103,9 +115,12 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{
-        CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
-        RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
+    use crate::{
+        config::{
+            CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
+            RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
+        },
+        core::server::room::DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
     };
 
     #[test]
@@ -135,6 +150,10 @@ mod tests {
         assert_eq!(config.user.room_size, 100);
         assert_eq!(config.user.timeout_ms, 10_000);
         assert_eq!(config.user.ping_interval_ms, 60_000);
+        assert_eq!(
+            config.user.outbound_queue_capacity,
+            DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY
+        );
         assert!(!config.http.trust_proxy_headers);
         assert_eq!(config.features, RuntimeFeatureFlags::default());
         assert_eq!(config.codecs.flags, MediaCodecFlags::default());
@@ -198,6 +217,17 @@ mod tests {
             "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
             "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
             "PING_INTERVAL_MS" => Some("0".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn config_rejects_zero_user_outbound_queue_capacity() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "USER_OUTBOUND_QUEUE_CAPACITY" => Some("0".to_owned()),
             _ => None,
         });
         assert!(config.is_err());

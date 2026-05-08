@@ -43,6 +43,8 @@ pub struct RuntimeMetrics {
     pub(super) ws_bus_parse_failures: Counter,
     pub(super) ws_bus_failures: CounterFamily<WsBusFailureKind>,
     pub(super) ws_bus_client_frames: CounterFamily<WsBusClientFrameKind>,
+    pub(super) ws_outbound_queued_messages: UpDownCounter,
+    pub(super) ws_outbound_queue_overflows: Counter,
     pub(super) ws_handshake_duration: Histogram<ControlPlaneDurationBucket>,
     pub(super) ws_auth_duration: Histogram<ControlPlaneDurationBucket>,
     pub(super) ws_user_initialize_duration: Histogram<ControlPlaneDurationBucket>,
@@ -228,6 +230,14 @@ impl RuntimeMetrics {
 
     pub fn record_ws_bus_send_failure(&self) {
         self.ws_bus_failures.increment(WsBusFailureKind::Send);
+    }
+
+    pub fn add_ws_outbound_queued_messages(&self, delta: i64) {
+        self.ws_outbound_queued_messages.add(delta);
+    }
+
+    pub fn record_ws_outbound_queue_overflow(&self) {
+        self.ws_outbound_queue_overflows.increment();
     }
 
     pub fn record_ws_handshake_duration(&self, duration: Duration) {

@@ -55,6 +55,10 @@ pub use manager::{
 };
 #[cfg(any(test, feature = "testing-transport"))]
 pub(in crate::runtime::room) use membership::UserCleanup;
+pub use outbound::{
+    DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY, UserOutboundEvent, UserOutboundOverflow,
+    UserOutboundReceiver, UserOutboundSendError, UserOutboundSender,
+};
 pub use state::{ConsumerRouteState, RemoteTrackBootstrap};
 #[cfg(any(test, feature = "testing-transport"))]
 pub use tests::api::{

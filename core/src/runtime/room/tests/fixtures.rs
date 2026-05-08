@@ -9,12 +9,12 @@ pub(super) use o_sfu_router::{
     ConsumerCapability, MediaCapabilities, MediaKind, MediaKind as RouterMediaKind, MediaStream,
     RouterId,
 };
-pub(super) use tokio::{sync::mpsc, task::yield_now, time::timeout};
+pub(super) use tokio::{task::yield_now, time::timeout};
 
 pub(super) use super::super::{
     JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomEventMessage, RoomEventRequest,
     RoomJoinError, RoomManager, RoomManagerJoinError, UserCleanup, UserCloseReason, UserOutbound,
-    topology::RoomTopology,
+    UserOutboundEvent, UserOutboundReceiver, UserOutboundSender, topology::RoomTopology,
 };
 use crate::runtime::room::user_negotiation::{UserNegotiationUpdate, UserTransportReady};
 pub(super) use crate::{
@@ -26,7 +26,7 @@ pub(super) use crate::{
             ActiveSpeakerSource, MediaTransport, SourcePacketGate, TransportMediaId,
             test_support::{FakeMediaTransport, FakeMediaTransportEvent},
         },
-        metrics::test_support::RuntimeMetricsSnapshotTestExt,
+        metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
         source_model::{
             UserStreamId,
             test_support::{
@@ -59,11 +59,8 @@ pub(super) fn test_simulcast_video_rtp_parameters() -> MediaStream {
     sample_simulcast_video_rtp_parameters(None)
 }
 
-pub(super) fn test_sender() -> (
-    mpsc::UnboundedSender<UserOutbound>,
-    mpsc::UnboundedReceiver<UserOutbound>,
-) {
-    mpsc::unbounded_channel()
+pub(super) fn test_sender() -> (UserOutboundSender, UserOutboundReceiver) {
+    UserOutboundSender::channel(1024, Arc::new(RuntimeMetrics::default()))
 }
 
 pub(super) fn fake_adapter() -> (MediaTransport, Arc<FakeMediaTransport>) {
@@ -227,8 +224,8 @@ pub(super) struct StagedPublishScenario {
     pub(super) fake: Arc<FakeMediaTransport>,
     pub(super) user_id: UserId,
     pub(super) connection_id: ConnectionId,
-    publisher_rx: mpsc::UnboundedReceiver<UserOutbound>,
-    subscriber_rx: mpsc::UnboundedReceiver<UserOutbound>,
+    publisher_rx: UserOutboundReceiver,
+    subscriber_rx: UserOutboundReceiver,
 }
 
 impl StagedPublishScenario {
@@ -396,8 +393,8 @@ struct ReadySessionScenario {
     room: Arc<super::super::Room>,
     adapter: MediaTransport,
     fake: Option<Arc<FakeMediaTransport>>,
-    first_rx: mpsc::UnboundedReceiver<UserOutbound>,
-    second_rx: mpsc::UnboundedReceiver<UserOutbound>,
+    first_rx: UserOutboundReceiver,
+    second_rx: UserOutboundReceiver,
 }
 
 impl ReadySessionScenarioOptions {
@@ -491,8 +488,8 @@ async fn setup_ready_user_scenario(options: ReadySessionScenarioOptions) -> Read
 pub(super) async fn setup_two_ready_users() -> (
     Arc<super::super::Room>,
     MediaTransport,
-    mpsc::UnboundedReceiver<UserOutbound>,
-    mpsc::UnboundedReceiver<UserOutbound>,
+    UserOutboundReceiver,
+    UserOutboundReceiver,
 ) {
     let scenario = setup_ready_user_scenario(ReadySessionScenarioOptions::two_ready_users()).await;
     (
@@ -507,8 +504,8 @@ pub(super) async fn setup_two_ready_users_with_fake() -> (
     Arc<super::super::Room>,
     MediaTransport,
     Arc<FakeMediaTransport>,
-    mpsc::UnboundedReceiver<UserOutbound>,
-    mpsc::UnboundedReceiver<UserOutbound>,
+    UserOutboundReceiver,
+    UserOutboundReceiver,
 ) {
     let scenario =
         setup_ready_user_scenario(ReadySessionScenarioOptions::two_ready_users_with_fake()).await;
@@ -525,8 +522,8 @@ pub(super) async fn setup_late_join_bootstrap_scenario() -> (
     Arc<super::super::Room>,
     MediaTransport,
     Arc<FakeMediaTransport>,
-    mpsc::UnboundedReceiver<UserOutbound>,
-    mpsc::UnboundedReceiver<UserOutbound>,
+    UserOutboundReceiver,
+    UserOutboundReceiver,
 ) {
     let scenario =
         setup_ready_user_scenario(ReadySessionScenarioOptions::late_join_bootstrap()).await;
@@ -556,7 +553,7 @@ pub(super) async fn setup_ready_users_with_fake_receivers(
     Arc<super::super::Room>,
     MediaTransport,
     Arc<FakeMediaTransport>,
-    Vec<mpsc::UnboundedReceiver<UserOutbound>>,
+    Vec<UserOutboundReceiver>,
 ) {
     let manager = RoomManager::for_test();
     let room = manager
@@ -760,7 +757,7 @@ pub(super) fn assert_featured_snapshot_update(
     }));
 }
 
-pub(super) fn drain_outbound(rx: &mut mpsc::UnboundedReceiver<UserOutbound>) -> Vec<UserOutbound> {
+pub(super) fn drain_outbound(rx: &mut UserOutboundReceiver) -> Vec<UserOutbound> {
     let mut msgs = Vec::new();
     while let Ok(msg) = rx.try_recv() {
         msgs.push(msg);

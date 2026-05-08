@@ -171,6 +171,7 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
         ws_bus_batches_sent => WsBusBatchesTotal &[("direction", "sent")],
         ws_bus_envelopes_sent => WsBusEnvelopesTotal &[("direction", "sent")],
         ws_bus_send_failures => WsBusFailuresTotal &[("kind", "send")],
+        ws_outbound_queue_overflows => WsOutboundQueueOverflowsTotal &[],
         recording_start_accepted => RecordingActionsTotal &[("action", "start"), ("outcome", "accepted")],
         recording_start_rejected => RecordingActionsTotal &[("action", "start"), ("outcome", "rejected")],
         recording_stop_accepted => RecordingActionsTotal &[("action", "stop"), ("outcome", "accepted")],
@@ -201,6 +202,7 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
         active_subscriptions => SubscriptionsActive &[],
         active_recording_rooms => RecordingRoomsActive &[],
         active_transport_users => TransportUsersActive &[],
+        ws_outbound_queued_messages => WsOutboundQueuedMessages &[],
     }
 
     fn transport_health_users(&self, state: TransportHealthState) -> i64 {

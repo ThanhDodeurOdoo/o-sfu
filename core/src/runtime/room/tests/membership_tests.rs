@@ -892,7 +892,7 @@ struct StaleRefreshScenario {
     fake: Arc<FakeMediaTransport>,
     first_subscriber_connection: ConnectionId,
     second_subscriber_connection: ConnectionId,
-    second_subscriber_rx: mpsc::UnboundedReceiver<UserOutbound>,
+    second_subscriber_rx: UserOutboundReceiver,
 }
 
 async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
@@ -1014,6 +1014,77 @@ async fn broadcast_reaches_all_except_sender() {
         "sender (user 2) should NOT receive own broadcast"
     );
     assert!(rx3.try_recv().is_ok(), "user 3 should receive broadcast");
+}
+
+#[tokio::test]
+async fn outbound_receiver_drains_queued_messages_before_closure() {
+    let metrics = Arc::new(RuntimeMetrics::default());
+    let (tx, mut rx) = UserOutboundSender::channel(1, Arc::clone(&metrics));
+    let sent = tx.send(UserOutbound::Message(RoomEventMessage::UserDeparted {
+        user_id: UserId::Integer(7),
+    }));
+    assert!(sent.is_ok());
+    drop(tx);
+
+    assert!(matches!(
+        rx.recv_event().await,
+        UserOutboundEvent::Message(UserOutbound::Message(RoomEventMessage::UserDeparted {
+            user_id
+        })) if user_id == UserId::Integer(7)
+    ));
+    assert!(matches!(rx.recv_event().await, UserOutboundEvent::Closed));
+    assert_eq!(metrics.snapshot().ws_outbound_queued_messages(), 0);
+}
+
+#[tokio::test]
+async fn outbound_queue_overflow_marks_slow_consumer() {
+    let manager = RoomManager::for_test();
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+    let metrics = Arc::new(RuntimeMetrics::default());
+    let (slow_tx, mut slow_rx) = UserOutboundSender::channel(1, Arc::clone(&metrics));
+    let (driver_tx, _driver_rx) = test_sender();
+    let slow_user = UserId::Integer(1);
+    let driver_user = UserId::Integer(2);
+    let _ = room
+        .test_api()
+        .lifecycle()
+        .join_user(slow_user.clone(), None, UserPermissions::default(), slow_tx)
+        .await;
+    let _ = room
+        .test_api()
+        .lifecycle()
+        .join_user(
+            driver_user.clone(),
+            None,
+            UserPermissions::default(),
+            driver_tx,
+        )
+        .await;
+
+    let driver_connection = user_connection_id(&room, &driver_user).await;
+    room.broadcast(
+        &driver_user,
+        driver_connection,
+        serde_json::json!({"text": "first"}),
+    )
+    .await;
+    room.broadcast(
+        &driver_user,
+        driver_connection,
+        serde_json::json!({"text": "second"}),
+    )
+    .await;
+
+    assert!(slow_rx.has_overflowed());
+    assert!(matches!(
+        slow_rx.recv_event().await,
+        UserOutboundEvent::Overflow(_)
+    ));
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.ws_outbound_queue_overflows(), 1);
+    assert_eq!(snapshot.ws_outbound_queued_messages(), 1);
 }
 
 #[tokio::test]

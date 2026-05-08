@@ -23,11 +23,10 @@
 use std::sync::{MutexGuard, PoisonError};
 
 use o_sfu_router::MediaCapabilities;
-use tokio::sync::mpsc;
 use tracing::warn;
 
 use super::{
-    Room, RoomJoinError, RoomUserPermissions, UserOutbound,
+    Room, RoomJoinError, RoomUserPermissions, UserOutbound, UserOutboundSender,
     cleanup::{
         CleanupFailureAction, CleanupReconciler, CleanupRetryAction, TransportCleanupOperation,
     },
@@ -131,7 +130,7 @@ enum UserTransition<'a> {
         user_id: &'a UserId,
         label: Option<String>,
         permissions: RoomUserPermissions,
-        sender: mpsc::UnboundedSender<UserOutbound>,
+        sender: UserOutboundSender,
         emit_joined_fanout: bool,
         transport_pressure: TransportPlacementPressureSnapshot,
     },
@@ -199,7 +198,7 @@ impl Room {
         user_id: UserId,
         label: Option<String>,
         permissions: UserPermissions,
-        sender: mpsc::UnboundedSender<UserOutbound>,
+        sender: UserOutboundSender,
         media_transport: &MediaTransport,
     ) -> Result<ConnectionId, RoomJoinError> {
         self.join_session_with_cleanup(
@@ -226,7 +225,7 @@ impl Room {
         user_id: UserId,
         label: Option<String>,
         permissions: UserPermissions,
-        sender: mpsc::UnboundedSender<UserOutbound>,
+        sender: UserOutboundSender,
         cleanup: UserCleanup<'_>,
         emit_joined_fanout: bool,
     ) -> Result<ConnectionId, RoomJoinError> {

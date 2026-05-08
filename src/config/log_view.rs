@@ -86,6 +86,11 @@ impl ConfigLogView<'_> {
             "    - ping_interval_ms={}",
             config.user.ping_interval_ms
         )?;
+        writeln!(
+            formatter,
+            "    - user_outbound_queue_capacity={}",
+            config.user.outbound_queue_capacity
+        )?;
         writeln!(formatter, "    - room_size={}", config.user.room_size)?;
         writeln!(
             formatter,
@@ -227,10 +232,13 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     use super::ConfigLogView;
-    use crate::config::{
-        AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
-        MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig,
-        TransportConfig, UserConfig, VideoBitrateLimits,
+    use crate::{
+        config::{
+            AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
+            MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags,
+            TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
+        },
+        core::server::room::DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
     };
 
     fn test_config(bind_address: SocketAddr) -> Config {
@@ -247,6 +255,7 @@ mod tests {
                 room_size: 100,
                 timeout_ms: 10_000,
                 ping_interval_ms: 60_000,
+                outbound_queue_capacity: DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
             },
             transport: TransportConfig {
                 public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),

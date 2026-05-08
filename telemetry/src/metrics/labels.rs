@@ -48,6 +48,7 @@ pub enum WsSessionLoopExitReason {
     OutboundChannelClosed,
     OutboundCloseSignal,
     OutboundMessageSendFailure,
+    OutboundQueueOverflow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -341,6 +342,7 @@ impl_exported_metric_label!(WsSessionLoopExitReason {
     OutboundChannelClosed => (5, "outbound_room_closed"),
     OutboundCloseSignal => (6, "outbound_close_signal"),
     OutboundMessageSendFailure => (7, "outbound_message_send_failure"),
+    OutboundQueueOverflow => (8, "outbound_queue_overflow"),
 });
 
 impl_exported_metric_label!(WsBusDirection {

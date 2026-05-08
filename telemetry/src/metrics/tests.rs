@@ -195,6 +195,18 @@ fn metrics_snapshot_tracks_http_and_websocket_counters() {
 }
 
 #[test]
+fn metrics_snapshot_tracks_websocket_outbound_queue_pressure() {
+    let metrics = RuntimeMetrics::default();
+    metrics.add_ws_outbound_queued_messages(2);
+    metrics.record_ws_outbound_queue_overflow();
+
+    let snapshot = metrics.snapshot();
+
+    assert_eq!(snapshot.ws_outbound_queued_messages(), 2);
+    assert_eq!(snapshot.ws_outbound_queue_overflows(), 1);
+}
+
+#[test]
 fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     let metrics = RuntimeMetrics::default();
     metrics.add_active_rooms(1);

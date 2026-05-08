@@ -48,8 +48,8 @@ pub(super) use crate::{
             test_support::RuntimeMetricsSnapshotLookup,
         },
         room::{
-            Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomManagerDeps,
-            RoomRuntimePolicy, rtp_capabilities,
+            DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY, Room, RoomAdmissionPolicy, RoomConfig,
+            RoomManager, RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy, rtp_capabilities,
         },
     },
 };
@@ -170,6 +170,7 @@ pub(super) fn test_config(
             room_size,
             timeout_ms: user_timeout_ms,
             ping_interval_ms,
+            outbound_queue_capacity: DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
         },
         transport: TransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),

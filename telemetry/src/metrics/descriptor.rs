@@ -231,6 +231,18 @@ metric_catalog! {
         kind: Counter,
         samples: |metrics| counter_family_samples(&metrics.ws_bus_client_frames, "kind")
     },
+    WsOutboundQueuedMessages {
+        name: "osfu_ws_outbound_queued_messages",
+        help: "Current websocket outbound room messages waiting in per-user queues.",
+        kind: Gauge,
+        samples: |metrics| vec![unlabeled_gauge(metrics.ws_outbound_queued_messages.load())]
+    },
+    WsOutboundQueueOverflowsTotal {
+        name: "osfu_ws_outbound_queue_overflows_total",
+        help: "Total websocket users marked for slow-consumer shutdown after outbound queue overflow.",
+        kind: Counter,
+        samples: |metrics| vec![unlabeled_counter(metrics.ws_outbound_queue_overflows.load())]
+    },
     RoomsActive {
         name: "osfu_rooms_active",
         help: "Current number of live rooms owned by this runtime.",

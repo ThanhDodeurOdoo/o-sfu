@@ -34,6 +34,7 @@ pub struct UserConfig {
     pub room_size: usize,
     pub timeout_ms: u64,
     pub ping_interval_ms: u64,
+    pub outbound_queue_capacity: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

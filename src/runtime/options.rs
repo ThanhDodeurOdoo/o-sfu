@@ -81,10 +81,13 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     use super::RuntimeOptions;
-    use crate::config::{
-        AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
-        MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig,
-        TransportConfig, UserConfig, VideoBitrateLimits,
+    use crate::{
+        config::{
+            AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
+            MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags,
+            TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
+        },
+        core::server::room::DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
     };
 
     fn test_config() -> Config {
@@ -101,6 +104,7 @@ mod tests {
                 room_size: 42,
                 timeout_ms: 7_000,
                 ping_interval_ms: 11_000,
+                outbound_queue_capacity: DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
             },
             transport: TransportConfig {
                 public_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
