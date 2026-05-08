@@ -56,7 +56,7 @@ use crate::{
         },
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
-        recording::{MediaSource, RecordingService},
+        recording::RecordingService,
         router_events::RoomRouterEventSink,
         source_model::UserStreamId,
     },
@@ -626,10 +626,9 @@ impl Room {
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         let definition = RoomDefinition::new(runtime_context, &runtime_policy, issuer, key, config);
-        let recording_media_source: Arc<dyn MediaSource> = packet_sink_registry;
         let recording_service = Arc::new(RecordingService::new(
             definition.instance_id(),
-            recording_media_source,
+            packet_sink_registry,
             Arc::clone(&metrics),
         ));
         let recording_event_sink = Arc::<RecordingService>::clone(&recording_service);

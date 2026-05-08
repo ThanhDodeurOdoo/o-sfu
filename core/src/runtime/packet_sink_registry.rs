@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     fmt,
-    hash::Hash,
     sync::{
         Arc, PoisonError, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -32,51 +31,6 @@ where
     T: PacketSink + 'static,
 {
     sink
-}
-
-#[derive(Debug, Clone)]
-pub struct ActiveRoomRegistry<K, V> {
-    rooms: HashMap<K, V>,
-}
-
-impl<K, V> Default for ActiveRoomRegistry<K, V> {
-    fn default() -> Self {
-        Self {
-            rooms: HashMap::new(),
-        }
-    }
-}
-
-impl<K, V> ActiveRoomRegistry<K, V>
-where
-    K: Eq + Hash,
-    V: Clone,
-{
-    pub fn insert(&mut self, room_instance_id: K, sink: V) {
-        self.rooms.insert(room_instance_id, sink);
-    }
-
-    pub fn remove(&mut self, room_instance_id: &K) -> bool {
-        self.rooms.remove(room_instance_id).is_some()
-    }
-
-    pub fn get(&self, room_instance_id: &K) -> Option<V> {
-        self.rooms.get(room_instance_id).cloned()
-    }
-
-    pub fn contains_key(&self, room_instance_id: &K) -> bool {
-        self.rooms.contains_key(room_instance_id)
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.rooms.is_empty()
-    }
-
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.rooms.len()
-    }
 }
 
 #[derive(Clone)]
@@ -125,7 +79,7 @@ impl fmt::Debug for RegisteredPacketSink {
 pub struct RoomPacketSinkRegistry {
     any_active: AtomicBool,
     generation: AtomicU64,
-    active_rooms: RwLock<ActiveRoomRegistry<RoomInstanceId, RegisteredPacketSink>>,
+    active_rooms: RwLock<HashMap<RoomInstanceId, RegisteredPacketSink>>,
 }
 
 impl Default for RoomPacketSinkRegistry {
@@ -133,7 +87,7 @@ impl Default for RoomPacketSinkRegistry {
         Self {
             any_active: AtomicBool::new(false),
             generation: AtomicU64::new(0),
-            active_rooms: RwLock::new(ActiveRoomRegistry::default()),
+            active_rooms: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -145,7 +99,7 @@ pub(in crate::runtime) trait PacketSinkLookup {
 #[derive(Default)]
 pub(in crate::runtime) struct PacketSinkRouteCache {
     generation: u64,
-    active_rooms: ActiveRoomRegistry<RoomInstanceId, RegisteredPacketSink>,
+    active_rooms: HashMap<RoomInstanceId, RegisteredPacketSink>,
 }
 
 impl PacketSinkRouteCache {
@@ -162,7 +116,7 @@ impl PacketSinkRouteCache {
 
 impl PacketSinkLookup for PacketSinkRouteCache {
     fn sink_for_room(&self, room_instance_id: RoomInstanceId) -> Option<RegisteredPacketSink> {
-        self.active_rooms.get(&room_instance_id)
+        self.active_rooms.get(&room_instance_id).cloned()
     }
 }
 
@@ -174,7 +128,7 @@ impl PacketSinkLookup for RoomPacketSinkRegistry {
 
 struct PacketSinkRegistrySnapshot {
     generation: u64,
-    active_rooms: ActiveRoomRegistry<RoomInstanceId, RegisteredPacketSink>,
+    active_rooms: HashMap<RoomInstanceId, RegisteredPacketSink>,
 }
 
 impl RoomPacketSinkRegistry {
@@ -186,6 +140,7 @@ impl RoomPacketSinkRegistry {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&room_instance_id)
+            .cloned()
     }
 
     fn generation(&self) -> u64 {

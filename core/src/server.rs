@@ -27,8 +27,7 @@ pub mod packet_sinks {
     //! Generic room packet-sink registry consumed by transport and room services.
 
     pub use crate::runtime::packet_sink_registry::{
-        ActiveRoomRegistry, PacketSink, RegisteredPacketSink, RoomPacketSinkRegistry,
-        into_packet_sink,
+        PacketSink, RegisteredPacketSink, RoomPacketSinkRegistry, into_packet_sink,
     };
 }
 

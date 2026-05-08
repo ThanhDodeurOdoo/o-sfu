@@ -9,8 +9,9 @@ use crate::runtime::{
         MetricName, RuntimeMetrics, RuntimeMetricsSnapshot,
         test_support::RuntimeMetricsSnapshotLookup,
     },
+    packet_sink_registry::RoomPacketSinkRegistry,
     recording::{
-        MediaSource, MediaTap, RecordingService,
+        RecordingService,
         test_support::{RecordingLifecycleState, is_room_active, transition_error_state},
     },
     router_events::RoomRouterEventSink,
@@ -31,13 +32,11 @@ impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {}
 
 #[test]
 fn recording_service_counts_packets_without_recounting_streams() {
-    let media_tap = Arc::new(MediaTap::default());
-    let media_source = Arc::<MediaTap>::clone(&media_tap);
-    let media_source: Arc<dyn MediaSource> = media_source;
+    let packet_sink_registry = Arc::new(RoomPacketSinkRegistry::default());
     let metrics = Arc::new(RuntimeMetrics::default());
     let service = RecordingService::new(
         RoomInstanceId::from_raw(30),
-        media_source,
+        Arc::clone(&packet_sink_registry),
         Arc::clone(&metrics),
     );
     let session_key = test_transport_session_key(30, 0, 1, SignalingSessionId::Integer(9));
@@ -47,9 +46,9 @@ fn recording_service_counts_packets_without_recounting_streams() {
     let ignored_packet = sample_forwarded_packet(session_key, "aud-up", b"ignored");
 
     assert!(service.start().is_ok());
-    media_tap.write_packet(&first_packet, TransportMediaId::new(1));
-    media_tap.write_packet(&second_packet, TransportMediaId::new(1));
-    media_tap.write_packet(&third_packet, TransportMediaId::new(2));
+    packet_sink_registry.write_packet(&first_packet, TransportMediaId::new(1));
+    packet_sink_registry.write_packet(&second_packet, TransportMediaId::new(1));
+    packet_sink_registry.write_packet(&third_packet, TransportMediaId::new(2));
 
     let snapshot = service.snapshot();
     assert_eq!(snapshot.captured_packet_count, 3);
@@ -59,7 +58,7 @@ fn recording_service_counts_packets_without_recounting_streams() {
     assert_eq!(metrics_snapshot.recording_captured_streams(), 2);
 
     assert!(service.stop().is_ok());
-    media_tap.write_packet(&ignored_packet, TransportMediaId::new(3));
+    packet_sink_registry.write_packet(&ignored_packet, TransportMediaId::new(3));
     let snapshot = service.snapshot();
     assert_eq!(snapshot.captured_packet_count, 3);
     assert_eq!(snapshot.captured_stream_count, 2);
@@ -67,12 +66,10 @@ fn recording_service_counts_packets_without_recounting_streams() {
 
 #[test]
 fn recording_service_allows_only_legal_state_machine_transitions() {
-    let media_tap = Arc::new(MediaTap::default());
-    let media_source = Arc::<MediaTap>::clone(&media_tap);
-    let media_source: Arc<dyn MediaSource> = media_source;
+    let packet_sink_registry = Arc::new(RoomPacketSinkRegistry::default());
     let service = RecordingService::new(
         RoomInstanceId::from_raw(17),
-        media_source,
+        Arc::clone(&packet_sink_registry),
         Arc::new(RuntimeMetrics::default()),
     );
 
@@ -82,7 +79,10 @@ fn recording_service_allows_only_legal_state_machine_transitions() {
         service.snapshot().lifecycle,
         RecordingLifecycleState::Recording
     );
-    assert!(is_room_active(&media_tap, RoomInstanceId::from_raw(17)));
+    assert!(is_room_active(
+        &packet_sink_registry,
+        RoomInstanceId::from_raw(17)
+    ));
 
     let invalid_start = service.start();
     assert!(invalid_start.is_err());
@@ -93,15 +93,17 @@ fn recording_service_allows_only_legal_state_machine_transitions() {
 
     assert!(service.stop().is_ok());
     assert_eq!(service.snapshot().lifecycle, RecordingLifecycleState::Idle);
-    assert!(!is_room_active(&media_tap, RoomInstanceId::from_raw(17)));
+    assert!(!is_room_active(
+        &packet_sink_registry,
+        RoomInstanceId::from_raw(17)
+    ));
 }
 
 #[test]
 fn recording_service_tracks_router_event_sink_inventory() {
-    let media_source: Arc<dyn MediaSource> = Arc::new(MediaTap::default());
     let service = RecordingService::new(
         RoomInstanceId::from_raw(22),
-        media_source,
+        Arc::new(RoomPacketSinkRegistry::default()),
         Arc::new(RuntimeMetrics::default()),
     );
     let user_id = RouterSessionId(9);

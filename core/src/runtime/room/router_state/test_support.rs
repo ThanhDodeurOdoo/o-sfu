@@ -6,20 +6,18 @@ use super::RoomRouterState;
 use crate::{
     MediaCodecFlags,
     runtime::{
-        RoomInstanceId, UserId,
-        metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
-        recording::{MediaSource, RecordingService},
+        RoomInstanceId, UserId, metrics::RuntimeMetrics,
+        packet_sink_registry::RoomPacketSinkRegistry, recording::RecordingService,
         room::rtp_capabilities::router_rtp_capabilities,
     },
 };
 
 impl RoomRouterState {
     pub(in crate::runtime::room) fn new_for_test(router_id: RouterId) -> Self {
-        let media_source: Arc<dyn MediaSource> = Arc::new(RoomPacketSinkRegistry::default());
+        let packet_sink_registry = Arc::new(RoomPacketSinkRegistry::default());
         let event_sink = Arc::new(RecordingService::new(
             RoomInstanceId::from_raw(0),
-            media_source,
+            packet_sink_registry,
             Arc::new(RuntimeMetrics::default()),
         ));
         Self::new(

@@ -11,11 +11,12 @@ use std::{
 
 use o_sfu_router::{ProducerId, RouterEvent, SessionId as UserId, TransportId};
 
-use super::{MediaPacketSink, MediaSource, into_packet_sink, user::RecordingSession};
+use super::{MediaPacketSink, into_packet_sink, user::RecordingSession};
 use crate::runtime::{
     RoomInstanceId,
     media_transport::{TransportMediaId, TransportSessionKey},
-    metrics::RuntimeMetrics,
+    metrics::{RtpForwardDestinationKind, RuntimeMetrics},
+    packet_sink_registry::RoomPacketSinkRegistry,
     router_events::RoomRouterEventSink,
 };
 
@@ -150,7 +151,7 @@ struct RecordingServiceState {
 
 pub(crate) struct RecordingService {
     room_instance_id: RoomInstanceId,
-    media_source: Arc<dyn MediaSource>,
+    packet_sink_registry: Arc<RoomPacketSinkRegistry>,
     lifecycle: Arc<AtomicU8>,
     users: Arc<Mutex<RecordingServiceState>>,
     captured_packet_count: Arc<AtomicU64>,
@@ -161,7 +162,7 @@ pub(crate) struct RecordingService {
 impl RecordingService {
     pub(crate) fn new(
         room_instance_id: RoomInstanceId,
-        media_source: Arc<dyn MediaSource>,
+        packet_sink_registry: Arc<RoomPacketSinkRegistry>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         let lifecycle = Arc::new(AtomicU8::new(RecordingLifecycleState::Idle.as_u8()));
@@ -172,7 +173,7 @@ impl RecordingService {
         let captured_streams = Arc::new(RwLock::new(BTreeSet::new()));
         Self {
             room_instance_id,
-            media_source,
+            packet_sink_registry,
             lifecycle: Arc::clone(&lifecycle),
             users: Arc::clone(&users),
             captured_packet_count: Arc::clone(&captured_packet_count),
@@ -198,7 +199,11 @@ impl RecordingService {
         let sink = into_packet_sink(Arc::<RecordingPacketCollector>::clone(
             &self.packet_collector,
         ));
-        self.media_source.activate_room(self.room_instance_id, sink);
+        self.packet_sink_registry.register_room(
+            self.room_instance_id,
+            sink,
+            RtpForwardDestinationKind::Recording,
+        );
         self.lifecycle.store(
             RecordingLifecycleState::Recording.as_u8(),
             Ordering::Release,
@@ -212,7 +217,8 @@ impl RecordingService {
             RecordingLifecycleState::Stopping,
             RecordingAction::Stop,
         )?;
-        self.media_source.deactivate_room(self.room_instance_id);
+        self.packet_sink_registry
+            .unregister_room(self.room_instance_id);
         self.lifecycle.store(
             RecordingLifecycleState::Finalizing.as_u8(),
             Ordering::Release,

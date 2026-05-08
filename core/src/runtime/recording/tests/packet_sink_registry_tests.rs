@@ -9,8 +9,9 @@ use std::{
 use crate::runtime::{
     RoomInstanceId, UserId,
     media_transport::{TransportMediaId, TransportSessionKey},
-    packet_sink_registry::{PacketSinkLookup, PacketSinkRouteCache},
-    recording::{MediaPacketSink, MediaSource, MediaTap, into_packet_sink},
+    metrics::RtpForwardDestinationKind,
+    packet_sink_registry::{PacketSinkLookup, PacketSinkRouteCache, RoomPacketSinkRegistry},
+    recording::{MediaPacketSink, into_packet_sink},
     rtc_engine::test_support::{sample_forwarded_packet, test_transport_session_key},
 };
 
@@ -65,18 +66,32 @@ impl MediaPacketSink for PayloadCapturingSink {
     }
 }
 
-#[test]
-fn media_tap_is_a_noop_when_no_room_is_active() {
-    let tap = MediaTap::default();
-    let session_key = test_transport_session_key(10, 0, 1, UserId::Integer(1));
-    let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
-
-    tap.write_packet(&packet, TransportMediaId::default());
+fn register_recording_sink<T>(
+    registry: &RoomPacketSinkRegistry,
+    room_instance_id: RoomInstanceId,
+    sink: Arc<T>,
+) where
+    T: MediaPacketSink + 'static,
+{
+    registry.register_room(
+        room_instance_id,
+        into_packet_sink(sink),
+        RtpForwardDestinationKind::Recording,
+    );
 }
 
 #[test]
-fn media_tap_routes_packets_only_for_active_rooms() {
-    let tap = MediaTap::default();
+fn packet_sink_registry_is_a_noop_when_no_room_is_active() {
+    let registry = RoomPacketSinkRegistry::default();
+    let session_key = test_transport_session_key(10, 0, 1, UserId::Integer(1));
+    let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
+
+    registry.write_packet(&packet, TransportMediaId::default());
+}
+
+#[test]
+fn packet_sink_registry_routes_packets_only_for_active_rooms() {
+    let registry = RoomPacketSinkRegistry::default();
     let counting_sink = Arc::new(CountingSink::new());
     let active_packet = sample_forwarded_packet(
         test_transport_session_key(10, 0, 1, UserId::Integer(1)),
@@ -89,57 +104,71 @@ fn media_tap_routes_packets_only_for_active_rooms() {
         b"second",
     );
 
-    tap.activate_room(
+    register_recording_sink(
+        &registry,
         RoomInstanceId::from_raw(10),
-        into_packet_sink(Arc::<CountingSink>::clone(&counting_sink)),
+        Arc::<CountingSink>::clone(&counting_sink),
     );
-    tap.write_packet(&active_packet, TransportMediaId::new(3));
-    tap.write_packet(&inactive_packet, TransportMediaId::new(4));
+    registry.write_packet(&active_packet, TransportMediaId::new(3));
+    registry.write_packet(&inactive_packet, TransportMediaId::new(4));
 
     assert_eq!(counting_sink.frames.load(Ordering::Relaxed), 1);
 }
 
 #[test]
-fn media_tap_exposes_the_active_room_sink_for_forwarding_destinations() {
-    let tap = MediaTap::default();
+fn packet_sink_registry_exposes_the_active_room_sink_for_forwarding_destinations() {
+    let registry = RoomPacketSinkRegistry::default();
     let sink = Arc::new(CountingSink::new());
 
-    assert!(tap.sink_for_room(RoomInstanceId::from_raw(10)).is_none());
-    tap.activate_room(
+    assert!(
+        registry
+            .sink_for_room(RoomInstanceId::from_raw(10))
+            .is_none()
+    );
+    register_recording_sink(
+        &registry,
         RoomInstanceId::from_raw(10),
-        into_packet_sink(Arc::<CountingSink>::clone(&sink)),
+        Arc::<CountingSink>::clone(&sink),
     );
 
-    assert!(tap.sink_for_room(RoomInstanceId::from_raw(10)).is_some());
-    assert!(tap.sink_for_room(RoomInstanceId::from_raw(11)).is_none());
+    assert!(
+        registry
+            .sink_for_room(RoomInstanceId::from_raw(10))
+            .is_some()
+    );
+    assert!(
+        registry
+            .sink_for_room(RoomInstanceId::from_raw(11))
+            .is_none()
+    );
 }
 
 #[test]
 fn packet_sink_route_cache_refreshes_after_registry_changes() {
-    let tap = MediaTap::default();
+    let registry = RoomPacketSinkRegistry::default();
     let sink = Arc::new(CountingSink::new());
     let mut cache = PacketSinkRouteCache::default();
     let room_id = RoomInstanceId::from_raw(13);
 
-    cache.refresh_from(&tap);
+    cache.refresh_from(&registry);
     assert!(cache.sink_for_room(room_id).is_none());
 
-    tap.activate_room(room_id, into_packet_sink(Arc::<CountingSink>::clone(&sink)));
+    register_recording_sink(&registry, room_id, Arc::<CountingSink>::clone(&sink));
 
     assert!(cache.sink_for_room(room_id).is_none());
-    cache.refresh_from(&tap);
+    cache.refresh_from(&registry);
     assert!(cache.sink_for_room(room_id).is_some());
 
-    tap.deactivate_room(room_id);
+    registry.unregister_room(room_id);
 
     assert!(cache.sink_for_room(room_id).is_some());
-    cache.refresh_from(&tap);
+    cache.refresh_from(&registry);
     assert!(cache.sink_for_room(room_id).is_none());
 }
 
 #[test]
-fn media_tap_keeps_multiple_rooms_active_at_once() {
-    let tap = MediaTap::default();
+fn packet_sink_registry_keeps_multiple_rooms_active_at_once() {
+    let registry = RoomPacketSinkRegistry::default();
     let first_sink = Arc::new(CountingSink::new());
     let second_sink = Arc::new(CountingSink::new());
     let first_packet = sample_forwarded_packet(
@@ -153,24 +182,26 @@ fn media_tap_keeps_multiple_rooms_active_at_once() {
         b"second",
     );
 
-    tap.activate_room(
+    register_recording_sink(
+        &registry,
         RoomInstanceId::from_raw(10),
-        into_packet_sink(Arc::<CountingSink>::clone(&first_sink)),
+        Arc::<CountingSink>::clone(&first_sink),
     );
-    tap.activate_room(
+    register_recording_sink(
+        &registry,
         RoomInstanceId::from_raw(11),
-        into_packet_sink(Arc::<CountingSink>::clone(&second_sink)),
+        Arc::<CountingSink>::clone(&second_sink),
     );
-    tap.write_packet(&first_packet, TransportMediaId::new(3));
-    tap.write_packet(&second_packet, TransportMediaId::new(4));
+    registry.write_packet(&first_packet, TransportMediaId::new(3));
+    registry.write_packet(&second_packet, TransportMediaId::new(4));
 
     assert_eq!(first_sink.frames.load(Ordering::Relaxed), 1);
     assert_eq!(second_sink.frames.load(Ordering::Relaxed), 1);
 }
 
 #[test]
-fn media_tap_records_forwarded_payload_bytes_through_the_shared_boundary() {
-    let tap = MediaTap::default();
+fn packet_sink_registry_records_forwarded_payload_bytes_through_the_shared_boundary() {
+    let registry = RoomPacketSinkRegistry::default();
     let sink = Arc::new(PayloadCapturingSink::new());
     let packet = sample_forwarded_packet(
         test_transport_session_key(12, 0, 1, UserId::Integer(3)),
@@ -178,11 +209,12 @@ fn media_tap_records_forwarded_payload_bytes_through_the_shared_boundary() {
         b"captured",
     );
 
-    tap.activate_room(
+    register_recording_sink(
+        &registry,
         RoomInstanceId::from_raw(12),
-        into_packet_sink(Arc::<PayloadCapturingSink>::clone(&sink)),
+        Arc::<PayloadCapturingSink>::clone(&sink),
     );
-    tap.write_packet(&packet, TransportMediaId::new(5));
+    registry.write_packet(&packet, TransportMediaId::new(5));
 
     let payloads = sink
         .payloads

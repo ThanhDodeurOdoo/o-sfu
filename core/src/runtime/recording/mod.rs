@@ -1,4 +1,3 @@
-mod media_source;
 mod metadata;
 mod ortp_format;
 mod service;
@@ -9,10 +8,7 @@ pub(crate) mod test_support;
 mod tests;
 mod user;
 
-pub(crate) use media_source::MediaSource;
 pub(crate) use ortp_format::OrtpFileHeader;
 pub(crate) use service::RecordingService;
 
-#[cfg(test)]
-pub(crate) use crate::runtime::packet_sink_registry::RoomPacketSinkRegistry as MediaTap;
 pub use crate::runtime::packet_sink_registry::{PacketSink as MediaPacketSink, into_packet_sink};

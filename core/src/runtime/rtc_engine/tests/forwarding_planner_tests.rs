@@ -46,16 +46,6 @@ impl CountingSink {
     }
 }
 
-trait MediaSource {
-    fn activate_room(&self, room_instance_id: RoomInstanceId, sink: Arc<dyn MediaPacketSink>);
-}
-
-impl MediaSource for RoomPacketSinkRegistry {
-    fn activate_room(&self, room_instance_id: RoomInstanceId, sink: Arc<dyn MediaPacketSink>) {
-        self.register_room(room_instance_id, sink, RtpForwardDestinationKind::Recording);
-    }
-}
-
 impl MediaPacketSink for CountingSink {
     fn record_packet(
         &self,
@@ -187,9 +177,10 @@ fn populate_forward_routes_keeps_recording_and_local_rtc_destinations_together()
             }],
         },
     );
-    packet_sink_registry.activate_room(
+    packet_sink_registry.register_room(
         producer_session.room_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&sink)),
+        RtpForwardDestinationKind::Recording,
     );
     let pending_packets = vec![sample_forwarded_packet(
         producer_session,
@@ -306,9 +297,10 @@ fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc
             }],
         },
     );
-    packet_sink_registry.activate_room(
+    packet_sink_registry.register_room(
         producer_session.room_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
+        RtpForwardDestinationKind::Recording,
     );
     state.add_relay_target(
         source_transport_media_id,
@@ -388,9 +380,10 @@ fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_r
             }],
         },
     );
-    packet_sink_registry.activate_room(
+    packet_sink_registry.register_room(
         producer_session.room_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
+        RtpForwardDestinationKind::Recording,
     );
     state.add_relay_target(
         source_transport_media_id,
@@ -891,9 +884,10 @@ fn populate_forward_routes_gates_only_the_selected_source_media() {
         gated_source_transport_media_id,
         PacketLayerGate::Rid("hi".into()),
     );
-    packet_sink_registry.activate_room(
+    packet_sink_registry.register_room(
         gated_producer_session.room_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
+        RtpForwardDestinationKind::Recording,
     );
     state.add_relay_target(
         gated_source_transport_media_id,

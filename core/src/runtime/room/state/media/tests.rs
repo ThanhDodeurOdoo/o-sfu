@@ -33,7 +33,7 @@ use crate::{
         media_transport::TransportMediaId,
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
-        recording::{MediaSource, RecordingService},
+        recording::RecordingService,
         room::{
             LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext,
             rtp_capabilities::router_rtp_capabilities,
@@ -53,7 +53,7 @@ use crate::{
 };
 
 fn test_state() -> RoomState {
-    let media_source: Arc<dyn MediaSource> = Arc::new(RoomPacketSinkRegistry::default());
+    let packet_sink_registry = Arc::new(RoomPacketSinkRegistry::default());
     let runtime_context = RoomRuntimeContext::new(
         RoomInstanceId::from_raw(0),
         LocalRouterRuntimeContext {
@@ -69,7 +69,7 @@ fn test_state() -> RoomState {
         crate::RoomShardingPolicy::strict_single_router(),
         Arc::new(RecordingService::new(
             RoomInstanceId::from_raw(0),
-            media_source,
+            packet_sink_registry,
             Arc::new(RuntimeMetrics::default()),
         )),
     )

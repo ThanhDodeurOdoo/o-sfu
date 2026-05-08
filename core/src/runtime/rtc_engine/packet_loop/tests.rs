@@ -84,16 +84,6 @@ impl MediaPacketSink for CountingSink {
     }
 }
 
-trait MediaSource {
-    fn activate_room(&self, room_instance_id: RoomInstanceId, sink: Arc<dyn MediaPacketSink>);
-}
-
-impl MediaSource for RoomPacketSinkRegistry {
-    fn activate_room(&self, room_instance_id: RoomInstanceId, sink: Arc<dyn MediaPacketSink>) {
-        self.register_room(room_instance_id, sink, RtpForwardDestinationKind::Recording);
-    }
-}
-
 trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
     fn rtc_datagram_fallback_scans(&self) -> u64 {
         self.counter_value(MetricName::RtcDatagramFallbackScansTotal, &[])
@@ -574,9 +564,10 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
 
-    packet_sink_registry.activate_room(
+    packet_sink_registry.register_room(
         producer_session.room_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&sink)),
+        RtpForwardDestinationKind::Recording,
     );
     buffers.pending_packets.push(sample_forwarded_packet(
         producer_session,
