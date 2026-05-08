@@ -34,6 +34,39 @@ fn test_simulcast_video_rtp_parameters() -> MediaStream {
     sample_simulcast_video_rtp_parameters(None)
 }
 
+const DIAGNOSTICS_ROUTE_PATHS: &[&str] = &[
+    DIAGNOSTICS_SUMMARY_PATH,
+    DIAGNOSTICS_ROOMS_PATH,
+    "/internal/diagnostics/rooms/test-room",
+    "/internal/diagnostics/rooms/test-room/users",
+    "/internal/diagnostics/node-graph/rooms/test-room",
+    "/internal/diagnostics/node-graph/rooms/test-room/users/1",
+    "/internal/diagnostics/users/1",
+];
+
+async fn assert_diagnostics_path_status(
+    state: &RuntimeState,
+    path: &str,
+    authorization: Option<&str>,
+    expected_status: StatusCode,
+) {
+    let mut request_builder = Request::get(path);
+    if let Some(authorization) = authorization {
+        request_builder = request_builder.header(header::AUTHORIZATION, authorization);
+    }
+    let request = build_request(request_builder, Body::empty());
+    assert!(request.is_some());
+    let Some(request) = request else {
+        return;
+    };
+    let response = app(state.clone()).oneshot(request).await;
+    assert!(response.is_ok());
+    let Some(response) = response.ok() else {
+        return;
+    };
+    assert_eq!(response.status(), expected_status);
+}
+
 async fn make_session_ready(room: &Room, user_id: &UserId, media_transport: &MediaTransport) {
     let Some(connection_id) = room.test_api().inspect().user_connection_id(user_id).await else {
         panic!("user should exist before publishing");
@@ -78,17 +111,9 @@ async fn diagnostics_routes_are_forbidden_without_token_on_public_listener() {
     let mut state = test_state();
     state.config.http.bind_address = SocketAddr::from(([0, 0, 0, 0], 8070));
 
-    let request = build_request(Request::get(DIAGNOSTICS_SUMMARY_PATH), Body::empty());
-    assert!(request.is_some());
-    let Some(request) = request else {
-        return;
-    };
-    let response = app(state).oneshot(request).await;
-    assert!(response.is_ok());
-    let Some(response) = response.ok() else {
-        return;
-    };
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    for path in DIAGNOSTICS_ROUTE_PATHS {
+        assert_diagnostics_path_status(&state, path, None, StatusCode::FORBIDDEN).await;
+    }
 }
 
 #[tokio::test]
@@ -97,48 +122,23 @@ async fn diagnostics_routes_require_the_configured_bearer_token() {
     state.config.http.bind_address = SocketAddr::from(([0, 0, 0, 0], 8070));
     state.config.diagnostics.auth_token = Some(String::from("operator-secret"));
 
-    let unauthorized = build_request(Request::get(DIAGNOSTICS_SUMMARY_PATH), Body::empty());
-    assert!(unauthorized.is_some());
-    let Some(unauthorized) = unauthorized else {
-        return;
-    };
-    let unauthorized_response = app(state.clone()).oneshot(unauthorized).await;
-    assert!(unauthorized_response.is_ok());
-    let Some(unauthorized_response) = unauthorized_response.ok() else {
-        return;
-    };
-    assert_eq!(unauthorized_response.status(), StatusCode::UNAUTHORIZED);
-
-    let wrong_scheme = build_request(
-        Request::get(DIAGNOSTICS_SUMMARY_PATH)
-            .header(header::AUTHORIZATION, "Basic operator-secret"),
-        Body::empty(),
-    );
-    assert!(wrong_scheme.is_some());
-    let Some(wrong_scheme) = wrong_scheme else {
-        return;
-    };
-    let wrong_scheme_response = app(state.clone()).oneshot(wrong_scheme).await;
-    assert!(wrong_scheme_response.is_ok());
-    let Some(wrong_scheme_response) = wrong_scheme_response.ok() else {
-        return;
-    };
-    assert_eq!(wrong_scheme_response.status(), StatusCode::UNAUTHORIZED);
-
-    let legacy_scheme = build_request(
-        Request::get(DIAGNOSTICS_SUMMARY_PATH).header(header::AUTHORIZATION, "jwt operator-secret"),
-        Body::empty(),
-    );
-    assert!(legacy_scheme.is_some());
-    let Some(legacy_scheme) = legacy_scheme else {
-        return;
-    };
-    let legacy_scheme_response = app(state.clone()).oneshot(legacy_scheme).await;
-    assert!(legacy_scheme_response.is_ok());
-    let Some(legacy_scheme_response) = legacy_scheme_response.ok() else {
-        return;
-    };
-    assert_eq!(legacy_scheme_response.status(), StatusCode::UNAUTHORIZED);
+    for path in DIAGNOSTICS_ROUTE_PATHS {
+        assert_diagnostics_path_status(&state, path, None, StatusCode::UNAUTHORIZED).await;
+        assert_diagnostics_path_status(
+            &state,
+            path,
+            Some("Basic operator-secret"),
+            StatusCode::UNAUTHORIZED,
+        )
+        .await;
+        assert_diagnostics_path_status(
+            &state,
+            path,
+            Some("jwt operator-secret"),
+            StatusCode::UNAUTHORIZED,
+        )
+        .await;
+    }
 
     let authorized = build_request(
         Request::get(DIAGNOSTICS_SUMMARY_PATH)

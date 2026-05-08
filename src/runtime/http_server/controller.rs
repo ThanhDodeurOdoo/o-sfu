@@ -4,8 +4,9 @@ use anyhow::Result;
 use axum::{
     Extension, Router,
     body::Bytes,
-    extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State},
     http::{HeaderMap, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -67,6 +68,16 @@ pub(crate) fn app(state: RuntimeState) -> Router {
         .route(NOOP_PATH, get(noop))
         .route(STATS_PATH, get(stats))
         .route(CHANNEL_PATH, get(room))
+        .merge(diagnostics_router(state.clone()))
+        .route(
+            DISCONNECT_PATH,
+            post(disconnect).layer(DefaultBodyLimit::max(MAX_DISCONNECT_BODY_BYTES)),
+        )
+        .with_state(state)
+}
+
+fn diagnostics_router(state: RuntimeState) -> Router<RuntimeState> {
+    Router::new()
         .route(DIAGNOSTICS_SUMMARY_PATH, get(diagnostics_summary))
         .route(DIAGNOSTICS_ROOMS_PATH, get(diagnostics_rooms))
         .route(
@@ -89,11 +100,10 @@ pub(crate) fn app(state: RuntimeState) -> Router {
             "/internal/diagnostics/users/{id}",
             get(diagnostics_user_detail),
         )
-        .route(
-            DISCONNECT_PATH,
-            post(disconnect).layer(DefaultBodyLimit::max(MAX_DISCONNECT_BODY_BYTES)),
-        )
-        .with_state(state)
+        .route_layer(middleware::from_fn_with_state(
+            state,
+            require_diagnostics_access,
+        ))
 }
 
 #[o_sfu_telemetry::measure_http_request(
@@ -279,13 +289,8 @@ fn authorization_token<'a>(headers: &'a HeaderMap, accepted_schemes: &[&str]) ->
     Some(token)
 }
 
-async fn diagnostics_summary(State(state): State<RuntimeState>, headers: HeaderMap) -> Response {
+async fn diagnostics_summary(State(state): State<RuntimeState>) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.config.http, &state.config.diagnostics) {
-            DiagnosticsAccess::Allowed => {}
-            DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
-            DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
-        }
         axum::Json(
             diagnostics::summary_response(&state.rooms, &state.media_transport, &state.diagnostics)
                 .await,
@@ -295,13 +300,8 @@ async fn diagnostics_summary(State(state): State<RuntimeState>, headers: HeaderM
     .await
 }
 
-async fn diagnostics_rooms(State(state): State<RuntimeState>, headers: HeaderMap) -> Response {
+async fn diagnostics_rooms(State(state): State<RuntimeState>) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.config.http, &state.config.diagnostics) {
-            DiagnosticsAccess::Allowed => {}
-            DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
-            DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
-        }
         axum::Json(
             diagnostics::rooms_response(&state.rooms, &state.media_transport, &state.diagnostics)
                 .await,
@@ -313,15 +313,9 @@ async fn diagnostics_rooms(State(state): State<RuntimeState>, headers: HeaderMap
 
 async fn diagnostics_room_detail(
     State(state): State<RuntimeState>,
-    headers: HeaderMap,
     Path(room_id): Path<String>,
 ) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.config.http, &state.config.diagnostics) {
-            DiagnosticsAccess::Allowed => {}
-            DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
-            DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
-        }
         let Some(payload) = diagnostics::room_detail_response(
             &state.rooms,
             &state.media_transport,
@@ -339,15 +333,9 @@ async fn diagnostics_room_detail(
 
 async fn diagnostics_room_users(
     State(state): State<RuntimeState>,
-    headers: HeaderMap,
     Path(room_id): Path<String>,
 ) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.config.http, &state.config.diagnostics) {
-            DiagnosticsAccess::Allowed => {}
-            DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
-            DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
-        }
         let Some(payload) = diagnostics::room_users_response(
             &state.rooms,
             &state.media_transport,
@@ -365,15 +353,9 @@ async fn diagnostics_room_users(
 
 async fn diagnostics_room_graph(
     State(state): State<RuntimeState>,
-    headers: HeaderMap,
     Path(room_id): Path<String>,
 ) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.config.http, &state.config.diagnostics) {
-            DiagnosticsAccess::Allowed => {}
-            DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
-            DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
-        }
         let Some(payload) = diagnostics::room_detail_response(
             &state.rooms,
             &state.media_transport,
@@ -392,15 +374,9 @@ async fn diagnostics_room_graph(
 
 async fn diagnostics_user_graph(
     State(state): State<RuntimeState>,
-    headers: HeaderMap,
     Path((room_id, user_id)): Path<(String, String)>,
 ) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.config.http, &state.config.diagnostics) {
-            DiagnosticsAccess::Allowed => {}
-            DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
-            DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
-        }
         let Some(payload) = diagnostics::room_detail_response(
             &state.rooms,
             &state.media_transport,
@@ -421,15 +397,9 @@ async fn diagnostics_user_graph(
 
 async fn diagnostics_user_detail(
     State(state): State<RuntimeState>,
-    headers: HeaderMap,
     Path(user_id): Path<String>,
 ) -> Response {
     async {
-        match ensure_diagnostics_access(&headers, &state.config.http, &state.config.diagnostics) {
-            DiagnosticsAccess::Allowed => {}
-            DiagnosticsAccess::Unauthorized => return StatusCode::UNAUTHORIZED.into_response(),
-            DiagnosticsAccess::Disabled => return StatusCode::FORBIDDEN.into_response(),
-        }
         match diagnostics::user_detail_response(
             &state.rooms,
             &state.media_transport,
@@ -446,6 +416,22 @@ async fn diagnostics_user_detail(
         }
     }
     .await
+}
+
+async fn require_diagnostics_access(
+    State(state): State<RuntimeState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    match ensure_diagnostics_access(
+        request.headers(),
+        &state.config.http,
+        &state.config.diagnostics,
+    ) {
+        DiagnosticsAccess::Allowed => next.run(request).await,
+        DiagnosticsAccess::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
+        DiagnosticsAccess::Disabled => StatusCode::FORBIDDEN.into_response(),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
