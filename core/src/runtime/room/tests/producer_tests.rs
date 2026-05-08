@@ -68,15 +68,16 @@ async fn production_change_pauses_producer_and_broadcasts_track_binding() {
     );
     assert!(drain_outbound(&mut rx1).is_empty());
 
-    room.test_api()
-        .media()
-        .set_publication_active(
-            &UserId::Integer(1),
-            TestSourceKind::ScalableVideo,
-            false,
-            &adapter,
-        )
-        .await;
+    let publisher_id = UserId::Integer(1);
+    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
+    room.set_publication_active_runtime(
+        &publisher_id,
+        publisher_connection_id,
+        &stream_id_for_source(TestSourceKind::ScalableVideo),
+        PublicationActivity::Inactive,
+        &adapter,
+    )
+    .await;
 
     let msgs1 = drain_outbound(&mut rx1);
     let msgs2 = drain_outbound(&mut rx2);
@@ -95,15 +96,14 @@ async fn production_change_pauses_producer_and_broadcasts_track_binding() {
         Some(false),
     );
 
-    room.test_api()
-        .media()
-        .set_publication_active(
-            &UserId::Integer(1),
-            TestSourceKind::ScalableVideo,
-            true,
-            &adapter,
-        )
-        .await;
+    room.set_publication_active_runtime(
+        &publisher_id,
+        publisher_connection_id,
+        &stream_id_for_source(TestSourceKind::ScalableVideo),
+        PublicationActivity::Active,
+        &adapter,
+    )
+    .await;
 
     let msgs1 = drain_outbound(&mut rx1);
     assert_track_binding_activity_update(
@@ -323,14 +323,12 @@ async fn leaving_a_multiparty_room_restores_the_highest_consumer_layer() {
 
     let baseline_event_count = fake.snapshot_events().len();
     assert!(
-        room.test_api()
-            .lifecycle()
-            .leave_session_without_transport_cleanup(
-                &UserId::Integer(3),
-                test_connection_id(2),
-                &adapter,
-            )
-            .await
+        room.remove_user_with_cleanup(
+            &UserId::Integer(3),
+            test_connection_id(2),
+            UserCleanup::state_only(Some(&adapter)),
+        )
+        .await
     );
 
     let events = fake.snapshot_events();
@@ -350,18 +348,24 @@ async fn leaving_a_multiparty_room_restores_the_highest_consumer_layer() {
 #[tokio::test]
 async fn receiver_bandwidth_pressure_downswitches_after_sustained_observations() {
     let (room, adapter, fake) = setup_three_ready_users_with_fake().await;
-    publish_audio_and_camera(&room, &UserId::Integer(1), &adapter).await;
+    let publisher_id = UserId::Integer(1);
+    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
+    publish_audio_and_camera(&room, &publisher_id, &adapter).await;
     let (first_audio_media_id, _first_camera_media_id) =
-        source_media_ids(&room, &UserId::Integer(1)).await;
+        source_media_ids(&room, &publisher_id).await;
 
     fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
         first_audio_media_id,
         Instant::now(),
     )]);
-    room.test_api()
-        .lifecycle()
-        .update_user_info_runtime(&UserId::Integer(1), UserInfo::default(), false, &adapter)
-        .await;
+    room.update_user_info(
+        &publisher_id,
+        publisher_connection_id,
+        UserInfo::default(),
+        UserInfoRefresh::NotNeeded,
+        &adapter,
+    )
+    .await;
     assert_consumer_packet_selection_update(
         &fake.snapshot_events(),
         &UserId::Integer(2),
@@ -372,10 +376,14 @@ async fn receiver_bandwidth_pressure_downswitches_after_sustained_observations()
     fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 100_000);
     let baseline_event_count = fake.snapshot_events().len();
     for _ in 0..2 {
-        room.test_api()
-            .lifecycle()
-            .update_user_info_runtime(&UserId::Integer(1), UserInfo::default(), false, &adapter)
-            .await;
+        room.update_user_info(
+            &publisher_id,
+            publisher_connection_id,
+            UserInfo::default(),
+            UserInfoRefresh::NotNeeded,
+            &adapter,
+        )
+        .await;
     }
 
     let events = fake.snapshot_events();
@@ -395,9 +403,11 @@ async fn receiver_bandwidth_pressure_downswitches_after_sustained_observations()
 #[tokio::test]
 async fn receiver_bandwidth_recovery_upswitches_conservatively_with_keyframe() {
     let (room, adapter, fake) = setup_three_ready_users_with_fake().await;
-    publish_audio_and_camera(&room, &UserId::Integer(1), &adapter).await;
+    let publisher_id = UserId::Integer(1);
+    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
+    publish_audio_and_camera(&room, &publisher_id, &adapter).await;
     let (first_audio_media_id, _first_camera_media_id) =
-        source_media_ids(&room, &UserId::Integer(1)).await;
+        source_media_ids(&room, &publisher_id).await;
 
     fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
         first_audio_media_id,
@@ -405,10 +415,14 @@ async fn receiver_bandwidth_recovery_upswitches_conservatively_with_keyframe() {
     )]);
     fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 100_000);
     for _ in 0..2 {
-        room.test_api()
-            .lifecycle()
-            .update_user_info_runtime(&UserId::Integer(1), UserInfo::default(), false, &adapter)
-            .await;
+        room.update_user_info(
+            &publisher_id,
+            publisher_connection_id,
+            UserInfo::default(),
+            UserInfoRefresh::NotNeeded,
+            &adapter,
+        )
+        .await;
     }
     assert_consumer_packet_selection_update(
         &fake.snapshot_events(),
@@ -420,10 +434,14 @@ async fn receiver_bandwidth_recovery_upswitches_conservatively_with_keyframe() {
     fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 2_000_000);
     let baseline_event_count = fake.snapshot_events().len();
     for _ in 0..3 {
-        room.test_api()
-            .lifecycle()
-            .update_user_info_runtime(&UserId::Integer(1), UserInfo::default(), false, &adapter)
-            .await;
+        room.update_user_info(
+            &publisher_id,
+            publisher_connection_id,
+            UserInfo::default(),
+            UserInfoRefresh::NotNeeded,
+            &adapter,
+        )
+        .await;
     }
 
     let events = fake.snapshot_events();
@@ -444,13 +462,19 @@ async fn receiver_budget_pauses_visible_thumbnail_after_cheapest_layers_do_not_f
         publish_simulcast_camera(&room, &UserId::Integer(raw_user_id), &adapter).await;
     }
 
+    let publisher_id = UserId::Integer(1);
+    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
     fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 200_000);
     let baseline_event_count = fake.snapshot_events().len();
     for _ in 0..2 {
-        room.test_api()
-            .lifecycle()
-            .update_user_info_runtime(&UserId::Integer(1), UserInfo::default(), false, &adapter)
-            .await;
+        room.update_user_info(
+            &publisher_id,
+            publisher_connection_id,
+            UserInfo::default(),
+            UserInfoRefresh::NotNeeded,
+            &adapter,
+        )
+        .await;
     }
 
     let events = fake.snapshot_events();
@@ -506,12 +530,18 @@ async fn receiver_budget_resumes_policy_paused_route_without_erasing_subscriptio
         publish_simulcast_camera(&room, &UserId::Integer(raw_user_id), &adapter).await;
     }
 
+    let publisher_id = UserId::Integer(1);
+    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
     fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 200_000);
     for _ in 0..2 {
-        room.test_api()
-            .lifecycle()
-            .update_user_info_runtime(&UserId::Integer(1), UserInfo::default(), false, &adapter)
-            .await;
+        room.update_user_info(
+            &publisher_id,
+            publisher_connection_id,
+            UserInfo::default(),
+            UserInfoRefresh::NotNeeded,
+            &adapter,
+        )
+        .await;
     }
     assert_consumer_activity_update(
         &fake.snapshot_events(),
@@ -523,10 +553,14 @@ async fn receiver_budget_resumes_policy_paused_route_without_erasing_subscriptio
     fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 1_000_000);
     let baseline_event_count = fake.snapshot_events().len();
     for _ in 0..3 {
-        room.test_api()
-            .lifecycle()
-            .update_user_info_runtime(&UserId::Integer(1), UserInfo::default(), false, &adapter)
-            .await;
+        room.update_user_info(
+            &publisher_id,
+            publisher_connection_id,
+            UserInfo::default(),
+            UserInfoRefresh::NotNeeded,
+            &adapter,
+        )
+        .await;
     }
 
     let events = fake.snapshot_events();
@@ -630,10 +664,16 @@ async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate()
         second_audio_media_id,
         Instant::now(),
     )]);
-    room.test_api()
-        .lifecycle()
-        .update_user_info_runtime(&UserId::Integer(2), UserInfo::default(), false, &adapter)
-        .await;
+    let second_user_id = UserId::Integer(2);
+    let second_connection_id = user_connection_id(&room, &second_user_id).await;
+    room.update_user_info(
+        &second_user_id,
+        second_connection_id,
+        UserInfo::default(),
+        UserInfoRefresh::NotNeeded,
+        &adapter,
+    )
+    .await;
 
     let events = fake.snapshot_events();
     let speaker_two_events = &events[baseline_event_count..];
@@ -655,10 +695,16 @@ async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate()
         first_audio_media_id,
         Instant::now(),
     )]);
-    room.test_api()
-        .lifecycle()
-        .update_user_info_runtime(&UserId::Integer(1), UserInfo::default(), false, &adapter)
-        .await;
+    let first_user_id = UserId::Integer(1);
+    let first_connection_id = user_connection_id(&room, &first_user_id).await;
+    room.update_user_info(
+        &first_user_id,
+        first_connection_id,
+        UserInfo::default(),
+        UserInfoRefresh::NotNeeded,
+        &adapter,
+    )
+    .await;
 
     let events = fake.snapshot_events();
     let speaker_one_events = &events[second_baseline_event_count..];
@@ -711,10 +757,16 @@ async fn active_speaker_camera_policy_clears_only_the_first_five_speakers_gates(
             .map(|transport_media_id| ActiveSpeakerSource::new(transport_media_id, Instant::now()))
             .collect(),
     );
-    room.test_api()
-        .lifecycle()
-        .update_user_info_runtime(&UserId::Integer(6), UserInfo::default(), false, &adapter)
-        .await;
+    let last_speaker_id = UserId::Integer(6);
+    let last_speaker_connection_id = user_connection_id(&room, &last_speaker_id).await;
+    room.update_user_info(
+        &last_speaker_id,
+        last_speaker_connection_id,
+        UserInfo::default(),
+        UserInfoRefresh::NotNeeded,
+        &adapter,
+    )
+    .await;
 
     let events = fake.snapshot_events();
     let active_speaker_events = &events[baseline_event_count..];
@@ -742,24 +794,32 @@ async fn pinned_camera_layout_overrides_active_speaker_bias_for_that_receiver() 
         third_audio_media_id,
         Instant::now(),
     )]);
-    room.test_api()
-        .lifecycle()
-        .update_user_info_runtime(&UserId::Integer(3), UserInfo::default(), false, &adapter)
-        .await;
+    let third_user_id = UserId::Integer(3);
+    let third_connection_id = user_connection_id(&room, &third_user_id).await;
+    room.update_user_info(
+        &third_user_id,
+        third_connection_id,
+        UserInfo::default(),
+        UserInfoRefresh::NotNeeded,
+        &adapter,
+    )
+    .await;
 
     let baseline_event_count = fake.snapshot_events().len();
-    room.test_api()
-        .media()
-        .update_subscription(
-            &UserId::Integer(2),
-            &UserId::Integer(1),
-            &TestSubscriptionStates {
-                scalable_video_layout: Some(VideoLayoutIntent::Pinned),
-                ..TestSubscriptionStates::default()
-            },
-            &adapter,
-        )
-        .await;
+    let subscriber_id = UserId::Integer(2);
+    let subscriber_connection_id = user_connection_id(&room, &subscriber_id).await;
+    let pinned_intents = subscription_intents_from_test_states(&TestSubscriptionStates {
+        scalable_video_layout: Some(VideoLayoutIntent::Pinned),
+        ..TestSubscriptionStates::default()
+    });
+    room.update_subscription_runtime(
+        &subscriber_id,
+        subscriber_connection_id,
+        &UserId::Integer(1),
+        &pinned_intents,
+        &adapter,
+    )
+    .await;
 
     let events = fake.snapshot_events();
     let layout_events = &events[baseline_event_count..];
@@ -782,24 +842,32 @@ async fn hidden_camera_layout_suppresses_active_speaker_featured_quality() {
         first_audio_media_id,
         Instant::now(),
     )]);
-    room.test_api()
-        .lifecycle()
-        .update_user_info_runtime(&UserId::Integer(1), UserInfo::default(), false, &adapter)
-        .await;
+    let publisher_id = UserId::Integer(1);
+    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
+    room.update_user_info(
+        &publisher_id,
+        publisher_connection_id,
+        UserInfo::default(),
+        UserInfoRefresh::NotNeeded,
+        &adapter,
+    )
+    .await;
 
     let baseline_event_count = fake.snapshot_events().len();
-    room.test_api()
-        .media()
-        .update_subscription(
-            &UserId::Integer(2),
-            &UserId::Integer(1),
-            &TestSubscriptionStates {
-                scalable_video_layout: Some(VideoLayoutIntent::Hidden),
-                ..TestSubscriptionStates::default()
-            },
-            &adapter,
-        )
-        .await;
+    let subscriber_id = UserId::Integer(2);
+    let subscriber_connection_id = user_connection_id(&room, &subscriber_id).await;
+    let hidden_intents = subscription_intents_from_test_states(&TestSubscriptionStates {
+        scalable_video_layout: Some(VideoLayoutIntent::Hidden),
+        ..TestSubscriptionStates::default()
+    });
+    room.update_subscription_runtime(
+        &subscriber_id,
+        subscriber_connection_id,
+        &publisher_id,
+        &hidden_intents,
+        &adapter,
+    )
+    .await;
 
     let events = fake.snapshot_events();
     let layout_events = &events[baseline_event_count..];
@@ -822,24 +890,33 @@ async fn explicit_visible_thumbnail_camera_layout_stays_on_thumbnail_quality() {
         first_audio_media_id,
         Instant::now(),
     )]);
-    room.test_api()
-        .lifecycle()
-        .update_user_info_runtime(&UserId::Integer(1), UserInfo::default(), false, &adapter)
-        .await;
+    let publisher_id = UserId::Integer(1);
+    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
+    room.update_user_info(
+        &publisher_id,
+        publisher_connection_id,
+        UserInfo::default(),
+        UserInfoRefresh::NotNeeded,
+        &adapter,
+    )
+    .await;
 
     let baseline_event_count = fake.snapshot_events().len();
-    room.test_api()
-        .media()
-        .update_subscription(
-            &UserId::Integer(2),
-            &UserId::Integer(1),
-            &TestSubscriptionStates {
-                scalable_video_layout: Some(VideoLayoutIntent::VisibleThumbnail),
-                ..TestSubscriptionStates::default()
-            },
-            &adapter,
-        )
-        .await;
+    let subscriber_id = UserId::Integer(2);
+    let subscriber_connection_id = user_connection_id(&room, &subscriber_id).await;
+    let visible_thumbnail_intents =
+        subscription_intents_from_test_states(&TestSubscriptionStates {
+            scalable_video_layout: Some(VideoLayoutIntent::VisibleThumbnail),
+            ..TestSubscriptionStates::default()
+        });
+    room.update_subscription_runtime(
+        &subscriber_id,
+        subscriber_connection_id,
+        &publisher_id,
+        &visible_thumbnail_intents,
+        &adapter,
+    )
+    .await;
 
     let events = fake.snapshot_events();
     let layout_events = &events[baseline_event_count..];
@@ -1221,18 +1298,18 @@ async fn publish_track_releases_room_lock_while_waiting_on_media_transport() {
     .await;
 
     let update_result = timeout(Duration::from_millis(50), async {
-        room.test_api()
-            .lifecycle()
-            .update_user_info_runtime(
-                &UserId::Integer(2),
-                UserInfo {
-                    is_talking: Some(true),
-                    ..UserInfo::default()
-                },
-                false,
-                &fake_media_transport,
-            )
-            .await;
+        let user_id = UserId::Integer(2);
+        room.update_user_info(
+            &user_id,
+            user_connection_id(&room, &user_id).await,
+            UserInfo {
+                is_talking: Some(true),
+                ..UserInfo::default()
+            },
+            UserInfoRefresh::NotNeeded,
+            &fake_media_transport,
+        )
+        .await;
     })
     .await;
     assert!(
@@ -1356,10 +1433,12 @@ async fn publish_track_cleans_up_transport_media_when_user_leaves_mid_publish() 
     .await;
 
     assert!(
-        room.test_api()
-            .lifecycle()
-            .leave_user(&UserId::Integer(1), test_connection_id(0))
-            .await
+        room.remove_user_with_cleanup(
+            &UserId::Integer(1),
+            test_connection_id(0),
+            UserCleanup::state_only(None),
+        )
+        .await
     );
     assert!(publish_task.await.unwrap().is_none());
 
@@ -1392,15 +1471,16 @@ async fn production_change_updates_screen_track_binding_activity() {
     drain_outbound(&mut rx1);
     drain_outbound(&mut rx2);
 
-    room.test_api()
-        .media()
-        .set_publication_active(
-            &UserId::Integer(1),
-            TestSourceKind::ReadableVideo,
-            false,
-            &adapter,
-        )
-        .await;
+    let publisher_id = UserId::Integer(1);
+    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
+    room.set_publication_active_runtime(
+        &publisher_id,
+        publisher_connection_id,
+        &stream_id_for_source(TestSourceKind::ReadableVideo),
+        PublicationActivity::Inactive,
+        &adapter,
+    )
+    .await;
 
     let msgs = drain_outbound(&mut rx1);
     assert_track_binding_activity_update(
@@ -1427,15 +1507,16 @@ async fn production_change_updates_transport_route_activity() {
     drain_outbound(&mut rx1);
     drain_outbound(&mut rx2);
 
-    room.test_api()
-        .media()
-        .set_publication_active(
-            &UserId::Integer(1),
-            TestSourceKind::ScalableVideo,
-            false,
-            &adapter,
-        )
-        .await;
+    let publisher_id = UserId::Integer(1);
+    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
+    room.set_publication_active_runtime(
+        &publisher_id,
+        publisher_connection_id,
+        &stream_id_for_source(TestSourceKind::ScalableVideo),
+        PublicationActivity::Inactive,
+        &adapter,
+    )
+    .await;
 
     wait_for_fake_event(&fake, |event| {
         matches!(
@@ -1470,16 +1551,16 @@ async fn production_change_commits_user_state_before_transport_update_finishes()
     let update_task = tokio::spawn({
         let room = Arc::clone(&room);
         let adapter = adapter.clone();
+        let publisher_connection_id = user_connection_id(&room, &UserId::Integer(1)).await;
         async move {
-            room.test_api()
-                .media()
-                .set_publication_active(
-                    &UserId::Integer(1),
-                    TestSourceKind::ScalableVideo,
-                    false,
-                    &adapter,
-                )
-                .await;
+            room.set_publication_active_runtime(
+                &UserId::Integer(1),
+                publisher_connection_id,
+                &stream_id_for_source(TestSourceKind::ScalableVideo),
+                PublicationActivity::Inactive,
+                &adapter,
+            )
+            .await;
         }
     });
 
@@ -1540,18 +1621,18 @@ async fn late_join_bootstrap_releases_room_lock_while_waiting_on_media_transport
     .await;
 
     let update_result = timeout(Duration::from_millis(50), async {
-        room.test_api()
-            .lifecycle()
-            .update_user_info_runtime(
-                &UserId::Integer(1),
-                UserInfo {
-                    is_talking: Some(true),
-                    ..UserInfo::default()
-                },
-                false,
-                &media_transport,
-            )
-            .await;
+        let user_id = UserId::Integer(1);
+        room.update_user_info(
+            &user_id,
+            user_connection_id(&room, &user_id).await,
+            UserInfo {
+                is_talking: Some(true),
+                ..UserInfo::default()
+            },
+            UserInfoRefresh::NotNeeded,
+            &media_transport,
+        )
+        .await;
     })
     .await;
     assert!(
@@ -1651,10 +1732,12 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_user_leaves_mid_cons
     .await;
 
     assert!(
-        room.test_api()
-            .lifecycle()
-            .leave_user(&UserId::Integer(2), test_connection_id(1))
-            .await
+        room.remove_user_with_cleanup(
+            &UserId::Integer(2),
+            test_connection_id(1),
+            UserCleanup::state_only(None),
+        )
+        .await
     );
     bootstrap_task.await.unwrap();
 
@@ -1705,10 +1788,12 @@ async fn late_join_bootstrap_queues_transport_cleanup_retry_when_commit_cleanup_
     let consumer_transport_media_id = fake.next_transport_media_id();
     fake.fail_remove_media_until_allowed(consumer_transport_media_id);
     assert!(
-        room.test_api()
-            .lifecycle()
-            .leave_user(&UserId::Integer(2), test_connection_id(1))
-            .await
+        room.remove_user_with_cleanup(
+            &UserId::Integer(2),
+            test_connection_id(1),
+            UserCleanup::state_only(None),
+        )
+        .await
     );
     bootstrap_task.await.unwrap();
 
@@ -1843,15 +1928,16 @@ async fn production_change_ignores_unknown_stream_type() {
     let (room, adapter, mut rx1, mut _rx2) = setup_two_ready_users().await;
 
     // No producer published for audio. PRODUCTION_CHANGE should be a no-op.
-    room.test_api()
-        .media()
-        .set_publication_active(
-            &UserId::Integer(1),
-            TestSourceKind::AudioDetector,
-            false,
-            &adapter,
-        )
-        .await;
+    let publisher_id = UserId::Integer(1);
+    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
+    room.set_publication_active_runtime(
+        &publisher_id,
+        publisher_connection_id,
+        &stream_id_for_source(TestSourceKind::AudioDetector),
+        PublicationActivity::Inactive,
+        &adapter,
+    )
+    .await;
 
     assert!(
         drain_outbound(&mut rx1).is_empty(),
@@ -2528,12 +2614,10 @@ async fn staged_negotiated_publish_commit_cleans_up_when_user_state_rejects_it()
     assert!(
         scenario
             .room
-            .test_api()
-            .lifecycle()
-            .leave_session_without_transport_cleanup(
+            .remove_user_with_cleanup(
                 &scenario.user_id,
                 scenario.connection_id,
-                &scenario.adapter
+                UserCleanup::state_only(Some(&scenario.adapter)),
             )
             .await
     );

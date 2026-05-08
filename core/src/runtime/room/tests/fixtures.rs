@@ -13,15 +13,15 @@ pub(super) use tokio::{sync::mpsc, task::yield_now, time::timeout};
 
 pub(super) use super::super::{
     JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomEventMessage, RoomEventRequest,
-    RoomJoinError, RoomManager, RoomManagerJoinError, UserCloseReason, UserOutbound,
+    RoomJoinError, RoomManager, RoomManagerJoinError, UserCleanup, UserCloseReason, UserOutbound,
     topology::RoomTopology,
 };
 use crate::runtime::room::user_negotiation::{UserNegotiationUpdate, UserTransportReady};
 pub(super) use crate::{
-    PublishStageOutcome, RollbackStagedPublishOutcome, SessionNegotiationOutcome, UnpublishOutcome,
+    PublicationActivity, PublishStageOutcome, RollbackStagedPublishOutcome,
+    SessionNegotiationOutcome, UnpublishOutcome, UserInfoRefresh,
     runtime::{
-        ConnectionId, TestSourceKind, TestSubscriptionStates, UserId, UserInfo, UserPermissions,
-        VideoLayoutIntent,
+        ConnectionId, TestSourceKind, UserId, UserInfo, UserPermissions, VideoLayoutIntent,
         media_transport::{
             ActiveSpeakerSource, MediaTransport, SourcePacketGate, TransportMediaId,
             test_support::{FakeMediaTransport, FakeMediaTransportEvent},
@@ -29,7 +29,10 @@ pub(super) use crate::{
         metrics::test_support::RuntimeMetricsSnapshotTestExt,
         source_model::{
             UserStreamId,
-            test_support::{source_publish_intent_for_source, stream_id_for_source},
+            test_support::{
+                TestSubscriptionStates, source_publish_intent_for_source, stream_id_for_source,
+                subscription_intents_from_test_states,
+            },
         },
     },
     transport::NegotiationPort,

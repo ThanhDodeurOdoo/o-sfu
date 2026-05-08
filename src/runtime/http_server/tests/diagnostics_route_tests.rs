@@ -21,7 +21,7 @@ use super::fixtures::*;
 use crate::{
     application::stream_catalog::source_publish_intent_for_stream_type,
     core::{
-        SessionNegotiationOutcome,
+        SessionNegotiationOutcome, UserInfoRefresh,
         server::session::{UserId, UserInfo, UserPermissions},
     },
     runtime::{
@@ -221,15 +221,20 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     if let Some(fake) = test_state.media_transport.as_fake_transport() {
         fake.set_receiver_bandwidth_estimate(bob_session_id.clone(), 200_000);
     }
+    let Some(alice_connection_id) = room
+        .test_api()
+        .inspect()
+        .user_connection_id(&alice_session_id)
+        .await
+    else {
+        panic!("alice should still have a live connection");
+    };
     for _ in 0..2 {
-        room.test_api()
-            .lifecycle()
-            .update_user_info_runtime(
-                &alice_session_id,
-                UserInfo::default(),
-                false,
-                &test_state.media_transport,
-            )
+        test_state
+            .state
+            .media_core
+            .session(&room, &alice_session_id, alice_connection_id)
+            .update_user_info(UserInfo::default(), UserInfoRefresh::NotNeeded)
             .await;
     }
     let rooms_request = build_request(Request::get(DIAGNOSTICS_ROOMS_PATH), Body::empty());

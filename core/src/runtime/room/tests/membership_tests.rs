@@ -69,9 +69,11 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
 
     assert!(
         !room
-            .test_api()
-            .lifecycle()
-            .leave_user(&UserId::Integer(1), first_connection)
+            .remove_user_with_cleanup(
+                &UserId::Integer(1),
+                first_connection,
+                UserCleanup::state_only(None),
+            )
             .await
     );
     assert_eq!(room.user_count().await, 1);
@@ -86,10 +88,12 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
         "stale leave must not remove the replacement connection"
     );
 
-    room.test_api()
-        .lifecycle()
-        .leave_user(&UserId::Integer(1), second_connection)
-        .await;
+    room.remove_user_with_cleanup(
+        &UserId::Integer(1),
+        second_connection,
+        UserCleanup::state_only(None),
+    )
+    .await;
     assert_eq!(room.user_count().await, 0);
     assert_eq!(room.test_api().inspect().router_user_count().await, 0);
 }
@@ -118,10 +122,12 @@ async fn leave_user_sends_departure_to_remaining_peers() {
         return;
     };
 
-    room.test_api()
-        .lifecycle()
-        .leave_user(&UserId::Integer(2), bob_connection)
-        .await;
+    room.remove_user_with_cleanup(
+        &UserId::Integer(2),
+        bob_connection,
+        UserCleanup::state_only(None),
+    )
+    .await;
 
     let msg = rx1.try_recv();
     assert!(msg.is_ok());
@@ -336,9 +342,7 @@ async fn leave_user_runtime_removes_surviving_consumer_media() {
         panic!("publisher connection should exist");
     };
     assert!(
-        room.test_api()
-            .lifecycle()
-            .leave_session_runtime(&UserId::Integer(1), connection_id, &media_transport,)
+        room.remove_user(&UserId::Integer(1), connection_id, &media_transport)
             .await
     );
 
@@ -401,9 +405,7 @@ async fn leave_user_runtime_removes_departing_consumer_media() {
         panic!("consumer connection should exist");
     };
     assert!(
-        room.test_api()
-            .lifecycle()
-            .leave_session_runtime(&UserId::Integer(1), connection_id, &media_transport,)
+        room.remove_user(&UserId::Integer(1), connection_id, &media_transport)
             .await
     );
 
@@ -519,9 +521,7 @@ async fn media_cleanup_failure_retries_until_success() {
     fake.fail_next_remove_media(transport_media_id);
 
     assert!(
-        room.test_api()
-            .lifecycle()
-            .leave_session_runtime(&UserId::Integer(1), connection_id, &media_transport)
+        room.remove_user(&UserId::Integer(1), connection_id, &media_transport)
             .await
     );
 
@@ -608,9 +608,7 @@ async fn cleanup_retry_exhaustion_drops_pending_retry() {
     fake.fail_remove_media_until_allowed(transport_media_id);
 
     assert!(
-        room.test_api()
-            .lifecycle()
-            .leave_session_runtime(&UserId::Integer(1), connection_id, &media_transport)
+        room.remove_user(&UserId::Integer(1), connection_id, &media_transport)
             .await
     );
     room.test_api()
@@ -717,14 +715,12 @@ async fn state_only_cleanup_does_not_enqueue_transport_retry() {
     fake.fail_next_remove_media(transport_media_id);
 
     assert!(
-        room.test_api()
-            .lifecycle()
-            .leave_session_without_transport_cleanup(
-                &UserId::Integer(1),
-                connection_id,
-                &media_transport,
-            )
-            .await
+        room.remove_user_with_cleanup(
+            &UserId::Integer(1),
+            connection_id,
+            UserCleanup::state_only(Some(&media_transport)),
+        )
+        .await
     );
 
     assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 0);
@@ -1004,10 +1000,13 @@ async fn broadcast_reaches_all_except_sender() {
         .join_user(UserId::Integer(3), None, UserPermissions::default(), tx3)
         .await;
 
-    room.test_api()
-        .lifecycle()
-        .broadcast(&UserId::Integer(2), serde_json::json!({"text": "hi"}))
-        .await;
+    let sender_id = UserId::Integer(2);
+    room.broadcast(
+        &sender_id,
+        user_connection_id(&room, &sender_id).await,
+        serde_json::json!({"text": "hi"}),
+    )
+    .await;
 
     assert!(rx1.try_recv().is_ok(), "user 1 should receive broadcast");
     assert!(
@@ -1041,10 +1040,15 @@ async fn update_user_info_broadcasts_to_all() {
         is_talking: Some(true),
         ..UserInfo::default()
     };
-    room.test_api()
-        .lifecycle()
-        .update_user_info_runtime(&UserId::Integer(1), info, false, &media_transport)
-        .await;
+    let user_id = UserId::Integer(1);
+    room.update_user_info(
+        &user_id,
+        user_connection_id(&room, &user_id).await,
+        info,
+        UserInfoRefresh::NotNeeded,
+        &media_transport,
+    )
+    .await;
 
     let msg1 = rx1.try_recv();
     let msg2 = rx2.try_recv();
@@ -1087,10 +1091,15 @@ async fn update_user_info_with_refresh_sends_full_snapshot() {
         is_self_muted: Some(true),
         ..UserInfo::default()
     };
-    room.test_api()
-        .lifecycle()
-        .update_user_info_runtime(&UserId::Integer(1), info, true, &media_transport)
-        .await;
+    let user_id = UserId::Integer(1);
+    room.update_user_info(
+        &user_id,
+        user_connection_id(&room, &user_id).await,
+        info,
+        UserInfoRefresh::Needed,
+        &media_transport,
+    )
+    .await;
 
     let msg = rx1.try_recv();
     assert!(msg.is_ok());
@@ -1134,9 +1143,8 @@ async fn disconnect_users_kicks_targets_and_notifies_remaining() {
         .join_user(UserId::Integer(3), None, UserPermissions::default(), tx3)
         .await;
 
-    room.test_api()
-        .lifecycle()
-        .disconnect_users(&[UserId::Integer(1), UserId::Integer(2)])
+    let media_transport = MediaTransport::fake_for_testing();
+    room.disconnect_users(&[UserId::Integer(1), UserId::Integer(2)], &media_transport)
         .await;
 
     let msg1 = rx1.try_recv();
@@ -1185,9 +1193,8 @@ async fn disconnect_users_target_only_the_active_replaced_user() {
         Some(UserOutbound::Close(UserCloseReason::Replaced))
     ));
 
-    room.test_api()
-        .lifecycle()
-        .disconnect_users(&[UserId::Integer(1)])
+    let media_transport = MediaTransport::fake_for_testing();
+    room.disconnect_users(&[UserId::Integer(1)], &media_transport)
         .await;
 
     assert!(matches!(
@@ -1224,10 +1231,12 @@ async fn room_maps_string_user_ids_into_router_users() {
         return;
     };
 
-    room.test_api()
-        .lifecycle()
-        .leave_user(&UserId::String("guest-1".to_owned()), connection_id)
-        .await;
+    room.remove_user_with_cleanup(
+        &UserId::String("guest-1".to_owned()),
+        connection_id,
+        UserCleanup::state_only(None),
+    )
+    .await;
     assert_eq!(room.user_count().await, 0);
     assert_eq!(room.test_api().inspect().router_user_count().await, 0);
 }

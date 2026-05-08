@@ -165,22 +165,23 @@ fn assert_relay_count(
 async fn set_camera_active(
     room: &Arc<super::super::Room>,
     consumer_id: &UserId,
+    consumer_connection_id: ConnectionId,
     publisher_id: &UserId,
     active: bool,
     media_transport: &MediaTransport,
 ) {
-    room.test_api()
-        .media()
-        .update_subscription(
-            consumer_id,
-            publisher_id,
-            &TestSubscriptionStates {
-                scalable_video: Some(active),
-                ..TestSubscriptionStates::default()
-            },
-            media_transport,
-        )
-        .await;
+    let intents = subscription_intents_from_test_states(&TestSubscriptionStates {
+        scalable_video: Some(active),
+        ..TestSubscriptionStates::default()
+    });
+    room.update_subscription_runtime(
+        consumer_id,
+        consumer_connection_id,
+        publisher_id,
+        &intents,
+        media_transport,
+    )
+    .await;
 }
 
 async fn wait_video(fake: &FakeMediaTransport, consumer_id: &UserId, publisher_id: &UserId) {
@@ -212,9 +213,7 @@ async fn leave(
     media_transport: &MediaTransport,
 ) {
     assert!(
-        room.test_api()
-            .lifecycle()
-            .leave_session_runtime(user_id, connection_id, media_transport)
+        room.remove_user(user_id, connection_id, media_transport)
             .await
     );
 }
@@ -735,14 +734,12 @@ async fn room_spillover_publish_subscribe_and_leave_cleanup_stay_aligned() {
     assert_eq!(room.test_api().inspect().topology_router_count().await, 2);
 
     assert!(
-        room.test_api()
-            .lifecycle()
-            .leave_session_without_transport_cleanup(
-                &subscriber_id,
-                subscriber_connection,
-                &adapter
-            )
-            .await
+        room.remove_user_with_cleanup(
+            &subscriber_id,
+            subscriber_connection,
+            UserCleanup::state_only(Some(&adapter)),
+        )
+        .await
     );
 
     assert_eq!(room.test_api().inspect().consumer_count().await, 0);
@@ -798,6 +795,7 @@ async fn room_owned_relay_route_shares_remote_worker_lifecycle() {
     set_camera_active(
         &room,
         &first_remote_id,
+        first_remote_connection,
         &publisher_id,
         false,
         &media_transport,
@@ -808,6 +806,7 @@ async fn room_owned_relay_route_shares_remote_worker_lifecycle() {
     set_camera_active(
         &room,
         &second_remote_id,
+        second_remote_connection,
         &publisher_id,
         false,
         &media_transport,
@@ -818,6 +817,7 @@ async fn room_owned_relay_route_shares_remote_worker_lifecycle() {
     set_camera_active(
         &room,
         &first_remote_id,
+        first_remote_connection,
         &publisher_id,
         true,
         &media_transport,

@@ -28,8 +28,7 @@ use super::super::{
 use crate::{
     MediaCodecFlags,
     runtime::{
-        ConnectionId, RoomInstanceId, TestSourceKind, TestSubscriptionStates, UserId,
-        UserPermissions,
+        ConnectionId, RoomInstanceId, TestSourceKind, UserId, UserPermissions,
         media_transport::TransportMediaId,
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -45,7 +44,8 @@ use crate::{
             PublishedSourceId, PublishedSourceOwner, SourceEncodingDescriptor,
             SourceEncodingDescriptorParts, SourceEncodingId, SourceSelector,
             test_support::{
-                source_kind_for_stream_id, source_publish_intent_for_source, stream_id_for_source,
+                TestSubscriptionStates, source_kind_for_stream_id,
+                source_publish_intent_for_source, stream_id_for_source,
                 subscription_intents_from_test_states,
             },
         },

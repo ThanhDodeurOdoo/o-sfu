@@ -4,18 +4,11 @@ use o_sfu_router::{
 use tracing::warn;
 
 use super::super::super::{Room, media_transaction::PendingPublishTransaction};
-use crate::{
-    PublicationActivity,
-    runtime::{
-        ConnectionId, TestSourceKind, TestSubscriptionStates, UserId,
-        media_transport::{MediaPort, MediaTransport, TransportMediaId},
-        source_model::{
-            SourcePublishIntent, UserStreamId,
-            test_support::{
-                source_publish_intent_for_source, stream_id_for_source,
-                subscription_intents_from_test_states,
-            },
-        },
+use crate::runtime::{
+    ConnectionId, TestSourceKind, UserId,
+    media_transport::{MediaPort, MediaTransport, TransportMediaId},
+    source_model::{
+        SourcePublishIntent, UserStreamId, test_support::source_publish_intent_for_source,
     },
 };
 
@@ -131,60 +124,5 @@ impl RoomTestMedia<'_> {
                 consumable_rtp_parameters,
             )
             .await
-    }
-
-    pub async fn set_publication_active(
-        self,
-        user_id: &UserId,
-        stream_type: TestSourceKind,
-        active: bool,
-        media_transport: &MediaTransport,
-    ) {
-        let Some(connection_id) = self
-            .room
-            .test_api()
-            .inspect()
-            .user_connection_id(user_id)
-            .await
-        else {
-            return;
-        };
-        self.room
-            .set_publication_active_runtime(
-                user_id,
-                connection_id,
-                &stream_id_for_source(stream_type),
-                PublicationActivity::from_active(active),
-                media_transport,
-            )
-            .await;
-    }
-
-    pub async fn update_subscription(
-        self,
-        user_id: &UserId,
-        target_user_id: &UserId,
-        states: &TestSubscriptionStates,
-        media_transport: &MediaTransport,
-    ) {
-        let Some(connection_id) = self
-            .room
-            .test_api()
-            .inspect()
-            .user_connection_id(user_id)
-            .await
-        else {
-            return;
-        };
-        let intents = subscription_intents_from_test_states(states);
-        self.room
-            .update_subscription_runtime(
-                user_id,
-                connection_id,
-                target_user_id,
-                &intents,
-                media_transport,
-            )
-            .await;
     }
 }

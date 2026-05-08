@@ -29,6 +29,6 @@ pub use session_types::{
     WebSocketCloseCode,
 };
 #[cfg(any(test, feature = "testing-transport"))]
-pub use source_model::test_support::{TestSourceKind, TestSubscriptionStates};
+pub use source_model::test_support::TestSourceKind;
 
 pub use crate::{ConnectionId, RoomInstanceId};

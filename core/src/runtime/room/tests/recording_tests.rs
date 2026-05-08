@@ -150,11 +150,14 @@ async fn recording_features_stay_hidden_until_persistent_backend_exists() {
 async fn recording_start_rejects_until_persistent_backend_exists() {
     let (room, metrics, mut publisher_rx, mut observer_rx) = build_recording_room().await;
 
+    let publisher_id = UserId::Integer(1);
     assert!(
         !room
-            .test_api()
-            .lifecycle()
-            .start_recording(&UserId::Integer(1), audio_recording_options())
+            .start_recording_runtime(
+                &publisher_id,
+                user_connection_id(&room, &publisher_id).await,
+                audio_recording_options(),
+            )
             .await
     );
     assert_eq!(room.recording_state().await, inactive_recording_state());
@@ -254,11 +257,14 @@ async fn recording_start_rejects_rooms_without_recording_address() {
     )
     .await;
 
+    let publisher_id = UserId::Integer(1);
     assert!(
         !room
-            .test_api()
-            .lifecycle()
-            .start_recording(&UserId::Integer(1), audio_recording_options())
+            .start_recording_runtime(
+                &publisher_id,
+                user_connection_id(&room, &publisher_id).await,
+                audio_recording_options(),
+            )
             .await
     );
     assert_eq!(room.recording_state().await, inactive_recording_state());
@@ -283,11 +289,13 @@ async fn recording_start_rejects_rooms_without_recording_address() {
 async fn recording_stop_rejects_when_recording_is_unavailable() {
     let (room, metrics, mut publisher_rx, mut observer_rx) = build_recording_room().await;
 
+    let publisher_id = UserId::Integer(1);
     assert!(
         !room
-            .test_api()
-            .lifecycle()
-            .stop_recording(&UserId::Integer(1))
+            .stop_recording_runtime(
+                &publisher_id,
+                user_connection_id(&room, &publisher_id).await
+            )
             .await
     );
     assert_eq!(room.recording_state().await, inactive_recording_state());
