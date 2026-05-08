@@ -43,6 +43,11 @@ cargo test -p o-sfu-tests
 cargo test --workspace --doc
 ```
 
+The `cargo test -p o-sfu-proofs` step used by PR CI is not Kani execution. It
+compiles the proof crate and runs normal Rust tests, including the router drift
+chec. The `#[kani::proof]` harnesses run only through `cargo kani` in the
+formal-verification workflow or in a local proof run.
+
 ## Dependency check
 
 Install once:
@@ -128,6 +133,9 @@ cargo +nightly fuzz run sdp_answer
 ```
 
 ## Proofs
+
+Kani proofs are formal-verification checks. They are separate from the normal
+`cargo test -p o-sfu-proofs` and compile checks used by PR CI.
 
 Install once:
 

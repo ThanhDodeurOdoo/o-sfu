@@ -28,6 +28,14 @@ use crate::{
     },
 };
 
+/// Central gate for exposing recording as a production room capability.
+///
+/// This must become true only when accepted recording controls can produce the
+/// promised persistent artifact or handoff.
+const fn persistent_recording_backend_available() -> bool {
+    false
+}
+
 #[derive(Debug, Clone)]
 struct RoomIdentity {
     uuid: String,
@@ -114,11 +122,12 @@ impl RoomDefinition {
 
     #[must_use]
     pub(crate) fn available_features(&self) -> AvailableFeatures {
+        let recording_available = self.recording_available();
         AvailableFeatures {
             rtc: self.config.web_rtc_enabled,
-            transcription: self.feature_flags.transcription,
-            audio_recording: self.feature_flags.audio_recording,
-            video_recording: self.feature_flags.video_recording,
+            transcription: recording_available && self.feature_flags.transcription,
+            audio_recording: recording_available && self.feature_flags.audio_recording,
+            video_recording: recording_available && self.feature_flags.video_recording,
         }
     }
 
@@ -188,8 +197,11 @@ impl RoomDefinition {
     }
 
     #[must_use]
-    pub(crate) const fn recording_enabled(&self) -> bool {
-        self.config.recording_address.is_some()
+    pub(crate) const fn recording_available(&self) -> bool {
+        if self.config.recording_address.is_none() {
+            return false;
+        }
+        persistent_recording_backend_available()
     }
 
     #[must_use]

@@ -8,8 +8,8 @@ pub(super) use o_sfu_protocol::{
     host_bridge::HostPendingRequestKind,
     shared::{
         AvailableFeatures, DownloadStates as ProtocolDownloadStates, RecordingState,
-        StopCode as ProtocolStopCode, StreamType as ProtocolStreamType,
-        UserId as ProtocolSessionId, UserInfo as ProtocolSessionInfo,
+        StreamType as ProtocolStreamType, UserId as ProtocolSessionId,
+        UserInfo as ProtocolSessionInfo,
     },
     signaling::{EnvelopeBatch, RequestId, ServerMessage, TrackBinding},
 };
@@ -40,7 +40,7 @@ pub(super) use frames::{
     no_server_frame, read_single_protocol_server_message, read_track_snapshot,
 };
 pub(super) use peer::ProtocolHarnessPeer;
-pub(super) use recording::{assert_recording_request_roundtrip, connect_protocol_recording_peer};
+pub(super) use recording::{assert_recording_request_rejected, connect_protocol_recording_peer};
 pub(super) use routes::{
     RealRtcRouteActivity, assert_real_rtc_subscribe_activity, real_rtc_route_activity,
     sample_video_rtp_parameters,

@@ -354,7 +354,7 @@ async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery()
 }
 
 #[tokio::test]
-async fn protocol_core_recording_requests_resolve_against_real_server_responses() {
+async fn protocol_core_recording_requests_resolve_as_unsupported_without_backend() {
     let server = spawn_test_server_with_feature_flags(
         1_000,
         100,
@@ -385,24 +385,16 @@ async fn protocol_core_recording_requests_resolve_against_real_server_responses(
     let Some(ref mut peer) = peer else {
         return;
     };
+    peer.pending_request_commands.clear();
+    peer.updates.clear();
 
     assert!(
         peer.start_recording(Some(true), Some(false), None)
             .await
             .is_some()
     );
-    let start_request_id = assert_recording_request_roundtrip(
-        peer,
-        HostPendingRequestKind::StartRecording,
-        None,
-        RecordingState {
-            recording: Some(true),
-            audio: Some(true),
-            video: Some(false),
-            transcription: Some(false),
-        },
-    )
-    .await;
+    let start_request_id =
+        assert_recording_request_rejected(peer, HostPendingRequestKind::StartRecording).await;
     assert!(start_request_id.is_some());
     if start_request_id.is_none() {
         return;
@@ -412,18 +404,8 @@ async fn protocol_core_recording_requests_resolve_against_real_server_responses(
     peer.updates.clear();
 
     assert!(peer.stop_recording().await.is_some());
-    let stop_request_id = assert_recording_request_roundtrip(
-        peer,
-        HostPendingRequestKind::StopRecording,
-        Some(ProtocolStopCode::UserRequest),
-        RecordingState {
-            recording: Some(false),
-            audio: Some(false),
-            video: Some(false),
-            transcription: Some(false),
-        },
-    )
-    .await;
+    let stop_request_id =
+        assert_recording_request_rejected(peer, HostPendingRequestKind::StopRecording).await;
     assert!(stop_request_id.is_some());
     if stop_request_id.is_none() {
         return;

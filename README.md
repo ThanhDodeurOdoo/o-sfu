@@ -58,9 +58,9 @@ you can read the one at [odoo/sfu](https://github.com/odoo/sfu), it's roughly th
 | `TELEMETRY_DEPLOYMENT_ENVIRONMENT`        | `local`                    | Deployment environment name attached to runtime telemetry metadata.                                                                                               |
 | `TELEMETRY_SERVICE_INSTANCE_ID`           | `pid-<pid>`                | Optional stable instance identifier for logs and future traces.                                                                                                   |
 | `TELEMETRY_OTLP_ENDPOINT`                 | disabled                   | Optional OTLP/HTTP traces endpoint (for example `http://collector:4318` or `http://collector:4318/v1/traces`). Requires the default `otel-tracing` cargo feature. |
-| `FEATURE_TRANSCRIPTION`                   | `false`                    | Enable transcription feature flags.                                                                                                                               |
-| `FEATURE_AUDIO_RECORDING`                 | `false`                    | Enable audio recording feature flags.                                                                                                                             |
-| `FEATURE_VIDEO_RECORDING`                 | `false`                    | Enable video recording feature flags.                                                                                                                             |
+| `FEATURE_TRANSCRIPTION`                   | `false`                    | Enable transcription intent flags. WIP.                                                                                                                           |
+| `FEATURE_AUDIO_RECORDING`                 | `false`                    | Enable audio recording intent flags. WIP.                                                                                                                         |
+| `FEATURE_VIDEO_RECORDING`                 | `false`                    | Enable video recording intent flags. WIP.                                                                                                                         |
 | `CODEC_OPUS`                              | `true`                     | Enable Opus audio codec.                                                                                                                                          |
 | `CODEC_PCMU`                              | `false`                    | Enable G.711 mu-law audio codec.                                                                                                                                  |
 | `CODEC_PCMA`                              | `false`                    | Enable G.711 a-law audio codec.                                                                                                                                   |
@@ -72,11 +72,14 @@ you can read the one at [odoo/sfu](https://github.com/odoo/sfu), it's roughly th
 | `CODEC_AUDIO_PREFERENCE`                  | `opus,PCMU,PCMA`           | Optional comma-separated audio codec preference order. Missing codecs keep their default relative order.                                                          |
 | `CODEC_VIDEO_PREFERENCE`                  | `VP8,H264,H265,VP9,AV1`    | Optional comma-separated video codec preference order. Missing codecs keep their default relative order.                                                          |
 | `MAX_BITRATE_IN`                          | `8000000`                  | Maximum incoming bitrate in bps per user (upload).                                                                                                                |
-| `MAX_BITRATE_OUT`                         | `10000000`                 | WebRTC desired-send-bitrate and BWE ceiling in bps per user (download); not a strict packet-forwarding cap.                                                       |
+| `MAX_BITRATE_OUT`                         | `10000000`                 | WebRTC desired-send-bitrate and BWE ceiling in bps per user (download). It is not a strict packet-forwarding cap.                                                 |
 | `MAX_VIDEO_BITRATE`                       | `4000000`                  | Maximum bitrate in bps for the highest default simulcast video layer metadata.                                                                                    |
 
-### WIRK IN PROGRESS: Control-plane env variables
-control plane is the server that help SFUs discover and interact with one another for the cross server scaling part (not ready yet)
+### WORK IN PROGRESS: Control-plane env variables
+
+The control plane is experimental. The normal media-server Docker image does not
+copy or expose it. Build it explicitly with `Dockerfile.control-plane` or run
+`cargo run --bin o-sfu-control-plane` when testing scalable-topology work.
 
 | Variable                     | Default          | Description |
 | :--------------------------- | :--------------- | :---------- |
@@ -95,7 +98,7 @@ See [CONTRIBUTING.md](https://github.com/ThanhDodeurOdoo/o-sfu/blob/master/.gith
 the o-sfu architecture helps a lot with recording compared to the previous version, since we now have complete control over the rtp packet dispatch, don't have to pipe streams through a transport layer and use ports and ffmpeg (at the real time recording step). we can just write packet frames to the disk directly and bypass all that old boilerplate.
 another advantage is the router/recording topology, we have recording nodes that should just act as "opaque" media consuming "entities" and their locality shouldn't matter much so recording and forwarding could be physically separated.
 
-also the recording feature on the official repo is still in active development so the API may change, and this repo
+also the recording feature on the official repo is still in active development so the API may change. This repo
 will adapt accordingly.
 
 ### scalability (sharding)
@@ -110,12 +113,12 @@ Partial coverage
 | :---------------------------- | :------------------------------------------------------------------------------------------------------------------------ |
 | VP8 RID simulcast             | Production path, enabled by default with `CODEC_VP8=true`.                                                                |
 | H.264 RID simulcast           | Production-ready for Chromium constrained baseline (`packetization-mode=1`, `profile-level-id=42e01f`) with RTX disabled. |
-| VP9 hybrid/layered forwarding | WIP; `CODEC_VP9=true` is codec negotiation only.                                                                          |
-| AV1 hybrid/layered forwarding | WIP; `CODEC_AV1=true` is codec negotiation only.                                                                          |
+| VP9 hybrid/layered forwarding | WIP. `CODEC_VP9=true` is codec negotiation only.                                                                          |
+| AV1 hybrid/layered forwarding | WIP. `CODEC_AV1=true` is codec negotiation only.                                                                          |
 
 The browser bundle configures RID send encodings only for upload slots that
 match a production simulcast path. Unsupported H.264 profiles, unsupported
-browsers, and optional codec-only configurations fall back to single-encoding
+browsers and optional codec-only configurations fall back to single-encoding
 publication
 
 ## Tooling

@@ -1,7 +1,4 @@
-use o_sfu_protocol::{
-    host_bridge::HostCommand,
-    shared::{RecordingStateUpdate, UserPermissions},
-};
+use o_sfu_protocol::{host_bridge::HostCommand, shared::UserPermissions};
 
 use super::*;
 
@@ -24,44 +21,32 @@ fn has_resolved_pending_request(
     })
 }
 
-fn has_recording_update(
-    updates: &[BundleUpdate],
-    state: &RecordingState,
-    stop_code: Option<ProtocolStopCode>,
-) -> bool {
-    updates.iter().any(|update| {
-        matches!(
-            update,
-            BundleUpdate::ChannelInfoChange(RecordingStateUpdate {
-                state: update_state,
-                stop_code: update_stop_code,
-            }) if *update_state == *state && *update_stop_code == stop_code
-        )
-    })
+fn has_any_recording_update(updates: &[BundleUpdate]) -> bool {
+    updates
+        .iter()
+        .any(|update| matches!(update, BundleUpdate::ChannelInfoChange(_)))
 }
 
-async fn drain_peer_until_recording_update(
+async fn drain_peer_until_pending_request_resolution(
     peer: &mut ProtocolHarnessPeer,
-    state: &RecordingState,
-    stop_code: Option<ProtocolStopCode>,
-) -> bool {
-    matches!(
-        timeout(Duration::from_secs(1), async {
-            loop {
-                if peer
-                    .pending_request_commands
-                    .iter()
-                    .any(|command| matches!(command, HostCommand::ResolvePendingRequest { .. }))
-                    && has_recording_update(&peer.updates, state, stop_code)
-                {
-                    return Some(());
-                }
+    request_kind: HostPendingRequestKind,
+    ok: bool,
+) -> Option<RequestId> {
+    timeout(Duration::from_secs(1), async {
+        loop {
+            let Some(request_id) = pending_request_id(&peer.pending_request_commands, request_kind)
+            else {
                 peer.read_server_frame().await?;
+                continue;
+            };
+            if has_resolved_pending_request(&peer.pending_request_commands, &request_id, ok) {
+                return Some(request_id);
             }
-        })
-        .await,
-        Ok(Some(()))
-    )
+            peer.read_server_frame().await?;
+        }
+    })
+    .await
+    .unwrap_or_default()
 }
 
 pub(crate) async fn connect_protocol_recording_peer(
@@ -93,16 +78,10 @@ fn pending_request_id(
     })
 }
 
-pub(crate) async fn assert_recording_request_roundtrip(
+pub(crate) async fn assert_recording_request_rejected(
     peer: &mut ProtocolHarnessPeer,
     request_kind: HostPendingRequestKind,
-    stop_code: Option<ProtocolStopCode>,
-    expected_state: RecordingState,
 ) -> Option<RequestId> {
-    if !drain_peer_until_recording_update(peer, &expected_state, stop_code).await {
-        return None;
-    }
-    let request_id = pending_request_id(&peer.pending_request_commands, request_kind)?;
-    has_resolved_pending_request(&peer.pending_request_commands, &request_id, true)
-        .then_some(request_id)
+    let request_id = drain_peer_until_pending_request_resolution(peer, request_kind, false).await?;
+    (!has_any_recording_update(&peer.updates)).then_some(request_id)
 }

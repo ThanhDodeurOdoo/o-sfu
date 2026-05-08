@@ -2,7 +2,7 @@
 //!
 //! This module defines the paths and JSON payloads for the SFU's HTTP
 //! These endpoints are primarily used by the Odoo server to manage rooms, disconnect
-//! users, and get metrics.
+//! users and get metrics.
 
 use serde::{Deserialize, Serialize};
 pub const METRICS_PATH: &str = "/metrics";
@@ -30,13 +30,16 @@ impl NoopResponse {
     }
 }
 
-/// Query parameters for the `/v1/room` creation endpoint.
+/// Query parameters for the `/v1/channel` creation endpoint.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateRoomQuery {
     /// Whether the room supports WebRTC features. Defaults to `true`.
     #[serde(rename = "webRTC", skip_serializing_if = "Option::is_none")]
     pub web_rtc: Option<bool>,
-    /// Optional webhook address to send recordings to when a recording user finishes.
+    /// Optional compatibility recording address from Odoo.
+    ///
+    /// The current runtime preserves this field for the room contract but does
+    /// not send recording output until persistent recording finalization lands.
     #[serde(rename = "recordingAddress", skip_serializing_if = "Option::is_none")]
     pub recording_address: Option<String>,
 }

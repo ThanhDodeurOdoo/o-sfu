@@ -458,12 +458,10 @@ pub struct RoomConfig {
     /// When false, the room still exists as a room identity but advertises
     /// that RTC is unavailable to clients.
     pub web_rtc_enabled: bool,
-    /// Compatibility knob from `/v1/room` for recording-enabled rooms.
+    /// Compatibility recording address from `/v1/channel`.
     ///
-    /// The current room runtime treats this as an enable flag, not as a
-    /// lasting recorder routing destination. The string is preserved because it
-    /// matches the current HTTP contract even though the runtime does not route
-    /// recording by address yet.
+    /// The current room runtime preserves this value for the HTTP contract.
+    /// Recording stays unavailable until persistent output exists.
     pub recording_address: Option<String>,
 }
 
@@ -825,12 +823,13 @@ impl Room {
     }
 
     #[must_use]
-    /// Whether the room was created with recording enabled.
+    /// Whether the room can accept production recording requests.
     ///
-    /// This reflects room configuration, not whether recording is currently
-    /// running. For the live room state, use [`Self::recording_state`].
-    pub(crate) fn recording_enabled(&self) -> bool {
-        self.definition.recording_enabled()
+    /// This reflects the persistent recording backend gate, not whether
+    /// recording is currently running. For the live room state, use
+    /// [`Self::recording_state`].
+    pub(crate) const fn recording_available(&self) -> bool {
+        self.definition.recording_available()
     }
 
     #[must_use]

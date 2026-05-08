@@ -190,15 +190,15 @@ impl Room {
 
     fn recording_permissions(&self, permissions: RoomUserPermissions) -> RecordingPermissions {
         let feature_flags = self.feature_flags();
-        let recording_enabled = self.recording_enabled();
+        let recording_available = self.recording_available();
         RecordingPermissions {
-            audio: recording_enabled
+            audio: recording_available
                 && feature_flags.audio_recording
                 && permissions.audio_recording(),
-            video: recording_enabled
+            video: recording_available
                 && feature_flags.video_recording
                 && permissions.video_recording(),
-            transcription: recording_enabled
+            transcription: recording_available
                 && feature_flags.transcription
                 && permissions.transcription(),
         }
