@@ -30,6 +30,9 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
+      - name: Check fuzz lockfile
+        run: cargo +nightly-2026-04-01 check --manifest-path tests/fuzz/Cargo.toml --locked
+
       - name: Run fuzz targets
         working-directory: tests/fuzz
         shell: bash

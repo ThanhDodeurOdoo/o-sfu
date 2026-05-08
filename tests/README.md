@@ -116,10 +116,10 @@ rustup toolchain install nightly
 cargo install cargo-fuzz
 ```
 
-Build-check the fuzz package:
+Build-check the fuzz package against its committed lockfile:
 
 ```bash
-cargo check --manifest-path tests/fuzz/Cargo.toml
+cargo check --manifest-path tests/fuzz/Cargo.toml --locked
 ```
 
 Run targets from `tests/fuzz/`:

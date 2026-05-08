@@ -54,7 +54,7 @@ jobs:
         run: cargo test --workspace --doc
 
       - name: Check fuzz targets build
-        run: cargo check --manifest-path tests/fuzz/Cargo.toml
+        run: cargo check --manifest-path tests/fuzz/Cargo.toml --locked
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
