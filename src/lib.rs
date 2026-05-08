@@ -2,9 +2,7 @@ pub mod config;
 pub use o_sfu_core as core;
 pub(crate) mod application;
 mod runtime;
-pub(crate) mod time;
 
-/// Runtime authentication claims and JWT signing/verification helpers.
 pub mod auth {
     pub use crate::runtime::auth::{
         AuthenticationError, HttpDisconnectClaims, HttpRoomClaims, MAX_JWT_TOKEN_BYTES,
@@ -12,7 +10,6 @@ pub mod auth {
     };
 }
 
-/// Public HTTP control-plane contract and request-origin helpers.
 pub mod http {
     pub use crate::runtime::{
         http_server::contract::{
@@ -24,7 +21,6 @@ pub mod http {
     };
 }
 
-/// WebSocket ingress parsing helpers used by verification and fuzz targets.
 pub mod websocket {
     pub use crate::runtime::websocket_server::{
         ClientBatchDecodeError, ClientBatchDecodeFailureKind, MAX_CLIENT_BATCH_ENVELOPES,

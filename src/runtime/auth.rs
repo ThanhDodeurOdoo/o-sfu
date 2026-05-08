@@ -1,4 +1,7 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use base64::{
     Engine as _,
@@ -11,8 +14,6 @@ use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::Sha256;
 use thiserror::Error;
-
-use crate::time::secs_since_epoch;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -91,6 +92,13 @@ impl WebSocketConnectClaims {
     pub fn normalize_runtime_user_id(&mut self) {
         self.user_id = self.user_id.runtime_normalized();
     }
+}
+
+#[must_use]
+pub(crate) fn secs_since_epoch() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }
 
 /// # Errors
