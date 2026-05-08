@@ -2,7 +2,7 @@ use o_sfu_router::{ProducerId as RouterProducerId, RouterError};
 
 use super::fixtures::*;
 use crate::{
-    LocalSpilloverPolicy,
+    LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts,
     runtime::room::{
         LocalRoomRouterPlacements, LocalRoomRouterPlacementsError,
         router_state::RoomRouterStateError,
@@ -400,10 +400,13 @@ fn topology_detaches_idle_spillover_router_after_last_home_session_leaves() {
 }
 
 #[test]
-fn load_triggered_topology_keeps_small_rooms_on_primary_router() {
-    let policy = LocalSpilloverPolicy::conservative()
-        .with_min_receiver_count(3)
-        .with_activation_window(1);
+fn load_triggered_topology_keeps_small_rooms_on_primary_router()
+-> Result<(), LocalSpilloverPolicyError> {
+    let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+        min_receiver_count: 3,
+        activation_window: 1,
+        ..LocalSpilloverPolicyParts::conservative()
+    })?;
     let mut topology = RoomTopology::new_with_load_spillover(RouterId(9), 2, policy);
     let first_user_id = UserId::Integer(10);
     let second_user_id = UserId::Integer(20);
@@ -442,13 +445,17 @@ fn load_triggered_topology_keeps_small_rooms_on_primary_router() {
         Some(RouterId(9))
     );
     assert_eq!(topology.router_count(), 1);
+    Ok(())
 }
 
 #[test]
-fn load_triggered_topology_attaches_router_after_pressure_window() {
-    let policy = LocalSpilloverPolicy::conservative()
-        .with_min_receiver_count(2)
-        .with_activation_window(1);
+fn load_triggered_topology_attaches_router_after_pressure_window()
+-> Result<(), LocalSpilloverPolicyError> {
+    let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+        min_receiver_count: 2,
+        activation_window: 1,
+        ..LocalSpilloverPolicyParts::conservative()
+    })?;
     let mut topology = RoomTopology::new_with_load_spillover(RouterId(9), 2, policy);
     let first_user_id = UserId::Integer(10);
     let second_user_id = UserId::Integer(20);
@@ -492,13 +499,16 @@ fn load_triggered_topology_attaches_router_after_pressure_window() {
         topology.last_load_pressure_reason_for_test(),
         Some(LoadPressureReason::ReceiverCount)
     );
+    Ok(())
 }
 
 #[test]
-fn load_triggered_topology_honors_activation_window() {
-    let policy = LocalSpilloverPolicy::conservative()
-        .with_min_receiver_count(2)
-        .with_activation_window(2);
+fn load_triggered_topology_honors_activation_window() -> Result<(), LocalSpilloverPolicyError> {
+    let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+        min_receiver_count: 2,
+        activation_window: 2,
+        ..LocalSpilloverPolicyParts::conservative()
+    })?;
     let mut topology = RoomTopology::new_with_load_spillover(RouterId(9), 2, policy);
     let first_user_id = UserId::Integer(10);
     let second_user_id = UserId::Integer(20);
@@ -553,14 +563,18 @@ fn load_triggered_topology_honors_activation_window() {
         topology.home_router_id_for_user(&third_user_id),
         Some(RouterId(10))
     );
+    Ok(())
 }
 
 #[test]
-fn load_triggered_topology_waits_for_cooldown_before_idle_detach() {
-    let policy = LocalSpilloverPolicy::conservative()
-        .with_min_receiver_count(2)
-        .with_activation_window(1)
-        .with_cooldown_window(2);
+fn load_triggered_topology_waits_for_cooldown_before_idle_detach()
+-> Result<(), LocalSpilloverPolicyError> {
+    let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+        min_receiver_count: 2,
+        activation_window: 1,
+        cooldown_window: 2,
+        ..LocalSpilloverPolicyParts::conservative()
+    })?;
     let mut topology = RoomTopology::new_with_load_spillover(RouterId(9), 2, policy);
     let first_user_id = UserId::Integer(10);
     let second_user_id = UserId::Integer(20);
@@ -609,6 +623,7 @@ fn load_triggered_topology_waits_for_cooldown_before_idle_detach() {
 
     assert!(topology.remove_session(&third_user_id).is_ok());
     assert_eq!(topology.router_count(), 1);
+    Ok(())
 }
 
 #[test]

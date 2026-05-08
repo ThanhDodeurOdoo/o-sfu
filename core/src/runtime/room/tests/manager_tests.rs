@@ -4,7 +4,8 @@ use tokio::sync::Notify;
 
 use super::fixtures::*;
 use crate::{
-    LocalSpilloverPolicy, MediaCodecFlags, RuntimeFeatureFlags,
+    LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts, MediaCodecFlags,
+    RuntimeFeatureFlags,
     runtime::{
         diagnostics::DiagnosticsStore, media_transport::TransportPlacementPressureSnapshot,
         metrics::RuntimeMetrics, packet_sink_registry::RoomPacketSinkRegistry,
@@ -340,12 +341,15 @@ async fn bounded_room_placement_keeps_topology_and_transport_aligned() {
 }
 
 #[tokio::test]
-async fn load_triggered_room_placement_keeps_topology_and_transport_aligned() {
+async fn load_triggered_room_placement_keeps_topology_and_transport_aligned()
+-> Result<(), LocalSpilloverPolicyError> {
     let manager = load_spillover_room_manager(
         3,
-        LocalSpilloverPolicy::conservative()
-            .with_min_receiver_count(2)
-            .with_activation_window(1),
+        LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+            min_receiver_count: 2,
+            activation_window: 1,
+            ..LocalSpilloverPolicyParts::conservative()
+        })?,
     );
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
@@ -366,15 +370,19 @@ async fn load_triggered_room_placement_keeps_topology_and_transport_aligned() {
         )
         .await;
     }
+    Ok(())
 }
 
 #[tokio::test]
-async fn load_triggered_room_keeps_small_room_transport_on_primary_worker() {
+async fn load_triggered_room_keeps_small_room_transport_on_primary_worker()
+-> Result<(), LocalSpilloverPolicyError> {
     let manager = load_spillover_room_manager(
         2,
-        LocalSpilloverPolicy::conservative()
-            .with_min_receiver_count(3)
-            .with_activation_window(1),
+        LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+            min_receiver_count: 3,
+            activation_window: 1,
+            ..LocalSpilloverPolicyParts::conservative()
+        })?,
     );
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
@@ -414,18 +422,22 @@ async fn load_triggered_room_keeps_small_room_transport_on_primary_worker() {
             Some(RouterId(0))
         );
     }
+    Ok(())
 }
 
 #[tokio::test]
-async fn load_triggered_room_uses_transport_pressure_for_new_placement() {
+async fn load_triggered_room_uses_transport_pressure_for_new_placement()
+-> Result<(), LocalSpilloverPolicyError> {
     let manager = load_spillover_room_manager(
         2,
-        LocalSpilloverPolicy::conservative()
-            .with_min_receiver_count(99)
-            .with_max_active_consumers_per_router(99)
-            .with_max_fanout_per_source(99)
-            .with_egress_bitrate_threshold_bps(128)
-            .with_activation_window(1),
+        LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+            min_receiver_count: 99,
+            max_active_consumers_per_router: 99,
+            max_fanout_per_source: 99,
+            egress_bitrate_threshold_bps: 128,
+            activation_window: 1,
+            ..LocalSpilloverPolicyParts::conservative()
+        })?,
     );
     let (media_transport, fake) = fake_adapter();
     let room = manager
@@ -462,15 +474,19 @@ async fn load_triggered_room_uses_transport_pressure_for_new_placement() {
         .await;
     assert!(second_join.is_ok());
     assert_user_placement(&room, &UserId::Integer(20), RouterId(1), 1).await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn load_triggered_room_places_new_receivers_on_spillover_worker_after_pressure() {
+async fn load_triggered_room_places_new_receivers_on_spillover_worker_after_pressure()
+-> Result<(), LocalSpilloverPolicyError> {
     let manager = load_spillover_room_manager(
         2,
-        LocalSpilloverPolicy::conservative()
-            .with_min_receiver_count(2)
-            .with_activation_window(1),
+        LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+            min_receiver_count: 2,
+            activation_window: 1,
+            ..LocalSpilloverPolicyParts::conservative()
+        })?,
     );
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
@@ -526,6 +542,7 @@ async fn load_triggered_room_places_new_receivers_on_spillover_worker_after_pres
             .await,
         Some(RouterId(1))
     );
+    Ok(())
 }
 
 #[tokio::test]

@@ -58,9 +58,9 @@ pub struct RoutingOptions {
 ///
 /// # Invariants
 ///
-/// `max_local_routers()` never returns zero. Constructors accept raw values so
-/// outer config layers can normalize or validate operator input in one place,
-/// while core callers still get a safe fallback if a policy is built directly.
+/// `max_local_routers()` never returns zero. The runtime config layer still
+/// validates operator-facing worker limits because those depend on process
+/// topology.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RoomShardingPolicy {
     max_local_routers: usize,
@@ -89,6 +89,42 @@ pub struct LocalSpilloverPolicy {
     activation_window: usize,
     /// Consecutive idle cleanup observations required before draining capacity.
     cooldown_window: usize,
+}
+
+/// Validated construction input for [`LocalSpilloverPolicy`].
+///
+/// Count and window fields must be greater than zero. Transport-observed
+/// pressure thresholds may be zero when the caller intentionally disables that
+/// signal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalSpilloverPolicyParts {
+    pub min_receiver_count: usize,
+    pub max_active_consumers_per_router: usize,
+    pub max_fanout_per_source: usize,
+    pub egress_bitrate_threshold_bps: u64,
+    pub packet_loop_lag_threshold_ms: u64,
+    pub command_backlog_threshold: usize,
+    pub relay_mailbox_depth_threshold: usize,
+    pub worker_pressure_threshold: u8,
+    pub activation_window: usize,
+    pub cooldown_window: usize,
+}
+
+/// Invalid load-triggered local spillover policy input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum LocalSpilloverPolicyError {
+    #[error("minimum receiver count must be greater than zero")]
+    MinReceiverCountZero,
+    #[error("maximum active consumers per router must be greater than zero")]
+    MaxActiveConsumersPerRouterZero,
+    #[error("maximum fan-out per source must be greater than zero")]
+    MaxFanoutPerSourceZero,
+    #[error("worker pressure threshold must be less than or equal to 100")]
+    WorkerPressureThresholdTooHigh,
+    #[error("activation window must be greater than zero")]
+    ActivationWindowZero,
+    #[error("cooldown window must be greater than zero")]
+    CooldownWindowZero,
 }
 
 /// How a room interprets its reserved local router placements.
@@ -225,6 +261,50 @@ impl LocalSpilloverPolicy {
     pub const DEFAULT_ACTIVATION_WINDOW: usize = 2;
     pub const DEFAULT_COOLDOWN_WINDOW: usize = 4;
 
+    /// Build a load-triggered spillover policy after validating its invariants.
+    ///
+    /// Use this for operator or caller-provided values. The only zero values
+    /// accepted here are optional transport-pressure thresholds where zero means
+    /// the corresponding signal is disabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocalSpilloverPolicyError`] when a required count or window is
+    /// zero or when the worker pressure threshold is above the 0 to 100 score
+    /// range.
+    pub fn try_new(parts: LocalSpilloverPolicyParts) -> Result<Self, LocalSpilloverPolicyError> {
+        if parts.min_receiver_count == 0 {
+            return Err(LocalSpilloverPolicyError::MinReceiverCountZero);
+        }
+        if parts.max_active_consumers_per_router == 0 {
+            return Err(LocalSpilloverPolicyError::MaxActiveConsumersPerRouterZero);
+        }
+        if parts.max_fanout_per_source == 0 {
+            return Err(LocalSpilloverPolicyError::MaxFanoutPerSourceZero);
+        }
+        if parts.worker_pressure_threshold > 100 {
+            return Err(LocalSpilloverPolicyError::WorkerPressureThresholdTooHigh);
+        }
+        if parts.activation_window == 0 {
+            return Err(LocalSpilloverPolicyError::ActivationWindowZero);
+        }
+        if parts.cooldown_window == 0 {
+            return Err(LocalSpilloverPolicyError::CooldownWindowZero);
+        }
+        Ok(Self {
+            min_receiver_count: parts.min_receiver_count,
+            max_active_consumers_per_router: parts.max_active_consumers_per_router,
+            max_fanout_per_source: parts.max_fanout_per_source,
+            egress_bitrate_threshold_bps: parts.egress_bitrate_threshold_bps,
+            packet_loop_lag_threshold_ms: parts.packet_loop_lag_threshold_ms,
+            command_backlog_threshold: parts.command_backlog_threshold,
+            relay_mailbox_depth_threshold: parts.relay_mailbox_depth_threshold,
+            worker_pressure_threshold: parts.worker_pressure_threshold,
+            activation_window: parts.activation_window,
+            cooldown_window: parts.cooldown_window,
+        })
+    }
+
     /// Build the default conservative threshold set.
     #[must_use]
     pub const fn conservative() -> Self {
@@ -243,86 +323,18 @@ impl LocalSpilloverPolicy {
     }
 
     #[must_use]
-    pub const fn with_min_receiver_count(mut self, value: usize) -> Self {
-        self.min_receiver_count = value;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_max_active_consumers_per_router(mut self, value: usize) -> Self {
-        self.max_active_consumers_per_router = value;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_max_fanout_per_source(mut self, value: usize) -> Self {
-        self.max_fanout_per_source = value;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_egress_bitrate_threshold_bps(mut self, value: u64) -> Self {
-        self.egress_bitrate_threshold_bps = value;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_packet_loop_lag_threshold_ms(mut self, value: u64) -> Self {
-        self.packet_loop_lag_threshold_ms = value;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_command_backlog_threshold(mut self, value: usize) -> Self {
-        self.command_backlog_threshold = value;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_relay_mailbox_depth_threshold(mut self, value: usize) -> Self {
-        self.relay_mailbox_depth_threshold = value;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_worker_pressure_threshold(mut self, value: u8) -> Self {
-        self.worker_pressure_threshold = value;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_activation_window(mut self, value: usize) -> Self {
-        self.activation_window = value;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_cooldown_window(mut self, value: usize) -> Self {
-        self.cooldown_window = value;
-        self
-    }
-
-    #[must_use]
     pub const fn min_receiver_count(self) -> usize {
         self.min_receiver_count
     }
 
     #[must_use]
     pub const fn max_active_consumers_per_router(self) -> usize {
-        if self.max_active_consumers_per_router == 0 {
-            1
-        } else {
-            self.max_active_consumers_per_router
-        }
+        self.max_active_consumers_per_router
     }
 
     #[must_use]
     pub const fn max_fanout_per_source(self) -> usize {
-        if self.max_fanout_per_source == 0 {
-            1
-        } else {
-            self.max_fanout_per_source
-        }
+        self.max_fanout_per_source
     }
 
     #[must_use]
@@ -352,19 +364,34 @@ impl LocalSpilloverPolicy {
 
     #[must_use]
     pub const fn activation_window(self) -> usize {
-        if self.activation_window == 0 {
-            1
-        } else {
-            self.activation_window
-        }
+        self.activation_window
     }
 
     #[must_use]
     pub const fn cooldown_window(self) -> usize {
-        if self.cooldown_window == 0 {
-            1
-        } else {
-            self.cooldown_window
+        self.cooldown_window
+    }
+}
+
+impl LocalSpilloverPolicyParts {
+    /// Build the default conservative threshold input set.
+    #[must_use]
+    pub const fn conservative() -> Self {
+        Self {
+            min_receiver_count: LocalSpilloverPolicy::DEFAULT_MIN_RECEIVER_COUNT,
+            max_active_consumers_per_router:
+                LocalSpilloverPolicy::DEFAULT_MAX_ACTIVE_CONSUMERS_PER_ROUTER,
+            max_fanout_per_source: LocalSpilloverPolicy::DEFAULT_MAX_FANOUT_PER_SOURCE,
+            egress_bitrate_threshold_bps:
+                LocalSpilloverPolicy::DEFAULT_EGRESS_BITRATE_THRESHOLD_BPS,
+            packet_loop_lag_threshold_ms:
+                LocalSpilloverPolicy::DEFAULT_PACKET_LOOP_LAG_THRESHOLD_MS,
+            command_backlog_threshold: LocalSpilloverPolicy::DEFAULT_COMMAND_BACKLOG_THRESHOLD,
+            relay_mailbox_depth_threshold:
+                LocalSpilloverPolicy::DEFAULT_RELAY_MAILBOX_DEPTH_THRESHOLD,
+            worker_pressure_threshold: LocalSpilloverPolicy::DEFAULT_WORKER_PRESSURE_THRESHOLD,
+            activation_window: LocalSpilloverPolicy::DEFAULT_ACTIVATION_WINDOW,
+            cooldown_window: LocalSpilloverPolicy::DEFAULT_COOLDOWN_WINDOW,
         }
     }
 }
@@ -372,6 +399,98 @@ impl LocalSpilloverPolicy {
 impl Default for LocalSpilloverPolicy {
     fn default() -> Self {
         Self::conservative()
+    }
+}
+
+impl Default for LocalSpilloverPolicyParts {
+    fn default() -> Self {
+        Self::conservative()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts};
+
+    #[test]
+    fn local_spillover_policy_rejects_invalid_required_fields() {
+        let valid_parts = LocalSpilloverPolicyParts::conservative();
+        let cases = [
+            (
+                LocalSpilloverPolicyParts {
+                    min_receiver_count: 0,
+                    ..valid_parts
+                },
+                LocalSpilloverPolicyError::MinReceiverCountZero,
+            ),
+            (
+                LocalSpilloverPolicyParts {
+                    max_active_consumers_per_router: 0,
+                    ..valid_parts
+                },
+                LocalSpilloverPolicyError::MaxActiveConsumersPerRouterZero,
+            ),
+            (
+                LocalSpilloverPolicyParts {
+                    max_fanout_per_source: 0,
+                    ..valid_parts
+                },
+                LocalSpilloverPolicyError::MaxFanoutPerSourceZero,
+            ),
+            (
+                LocalSpilloverPolicyParts {
+                    activation_window: 0,
+                    ..valid_parts
+                },
+                LocalSpilloverPolicyError::ActivationWindowZero,
+            ),
+            (
+                LocalSpilloverPolicyParts {
+                    cooldown_window: 0,
+                    ..valid_parts
+                },
+                LocalSpilloverPolicyError::CooldownWindowZero,
+            ),
+        ];
+
+        for (parts, error) in cases {
+            assert_eq!(LocalSpilloverPolicy::try_new(parts).err(), Some(error));
+        }
+    }
+
+    #[test]
+    fn local_spillover_policy_rejects_worker_pressure_above_score_range() {
+        let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+            worker_pressure_threshold: 101,
+            ..LocalSpilloverPolicyParts::conservative()
+        });
+
+        assert_eq!(
+            policy.err(),
+            Some(LocalSpilloverPolicyError::WorkerPressureThresholdTooHigh)
+        );
+    }
+
+    #[test]
+    fn local_spillover_policy_accepts_disabled_transport_pressure_signals() {
+        let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+            egress_bitrate_threshold_bps: 0,
+            packet_loop_lag_threshold_ms: 0,
+            command_backlog_threshold: 0,
+            relay_mailbox_depth_threshold: 0,
+            worker_pressure_threshold: 0,
+            ..LocalSpilloverPolicyParts::conservative()
+        });
+
+        assert!(policy.is_ok());
+        let Ok(policy) = policy else {
+            return;
+        };
+        assert_eq!(policy.egress_bitrate_threshold_bps(), 0);
+        assert_eq!(policy.packet_loop_lag_threshold_ms(), 0);
+        assert_eq!(policy.command_backlog_threshold(), 0);
+        assert_eq!(policy.relay_mailbox_depth_threshold(), 0);
+        assert_eq!(policy.worker_pressure_threshold(), 0);
     }
 }
 

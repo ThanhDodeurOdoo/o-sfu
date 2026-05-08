@@ -1,7 +1,10 @@
 use std::{net::IpAddr, num::NonZeroUsize};
 
 use anyhow::{Context, Result, anyhow, ensure};
-use o_sfu_core::{LocalSpilloverPolicy, RoomShardingPolicy, RtcPortRange, VideoBitrateLimits};
+use o_sfu_core::{
+    LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts, RoomShardingPolicy,
+    RtcPortRange, VideoBitrateLimits,
+};
 
 use super::{TransportConfig, parsing::parse_env_or_default};
 
@@ -94,122 +97,91 @@ fn room_sharding_policy(
 fn load_local_spillover_policy(
     get_var: &mut impl FnMut(&str) -> Option<String>,
 ) -> Result<LocalSpilloverPolicy> {
-    let config = LocalSpilloverConfig::load(get_var)?;
-    config.validate()?;
-    Ok(config.into_policy())
-}
-
-#[derive(Clone, Copy)]
-struct LocalSpilloverConfig {
-    min_receiver_count: usize,
-    max_active_consumers_per_router: usize,
-    max_fanout_per_source: usize,
-    egress_bitrate_threshold_bps: u64,
-    packet_loop_lag_threshold_ms: u64,
-    command_backlog_threshold: usize,
-    relay_mailbox_depth_threshold: usize,
-    worker_pressure_threshold: u8,
-    activation_window: usize,
-    cooldown_window: usize,
-}
-
-impl LocalSpilloverConfig {
-    fn load(get_var: &mut impl FnMut(&str) -> Option<String>) -> Result<Self> {
-        Ok(Self {
-            min_receiver_count: parse_env_or_default(
-                get_var,
-                "ROOM_SPILLOVER_MIN_RECEIVERS",
-                "usize",
-                LocalSpilloverPolicy::DEFAULT_MIN_RECEIVER_COUNT,
-            )?,
-            max_active_consumers_per_router: parse_env_or_default(
-                get_var,
-                "ROOM_SPILLOVER_MAX_CONSUMERS_PER_ROUTER",
-                "usize",
-                LocalSpilloverPolicy::DEFAULT_MAX_ACTIVE_CONSUMERS_PER_ROUTER,
-            )?,
-            max_fanout_per_source: parse_env_or_default(
-                get_var,
-                "ROOM_SPILLOVER_MAX_FANOUT_PER_SOURCE",
-                "usize",
-                LocalSpilloverPolicy::DEFAULT_MAX_FANOUT_PER_SOURCE,
-            )?,
-            egress_bitrate_threshold_bps: parse_env_or_default(
-                get_var,
-                "ROOM_SPILLOVER_EGRESS_BITRATE_BPS",
-                "u64",
-                LocalSpilloverPolicy::DEFAULT_EGRESS_BITRATE_THRESHOLD_BPS,
-            )?,
-            packet_loop_lag_threshold_ms: parse_env_or_default(
-                get_var,
-                "ROOM_SPILLOVER_PACKET_LOOP_LAG_MS",
-                "u64",
-                LocalSpilloverPolicy::DEFAULT_PACKET_LOOP_LAG_THRESHOLD_MS,
-            )?,
-            command_backlog_threshold: parse_env_or_default(
-                get_var,
-                "ROOM_SPILLOVER_COMMAND_BACKLOG",
-                "usize",
-                LocalSpilloverPolicy::DEFAULT_COMMAND_BACKLOG_THRESHOLD,
-            )?,
-            relay_mailbox_depth_threshold: parse_env_or_default(
-                get_var,
-                "ROOM_SPILLOVER_RELAY_MAILBOX_DEPTH",
-                "usize",
-                LocalSpilloverPolicy::DEFAULT_RELAY_MAILBOX_DEPTH_THRESHOLD,
-            )?,
-            worker_pressure_threshold: parse_env_or_default(
-                get_var,
-                "ROOM_SPILLOVER_WORKER_PRESSURE",
-                "u8",
-                LocalSpilloverPolicy::DEFAULT_WORKER_PRESSURE_THRESHOLD,
-            )?,
-            activation_window: parse_env_or_default(
-                get_var,
-                "ROOM_SPILLOVER_ACTIVATION_WINDOW",
-                "usize",
-                LocalSpilloverPolicy::DEFAULT_ACTIVATION_WINDOW,
-            )?,
-            cooldown_window: parse_env_or_default(
-                get_var,
-                "ROOM_SPILLOVER_COOLDOWN_WINDOW",
-                "usize",
-                LocalSpilloverPolicy::DEFAULT_COOLDOWN_WINDOW,
-            )?,
-        })
-    }
-
-    fn validate(self) -> Result<()> {
-        ensure_non_zero_usize_env(self.min_receiver_count, "ROOM_SPILLOVER_MIN_RECEIVERS")?;
-        ensure_non_zero_usize_env(
-            self.max_active_consumers_per_router,
+    let parts = LocalSpilloverPolicyParts {
+        min_receiver_count: parse_env_or_default(
+            get_var,
+            "ROOM_SPILLOVER_MIN_RECEIVERS",
+            "usize",
+            LocalSpilloverPolicy::DEFAULT_MIN_RECEIVER_COUNT,
+        )?,
+        max_active_consumers_per_router: parse_env_or_default(
+            get_var,
             "ROOM_SPILLOVER_MAX_CONSUMERS_PER_ROUTER",
-        )?;
-        ensure_non_zero_usize_env(
-            self.max_fanout_per_source,
+            "usize",
+            LocalSpilloverPolicy::DEFAULT_MAX_ACTIVE_CONSUMERS_PER_ROUTER,
+        )?,
+        max_fanout_per_source: parse_env_or_default(
+            get_var,
             "ROOM_SPILLOVER_MAX_FANOUT_PER_SOURCE",
-        )?;
-        ensure!(
-            self.worker_pressure_threshold <= 100,
-            "ROOM_SPILLOVER_WORKER_PRESSURE must be less than or equal to 100"
-        );
-        ensure_non_zero_usize_env(self.activation_window, "ROOM_SPILLOVER_ACTIVATION_WINDOW")?;
-        ensure_non_zero_usize_env(self.cooldown_window, "ROOM_SPILLOVER_COOLDOWN_WINDOW")?;
-        Ok(())
-    }
+            "usize",
+            LocalSpilloverPolicy::DEFAULT_MAX_FANOUT_PER_SOURCE,
+        )?,
+        egress_bitrate_threshold_bps: parse_env_or_default(
+            get_var,
+            "ROOM_SPILLOVER_EGRESS_BITRATE_BPS",
+            "u64",
+            LocalSpilloverPolicy::DEFAULT_EGRESS_BITRATE_THRESHOLD_BPS,
+        )?,
+        packet_loop_lag_threshold_ms: parse_env_or_default(
+            get_var,
+            "ROOM_SPILLOVER_PACKET_LOOP_LAG_MS",
+            "u64",
+            LocalSpilloverPolicy::DEFAULT_PACKET_LOOP_LAG_THRESHOLD_MS,
+        )?,
+        command_backlog_threshold: parse_env_or_default(
+            get_var,
+            "ROOM_SPILLOVER_COMMAND_BACKLOG",
+            "usize",
+            LocalSpilloverPolicy::DEFAULT_COMMAND_BACKLOG_THRESHOLD,
+        )?,
+        relay_mailbox_depth_threshold: parse_env_or_default(
+            get_var,
+            "ROOM_SPILLOVER_RELAY_MAILBOX_DEPTH",
+            "usize",
+            LocalSpilloverPolicy::DEFAULT_RELAY_MAILBOX_DEPTH_THRESHOLD,
+        )?,
+        worker_pressure_threshold: parse_env_or_default(
+            get_var,
+            "ROOM_SPILLOVER_WORKER_PRESSURE",
+            "u8",
+            LocalSpilloverPolicy::DEFAULT_WORKER_PRESSURE_THRESHOLD,
+        )?,
+        activation_window: parse_env_or_default(
+            get_var,
+            "ROOM_SPILLOVER_ACTIVATION_WINDOW",
+            "usize",
+            LocalSpilloverPolicy::DEFAULT_ACTIVATION_WINDOW,
+        )?,
+        cooldown_window: parse_env_or_default(
+            get_var,
+            "ROOM_SPILLOVER_COOLDOWN_WINDOW",
+            "usize",
+            LocalSpilloverPolicy::DEFAULT_COOLDOWN_WINDOW,
+        )?,
+    };
+    LocalSpilloverPolicy::try_new(parts).map_err(local_spillover_policy_error)
+}
 
-    fn into_policy(self) -> LocalSpilloverPolicy {
-        LocalSpilloverPolicy::conservative()
-            .with_min_receiver_count(self.min_receiver_count)
-            .with_max_active_consumers_per_router(self.max_active_consumers_per_router)
-            .with_max_fanout_per_source(self.max_fanout_per_source)
-            .with_egress_bitrate_threshold_bps(self.egress_bitrate_threshold_bps)
-            .with_packet_loop_lag_threshold_ms(self.packet_loop_lag_threshold_ms)
-            .with_command_backlog_threshold(self.command_backlog_threshold)
-            .with_relay_mailbox_depth_threshold(self.relay_mailbox_depth_threshold)
-            .with_worker_pressure_threshold(self.worker_pressure_threshold)
-            .with_activation_window(self.activation_window)
-            .with_cooldown_window(self.cooldown_window)
+fn local_spillover_policy_error(error: LocalSpilloverPolicyError) -> anyhow::Error {
+    match error {
+        LocalSpilloverPolicyError::MinReceiverCountZero => {
+            anyhow!("ROOM_SPILLOVER_MIN_RECEIVERS must be greater than zero")
+        }
+        LocalSpilloverPolicyError::MaxActiveConsumersPerRouterZero => {
+            anyhow!("ROOM_SPILLOVER_MAX_CONSUMERS_PER_ROUTER must be greater than zero")
+        }
+        LocalSpilloverPolicyError::MaxFanoutPerSourceZero => {
+            anyhow!("ROOM_SPILLOVER_MAX_FANOUT_PER_SOURCE must be greater than zero")
+        }
+        LocalSpilloverPolicyError::WorkerPressureThresholdTooHigh => {
+            anyhow!("ROOM_SPILLOVER_WORKER_PRESSURE must be less than or equal to 100")
+        }
+        LocalSpilloverPolicyError::ActivationWindowZero => {
+            anyhow!("ROOM_SPILLOVER_ACTIVATION_WINDOW must be greater than zero")
+        }
+        LocalSpilloverPolicyError::CooldownWindowZero => {
+            anyhow!("ROOM_SPILLOVER_COOLDOWN_WINDOW must be greater than zero")
+        }
     }
 }
 
@@ -490,6 +462,22 @@ mod tests {
                     ("RTC_MEDIA_WORKER_COUNT", "2"),
                     ("ROOM_MAX_LOCAL_ROUTERS", "2"),
                     ("ROOM_SPILLOVER_ACTIVATION_WINDOW", "0"),
+                ],
+            ),
+            (
+                "zero spillover receiver threshold",
+                &[
+                    ("RTC_MEDIA_WORKER_COUNT", "2"),
+                    ("ROOM_MAX_LOCAL_ROUTERS", "2"),
+                    ("ROOM_SPILLOVER_MIN_RECEIVERS", "0"),
+                ],
+            ),
+            (
+                "out of range spillover worker pressure",
+                &[
+                    ("RTC_MEDIA_WORKER_COUNT", "2"),
+                    ("ROOM_MAX_LOCAL_ROUTERS", "2"),
+                    ("ROOM_SPILLOVER_WORKER_PRESSURE", "101"),
                 ],
             ),
             (

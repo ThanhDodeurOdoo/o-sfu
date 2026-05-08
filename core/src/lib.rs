@@ -85,9 +85,9 @@ pub mod transport;
 pub use ids::{ConnectionId, RoomInstanceId};
 pub use options::{
     AudioCodecPreference, CodecOptions, CodecPreferences, CoreOptions, LocalSpilloverPolicy,
-    MediaCodecFlags, MediaOptions, ObservabilityOptions, RoomShardingPolicy, RoomSpilloverMode,
-    RoutingOptions, RtcPortRange, RuntimeFeatureFlags, SessionBitrateLimits, VideoBitrateLimits,
-    VideoCodecPreference,
+    LocalSpilloverPolicyError, LocalSpilloverPolicyParts, MediaCodecFlags, MediaOptions,
+    ObservabilityOptions, RoomShardingPolicy, RoomSpilloverMode, RoutingOptions, RtcPortRange,
+    RuntimeFeatureFlags, SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
 };
 pub use room::{
     MediaSessionContext, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
