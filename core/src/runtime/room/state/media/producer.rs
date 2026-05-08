@@ -124,6 +124,7 @@ pub(in crate::runtime::room) struct ProducerActivityOutcome {
 pub(in crate::runtime::room) struct UnpublishTrackOutcome {
     recipients: Vec<OutboundSender>,
     relay_effects: Vec<RelayRouteEffect>,
+    transport_removals: Vec<TransportMediaRemoval>,
 }
 
 impl RoomState {
@@ -501,7 +502,7 @@ impl RoomState {
     /// producer, drops the producer and pending-consumer indexes for that
     /// stream and clears the `TransportMediaId` ownership entry in the same
     /// step so later diagnostics or room policy updates cannot resolve stale
-    /// ownership
+    /// ownership.
     pub(in crate::runtime::room) fn unpublish_track(
         &mut self,
         user_id: &UserId,
@@ -509,6 +510,8 @@ impl RoomState {
         stream_id: &UserStreamId,
     ) -> Option<UnpublishTrackOutcome> {
         let producer_target = self.producer_route_target(user_id, connection_id, stream_id)?;
+        let transport_removals =
+            self.unpublish_transport_removals(user_id, connection_id, stream_id)?;
         if self
             .topology
             .remove_producer(producer_target.routed_producer_id)
@@ -517,9 +520,8 @@ impl RoomState {
             error!(
                 ?user_id,
                 stream_id = %stream_id,
-                "failed to remove published track from room router"
+                "repaired published track room state after router producer teardown failed"
             );
-            return None;
         }
         let (_producer, relay_effects) =
             self.remove_source_registry_entry(producer_target.source_id)?;
@@ -530,6 +532,7 @@ impl RoomState {
                 .map(|user| user.sender.clone())
                 .collect(),
             relay_effects,
+            transport_removals,
         })
     }
 
@@ -647,6 +650,10 @@ impl ProducerActivityOutcome {
 impl UnpublishTrackOutcome {
     pub(in crate::runtime::room) fn relay_effects(&self) -> &[RelayRouteEffect] {
         &self.relay_effects
+    }
+
+    pub(in crate::runtime::room) fn transport_removals(&self) -> &[TransportMediaRemoval] {
+        &self.transport_removals
     }
 
     /// Emits the unpublish side effects after state cleanup already landed

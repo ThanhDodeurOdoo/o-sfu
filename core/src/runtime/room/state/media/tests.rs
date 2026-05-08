@@ -737,6 +737,70 @@ fn unpublish_track_clears_transport_media_owner_index() {
 }
 
 #[test]
+fn unpublish_track_repairs_missing_topology_router_and_clears_state() {
+    let mut state = test_state();
+    let user_id = UserId::Integer(1);
+
+    join_test_user(&mut state, &user_id);
+    let connection_id = state
+        .user_connection_id(&user_id)
+        .expect("publisher should have a connection id");
+    assert!(
+        state
+            .set_client_rtp_capabilities_for_test(
+                &user_id,
+                connection_id,
+                &sample_client_rtp_capabilities(),
+            )
+            .session_present
+    );
+    assert!(
+        state
+            .set_transport_ready_for_test(&user_id, connection_id, UserTransportReady::Publish,)
+            .session_present
+    );
+
+    let consumable_rtp_parameters = derive_consumable_rtp_parameters(
+        &sample_video_rtp_parameters(None, 43_000),
+        &state.router_rtp_capabilities(),
+    )
+    .expect("publisher RTP parameters should derive consumable router parameters");
+    let prepared_track = state
+        .validate_publish_descriptor(
+            &user_id,
+            connection_id,
+            &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
+        )
+        .expect("publish descriptor should validate once the user is publish-ready")
+        .into_prepared_track(consumable_rtp_parameters);
+    let transport_media_id = TransportMediaId::new(100);
+
+    assert!(
+        state
+            .commit_published_track(prepared_track, transport_media_id)
+            .is_some()
+    );
+    state.topology.remove_router_for_test(RouterId(1));
+    assert!(
+        state
+            .unpublish_track(
+                &user_id,
+                connection_id,
+                &stream_id_for_source(TestSourceKind::ScalableVideo),
+            )
+            .is_some()
+    );
+
+    assert_eq!(
+        state.producer_stream_id_for_transport_media_id(transport_media_id),
+        None
+    );
+    assert!(state.source_ids_by_owner_stream.is_empty());
+    assert!(state.producer_id_by_source_id.is_empty());
+    assert!(state.producers.is_empty());
+}
+
+#[test]
 fn purge_user_media_state_removes_only_indexed_user_and_source_entries() {
     let mut state = test_state();
     let publisher_id = UserId::Integer(1);

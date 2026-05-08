@@ -6,7 +6,7 @@
     reason = "state-level test assertions use panic, unwrap, expect, and direct indexing for clear failure messages"
 )]
 
-use std::sync::Arc;
+use std::{slice::from_ref, sync::Arc};
 
 use o_sfu_router::{ConsumerId, MediaKind, MediaStream, ProducerId, RouterId};
 use tokio::sync::mpsc;
@@ -175,6 +175,47 @@ fn disconnect_sessions_removes_current_members_and_fanouts_departures() {
     }));
     assert_eq!(outcome.effects.close_requests.len(), 2);
     assert_eq!(outcome.effects.fanouts.len(), 2);
+}
+
+#[test]
+fn leave_repairs_missing_topology_router_and_removes_member() {
+    let mut state = test_state();
+    let (sender, _receiver) = mpsc::unbounded_channel();
+    let user_id = UserId::Integer(1);
+    assert!(
+        state
+            .apply_join(&user_id, None, UserPermissions::default(), sender, false,)
+            .is_ok()
+    );
+    let connection_id = state
+        .user_connection_id(&user_id)
+        .expect("joined user should have a connection id");
+    state.topology.remove_router_for_test(RouterId(1));
+
+    let outcome = state.apply_leave(&user_id, connection_id);
+
+    assert!(outcome.is_some());
+    assert!(!state.users.contains_key(&user_id));
+    assert_eq!(state.topology.home_router_id_for_user(&user_id), None);
+}
+
+#[test]
+fn disconnect_repairs_missing_topology_router_and_removes_member() {
+    let mut state = test_state();
+    let (sender, _receiver) = mpsc::unbounded_channel();
+    let user_id = UserId::Integer(1);
+    assert!(
+        state
+            .apply_join(&user_id, None, UserPermissions::default(), sender, false,)
+            .is_ok()
+    );
+    state.topology.remove_router_for_test(RouterId(1));
+
+    let outcome = state.apply_disconnect_users(from_ref(&user_id));
+
+    assert_eq!(outcome.disconnected_users.len(), 1);
+    assert!(!state.users.contains_key(&user_id));
+    assert_eq!(state.topology.home_router_id_for_user(&user_id), None);
 }
 
 #[test]

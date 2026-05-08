@@ -213,21 +213,8 @@ impl Room {
         stream_id: &UserStreamId,
         media_port: &(impl MediaPort + SessionPort),
     ) -> UnpublishOutcome {
-        let Some(effect_plan) = ({
-            let state = self.state.read().await;
-            state
-                .unpublish_transport_removals(user_id, connection_id, stream_id)
-                .map(|transport_removals| {
-                    UnpublishEffectPlan::new(
-                        user_id.clone(),
-                        connection_id,
-                        stream_id.clone(),
-                        transport_removals,
-                    )
-                })
-        }) else {
-            return UnpublishOutcome::MissingPublication;
-        };
+        let effect_plan =
+            UnpublishEffectPlan::new(user_id.clone(), connection_id, stream_id.clone());
         effect_plan.execute(self, media_port).await
     }
 }

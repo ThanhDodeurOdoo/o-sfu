@@ -67,10 +67,13 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
         return;
     };
 
-    room.test_api()
-        .lifecycle()
-        .leave_user(&UserId::Integer(1), first_connection)
-        .await;
+    assert!(
+        !room
+            .test_api()
+            .lifecycle()
+            .leave_user(&UserId::Integer(1), first_connection)
+            .await
+    );
     assert_eq!(room.user_count().await, 1);
     assert_eq!(room.test_api().inspect().router_user_count().await, 1);
 

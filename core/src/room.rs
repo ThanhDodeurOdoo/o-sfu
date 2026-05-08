@@ -165,19 +165,14 @@ pub enum RollbackStagedPublishOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Result of removing a live publication from room state.
 ///
-/// Explicit unpublish is stricter than staged rollback. Live producer and
-/// consumer routes remain authoritative until committed transport cleanup
-/// succeeds, because dropping room state first could leave routable media that
-/// the room can no longer address.
+/// Explicit unpublish removes room ownership before transport cleanup runs.
+/// Cleanup failures are retained by the room reconciler so callers can continue
+/// with renegotiation after the publication is no longer visible.
 pub enum UnpublishOutcome {
-    /// Transport cleanup succeeded and room state removed the publication.
-    Unpublished,
+    /// Room state removed the publication.
+    Unpublished { cleanup: TransportEffectOutcome },
     /// The stream was not live for this connection.
     MissingPublication,
-    /// Transport cleanup failed before room state was changed.
-    TransportCleanupFailed,
-    /// Transport cleanup succeeded, but the room state commit no longer matched.
-    StateCommitRejected,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -169,22 +169,20 @@ impl RoomRouterState {
         Ok(producer_id)
     }
 
-    /// # Errors
-    ///
-    /// Returns the underlying [`RouterError`] when the consumer user does not
-    /// exist, no download transport is available or consumer insertion fails.
-    pub(super) fn add_consumer(
+    pub(super) fn add_consumer_with_route_state(
         &mut self,
         consumer_user_id: &UserId,
         producer_id: RouterProducerId,
         media_kind: RouterMediaKind,
         capability: ConsumerCapability,
+        route_state: ConsumerRouteState,
     ) -> Result<RouterConsumerId, RoomRouterStateError> {
         let transport_ids = self.ensure_session_transport_ids(consumer_user_id)?;
         let consumer_id = self.allocate_consumer_id();
         self.router
             .add_consumer(
-                RouterConsumer::new(consumer_id, producer_id, transport_ids.download, media_kind),
+                RouterConsumer::new(consumer_id, producer_id, transport_ids.download, media_kind)
+                    .with_route_state(route_state),
                 capability,
             )
             .map_err(RoomRouterStateError::from)?;
@@ -274,6 +272,25 @@ impl RoomRouterState {
         self.router_user_ids_by_user_id.remove(user_id);
         self.transport_ids_by_user_id.remove(user_id);
         Ok(())
+    }
+
+    pub(super) fn remove_session_repairing(
+        &mut self,
+        user_id: &UserId,
+    ) -> Result<(), RoomRouterStateError> {
+        match self.remove_session(user_id) {
+            Ok(()) => Ok(()),
+            Err(error @ RoomRouterStateError::Router(RouterError::MissingSession(_))) => {
+                self.forget_session_indexes(user_id);
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn forget_session_indexes(&mut self, user_id: &UserId) {
+        self.router_user_ids_by_user_id.remove(user_id);
+        self.transport_ids_by_user_id.remove(user_id);
     }
 
     fn router_user_id(&self, user_id: &UserId) -> Result<RouterSessionId, RoomRouterStateError> {

@@ -32,10 +32,7 @@ use tracing::warn;
 
 use super::{
     Room, RoomMediaCounts,
-    state::{
-        ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, TransportMediaRemoval,
-        ValidatedPublishDescriptor,
-    },
+    state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, ValidatedPublishDescriptor},
 };
 use crate::{
     PublishStageOutcome, RollbackStagedPublishOutcome, TransportEffectOutcome,
@@ -758,70 +755,6 @@ impl Room {
         };
         self.record_media_count_delta(media_counts_before, media_counts_after);
         super::effects::execute_relay_route_effects(self, media_port, &relay_effects).await;
-    }
-
-    /// Best-effort transport-media cleanup for a known room owner.
-    ///
-    /// The room has already decided that the media should no longer be
-    /// owned by room state. A transport failure is logged but does not rebuild
-    /// previous room state.
-    pub(super) async fn cleanup_transport_media(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-        transport_media_id: TransportMediaId,
-        media_port: &impl MediaPort,
-        failure_message: &str,
-    ) -> TransportEffectOutcome {
-        if media_port
-            .remove_media(
-                &self.transport_user_key(user_id, connection_id),
-                transport_media_id,
-            )
-            .await
-            .is_err()
-        {
-            warn!(
-                ?user_id,
-                connection_id = ?connection_id,
-                ?transport_media_id,
-                "{failure_message}"
-            );
-            return TransportEffectOutcome::Failed;
-        }
-        TransportEffectOutcome::Applied
-    }
-
-    /// Removes a batch of committed transport media where the caller needs to
-    /// know whether every transport cleanup succeeded.
-    ///
-    /// Unlike staged publish rollback,this is used by transitions that already
-    /// removed live room state and need a strict transport outcome to decide
-    /// weather the outer cleanup can keep going.
-    pub(super) async fn cleanup_transport_removals_strict(
-        &self,
-        media_port: &impl MediaPort,
-        removals: &[TransportMediaRemoval],
-    ) -> bool {
-        for removal in removals {
-            if media_port
-                .remove_media(
-                    &self.transport_user_key(removal.user(), removal.connection()),
-                    removal.transport_media(),
-                )
-                .await
-                .is_err()
-            {
-                warn!(
-                    user_id = ?removal.user(),
-                    connection_id = ?removal.connection(),
-                    transport_media_id = ?removal.transport_media(),
-                    "media transport failed to remove transport media during room cleanup"
-                );
-                return false;
-            }
-        }
-        true
     }
 
     pub(super) async fn apply_initial_consumer_pause_state(

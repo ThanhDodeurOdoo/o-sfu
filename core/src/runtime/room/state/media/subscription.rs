@@ -531,11 +531,17 @@ impl RoomState {
             .entry(pending.consumer_key.clone())
             .or_insert_with(|| ConsumerSourceSelection::open(pending.consumer_active));
         self.register_consumer_key(&pending.consumer_key);
-        let routed_consumer_id = match self.topology.add_consumer(
+        let initial_route_state = if pending.consumer_active {
+            RouterConsumerRouteState::Active
+        } else {
+            RouterConsumerRouteState::Paused
+        };
+        let routed_consumer_id = match self.topology.add_consumer_with_route_state(
             &target.consumer_user_id,
             pending.producer.routed_producer_id?,
             pending.producer.media_kind,
             ConsumerCapability::Compatible,
+            initial_route_state,
         ) {
             Ok(id) => id,
             Err(error) => {
@@ -550,21 +556,6 @@ impl RoomState {
         };
         if let Some(consumer_mid) = consumer_mid {
             pending.bootstrap.mid = consumer_mid;
-        }
-        // The router inserts consumers as locally active, then mirrors the
-        // stored download selection if this receiver had already paused it.
-        if !pending.consumer_active
-            && self
-                .topology
-                .set_consumer_route_state(routed_consumer_id, RouterConsumerRouteState::Paused)
-                .is_err()
-        {
-            error!(
-                consumer_user_id = ?target.consumer_user_id,
-                producer_id = %pending.producer.producer_id,
-                "failed to mirror initial consumer pause state into room router"
-            );
-            return None;
         }
         let consumer_key = pending.consumer_key;
         self.consumer_index.insert(

@@ -332,13 +332,13 @@ impl RoomState {
         }
         let transport_removals =
             self.collect_user_transport_removals(&BTreeSet::from([user_id.clone()]));
-        if let Err(error) = self.topology.remove_session(user_id) {
+        let topology_repair = self.topology.remove_session_repairing(user_id);
+        if !topology_repair.is_clean() {
             error!(
                 ?user_id,
-                ?error,
-                "failed to remove departed user from room router"
+                errors = ?topology_repair.errors(),
+                "repaired departed user topology during room teardown"
             );
-            return None;
         }
         let relay_effects = self.purge_user_media_state(user_id);
         let user = self.users.remove(user_id)?;
@@ -436,13 +436,13 @@ impl RoomState {
             if !self.users.contains_key(user_id) {
                 continue;
             }
-            if let Err(error) = self.topology.remove_session(user_id) {
+            let topology_repair = self.topology.remove_session_repairing(user_id);
+            if !topology_repair.is_clean() {
                 error!(
                     ?user_id,
-                    ?error,
-                    "failed to mirror bulk disconnect into room router"
+                    errors = ?topology_repair.errors(),
+                    "repaired disconnected user topology during room teardown"
                 );
-                continue;
             }
             transport_removals
                 .extend(self.collect_user_transport_removals(&BTreeSet::from([user_id.clone()])));

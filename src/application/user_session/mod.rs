@@ -178,9 +178,7 @@ enum UnpublishMediaDisposition {
     /// A not-yet-committed publish was cancelled.
     RolledBackStagedPublish { cleanup: TransportEffectOutcome },
     /// A live room publication was removed and peers need a follow-up offer.
-    RemovedLivePublication,
-    /// Core could not remove the live publication cleanly.
-    UnpublishFailed,
+    RemovedLivePublication { cleanup: TransportEffectOutcome },
 }
 
 /// User-session failure category reported to the websocket runtime.
@@ -454,14 +452,10 @@ impl User {
                 }
                 RollbackStagedPublishOutcome::NotStaged => {
                     match media.unpublish(&stream_id).await {
-                        UnpublishOutcome::Unpublished => {
-                            Some(UnpublishMediaDisposition::RemovedLivePublication)
+                        UnpublishOutcome::Unpublished { cleanup } => {
+                            Some(UnpublishMediaDisposition::RemovedLivePublication { cleanup })
                         }
                         UnpublishOutcome::MissingPublication => None,
-                        UnpublishOutcome::TransportCleanupFailed
-                        | UnpublishOutcome::StateCommitRejected => {
-                            Some(UnpublishMediaDisposition::UnpublishFailed)
-                        }
                     }
                 }
             }
@@ -472,11 +466,11 @@ impl User {
                 let _disposition = self.state.negotiation.request_renegotiation();
                 Ok(UserOutput::new())
             }
-            Some(UnpublishMediaDisposition::RemovedLivePublication) => {
+            Some(UnpublishMediaDisposition::RemovedLivePublication { cleanup }) => {
+                Self::log_live_unpublish(stream_type, cleanup);
                 self.update_publication_info(stream_type, false).await?;
                 self.request_renegotiation().await
             }
-            Some(UnpublishMediaDisposition::UnpublishFailed) => Err(UserError::InternalError),
             None => Ok(UserOutput::new()),
         }
     }
@@ -914,6 +908,15 @@ impl User {
             outcome = ?cleanup,
             stream_type = ?stream_type,
             "rolled back staged publish stream before commit"
+        );
+    }
+
+    fn log_live_unpublish(stream_type: StreamType, cleanup: TransportEffectOutcome) {
+        info!(
+            operation = "publish_unpublish",
+            outcome = ?cleanup,
+            stream_type = ?stream_type,
+            "removed live publish stream"
         );
     }
 

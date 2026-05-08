@@ -105,6 +105,25 @@ pub(in crate::runtime::room) enum RoomTopologyError {
     RouterState(RoomRouterStateError),
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(in crate::runtime::room) struct RoomTopologyRepairReport {
+    errors: Vec<RoomTopologyError>,
+}
+
+impl RoomTopologyRepairReport {
+    fn record(&mut self, error: RoomTopologyError) {
+        self.errors.push(error);
+    }
+
+    pub(in crate::runtime::room) fn errors(&self) -> &[RoomTopologyError] {
+        &self.errors
+    }
+
+    pub(in crate::runtime::room) fn is_clean(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
 impl From<RoomRouterStateError> for RoomTopologyError {
     fn from(error: RoomRouterStateError) -> Self {
         Self::RouterState(error)
@@ -489,6 +508,7 @@ impl RoomTopology {
     /// topology first materializes a shadow receiver session on the producer
     /// router. That keeps producer pause propagation and consumer teardown in
     /// the same pure router instance that owns the source.
+    #[cfg(test)]
     pub(super) fn add_consumer(
         &mut self,
         consumer_user_id: &UserId,
@@ -496,14 +516,34 @@ impl RoomTopology {
         media_kind: RouterMediaKind,
         capability: ConsumerCapability,
     ) -> Result<RoutedConsumerId, RoomTopologyError> {
-        let receiver_session =
-            self.ensure_session_on_router(consumer_user_id, producer_id.router_id())?;
-        let consumer_result = self.router_mut(producer_id.router_id())?.add_consumer(
+        self.add_consumer_with_route_state(
             consumer_user_id,
-            producer_id.producer_id(),
+            producer_id,
             media_kind,
             capability,
-        );
+            ConsumerRouteState::Active,
+        )
+    }
+
+    pub(super) fn add_consumer_with_route_state(
+        &mut self,
+        consumer_user_id: &UserId,
+        producer_id: RoutedProducerId,
+        media_kind: RouterMediaKind,
+        capability: ConsumerCapability,
+        route_state: ConsumerRouteState,
+    ) -> Result<RoutedConsumerId, RoomTopologyError> {
+        let receiver_session =
+            self.ensure_session_on_router(consumer_user_id, producer_id.router_id())?;
+        let consumer_result = self
+            .router_mut(producer_id.router_id())?
+            .add_consumer_with_route_state(
+                consumer_user_id,
+                producer_id.producer_id(),
+                media_kind,
+                capability,
+                route_state,
+            );
         let consumer_id = match consumer_result {
             Ok(consumer_id) => consumer_id,
             Err(error) => {
@@ -615,6 +655,38 @@ impl RoomTopology {
         Ok(())
     }
 
+    pub(super) fn remove_session_repairing(
+        &mut self,
+        user_id: &UserId,
+    ) -> RoomTopologyRepairReport {
+        let mut report = RoomTopologyRepairReport::default();
+        match self.require_home_router_id(user_id) {
+            Ok(home_router_id) if !self.routers.contains_key(&home_router_id) => {
+                report.record(RoomTopologyError::MissingRouterForSession {
+                    user_id: user_id.clone(),
+                    router_id: home_router_id,
+                });
+            }
+            Err(error) => report.record(error),
+            Ok(_) => {}
+        }
+        let router_ids = self.routers.keys().copied().collect::<Vec<_>>();
+        for router_id in router_ids {
+            let removal = self
+                .router_mut_for_user(user_id, router_id)
+                .and_then(|router| router.remove_session_repairing(user_id).map_err(Into::into));
+            if let Err(error) = removal {
+                report.record(error);
+            }
+        }
+        let shadow_sessions = self.shadow_sessions.unregister_session(user_id);
+        self.prune_shadow_sessions_repairing(shadow_sessions, &mut report);
+        self.session_home_router.remove(user_id);
+        self.session_seed_by_user.remove(user_id);
+        self.detach_idle_spillover_routers();
+        report
+    }
+
     /// Return the user's home router after topology admission.
     fn require_home_router_id(&self, user_id: &UserId) -> Result<RouterId, RoomTopologyError> {
         self.session_home_router
@@ -704,6 +776,25 @@ impl RoomTopology {
                 .remove_session(shadow_session.user_id())?;
         }
         Ok(())
+    }
+
+    fn prune_shadow_sessions_repairing(
+        &mut self,
+        shadow_sessions: BTreeSet<ShadowSessionKey>,
+        report: &mut RoomTopologyRepairReport,
+    ) {
+        for shadow_session in shadow_sessions {
+            let removal = self
+                .router_mut_for_user(shadow_session.user_id(), shadow_session.router_id())
+                .and_then(|router| {
+                    router
+                        .remove_session_repairing(shadow_session.user_id())
+                        .map_err(Into::into)
+                });
+            if let Err(error) = removal {
+                report.record(error);
+            }
+        }
     }
 
     /// Drop idle spillover router state after home sessions leave.

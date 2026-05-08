@@ -419,13 +419,23 @@ impl Room {
         &self,
         cleanup: UserCleanup<'_>,
         removals: &[TransportMediaRemoval],
-    ) {
+    ) -> TransportEffectOutcome {
         let Some(media_transport) = cleanup.media_transport() else {
-            return;
+            return TransportEffectOutcome::Applied;
         };
         if !cleanup.cleans_transport_state() {
-            return;
+            return TransportEffectOutcome::Applied;
         }
+        self.cleanup_transport_removals_with_retry(media_transport, removals)
+            .await
+    }
+
+    pub(in crate::runtime::room) async fn cleanup_transport_removals_with_retry(
+        &self,
+        media_transport: &(impl MediaPort + SessionPort),
+        removals: &[TransportMediaRemoval],
+    ) -> TransportEffectOutcome {
+        let mut cleanup = TransportEffectOutcome::Applied;
         for removal in removals {
             let operation = TransportCleanupOperation::RemoveMedia {
                 user_id: removal.user().clone(),
@@ -438,10 +448,12 @@ impl Room {
             {
                 self.record_cleanup_failure(&operation, error, media_transport)
                     .await;
+                cleanup = TransportEffectOutcome::Failed;
             }
         }
         self.reconcile_transport_cleanup_retries(media_transport)
             .await;
+        cleanup
     }
 
     /// Removes one staged media reservation after room ownership was consumed.
@@ -941,7 +953,11 @@ impl Room {
                 .await;
         }
         self.definition.unregister_transport_worker(connection_id);
-        UserTransitionResult::Applied
+        if had_state {
+            UserTransitionResult::Applied
+        } else {
+            UserTransitionResult::Missing
+        }
     }
 
     /// Record diagnostics for a live session that was removed by close.

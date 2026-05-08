@@ -155,7 +155,9 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
             &adapter,
         )
         .await,
-        UnpublishOutcome::Unpublished
+        UnpublishOutcome::Unpublished {
+            cleanup: crate::TransportEffectOutcome::Applied
+        }
     );
 
     assert_eq!(room.test_api().inspect().producer_count().await, 0);
@@ -878,7 +880,7 @@ async fn screen_share_layout_uses_screen_specific_priority_in_diagnostics() {
 }
 
 #[tokio::test]
-async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
+async fn explicit_unpublish_removes_state_when_transport_cleanup_fails() {
     let mut scenario = setup_real_rtc_refresh_scenario().await;
 
     publish_track(
@@ -938,35 +940,40 @@ async fn explicit_unpublish_preserves_state_when_transport_cleanup_fails() {
                 &scenario.media_transport,
             )
             .await,
-        UnpublishOutcome::TransportCleanupFailed,
-        "unpublish should abort when transport cleanup fails"
+        UnpublishOutcome::Unpublished {
+            cleanup: crate::TransportEffectOutcome::Failed
+        },
+        "unpublish should commit room state and queue failed transport cleanup"
     );
 
-    assert_eq!(scenario.room.test_api().inspect().producer_count().await, 1);
-    assert_eq!(scenario.room.test_api().inspect().consumer_count().await, 1);
+    assert_eq!(scenario.room.test_api().inspect().producer_count().await, 0);
+    assert_eq!(scenario.room.test_api().inspect().consumer_count().await, 0);
+    assert_user_has_no_producer_route_target(
+        &scenario.room,
+        &scenario.publisher_user_id,
+        connection_id,
+        TestSourceKind::AudioDetector,
+    )
+    .await;
+    assert_transport_media_mapping_is_missing(&scenario.room, transport_media_id).await;
     assert!(
         scenario
             .room
             .test_api()
-            .inspect()
-            .has_producer_route_target(
-                &scenario.publisher_user_id,
-                connection_id,
-                TestSourceKind::AudioDetector,
-            )
-            .await
+            .lifecycle()
+            .pending_cleanup_retry_count()
+            > 0
     );
     assert!(
-        scenario
-            .room
-            .test_api()
-            .inspect()
-            .producer_stream_type_for_transport_media_id(transport_media_id)
-            .await
-            .is_some()
+        drain_outbound(&mut scenario.publisher_rx)
+            .iter()
+            .any(|message| matches!(message, UserOutbound::TrackBindingUpdate(_)))
     );
-    assert!(drain_outbound(&mut scenario.publisher_rx).is_empty());
-    assert!(drain_outbound(&mut scenario.subscriber_rx).is_empty());
+    assert!(
+        drain_outbound(&mut scenario.subscriber_rx)
+            .iter()
+            .any(|message| matches!(message, UserOutbound::TrackBindingUpdate(_)))
+    );
 }
 
 #[tokio::test]
@@ -1664,6 +1671,73 @@ async fn late_join_bootstrap_cleans_up_transport_media_when_user_leaves_mid_cons
 }
 
 #[tokio::test]
+async fn late_join_bootstrap_queues_transport_cleanup_retry_when_commit_cleanup_fails() {
+    let (room, media_transport, fake, mut publisher_rx, mut subscriber_rx) =
+        setup_late_join_bootstrap_scenario().await;
+    drain_outbound(&mut publisher_rx);
+    drain_outbound(&mut subscriber_rx);
+
+    let _ = set_consume_transport_ready(&room, &UserId::Integer(2)).await;
+    let _ = set_client_rtp_capabilities(&room, &UserId::Integer(2), test_client_rtp_capabilities())
+        .await;
+    fake.set_consume_media_delay(Some(Duration::from_millis(200)));
+    let consumer_transport_media_id = TransportMediaId::new(1);
+    fake.fail_remove_media_until_allowed(consumer_transport_media_id);
+
+    let bootstrap_task = tokio::spawn({
+        let room = Arc::clone(&room);
+        let adapter = media_transport.clone();
+        async move {
+            let _ = refresh_session_consumers(&room, &UserId::Integer(2), &adapter).await;
+        }
+    });
+
+    wait_for_fake_event(&fake, |event| {
+        matches!(
+            event,
+            FakeMediaTransportEvent::ConsumeMediaRequested {
+                consumer_user_id: UserId::Integer(2),
+                source_user_id: UserId::Integer(1),
+                media_kind: MediaKind::Video,
+            }
+        )
+    })
+    .await;
+
+    assert!(
+        room.test_api()
+            .lifecycle()
+            .leave_user(&UserId::Integer(2), test_connection_id(1))
+            .await
+    );
+    bootstrap_task.await.unwrap();
+
+    assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 1);
+    assert!(!fake.snapshot_events().iter().any(|event| matches!(
+        event,
+        FakeMediaTransportEvent::MediaRemoved {
+            user_id: UserId::Integer(2),
+            transport_media_id,
+        } if *transport_media_id == consumer_transport_media_id
+    )));
+
+    fake.allow_remove_media(consumer_transport_media_id);
+    room.test_api()
+        .lifecycle()
+        .force_cleanup_retry_cycle(&media_transport)
+        .await;
+
+    assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 0);
+    assert!(fake.snapshot_events().iter().any(|event| matches!(
+        event,
+        FakeMediaTransportEvent::MediaRemoved {
+            user_id: UserId::Integer(2),
+            transport_media_id,
+        } if *transport_media_id == consumer_transport_media_id
+    )));
+}
+
+#[tokio::test]
 async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_cleanup() {
     let (room, media_transport, fake, mut publisher_rx, mut subscriber_rx) =
         setup_two_ready_users_with_fake().await;
@@ -1746,7 +1820,9 @@ async fn in_flight_bootstrap_retry_does_not_duplicate_consumer_or_unpublish_clea
             &media_transport
         )
         .await,
-        UnpublishOutcome::Unpublished
+        UnpublishOutcome::Unpublished {
+            cleanup: crate::TransportEffectOutcome::Applied
+        }
     );
     assert_eq!(room.test_api().inspect().producer_count().await, 0);
     assert_eq!(room.test_api().inspect().consumer_count().await, 0);

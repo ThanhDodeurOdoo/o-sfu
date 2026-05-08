@@ -24,7 +24,7 @@ use super::{
     state::{
         ConsumerBootstrapOrigin, ConsumerRouteUpdate, PendingConsumerBootstrap,
         PendingConsumerBootstrapTarget, PlannedConsumerBootstrap, PlannedSubscriptionChange,
-        PreparedConsumerBootstrap, RelayRouteEffect, TransportMediaRemoval,
+        PreparedConsumerBootstrap, RelayRouteEffect,
     },
 };
 use crate::{
@@ -438,7 +438,7 @@ impl ConsumerBootstrapOp {
             room.release_pending_consumer_bootstrap(target, media_port)
                 .await;
             room
-                .cleanup_transport_media(
+                .cleanup_transport_media_with_retry(
                     target.consumer_user_id(),
                     target.consumer_connection_id(),
                     consumer_transport_media_id,
@@ -485,10 +485,9 @@ impl ConsumerBootstrapOp {
 
 #[derive(Debug)]
 pub(super) struct UnpublishEffectPlan {
-    user_id: UserId,
-    connection_id: ConnectionId,
-    stream_id: UserStreamId,
-    transport_removals: Vec<TransportMediaRemoval>,
+    user: UserId,
+    connection: ConnectionId,
+    stream: UserStreamId,
 }
 
 impl UnpublishEffectPlan {
@@ -496,13 +495,11 @@ impl UnpublishEffectPlan {
         user_id: UserId,
         connection_id: ConnectionId,
         stream_id: UserStreamId,
-        transport_removals: Vec<TransportMediaRemoval>,
     ) -> Self {
         Self {
-            user_id,
-            connection_id,
-            stream_id,
-            transport_removals,
+            user: user_id,
+            connection: connection_id,
+            stream: stream_id,
         }
     }
 
@@ -511,22 +508,13 @@ impl UnpublishEffectPlan {
         room: &Room,
         media_port: &(impl MediaPort + SessionPort),
     ) -> UnpublishOutcome {
-        // Explicit unpublish tears down transport state first so a later state
-        // commit failure cannot leave routable media alive for a track the room
-        // already considers removed.
-        if !room
-            .cleanup_transport_removals_strict(media_port, &self.transport_removals)
-            .await
-        {
-            return UnpublishOutcome::TransportCleanupFailed;
-        }
         let (media_counts_before, outcome, media_counts_after) = {
             let mut state = room.state.write().await;
             let media_counts_before = RoomMediaCounts {
                 publications: state.publication_count(),
                 subscriptions: state.subscription_count(),
             };
-            let outcome = state.unpublish_track(&self.user_id, self.connection_id, &self.stream_id);
+            let outcome = state.unpublish_track(&self.user, self.connection, &self.stream);
             let media_counts_after = RoomMediaCounts {
                 publications: state.publication_count(),
                 subscriptions: state.subscription_count(),
@@ -535,17 +523,14 @@ impl UnpublishEffectPlan {
             (media_counts_before, outcome, media_counts_after)
         };
         let Some(outcome) = outcome else {
-            warn!(
-                user_id = ?self.user_id,
-                connection_id = ?self.connection_id,
-                stream_id = %self.stream_id,
-                "transport cleanup succeeded but room state commit failed"
-            );
-            return UnpublishOutcome::StateCommitRejected;
+            return UnpublishOutcome::MissingPublication;
         };
         MediaCountDelta::new(media_counts_before, media_counts_after).record(room);
         execute_relay_route_effects(room, media_port, outcome.relay_effects()).await;
-        outcome.emit(&self.user_id, &self.stream_id);
-        UnpublishOutcome::Unpublished
+        let cleanup = room
+            .cleanup_transport_removals_with_retry(media_port, outcome.transport_removals())
+            .await;
+        outcome.emit(&self.user, &self.stream);
+        UnpublishOutcome::Unpublished { cleanup }
     }
 }
