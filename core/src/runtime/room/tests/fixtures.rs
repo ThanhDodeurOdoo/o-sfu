@@ -1,3 +1,4 @@
+use std::time::Instant;
 pub(super) use std::{sync::Arc, time::Duration};
 
 use o_sfu_router::test_support::rtp_samples::{
@@ -19,7 +20,7 @@ pub(super) use super::super::{
 use crate::runtime::room::user_negotiation::{UserNegotiationUpdate, UserTransportReady};
 pub(super) use crate::{
     PublicationActivity, PublishStageOutcome, RollbackStagedPublishOutcome,
-    SessionNegotiationOutcome, UnpublishOutcome, UserInfoRefresh,
+    SessionNegotiationOutcome, SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
     runtime::{
         ConnectionId, TestSourceKind, UserId, UserInfo, UserPermissions, VideoLayoutIntent,
         media_transport::{
@@ -587,6 +588,141 @@ pub(super) async fn setup_three_ready_users_with_fake() -> (
     Arc<FakeMediaTransport>,
 ) {
     setup_ready_users_with_fake(&[1, 2, 3]).await
+}
+
+pub(super) struct SourcePolicyScenario {
+    pub(super) room: Arc<super::super::Room>,
+    pub(super) adapter: MediaTransport,
+    pub(super) fake: Arc<FakeMediaTransport>,
+}
+
+impl SourcePolicyScenario {
+    pub(super) async fn with_ready_users(user_ids: &[i64]) -> Self {
+        let (room, adapter, fake) = setup_ready_users_with_fake(user_ids).await;
+        Self {
+            room,
+            adapter,
+            fake,
+        }
+    }
+
+    pub(super) async fn three_ready_users() -> Self {
+        Self::with_ready_users(&[1, 2, 3]).await
+    }
+
+    pub(super) async fn publish_audio_and_camera(&self, raw_user_id: i64) {
+        publish_audio_and_camera(&self.room, &UserId::Integer(raw_user_id), &self.adapter).await;
+    }
+
+    pub(super) async fn publish_audio_and_camera_for_users(&self, user_ids: &[i64]) {
+        for raw_user_id in user_ids {
+            self.publish_audio_and_camera(*raw_user_id).await;
+        }
+    }
+
+    pub(super) async fn publish_simulcast_camera(&self, raw_user_id: i64) {
+        publish_simulcast_camera(&self.room, &UserId::Integer(raw_user_id), &self.adapter).await;
+    }
+
+    pub(super) async fn publish_simulcast_cameras(&self, user_ids: &[i64]) {
+        for raw_user_id in user_ids {
+            self.publish_simulcast_camera(*raw_user_id).await;
+        }
+    }
+
+    pub(super) async fn audio_media_id(&self, raw_user_id: i64) -> TransportMediaId {
+        let (audio_media_id, _camera_media_id) =
+            source_media_ids(&self.room, &UserId::Integer(raw_user_id)).await;
+        audio_media_id
+    }
+
+    pub(super) async fn audio_media_ids(&self, user_ids: &[i64]) -> Vec<TransportMediaId> {
+        let mut media_ids = Vec::with_capacity(user_ids.len());
+        for raw_user_id in user_ids {
+            media_ids.push(self.audio_media_id(*raw_user_id).await);
+        }
+        media_ids
+    }
+
+    pub(super) fn mark_active_speaker(&self, transport_media_id: TransportMediaId) {
+        self.mark_active_speakers([transport_media_id]);
+    }
+
+    pub(super) fn mark_active_speakers(
+        &self,
+        transport_media_ids: impl IntoIterator<Item = TransportMediaId>,
+    ) {
+        let observed_at = Instant::now();
+        self.fake.set_active_speaker_source_snapshot(
+            transport_media_ids
+                .into_iter()
+                .map(|transport_media_id| ActiveSpeakerSource::new(transport_media_id, observed_at))
+                .collect(),
+        );
+    }
+
+    pub(super) async fn mark_user_active_speaker(&self, raw_user_id: i64) {
+        self.mark_active_speaker(self.audio_media_id(raw_user_id).await);
+    }
+
+    pub(super) fn set_receiver_budget(&self, raw_user_id: i64, estimate_bps: u64) {
+        self.fake
+            .set_receiver_bandwidth_estimate(UserId::Integer(raw_user_id), estimate_bps);
+    }
+
+    pub(super) fn event_cursor(&self) -> usize {
+        self.fake.snapshot_events().len()
+    }
+
+    pub(super) fn events(&self) -> Vec<FakeMediaTransportEvent> {
+        self.fake.snapshot_events()
+    }
+
+    pub(super) fn events_since(&self, cursor: usize) -> Vec<FakeMediaTransportEvent> {
+        self.fake
+            .snapshot_events()
+            .into_iter()
+            .skip(cursor)
+            .collect()
+    }
+
+    pub(super) async fn refresh_policy(&self) {
+        self.room
+            .sync_source_packet_selection_policy(Some(&self.adapter), &self.adapter)
+            .await;
+    }
+
+    pub(super) async fn refresh_policy_times(&self, count: usize) {
+        for _ in 0..count {
+            self.refresh_policy().await;
+        }
+    }
+
+    pub(super) async fn set_scalable_video_layout(
+        &self,
+        receiver_user_id: i64,
+        source_user_id: i64,
+        layout: VideoLayoutIntent,
+    ) {
+        let receiver_user_id = UserId::Integer(receiver_user_id);
+        let source_user_id = UserId::Integer(source_user_id);
+        let intents = subscription_intents_from_test_states(&TestSubscriptionStates {
+            scalable_video_layout: Some(layout),
+            ..TestSubscriptionStates::default()
+        });
+        assert_eq!(
+            self.room
+                .update_subscription_runtime(
+                    &receiver_user_id,
+                    user_connection_id(&self.room, &receiver_user_id).await,
+                    &source_user_id,
+                    &intents,
+                    &self.adapter,
+                )
+                .await,
+            SubscriptionUpdateOutcome::Applied
+        );
+    }
 }
 
 pub(super) async fn try_publish_camera(

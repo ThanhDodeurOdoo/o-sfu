@@ -347,144 +347,74 @@ async fn leaving_a_multiparty_room_restores_the_highest_consumer_layer() {
 
 #[tokio::test]
 async fn receiver_bandwidth_pressure_downswitches_after_sustained_observations() {
-    let (room, adapter, fake) = setup_three_ready_users_with_fake().await;
-    let publisher_id = UserId::Integer(1);
-    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
-    publish_audio_and_camera(&room, &publisher_id, &adapter).await;
-    let (first_audio_media_id, _first_camera_media_id) =
-        source_media_ids(&room, &publisher_id).await;
-
-    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
-        first_audio_media_id,
-        Instant::now(),
-    )]);
-    room.update_user_info(
-        &publisher_id,
-        publisher_connection_id,
-        UserInfo::default(),
-        UserInfoRefresh::NotNeeded,
-        &adapter,
-    )
-    .await;
+    let scenario = SourcePolicyScenario::three_ready_users().await;
+    scenario.publish_audio_and_camera(1).await;
+    scenario.mark_user_active_speaker(1).await;
+    scenario.refresh_policy().await;
     assert_consumer_packet_selection_update(
-        &fake.snapshot_events(),
+        &scenario.events(),
         &UserId::Integer(2),
         &UserId::Integer(1),
         "hi",
     );
 
-    fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 100_000);
-    let baseline_event_count = fake.snapshot_events().len();
-    for _ in 0..2 {
-        room.update_user_info(
-            &publisher_id,
-            publisher_connection_id,
-            UserInfo::default(),
-            UserInfoRefresh::NotNeeded,
-            &adapter,
-        )
-        .await;
-    }
+    scenario.set_receiver_budget(2, 100_000);
+    let baseline_event_count = scenario.event_cursor();
+    scenario.refresh_policy_times(2).await;
 
-    let events = fake.snapshot_events();
+    let events = scenario.events_since(baseline_event_count);
     assert_consumer_packet_selection_update(
-        &events[baseline_event_count..],
+        &events,
         &UserId::Integer(2),
         &UserId::Integer(1),
         "lo",
     );
-    assert_consumer_keyframe_request(
-        &events[baseline_event_count..],
-        &UserId::Integer(2),
-        &UserId::Integer(1),
-    );
+    assert_consumer_keyframe_request(&events, &UserId::Integer(2), &UserId::Integer(1));
 }
 
 #[tokio::test]
 async fn receiver_bandwidth_recovery_upswitches_conservatively_with_keyframe() {
-    let (room, adapter, fake) = setup_three_ready_users_with_fake().await;
-    let publisher_id = UserId::Integer(1);
-    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
-    publish_audio_and_camera(&room, &publisher_id, &adapter).await;
-    let (first_audio_media_id, _first_camera_media_id) =
-        source_media_ids(&room, &publisher_id).await;
-
-    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
-        first_audio_media_id,
-        Instant::now(),
-    )]);
-    fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 100_000);
-    for _ in 0..2 {
-        room.update_user_info(
-            &publisher_id,
-            publisher_connection_id,
-            UserInfo::default(),
-            UserInfoRefresh::NotNeeded,
-            &adapter,
-        )
-        .await;
-    }
+    let scenario = SourcePolicyScenario::three_ready_users().await;
+    scenario.publish_audio_and_camera(1).await;
+    scenario.mark_user_active_speaker(1).await;
+    scenario.set_receiver_budget(2, 100_000);
+    scenario.refresh_policy_times(2).await;
     assert_consumer_packet_selection_update(
-        &fake.snapshot_events(),
+        &scenario.events(),
         &UserId::Integer(2),
         &UserId::Integer(1),
         "lo",
     );
 
-    fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 2_000_000);
-    let baseline_event_count = fake.snapshot_events().len();
-    for _ in 0..3 {
-        room.update_user_info(
-            &publisher_id,
-            publisher_connection_id,
-            UserInfo::default(),
-            UserInfoRefresh::NotNeeded,
-            &adapter,
-        )
-        .await;
-    }
+    scenario.set_receiver_budget(2, 2_000_000);
+    let baseline_event_count = scenario.event_cursor();
+    scenario.refresh_policy_times(3).await;
 
-    let events = fake.snapshot_events();
-    let recovery_events = &events[baseline_event_count..];
+    let recovery_events = scenario.events_since(baseline_event_count);
     assert_consumer_packet_selection_update(
-        recovery_events,
+        &recovery_events,
         &UserId::Integer(2),
         &UserId::Integer(1),
         "hi",
     );
-    assert_consumer_keyframe_request(recovery_events, &UserId::Integer(2), &UserId::Integer(1));
+    assert_consumer_keyframe_request(&recovery_events, &UserId::Integer(2), &UserId::Integer(1));
 }
 
 #[tokio::test]
 async fn receiver_budget_pauses_visible_thumbnail_after_cheapest_layers_do_not_fit() {
-    let (room, adapter, fake) = setup_ready_users_with_fake(&[1, 2, 3, 4]).await;
-    for raw_user_id in [1_i64, 3, 4] {
-        publish_simulcast_camera(&room, &UserId::Integer(raw_user_id), &adapter).await;
-    }
+    let scenario = SourcePolicyScenario::with_ready_users(&[1, 2, 3, 4]).await;
+    scenario.publish_simulcast_cameras(&[1, 3, 4]).await;
 
-    let publisher_id = UserId::Integer(1);
-    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
-    fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 200_000);
-    let baseline_event_count = fake.snapshot_events().len();
-    for _ in 0..2 {
-        room.update_user_info(
-            &publisher_id,
-            publisher_connection_id,
-            UserInfo::default(),
-            UserInfoRefresh::NotNeeded,
-            &adapter,
-        )
+    scenario.set_receiver_budget(2, 200_000);
+    let baseline_event_count = scenario.event_cursor();
+    scenario.refresh_policy_times(2).await;
+
+    let events = scenario.events_since(baseline_event_count);
+    assert_consumer_activity_update(&events, &UserId::Integer(2), &UserId::Integer(1), false);
+    let diagnostics = scenario
+        .room
+        .diagnostics_user_views(&scenario.adapter)
         .await;
-    }
-
-    let events = fake.snapshot_events();
-    assert_consumer_activity_update(
-        &events[baseline_event_count..],
-        &UserId::Integer(2),
-        &UserId::Integer(1),
-        false,
-    );
-    let diagnostics = room.diagnostics_user_views(&adapter).await;
     let paused_subscription = diagnostics
         .iter()
         .find(|view| view.user_id == UserId::Integer(2))
@@ -525,53 +455,29 @@ async fn receiver_budget_pauses_visible_thumbnail_after_cheapest_layers_do_not_f
 
 #[tokio::test]
 async fn receiver_budget_resumes_policy_paused_route_without_erasing_subscription_state() {
-    let (room, adapter, fake) = setup_ready_users_with_fake(&[1, 2, 3, 4]).await;
-    for raw_user_id in [1_i64, 3, 4] {
-        publish_simulcast_camera(&room, &UserId::Integer(raw_user_id), &adapter).await;
-    }
-
-    let publisher_id = UserId::Integer(1);
-    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
-    fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 200_000);
-    for _ in 0..2 {
-        room.update_user_info(
-            &publisher_id,
-            publisher_connection_id,
-            UserInfo::default(),
-            UserInfoRefresh::NotNeeded,
-            &adapter,
-        )
-        .await;
-    }
+    let scenario = SourcePolicyScenario::with_ready_users(&[1, 2, 3, 4]).await;
+    scenario.publish_simulcast_cameras(&[1, 3, 4]).await;
+    scenario.set_receiver_budget(2, 200_000);
+    scenario.refresh_policy_times(2).await;
     assert_consumer_activity_update(
-        &fake.snapshot_events(),
+        &scenario.events(),
         &UserId::Integer(2),
         &UserId::Integer(1),
         false,
     );
 
-    fake.set_receiver_bandwidth_estimate(UserId::Integer(2), 1_000_000);
-    let baseline_event_count = fake.snapshot_events().len();
-    for _ in 0..3 {
-        room.update_user_info(
-            &publisher_id,
-            publisher_connection_id,
-            UserInfo::default(),
-            UserInfoRefresh::NotNeeded,
-            &adapter,
-        )
-        .await;
-    }
+    scenario.set_receiver_budget(2, 1_000_000);
+    let baseline_event_count = scenario.event_cursor();
+    scenario.refresh_policy_times(3).await;
 
-    let events = fake.snapshot_events();
-    let recovery_events = &events[baseline_event_count..];
+    let recovery_events = scenario.events_since(baseline_event_count);
     assert_consumer_activity_update(
-        recovery_events,
+        &recovery_events,
         &UserId::Integer(2),
         &UserId::Integer(1),
         true,
     );
-    assert_consumer_keyframe_request(recovery_events, &UserId::Integer(2), &UserId::Integer(1));
+    assert_consumer_keyframe_request(&recovery_events, &UserId::Integer(2), &UserId::Integer(1));
 }
 
 async fn assert_transport_media_mapping_is_missing(
@@ -649,85 +555,55 @@ async fn assert_subscription_layout(
 
 #[tokio::test]
 async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate() {
-    let (room, adapter, fake) = setup_three_ready_users_with_fake().await;
-    for user_id in [UserId::Integer(1), UserId::Integer(2)] {
-        publish_audio_and_camera(&room, &user_id, &adapter).await;
-    }
+    let scenario = SourcePolicyScenario::three_ready_users().await;
+    scenario.publish_audio_and_camera_for_users(&[1, 2]).await;
 
-    let (first_audio_media_id, _first_camera_media_id) =
-        source_media_ids(&room, &UserId::Integer(1)).await;
-    let (second_audio_media_id, _second_camera_media_id) =
-        source_media_ids(&room, &UserId::Integer(2)).await;
+    let first_audio_media_id = scenario.audio_media_id(1).await;
+    let second_audio_media_id = scenario.audio_media_id(2).await;
 
-    let baseline_event_count = fake.snapshot_events().len();
-    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
-        second_audio_media_id,
-        Instant::now(),
-    )]);
-    let second_user_id = UserId::Integer(2);
-    let second_connection_id = user_connection_id(&room, &second_user_id).await;
-    room.update_user_info(
-        &second_user_id,
-        second_connection_id,
-        UserInfo::default(),
-        UserInfoRefresh::NotNeeded,
-        &adapter,
-    )
-    .await;
+    let baseline_event_count = scenario.event_cursor();
+    scenario.mark_active_speaker(second_audio_media_id);
+    scenario.refresh_policy().await;
 
-    let events = fake.snapshot_events();
-    let speaker_two_events = &events[baseline_event_count..];
+    let speaker_two_events = scenario.events_since(baseline_event_count);
     assert_consumer_packet_selection_update(
-        speaker_two_events,
+        &speaker_two_events,
         &UserId::Integer(1),
         &UserId::Integer(2),
         "hi",
     );
     assert_consumer_packet_selection_update(
-        speaker_two_events,
+        &speaker_two_events,
         &UserId::Integer(3),
         &UserId::Integer(2),
         "hi",
     );
 
-    let second_baseline_event_count = events.len();
-    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
-        first_audio_media_id,
-        Instant::now(),
-    )]);
-    let first_user_id = UserId::Integer(1);
-    let first_connection_id = user_connection_id(&room, &first_user_id).await;
-    room.update_user_info(
-        &first_user_id,
-        first_connection_id,
-        UserInfo::default(),
-        UserInfoRefresh::NotNeeded,
-        &adapter,
-    )
-    .await;
+    let second_baseline_event_count = scenario.event_cursor();
+    scenario.mark_active_speaker(first_audio_media_id);
+    scenario.refresh_policy().await;
 
-    let events = fake.snapshot_events();
-    let speaker_one_events = &events[second_baseline_event_count..];
+    let speaker_one_events = scenario.events_since(second_baseline_event_count);
     assert_consumer_packet_selection_update(
-        speaker_one_events,
+        &speaker_one_events,
         &UserId::Integer(2),
         &UserId::Integer(1),
         "hi",
     );
     assert_consumer_packet_selection_update(
-        speaker_one_events,
+        &speaker_one_events,
         &UserId::Integer(3),
         &UserId::Integer(1),
         "hi",
     );
     assert_consumer_packet_selection_update(
-        speaker_one_events,
+        &speaker_one_events,
         &UserId::Integer(1),
         &UserId::Integer(2),
         "lo",
     );
     assert_consumer_packet_selection_update(
-        speaker_one_events,
+        &speaker_one_events,
         &UserId::Integer(3),
         &UserId::Integer(2),
         "lo",
@@ -736,43 +612,21 @@ async fn dominant_speaker_camera_policy_clears_only_the_observed_speakers_gate()
 
 #[tokio::test]
 async fn active_speaker_camera_policy_clears_only_the_first_five_speakers_gates() {
-    let (room, adapter, fake) = setup_ready_users_with_fake(&[1, 2, 3, 4, 5, 6, 7]).await;
-    for raw_user_id in 1_i64..=6 {
-        publish_audio_and_camera(&room, &UserId::Integer(raw_user_id), &adapter).await;
-    }
+    let scenario = SourcePolicyScenario::with_ready_users(&[1, 2, 3, 4, 5, 6, 7]).await;
+    scenario
+        .publish_audio_and_camera_for_users(&[1, 2, 3, 4, 5, 6])
+        .await;
 
-    let mut ordered_audio_media_ids = Vec::new();
-    for raw_user_id in 1_i64..=6 {
-        let (audio_media_id, _camera_media_id) =
-            source_media_ids(&room, &UserId::Integer(raw_user_id)).await;
-        ordered_audio_media_ids.push(audio_media_id);
-    }
+    let ordered_audio_media_ids = scenario.audio_media_ids(&[1, 2, 3, 4, 5, 6]).await;
 
-    let baseline_event_count = fake.snapshot_events().len();
-    fake.set_active_speaker_source_snapshot(
-        ordered_audio_media_ids
-            .iter()
-            .rev()
-            .copied()
-            .map(|transport_media_id| ActiveSpeakerSource::new(transport_media_id, Instant::now()))
-            .collect(),
-    );
-    let last_speaker_id = UserId::Integer(6);
-    let last_speaker_connection_id = user_connection_id(&room, &last_speaker_id).await;
-    room.update_user_info(
-        &last_speaker_id,
-        last_speaker_connection_id,
-        UserInfo::default(),
-        UserInfoRefresh::NotNeeded,
-        &adapter,
-    )
-    .await;
+    let baseline_event_count = scenario.event_cursor();
+    scenario.mark_active_speakers(ordered_audio_media_ids.iter().rev().copied());
+    scenario.refresh_policy().await;
 
-    let events = fake.snapshot_events();
-    let active_speaker_events = &events[baseline_event_count..];
+    let active_speaker_events = scenario.events_since(baseline_event_count);
     for raw_user_id in 2_i64..=6 {
         assert_consumer_packet_selection_update(
-            active_speaker_events,
+            &active_speaker_events,
             &UserId::Integer(7),
             &UserId::Integer(raw_user_id),
             "hi",
@@ -782,49 +636,21 @@ async fn active_speaker_camera_policy_clears_only_the_first_five_speakers_gates(
 
 #[tokio::test]
 async fn pinned_camera_layout_overrides_active_speaker_bias_for_that_receiver() {
-    let (room, adapter, fake) = setup_three_ready_users_with_fake().await;
-    publish_audio_and_camera(&room, &UserId::Integer(1), &adapter).await;
-    publish_audio_and_camera(&room, &UserId::Integer(3), &adapter).await;
-    let (_first_audio_media_id, _first_camera_media_id) =
-        source_media_ids(&room, &UserId::Integer(1)).await;
-    let (third_audio_media_id, _third_camera_media_id) =
-        source_media_ids(&room, &UserId::Integer(3)).await;
+    let scenario = SourcePolicyScenario::three_ready_users().await;
+    scenario.publish_audio_and_camera_for_users(&[1, 3]).await;
+    let third_audio_media_id = scenario.audio_media_id(3).await;
 
-    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
-        third_audio_media_id,
-        Instant::now(),
-    )]);
-    let third_user_id = UserId::Integer(3);
-    let third_connection_id = user_connection_id(&room, &third_user_id).await;
-    room.update_user_info(
-        &third_user_id,
-        third_connection_id,
-        UserInfo::default(),
-        UserInfoRefresh::NotNeeded,
-        &adapter,
-    )
-    .await;
+    scenario.mark_active_speaker(third_audio_media_id);
+    scenario.refresh_policy().await;
 
-    let baseline_event_count = fake.snapshot_events().len();
-    let subscriber_id = UserId::Integer(2);
-    let subscriber_connection_id = user_connection_id(&room, &subscriber_id).await;
-    let pinned_intents = subscription_intents_from_test_states(&TestSubscriptionStates {
-        scalable_video_layout: Some(VideoLayoutIntent::Pinned),
-        ..TestSubscriptionStates::default()
-    });
-    room.update_subscription_runtime(
-        &subscriber_id,
-        subscriber_connection_id,
-        &UserId::Integer(1),
-        &pinned_intents,
-        &adapter,
-    )
-    .await;
+    let baseline_event_count = scenario.event_cursor();
+    scenario
+        .set_scalable_video_layout(2, 1, VideoLayoutIntent::Pinned)
+        .await;
 
-    let events = fake.snapshot_events();
-    let layout_events = &events[baseline_event_count..];
+    let layout_events = scenario.events_since(baseline_event_count);
     assert_consumer_packet_selection_update(
-        layout_events,
+        &layout_events,
         &UserId::Integer(2),
         &UserId::Integer(1),
         "hi",
@@ -833,46 +659,21 @@ async fn pinned_camera_layout_overrides_active_speaker_bias_for_that_receiver() 
 
 #[tokio::test]
 async fn hidden_camera_layout_suppresses_active_speaker_featured_quality() {
-    let (room, adapter, fake) = setup_three_ready_users_with_fake().await;
-    publish_audio_and_camera(&room, &UserId::Integer(1), &adapter).await;
-    let (first_audio_media_id, _first_camera_media_id) =
-        source_media_ids(&room, &UserId::Integer(1)).await;
+    let scenario = SourcePolicyScenario::three_ready_users().await;
+    scenario.publish_audio_and_camera(1).await;
+    let first_audio_media_id = scenario.audio_media_id(1).await;
 
-    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
-        first_audio_media_id,
-        Instant::now(),
-    )]);
-    let publisher_id = UserId::Integer(1);
-    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
-    room.update_user_info(
-        &publisher_id,
-        publisher_connection_id,
-        UserInfo::default(),
-        UserInfoRefresh::NotNeeded,
-        &adapter,
-    )
-    .await;
+    scenario.mark_active_speaker(first_audio_media_id);
+    scenario.refresh_policy().await;
 
-    let baseline_event_count = fake.snapshot_events().len();
-    let subscriber_id = UserId::Integer(2);
-    let subscriber_connection_id = user_connection_id(&room, &subscriber_id).await;
-    let hidden_intents = subscription_intents_from_test_states(&TestSubscriptionStates {
-        scalable_video_layout: Some(VideoLayoutIntent::Hidden),
-        ..TestSubscriptionStates::default()
-    });
-    room.update_subscription_runtime(
-        &subscriber_id,
-        subscriber_connection_id,
-        &publisher_id,
-        &hidden_intents,
-        &adapter,
-    )
-    .await;
+    let baseline_event_count = scenario.event_cursor();
+    scenario
+        .set_scalable_video_layout(2, 1, VideoLayoutIntent::Hidden)
+        .await;
 
-    let events = fake.snapshot_events();
-    let layout_events = &events[baseline_event_count..];
+    let layout_events = scenario.events_since(baseline_event_count);
     assert_consumer_packet_selection_update(
-        layout_events,
+        &layout_events,
         &UserId::Integer(2),
         &UserId::Integer(1),
         "lo",
@@ -881,47 +682,21 @@ async fn hidden_camera_layout_suppresses_active_speaker_featured_quality() {
 
 #[tokio::test]
 async fn explicit_visible_thumbnail_camera_layout_stays_on_thumbnail_quality() {
-    let (room, adapter, fake) = setup_three_ready_users_with_fake().await;
-    publish_audio_and_camera(&room, &UserId::Integer(1), &adapter).await;
-    let (first_audio_media_id, _first_camera_media_id) =
-        source_media_ids(&room, &UserId::Integer(1)).await;
+    let scenario = SourcePolicyScenario::three_ready_users().await;
+    scenario.publish_audio_and_camera(1).await;
+    let first_audio_media_id = scenario.audio_media_id(1).await;
 
-    fake.set_active_speaker_source_snapshot(vec![ActiveSpeakerSource::new(
-        first_audio_media_id,
-        Instant::now(),
-    )]);
-    let publisher_id = UserId::Integer(1);
-    let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
-    room.update_user_info(
-        &publisher_id,
-        publisher_connection_id,
-        UserInfo::default(),
-        UserInfoRefresh::NotNeeded,
-        &adapter,
-    )
-    .await;
+    scenario.mark_active_speaker(first_audio_media_id);
+    scenario.refresh_policy().await;
 
-    let baseline_event_count = fake.snapshot_events().len();
-    let subscriber_id = UserId::Integer(2);
-    let subscriber_connection_id = user_connection_id(&room, &subscriber_id).await;
-    let visible_thumbnail_intents =
-        subscription_intents_from_test_states(&TestSubscriptionStates {
-            scalable_video_layout: Some(VideoLayoutIntent::VisibleThumbnail),
-            ..TestSubscriptionStates::default()
-        });
-    room.update_subscription_runtime(
-        &subscriber_id,
-        subscriber_connection_id,
-        &publisher_id,
-        &visible_thumbnail_intents,
-        &adapter,
-    )
-    .await;
+    let baseline_event_count = scenario.event_cursor();
+    scenario
+        .set_scalable_video_layout(2, 1, VideoLayoutIntent::VisibleThumbnail)
+        .await;
 
-    let events = fake.snapshot_events();
-    let layout_events = &events[baseline_event_count..];
+    let layout_events = scenario.events_since(baseline_event_count);
     assert_consumer_packet_selection_update(
-        layout_events,
+        &layout_events,
         &UserId::Integer(2),
         &UserId::Integer(1),
         "lo",
