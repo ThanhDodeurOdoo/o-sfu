@@ -293,21 +293,21 @@ impl RoomManager {
         request: JoinUserRequest,
         media_transport: &MediaTransport,
     ) -> Result<(Arc<Room>, ConnectionId), RoomManagerJoinError> {
-        let Some((room, user_count_before, media_counts_before, join_result)) = self
-            .with_current_room(room_id, |room| async move {
-                let user_count_before = room.user_count().await;
-                let media_counts_before = room.media_counts().await;
-                let join_result = room
-                    .add_user(
+        let Some((room, join_result)) = self
+            .run_current_room_mutation(
+                room_id,
+                |room| async move {
+                    room.add_user(
                         request.user_id,
                         request.label,
                         request.permissions,
                         request.sender,
                         media_transport,
                     )
-                    .await;
-                (room, user_count_before, media_counts_before, join_result)
-            })
+                    .await
+                },
+                |_| false,
+            )
             .await
         else {
             return Err(RoomManagerJoinError::MissingRoom);
@@ -316,12 +316,6 @@ impl RoomManager {
             RoomJoinError::RoomFull => RoomManagerJoinError::RoomFull,
             RoomJoinError::RouterState => RoomManagerJoinError::RouterState,
         })?;
-        self.record_live_count_deltas(
-            user_count_before,
-            media_counts_before,
-            room.user_count().await,
-            room.media_counts().await,
-        );
         Ok((room, connection_id))
     }
 
@@ -335,32 +329,19 @@ impl RoomManager {
         connection_id: ConnectionId,
         media_transport: &MediaTransport,
     ) -> bool {
-        let Some((room, user_count_before, media_counts_before, did_remove_active_session)) = self
-            .with_current_room(room_id, |room| async move {
-                let user_count_before = room.user_count().await;
-                let media_counts_before = room.media_counts().await;
-                let did_remove_active_session = room
-                    .remove_user(user_id, connection_id, media_transport)
-                    .await;
-                (
-                    room,
-                    user_count_before,
-                    media_counts_before,
-                    did_remove_active_session,
-                )
-            })
+        let Some((_room, did_remove_active_session)) = self
+            .run_current_room_mutation(
+                room_id,
+                |room| async move {
+                    room.remove_user(user_id, connection_id, media_transport)
+                        .await
+                },
+                |did_remove_active_session| *did_remove_active_session,
+            )
             .await
         else {
             return false;
         };
-        self.finish_session_mutation(
-            room_id,
-            &room,
-            user_count_before,
-            media_counts_before,
-            did_remove_active_session,
-        )
-        .await;
         did_remove_active_session
     }
 
@@ -374,19 +355,18 @@ impl RoomManager {
         user_ids: &[UserId],
         media_transport: &MediaTransport,
     ) {
-        let Some((room, user_count_before, media_counts_before)) = self
-            .with_current_room(room_id, |room| async move {
-                let user_count_before = room.user_count().await;
-                let media_counts_before = room.media_counts().await;
-                room.disconnect_users(user_ids, media_transport).await;
-                (room, user_count_before, media_counts_before)
-            })
+        let Some((_room, ())) = self
+            .run_current_room_mutation(
+                room_id,
+                |room| async move {
+                    room.disconnect_users(user_ids, media_transport).await;
+                },
+                |()| true,
+            )
             .await
         else {
             return;
         };
-        self.finish_session_mutation(room_id, &room, user_count_before, media_counts_before, true)
-            .await;
     }
 
     /// Runs `action` under the current entry's lifecycle lock.
@@ -408,6 +388,34 @@ impl RoomManager {
             return None;
         }
         Some(action(room).await)
+    }
+
+    async fn run_current_room_mutation<T, F, Fut, ShouldRemove>(
+        &self,
+        room_id: &str,
+        action: F,
+        should_remove_if_empty: ShouldRemove,
+    ) -> Option<(Arc<Room>, T)>
+    where
+        F: FnOnce(Arc<Room>) -> Fut,
+        Fut: Future<Output = T>,
+        ShouldRemove: FnOnce(&T) -> bool,
+    {
+        self.with_current_room(room_id, |room| async move {
+            let user_count_before = room.user_count().await;
+            let media_counts_before = room.media_counts().await;
+            let output = action(Arc::clone(&room)).await;
+            self.finish_session_mutation(
+                room_id,
+                &room,
+                user_count_before,
+                media_counts_before,
+                should_remove_if_empty(&output),
+            )
+            .await;
+            (room, output)
+        })
+        .await
     }
 
     async fn finish_session_mutation(

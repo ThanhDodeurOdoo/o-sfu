@@ -1,5 +1,7 @@
 use std::{collections::BTreeSet, time::Instant};
 
+use tokio::sync::Notify;
+
 use super::fixtures::*;
 use crate::{
     LocalSpilloverPolicy, MediaCodecFlags, RuntimeFeatureFlags,
@@ -1051,6 +1053,115 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
     assert_eq!(snapshot.active_rooms(), 0);
     assert_eq!(snapshot.active_users(), 0);
     assert!(manager.get_by_uuid(&room_id).await.is_none());
+}
+
+#[tokio::test]
+async fn manager_concurrent_empty_cleanup_and_join_keep_directory_consistent() {
+    let manager = Arc::new(RoomManager::for_test_with_admission_policy(
+        RoomAdmissionPolicy::new(2),
+    ));
+    let media_transport = MediaTransport::fake_for_testing();
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+    let room_id = room.uuid().to_owned();
+    let first_user = UserId::Integer(1);
+    let second_user = UserId::Integer(2);
+    let (first_tx, _first_rx) = test_sender();
+    let joined = manager
+        .join_user(
+            &room_id,
+            JoinUserRequest {
+                user_id: first_user.clone(),
+                label: None,
+                permissions: UserPermissions::default(),
+                sender: first_tx,
+            },
+            &media_transport,
+        )
+        .await;
+    let (_room, first_connection_id) = joined.expect("initial user should join");
+
+    let lifecycle_entered = Arc::new(Notify::new());
+    let release_lifecycle = Arc::new(Notify::new());
+    let manager_for_hold = Arc::clone(&manager);
+    let room_id_for_hold = room_id.clone();
+    let lifecycle_entered_for_hold = Arc::clone(&lifecycle_entered);
+    let release_lifecycle_for_hold = Arc::clone(&release_lifecycle);
+    let hold_lifecycle = tokio::spawn(async move {
+        manager_for_hold
+            .with_current_room(&room_id_for_hold, |room| async move {
+                lifecycle_entered_for_hold.notify_one();
+                release_lifecycle_for_hold.notified().await;
+                room
+            })
+            .await
+    });
+    lifecycle_entered.notified().await;
+
+    let manager_for_close = Arc::clone(&manager);
+    let room_id_for_close = room_id.clone();
+    let first_user_for_close = first_user.clone();
+    let transport_for_close = media_transport.clone();
+    let close_task = tokio::spawn(async move {
+        manager_for_close
+            .close_session(
+                &room_id_for_close,
+                &first_user_for_close,
+                first_connection_id,
+                &transport_for_close,
+            )
+            .await
+    });
+    yield_now().await;
+
+    let manager_for_join = Arc::clone(&manager);
+    let room_id_for_join = room_id.clone();
+    let second_user_for_join = second_user.clone();
+    let transport_for_join = media_transport.clone();
+    let (second_tx, _second_rx) = test_sender();
+    let join_task = tokio::spawn(async move {
+        manager_for_join
+            .join_user(
+                &room_id_for_join,
+                JoinUserRequest {
+                    user_id: second_user_for_join,
+                    label: None,
+                    permissions: UserPermissions::default(),
+                    sender: second_tx,
+                },
+                &transport_for_join,
+            )
+            .await
+    });
+
+    release_lifecycle.notify_one();
+
+    let held_room = timeout(Duration::from_secs(1), hold_lifecycle)
+        .await
+        .expect("lifecycle holder should finish")
+        .expect("lifecycle holder task should not panic");
+    assert!(held_room.is_some());
+    timeout(Duration::from_secs(1), close_task)
+        .await
+        .expect("close should finish")
+        .expect("close task should not panic");
+    let join_result = timeout(Duration::from_secs(1), join_task)
+        .await
+        .expect("join should finish")
+        .expect("join task should not panic");
+
+    match join_result {
+        Ok((_room, _connection_id)) => {
+            assert!(manager.get_by_uuid(&room_id).await.is_some());
+            assert!(manager.test_api().has_session(&room_id, &second_user).await);
+        }
+        Err(RoomManagerJoinError::MissingRoom) => {
+            assert!(manager.get_by_uuid(&room_id).await.is_none());
+            assert!(!room.test_api().inspect().has_session(&second_user).await);
+        }
+        Err(error) => panic!("unexpected join error: {error:?}"),
+    }
 }
 
 #[tokio::test]
