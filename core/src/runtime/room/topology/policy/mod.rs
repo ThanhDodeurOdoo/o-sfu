@@ -1,11 +1,7 @@
-mod bounded;
 mod load;
-mod strict;
 
-use bounded::BoundedPlacementPolicy;
 #[cfg(test)]
 pub(in crate::runtime::room) use load::LoadPressureReason;
-use strict::StrictPlacementPolicy;
 
 use crate::{RoomShardingPolicy, RoomSpilloverMode};
 
@@ -55,8 +51,8 @@ impl HomePlacementDecision {
 
 #[derive(Debug, Clone)]
 pub(super) enum PlacementPolicy {
-    Strict(strict::StrictPlacementPolicy),
-    Bounded(bounded::BoundedPlacementPolicy),
+    Strict,
+    Bounded,
     LoadTriggered(load::LoadTriggeredPlacementPolicy),
 }
 
@@ -64,10 +60,8 @@ impl PlacementPolicy {
     #[must_use]
     pub(super) fn new(policy: RoomShardingPolicy) -> Self {
         match policy.spillover() {
-            RoomSpilloverMode::StrictSingleRouter => Self::Strict(strict::StrictPlacementPolicy),
-            RoomSpilloverMode::BoundedLocalSpillover => {
-                Self::Bounded(bounded::BoundedPlacementPolicy)
-            }
+            RoomSpilloverMode::StrictSingleRouter => Self::Strict,
+            RoomSpilloverMode::BoundedLocalSpillover => Self::Bounded,
             RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) => {
                 Self::LoadTriggered(load::LoadTriggeredPlacementPolicy::new(policy))
             }
@@ -79,8 +73,13 @@ impl PlacementPolicy {
         input: HomePlacementInput,
     ) -> HomePlacementDecision {
         match self {
-            Self::Strict(_) => StrictPlacementPolicy::choose_home_router(input),
-            Self::Bounded(_) => BoundedPlacementPolicy::choose_home_router(input),
+            Self::Strict => HomePlacementDecision::new(0),
+            Self::Bounded => {
+                let router_count = input.reserved_router_count.max(1);
+                let router_index =
+                    usize::try_from(input.connection_seed).unwrap_or(0) % router_count;
+                HomePlacementDecision::new(router_index)
+            }
             Self::LoadTriggered(policy) => policy.choose_home_router(input),
         }
     }
@@ -90,12 +89,8 @@ impl PlacementPolicy {
         input: CleanupInput,
     ) -> usize {
         match self {
-            Self::Strict(_) => {
-                StrictPlacementPolicy::active_router_count_to_keep_after_cleanup(input)
-            }
-            Self::Bounded(_) => {
-                BoundedPlacementPolicy::active_router_count_to_keep_after_cleanup(input)
-            }
+            Self::Strict => 1,
+            Self::Bounded => input.occupied_router_count.max(1),
             Self::LoadTriggered(policy) => policy.active_router_count_to_keep_after_cleanup(input),
         }
     }
@@ -103,7 +98,7 @@ impl PlacementPolicy {
     #[cfg(test)]
     pub(super) fn active_router_count_for_test(&self) -> usize {
         match self {
-            Self::Strict(_) | Self::Bounded(_) => 1,
+            Self::Strict | Self::Bounded => 1,
             Self::LoadTriggered(policy) => policy.active_router_count_for_test(),
         }
     }
@@ -111,7 +106,7 @@ impl PlacementPolicy {
     #[cfg(test)]
     pub(super) fn last_load_pressure_reason_for_test(&self) -> Option<LoadPressureReason> {
         match self {
-            Self::Strict(_) | Self::Bounded(_) => None,
+            Self::Strict | Self::Bounded => None,
             Self::LoadTriggered(policy) => policy.last_pressure_reason_for_test(),
         }
     }
