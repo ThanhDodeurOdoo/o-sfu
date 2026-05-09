@@ -25,21 +25,42 @@ fn source_encoding(
     encoding_id: SourceEncodingId,
     rid: &str,
 ) -> SourceEncodingDescriptor {
+    source_encoding_with_options(
+        source_id,
+        encoding_id,
+        Some(rid),
+        Some(150_000 * encoding_id.as_u64()),
+    )
+}
+
+fn source_encoding_with_options(
+    source_id: PublishedSourceId,
+    encoding_id: SourceEncodingId,
+    rid: Option<&str>,
+    max_bitrate: Option<u64>,
+) -> SourceEncodingDescriptor {
     let raw_encoding_id =
         u32::try_from(encoding_id.as_u64()).expect("test encoding id should fit in u32");
     SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
         encoding_id,
         source_id,
-        rid: Some(Rid::new(rid)),
+        rid: rid.map(Rid::new),
         primary_ssrc: Some(Ssrc::new(100 + raw_encoding_id)),
         repair_ssrc: Some(Ssrc::new(200 + raw_encoding_id)),
-        max_bitrate: Some(150_000 * encoding_id.as_u64()),
+        max_bitrate,
         resolution_scale: None,
         max_framerate: None,
         policy_role: None,
         max_temporal_layer_id: None,
         negotiated_format: Some(video_format(96)),
     })
+}
+
+fn selectable_encoding_ids(descriptor: &PublishedSourceDescriptor) -> Vec<SourceEncodingId> {
+    descriptor
+        .selectable_encodings()
+        .map(SourceEncodingDescriptor::encoding_id)
+        .collect()
 }
 
 #[test]
@@ -93,6 +114,97 @@ fn descriptor_keeps_source_encoding_identity_separate() {
             .map(Rid::as_str),
         Some("hi")
     );
+}
+
+#[test]
+fn descriptor_orders_selectable_encodings_by_bitrate() {
+    let source_id = PublishedSourceId::from_raw(7);
+    let low_encoding_id = SourceEncodingId::from_raw(1);
+    let middle_encoding_id = SourceEncodingId::from_raw(2);
+    let high_encoding_id = SourceEncodingId::from_raw(3);
+    let descriptor = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+        source_id,
+        owner: PublishedSourceOwner::new(UserId::Integer(42)),
+        stream_id: UserStreamId::new("main-video"),
+        media_kind: MediaKind::Video,
+        policy: SourcePolicy::hidden(),
+        mid: None,
+        encodings: vec![
+            source_encoding_with_options(source_id, high_encoding_id, Some("hi"), Some(900_000)),
+            source_encoding_with_options(source_id, low_encoding_id, Some("lo"), Some(150_000)),
+            source_encoding_with_options(source_id, middle_encoding_id, Some("mid"), Some(450_000)),
+        ],
+    })
+    .expect("source descriptor should be valid");
+
+    assert_eq!(
+        selectable_encoding_ids(&descriptor),
+        vec![low_encoding_id, middle_encoding_id, high_encoding_id]
+    );
+    assert_eq!(
+        descriptor
+            .selectable_encoding_by_rank(1)
+            .map(SourceEncodingDescriptor::encoding_id),
+        Some(middle_encoding_id)
+    );
+}
+
+#[test]
+fn descriptor_keeps_declared_selectable_order_without_bitrates() {
+    let source_id = PublishedSourceId::from_raw(7);
+    let first_encoding_id = SourceEncodingId::from_raw(1);
+    let second_encoding_id = SourceEncodingId::from_raw(2);
+    let third_encoding_id = SourceEncodingId::from_raw(3);
+    let descriptor = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+        source_id,
+        owner: PublishedSourceOwner::new(UserId::Integer(42)),
+        stream_id: UserStreamId::new("main-video"),
+        media_kind: MediaKind::Video,
+        policy: SourcePolicy::hidden(),
+        mid: None,
+        encodings: vec![
+            source_encoding_with_options(source_id, first_encoding_id, Some("a"), None),
+            source_encoding_with_options(source_id, second_encoding_id, Some("b"), None),
+            source_encoding_with_options(source_id, third_encoding_id, Some("c"), None),
+        ],
+    })
+    .expect("source descriptor should be valid");
+
+    assert_eq!(
+        selectable_encoding_ids(&descriptor),
+        vec![first_encoding_id, second_encoding_id, third_encoding_id]
+    );
+}
+
+#[test]
+fn descriptor_excludes_selectable_encodings_when_rid_is_missing() {
+    let source_id = PublishedSourceId::from_raw(7);
+    let descriptor = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+        source_id,
+        owner: PublishedSourceOwner::new(UserId::Integer(42)),
+        stream_id: UserStreamId::new("main-video"),
+        media_kind: MediaKind::Video,
+        policy: SourcePolicy::hidden(),
+        mid: None,
+        encodings: vec![
+            source_encoding_with_options(
+                source_id,
+                SourceEncodingId::from_raw(1),
+                Some("lo"),
+                Some(150_000),
+            ),
+            source_encoding_with_options(
+                source_id,
+                SourceEncodingId::from_raw(2),
+                None,
+                Some(450_000),
+            ),
+        ],
+    })
+    .expect("source descriptor should be valid");
+
+    assert_eq!(descriptor.selectable_encoding_count(), 0);
+    assert!(descriptor.selectable_encoding_by_rank(0).is_none());
 }
 
 #[test]

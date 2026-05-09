@@ -33,6 +33,8 @@ pub struct PublishedSourceDescriptor {
     mid: Option<Mid>,
     /// Advertised encodings owned by this logical source.
     encodings: Vec<SourceEncodingDescriptor>,
+    /// Source-policy selectable encodings ordered by receiver budget priority.
+    selectable_encoding_indices: Vec<usize>,
 }
 
 impl PublishedSourceDescriptor {
@@ -63,6 +65,7 @@ impl PublishedSourceDescriptor {
                 encoding_source_id: encoding.source_id(),
             });
         }
+        let selectable_encoding_indices = selectable_encoding_indices(&parts.encodings);
         Ok(Self {
             source_id: parts.source_id,
             owner: parts.owner,
@@ -71,6 +74,7 @@ impl PublishedSourceDescriptor {
             policy: parts.policy,
             mid: parts.mid,
             encodings: parts.encodings,
+            selectable_encoding_indices,
         })
     }
 
@@ -108,6 +112,30 @@ impl PublishedSourceDescriptor {
         self.encodings.iter()
     }
 
+    /// Returns the encodings that receiver video policy may select.
+    ///
+    /// Encodings without complete RID coverage are excluded because the
+    /// packet-gate projection cannot address them. Sources with bitrate hints
+    /// use ascending bitrate order. Sources without bitrate hints keep the
+    /// publisher-declared order.
+    pub fn selectable_encodings(&self) -> impl Iterator<Item = &SourceEncodingDescriptor> {
+        self.selectable_encoding_indices
+            .iter()
+            .filter_map(|index| self.encodings.get(*index))
+    }
+
+    #[must_use]
+    pub fn selectable_encoding_count(&self) -> usize {
+        self.selectable_encoding_indices.len()
+    }
+
+    #[must_use]
+    pub fn selectable_encoding_by_rank(&self, rank: usize) -> Option<&SourceEncodingDescriptor> {
+        self.selectable_encoding_indices
+            .get(rank)
+            .and_then(|index| self.encodings.get(*index))
+    }
+
     /// Returns an encoding by source-encoding identity.
     ///
     /// Missing values are normal for best-effort callers such as diagnostics or
@@ -119,6 +147,25 @@ impl PublishedSourceDescriptor {
             .iter()
             .find(|encoding| encoding.encoding_id() == encoding_id)
     }
+}
+
+fn selectable_encoding_indices(encodings: &[SourceEncodingDescriptor]) -> Vec<usize> {
+    if encodings.iter().any(|encoding| encoding.rid().is_none()) {
+        return Vec::new();
+    }
+    let mut indices = (0..encodings.len()).collect::<Vec<_>>();
+    if encodings
+        .iter()
+        .any(|encoding| encoding.max_bitrate().is_some())
+    {
+        indices.sort_by_key(|index| {
+            encodings
+                .get(*index)
+                .and_then(SourceEncodingDescriptor::max_bitrate)
+                .unwrap_or(u64::MAX)
+        });
+    }
+    indices
 }
 
 /// Construction input for [`PublishedSourceDescriptor`].

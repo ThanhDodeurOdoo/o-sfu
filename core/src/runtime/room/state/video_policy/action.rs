@@ -25,7 +25,7 @@ pub(in crate::runtime::room) enum VideoRouteAction {
 /// One route action plus the route identity needed for stale-update checks.
 #[derive(Debug, Clone)]
 pub(in crate::runtime::room) struct ReceiverVideoRouteAction<'a> {
-    route: ReceiverVideoRouteInput<'a>,
+    route: &'a ReceiverVideoRouteInput<'a>,
     action: VideoRouteAction,
     budget: ReceiverVideoBudgetDiagnostics,
     outcomes: BudgetSolverOutcomes,
@@ -37,7 +37,7 @@ pub(in crate::runtime::room) struct ReceiverVideoRouteAction<'a> {
 impl<'a> ReceiverVideoRouteAction<'a> {
     #[must_use]
     pub(in crate::runtime::room) fn new(
-        route: ReceiverVideoRouteInput<'a>,
+        route: &'a ReceiverVideoRouteInput<'a>,
         action: VideoRouteAction,
         budget: ReceiverVideoBudgetDiagnostics,
         outcomes: BudgetSolverOutcomes,

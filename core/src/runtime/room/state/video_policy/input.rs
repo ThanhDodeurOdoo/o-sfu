@@ -26,6 +26,9 @@ use crate::runtime::{
 };
 
 /// Policy input for one refresh across all live receiver/source video routes.
+///
+/// Routes retain `consumer_index` order so the budget planner can process
+/// contiguous receiver groups without rebuilding a map.
 #[derive(Debug)]
 pub(in crate::runtime::room) struct ReceiverVideoPolicyInput<'a> {
     routes: Vec<ReceiverVideoRouteInput<'a>>,
@@ -33,7 +36,7 @@ pub(in crate::runtime::room) struct ReceiverVideoPolicyInput<'a> {
 
 impl<'a> ReceiverVideoPolicyInput<'a> {
     #[must_use]
-    pub(in crate::runtime::room) fn new(routes: Vec<ReceiverVideoRouteInput<'a>>) -> Self {
+    fn new(routes: Vec<ReceiverVideoRouteInput<'a>>) -> Self {
         Self { routes }
     }
 
@@ -48,13 +51,14 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
         let receiver_bandwidth_by_user = receiver_bandwidth_by_user(receiver_bandwidth_snapshot);
         let visible_scalable_route_counts =
             visible_scalable_route_counts_by_consumer(state, &featured_source_user_ids);
-        let selectable_encoding_ladders = selectable_encoding_ladders_by_source(&state.sources);
         let routes = state
             .consumer_index
             .iter()
             .filter_map(|(consumer_key, consumer_state)| {
                 let source = state.sources.get(&consumer_key.source_id)?;
-                let encodings = selectable_encoding_ladders.get(&consumer_key.source_id)?;
+                if source.selectable_encoding_count() == 0 {
+                    return None;
+                }
                 let producer_id = state
                     .producer_id_by_source_id
                     .get(&consumer_key.source_id)?;
@@ -93,7 +97,6 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
                     receiver_bandwidth_bps: receiver_bandwidth_by_user
                         .get(&consumer_key.consumer_user_id)
                         .copied(),
-                    encodings: encodings.clone(),
                 }))
             })
             .collect();
@@ -120,14 +123,13 @@ pub(in crate::runtime::room) struct ReceiverVideoRouteInput<'a> {
     layout_intent: ReceiverVideoLayoutIntent,
     visible_scalable_route_count: usize,
     receiver_bandwidth_bps: Option<u64>,
-    encodings: Vec<&'a SourceEncodingDescriptor>,
 }
 
 /// Construction input for [`ReceiverVideoRouteInput`].
 ///
 /// The route input is intentionally explicit so pure policy tests can build the
 /// planner input without constructing a full room or media transport.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub(in crate::runtime::room) struct ReceiverVideoRouteInputParts<'a> {
     pub(in crate::runtime::room) user_count: usize,
     pub(in crate::runtime::room) source: &'a PublishedSourceDescriptor,
@@ -141,7 +143,6 @@ pub(in crate::runtime::room) struct ReceiverVideoRouteInputParts<'a> {
     pub(in crate::runtime::room) layout_intent: ReceiverVideoLayoutIntent,
     pub(in crate::runtime::room) visible_scalable_route_count: usize,
     pub(in crate::runtime::room) receiver_bandwidth_bps: Option<u64>,
-    pub(in crate::runtime::room) encodings: Vec<&'a SourceEncodingDescriptor>,
 }
 
 impl<'a> ReceiverVideoRouteInput<'a> {
@@ -160,7 +161,6 @@ impl<'a> ReceiverVideoRouteInput<'a> {
             layout_intent: parts.layout_intent,
             visible_scalable_route_count: parts.visible_scalable_route_count,
             receiver_bandwidth_bps: parts.receiver_bandwidth_bps,
-            encodings: parts.encodings,
         }
     }
 
@@ -220,8 +220,36 @@ impl<'a> ReceiverVideoRouteInput<'a> {
         self.receiver_bandwidth_bps
     }
 
-    pub(in crate::runtime::room) fn encodings(&self) -> &[&'a SourceEncodingDescriptor] {
-        &self.encodings
+    pub(in crate::runtime::room) fn encodings(&self) -> SelectableRouteEncodings<'a> {
+        SelectableRouteEncodings::new(self.source)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(in crate::runtime::room) struct SelectableRouteEncodings<'a> {
+    source: &'a PublishedSourceDescriptor,
+}
+
+impl<'a> SelectableRouteEncodings<'a> {
+    #[must_use]
+    fn new(source: &'a PublishedSourceDescriptor) -> Self {
+        Self { source }
+    }
+
+    #[must_use]
+    pub(in crate::runtime::room) fn len(self) -> usize {
+        self.source.selectable_encoding_count()
+    }
+
+    #[must_use]
+    pub(in crate::runtime::room) fn get(self, rank: usize) -> Option<&'a SourceEncodingDescriptor> {
+        self.source.selectable_encoding_by_rank(rank)
+    }
+
+    pub(in crate::runtime::room) fn iter(
+        self,
+    ) -> impl Iterator<Item = &'a SourceEncodingDescriptor> {
+        self.source.selectable_encodings()
     }
 }
 
@@ -277,34 +305,6 @@ fn receiver_bandwidth_by_user(snapshot: &ReceiverBandwidthSnapshot) -> BTreeMap<
         .iter()
         .map(|(session_key, estimate_bps)| (session_key.user_id().clone(), *estimate_bps))
         .collect()
-}
-
-fn selectable_encoding_ladders_by_source(
-    sources: &BTreeMap<PublishedSourceId, PublishedSourceDescriptor>,
-) -> BTreeMap<PublishedSourceId, Vec<&SourceEncodingDescriptor>> {
-    sources
-        .iter()
-        .filter_map(|(source_id, source)| {
-            let encodings = selectable_encodings(source);
-            (!encodings.is_empty()).then_some((*source_id, encodings))
-        })
-        .collect()
-}
-
-pub(super) fn selectable_encodings(
-    source: &PublishedSourceDescriptor,
-) -> Vec<&SourceEncodingDescriptor> {
-    let mut encodings = source.encodings().collect::<Vec<_>>();
-    if encodings.iter().any(|encoding| encoding.rid().is_none()) {
-        return Vec::new();
-    }
-    let use_declared_order = encodings
-        .iter()
-        .all(|encoding| encoding.max_bitrate().is_none());
-    if !use_declared_order {
-        encodings.sort_by_key(|encoding| encoding.max_bitrate().unwrap_or(u64::MAX));
-    }
-    encodings
 }
 
 pub(super) fn featured_source_owner_for_active_speaker_source(

@@ -14,17 +14,14 @@
 //! [`SourceAdaptationPolicy::ReadableDetail`]. Orchestration changes those
 //! decisions before publish by building a different source policy.
 
-use std::collections::BTreeMap;
-
 use super::{
     action::{
         BudgetSolverOutcomes, ConsumerPacketSelectionUpdate, ReceiverVideoRouteAction,
         VideoRouteAction,
     },
-    input::{ReceiverVideoPolicyInput, ReceiverVideoRouteInput},
+    input::{ReceiverVideoPolicyInput, ReceiverVideoRouteInput, SelectableRouteEncodings},
 };
 use crate::runtime::{
-    UserId,
     media_transport::{ActiveSpeakerSource, ReceiverBandwidthSnapshot},
     source_model::{
         ConsumerSourceSelection, OverBudgetExceptionReason, PolicyPauseReason,
@@ -54,18 +51,22 @@ pub(in crate::runtime::room) struct ReceiverVideoBudgetPlan<'a> {
 impl<'a> ReceiverVideoBudgetPlan<'a> {
     #[must_use]
     pub(in crate::runtime::room) fn from_input(input: &'a ReceiverVideoPolicyInput<'a>) -> Self {
-        let mut routes_by_receiver: BTreeMap<&UserId, Vec<&ReceiverVideoRouteInput<'a>>> =
-            BTreeMap::new();
-        for route in input.routes() {
-            routes_by_receiver
-                .entry(route.consumer_user_id())
-                .or_default()
-                .push(route);
+        let routes = input.routes();
+        let mut route_actions = Vec::with_capacity(routes.len());
+        let mut remaining_routes = routes;
+        while let Some((first_route, rest)) = remaining_routes.split_first() {
+            let consumer_user_id = first_route.consumer_user_id();
+            let group_len = 1 + rest
+                .iter()
+                .take_while(|route| route.consumer_user_id() == consumer_user_id)
+                .count();
+            let Some((receiver_routes, next_routes)) = remaining_routes.split_at_checked(group_len)
+            else {
+                break;
+            };
+            route_actions.extend(plan_receiver_routes(receiver_routes));
+            remaining_routes = next_routes;
         }
-        let route_actions = routes_by_receiver
-            .into_values()
-            .flat_map(plan_receiver_routes)
-            .collect();
         Self { route_actions }
     }
 
@@ -89,9 +90,9 @@ struct ConsumerAdaptationPlan {
     request_keyframe: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct PlannedReceiverRoute<'a> {
-    route: ReceiverVideoRouteInput<'a>,
+    route: &'a ReceiverVideoRouteInput<'a>,
     adaptation: ConsumerAdaptationPlan,
     selected_bitrate_bps: u64,
     action: VideoRouteAction,
@@ -120,18 +121,18 @@ impl super::super::shared::RoomState {
 }
 
 fn plan_receiver_routes<'a>(
-    routes: Vec<&'a ReceiverVideoRouteInput<'a>>,
+    routes: &'a [ReceiverVideoRouteInput<'a>],
 ) -> Vec<ReceiverVideoRouteAction<'a>> {
     let Some(receiver_bandwidth_bps) = routes
         .iter()
-        .find_map(|route| route.receiver_bandwidth_bps())
+        .find_map(ReceiverVideoRouteInput::receiver_bandwidth_bps)
     else {
         let planned_routes = routes
-            .into_iter()
+            .iter()
             .filter_map(|route| {
                 let adaptation = consumer_route_adaptation_plan(route)?;
                 Some(PlannedReceiverRoute {
-                    route: (*route).clone(),
+                    route,
                     selected_bitrate_bps: selector_bitrate_bps(
                         route.encodings(),
                         adaptation.selector,
@@ -153,7 +154,7 @@ fn plan_receiver_routes<'a>(
             .collect();
     };
     let mut planned_routes = routes
-        .into_iter()
+        .iter()
         .filter_map(|route| {
             let adaptation = consumer_route_adaptation_plan(route)?;
             let selected_bitrate_bps = selector_bitrate_bps(route.encodings(), adaptation.selector);
@@ -163,7 +164,7 @@ fn plan_receiver_routes<'a>(
                 adaptation.selector,
             );
             Some(PlannedReceiverRoute {
-                route: (*route).clone(),
+                route,
                 adaptation,
                 selected_bitrate_bps,
                 action: VideoRouteAction::Send(adaptation.selector),
@@ -355,7 +356,7 @@ fn active_video_route_count(planned_routes: &[PlannedReceiverRoute<'_>]) -> usiz
 }
 
 fn adaptation_outcomes(
-    encodings: &[&SourceEncodingDescriptor],
+    encodings: SelectableRouteEncodings<'_>,
     current: ConsumerSourceSelection,
     selector: SourceSelector,
 ) -> BudgetSolverOutcomes {
@@ -371,7 +372,7 @@ fn adaptation_outcomes(
 fn consumer_adaptation_plan(
     user_count: usize,
     adaptation_policy: SourceAdaptationPolicy,
-    encodings: &[&SourceEncodingDescriptor],
+    encodings: SelectableRouteEncodings<'_>,
     current: ConsumerSourceSelection,
     featured: bool,
     visible_scalable_route_count: usize,
@@ -509,7 +510,7 @@ fn pause_reason_for_route(route: &PlannedReceiverRoute<'_>) -> PolicyPauseReason
 }
 
 fn cheapest_useful_encoding(
-    encodings: &[&SourceEncodingDescriptor],
+    encodings: SelectableRouteEncodings<'_>,
 ) -> Option<(SourceSelector, u64)> {
     encodings
         .iter()
@@ -528,26 +529,26 @@ fn cheapest_useful_encoding(
         })
 }
 
-fn selector_bitrate_bps(encodings: &[&SourceEncodingDescriptor], selector: SourceSelector) -> u64 {
+fn selector_bitrate_bps(encodings: SelectableRouteEncodings<'_>, selector: SourceSelector) -> u64 {
     selector
         .selected_encoding()
         .and_then(|encoding_id| {
             encodings
                 .iter()
                 .find(|encoding| encoding.encoding_id() == encoding_id)
-                .and_then(|encoding| encoding.max_bitrate())
+                .and_then(SourceEncodingDescriptor::max_bitrate)
         })
         .or_else(|| {
             encodings
                 .iter()
-                .filter_map(|encoding| encoding.max_bitrate())
+                .filter_map(SourceEncodingDescriptor::max_bitrate)
                 .max()
         })
         .unwrap_or_default()
 }
 
 fn readable_detail_adaptation_plan(
-    encodings: &[&SourceEncodingDescriptor],
+    encodings: SelectableRouteEncodings<'_>,
     current: ConsumerSourceSelection,
 ) -> Option<ConsumerAdaptationPlan> {
     if encodings.len() < 2 {
@@ -568,7 +569,7 @@ fn desired_encoding_index(
     featured: bool,
     visible_scalable_route_count: usize,
     receiver_bandwidth_bps: Option<u64>,
-    encodings: &[&SourceEncodingDescriptor],
+    encodings: SelectableRouteEncodings<'_>,
 ) -> usize {
     let highest_index = encodings.len().saturating_sub(1);
     if user_count < MULTIPARTY_SCALABLE_VIDEO_SELECTION_THRESHOLD {
@@ -590,7 +591,7 @@ fn desired_encoding_index(
 }
 
 fn highest_affordable_encoding_index(
-    encodings: &[&SourceEncodingDescriptor],
+    encodings: SelectableRouteEncodings<'_>,
     budget_bps: u64,
     featured: bool,
 ) -> usize {
@@ -607,16 +608,16 @@ fn highest_affordable_encoding_index(
     encodings
         .iter()
         .enumerate()
-        .rev()
-        .find(|(_index, encoding)| {
+        .filter(|(_index, encoding)| {
             encoding
                 .max_bitrate()
                 .is_some_and(|bitrate| bitrate <= budget_bps)
         })
+        .last()
         .map_or(0, |(index, _encoding)| index)
 }
 
-fn selector_index(selector: SourceSelector, encodings: &[&SourceEncodingDescriptor]) -> usize {
+fn selector_index(selector: SourceSelector, encodings: SelectableRouteEncodings<'_>) -> usize {
     selector
         .selected_encoding()
         .and_then(|encoding_id| {

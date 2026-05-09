@@ -5,7 +5,7 @@
 //! packet-facing gate vocabulary consumed by the media transport.
 
 #[cfg(test)]
-use crate::runtime::source_model::SourceEncodingId;
+use crate::runtime::source_model::{SourceEncodingDescriptor, SourceEncodingId};
 use crate::runtime::{
     media_transport::{SourcePacketGate, SourcePacketOperatingPoint},
     source_model::{PublishedSourceDescriptor, SourceSelector},
@@ -60,24 +60,13 @@ pub(super) fn source_packet_gate_for_selector(
 
 #[cfg(test)]
 fn lowest_declared_encoding(source: &PublishedSourceDescriptor) -> Option<SourceEncodingId> {
-    let encodings = super::input::selectable_encodings(source);
-    if encodings.len() < 2 || encodings.iter().any(|encoding| encoding.rid().is_none()) {
+    if source.selectable_encoding_count() < 2 {
         return None;
     }
-    let use_declared_order = encodings
-        .iter()
-        .all(|encoding| encoding.max_bitrate().is_none());
-    encodings
-        .into_iter()
-        .enumerate()
-        .min_by_key(|(index, encoding)| {
-            if use_declared_order {
-                (0_u64, *index)
-            } else {
-                (encoding.max_bitrate().unwrap_or(u64::MAX), *index)
-            }
-        })
-        .map(|(_index, encoding)| encoding.encoding_id())
+    source
+        .selectable_encodings()
+        .next()
+        .map(SourceEncodingDescriptor::encoding_id)
 }
 
 #[cfg(test)]
