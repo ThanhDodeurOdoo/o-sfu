@@ -1,3 +1,11 @@
+/**
+ * async request tracking
+ *
+ * this module manages the lifecycle of protocol requests that expect a
+ * response (like recording toggle). it links the protocol correlation id
+ * to local promise-based waiters
+ */
+
 import {
     CommandKind,
     PENDING_REQUEST_KIND,
@@ -8,6 +16,9 @@ import type { PendingRequestCallbacks } from "./browser_types.js";
 
 const ALL_PENDING_REQUEST_KINDS = Object.values(PENDING_REQUEST_KIND) as PendingRequestKind[];
 
+/**
+ * manager for local request waiters
+ */
 export class PendingRequests {
     private _pendingRequestResolvers = new Map<string, PendingRequestCallbacks>();
     private _requestWaiters: Record<PendingRequestKind, PendingRequestCallbacks[]> = {
@@ -15,6 +26,14 @@ export class PendingRequests {
         [PENDING_REQUEST_KIND.STOP_RECORDING]: []
     };
 
+    /**
+     * begins a new request and returns a promise for its completion
+     *
+     * @param getCommands callback that returns the protocol commands for the request
+     * @param enqueue callback to schedule the commands for execution
+     * @param onRuntimeError callback for handling synchronous command errors
+     * @returns promise that resolves with the request outcome
+     */
     begin(
         getCommands: () => HostCommand[],
         enqueue: (commands: HostCommand[]) => void,
@@ -38,6 +57,12 @@ export class PendingRequests {
         });
     }
 
+    /**
+     * associates a protocol request id with a pending waiter
+     *
+     * @param requestId correlation id from the protocol core
+     * @param requestKind type of the request being registered
+     */
     register(requestId: string, requestKind: PendingRequestKind): void {
         const callbacks = this._requestWaiters[requestKind].shift();
         if (!callbacks) {
@@ -46,6 +71,12 @@ export class PendingRequests {
         this._pendingRequestResolvers.set(requestId, callbacks);
     }
 
+    /**
+     * resolves a pending request with its outcome
+     *
+     * @param requestId correlation id to resolve
+     * @param ok whether the request succeeded
+     */
     resolve(requestId: string, ok: boolean): void {
         const callbacks = this._pendingRequestResolvers.get(requestId);
         if (!callbacks) {
@@ -55,6 +86,11 @@ export class PendingRequests {
         callbacks.resolve(ok);
     }
 
+    /**
+     * rejects all pending requests with an error
+     *
+     * @param error the error to reject with
+     */
     rejectAll(error: Error): void {
         for (const callbacks of this._pendingRequestResolvers.values()) {
             callbacks.reject(error);

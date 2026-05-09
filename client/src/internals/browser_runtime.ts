@@ -1,3 +1,9 @@
+/**
+ * the lifecycle of the browser-side media transport.
+ * manages the peer connection, the signaling websocket, and the command
+ * queue that executes protocol core instructions in order
+ */
+
 import {
     CLIENT_UPDATE,
     CLIENT_LOG_LEVEL,
@@ -20,6 +26,9 @@ import type { PendingRequests } from "./pending_requests.js";
 import type { RemoteTracks } from "./remote_tracks.js";
 import { localDescriptionHasOnlyInactiveMedia } from "./sdp_media_direction.js";
 
+/**
+ * external dependencies and callbacks for the browser runtime
+ */
 export type BrowserRuntimeHooks = {
     iceServers?: RTCIceServer[];
     localUploads: LocalUploads;
@@ -38,6 +47,13 @@ const BROWSER_RUNTIME_LOG_SOURCE = "browser_runtime";
 
 export { CLIENT_RECOVERABLE_CLOSE_CODE };
 
+/**
+ * main orchestrator for browser-side rtc operations
+ *
+ * it executes commands from the protocol core (like creating offers or
+ * attaching tracks) and emits events back to the core (like ice candidates
+ * or connection state changes)
+ */
 export class BrowserRuntime {
     private readonly _clearTimer: (handle: TimerHandle) => void;
     private readonly _createPeerConnection: (config: RTCConfiguration) => ClientPeerConnection;
@@ -59,6 +75,12 @@ export class BrowserRuntime {
         this._clearTimer = dependencies.clearTimer ?? ((handle) => clearTimeout(handle));
     }
 
+    /**
+     * schedules a list of protocol commands for execution
+     *
+     * @param getCommands callback that returns a list of commands
+     * @param hooks runtime hooks for sync and logging
+     */
     enqueueProtocolCommands(getCommands: () => HostCommand[], hooks: BrowserRuntimeHooks): void {
         try {
             this.enqueue(getCommands(), hooks);
@@ -67,6 +89,12 @@ export class BrowserRuntime {
         }
     }
 
+    /**
+     * adds commands to the sequential execution queue
+     *
+     * @param commands list of host commands to process
+     * @param hooks runtime hooks for sync and logging
+     */
     enqueue(commands: HostCommand[], hooks: BrowserRuntimeHooks): void {
         this._commandQueue = this._commandQueue
             .then(async () => {
@@ -77,6 +105,12 @@ export class BrowserRuntime {
             });
     }
 
+    /**
+     * schedules a local operation to run in sequence with protocol commands
+     *
+     * @param operation async operation to execute
+     * @param hooks runtime hooks for error handling
+     */
     enqueueLocalOperation(operation: () => Promise<void>, hooks: BrowserRuntimeHooks): void {
         this._commandQueue = this._commandQueue
             .then(async () => {
@@ -87,6 +121,13 @@ export class BrowserRuntime {
             });
     }
 
+    /**
+     * attaches a local track to an existing transceiver
+     *
+     * @param mid transceiver mid to attach to
+     * @param streamType type of the stream to attach
+     * @param localUploads local upload state manager
+     */
     async attachTrack(
         mid: string,
         streamType: StreamType,
@@ -95,10 +136,22 @@ export class BrowserRuntime {
         await localUploads.attachTrack(this._peerConnection, mid, streamType);
     }
 
+    /**
+     * removes a local track from its transceiver
+     *
+     * @param streamType stream type to detach
+     * @param localUploads local upload state manager
+     */
     async detachTrack(streamType: StreamType, localUploads: LocalUploads): Promise<void> {
         await localUploads.detachTrack(this._peerConnection, streamType);
     }
 
+    /**
+     * collects transport-level stats for all active tracks
+     *
+     * @param localUploads local upload state manager
+     * @returns combined rtc stats report
+     */
     async getStats(localUploads: LocalUploads): Promise<SfuStats> {
         const peerConnection = this._peerConnection;
         if (!peerConnection) {
@@ -122,6 +175,12 @@ export class BrowserRuntime {
         return stats;
     }
 
+    /**
+     * closes all active connections and cleans up runtime state
+     *
+     * @param hooks runtime hooks for reset and logging
+     * @param webSocketCloseCode code to use when closing the socket
+     */
     teardown(hooks: BrowserRuntimeHooks, webSocketCloseCode: number): void {
         for (const timerId of [...this._timerHandles.keys()]) {
             this.cancelTimer(timerId);
@@ -134,6 +193,12 @@ export class BrowserRuntime {
         this._webSocket = null;
     }
 
+    /**
+     * executes a list of commands sequentially
+     *
+     * @param commands list of commands to process
+     * @param hooks runtime hooks for sync and logging
+     */
     private async processCommands(
         commands: HostCommand[],
         hooks: BrowserRuntimeHooks
@@ -155,6 +220,13 @@ export class BrowserRuntime {
         }
     }
 
+    /**
+     * maps a protocol command to a local rtc or websocket action
+     *
+     * @param command host command to execute
+     * @param hooks runtime hooks for state and side effects
+     * @returns follow-up commands to enqueue
+     */
     private async executeCommand(
         command: HostCommand,
         hooks: BrowserRuntimeHooks
@@ -270,6 +342,12 @@ export class BrowserRuntime {
         }
     }
 
+    /**
+     * opens the signaling websocket and binds message handlers
+     *
+     * @param url websocket server url
+     * @param hooks runtime hooks for protocol events
+     */
     private openWebSocket(url: string, hooks: BrowserRuntimeHooks): void {
         if (this._webSocket && this._webSocket.readyState < 2) {
             this._webSocket.close(1000);
@@ -308,6 +386,11 @@ export class BrowserRuntime {
         this._webSocket = socket;
     }
 
+    /**
+     * initializes a new peer connection and binds rtc event handlers
+     *
+     * @param hooks runtime hooks for ice servers and events
+     */
     private createPeerConnection(hooks: BrowserRuntimeHooks): void {
         this.closePeerConnection(hooks);
         const peerConnection = this._createPeerConnection({
@@ -373,6 +456,11 @@ export class BrowserRuntime {
         this._peerConnection = peerConnection;
     }
 
+    /**
+     * closes the peer conection and notifies listeners
+     *
+     * @param hooks runtime hooks for state reset
+     */
     private closePeerConnection(hooks: BrowserRuntimeHooks): void {
         if (this._peerConnection) {
             this._peerConnection.close();
@@ -383,6 +471,13 @@ export class BrowserRuntime {
         this._peerConnection = null;
     }
 
+    /**
+     * returns stats for a specific local sender
+     *
+     * @param streamType stream type to get stats for
+     * @param localUploads local upload state manager
+     * @returns stats report or undefined if not bound
+     */
     private async getSenderStats(
         streamType: StreamType,
         localUploads: LocalUploads
@@ -401,6 +496,22 @@ export class BrowserRuntime {
         return transceiver.sender.getStats();
     }
 
+    /**
+     * applies an sdp offer and creates a matching answer
+     *
+     * this handles the core negotiationlifecycle: applying remote sdp,
+     * attaching pending tracks to new slots, creating a local answer,
+     * and waiting for ice gathering to finish before submitting the answer
+     *
+     * @param requestId correlation id for the negotiation request
+     * @param negotiationKind whether this is an initial offer or renegotiation
+     * @param sdp remote sdp offer
+     * @param uploadSlots metadata for upload sections in the sdp
+     * @param localUploads manager for local track bindings
+     * @param protocolCore protocol bindings for response submission
+     * @param hooks runtime hooks for logging and sync
+     * @returns follow-up commands (like transport-ready fallback)
+     */
     private async applyNegotiation(
         requestId: string,
         negotiationKind: "offer" | "renegotiate",
@@ -483,6 +594,12 @@ export class BrowserRuntime {
         return commands;
     }
 
+    /**
+     * waits for ice gathering to complete or for the first candidate to arrive
+     *
+     * @param peerConnection active peer connection
+     * @returns sdp with gathered candidates
+     */
     private async awaitStableLocalDescription(
         peerConnection: ClientPeerConnection
     ): Promise<string> {

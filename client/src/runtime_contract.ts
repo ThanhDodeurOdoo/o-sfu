@@ -1,3 +1,11 @@
+/**
+ * protocol and runtime contract definitions
+ *
+ * this module defines the interface between the platform-agnostic protocol
+ * core (wasm) and the browser-specific host runtime. it includes command
+ * schemas, state types, and the binding wrappers that enforce safety
+ */
+
 import {
     CLIENT_UPDATE,
     type AvailableFeatures,
@@ -114,18 +122,35 @@ let defaultProtocolCoreProvider: ProtocolCoreProvider | undefined;
 let protocolCoreProvider: ProtocolCoreProvider | undefined;
 
 /**
- * Registers the entrypoint-owned default protocol-core provider. Browser
- * bundles install this once so `createProtocolCore()` can stay decoupled from a
- * specific WASM bootstrap path.
+ * registers the entrypoint-owned default protocol-core provider
+ *
+ * browser bundles install this once so createProtocolCore() can stay
+ * decoupled from a specific wasm bootstrap path
+ *
+ * @param provider callback that returns the protocol core bindings
  */
 export function configureDefaultProtocolCoreProvider(provider: ProtocolCoreProvider): void {
     defaultProtocolCoreProvider = provider;
 }
 
+/**
+ * configures the active protocol core provider
+ *
+ * @param provider callback that returns the protocol core bindings
+ */
 export function configureProtocolCoreProvider(provider: ProtocolCoreProvider): void {
     protocolCoreProvider = provider;
 }
 
+/**
+ * wraps protocol core bindings with validation logic
+ *
+ * this ensures that values crossing the wasm boundary conform to the
+ * expected types and constraints before they reach the rest of the client
+ *
+ * @param bindings raw protocol core bindings from the wasm module
+ * @returns validated protocol core bindings
+ */
 export function wrapProtocolCoreBindings(bindings: ProtocolCoreBindings): ProtocolCoreBindings {
     return {
         get state(): ConnectionState {
@@ -207,6 +232,11 @@ export function wrapProtocolCoreBindings(bindings: ProtocolCoreBindings): Protoc
     };
 }
 
+/**
+ * creates a new protocol core instance using the configured provider
+ *
+ * @returns validated protocol core bindings
+ */
 export function createProtocolCore(): ProtocolCoreBindings {
     return wrapProtocolCoreBindings(
         (protocolCoreProvider ?? requireDefaultProtocolCoreProvider())()
