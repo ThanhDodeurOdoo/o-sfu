@@ -1,3 +1,11 @@
+//! Shared RTP payload ownership for packet-loop fanout.
+//!
+//! Packet sinks and relay targets can borrow or share packet bytes without
+//! forcing one allocation per destination. Local WebRTC egress still crosses
+//! `str0m::StreamTx::write_rtp_with_csrc`, whose current API accepts an owned
+//! payload buffer. `take_write_payload` is the only boundary that materializes
+//! those owned bytes for local writes.
+
 use std::{mem::take, sync::Arc};
 
 #[derive(Debug)]

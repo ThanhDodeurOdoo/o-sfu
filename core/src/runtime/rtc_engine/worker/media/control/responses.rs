@@ -1,11 +1,12 @@
 //! Command response adapters for worker-local media route control.
 
-use std::time::Instant;
-
 use tokio::sync::oneshot;
 
 use super::{
-    super::{keyframe::worker_request_consumer_keyframe, types::ConsumerPacketGateRequest},
+    super::{
+        keyframe::worker_request_consumer_keyframe,
+        types::{ConsumerKeyframeRequest, ConsumerPacketGateRequest},
+    },
     remote_source, routes,
 };
 use crate::runtime::{
@@ -15,6 +16,7 @@ use crate::runtime::{
     metrics::RuntimeMetrics,
     rtc_engine::{
         commands::ConsumerPacketGateCommand,
+        packet_loop::time::PacketLoopTime,
         relay_registry::{RelayTargetId, RelayTargetTransport},
         route_control::PacketLayerGate,
         state::RtcBootstrapState,
@@ -63,7 +65,7 @@ pub fn respond_set_consumer_active(
 pub fn respond_set_consumer_packet_gate(
     state: &mut RtcBootstrapState,
     request: ConsumerPacketGateRequest<'_>,
-    now: Instant,
+    now: PacketLoopTime,
     response: oneshot::Sender<Result<(), TransportAdapterError>>,
 ) {
     let _ = response.send(routes::worker_set_consumer_packet_gate(state, request, now));
@@ -74,7 +76,7 @@ pub fn respond_set_consumer_packet_gates(
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     updates: Vec<ConsumerPacketGateCommand>,
-    now: Instant,
+    now: PacketLoopTime,
     response: oneshot::Sender<TransportResult<Vec<TransportResult<()>>>>,
 ) {
     let _ = response.send(Ok(routes::worker_set_consumer_packet_gates(
@@ -89,19 +91,18 @@ pub fn respond_set_consumer_packet_gates(
 pub fn respond_request_consumer_keyframe(
     state: &mut RtcBootstrapState,
     metrics: &RuntimeMetrics,
-    consumer_session_key: &TransportSessionKey,
-    consumer_transport_media_id: TransportMediaId,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    request: ConsumerKeyframeRequest<'_>,
+    now: PacketLoopTime,
     response: oneshot::Sender<Result<(), TransportAdapterError>>,
 ) {
     let _ = response.send(worker_request_consumer_keyframe(
         state,
         metrics,
-        consumer_session_key,
-        consumer_transport_media_id,
-        source_session_key,
-        source_transport_media_id,
+        request.consumer_session_key,
+        request.consumer_transport_media_id,
+        request.source_session_key,
+        request.source_transport_media_id,
+        now,
     ));
 }
 

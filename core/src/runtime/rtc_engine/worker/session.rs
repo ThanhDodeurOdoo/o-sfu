@@ -47,15 +47,18 @@ fn worker_close_session(
     metrics: &RuntimeMetrics,
 ) -> CloseSessionOutcome {
     let removed_session = state.users.remove(session_key);
-    state.clear_session_schedule(session_key);
+    state.packet_loop.clear_session_schedule(session_key);
     state.remove_egress_bitrate_counter(session_key);
     state
+        .packet_loop
         .remote_addr_demux
         .forget_user_remote_addrs(session_key);
     state
+        .packet_loop
         .remote_addr_demux
         .forget_user_local_ice_ufrag(session_key);
     state
+        .packet_loop
         .remote_addr_demux
         .forget_user_remote_candidate_addrs(session_key);
     let removed_media_handles = state.remove_session_media_handles(session_key);
@@ -65,11 +68,13 @@ fn worker_close_session(
         .collect::<Vec<_>>();
     let mut affected_route_sources = BTreeSet::new();
     state
+        .packet_loop
         .media_route_index
         .retain(|source_transport_media_id, _| {
             !removed_media_ids.contains(source_transport_media_id)
         });
     state
+        .packet_loop
         .media_route_index
         .retain(|source_transport_media_id, entry| {
             let destination_count = entry.destinations.len();
@@ -82,7 +87,7 @@ fn worker_close_session(
             !entry.destinations.is_empty()
         });
     for source_transport_media_id in affected_route_sources {
-        refresh_source_packet_gate(state, source_transport_media_id);
+        refresh_source_packet_gate(&mut state.packet_loop, source_transport_media_id);
     }
     state.prune_unrouted_remote_sources();
     if state.users.is_empty() {

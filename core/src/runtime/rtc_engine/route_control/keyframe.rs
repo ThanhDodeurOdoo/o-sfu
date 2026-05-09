@@ -5,9 +5,11 @@
 //! debounce so repeated requests inside a short window do not fan out
 //! redundant PLI/FIR traffic.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use str0m::media::KeyframeRequestKind;
+
+use crate::runtime::rtc_engine::packet_loop::time::PacketLoopTime;
 
 const KEYFRAME_REQUEST_COALESCE_WINDOW: Duration = Duration::from_secs(1);
 
@@ -19,22 +21,23 @@ pub(in crate::runtime::rtc_engine) enum KeyframeRequestDecision {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct KeyframeRequestWindow {
-    blocked_until: Instant,
+    blocked_until: PacketLoopTime,
 }
 
 impl KeyframeRequestWindow {
-    pub(super) fn new(now: Instant) -> Self {
+    pub(super) fn new(now: PacketLoopTime) -> Self {
         Self {
             blocked_until: now + KEYFRAME_REQUEST_COALESCE_WINDOW,
         }
     }
 
-    pub(super) fn is_open(self, now: Instant) -> bool {
+    pub(super) fn is_open(self, now: PacketLoopTime) -> bool {
         now < self.blocked_until
     }
 }
 
-pub(in crate::runtime::rtc_engine) fn coalesce_keyframe_kind(
+#[must_use]
+pub fn coalesce_keyframe_kind(
     current: KeyframeRequestKind,
     incoming: KeyframeRequestKind,
 ) -> KeyframeRequestKind {

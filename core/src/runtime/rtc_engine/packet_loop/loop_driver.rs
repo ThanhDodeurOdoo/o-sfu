@@ -8,10 +8,10 @@
 //! The driver preserves the worker ordering contract:
 //!
 //! - drain already queued commands before touching media
-//! - pump dirty or timed-out sessions and bounded relay packets
+//! - poll dirty or timed-out host sessions and pump bounded relay packets
 //! - flush all staged UDP transmits outside any shared-state lock
-//! - wait for the next shutdown, command, timeout or UDP datagram event
-//! - try to route one received datagram into its owning `str0m::Rtc`
+//! - wait for the next shutdown, command, relay, timeout or UDP datagram event
+//! - ask the host session adapter to route one received datagram into its owner
 //!
 //! Shared observable state is updated through narrow side channels. The packet
 //! loop owns authoritative media state, while snapshots, metrics, diagnostics,
@@ -31,27 +31,38 @@ use tracing::warn;
 use super::{
     super::{
         bitrate::RtcBitrateState,
-        forwarding_planner::populate_forward_routes_for_packet,
+        forwarded_packet::ForwardedPacket,
         routing_miss::PacketLoopRoutingState,
         state::{RtcBootstrapState, RtcSnapshotState},
-        worker::{WorkerCommandContext, drain_due_rid_keyframe_refreshes},
+        worker::WorkerCommandContext,
     },
-    buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers, RECEIVE_BUFFER_LEN},
-    forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
-    ingress_routing::route_packet_to_matching_session,
-    input::{PacketLoopControlInput, PacketLoopInputReceivers},
-    keyframe_requests::flush_pending_keyframe_requests,
-    session_drain::drain_ready_sessions,
+    host_clock::PacketLoopClock,
+    host_effects::{
+        PacketLoopHostEffectContext, execute_packet_loop_effects, flush_packet_loop_forwards,
+    },
+    ingress_routing::{DatagramRouteInput, route_packet_to_matching_session},
+    input::{PacketLoopControlInput, PacketLoopInputReceivers, PacketLoopWakeInput},
+    machine::{
+        effect::PacketLoopEffects,
+        scratch::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopScratch, RECEIVE_BUFFER_LEN},
+        state::PacketLoopState,
+        turn::{PacketLoopTurn, PacketLoopTurnInput},
+    },
+    route_snapshot::PacketLoopRouteSnapshot,
+    session_drain::{DrainedSessionOutput, SessionPollContext, drain_ready_session_outputs},
+    time::PacketLoopTime,
 };
 use crate::{
     CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
     runtime::{
         diagnostics::DiagnosticsStore,
-        media_transport::SourcePolicySignal,
+        media_transport::{SourcePolicySignal, TransportSessionKey},
         metrics::{RtpMetricsRecorder, RuntimeMetrics},
-        packet_sink_registry::{PacketSinkRouteCache, RoomPacketSinkRegistry},
+        packet_sink_registry::RoomPacketSinkRegistry,
     },
 };
+
+const PACKET_LOOP_LAG_SNAPSHOT_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Immutable configuration and shared side channels for one packet-loop worker.
 ///
@@ -101,16 +112,68 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopConfig {
 struct SnapshotInfo {
     socket: Arc<UdpSocket>,
     candidate_addr: SocketAddr,
-    next_timeout: Option<Instant>,
+    next_timeout: Option<PacketLoopTime>,
+    clock: PacketLoopClock,
+}
+
+struct PacketLoopRuntimeContext<'a> {
+    bitrate_state: &'a Arc<Mutex<RtcBitrateState>>,
+    snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
+    config: &'a PacketLoopConfig,
+}
+
+impl<'a> PacketLoopRuntimeContext<'a> {
+    fn host_effect_context(&self) -> PacketLoopHostEffectContext<'a> {
+        PacketLoopHostEffectContext {
+            snapshot_state: self.snapshot_state,
+            diagnostics: &self.config.diagnostics,
+            metrics: &self.config.metrics,
+            source_policy_signal: &self.config.source_policy_signal,
+            rtp_metrics: &self.config.rtp_metrics,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct PacketLoopLagReporter {
+    last_snapshot_at: Option<Instant>,
+    pending_max_lag_ms: u64,
+}
+
+impl PacketLoopLagReporter {
+    pub(super) fn record(&mut self, observed_at: Instant, lag_ms: u64) -> Option<u64> {
+        self.pending_max_lag_ms = self.pending_max_lag_ms.max(lag_ms);
+        if let Some(last_snapshot_at) = self.last_snapshot_at
+            && observed_at.saturating_duration_since(last_snapshot_at)
+                < PACKET_LOOP_LAG_SNAPSHOT_INTERVAL
+        {
+            return None;
+        }
+        self.last_snapshot_at = Some(observed_at);
+        let lag_ms = self.pending_max_lag_ms;
+        self.pending_max_lag_ms = 0;
+        Some(lag_ms)
+    }
+}
+
+struct PacketLoopPumpWorkspace<'a> {
+    relay_rx: &'a mut mpsc::Receiver<ForwardedPacket>,
+    scratch: &'a mut PacketLoopScratch,
+    effects: &'a mut PacketLoopEffects,
+    route_snapshot: &'a mut PacketLoopRouteSnapshot,
+    session_output_batch: &'a mut Vec<DrainedSessionOutput>,
+    ready_session_batch: &'a mut Vec<TransportSessionKey>,
+    relay_packet_batch: &'a mut Vec<ForwardedPacket>,
+    pending_relay_packet: &'a mut Option<ForwardedPacket>,
+    lag_reporter: &'a mut PacketLoopLagReporter,
 }
 
 /// External input that resumes the worker after the pump phase.
 ///
-/// A timeout wake is represented as `Datagram { received_size: 0, .. }`. That
-/// keeps the driver on one input path while letting `next_timeout_deadline`
-/// wake ready sessions without fabricating a command.
 enum NextLoopInput {
     Control(PacketLoopControlInput),
+    Relay,
+    Timeout,
     Datagram {
         source_addr: SocketAddr,
         candidate_addr: SocketAddr,
@@ -123,7 +186,7 @@ enum NextLoopInput {
 /// # Concurrency
 ///
 /// This task owns `RtcBootstrapState`, routing hints, the UDP receive buffer and
-/// `PacketLoopBuffers`. Other tasks communicate with it through channels,
+/// `PacketLoopScratch`. Other tasks communicate with it through channels,
 /// shared read-side snapshots and cancellation. No `MutexGuard` is held across
 /// socket sends or receives.
 ///
@@ -139,70 +202,103 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     mut inputs: PacketLoopInputReceivers,
 ) {
-    let mut bootstrap_state = RtcBootstrapState {
-        next_media_id: config.media_id_base,
-        ..RtcBootstrapState::default()
-    };
+    let mut bootstrap_state = RtcBootstrapState::default();
+    bootstrap_state.packet_loop.next_media_id = config.media_id_base;
     let mut routing_state = PacketLoopRoutingState::new();
     let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
-    let mut buffers = PacketLoopBuffers::new();
-    let mut packet_sink_cache = PacketSinkRouteCache::default();
+    let mut scratch = PacketLoopScratch::new();
+    let mut effects = PacketLoopEffects::default();
+    let mut route_snapshot = PacketLoopRouteSnapshot::default();
+    let mut session_output_batch = Vec::with_capacity(64);
+    let mut ready_session_batch = Vec::with_capacity(64);
+    let mut relay_packet_batch = Vec::with_capacity(MAX_RELAY_PACKETS_PER_ITERATION);
+    let mut pending_relay_packet = None;
+    let mut lag_reporter = PacketLoopLagReporter::default();
+    let clock = PacketLoopClock::new(Instant::now());
+    let runtime_context = PacketLoopRuntimeContext {
+        bitrate_state: &bitrate_state,
+        snapshot_state: &snapshot_state,
+        config: &config,
+    };
 
     loop {
-        // draining commands
         while let Some(input) = inputs.try_recv_control() {
             handle_control_input_and_clear_routing_cache(
                 &mut bootstrap_state,
-                &bitrate_state,
-                &snapshot_state,
-                &config,
+                &runtime_context,
                 input,
                 &mut routing_state,
+                clock,
             );
+        }
+        if inputs.control_receiver_closed() {
+            return;
         }
 
         let snapshot = snapshot_and_pump(
             &mut bootstrap_state,
-            &snapshot_state,
-            &config,
-            inputs.relay_rx(),
-            &mut buffers,
-            &mut packet_sink_cache,
+            &runtime_context,
+            PacketLoopPumpWorkspace {
+                relay_rx: inputs.relay_rx(),
+                scratch: &mut scratch,
+                effects: &mut effects,
+                route_snapshot: &mut route_snapshot,
+                session_output_batch: &mut session_output_batch,
+                ready_session_batch: &mut ready_session_batch,
+                relay_packet_batch: &mut relay_packet_batch,
+                pending_relay_packet: &mut pending_relay_packet,
+                lag_reporter: &mut lag_reporter,
+            },
+            clock,
         );
 
         if let Some(info) = snapshot.as_ref() {
-            for pending_transmit in buffers.pending_transmits() {
+            for pending_transmit in scratch.pending_transmits() {
                 if info
                     .socket
-                    .send_to(
-                        pending_transmit.contents.as_slice(),
-                        pending_transmit.destination,
-                    )
+                    .send_to(pending_transmit.contents(), pending_transmit.destination())
                     .await
                     .is_err()
                 {
                     warn!(
-                        destination = %pending_transmit.destination,
+                        destination = %pending_transmit.destination(),
                         "failed to send packet-loop transport datagram"
                     );
                 }
             }
         }
 
-        let Some(next_input) =
-            wait_for_next_loop_input(snapshot, &mut inputs, &mut receive_buffer).await
+        let Some(next_input) = wait_for_next_loop_input(
+            snapshot,
+            &mut inputs,
+            &mut receive_buffer,
+            &mut pending_relay_packet,
+        )
+        .await
         else {
             return;
         };
 
-        let _ = apply_ingress_for_next_turn(
+        if let NextLoopInput::Relay = next_input {
+            continue;
+        }
+
+        effects.clear();
+        apply_ingress_for_next_turn(
             &mut bootstrap_state,
-            &bitrate_state,
-            &snapshot_state,
-            &config,
+            &runtime_context,
             next_input,
             &receive_buffer,
             &mut routing_state,
+            &mut effects,
+            clock,
+        );
+        let host_effect_context = runtime_context.host_effect_context();
+        execute_packet_loop_effects(
+            &mut bootstrap_state,
+            &scratch,
+            &host_effect_context,
+            &effects,
         );
     }
 }
@@ -211,51 +307,48 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
 ///
 /// Control inputs mutate authoritative worker state and conservatively
 /// invalidate ingress routing hints. Datagram inputs are routed into the owning
-/// `str0m::Rtc` if the receive buffer contains a non-empty packet. A
-/// zero-length datagram input is the driver's internal timeout wake and only
-/// causes the next turn to poll ready sessions.
+/// host session if the receive buffer contains a packet. Relay and timeout
+/// input only cause the next turn to poll ready sessions and relay packets.
 fn apply_ingress_for_next_turn(
     bootstrap_state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    config: &PacketLoopConfig,
+    runtime_context: &PacketLoopRuntimeContext<'_>,
     next_input: NextLoopInput,
     receive_buffer: &[u8],
     routing_state: &mut PacketLoopRoutingState,
-) -> bool {
+    effects: &mut PacketLoopEffects,
+    clock: PacketLoopClock,
+) {
     match next_input {
         NextLoopInput::Control(command) => {
             handle_control_input_and_clear_routing_cache(
                 bootstrap_state,
-                bitrate_state,
-                snapshot_state,
-                config,
+                runtime_context,
                 command,
                 routing_state,
+                clock,
             );
-            true
         }
+        NextLoopInput::Relay | NextLoopInput::Timeout => {}
         NextLoopInput::Datagram {
             source_addr,
             candidate_addr,
             received_size,
         } => {
-            if received_size == 0 {
-                return false;
-            }
             let Some(packet) = receive_buffer.get(..received_size) else {
-                return false;
+                return;
             };
             route_packet_to_matching_session(
                 bootstrap_state,
-                snapshot_state,
                 routing_state,
-                &config.metrics,
-                source_addr,
-                candidate_addr,
-                packet,
+                effects,
+                DatagramRouteInput {
+                    source_addr,
+                    candidate_addr,
+                    packet,
+                    received_at: Instant::now(),
+                    packet_time: clock.now(),
+                },
             );
-            true
         }
     }
 }
@@ -268,26 +361,26 @@ fn apply_ingress_for_next_turn(
 /// which session owns a source tuple or ICE username fragment.
 fn handle_control_input_and_clear_routing_cache(
     bootstrap_state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    config: &PacketLoopConfig,
+    runtime_context: &PacketLoopRuntimeContext<'_>,
     command: PacketLoopControlInput,
     routing_state: &mut PacketLoopRoutingState,
+    clock: PacketLoopClock,
 ) {
+    let now = Instant::now();
     command.dispatch(
         bootstrap_state,
         &WorkerCommandContext {
-            bitrate_state,
-            snapshot_state,
-            now: Instant::now(),
-            public_ip: config.public_ip,
-            max_bitrate_in_bps: config.max_bitrate_in_bps,
-            max_bitrate_out_bps: config.max_bitrate_out_bps,
-            video_bitrate_limits: config.video_bitrate_limits,
-            rtc_port_range: config.rtc_port_range,
-            codec_flags: config.codec_flags,
-            codec_preferences: config.codec_preferences,
-            metrics: &config.metrics,
+            bitrate_state: runtime_context.bitrate_state,
+            snapshot_state: runtime_context.snapshot_state,
+            packet_now: clock.to_packet_time(now),
+            public_ip: runtime_context.config.public_ip,
+            max_bitrate_in_bps: runtime_context.config.max_bitrate_in_bps,
+            max_bitrate_out_bps: runtime_context.config.max_bitrate_out_bps,
+            video_bitrate_limits: runtime_context.config.video_bitrate_limits,
+            rtc_port_range: runtime_context.config.rtc_port_range,
+            codec_flags: runtime_context.config.codec_flags,
+            codec_preferences: runtime_context.config.codec_preferences,
+            metrics: &runtime_context.config.metrics,
         },
     );
     routing_state.clear_on_topology_change();
@@ -295,23 +388,39 @@ fn handle_control_input_and_clear_routing_cache(
 
 /// Drain synchronous worker work and return the socket state for async waiting.
 ///
-/// This is the center of one packet-loop turn. It clears reusable buffers,
-/// drains session outputs, drains bounded relay input, flushes route-control
-/// feedback, records packet observations, plans fanout and executes forwarding.
+/// Host wrapper around one packet-loop machine turn.
+///
+/// This keeps socket ownership, relay-channel draining, packet-sink snapshot
+/// refresh, effect execution, lag measurement and wake calculation outside the
+/// machine turn. The turn itself only mutates worker state, scratch and ordered
+/// effects.
+///
 /// The returned snapshot contains only the socket handle and next deadline
 /// needed after the mutable borrow of worker state ends. If the worker has not
 /// opened a shared socket yet, the function clears staged buffers and returns
 /// without polling media.
 fn snapshot_and_pump(
     state: &mut RtcBootstrapState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    config: &PacketLoopConfig,
-    relay_rx: &mut mpsc::Receiver<super::super::forwarded_packet::ForwardedPacket>,
-    buffers: &mut PacketLoopBuffers,
-    packet_sink_cache: &mut PacketSinkRouteCache,
+    runtime_context: &PacketLoopRuntimeContext<'_>,
+    workspace: PacketLoopPumpWorkspace<'_>,
+    clock: PacketLoopClock,
 ) -> Option<SnapshotInfo> {
+    let PacketLoopPumpWorkspace {
+        relay_rx,
+        scratch,
+        effects,
+        route_snapshot,
+        session_output_batch,
+        ready_session_batch,
+        relay_packet_batch,
+        pending_relay_packet,
+        lag_reporter,
+    } = workspace;
     let turn_started_at = Instant::now();
-    buffers.clear();
+    scratch.clear();
+    effects.clear();
+    session_output_batch.clear();
+    relay_packet_batch.clear();
     let (socket, candidate_addr) = {
         let shared_socket = state.shared_socket.as_ref()?;
         (
@@ -319,51 +428,84 @@ fn snapshot_and_pump(
             shared_socket.candidate_addr,
         )
     };
-    let now = Instant::now();
-    drain_ready_sessions(
+    let host_now = Instant::now();
+    let packet_now = clock.to_packet_time(host_now);
+    drain_ready_session_outputs(
         state,
-        snapshot_state,
-        &config.diagnostics,
-        &config.metrics,
-        &config.source_policy_signal,
-        buffers,
-        now,
+        session_output_batch,
+        ready_session_batch,
+        &SessionPollContext {
+            host_now,
+            packet_now,
+            clock,
+        },
     );
-    drain_relay_packets(
+    drain_relay_packets_into_batch(
         relay_rx,
-        &mut buffers.pending_packets,
+        relay_packet_batch,
+        pending_relay_packet,
         MAX_RELAY_PACKETS_PER_ITERATION,
     );
-    drain_due_rid_keyframe_refreshes(state, &config.metrics, now);
-    flush_pending_keyframe_requests(state, &config.metrics, buffers);
-    record_incoming_stats(
-        state,
-        &config.source_policy_signal,
-        &config.metrics,
-        &config.rtp_metrics,
-        buffers,
+    route_snapshot.refresh_from(state, &runtime_context.config.packet_sink_registry);
+    PacketLoopTurn::step(
+        &mut state.packet_loop,
+        scratch,
+        effects,
+        PacketLoopTurnInput::new(
+            packet_now,
+            session_output_batch,
+            relay_packet_batch,
+            route_snapshot,
+        ),
     );
-    packet_sink_cache.refresh_from(&config.packet_sink_registry);
-    for (packet_idx, packet) in buffers.pending_packets.iter_mut().enumerate() {
-        populate_forward_routes_for_packet(
-            state,
-            packet_sink_cache,
-            &config.metrics,
-            packet_idx,
-            packet,
-            &mut buffers.forwards,
-        );
-    }
-    flush_forward_routes(state, &config.metrics, &config.rtp_metrics, buffers);
-    record_packet_loop_lag(snapshot_state, turn_started_at);
+    let host_effect_context = runtime_context.host_effect_context();
+    execute_packet_loop_effects(state, &*scratch, &host_effect_context, effects);
+    flush_packet_loop_forwards(state, scratch, route_snapshot, &host_effect_context);
+    record_packet_loop_lag(
+        runtime_context.snapshot_state,
+        turn_started_at,
+        lag_reporter,
+    );
     Some(SnapshotInfo {
         socket,
         candidate_addr,
-        next_timeout: next_timeout_deadline(state),
+        next_timeout: next_timeout_deadline(&mut state.packet_loop, packet_now),
+        clock,
     })
 }
 
-fn record_packet_loop_lag(snapshot_state: &Arc<Mutex<RtcSnapshotState>>, turn_started_at: Instant) {
+pub(super) fn drain_relay_packets_into_batch(
+    relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
+    relay_packet_batch: &mut Vec<ForwardedPacket>,
+    pending_relay_packet: &mut Option<ForwardedPacket>,
+    max_packets: usize,
+) -> usize {
+    relay_packet_batch.clear();
+    if relay_packet_batch.len() < max_packets
+        && let Some(packet) = pending_relay_packet.take()
+    {
+        relay_packet_batch.push(packet);
+    }
+    let mut drained_packets = 0;
+    while relay_packet_batch.len() < max_packets {
+        match relay_rx.try_recv() {
+            Ok(packet) => {
+                relay_packet_batch.push(packet);
+                drained_packets += 1;
+            }
+            Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {
+                break;
+            }
+        }
+    }
+    drained_packets
+}
+
+fn record_packet_loop_lag(
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    turn_started_at: Instant,
+    reporter: &mut PacketLoopLagReporter,
+) {
     let observed_at = Instant::now();
     let lag_ms = u64::try_from(
         observed_at
@@ -371,6 +513,9 @@ fn record_packet_loop_lag(snapshot_state: &Arc<Mutex<RtcSnapshotState>>, turn_st
             .as_millis(),
     )
     .map_or(u64::MAX, |value| value);
+    let Some(lag_ms) = reporter.record(observed_at, lag_ms) else {
+        return;
+    };
     if let Ok(mut snapshot) = snapshot_state.lock() {
         snapshot.set_packet_loop_lag_ms(lag_ms, observed_at);
     }
@@ -381,9 +526,12 @@ fn record_packet_loop_lag(snapshot_state: &Arc<Mutex<RtcSnapshotState>>, turn_st
 /// Dirty sessions are always due immediately because a previous input or local
 /// send has queued more `str0m` output. Otherwise the deadline is the earlier of
 /// the next `str0m` timeout and the next delayed selected-RID keyframe refresh.
-pub(super) fn next_timeout_deadline(state: &mut RtcBootstrapState) -> Option<Instant> {
+pub(super) fn next_timeout_deadline(
+    state: &mut PacketLoopState,
+    now: PacketLoopTime,
+) -> Option<PacketLoopTime> {
     if state.has_dirty_sessions() {
-        return Some(Instant::now());
+        return Some(now);
     }
     match (
         state.next_timeout_deadline(),
@@ -399,30 +547,44 @@ pub(super) fn next_timeout_deadline(state: &mut RtcBootstrapState) -> Option<Ins
 
 /// Wait for the next event that should resume the worker loop.
 ///
-/// Shutdown and control input are biased ahead of socket receive. When no
-/// socket has been opened yet, only shutdown and control input can wake the
-/// worker.
+/// Socket input stays ahead of relay input once queued control has been
+/// drained. Relay still wakes an otherwise idle worker, but a relay burst must
+/// not starve browser-originated RTCP or ICE traffic.
 async fn wait_for_next_loop_input(
     snapshot: Option<SnapshotInfo>,
     inputs: &mut PacketLoopInputReceivers,
     receive_buffer: &mut [u8],
+    pending_relay_packet: &mut Option<ForwardedPacket>,
 ) -> Option<NextLoopInput> {
+    if let Some(input) = inputs.try_recv_control() {
+        return Some(NextLoopInput::Control(input));
+    }
+    if inputs.control_receiver_closed() {
+        return None;
+    }
     let Some(info) = snapshot else {
         return inputs.recv_control().await.map(NextLoopInput::Control);
     };
     tokio::select! {
         biased;
-        next_input = inputs.recv_control() => next_input.map(NextLoopInput::Control),
         next_input = wait_for_socket_input(&info, receive_buffer) => Some(next_input),
+        next_input = inputs.recv_control_or_relay(pending_relay_packet) => next_input.map(next_loop_input_from_wake),
+    }
+}
+
+fn next_loop_input_from_wake(input: PacketLoopWakeInput) -> NextLoopInput {
+    match input {
+        PacketLoopWakeInput::Control(input) => NextLoopInput::Control(input),
+        PacketLoopWakeInput::Relay => NextLoopInput::Relay,
     }
 }
 
 async fn wait_for_socket_input(info: &SnapshotInfo, receive_buffer: &mut [u8]) -> NextLoopInput {
     let receive = info.socket.recv_from(receive_buffer);
     let result = if let Some(next_timeout) = info.next_timeout {
-        match timeout(socket_wait_duration(next_timeout), receive).await {
+        match timeout(socket_wait_duration(info.clock, next_timeout), receive).await {
             Ok(result) => result,
-            Err(_elapsed) => return empty_datagram_loop_input(info.candidate_addr),
+            Err(_elapsed) => return NextLoopInput::Timeout,
         }
     } else {
         receive.await
@@ -442,16 +604,8 @@ fn handle_socket_receive_result(
         },
         Err(_error) => {
             warn!("rtc packet loop failed to receive datagram");
-            empty_datagram_loop_input(candidate_addr)
+            NextLoopInput::Timeout
         }
-    }
-}
-
-fn empty_datagram_loop_input(candidate_addr: SocketAddr) -> NextLoopInput {
-    NextLoopInput::Datagram {
-        source_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
-        candidate_addr,
-        received_size: 0,
     }
 }
 
@@ -459,8 +613,8 @@ fn empty_datagram_loop_input(candidate_addr: SocketAddr) -> NextLoopInput {
 ///
 /// A deadline that is already due becomes a one millisecond timeout. This yields
 /// back to Tokio instead of spinning if the loop reaches an expired deadline.
-fn socket_wait_duration(next_timeout: Instant) -> Duration {
-    let timeout_duration = next_timeout.saturating_duration_since(Instant::now());
+fn socket_wait_duration(clock: PacketLoopClock, next_timeout: PacketLoopTime) -> Duration {
+    let timeout_duration = next_timeout.saturating_duration_since(clock.now());
     if timeout_duration.is_zero() {
         Duration::from_millis(1)
     } else {

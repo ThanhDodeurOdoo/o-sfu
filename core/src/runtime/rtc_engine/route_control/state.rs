@@ -20,7 +20,7 @@ use super::{
 };
 use crate::runtime::{
     media_transport::{ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, TransportMediaId},
-    rtc_engine::relay_registry::RelayTargetId,
+    rtc_engine::{packet_loop::time::PacketLoopTime, relay_registry::RelayTargetId},
 };
 
 #[derive(Debug, Default)]
@@ -33,7 +33,7 @@ impl RouteControlState {
     pub(in crate::runtime::rtc_engine) fn decide_keyframe_request(
         &mut self,
         source_transport_media_id: TransportMediaId,
-        now: Instant,
+        now: PacketLoopTime,
     ) -> KeyframeRequestDecision {
         self.decide_keyframe_request_for_rid(source_transport_media_id, None, now)
     }
@@ -42,7 +42,7 @@ impl RouteControlState {
         &mut self,
         source_transport_media_id: TransportMediaId,
         rid: Option<Rid>,
-        now: Instant,
+        now: PacketLoopTime,
     ) -> KeyframeRequestDecision {
         let source_control = self.sources.entry(source_transport_media_id).or_default();
         source_control.decide_keyframe_request(rid, now)
@@ -299,7 +299,7 @@ impl SourceRouteControl {
     fn decide_keyframe_request(
         &mut self,
         rid: Option<Rid>,
-        now: Instant,
+        now: PacketLoopTime,
     ) -> KeyframeRequestDecision {
         let Some(request_state) = self
             .keyframe_requests

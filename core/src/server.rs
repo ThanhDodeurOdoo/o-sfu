@@ -90,6 +90,13 @@ pub mod transport {
         pub use crate::runtime::rtc_engine::client_rtp_capabilities_from_answer;
     }
 
+    #[cfg(any(test, feature = "packet-loop-verification"))]
+    pub mod packet_loop_verification {
+        //! verification-only packet-loop surfaces
+
+        pub use crate::runtime::rtc_engine::packet_loop_verification::*;
+    }
+
     pub use crate::{
         SessionBitrateLimits,
         runtime::media_transport::{

@@ -45,6 +45,7 @@ jobs:
           MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_auth_codec
           cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_protocol_core
           cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_rtp_negotiation
+          cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_packet_loop_core
 
   # Keep the cross-target big-endian replay off pull requests because it needs
   # extra toolchain setup

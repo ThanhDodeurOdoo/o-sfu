@@ -16,6 +16,7 @@ anyhow.workspace = true
 base64.workspace = true
 futures-util.workspace = true
 o-sfu = { path = "..", default-features = false }
+o-sfu-core = { path = "../core", features = ["packet-loop-verification"] }
 o-sfu-protocol = { path = "../protocol" }
 o-sfu-rfc = { path = "../rfc" }
 o-sfu-router = { path = "../router" }
@@ -49,3 +50,7 @@ path = "miri/protocol_core.rs"
 [[test]]
 name = "miri_rtp_negotiation"
 path = "miri/rtp_negotiation.rs"
+
+[[test]]
+name = "miri_packet_loop_core"
+path = "miri/packet_loop_core.rs"

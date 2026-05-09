@@ -76,6 +76,33 @@ impl fmt::Debug for RegisteredPacketSink {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::runtime) struct PacketSinkRouteRef {
+    index: usize,
+    forward_destination_kind: RtpForwardDestinationKind,
+}
+
+impl PacketSinkRouteRef {
+    const fn new(index: usize, forward_destination_kind: RtpForwardDestinationKind) -> Self {
+        Self {
+            index,
+            forward_destination_kind,
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::runtime) const fn for_test(
+        index: usize,
+        forward_destination_kind: RtpForwardDestinationKind,
+    ) -> Self {
+        Self::new(index, forward_destination_kind)
+    }
+
+    pub(in crate::runtime) const fn forward_destination_kind(self) -> RtpForwardDestinationKind {
+        self.forward_destination_kind
+    }
+}
+
 pub struct RoomPacketSinkRegistry {
     any_active: AtomicBool,
     generation: AtomicU64,
@@ -92,14 +119,11 @@ impl Default for RoomPacketSinkRegistry {
     }
 }
 
-pub(in crate::runtime) trait PacketSinkLookup {
-    fn sink_for_room(&self, room_instance_id: RoomInstanceId) -> Option<RegisteredPacketSink>;
-}
-
 #[derive(Default)]
 pub(in crate::runtime) struct PacketSinkRouteCache {
     generation: u64,
-    active_rooms: HashMap<RoomInstanceId, RegisteredPacketSink>,
+    active_rooms: HashMap<RoomInstanceId, PacketSinkRouteRef>,
+    active_sinks: Vec<RegisteredPacketSink>,
 }
 
 impl PacketSinkRouteCache {
@@ -110,19 +134,40 @@ impl PacketSinkRouteCache {
         }
         let snapshot = registry.snapshot();
         self.generation = snapshot.generation;
-        self.active_rooms = snapshot.active_rooms;
+        self.active_rooms.clear();
+        self.active_sinks.clear();
+        self.active_sinks.reserve(snapshot.active_rooms.len());
+        self.active_rooms.reserve(snapshot.active_rooms.len());
+        for (room_instance_id, sink) in snapshot.active_rooms {
+            let route_ref =
+                PacketSinkRouteRef::new(self.active_sinks.len(), sink.forward_destination_kind());
+            self.active_sinks.push(sink);
+            self.active_rooms.insert(room_instance_id, route_ref);
+        }
     }
-}
 
-impl PacketSinkLookup for PacketSinkRouteCache {
-    fn sink_for_room(&self, room_instance_id: RoomInstanceId) -> Option<RegisteredPacketSink> {
-        self.active_rooms.get(&room_instance_id).cloned()
+    pub(in crate::runtime) fn route_for_room(
+        &self,
+        room_instance_id: RoomInstanceId,
+    ) -> Option<PacketSinkRouteRef> {
+        self.active_rooms.get(&room_instance_id).copied()
     }
-}
 
-impl PacketSinkLookup for RoomPacketSinkRegistry {
-    fn sink_for_room(&self, room_instance_id: RoomInstanceId) -> Option<RegisteredPacketSink> {
-        Self::sink_for_room(self, room_instance_id)
+    pub(in crate::runtime) fn sink_for_route(
+        &self,
+        route_ref: PacketSinkRouteRef,
+    ) -> Option<&RegisteredPacketSink> {
+        self.active_sinks.get(route_ref.index)
+    }
+
+    #[cfg(test)]
+    pub(in crate::runtime) fn sink_for_room(
+        &self,
+        room_instance_id: RoomInstanceId,
+    ) -> Option<RegisteredPacketSink> {
+        self.route_for_room(room_instance_id)
+            .and_then(|route_ref| self.sink_for_route(route_ref))
+            .cloned()
     }
 }
 

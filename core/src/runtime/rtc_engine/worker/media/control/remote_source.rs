@@ -31,9 +31,11 @@ pub(super) fn set_remote_source_packet_gate(
     {
         return;
     }
-    state
-        .route_control
-        .set_relay_packet_gate(source_transport_media_id, target_id, packet_gate);
+    state.packet_loop.route_control.set_relay_packet_gate(
+        source_transport_media_id,
+        target_id,
+        packet_gate,
+    );
 }
 
 pub(super) fn worker_add_relay_target(

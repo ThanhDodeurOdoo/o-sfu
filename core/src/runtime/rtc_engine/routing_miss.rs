@@ -1,17 +1,18 @@
-//! Negative routing memory for packet-loop UDP demux fallback.
+//! Recent routing-miss memory for packet-loop UDP demux fallback.
 //!
 //! `ingress_routing` owns the authoritative demux decision for one datagram. It
 //! first checks pinned source-address state, then probes recovery indexes and
-//! finally asks `str0m::Rtc::accepts()` before feeding a packet into a session.
-//! This module does not decide ownership. It only remembers recent negative
-//! results so the packet loop can avoid repeating expensive fallback work for
-//! traffic that was already proven unrelated to any live session.
+//! finally asks the host session adapter before feeding a packet into a session.
+//! This module does not decide ownership. It only remembers exact packets that
+//! recently missed every routing fallback so the packet loop can avoid repeating
+//! expensive recovery work for traffic already proven unrelated to any live
+//! session.
 //!
 //! # Invalidation contract
 //!
 //! The state here is a performance hint. It must be cleared whenever topology,
-//! ICE credentials or candidate indexes can change. A stale negative result
-//! could otherwise hide a packet that becomes valid after a join, answer or
+//! ICE credentials or candidate indexes can change. A stale miss entry could
+//! otherwise hide a packet that becomes valid after a join, answer or
 //! source-address remap.
 //!
 //! # Hot-path contract
@@ -25,8 +26,10 @@
 use std::{
     collections::{HashMap, VecDeque},
     net::SocketAddr,
-    time::{Duration, Instant},
+    time::Duration,
 };
+
+use super::packet_loop::time::PacketLoopTime;
 
 /// Maximum exact negative route decisions retained by one packet-loop worker.
 ///
@@ -62,7 +65,7 @@ const UNKNOWN_SOURCE_RATE_LIMIT_COOLDOWN: Duration = Duration::from_millis(200);
 /// still compare the saved bytes because the fingerprint is intentionally small
 /// and can collide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) struct PacketLoopRoutingMissKey {
+pub struct PacketLoopRoutingMissKey {
     /// Remote UDP tuple that produced the packet.
     source_addr: SocketAddr,
     /// Local shard candidate address that received the packet.
@@ -80,7 +83,8 @@ impl PacketLoopRoutingMissKey {
     /// The caller must keep the original packet bytes available when checking
     /// or recording a miss. The key only avoids comparing every cached packet
     /// when the tuple, length and fingerprint clearly differ.
-    pub(super) fn new(source_addr: SocketAddr, candidate_addr: SocketAddr, packet: &[u8]) -> Self {
+    #[must_use]
+    pub fn new(source_addr: SocketAddr, candidate_addr: SocketAddr, packet: &[u8]) -> Self {
         Self {
             source_addr,
             candidate_addr,
@@ -163,9 +167,9 @@ impl PacketLoopRoutingMissRecord {
 /// This cache answers one narrow question for `ingress_routing`: "can we skip
 /// recovery work because this exact datagram already failed against the current
 /// topology". It does not track malformed packets and it does not replace
-/// `Rtc::accepts()` for packets that reach a candidate session.
+/// the host session accepts check for packets that reach a candidate session.
 #[derive(Default)]
-struct PacketLoopRoutingMissCache {
+pub struct PacketLoopRoutingMissCache {
     /// Oldest misses sit at the front so cache pressure reuses the coldest
     /// record first.
     entries: VecDeque<PacketLoopRoutingMissRecord>,
@@ -176,7 +180,7 @@ impl PacketLoopRoutingMissCache {
     ///
     /// This is required after topology or ICE changes because a previous miss
     /// can become valid when a session joins or candidate indexes are refreshed.
-    fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.entries.clear();
     }
 
@@ -185,7 +189,8 @@ impl PacketLoopRoutingMissCache {
     /// The exact byte comparison is the safety guard that lets the fingerprint
     /// stay cheap. A collision can cost one comparison but cannot suppress a
     /// different packet.
-    fn contains(&self, key: PacketLoopRoutingMissKey, packet: &[u8]) -> bool {
+    #[must_use]
+    pub fn contains(&self, key: PacketLoopRoutingMissKey, packet: &[u8]) -> bool {
         self.entries
             .iter()
             .any(|candidate| candidate.key == key && candidate.packet.as_slice() == packet)
@@ -196,7 +201,7 @@ impl PacketLoopRoutingMissCache {
     /// Duplicate misses are ignored. A full cache reuses the oldest record so
     /// sustained unknown-source traffic does not allocate a fresh boxed packet
     /// for every retained negative decision.
-    fn record(&mut self, key: PacketLoopRoutingMissKey, packet: &[u8]) {
+    pub fn record(&mut self, key: PacketLoopRoutingMissKey, packet: &[u8]) {
         if self.contains(key, packet) {
             return;
         }
@@ -216,15 +221,9 @@ impl PacketLoopRoutingMissCache {
     /// Fallback route success means the packet loop learned something new about that
     /// source tuple. Forgetting the matching negative record avoids carrying a
     /// stale "no session accepted this" result next to a fresh source pin.
-    fn forget(&mut self, key: PacketLoopRoutingMissKey, packet: &[u8]) {
-        let Some(position) = self
-            .entries
-            .iter()
-            .position(|candidate| candidate.key == key && candidate.packet.as_slice() == packet)
-        else {
-            return;
-        };
-        let _ = self.entries.remove(position);
+    pub fn forget(&mut self, key: PacketLoopRoutingMissKey, packet: &[u8]) {
+        self.entries
+            .retain(|candidate| candidate.key != key || candidate.packet.as_slice() != packet);
     }
 }
 
@@ -234,28 +233,20 @@ impl PacketLoopRoutingMissCache {
 /// source can vary sequence numbers, SSRCs or random payload bytes enough to
 /// avoid exact cache hits. The limiter bounds those varied probes by source
 /// address instead of by packet identity.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct UnknownSourceRateLimitEntry {
     /// Number of unresolved probes since the last cooldown decision.
     miss_count: usize,
     /// End of the current cooldown window, if the source is blocked.
-    blocked_until: Option<Instant>,
+    blocked_until: Option<PacketLoopTime>,
 }
 
 impl UnknownSourceRateLimitEntry {
-    /// Starts a source in the allowed state.
-    fn new() -> Self {
-        Self {
-            miss_count: 0,
-            blocked_until: None,
-        }
-    }
-
     /// Returns whether the source may attempt fallback recovery at `now`.
     ///
     /// Expired cooldowns are cleared lazily so the hot path does not need a
     /// background cleanup pass.
-    fn allow_probe(&mut self, now: Instant) -> bool {
+    fn allow_probe(&mut self, now: PacketLoopTime) -> bool {
         if self
             .blocked_until
             .is_some_and(|blocked_until| blocked_until > now)
@@ -271,7 +262,7 @@ impl UnknownSourceRateLimitEntry {
     /// After the burst is exhausted, the source enters a short cooldown and the
     /// burst counter resets. That keeps repeated abuse bounded while allowing a
     /// later legitimate ICE update to recover without waiting for long state.
-    fn record_miss(&mut self, now: Instant) {
+    fn record_miss(&mut self, now: PacketLoopTime) {
         self.miss_count = self.miss_count.saturating_add(1);
         if self.miss_count < UNKNOWN_SOURCE_MISS_BURST_LIMIT {
             return;
@@ -306,7 +297,7 @@ impl UnknownSourceRateLimiter {
     }
 
     /// Returns whether fallback recovery may inspect this source now.
-    fn allow_probe(&mut self, source_addr: SocketAddr, now: Instant) -> bool {
+    fn allow_probe(&mut self, source_addr: SocketAddr, now: PacketLoopTime) -> bool {
         self.entry_mut(source_addr).allow_probe(now)
     }
 
@@ -314,7 +305,7 @@ impl UnknownSourceRateLimiter {
     ///
     /// Capacity enforcement happens after the miss so the source that triggered
     /// growth is represented before older entries are evicted.
-    fn record_miss(&mut self, source_addr: SocketAddr, now: Instant) {
+    fn record_miss(&mut self, source_addr: SocketAddr, now: PacketLoopTime) {
         self.entry_mut(source_addr).record_miss(now);
         self.enforce_capacity();
     }
@@ -338,9 +329,7 @@ impl UnknownSourceRateLimiter {
         if !self.entries.contains_key(&source_addr) {
             self.insertion_order.push_back(source_addr);
         }
-        self.entries
-            .entry(source_addr)
-            .or_insert_with(UnknownSourceRateLimitEntry::new)
+        self.entries.entry(source_addr).or_default()
     }
 
     /// Keeps the source throttle bounded under high-cardinality misses.
@@ -373,33 +362,35 @@ impl UnknownSourceRateLimiter {
 /// that completed fallback recovery and found no session. A packet that routes
 /// successfully through fallback must call `record_fallback_route_success` so
 /// stale miss and rate-limit state do not outlive the learned source tuple.
-pub(super) struct PacketLoopRoutingState {
+pub struct PacketLoopRoutingState {
     /// Exact recent packets that failed fallback routing.
     miss_cache: PacketLoopRoutingMissCache,
     /// Source-address throttle for varied traffic that keeps missing.
     source_rate_limiter: UnknownSourceRateLimiter,
-    #[cfg(test)]
-    /// Test-only counter proving when fallback recovery was attempted.
-    fallback_attempts: usize,
+}
+
+impl Default for PacketLoopRoutingState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PacketLoopRoutingState {
     /// Creates empty routing hints for one packet-loop worker.
-    pub(super) fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             miss_cache: PacketLoopRoutingMissCache::default(),
             source_rate_limiter: UnknownSourceRateLimiter::default(),
-            #[cfg(test)]
-            fallback_attempts: 0,
         }
     }
 
-    /// Invalidates all negative routing memory after a topology change.
+    /// Invalidates all cached routing misses after a topology change.
     ///
     /// This should be called after worker commands that can add, remove or
     /// retarget sessions, candidates or ICE ufrags. The next packet will pay
-    /// fallback cost again, which is safer than trusting stale negative state.
-    pub(super) fn clear_on_topology_change(&mut self) {
+    /// fallback cost again, which is safer than trusting stale miss entries.
+    pub fn clear_on_topology_change(&mut self) {
         self.miss_cache.clear();
         self.source_rate_limiter.clear();
     }
@@ -409,11 +400,8 @@ impl PacketLoopRoutingState {
     /// A true result means the same packet already failed against the current
     /// topology. It does not say anything about other packets from the same
     /// source, which is why varied traffic is handled by the source limiter.
-    pub(super) fn should_skip_scan(
-        &self,
-        miss_key: PacketLoopRoutingMissKey,
-        packet: &[u8],
-    ) -> bool {
+    #[must_use]
+    pub fn should_skip_scan(&self, miss_key: PacketLoopRoutingMissKey, packet: &[u8]) -> bool {
         self.miss_cache.contains(miss_key, packet)
     }
 
@@ -421,10 +409,11 @@ impl PacketLoopRoutingState {
     ///
     /// This mutates limiter state because expired cooldowns are cleared lazily
     /// when the source is next seen.
-    pub(super) fn should_rate_limit_source(
+    #[must_use]
+    pub fn should_rate_limit_source(
         &mut self,
         source_addr: SocketAddr,
-        now: Instant,
+        now: PacketLoopTime,
     ) -> bool {
         !self.source_rate_limiter.allow_probe(source_addr, now)
     }
@@ -433,12 +422,12 @@ impl PacketLoopRoutingState {
     ///
     /// The exact miss cache handles repeated identical packets. The source
     /// limiter handles varied packets from the same unresolved address.
-    pub(super) fn record_miss(
+    pub fn record_miss(
         &mut self,
         miss_key: PacketLoopRoutingMissKey,
         packet: &[u8],
         source_addr: SocketAddr,
-        now: Instant,
+        now: PacketLoopTime,
     ) {
         self.miss_cache.record(miss_key, packet);
         self.source_rate_limiter.record_miss(source_addr, now);
@@ -449,7 +438,7 @@ impl PacketLoopRoutingState {
     /// This keeps the hints aligned with the fast-path demux state. Once
     /// fallback accepts a source, later packets should use the learned source
     /// pin or revalidate normally instead of inheriting old fallback failures.
-    pub(super) fn record_fallback_route_success(
+    pub fn record_fallback_route_success(
         &mut self,
         miss_key: PacketLoopRoutingMissKey,
         packet: &[u8],
@@ -457,16 +446,6 @@ impl PacketLoopRoutingState {
     ) {
         self.miss_cache.forget(miss_key, packet);
         self.source_rate_limiter.forget_source(source_addr);
-    }
-
-    #[cfg(test)]
-    pub(super) fn record_fallback_attempt(&mut self) {
-        self.fallback_attempts = self.fallback_attempts.saturating_add(1);
-    }
-
-    #[cfg(test)]
-    pub(super) fn fallback_attempts(&self) -> usize {
-        self.fallback_attempts
     }
 
     #[cfg(test)]
@@ -479,16 +458,19 @@ impl PacketLoopRoutingState {
 mod tests {
     use std::{
         net::{Ipv4Addr, SocketAddr},
-        time::{Duration, Instant},
+        time::Duration,
     };
 
-    use super::{PacketLoopRoutingMissKey, PacketLoopRoutingState, UnknownSourceRateLimiter};
+    use super::{
+        super::packet_loop::time::PacketLoopTime, PacketLoopRoutingMissKey, PacketLoopRoutingState,
+        UnknownSourceRateLimiter,
+    };
 
     #[test]
     fn unknown_source_rate_limiter_blocks_after_burst_and_recovers_after_cooldown() {
         let source_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 44_000));
         let mut limiter = UnknownSourceRateLimiter::default();
-        let start = Instant::now();
+        let start = PacketLoopTime::from_millis(0);
 
         for offset in 0..4 {
             let now = start + Duration::from_millis(offset);
@@ -506,7 +488,7 @@ mod tests {
         let source_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 44_010));
         let candidate_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 44_011));
         let mut routing_state = PacketLoopRoutingState::new();
-        let start = Instant::now();
+        let start = PacketLoopTime::from_millis(0);
         let packet = [0x80, 0x60, 0x00, 0x01];
         let miss_key = PacketLoopRoutingMissKey::new(source_addr, candidate_addr, &packet);
 

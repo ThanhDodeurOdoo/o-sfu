@@ -5,7 +5,7 @@
 //! candidates, and create the worker-owned user state.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket as StdUdpSocket},
     sync::Arc,
     time::Instant,
@@ -21,7 +21,10 @@ use str0m::{
 use tokio::net::UdpSocket;
 use tracing::info;
 
-use super::state::{RtcSessionState, SessionSdpNegotiationState, SharedRtcSocket};
+use super::{
+    session_adapter::RtcHostSession,
+    state::{RtcSessionState, SessionSdpNegotiationState, SharedRtcSocket},
+};
 use crate::{
     MediaCodecFlags, RtcPortRange,
     runtime::media_transport::{TransportAdapterError, TransportSessionKey},
@@ -94,7 +97,7 @@ pub(super) fn ensure_session_rtc_state(
     users.insert(
         session_key.clone(),
         RtcSessionState {
-            rtc,
+            host_session: RtcHostSession::new(rtc),
             started_at,
             local_ice_ufrag,
             #[cfg(test)]
@@ -103,7 +106,6 @@ pub(super) fn ensure_session_rtc_state(
             max_bitrate_out_bps: Some(max_bitrate_out_bps),
             dtls_started: false,
             sdp_negotiation: SessionSdpNegotiationState::default(),
-            consumer_streams: HashMap::new(),
         },
     );
     Ok(true)

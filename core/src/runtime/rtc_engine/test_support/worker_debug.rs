@@ -311,6 +311,7 @@ fn respond_debug_remember_remote_addr(
     response: oneshot::Sender<()>,
 ) {
     if state
+        .packet_loop
         .remote_addr_demux
         .remember_remote_addr(source_addr, session_key)
         && let Ok(mut snapshot) = snapshot_state.lock()
@@ -330,7 +331,7 @@ fn respond_debug_session_stream_rx_ssrc(
     response: oneshot::Sender<Option<u32>>,
 ) {
     let value = state.users.get_mut(session_key).and_then(|session_state| {
-        let mut direct_api = session_state.rtc.direct_api();
+        let mut direct_api = session_state.host_session.direct_api();
         direct_api
             .stream_rx_by_mid(mid, None)
             .map(|stream_rx| *stream_rx.ssrc())
@@ -346,7 +347,7 @@ fn respond_debug_session_stream_tx_ssrc(
     response: oneshot::Sender<Option<u32>>,
 ) {
     let value = state.users.get_mut(session_key).and_then(|session_state| {
-        let mut direct_api = session_state.rtc.direct_api();
+        let mut direct_api = session_state.host_session.direct_api();
         direct_api
             .stream_tx_by_mid(mid, None)
             .map(|stream_tx| *stream_tx.ssrc())
@@ -388,6 +389,7 @@ fn respond_debug_route_entry(
     response: oneshot::Sender<Option<DebugRouteEntry>>,
 ) {
     let value = state
+        .packet_loop
         .source_transport_media_id_for_mid(source_session_key, source_mid)
         .and_then(|source_transport_media_id| {
             build_debug_route_entry(state, source_transport_media_id)
@@ -402,6 +404,7 @@ fn respond_debug_route_entry_by_consumer_mid(
     response: oneshot::Sender<Option<DebugRouteEntry>>,
 ) {
     let value = state
+        .packet_loop
         .consumer_source_transport_media_id_for_mid(consumer_session_key, consumer_mid)
         .and_then(|source_transport_media_id| {
             build_debug_route_entry(state, source_transport_media_id)
@@ -423,12 +426,14 @@ fn build_debug_route_entry(
     source_transport_media_id: TransportMediaId,
 ) -> Option<DebugRouteEntry> {
     state
+        .packet_loop
         .media_route_index
         .get(&source_transport_media_id)
         .map(|entry| DebugRouteEntry {
             source_transport_media_id,
             source_active: entry.source_active,
             effective_packet_gate: state
+                .packet_loop
                 .route_control
                 .effective_packet_gate(source_transport_media_id)
                 .as_ref()
@@ -489,7 +494,7 @@ fn respond_debug_observe_audio_activity(
     now: Instant,
     response: oneshot::Sender<()>,
 ) {
-    state.route_control.observe_audio_activity(
+    state.packet_loop.route_control.observe_audio_activity(
         transport_media_id,
         voice_activity,
         audio_level_dbov,

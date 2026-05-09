@@ -15,16 +15,16 @@
 //! 3. emitted commands may be followed up with negotiation answers or request
 //!    responses so multi-step flows keep progressing.
 
-use libfuzzer_sys::arbitrary;
 use libfuzzer_sys::{
+    arbitrary,
     arbitrary::{Arbitrary, Error, Unstructured},
     fuzz_target,
 };
 use o_sfu_protocol::{
     core::{Command, ConnectionState, PendingRequestKind, ProtocolCore, RECOVERY_TIMER_ID},
     shared::{
-        AvailableFeatures, RecordingState, RecordingStateUpdate, UserId, UserInfo, StopCode,
-        StreamType,
+        AvailableFeatures, RecordingState, RecordingStateUpdate, StopCode, StreamType, UserId,
+        UserInfo,
     },
     signaling::{
         PeerInfoPayload, PeerLeftPayload, PeerSnapshot, RecordingActionResult, RecordingOptions,

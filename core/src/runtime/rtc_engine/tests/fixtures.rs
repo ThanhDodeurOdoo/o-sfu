@@ -20,7 +20,6 @@ pub(super) use tokio::time::sleep;
 
 pub(super) use super::super::{
     RtcTransportShard,
-    shared_payload::SharedPayload,
     state::TransportSessionHealth,
     test_support::{DebugPacketGate, DebugRouteEntry, test_transport_session_key},
 };

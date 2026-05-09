@@ -44,3 +44,17 @@ path = "fuzz_targets/sdp_answer.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "packet_loop_demux"
+path = "fuzz_targets/packet_loop_demux.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "packet_loop_turn_trace"
+path = "fuzz_targets/packet_loop_turn_trace.rs"
+test = false
+doc = false
+bench = false

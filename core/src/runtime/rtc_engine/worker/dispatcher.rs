@@ -20,6 +20,7 @@ use super::{
     super::{
         bitrate::RtcBitrateState,
         commands::RtcWorkerCommand,
+        packet_loop::time::PacketLoopTime,
         state::{RtcBootstrapState, RtcSnapshotState},
     },
     media,
@@ -40,7 +41,7 @@ use crate::{
 pub struct WorkerCommandContext<'a> {
     pub bitrate_state: &'a Arc<Mutex<RtcBitrateState>>,
     pub snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
-    pub now: Instant,
+    pub packet_now: PacketLoopTime,
     pub public_ip: IpAddr,
     pub max_bitrate_in_bps: u64,
     pub max_bitrate_out_bps: u64,
@@ -119,7 +120,7 @@ pub fn handle_worker_command(
                     codec_preferences: context.codec_preferences,
                 },
                 context.metrics,
-                context.now,
+                context.packet_now,
                 command,
             );
         }
@@ -203,6 +204,7 @@ fn respond_next_active_speaker_deadline(
     response: oneshot::Sender<Result<Option<Instant>, TransportAdapterError>>,
 ) {
     let deadline = state
+        .packet_loop
         .route_control
         .next_active_speaker_deadline(Instant::now());
     let _ = response.send(Ok(deadline));
@@ -222,7 +224,7 @@ fn handle_media_command(
     bitrate_state: &Arc<Mutex<RtcBitrateState>>,
     recv_media_policy: media::RecvMediaPolicy,
     metrics: &RuntimeMetrics,
-    now: Instant,
+    packet_now: PacketLoopTime,
     command: RtcWorkerCommand,
 ) {
     match command {
@@ -269,7 +271,7 @@ fn handle_media_command(
                 remote_source_control,
                 consumer_rtp_parameters: &consumer_rtp_parameters,
             },
-            now,
+            packet_now,
             response,
         ),
         RtcWorkerCommand::AddRelayTarget { .. }
@@ -282,7 +284,7 @@ fn handle_media_command(
         | RtcWorkerCommand::SetConsumerPacketGate { .. }
         | RtcWorkerCommand::SetConsumerPacketGateBatch { .. }
         | RtcWorkerCommand::RequestConsumerKeyframe { .. } => {
-            handle_media_route_control_command(state, metrics, now, command);
+            handle_media_route_control_command(state, metrics, packet_now, command);
         }
         _ => {}
     }
@@ -291,7 +293,7 @@ fn handle_media_command(
 fn handle_media_route_control_command(
     state: &mut RtcBootstrapState,
     metrics: &RuntimeMetrics,
-    now: Instant,
+    packet_now: PacketLoopTime,
     command: RtcWorkerCommand,
 ) {
     match command {
@@ -316,6 +318,7 @@ fn handle_media_route_control_command(
                 rid,
                 kind,
             },
+            packet_now,
         ),
         RtcWorkerCommand::SetRemoteSourcePacketGate {
             source_session_key,
@@ -358,13 +361,13 @@ fn handle_media_route_control_command(
             response,
         ),
         RtcWorkerCommand::SetConsumerPacketGate { .. } => {
-            handle_consumer_packet_gate_update(state, command, now);
+            handle_consumer_packet_gate_update(state, command, packet_now);
         }
         RtcWorkerCommand::SetConsumerPacketGateBatch { .. } => {
-            handle_consumer_packet_gate_batch_update(state, command, now);
+            handle_consumer_packet_gate_batch_update(state, command, packet_now);
         }
         RtcWorkerCommand::RequestConsumerKeyframe { .. } => {
-            handle_consumer_keyframe_request(state, metrics, command);
+            handle_consumer_keyframe_request(state, metrics, command, packet_now);
         }
         _ => {}
     }
@@ -417,7 +420,7 @@ fn handle_relay_route_control_command(state: &mut RtcBootstrapState, command: Rt
 fn handle_consumer_packet_gate_update(
     state: &mut RtcBootstrapState,
     command: RtcWorkerCommand,
-    now: Instant,
+    packet_now: PacketLoopTime,
 ) {
     if let RtcWorkerCommand::SetConsumerPacketGate {
         consumer_session_key,
@@ -437,7 +440,7 @@ fn handle_consumer_packet_gate_update(
                 source_transport_media_id,
                 packet_gate,
             },
-            now,
+            packet_now,
             response,
         );
     }
@@ -446,7 +449,7 @@ fn handle_consumer_packet_gate_update(
 fn handle_consumer_packet_gate_batch_update(
     state: &mut RtcBootstrapState,
     command: RtcWorkerCommand,
-    now: Instant,
+    packet_now: PacketLoopTime,
 ) {
     if let RtcWorkerCommand::SetConsumerPacketGateBatch {
         source_session_key,
@@ -460,7 +463,7 @@ fn handle_consumer_packet_gate_batch_update(
             &source_session_key,
             source_transport_media_id,
             updates,
-            now,
+            packet_now,
             response,
         );
     }
@@ -470,6 +473,7 @@ fn handle_consumer_keyframe_request(
     state: &mut RtcBootstrapState,
     metrics: &RuntimeMetrics,
     command: RtcWorkerCommand,
+    packet_now: PacketLoopTime,
 ) {
     if let RtcWorkerCommand::RequestConsumerKeyframe {
         consumer_session_key,
@@ -482,10 +486,13 @@ fn handle_consumer_keyframe_request(
         media::respond_request_consumer_keyframe(
             state,
             metrics,
-            &consumer_session_key,
-            consumer_transport_media_id,
-            &source_session_key,
-            source_transport_media_id,
+            media::ConsumerKeyframeRequest {
+                consumer_session_key: &consumer_session_key,
+                consumer_transport_media_id,
+                source_session_key: &source_session_key,
+                source_transport_media_id,
+            },
+            packet_now,
             response,
         );
     }

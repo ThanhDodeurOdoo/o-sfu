@@ -10,7 +10,8 @@ mod keyframe;
 mod packet_gate;
 mod state;
 
-pub(super) use keyframe::{KeyframeRequestDecision, coalesce_keyframe_kind};
+pub(super) use keyframe::KeyframeRequestDecision;
+pub use keyframe::coalesce_keyframe_kind;
 pub(super) use packet_gate::{
     PacketLayerGate, PacketLayerMetadata, PacketOperatingPointGate, PacketRouteDecision,
     aggregate_packet_gates,

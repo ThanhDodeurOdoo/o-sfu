@@ -20,6 +20,5 @@ mod publication;
 mod session;
 
 pub use dispatcher::{WorkerCommandContext, handle_worker_command};
-pub(super) use media::{
-    drain_due_rid_keyframe_refreshes, observe_source_rid_readiness, request_keyframe_for_source,
-};
+pub(in crate::runtime::rtc_engine) use media::refresh_source_packet_gate;
+pub(super) use media::request_keyframe_for_source;

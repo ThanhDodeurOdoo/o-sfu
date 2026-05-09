@@ -2,8 +2,9 @@
 //!
 //! The packet loop is the RTC engine's transport hot path. Each
 //! `RtcTransportShard` starts one Tokio task that owns one mutable
-//! `RtcBootstrapState`, drives all `str0m::Rtc` instances for that shard and
-//! performs the UDP reads and writes for the shared shard socket.
+//! `RtcBootstrapState`, asks the host session adapter to drive shard-local
+//! `RtcHostSession` instances and performs the UDP reads and writes for the shared
+//! shard socket.
 //!
 //! The loop is below room policy and above raw `str0m` I/O. Room
 //! and router code project intent into transport state before packets arrive
@@ -11,12 +12,9 @@
 //! `str0m` outputs, local fanout, relay fanout, packet sinks and transport
 //! observability.
 //!
-//! Authoritative media state lives in the worker-owned `RtcBootstrapState`.
-//! `RtcSnapshotState`, bitrate counters, diagnostics, metrics, packet sinks and
-//! source-policy signals are side channels used to expose observations or
-//! enqueue work without letting external callers mutate the hot-path state
-//! directly. Relay routing state stays in the worker-owned
-//! `RtcBootstrapState`.
+//! Authoritative media state lives in worker-owned packet-loop state. The host
+//! keeps sockets, host sessions, bitrate mirrors, diagnostics, metrics, packet
+//! sinks and source-policy signals outside the deterministic turn.
 //!
 //! # Packet-loop turn
 //!
@@ -27,15 +25,18 @@
 //! drain pending worker commands
 //!   |
 //!   v
-//! mutate RtcBootstrapState and clear routing hints
+//! mutate host state and clear routing hints
 //!   |
 //!   v
-//! snapshot_and_pump
+//! host polls dirty and timed-out sessions
 //!   |
-//!   +--> drain dirty and timed-out Rtc sessions
-//!   |      |
-//!   |      v
-//!   |    collect str0m Output values
+//!   v
+//! collect host session outputs
+//!   |
+//!   v
+//! PacketLoopTurn::step
+//!   |
+//!   +--> consume host session outputs
 //!   |
 //!   +--> drain bounded relay mailbox
 //!   |
@@ -45,7 +46,10 @@
 //!   |
 //!   +--> populate forwarding destinations
 //!   |
-//!   +--> flush local RTC, relay and packet-sink destinations
+//!   +--> emit typed forwarding and observability effects
+//!   |
+//!   v
+//! execute host effects in order
 //!   |
 //!   v
 //! send queued UDP transmits
@@ -70,31 +74,47 @@
 //!
 //! # Submodules
 //!
-//! - [`loop_driver`] owns worker lifecycle, turn ordering, socket waits and the
-//!   shared configuration passed in by the shard.
+//! - [`loop_driver`] owns worker lifecycle, socket waits, effect execution and
+//!   the shared configuration passed in by the shard.
 //! - [`ingress_routing`] maps inbound UDP datagrams to a session with
-//!   source-address pins, bounded recovery and `Rtc::accepts()` as the final
-//!   authority.
-//! - [`session_drain`] pulls ready `str0m` outputs out of dirty or timed-out
-//!   sessions without scanning every live session on every turn.
-//! - [`forward_flush`] records packet-path stats, executes planned destinations
-//!   and accounts for local, relay and sink egress.
+//!   source-address pins, bounded recovery and the host session adapter as the
+//!   final `str0m` authority.
+//! - [`session_drain`] lets the host pull ready `str0m` outputs out of dirty or
+//!   timed-out sessions, then lets the machine turn consume the normalized
+//!   outputs without polling `str0m`.
+//! - [`forward_flush`] records packet-path state and emits forwarding effects
+//!   for local, relay and sink egress.
+//! - [`route_snapshot`] gives the machine turn explicit source facts and stable
+//!   host-route references without exposing host handles.
+//! - [`host_effects`] executes typed effects against snapshots, metrics,
+//!   diagnostics, packet sinks, relay mailboxes and local RTC sessions.
 //! - [`keyframe_requests`] resolves consumer RTCP feedback back to the producer
 //!   source, then coalesces duplicate requests before they leave the worker.
 //! - [`event_observation`] translates selected `str0m` events into snapshots,
 //!   diagnostics, source-policy wakeups and metrics.
-//! - [`buffers`] owns the reusable allocation surface used by the whole turn.
+//! - [`machine::scratch`] owns the reusable allocation surface used by the whole turn.
+//! - [`machine::effect`] owns the ordered packet-loop effect values.
+//! - [`machine::turn`] owns the deterministic synchronous packet-loop step.
+//! - [`time`] owns deterministic packet-loop-local timestamps.
+//! - [`host_clock`] owns host `Instant` to packet-loop time translation.
 
-mod buffers;
 mod event_observation;
 mod forward_flush;
+mod host_clock;
+mod host_effects;
 mod ingress_routing;
 mod input;
-mod keyframe_requests;
+pub(in crate::runtime::rtc_engine) mod keyframe_requests;
 mod loop_driver;
+pub(in crate::runtime::rtc_engine) mod machine;
+pub(in crate::runtime::rtc_engine) mod route_snapshot;
+pub(in crate::runtime::rtc_engine) mod selected_rid;
 mod session_drain;
 #[cfg(test)]
 mod tests;
+pub(in crate::runtime::rtc_engine) mod time;
+#[cfg(any(test, feature = "packet-loop-verification"))]
+pub(in crate::runtime::rtc_engine) mod verification;
 
 #[cfg(test)]
 pub use event_observation::{transport_health_from_event, transport_ice_state};

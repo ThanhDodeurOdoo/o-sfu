@@ -31,6 +31,14 @@ pub struct ConsumerPacketGateRequest<'a> {
     pub packet_gate: PacketLayerGate,
 }
 
+#[derive(Clone, Copy)]
+pub struct ConsumerKeyframeRequest<'a> {
+    pub consumer_session_key: &'a TransportSessionKey,
+    pub consumer_transport_media_id: TransportMediaId,
+    pub source_session_key: &'a TransportSessionKey,
+    pub source_transport_media_id: TransportMediaId,
+}
+
 pub struct RemoteKeyframeRequest<'a> {
     pub source_session_key: &'a TransportSessionKey,
     pub source_transport_media_id: TransportMediaId,

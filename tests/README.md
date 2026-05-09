@@ -43,11 +43,6 @@ cargo test -p o-sfu-tests
 cargo test --workspace --doc
 ```
 
-The `cargo test -p o-sfu-proofs` step used by PR CI is not Kani execution. It
-compiles the proof crate and runs normal Rust tests, including the router drift
-chec. The `#[kani::proof]` harnesses run only through `cargo kani` in the
-formal-verification workflow or in a local proof run.
-
 ## Dependency check
 
 Install once:
@@ -95,6 +90,7 @@ Run the targeted Miri suite:
 cargo +nightly miri test -p o-sfu-tests --test miri_router_protocol
 MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p o-sfu-tests --test miri_auth_codec
 cargo +nightly miri test -p o-sfu-tests --test miri_protocol_core
+cargo +nightly miri test -p o-sfu-tests --test miri_packet_loop_core
 cargo +nightly miri test -p o-sfu-tests --test miri_rtp_negotiation
 ```
 
@@ -129,6 +125,8 @@ cd tests/fuzz
 cargo +nightly fuzz run protocol_decode
 cargo +nightly fuzz run http_disconnect_auth
 cargo +nightly fuzz run protocol_sequence
+cargo +nightly fuzz run packet_loop_demux
+cargo +nightly fuzz run packet_loop_turn_trace
 cargo +nightly fuzz run sdp_answer
 ```
 
@@ -150,6 +148,17 @@ Run all proofs:
 cargo kani -p o-sfu-proofs
 ```
 
+Run the packet-loop proofs against production `o-sfu-core` exports:
+
+```bash
+cargo kani -p o-sfu-proofs --features packet-loop-proofs \
+  --harness packet_loop_recent_miss_cache_is_exact_for_recorded_packet \
+  --harness packet_loop_topology_invalidation_clears_recent_miss_cache \
+  --harness packet_loop_route_success_clears_recent_miss_cache \
+  --harness packet_loop_keyframe_kind_coalescing_prefers_fir \
+  --harness packet_loop_scratch_clear_removes_staged_work_and_keeps_capacity
+```
+
 Run the production-router drift check for the proof model:
 
 ```bash
@@ -160,4 +169,5 @@ Run one harness:
 
 ```bash
 cargo kani -p o-sfu-proofs --harness session_teardown_clears_reverse_indices_and_dependents
+cargo kani -p o-sfu-proofs --features packet-loop-proofs --harness packet_loop_recent_miss_cache_is_exact_for_recorded_packet
 ```

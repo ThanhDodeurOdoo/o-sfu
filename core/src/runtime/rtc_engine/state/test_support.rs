@@ -7,7 +7,8 @@ impl RtcBootstrapState {
         source_transport_media_id: TransportMediaId,
         packet_gate: PacketLayerGate,
     ) {
-        self.route_control
+        self.packet_loop
+            .route_control
             .set_packet_gate(source_transport_media_id, packet_gate);
     }
 }

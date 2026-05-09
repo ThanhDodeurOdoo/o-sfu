@@ -29,8 +29,8 @@ use super::{
         super::{
             bitrate::RtcBitrateState,
             commands::RtcWorkerResponse,
-            local_send_rewrite::forget_transport_media_streams,
             media_registry::RegisteredMediaHandle,
+            packet_loop::time::PacketLoopTime,
             simulcast,
             state::{PendingRecvStream, RtcBootstrapState, RtcSessionState},
         },
@@ -95,7 +95,7 @@ pub fn respond_add_recv_media(
 pub fn respond_add_send_media(
     state: &mut RtcBootstrapState,
     request: AddSendMediaRequest<'_>,
-    now: Instant,
+    now: PacketLoopTime,
     response: RtcWorkerResponse<TransportMediaId>,
 ) {
     let _ = response.send(worker_add_send_media(state, request, now));
@@ -120,7 +120,7 @@ fn worker_remove_media(
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
 ) -> Result<(), TransportAdapterError> {
-    let Some(handle) = state.media_handle(transport_media_id).cloned() else {
+    let Some(handle) = state.packet_loop.media_handle(transport_media_id).cloned() else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
     if handle.session_key() != session_key {
@@ -141,8 +141,11 @@ fn worker_remove_media(
                     .negotiated_producer_parameters
                     .remove(&mid);
             }
-            state.media_route_index.remove(&transport_media_id);
-            state.mark_session_dirty(&session_key);
+            state
+                .packet_loop
+                .media_route_index
+                .remove(&transport_media_id);
+            state.packet_loop.mark_session_dirty(&session_key);
             Ok(())
         }
         RegisteredMediaHandle::Consumer {
@@ -151,10 +154,9 @@ fn worker_remove_media(
             ..
         } => {
             if let Some(session_state) = state.users.get_mut(&session_key) {
-                forget_transport_media_streams(
-                    &mut session_state.consumer_streams,
-                    transport_media_id,
-                );
+                session_state
+                    .host_session
+                    .forget_transport_media_streams(transport_media_id);
             }
             remove_consumer_route(
                 state,
@@ -162,7 +164,7 @@ fn worker_remove_media(
                 transport_media_id,
                 source_transport_media_id,
             );
-            state.mark_session_dirty(&session_key);
+            state.packet_loop.mark_session_dirty(&session_key);
             Ok(())
         }
     }
@@ -193,7 +195,10 @@ fn stage_last_mid_removal_before_unregistering_handle(
     if session_state.sdp_negotiation.initial_offer_applied {
         worker_stage_native_media_removal(session_state, handle.mid())
     } else {
-        session_state.rtc.direct_api().remove_media(handle.mid());
+        session_state
+            .host_session
+            .direct_api()
+            .remove_media(handle.mid());
         Ok(())
     }
 }
@@ -204,11 +209,15 @@ fn session_has_other_mid_user(
     mid: Mid,
     excluded_transport_media_id: TransportMediaId,
 ) -> bool {
-    state.mid_registry.iter().any(|(raw_id, handle)| {
-        *raw_id != excluded_transport_media_id.as_u64()
-            && handle.session_key() == session_key
-            && handle.mid() == mid
-    })
+    state
+        .packet_loop
+        .mid_registry
+        .iter()
+        .any(|(raw_id, handle)| {
+            *raw_id != excluded_transport_media_id.as_u64()
+                && handle.session_key() == session_key
+                && handle.mid() == mid
+        })
 }
 
 /// Returns whether the shard already handed out a local offer and is still
@@ -235,12 +244,12 @@ fn worker_stage_native_media_removal(
             .insert(mid);
         return Ok(());
     }
-    if session_state.rtc.media(mid).is_none() {
+    if session_state.host_session.media(mid).is_none() {
         return Err(TransportAdapterError::InvalidInput);
     }
 
     let existing_pending_offer = session_state.sdp_negotiation.pending_offer.take();
-    let mut sdp_api = session_state.rtc.sdp_api();
+    let mut sdp_api = session_state.host_session.sdp_api();
     if let Some(pending_offer) = existing_pending_offer {
         sdp_api.merge(pending_offer);
     }
@@ -288,9 +297,9 @@ fn worker_add_recv_media(
         )?
     } else {
         let mid = transport_mid(rtp_parameters).unwrap_or_default();
-        let has_media = session_state.rtc.media(mid).is_some();
+        let has_media = session_state.host_session.media(mid).is_some();
         {
-            let mut api = session_state.rtc.direct_api();
+            let mut api = session_state.host_session.direct_api();
             if !has_media {
                 api.declare_media(mid, media_kind);
             }
@@ -305,7 +314,7 @@ fn worker_add_recv_media(
                 }
             }
         }
-        state.mark_session_dirty(session_key);
+        state.packet_loop.mark_session_dirty(session_key);
         mid
     };
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
@@ -344,7 +353,7 @@ fn worker_stage_native_recv_media(
     }
 
     let existing_pending_offer = session_state.sdp_negotiation.pending_offer.take();
-    let mut sdp_api = session_state.rtc.sdp_api();
+    let mut sdp_api = session_state.host_session.sdp_api();
     if let Some(pending_offer) = existing_pending_offer {
         sdp_api.merge(pending_offer);
     }
@@ -401,7 +410,7 @@ fn worker_stage_native_recv_media(
 fn worker_add_send_media(
     state: &mut RtcBootstrapState,
     request: AddSendMediaRequest<'_>,
-    now: Instant,
+    now: PacketLoopTime,
 ) -> TransportResult<TransportMediaId> {
     let AddSendMediaRequest {
         consumer_session_key,
@@ -464,7 +473,7 @@ fn worker_add_send_media(
     } else {
         let mid = transport_mid(consumer_rtp_parameters).unwrap_or_default();
         declare_direct_send_media(session_state, mid, media_kind, consumer_rtp_parameters);
-        state.mark_session_dirty(consumer_session_key);
+        state.packet_loop.mark_session_dirty(consumer_session_key);
         mid
     };
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Consumer {
@@ -518,7 +527,7 @@ fn worker_stage_native_send_media(
     }
 
     let existing_pending_offer = session_state.sdp_negotiation.pending_offer.take();
-    let mut sdp_api = session_state.rtc.sdp_api();
+    let mut sdp_api = session_state.host_session.sdp_api();
     if let Some(pending_offer) = existing_pending_offer {
         sdp_api.merge(pending_offer);
     }
@@ -541,8 +550,8 @@ fn declare_direct_send_media(
     media_kind: MediaKind,
     consumer_rtp_parameters: &RouterRtpParameters,
 ) {
-    let has_media = session_state.rtc.media(mid).is_some();
-    let mut api = session_state.rtc.direct_api();
+    let has_media = session_state.host_session.media(mid).is_some();
+    let mut api = session_state.host_session.direct_api();
     if !has_media {
         api.declare_media(mid, media_kind);
     }

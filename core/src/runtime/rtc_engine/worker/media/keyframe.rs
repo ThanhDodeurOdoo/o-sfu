@@ -4,17 +4,21 @@
 //! checks and route-control throttling. This module keeps those rules in one
 //! place so local and cross-worker feedback stay consistent.
 
-use std::time::Instant;
-
 use str0m::media::{KeyframeRequestKind, Mid, Rid};
 use tracing::debug;
 
 use super::{
     super::super::{
-        demux::MediaRouteDestination, media_registry::RegisteredMediaHandle,
-        route_control::KeyframeRequestDecision, state::RtcBootstrapState,
+        demux::MediaRouteDestination,
+        media_registry::RegisteredMediaHandle,
+        packet_loop::{
+            keyframe_requests::{ResolvedKeyframeDecision, decide_keyframe_route},
+            time::PacketLoopTime,
+        },
+        route_control::{KeyframeRequestDecision, PacketLayerGate},
+        state::RtcBootstrapState,
     },
-    control::{ensure_existing_route_source, owned_local_producer_mid, packet_gate_rid},
+    control::{ensure_existing_route_source, owned_local_producer_mid},
     types::{RemoteKeyframeRequest, RouteSourceKind},
 };
 use crate::runtime::{
@@ -26,6 +30,7 @@ pub fn respond_request_remote_keyframe(
     state: &mut RtcBootstrapState,
     metrics: &RuntimeMetrics,
     request: &RemoteKeyframeRequest<'_>,
+    now: PacketLoopTime,
 ) {
     if !state.is_relay_target_active(request.source_transport_media_id, request.target_id) {
         metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
@@ -38,7 +43,7 @@ pub fn respond_request_remote_keyframe(
         request.source_transport_media_id,
         request.rid,
         request.kind,
-        Instant::now(),
+        now,
     );
 }
 
@@ -55,7 +60,7 @@ pub fn request_keyframe_for_source(
     source_transport_media_id: TransportMediaId,
     rid: Option<Rid>,
     kind: KeyframeRequestKind,
-    now: Instant,
+    now: PacketLoopTime,
 ) {
     let Some(mid) = local_keyframe_request_mid(
         state,
@@ -113,6 +118,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn worker_request_consumer_key
     consumer_transport_media_id: TransportMediaId,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
+    now: PacketLoopTime,
 ) -> Result<(), TransportAdapterError> {
     let route_source = ensure_existing_route_source(
         state,
@@ -121,6 +127,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn worker_request_consumer_key
         source_transport_media_id,
     )?;
     match state
+        .packet_loop
         .mid_registry
         .get(&consumer_transport_media_id.as_u64())
     {
@@ -136,6 +143,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn worker_request_consumer_key
         None => return Err(TransportAdapterError::TransportUnavailable),
     }
     let (destination_active, destination_rid) = state
+        .packet_loop
         .media_route_index
         .get(&source_transport_media_id)
         .and_then(|route_entry| {
@@ -149,50 +157,50 @@ pub(in crate::runtime::rtc_engine::worker::media) fn worker_request_consumer_key
     if !destination_active {
         return Ok(());
     }
-    let now = Instant::now();
-    match route_source {
-        RouteSourceKind::Local => {
+    let Some(decision) = decide_keyframe_route(
+        &mut state.packet_loop,
+        source_transport_media_id,
+        destination_rid,
+        now,
+    ) else {
+        return Err(TransportAdapterError::TransportUnavailable);
+    };
+    match (route_source, decision) {
+        (
+            RouteSourceKind::Local,
+            ResolvedKeyframeDecision::Local {
+                source_session_key: owner_key,
+            },
+        ) if owner_key == *source_session_key => {
             request_keyframe_for_source(
                 state,
                 metrics,
-                source_session_key,
+                &owner_key,
                 source_transport_media_id,
                 destination_rid,
                 KeyframeRequestKind::Pli,
                 now,
             );
         }
-        RouteSourceKind::Remote => {
-            let Some((source_session_key, source_control)) = state
-                .remote_source_registration(source_transport_media_id)
-                .map(|registration| {
-                    (
-                        registration.source_session_key().clone(),
-                        registration.source_control().clone(),
-                    )
-                })
-            else {
-                return Err(TransportAdapterError::TransportUnavailable);
-            };
-            match state.route_control.decide_keyframe_request_for_rid(
+        (
+            RouteSourceKind::Remote,
+            ResolvedKeyframeDecision::RemoteForward {
+                source_session_key,
+                source_control,
+            },
+        ) => {
+            source_control.request_keyframe(
+                source_session_key,
                 source_transport_media_id,
                 destination_rid,
-                now,
-            ) {
-                KeyframeRequestDecision::Forward => {
-                    source_control.request_keyframe(
-                        source_session_key,
-                        source_transport_media_id,
-                        destination_rid,
-                        KeyframeRequestKind::Pli,
-                    );
-                    metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
-                }
-                KeyframeRequestDecision::Absorb => {
-                    metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
-                }
-            }
+                KeyframeRequestKind::Pli,
+            );
+            metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
         }
+        (_, ResolvedKeyframeDecision::Absorb { .. }) => {
+            metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
+        }
+        _ => return Err(TransportAdapterError::InvalidInput),
     }
     Ok(())
 }
@@ -201,8 +209,8 @@ fn keyframe_request_rid(destination: &MediaRouteDestination) -> Option<Rid> {
     destination
         .pending_packet_gate
         .as_ref()
-        .and_then(packet_gate_rid)
-        .or_else(|| packet_gate_rid(&destination.packet_gate))
+        .and_then(PacketLayerGate::rid)
+        .or_else(|| destination.packet_gate.rid())
 }
 
 fn local_keyframe_request_mid(
@@ -246,7 +254,7 @@ fn producer_keyframe_target_rids(
         );
         return Vec::new();
     };
-    let mut direct_api = session_state.rtc.direct_api();
+    let mut direct_api = session_state.host_session.direct_api();
     let mut target_rids = candidate_rids
         .into_iter()
         .filter(|candidate_rid| direct_api.stream_rx_by_mid(mid, *candidate_rid).is_some())
@@ -317,10 +325,11 @@ fn should_absorb_keyframe_request(
     mid: Mid,
     rid: Option<Rid>,
     kind: KeyframeRequestKind,
-    now: Instant,
+    now: PacketLoopTime,
 ) -> bool {
     if matches!(
         state
+            .packet_loop
             .route_control
             .decide_keyframe_request_for_rid(source_transport_media_id, rid, now),
         KeyframeRequestDecision::Absorb
@@ -358,7 +367,7 @@ fn request_keyframe_from_producer(
         );
         return;
     };
-    let mut direct_api = session_state.rtc.direct_api();
+    let mut direct_api = session_state.host_session.direct_api();
     let mut requested_rids = Vec::with_capacity(target_rids.len());
     for target_rid in target_rids {
         if let Some(stream_rx) = direct_api.stream_rx_by_mid(mid, *target_rid) {
@@ -377,7 +386,7 @@ fn request_keyframe_from_producer(
         );
         return;
     }
-    state.mark_session_dirty(source_session_key);
+    state.packet_loop.mark_session_dirty(source_session_key);
     metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
     debug!(
         ?source_session_key,

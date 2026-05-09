@@ -79,7 +79,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
             }
             let mid = media_line.mid();
             let Some(media_kind) = session_state
-                .rtc
+                .host_session
                 .media(mid)
                 .map(|media| to_router_media_kind(media.kind()))
             else {
@@ -162,7 +162,7 @@ fn apply_projected_recv_streams(
     bindings: &[StreamBinding],
     max_bitrate_in_bps: u64,
 ) {
-    let mut api = session_state.rtc.direct_api();
+    let mut api = session_state.host_session.direct_api();
     for binding in bindings {
         apply_projected_recv_stream(&mut api, mid, binding, max_bitrate_in_bps);
     }
@@ -202,14 +202,18 @@ fn worker_resolve_negotiated_producer_parameters(
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
 ) -> Result<RouterRtpParameters, TransportAdapterError> {
-    let Some(handle) = state.mid_registry.get(&transport_media_id.as_u64()) else {
+    let Some(handle) = state
+        .packet_loop
+        .mid_registry
+        .get(&transport_media_id.as_u64())
+    else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
     let mid = match handle {
         RegisteredMediaHandle::Producer {
             session_key: owner_session_key,
             mid,
-        } if owner_session_key == session_key => *mid,
+        } if *owner_session_key == *session_key => *mid,
         RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. } => {
             return Err(TransportAdapterError::InvalidInput);
         }
@@ -390,7 +394,7 @@ fn project_bindings(
 
 fn stream_rx_ssrc(session_state: &mut RtcSessionState, mid: Mid, rid: Option<Rid>) -> Option<u32> {
     session_state
-        .rtc
+        .host_session
         .direct_api()
         .stream_rx_by_mid(mid, rid)
         .map(|stream_rx| *stream_rx.ssrc())

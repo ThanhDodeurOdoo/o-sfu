@@ -17,11 +17,15 @@ use crate::runtime::{
     media_transport::{TransportMediaId, TransportSessionKey},
     metrics::{RtpForwardDestinationKind, RuntimeMetrics},
     packet_sink_registry::{
-        PacketSink as MediaPacketSink, PacketSinkLookup, RoomPacketSinkRegistry, into_packet_sink,
+        PacketSink as MediaPacketSink, RoomPacketSinkRegistry, into_packet_sink,
     },
     rtc_engine::{
         forwarded_packet::ForwardedPacket,
         forwarding_destination::{ForwardingDestination, PacketForward},
+        packet_loop::{
+            machine::effect::{PacketLoopEffect, PacketLoopEffects, PacketLoopMetricEffect},
+            route_snapshot::PacketLoopRouteSnapshot,
+        },
         relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayTargetId},
         route_control::{PacketLayerGate, PacketOperatingPointGate},
         state::RtcBootstrapState,
@@ -59,21 +63,39 @@ impl MediaPacketSink for CountingSink {
 
 fn populate_forward_routes(
     state: &RtcBootstrapState,
-    packet_sinks: &impl PacketSinkLookup,
+    packet_sink_registry: &RoomPacketSinkRegistry,
     metrics: &RuntimeMetrics,
     pending_packets: &mut [ForwardedPacket],
     forwards: &mut Vec<PacketForward>,
 ) {
+    let mut effects = PacketLoopEffects::default();
+    let routes = route_snapshot_for(state, packet_sink_registry);
     for (packet_idx, packet) in pending_packets.iter_mut().enumerate() {
         populate_forward_routes_for_packet(
-            state,
-            packet_sinks,
-            metrics,
+            &state.packet_loop,
+            &routes,
+            &mut effects,
             packet_idx,
             packet,
             forwards,
         );
     }
+    for effect in effects.iter() {
+        if let PacketLoopEffect::RecordMetric(PacketLoopMetricEffect::RtcRouteControl(outcome)) =
+            effect
+        {
+            metrics.record_rtc_route_control(*outcome);
+        }
+    }
+}
+
+fn route_snapshot_for(
+    state: &RtcBootstrapState,
+    packet_sink_registry: &RoomPacketSinkRegistry,
+) -> PacketLoopRouteSnapshot {
+    let mut routes = PacketLoopRouteSnapshot::default();
+    routes.refresh_from(state, packet_sink_registry);
+    routes
 }
 
 #[test]
@@ -114,9 +136,9 @@ fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() 
     );
 
     assert_eq!(forwards.len(), 1);
-    assert_eq!(forwards.first().map(PacketForward::packet_idx), Some(0));
+    assert_eq!(forwards.first().map(|forward| forward.packet_idx), Some(0));
     assert!(matches!(
-        forwards.first().map(PacketForward::destination),
+        forwards.first().map(|forward| &forward.destination),
         Some(destination)
             if destination.session_key() == Some(&consumer_session)
     ));
@@ -157,12 +179,12 @@ fn populate_forward_routes_keeps_recording_and_local_rtc_destinations_together()
 
     assert_eq!(forwards.len(), 2);
     assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(ForwardingDestination::PacketSink(_))
+        forwards.first().map(|forward| &forward.destination),
+        Some(ForwardingDestination::PacketSink { .. })
     ));
     assert!(matches!(
-        forwards.get(1).map(PacketForward::destination),
-        Some(ForwardingDestination::LocalRtc(_))
+        forwards.get(1).map(|forward| &forward.destination),
+        Some(ForwardingDestination::LocalRtc { .. })
     ));
 }
 
@@ -249,20 +271,20 @@ fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc
 
     assert_eq!(forwards.len(), 4);
     assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(ForwardingDestination::PacketSink(_))
+        forwards.first().map(|forward| &forward.destination),
+        Some(ForwardingDestination::PacketSink { .. })
     ));
     assert!(matches!(
-        forwards.get(1).map(PacketForward::destination),
-        Some(ForwardingDestination::IntraNodeRelay(_))
+        forwards.get(1).map(|forward| &forward.destination),
+        Some(destination) if destination.metrics_kind() == RtpForwardDestinationKind::IntraNodeRelay
     ));
     assert!(matches!(
-        forwards.get(2).map(PacketForward::destination),
-        Some(ForwardingDestination::IntraNodeRelay(_))
+        forwards.get(2).map(|forward| &forward.destination),
+        Some(destination) if destination.metrics_kind() == RtpForwardDestinationKind::IntraNodeRelay
     ));
     assert!(matches!(
-        forwards.get(3).map(PacketForward::destination),
-        Some(ForwardingDestination::LocalRtc(_))
+        forwards.get(3).map(|forward| &forward.destination),
+        Some(ForwardingDestination::LocalRtc { .. })
     ));
 }
 
@@ -312,8 +334,8 @@ fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_r
 
     assert_eq!(forwards.len(), 1);
     assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(ForwardingDestination::LocalRtc(_))
+        forwards.first().map(|forward| &forward.destination),
+        Some(ForwardingDestination::LocalRtc { .. })
     ));
 }
 
@@ -357,17 +379,17 @@ fn populate_forward_routes_only_relays_the_registered_source_media() {
 
     assert_eq!(forwards.len(), 2);
     assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(ForwardingDestination::IntraNodeRelay(_))
+        forwards.first().map(|forward| &forward.destination),
+        Some(destination) if destination.metrics_kind() == RtpForwardDestinationKind::IntraNodeRelay
     ));
     assert!(matches!(
-        forwards.get(1).map(PacketForward::destination),
-        Some(ForwardingDestination::LocalRtc(_))
+        forwards.get(1).map(|forward| &forward.destination),
+        Some(ForwardingDestination::LocalRtc { .. })
     ));
     assert_eq!(
         pending_packets
             .get_mut(1)
-            .and_then(|packet| packet.resolve_source_transport_media_id(&state)),
+            .and_then(|packet| packet.resolve_source_transport_media_id(&state.packet_loop)),
         Some(second_source_transport_media_id)
     );
 }
@@ -407,8 +429,8 @@ fn populate_forward_routes_plans_inter_node_relay_targets_without_new_packet_sha
 
     assert_eq!(forwards.len(), 1);
     assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(ForwardingDestination::InterNodeRelay(_))
+        forwards.first().map(|forward| &forward.destination),
+        Some(destination) if destination.metrics_kind() == RtpForwardDestinationKind::InterNodeRelay
     ));
 }
 
@@ -433,6 +455,7 @@ fn populate_forward_routes_enforces_per_consumer_rid_gates_after_aggregate_admit
         .packet_gate(PacketLayerGate::Rid("hi".into()))
         .install(&mut state, source_transport_media_id);
     state
+        .packet_loop
         .route_control
         .set_local_packet_gate(source_transport_media_id, Some(PacketLayerGate::Open));
     let mut pending_packets = vec![
@@ -455,14 +478,14 @@ fn populate_forward_routes_enforces_per_consumer_rid_gates_after_aggregate_admit
     );
 
     assert_eq!(forwards.len(), 2);
-    assert_eq!(forwards.first().map(PacketForward::packet_idx), Some(0));
+    assert_eq!(forwards.first().map(|forward| forward.packet_idx), Some(0));
     assert!(matches!(
-        forwards.first().map(PacketForward::destination),
+        forwards.first().map(|forward| &forward.destination),
         Some(destination) if destination.session_key() == Some(&hi_consumer_session)
     ));
-    assert_eq!(forwards.get(1).map(PacketForward::packet_idx), Some(1));
+    assert_eq!(forwards.get(1).map(|forward| forward.packet_idx), Some(1));
     assert!(matches!(
-        forwards.get(1).map(PacketForward::destination),
+        forwards.get(1).map(|forward| &forward.destination),
         Some(destination) if destination.session_key() == Some(&lo_consumer_session)
     ));
     let snapshot = metrics.snapshot();
@@ -494,7 +517,7 @@ fn populate_forward_routes_enforces_per_consumer_temporal_ceilings_after_aggrega
             PacketOperatingPointGate::new(Some("hi".into()), 2),
         ))
         .install(&mut state, source_transport_media_id);
-    state.route_control.set_local_packet_gate(
+    state.packet_loop.route_control.set_local_packet_gate(
         source_transport_media_id,
         Some(PacketLayerGate::OperatingPoint(
             PacketOperatingPointGate::new(Some("hi".into()), 2),
@@ -527,19 +550,19 @@ fn populate_forward_routes_enforces_per_consumer_temporal_ceilings_after_aggrega
     );
 
     assert_eq!(forwards.len(), 3);
-    assert_eq!(forwards.first().map(PacketForward::packet_idx), Some(0));
+    assert_eq!(forwards.first().map(|forward| forward.packet_idx), Some(0));
     assert!(matches!(
-        forwards.first().map(PacketForward::destination),
+        forwards.first().map(|forward| &forward.destination),
         Some(destination) if destination.session_key() == Some(&high_consumer_session)
     ));
-    assert_eq!(forwards.get(1).map(PacketForward::packet_idx), Some(1));
+    assert_eq!(forwards.get(1).map(|forward| forward.packet_idx), Some(1));
     assert!(matches!(
-        forwards.get(1).map(PacketForward::destination),
+        forwards.get(1).map(|forward| &forward.destination),
         Some(destination) if destination.session_key() == Some(&base_consumer_session)
     ));
-    assert_eq!(forwards.get(2).map(PacketForward::packet_idx), Some(1));
+    assert_eq!(forwards.get(2).map(|forward| forward.packet_idx), Some(1));
     assert!(matches!(
-        forwards.get(2).map(PacketForward::destination),
+        forwards.get(2).map(|forward| &forward.destination),
         Some(destination) if destination.session_key() == Some(&high_consumer_session)
     ));
     let snapshot = metrics.snapshot();
@@ -575,12 +598,12 @@ fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admit
         inter_node_sender.into(),
     );
     state.set_relay_target_active(source_transport_media_id, lo_target_id, true);
-    state.route_control.set_relay_packet_gate(
+    state.packet_loop.route_control.set_relay_packet_gate(
         source_transport_media_id,
         hi_target_id,
         PacketLayerGate::Rid("hi".into()),
     );
-    state.route_control.set_relay_packet_gate(
+    state.packet_loop.route_control.set_relay_packet_gate(
         source_transport_media_id,
         lo_target_id,
         PacketLayerGate::Rid("lo".into()),
@@ -605,15 +628,15 @@ fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admit
     );
 
     assert_eq!(forwards.len(), 2);
-    assert_eq!(forwards.first().map(PacketForward::packet_idx), Some(0));
+    assert_eq!(forwards.first().map(|forward| forward.packet_idx), Some(0));
     assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(ForwardingDestination::IntraNodeRelay(_))
+        forwards.first().map(|forward| &forward.destination),
+        Some(destination) if destination.metrics_kind() == RtpForwardDestinationKind::IntraNodeRelay
     ));
-    assert_eq!(forwards.get(1).map(PacketForward::packet_idx), Some(1));
+    assert_eq!(forwards.get(1).map(|forward| forward.packet_idx), Some(1));
     assert!(matches!(
-        forwards.get(1).map(PacketForward::destination),
-        Some(ForwardingDestination::InterNodeRelay(_))
+        forwards.get(1).map(|forward| &forward.destination),
+        Some(destination) if destination.metrics_kind() == RtpForwardDestinationKind::InterNodeRelay
     ));
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_layer_allowed(), 2);
@@ -682,15 +705,15 @@ fn populate_forward_routes_gates_only_the_selected_source_media() {
 
     assert_eq!(forwards.len(), 3);
     assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(ForwardingDestination::PacketSink(_))
+        forwards.first().map(|forward| &forward.destination),
+        Some(ForwardingDestination::PacketSink { .. })
     ));
     assert!(matches!(
-        forwards.get(1).map(PacketForward::destination),
-        Some(ForwardingDestination::PacketSink(_))
+        forwards.get(1).map(|forward| &forward.destination),
+        Some(ForwardingDestination::PacketSink { .. })
     ));
     assert!(matches!(
-        forwards.get(2).map(PacketForward::destination),
+        forwards.get(2).map(|forward| &forward.destination),
         Some(destination)
             if destination.session_key() == Some(&open_consumer_session)
     ));
@@ -742,7 +765,7 @@ fn populate_forward_routes_applies_operating_point_packet_gates() {
 
     assert_eq!(forwards.len(), 1);
     assert!(matches!(
-        forwards.first().map(PacketForward::destination),
+        forwards.first().map(|forward| &forward.destination),
         Some(destination) if destination.session_key() == Some(&consumer_session)
     ));
     let snapshot = metrics.snapshot();

@@ -1197,6 +1197,7 @@ dependencies = [
 name = "o-sfu-proofs"
 version = "0.3.0"
 dependencies = [
+ "o-sfu-core",
  "o-sfu-protocol",
  "o-sfu-rfc",
  "o-sfu-router",
@@ -1266,6 +1267,7 @@ dependencies = [
  "base64",
  "futures-util",
  "o-sfu",
+ "o-sfu-core",
  "o-sfu-protocol",
  "o-sfu-rfc",
  "o-sfu-router",

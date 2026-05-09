@@ -46,6 +46,7 @@ mod packet_loop;
 mod relay_registry;
 mod route_control;
 mod routing_miss;
+mod session_adapter;
 mod shared_payload;
 mod simulcast;
 mod state;
@@ -59,5 +60,10 @@ pub use api::RtcTransportShard;
 #[cfg(any(test, feature = "testing-transport"))]
 pub use forwarded_packet::ForwardedPacket;
 pub use negotiated_capabilities::client_rtp_capabilities_from_answer;
+
+#[cfg(any(test, feature = "packet-loop-verification"))]
+pub mod packet_loop_verification {
+    pub use super::packet_loop::verification::*;
+}
 
 pub use crate::transport::TransportSessionHealth;

@@ -1,7 +1,7 @@
 //! Offer/answer ownership for worker-local RTC users.
 //!
 //! This module keeps the one-outstanding-offer rule local to the worker that
-//! owns the user's `str0m::Rtc`. It is responsible for creating the initial
+//! owns the user's host session. It is responsible for creating the initial
 //! server-authored offer, handing out staged follow-up offers, accepting remote
 //! answers, and refreshing any worker-local state that answer application
 //! invalidates.
@@ -129,7 +129,7 @@ fn worker_create_initial_session_offer(
 
     let bootstrap_mids = &mut session_state.sdp_negotiation.bootstrap_mids;
     let (offer, pending_offer) = {
-        let mut sdp_api = session_state.rtc.sdp_api();
+        let mut sdp_api = session_state.host_session.sdp_api();
         ensure_initial_negotiation_media(
             bootstrap_mids,
             &mut sdp_api,
@@ -191,6 +191,7 @@ fn worker_apply_session_answer(
     answer_sdp: &str,
 ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
     let producer_handles = state
+        .packet_loop
         .mid_registry
         .iter()
         .filter_map(|(transport_media_id, handle)| match handle {
@@ -217,7 +218,7 @@ fn worker_apply_session_answer(
         return Err(TransportAdapterError::InvalidInput);
     };
     session_state
-        .rtc
+        .host_session
         .sdp_api()
         .accept_answer(pending_offer, answer)
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
@@ -241,8 +242,9 @@ fn worker_apply_session_answer(
     if let Some(session_state) = state.users.get_mut(session_key) {
         stage_queued_removal_offer(session_state);
     }
-    state.mark_session_dirty(session_key);
+    state.packet_loop.mark_session_dirty(session_key);
     state
+        .packet_loop
         .remote_addr_demux
         .replace_session_remote_candidate_addrs(
             session_key,
@@ -291,7 +293,7 @@ fn apply_pending_recv_streams(
         .iter()
         .flat_map(|(mid, streams)| streams.iter().map(|stream| (*mid, stream.clone())))
         .collect::<Vec<_>>();
-    let mut api = session_state.rtc.direct_api();
+    let mut api = session_state.host_session.direct_api();
     for (mid, stream) in &pending_recv_streams {
         apply_pending_recv_stream(&mut api, *mid, stream, max_bitrate_in_bps);
     }
@@ -344,7 +346,7 @@ fn stage_queued_removal_offer(session_state: &mut super::super::state::RtcSessio
         .iter()
         .copied()
         .collect::<Vec<_>>();
-    let mut sdp_api = session_state.rtc.sdp_api();
+    let mut sdp_api = session_state.host_session.sdp_api();
     for mid in &queued_removal_mids {
         sdp_api.set_direction(*mid, Direction::Inactive);
     }
@@ -470,16 +472,21 @@ fn ensure_session_ready_for_offer(
         let counter = bitrate.register_session_egress(session_key, Instant::now());
         state.register_egress_bitrate_counter(session_key.clone(), counter);
     }
-    if let Some(session_state) = state.users.get(session_key) {
+    if let Some(local_ice_ufrag) = state
+        .users
+        .get(session_key)
+        .map(|session_state| session_state.local_ice_ufrag.clone())
+    {
         let registered_local_ice_ufrag = state
+            .packet_loop
             .remote_addr_demux
-            .remember_local_ice_ufrag(&session_state.local_ice_ufrag, session_key);
+            .remember_local_ice_ufrag(&local_ice_ufrag, session_key);
         if created_session || registered_local_ice_ufrag {
             debug!(
                 user_id = ?session_key.user_id(),
                 media_worker_id = session_key.media_worker_id(),
                 %candidate_addr,
-                local_ice_ufrag = %session_state.local_ice_ufrag,
+                %local_ice_ufrag,
                 created_session,
                 "prepared rtc user for offer generation"
             );

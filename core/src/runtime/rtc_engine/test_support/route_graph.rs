@@ -52,6 +52,7 @@ impl RouteSourceFixture {
             state.register_media_handle(RegisteredMediaHandle::Producer { session_key, mid })
         });
         state
+            .packet_loop
             .media_route_index
             .entry(transport_media_id)
             .and_modify(|route_entry| route_entry.source_active = active)
@@ -92,14 +93,6 @@ impl RouteDestinationFixture {
         self
     }
 
-    pub(in crate::runtime::rtc_engine) fn pending_packet_gate(
-        mut self,
-        packet_gate: PacketLayerGate,
-    ) -> Self {
-        self.pending_packet_gate = Some(packet_gate);
-        self
-    }
-
     pub(in crate::runtime::rtc_engine) fn install(
         self,
         state: &mut RtcBootstrapState,
@@ -111,6 +104,7 @@ impl RouteDestinationFixture {
             source_transport_media_id,
         });
         state
+            .packet_loop
             .media_route_index
             .entry(source_transport_media_id)
             .or_insert_with(|| MediaRouteEntry {

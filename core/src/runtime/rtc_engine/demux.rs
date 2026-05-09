@@ -206,6 +206,33 @@ impl RemoteAddrDemux {
         }
     }
 
+    pub(super) fn retain_candidate_sessions_for_source_addr(
+        &mut self,
+        source_addr: SocketAddr,
+        mut retain: impl FnMut(&TransportSessionKey) -> bool,
+    ) {
+        let Some(mut session_keys) = self.remote_candidate_addr_index.remove(&source_addr) else {
+            return;
+        };
+        let mut idx = 0;
+        while idx < session_keys.len() {
+            let Some(session_key) = session_keys.get(idx) else {
+                break;
+            };
+            if retain(session_key) {
+                idx += 1;
+                continue;
+            }
+            let stale_session_key = session_keys.swap_remove(idx);
+            self.remove_remote_candidate_addr_from_session(&stale_session_key, source_addr);
+            self.forget_user_local_ice_ufrag(&stale_session_key);
+        }
+        if !session_keys.is_empty() {
+            self.remote_candidate_addr_index
+                .insert(source_addr, session_keys);
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn session_addrs_for(
         &self,
@@ -256,6 +283,28 @@ impl RemoteAddrDemux {
             });
         if should_remove_session_entry {
             self.remote_addrs_by_session.remove(session_key);
+        }
+    }
+
+    fn remove_remote_candidate_addr_from_session(
+        &mut self,
+        session_key: &TransportSessionKey,
+        source_addr: SocketAddr,
+    ) {
+        let should_remove_session_entry = self
+            .remote_candidate_addrs_by_session
+            .get_mut(session_key)
+            .is_some_and(|candidate_addrs| {
+                if let Some(position) = candidate_addrs
+                    .iter()
+                    .position(|candidate_addr| *candidate_addr == source_addr)
+                {
+                    candidate_addrs.swap_remove(position);
+                }
+                candidate_addrs.is_empty()
+            });
+        if should_remove_session_entry {
+            self.remote_candidate_addrs_by_session.remove(session_key);
         }
     }
 }

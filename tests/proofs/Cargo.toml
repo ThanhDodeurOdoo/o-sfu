@@ -7,7 +7,11 @@ edition.workspace = true
 rust-version = "1.93"
 version.workspace = true
 
+[features]
+packet-loop-proofs = ["dep:o-sfu-core"]
+
 [dependencies]
+o-sfu-core = { path = "../../core", features = ["packet-loop-verification"], optional = true }
 o-sfu-protocol = { path = "../../protocol", features = ["verification-models"] }
 o-sfu-rfc = { path = "../../rfc" }
 o-sfu-router = { path = "../../router", features = ["test-support"] }

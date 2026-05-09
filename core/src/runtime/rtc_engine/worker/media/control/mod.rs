@@ -37,7 +37,6 @@
 mod remote_source;
 mod responses;
 mod routes;
-mod selected_rid;
 
 pub(in crate::runtime::rtc_engine::worker) use responses::{
     respond_add_relay_target, respond_remove_relay_target, respond_request_consumer_keyframe,
@@ -47,12 +46,9 @@ pub(in crate::runtime::rtc_engine::worker) use responses::{
 };
 #[cfg(test)]
 pub(super) use routes::consumer_packet_gate;
-pub(in crate::runtime::rtc_engine::worker) use routes::refresh_source_packet_gate;
+pub(in crate::runtime::rtc_engine) use routes::refresh_source_packet_gate;
 pub(super) use routes::{
     ConsumerRouteRegistration, consumer_payload_type, ensure_existing_route_source,
-    ensure_route_source_registered, owned_local_producer_mid, packet_gate_rid,
-    register_consumer_route, remove_consumer_route,
-};
-pub(in crate::runtime::rtc_engine) use selected_rid::{
-    drain_due_rid_keyframe_refreshes, observe_source_rid_readiness,
+    ensure_route_source_registered, owned_local_producer_mid, register_consumer_route,
+    remove_consumer_route,
 };

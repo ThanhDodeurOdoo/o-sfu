@@ -69,6 +69,14 @@ impl PacketLayerGate {
             Self::OperatingPoint(operating_point) => operating_point.permits(metadata),
         }
     }
+
+    pub(in crate::runtime::rtc_engine) const fn rid(&self) -> Option<Rid> {
+        match self {
+            Self::Rid(rid) => Some(*rid),
+            Self::OperatingPoint(operating_point) => operating_point.rid(),
+            Self::Open | Self::Block => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -10,7 +10,7 @@ use crate::runtime::{
     RoomInstanceId, UserId,
     media_transport::{TransportMediaId, TransportSessionKey},
     metrics::RtpForwardDestinationKind,
-    packet_sink_registry::{PacketSinkLookup, PacketSinkRouteCache, RoomPacketSinkRegistry},
+    packet_sink_registry::{PacketSinkRouteCache, RoomPacketSinkRegistry},
     recording::{MediaPacketSink, into_packet_sink},
     rtc_engine::test_support::{sample_forwarded_packet, test_transport_session_key},
 };

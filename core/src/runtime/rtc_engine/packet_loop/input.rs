@@ -70,6 +70,14 @@ pub(super) enum PacketLoopControlInput {
     Debug(DebugRtcWorkerCommand),
 }
 
+/// Input that can wake an idle packet loop.
+pub(super) enum PacketLoopWakeInput {
+    /// Control-plane work that mutates authoritative worker state.
+    Control(PacketLoopControlInput),
+    /// Cross-worker media that must be pumped on the next packet-loop turn.
+    Relay,
+}
+
 impl PacketLoopInputReceivers {
     /// Build the production receiver bundle for a newly booted packet loop.
     ///
@@ -131,6 +139,15 @@ impl PacketLoopInputReceivers {
         None
     }
 
+    /// Report whether the production command channel has closed.
+    ///
+    /// The production command sender owns worker lifetime. Callers check this
+    /// after draining queued control input so final commands still run before
+    /// the packet loop exits.
+    pub(super) fn control_receiver_closed(&self) -> bool {
+        self.command_rx.is_closed()
+    }
+
     /// Wait for shutdown or the next control input.
     ///
     /// `None` means the worker should stop because shutdown fired or an owned
@@ -149,6 +166,37 @@ impl PacketLoopInputReceivers {
             }
         }
         recv_production_control(&mut self.command_rx, &self.shutdown_token).await
+    }
+
+    /// Wait for shutdown, control input or relay media.
+    ///
+    /// Relay media is a wake source because cross-worker packets may be the only
+    /// event that should resume the target worker. The driver still drains relay
+    /// packets in the bounded pump phase after this wake.
+    pub(super) async fn recv_control_or_relay(
+        &mut self,
+        pending_relay_packet: &mut Option<ForwardedPacket>,
+    ) -> Option<PacketLoopWakeInput> {
+        #[cfg(any(test, feature = "testing-transport"))]
+        {
+            if let Some(debug_rx) = self.debug_rx.as_mut() {
+                return recv_control_or_relay_with_debug(
+                    &mut self.command_rx,
+                    debug_rx,
+                    &mut self.relay_rx,
+                    &self.shutdown_token,
+                    pending_relay_packet,
+                )
+                .await;
+            }
+        }
+        recv_production_control_or_relay(
+            &mut self.command_rx,
+            &mut self.relay_rx,
+            &self.shutdown_token,
+            pending_relay_packet,
+        )
+        .await
     }
 }
 
@@ -191,6 +239,28 @@ async fn recv_production_control(
     }
 }
 
+/// Wait on production control inputs and relay media.
+async fn recv_production_control_or_relay(
+    command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
+    relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
+    shutdown_token: &CancellationToken,
+    pending_relay_packet: &mut Option<ForwardedPacket>,
+) -> Option<PacketLoopWakeInput> {
+    tokio::select! {
+        biased;
+        () = shutdown_token.cancelled() => None,
+        maybe_command = command_rx.recv() => {
+            maybe_command.map(PacketLoopControlInput::Command).map(PacketLoopWakeInput::Control)
+        }
+        maybe_packet = relay_rx.recv() => {
+            maybe_packet.map(|packet| {
+                *pending_relay_packet = Some(packet);
+                PacketLoopWakeInput::Relay
+            })
+        }
+    }
+}
+
 /// Wait on production and debug control inputs in testing builds.
 ///
 /// Production commands stay before debug commands in the biased wait. This
@@ -210,6 +280,33 @@ async fn recv_control_with_debug(
         }
         maybe_command = debug_rx.recv() => {
             maybe_command.map(PacketLoopControlInput::Debug)
+        }
+    }
+}
+
+/// Wait on production control, debug control and relay media in testing builds.
+#[cfg(any(test, feature = "testing-transport"))]
+async fn recv_control_or_relay_with_debug(
+    command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
+    debug_rx: &mut mpsc::Receiver<DebugRtcWorkerCommand>,
+    relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
+    shutdown_token: &CancellationToken,
+    pending_relay_packet: &mut Option<ForwardedPacket>,
+) -> Option<PacketLoopWakeInput> {
+    tokio::select! {
+        biased;
+        () = shutdown_token.cancelled() => None,
+        maybe_command = command_rx.recv() => {
+            maybe_command.map(PacketLoopControlInput::Command).map(PacketLoopWakeInput::Control)
+        }
+        maybe_command = debug_rx.recv() => {
+            maybe_command.map(PacketLoopControlInput::Debug).map(PacketLoopWakeInput::Control)
+        }
+        maybe_packet = relay_rx.recv() => {
+            maybe_packet.map(|packet| {
+                *pending_relay_packet = Some(packet);
+                PacketLoopWakeInput::Relay
+            })
         }
     }
 }

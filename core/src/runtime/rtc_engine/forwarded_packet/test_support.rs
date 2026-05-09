@@ -36,6 +36,10 @@ pub fn sample_forwarded_packet_with_rid(
 }
 
 #[must_use]
+#[allow(
+    dead_code,
+    reason = "verification feature builds keep the shared packet fixture module available even when a target needs only the basic relay packet constructor"
+)]
 pub fn sample_forwarded_packet_with_audio_activity(
     source_session_key: TransportSessionKey,
     mid: &str,
@@ -57,6 +61,10 @@ pub fn sample_forwarded_packet_with_audio_activity(
 }
 
 #[must_use]
+#[allow(
+    dead_code,
+    reason = "verification feature builds keep the shared packet fixture module available even when a target needs only the basic relay packet constructor"
+)]
 pub fn sample_forwarded_packet_with_frame_mark(
     source_session_key: TransportSessionKey,
     mid: &str,
@@ -115,6 +123,10 @@ fn sample_forwarded_packet_with_extensions(
 }
 
 #[must_use]
+#[allow(
+    dead_code,
+    reason = "verification feature builds keep the shared packet fixture module available even when a target needs only the basic relay packet constructor"
+)]
 pub fn sample_forwarded_packet_without_mid(
     source_session_key: TransportSessionKey,
     ssrc: u32,

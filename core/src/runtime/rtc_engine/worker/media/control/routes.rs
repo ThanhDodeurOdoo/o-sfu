@@ -1,13 +1,11 @@
 //! Consumer-route registration, source validation and packet-gate mutation.
 
-use std::time::Instant;
-
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{Mid, Pt, Rid};
 
 use super::{
     super::types::{ConsumerPacketGateRequest, RouteSourceKind},
-    remote_source, selected_rid,
+    remote_source,
 };
 use crate::runtime::{
     media_transport::{
@@ -17,6 +15,10 @@ use crate::runtime::{
         commands::{ConsumerPacketGateCommand, RemoteSourceControl},
         demux::{MediaRouteDestination, MediaRouteEntry},
         media_registry::RegisteredMediaHandle,
+        packet_loop::{
+            machine::state::PacketLoopState, selected_rid::guarded_packet_gate,
+            time::PacketLoopTime,
+        },
         route_control::{PacketLayerGate, aggregate_packet_gates},
         state::RtcBootstrapState,
     },
@@ -40,7 +42,7 @@ pub(in crate::runtime::rtc_engine::worker::media) struct ConsumerRouteRegistrati
     pub(in crate::runtime::rtc_engine::worker::media) source_transport_media_id: TransportMediaId,
     pub(in crate::runtime::rtc_engine::worker::media) consumer_rtp_parameters:
         &'a RouterRtpParameters,
-    pub(in crate::runtime::rtc_engine::worker::media) now: Instant,
+    pub(in crate::runtime::rtc_engine::worker::media) now: PacketLoopTime,
 }
 
 /// Reduces negotiated consumer RTP parameters into the route-level packet gate.
@@ -90,10 +92,10 @@ fn consumer_packet_gate_for_source(
     state: &RtcBootstrapState,
     source_transport_media_id: TransportMediaId,
     consumer_rtp_parameters: &RouterRtpParameters,
-    now: Instant,
+    now: PacketLoopTime,
 ) -> (PacketLayerGate, Option<PacketLayerGate>) {
-    selected_rid::guarded_packet_gate(
-        state,
+    guarded_packet_gate(
+        &state.packet_loop,
         source_transport_media_id,
         consumer_packet_gate(consumer_rtp_parameters),
         now,
@@ -168,6 +170,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn register_consumer_route(
     );
     let dest_payload_type = consumer_payload_type(consumer_rtp_parameters);
     state
+        .packet_loop
         .media_route_index
         .entry(source_transport_media_id)
         .or_insert_with(|| MediaRouteEntry {
@@ -184,7 +187,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn register_consumer_route(
             packet_gate,
             pending_packet_gate,
         });
-    refresh_source_packet_gate(state, source_transport_media_id);
+    refresh_source_packet_gate(&mut state.packet_loop, source_transport_media_id);
 }
 
 pub(in crate::runtime::rtc_engine::worker::media) fn consumer_payload_type(
@@ -207,7 +210,11 @@ pub(in crate::runtime::rtc_engine::worker::media) fn remove_consumer_route(
     consumer_transport_media_id: TransportMediaId,
     source_transport_media_id: TransportMediaId,
 ) {
-    let Some(route_entry) = state.media_route_index.get_mut(&source_transport_media_id) else {
+    let Some(route_entry) = state
+        .packet_loop
+        .media_route_index
+        .get_mut(&source_transport_media_id)
+    else {
         state.prune_remote_source_if_unrouted(source_transport_media_id);
         return;
     };
@@ -222,9 +229,12 @@ pub(in crate::runtime::rtc_engine::worker::media) fn remove_consumer_route(
         route_entry.destinations.is_empty()
     };
     if remove_route_entry {
-        state.media_route_index.remove(&source_transport_media_id);
+        state
+            .packet_loop
+            .media_route_index
+            .remove(&source_transport_media_id);
     }
-    refresh_source_packet_gate(state, source_transport_media_id);
+    refresh_source_packet_gate(&mut state.packet_loop, source_transport_media_id);
     state.prune_remote_source_if_unrouted(source_transport_media_id);
 }
 
@@ -233,8 +243,8 @@ pub(in crate::runtime::rtc_engine::worker::media) fn remove_consumer_route(
 ///
 /// Join resume, pause and removal all converge here so local forwarding and
 /// remote relay control immediately see the same effective route selection.
-pub(in crate::runtime::rtc_engine::worker) fn refresh_source_packet_gate(
-    state: &mut RtcBootstrapState,
+pub(in crate::runtime::rtc_engine) fn refresh_source_packet_gate(
+    state: &mut PacketLoopState,
     source_transport_media_id: TransportMediaId,
 ) {
     let route_entry = state.media_route_index.get(&source_transport_media_id);
@@ -271,6 +281,7 @@ pub(super) fn worker_set_producer_active(
 ) -> Result<(), TransportAdapterError> {
     ensure_owned_local_producer_mid(state, session_key, transport_media_id)?;
     let route_entry = state
+        .packet_loop
         .media_route_index
         .get_mut(&transport_media_id)
         .ok_or(TransportAdapterError::TransportUnavailable)?;
@@ -294,6 +305,7 @@ pub(super) fn worker_set_consumer_active(
         RouteSourceAccess::Existing,
     )?;
     match state
+        .packet_loop
         .mid_registry
         .get(&consumer_transport_media_id.as_u64())
     {
@@ -311,6 +323,7 @@ pub(super) fn worker_set_consumer_active(
     let mut route_changed = false;
     {
         let route_entry = state
+            .packet_loop
             .media_route_index
             .get_mut(&source_transport_media_id)
             .ok_or(TransportAdapterError::TransportUnavailable)?;
@@ -330,7 +343,7 @@ pub(super) fn worker_set_consumer_active(
     if !route_changed {
         return Ok(());
     }
-    refresh_source_packet_gate(state, source_transport_media_id);
+    refresh_source_packet_gate(&mut state.packet_loop, source_transport_media_id);
     Ok(())
 }
 
@@ -342,7 +355,7 @@ pub(super) fn worker_set_consumer_active(
 pub(super) fn worker_set_consumer_packet_gate(
     state: &mut RtcBootstrapState,
     request: ConsumerPacketGateRequest<'_>,
-    now: Instant,
+    now: PacketLoopTime,
 ) -> Result<(), TransportAdapterError> {
     if update_consumer_packet_gate(
         state,
@@ -353,7 +366,7 @@ pub(super) fn worker_set_consumer_packet_gate(
         request.packet_gate,
         now,
     )? {
-        refresh_source_packet_gate(state, request.source_transport_media_id);
+        refresh_source_packet_gate(&mut state.packet_loop, request.source_transport_media_id);
     }
     Ok(())
 }
@@ -363,7 +376,7 @@ pub(super) fn worker_set_consumer_packet_gates(
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     updates: Vec<ConsumerPacketGateCommand>,
-    now: Instant,
+    now: PacketLoopTime,
 ) -> Vec<TransportResult<()>> {
     let mut route_changed = false;
     let mut results = Vec::with_capacity(updates.len());
@@ -386,7 +399,7 @@ pub(super) fn worker_set_consumer_packet_gates(
         }
     }
     if route_changed {
-        refresh_source_packet_gate(state, source_transport_media_id);
+        refresh_source_packet_gate(&mut state.packet_loop, source_transport_media_id);
     }
     results
 }
@@ -398,7 +411,7 @@ fn update_consumer_packet_gate(
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     packet_gate: PacketLayerGate,
-    now: Instant,
+    now: PacketLoopTime,
 ) -> Result<bool, TransportAdapterError> {
     ensure_route_source(
         state,
@@ -408,6 +421,7 @@ fn update_consumer_packet_gate(
         RouteSourceAccess::Existing,
     )?;
     match state
+        .packet_loop
         .mid_registry
         .get(&consumer_transport_media_id.as_u64())
     {
@@ -422,10 +436,15 @@ fn update_consumer_packet_gate(
         }
         None => return Err(TransportAdapterError::TransportUnavailable),
     }
-    let (packet_gate, pending_packet_gate) =
-        selected_rid::guarded_packet_gate(state, source_transport_media_id, packet_gate, now);
+    let (packet_gate, pending_packet_gate) = guarded_packet_gate(
+        &state.packet_loop,
+        source_transport_media_id,
+        packet_gate,
+        now,
+    );
     {
         let route_entry = state
+            .packet_loop
             .media_route_index
             .get_mut(&source_transport_media_id)
             .ok_or(TransportAdapterError::TransportUnavailable)?;
@@ -451,16 +470,6 @@ fn update_consumer_packet_gate(
         }
     }
     Ok(false)
-}
-
-pub(in crate::runtime::rtc_engine::worker::media) fn packet_gate_rid(
-    packet_gate: &PacketLayerGate,
-) -> Option<Rid> {
-    match packet_gate {
-        PacketLayerGate::Rid(rid) => Some(*rid),
-        PacketLayerGate::OperatingPoint(operating_point) => operating_point.rid(),
-        PacketLayerGate::Open | PacketLayerGate::Block => None,
-    }
 }
 
 fn ensure_route_source(
@@ -503,7 +512,7 @@ pub(super) fn ensure_owned_local_producer_mid(
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
 ) -> Result<Mid, TransportAdapterError> {
-    match state.media_handle(source_transport_media_id) {
+    match state.packet_loop.media_handle(source_transport_media_id) {
         Some(RegisteredMediaHandle::Producer { session_key, mid })
             if session_key == source_session_key =>
         {

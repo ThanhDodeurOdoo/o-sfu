@@ -59,7 +59,7 @@ fn worker_local_relay_targets_forward_packets_through_registered_mailboxes() {
     if let Some(mut forwarded) = forwarded {
         assert_eq!(forwarded.payload(), b"payload");
         assert_eq!(
-            forwarded.resolve_source_transport_media_id(&RtcBootstrapState::default()),
+            forwarded.resolve_source_transport_media_id(&RtcBootstrapState::default().packet_loop),
             Some(TransportMediaId::new(9))
         );
     }
@@ -257,7 +257,7 @@ fn worker_local_relay_targets_forward_packets_through_registered_inter_node_targ
     };
     assert_eq!(forwarded.payload(), b"payload");
     assert_eq!(
-        forwarded.resolve_source_transport_media_id(&RtcBootstrapState::default()),
+        forwarded.resolve_source_transport_media_id(&RtcBootstrapState::default().packet_loop),
         Some(source_transport_media_id)
     );
 }

@@ -127,6 +127,13 @@ struct RelayTargetRegistration<Target> {
     active: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RelayTargetRemoval {
+    target_removed: bool,
+    source_empty: bool,
+    active_set_changed: bool,
+}
+
 /// Source-worker cache for relay target handles and active bits.
 #[derive(Debug, Clone)]
 pub(super) struct RelayTargetRegistry<TargetId, Target> {
@@ -157,20 +164,29 @@ where
             });
     }
 
-    pub(super) fn remove_target(&mut self, target_id: TargetId) -> bool {
-        self.targets.remove(&target_id);
-        self.rebuild_mailboxes();
-        self.targets.is_empty()
+    fn remove_target(&mut self, target_id: TargetId) -> RelayTargetRemoval {
+        let was_active = self.is_target_active(target_id);
+        let target_removed = self.targets.remove(&target_id).is_some();
+        if was_active {
+            self.rebuild_mailboxes();
+        }
+        RelayTargetRemoval {
+            target_removed,
+            source_empty: self.targets.is_empty(),
+            active_set_changed: was_active,
+        }
     }
 
-    pub(super) fn set_target_active(&mut self, target_id: TargetId, active: bool) {
+    pub(super) fn set_target_active(&mut self, target_id: TargetId, active: bool) -> bool {
         let Some(registration) = self.targets.get_mut(&target_id) else {
-            return;
+            return false;
         };
         if registration.active != active {
             registration.active = active;
             self.rebuild_mailboxes();
+            return true;
         }
+        false
     }
 
     #[must_use]
@@ -178,13 +194,10 @@ where
         &self.active_targets
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(super) fn has_active_targets(&self) -> bool {
         !self.active_targets.is_empty()
-    }
-
-    pub(super) fn contains_target(&self, target_id: TargetId) -> bool {
-        self.targets.contains_key(&target_id)
     }
 
     pub(super) fn is_target_active(&self, target_id: TargetId) -> bool {
@@ -244,11 +257,13 @@ pub(super) type RelaySourceRegistration = RelayTargetRegistry<RelayTargetId, Rel
 /// Relay sends use bounded `try_send`; overload drops are counted at the
 /// packet-loop forwarding boundary instead of blocking the source worker.
 impl RtcBootstrapState {
+    #[cfg(test)]
     pub(super) fn relay_targets_for_source(
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> Option<&[ActiveRelayTarget<RelayTargetId, RelayTargetTransport>]> {
-        self.relay_targets
+        self.packet_loop
+            .relay_targets
             .get(&source_transport_media_id)
             .and_then(|registration| {
                 registration
@@ -263,7 +278,8 @@ impl RtcBootstrapState {
         target_id: RelayTargetId,
         target: RelayTargetTransport,
     ) {
-        self.relay_targets
+        self.packet_loop
+            .relay_targets
             .entry(source_transport_media_id)
             .or_default()
             .add_target(target_id, target);
@@ -274,18 +290,26 @@ impl RtcBootstrapState {
         source_transport_media_id: TransportMediaId,
         target_id: RelayTargetId,
     ) {
-        let Some(source) = self.relay_targets.get_mut(&source_transport_media_id) else {
+        let Some(source) = self
+            .packet_loop
+            .relay_targets
+            .get_mut(&source_transport_media_id)
+        else {
             return;
         };
-        let had_target = source.contains_target(target_id);
-        let remove_source = source.remove_target(target_id);
-        let target_removed = had_target && !source.contains_target(target_id);
-        if remove_source {
-            self.relay_targets.remove(&source_transport_media_id);
+        let removal = source.remove_target(target_id);
+        if removal.source_empty {
+            self.packet_loop
+                .relay_targets
+                .remove(&source_transport_media_id);
         }
-        if target_removed {
-            self.route_control
+        if removal.target_removed {
+            self.packet_loop
+                .route_control
                 .forget_relay_packet_gate(source_transport_media_id, target_id);
+        }
+        if removal.active_set_changed {
+            self.packet_loop.bump_relay_topology_generation();
         }
     }
 
@@ -295,11 +319,16 @@ impl RtcBootstrapState {
         target_id: RelayTargetId,
         active: bool,
     ) {
-        let Some(source_registration) = self.relay_targets.get_mut(&source_transport_media_id)
+        let Some(source_registration) = self
+            .packet_loop
+            .relay_targets
+            .get_mut(&source_transport_media_id)
         else {
             return;
         };
-        source_registration.set_target_active(target_id, active);
+        if source_registration.set_target_active(target_id, active) {
+            self.packet_loop.bump_relay_topology_generation();
+        }
     }
 
     pub(super) fn is_relay_target_active(
@@ -307,7 +336,8 @@ impl RtcBootstrapState {
         source_transport_media_id: TransportMediaId,
         target_id: RelayTargetId,
     ) -> bool {
-        self.relay_targets
+        self.packet_loop
+            .relay_targets
             .get(&source_transport_media_id)
             .is_some_and(|source_registration| source_registration.is_target_active(target_id))
     }
@@ -317,7 +347,8 @@ impl RtcBootstrapState {
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> usize {
-        self.relay_targets
+        self.packet_loop
+            .relay_targets
             .get(&source_transport_media_id)
             .map_or(0, RelaySourceRegistration::target_count)
     }
@@ -327,7 +358,8 @@ impl RtcBootstrapState {
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> usize {
-        self.relay_targets
+        self.packet_loop
+            .relay_targets
             .get(&source_transport_media_id)
             .map_or(0, RelaySourceRegistration::active_target_count)
     }
