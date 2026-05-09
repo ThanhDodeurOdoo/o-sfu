@@ -395,11 +395,11 @@ impl RuntimeMetrics {
             self.transport_user_lifetime_buckets
                 .increment(TransportUserLifetimeBucket::Le10Seconds);
         }
-        if duration <= Duration::from_secs(60) {
+        if duration <= Duration::from_mins(1) {
             self.transport_user_lifetime_buckets
                 .increment(TransportUserLifetimeBucket::Le60Seconds);
         }
-        if duration <= Duration::from_secs(300) {
+        if duration <= Duration::from_mins(5) {
             self.transport_user_lifetime_buckets
                 .increment(TransportUserLifetimeBucket::Le300Seconds);
         }

@@ -3,7 +3,7 @@ name = "o-sfu-model"
 description = "Shared canonical o-sfu call model types"
 authors.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+rust-version = "1.93"
 version.workspace = true
 
 [dependencies]

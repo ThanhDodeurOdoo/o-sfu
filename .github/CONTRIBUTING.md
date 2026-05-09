@@ -30,7 +30,7 @@
 We follow standard Rust idioms and enforce strict safety.
 
 - **Formatting**: Always run `cargo fmt` before committing.
-- **Linting**: We use Clippy with strict rules. The enforced rules can be found in [Cargo.toml](../Cargo.toml), see the [Clippy documentation](https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html) for explanations.
+- **Linting**: We use Clippy with strict rules. The enforced rules can be found in [Cargo.toml](../Cargo.toml), see the [Clippy documentation](https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html) for explanations.
 - **Justify overrides**: Any override of a rule MUST be justified with a "reason".
 - **Unsafe Code**: Use of `unsafe` is discouraged. If absolutely necessary, it must be locally scoped (as narrow as possible) and justified.
 - **Avoid dead_code**: for example if you write a test helper, use the cfg=test flag

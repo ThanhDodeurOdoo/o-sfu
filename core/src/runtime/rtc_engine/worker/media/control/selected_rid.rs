@@ -82,9 +82,9 @@ const SELECTED_RID_READY_MAX_AGE: Duration = Duration::from_secs(2);
 const SELECTED_RID_KEYFRAME_RETRY_DELAYS: [Duration; 5] = [
     Duration::from_millis(1_100),
     Duration::from_millis(2_500),
-    Duration::from_millis(5_000),
-    Duration::from_millis(8_000),
-    Duration::from_millis(13_000),
+    Duration::from_secs(5),
+    Duration::from_secs(8),
+    Duration::from_secs(13),
 ];
 
 /// Update packet-path readiness for one incoming producer RID.
