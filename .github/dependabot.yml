@@ -13,6 +13,7 @@ updates:
       - "dependencies"
       - "cargo"
       - "AI"
+      - "lang-rust"
 
   - package-ecosystem: "cargo"
     directory: "/router"
@@ -22,6 +23,7 @@ updates:
       - "dependencies"
       - "cargo"
       - "AI"
+      - "lang-rust"
 
   - package-ecosystem: "cargo"
     directory: "/core"
@@ -31,6 +33,7 @@ updates:
       - "dependencies"
       - "cargo"
       - "AI"
+      - "lang-rust"
 
   - package-ecosystem: "cargo"
     directory: "/telemetry"
@@ -40,6 +43,7 @@ updates:
       - "dependencies"
       - "cargo"
       - "AI"
+      - "lang-rust"
 
   - package-ecosystem: "cargo"
     directory: "/protocol"
@@ -49,6 +53,7 @@ updates:
       - "dependencies"
       - "cargo"
       - "AI"
+      - "lang-rust"
 
   - package-ecosystem: "cargo"
     directory: "/tests"
@@ -58,6 +63,7 @@ updates:
       - "dependencies"
       - "cargo"
       - "AI"
+      - "lang-rust"
 
   - package-ecosystem: "npm"
     directory: "/client"
@@ -67,3 +73,4 @@ updates:
       - "dependencies"
       - "npm"
       - "AI"
+      - "lang-js"
