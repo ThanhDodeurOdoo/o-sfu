@@ -27,7 +27,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.92.0
+          toolchain: 1.95.0
           components: rustfmt, clippy
 
       - name: Install cargo-nextest
@@ -36,7 +36,7 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: rust-1.92-mainline
+          shared-key: rust-1.95-mainline
 
       - name: Check formatting
         run: cargo fmt --check
@@ -70,7 +70,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.92.0
+          toolchain: 1.95.0
           components: llvm-tools-preview
 
       - name: Install cargo-llvm-cov
@@ -79,7 +79,7 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: rust-1.92-mainline
+          shared-key: rust-1.95-mainline
 
       - name: Generate workspace coverage report
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
