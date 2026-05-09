@@ -23,6 +23,26 @@ pub(super) trait HistogramBucketLabel: MetricBucketLabel {
     fn from_duration(duration: Duration) -> Self;
 }
 
+#[repr(align(64))]
+#[derive(Debug, Default)]
+pub(super) struct PaddedCounter {
+    value: Counter,
+}
+
+impl PaddedCounter {
+    pub(super) fn increment(&self) {
+        self.value.increment();
+    }
+
+    pub(super) fn add(&self, value: usize) {
+        self.value.add(value);
+    }
+
+    pub(super) fn load(&self) -> u64 {
+        self.value.load()
+    }
+}
+
 #[derive(Debug, Default)]
 pub(super) struct Counter {
     value: AtomicU64,
@@ -93,6 +113,45 @@ impl<L: MetricLabel> UpDownCounterFamily<L> {
         self.counters
             .get(label.as_index())
             .map_or(0, UpDownCounter::load)
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct PaddedCounterFamily<L: MetricLabel> {
+    counters: Box<[PaddedCounter]>,
+    _label: PhantomData<L>,
+}
+
+impl<L: MetricLabel> Default for PaddedCounterFamily<L> {
+    fn default() -> Self {
+        let counters = (0..L::COUNT)
+            .map(|_| PaddedCounter::default())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Self {
+            counters,
+            _label: PhantomData,
+        }
+    }
+}
+
+impl<L: MetricLabel> PaddedCounterFamily<L> {
+    pub(super) fn increment(&self, label: L) {
+        if let Some(counter) = self.counters.get(label.as_index()) {
+            counter.increment();
+        }
+    }
+
+    pub(super) fn add(&self, label: L, value: usize) {
+        if let Some(counter) = self.counters.get(label.as_index()) {
+            counter.add(value);
+        }
+    }
+
+    pub(super) fn load(&self, label: L) -> u64 {
+        self.counters
+            .get(label.as_index())
+            .map_or(0, PaddedCounter::load)
     }
 }
 

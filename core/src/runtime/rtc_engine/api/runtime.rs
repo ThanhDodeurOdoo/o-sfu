@@ -163,6 +163,7 @@ impl RtcTransportShard {
                 packet_sink_registry: Arc::clone(&self.packet_sink_registry),
                 source_policy_signal: Arc::clone(&self.source_policy_signal),
                 metrics: Arc::clone(&self.metrics),
+                rtp_metrics: Arc::clone(&self.rtp_metrics),
             },
             bitrate_state,
             snapshot_state,

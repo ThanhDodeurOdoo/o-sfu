@@ -6,7 +6,7 @@
 //! and prevents HTTP, websocket, transport, and media code from inventing
 //! adoc counters, gauges, etc...
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use o_sfu_model::WebSocketCloseCode;
 
@@ -17,12 +17,13 @@ use super::{
     labels::{
         BudgetSolverOutcome, ControlPlaneDurationBucket, HttpDisconnectResponseStatus,
         HttpRoomResponseStatus, HttpRoute, RecordingActionOutcome, RtcDatagramDropReason,
-        RtcDatagramRoutePath, RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind,
-        RtpRelayDropKind, SourceSelectionKind, TransportCleanupFailureKind, TransportHealthState,
+        RtcDatagramRoutePath, RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind,
+        SourceSelectionKind, TransportCleanupFailureKind, TransportHealthState,
         TransportHealthTransition, TransportIceState, TransportUserLifetimeBucket,
         WsBusClientFrameKind, WsBusDirection, WsBusFailureKind, WsConnectionStage,
         WsSessionLoopExitReason, WsStartupFailureKind,
     },
+    rtp::{RtpMetrics, RtpMetricsRecorder},
 };
 
 #[derive(Debug, Default)]
@@ -58,10 +59,7 @@ pub struct RuntimeMetrics {
     pub(super) recording_actions: CounterFamily<RecordingActionOutcome>,
     pub(super) recording_captured_packets: Counter,
     pub(super) recording_captured_streams: Counter,
-    pub(super) rtp_packets: CounterFamily<RtpFlowDirection>,
-    pub(super) rtp_payload_bytes: CounterFamily<RtpFlowDirection>,
-    pub(super) rtp_forwarded_packets: CounterFamily<RtpForwardDestinationKind>,
-    pub(super) rtp_forwarded_payload_bytes: CounterFamily<RtpForwardDestinationKind>,
+    pub(super) rtp_metrics: RtpMetrics,
     pub(super) rtp_relay_overload_drops: CounterFamily<RtpRelayDropKind>,
     pub(super) transport_health_transitions: CounterFamily<TransportHealthTransition>,
     pub(super) transport_ice_state_changes: CounterFamily<TransportIceState>,
@@ -348,16 +346,20 @@ impl RuntimeMetrics {
         self.recording_captured_streams.increment();
     }
 
+    /// Registers one worker-local recorder for hot RTP packet metrics.
+    ///
+    /// The caller should keep the returned handle beside the packet loop and
+    /// reuse it for every RTP packet observation owned by that worker.
+    pub fn register_rtp_worker(&self) -> Arc<RtpMetricsRecorder> {
+        self.rtp_metrics.register_worker()
+    }
+
     pub fn record_rtp_ingress(&self, payload_bytes: usize) {
-        self.rtp_packets.increment(RtpFlowDirection::Ingress);
-        self.rtp_payload_bytes
-            .add(RtpFlowDirection::Ingress, payload_bytes);
+        self.rtp_metrics.record_ingress(payload_bytes);
     }
 
     pub fn record_rtp_egress(&self, payload_bytes: usize) {
-        self.rtp_packets.increment(RtpFlowDirection::Egress);
-        self.rtp_payload_bytes
-            .add(RtpFlowDirection::Egress, payload_bytes);
+        self.rtp_metrics.record_egress(payload_bytes);
     }
 
     pub fn record_rtp_forwarded(
@@ -365,9 +367,8 @@ impl RuntimeMetrics {
         destination: RtpForwardDestinationKind,
         payload_bytes: usize,
     ) {
-        self.rtp_forwarded_packets.increment(destination);
-        self.rtp_forwarded_payload_bytes
-            .add(destination, payload_bytes);
+        self.rtp_metrics
+            .record_forwarded(destination, payload_bytes);
     }
 
     pub fn record_rtp_relay_overload_drop(&self, destination: RtpRelayDropKind) {

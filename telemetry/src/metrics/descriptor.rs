@@ -7,8 +7,10 @@ use super::{
         MetricBucketLabel, MetricLabel as MetricStorageLabel, UpDownCounterFamily,
     },
     labels::{
-        ControlPlaneDurationBucket, HttpRoute, RecordingActionOutcome, TransportHealthTransition,
+        ControlPlaneDurationBucket, HttpRoute, RecordingActionOutcome, RtpFlowDirection,
+        RtpForwardDestinationKind, TransportHealthTransition,
     },
+    rtp::RtpMetricsSnapshot,
     snapshot::{
         MetricFamilySnapshot, MetricHistogramBucketSnapshot, MetricHistogramSnapshot, MetricKind,
         MetricLabel, MetricSample, RuntimeMetricsSnapshot,
@@ -355,25 +357,41 @@ metric_catalog! {
         name: "osfu_rtp_packets_total",
         help: "Total RTP packets processed by flow direction.",
         kind: Counter,
-        samples: |metrics| counter_family_samples(&metrics.rtp_packets, "direction")
+        samples: |metrics| rtp_flow_samples(
+            &metrics.rtp_metrics.snapshot(),
+            "direction",
+            RtpMetricsSnapshot::packets
+        )
     },
     RtpPayloadBytesTotal {
         name: "osfu_rtp_payload_bytes_total",
         help: "Total RTP payload bytes processed by flow direction.",
         kind: Counter,
-        samples: |metrics| counter_family_samples(&metrics.rtp_payload_bytes, "direction")
+        samples: |metrics| rtp_flow_samples(
+            &metrics.rtp_metrics.snapshot(),
+            "direction",
+            RtpMetricsSnapshot::payload_bytes
+        )
     },
     RtpForwardedPacketsTotal {
         name: "osfu_rtp_forwarded_packets_total",
         help: "Total RTP packet fan-out operations by forwarding destination.",
         kind: Counter,
-        samples: |metrics| counter_family_samples(&metrics.rtp_forwarded_packets, "destination")
+        samples: |metrics| rtp_forward_destination_samples(
+            &metrics.rtp_metrics.snapshot(),
+            "destination",
+            RtpMetricsSnapshot::forwarded_packets
+        )
     },
     RtpForwardedPayloadBytesTotal {
         name: "osfu_rtp_forwarded_payload_bytes_total",
         help: "Total RTP payload bytes fanned out by forwarding destination.",
         kind: Counter,
-        samples: |metrics| counter_family_samples(&metrics.rtp_forwarded_payload_bytes, "destination")
+        samples: |metrics| rtp_forward_destination_samples(
+            &metrics.rtp_metrics.snapshot(),
+            "destination",
+            RtpMetricsSnapshot::forwarded_payload_bytes
+        )
     },
     RtpRelayOverloadDropsTotal {
         name: "osfu_rtp_relay_overload_drops_total",
@@ -471,6 +489,28 @@ where
     L::VARIANTS
         .iter()
         .map(|label| counter([(label_name, label.label_value())], family.load(*label)))
+        .collect()
+}
+
+fn rtp_flow_samples(
+    snapshot: &RtpMetricsSnapshot,
+    label_name: &'static str,
+    read: fn(&RtpMetricsSnapshot, RtpFlowDirection) -> u64,
+) -> Vec<MetricSample> {
+    <RtpFlowDirection as MetricStorageLabel>::VARIANTS
+        .iter()
+        .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
+        .collect()
+}
+
+fn rtp_forward_destination_samples(
+    snapshot: &RtpMetricsSnapshot,
+    label_name: &'static str,
+    read: fn(&RtpMetricsSnapshot, RtpForwardDestinationKind) -> u64,
+) -> Vec<MetricSample> {
+    <RtpForwardDestinationKind as MetricStorageLabel>::VARIANTS
+        .iter()
+        .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
         .collect()
 }
 

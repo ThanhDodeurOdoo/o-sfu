@@ -321,6 +321,30 @@ mod tests {
     }
 
     #[test]
+    fn prometheus_export_keeps_rtp_shape_for_worker_recorders() {
+        let metrics = RuntimeMetrics::default();
+        let first_worker = metrics.register_rtp_worker();
+        let second_worker = metrics.register_rtp_worker();
+
+        first_worker.record_ingress(1200);
+        first_worker.record_egress(900);
+        first_worker.record_forwarded(RtpForwardDestinationKind::LocalRtc, 900);
+        second_worker.record_ingress(300);
+        second_worker.record_forwarded(RtpForwardDestinationKind::Recording, 300);
+
+        let rendered = render_prometheus(&metrics);
+
+        assert!(rendered.contains("osfu_rtp_packets_total{direction=\"ingress\"} 2"));
+        assert!(rendered.contains("osfu_rtp_payload_bytes_total{direction=\"ingress\"} 1500"));
+        assert!(rendered.contains("osfu_rtp_forwarded_packets_total{destination=\"local_rtc\"} 1"));
+        assert!(
+            rendered
+                .contains("osfu_rtp_forwarded_payload_bytes_total{destination=\"recording\"} 300")
+        );
+        assert!(!rendered.contains("worker="));
+    }
+
+    #[test]
     fn prometheus_export_renders_rtc_datagram_metric_families() {
         let rendered = render_prometheus(&sample_metrics());
 

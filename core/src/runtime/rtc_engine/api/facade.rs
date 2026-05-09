@@ -45,7 +45,7 @@ use crate::{
             SessionOffer, SourcePacketGate, SourcePolicySignal, TransportAdapterError,
             TransportMediaId, TransportResult, TransportSessionKey,
         },
-        metrics::RuntimeMetrics,
+        metrics::{RtpMetricsRecorder, RuntimeMetrics},
         packet_sink_registry::RoomPacketSinkRegistry,
     },
 };
@@ -101,6 +101,7 @@ pub struct RtcTransportShard {
     pub(super) packet_sink_registry: Arc<RoomPacketSinkRegistry>,
     pub(super) source_policy_signal: Arc<SourcePolicySignal>,
     pub metrics: Arc<RuntimeMetrics>,
+    pub(super) rtp_metrics: Arc<RtpMetricsRecorder>,
     pub(super) worker_handle: Mutex<super::runtime::WorkerHandleSlot<RtcWorkerHandle>>,
 }
 
@@ -131,6 +132,8 @@ impl RtcTransportShard {
         source_policy_signal: Arc<SourcePolicySignal>,
         media_id_base: u64,
     ) -> Self {
+        let metrics = deps.metrics();
+        let rtp_metrics = metrics.register_rtp_worker();
         Self {
             relay_target_id: RelayTargetId::new(
                 NEXT_RELAY_TARGET_ID.fetch_add(1, Ordering::Relaxed),
@@ -146,7 +149,8 @@ impl RtcTransportShard {
             diagnostics: deps.diagnostics(),
             packet_sink_registry: deps.packet_sink_registry(),
             source_policy_signal,
-            metrics: deps.metrics(),
+            metrics,
+            rtp_metrics,
             worker_handle: Mutex::new(super::runtime::WorkerHandleSlot::default()),
         }
     }

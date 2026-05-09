@@ -48,7 +48,7 @@ use crate::{
     runtime::{
         diagnostics::DiagnosticsStore,
         media_transport::SourcePolicySignal,
-        metrics::RuntimeMetrics,
+        metrics::{RtpMetricsRecorder, RuntimeMetrics},
         packet_sink_registry::{PacketSinkRouteCache, RoomPacketSinkRegistry},
     },
 };
@@ -89,6 +89,8 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopConfig {
     pub source_policy_signal: Arc<SourcePolicySignal>,
     /// Central metrics catalog updated by packet-loop observations.
     pub metrics: Arc<RuntimeMetrics>,
+    /// Worker-local RTP metric recorder used by packet forwarding.
+    pub rtp_metrics: Arc<RtpMetricsRecorder>,
 }
 
 /// Socket snapshot used for the wait phase of one packet-loop turn.
@@ -338,6 +340,7 @@ fn snapshot_and_pump(
         state,
         &config.source_policy_signal,
         &config.metrics,
+        &config.rtp_metrics,
         buffers,
     );
     packet_sink_cache.refresh_from(&config.packet_sink_registry);
@@ -351,7 +354,7 @@ fn snapshot_and_pump(
             &mut buffers.forwards,
         );
     }
-    flush_forward_routes(state, &config.metrics, buffers);
+    flush_forward_routes(state, &config.metrics, &config.rtp_metrics, buffers);
     record_packet_loop_lag(snapshot_state, turn_started_at);
     Some(SnapshotInfo {
         socket,

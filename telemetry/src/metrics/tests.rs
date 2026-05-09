@@ -264,6 +264,47 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
 }
 
 #[test]
+fn metrics_snapshot_aggregates_worker_local_rtp_recorders() {
+    let metrics = RuntimeMetrics::default();
+    let first_worker = metrics.register_rtp_worker();
+    let second_worker = metrics.register_rtp_worker();
+
+    metrics.record_rtp_ingress(10);
+    first_worker.record_ingress(1200);
+    first_worker.record_egress(900);
+    first_worker.record_forwarded(RtpForwardDestinationKind::LocalRtc, 900);
+    second_worker.record_ingress(300);
+    second_worker.record_forwarded(RtpForwardDestinationKind::Recording, 300);
+
+    let snapshot = metrics.snapshot();
+
+    assert_eq!(snapshot.rtp_packets_ingress(), 3);
+    assert_eq!(snapshot.rtp_packets_egress(), 1);
+    assert_eq!(snapshot.rtp_payload_bytes_ingress(), 1510);
+    assert_eq!(snapshot.rtp_payload_bytes_egress(), 900);
+    assert_eq!(snapshot.rtp_forwarded_packets_local_rtc(), 1);
+    assert_eq!(snapshot.rtp_forwarded_packets_recording(), 1);
+    assert_eq!(snapshot.rtp_forwarded_payload_bytes_local_rtc(), 900);
+    assert_eq!(snapshot.rtp_forwarded_payload_bytes_recording(), 300);
+}
+
+#[test]
+fn metrics_snapshot_keeps_rtp_counts_after_worker_handle_drop() {
+    let metrics = RuntimeMetrics::default();
+    {
+        let worker = metrics.register_rtp_worker();
+        worker.record_ingress(100);
+    }
+    let replacement_worker = metrics.register_rtp_worker();
+    replacement_worker.record_ingress(50);
+
+    let snapshot = metrics.snapshot();
+
+    assert_eq!(snapshot.rtp_packets_ingress(), 2);
+    assert_eq!(snapshot.rtp_payload_bytes_ingress(), 150);
+}
+
+#[test]
 fn transport_health_transition_updates_connected_and_disconnected_gauges() {
     let metrics = RuntimeMetrics::default();
 

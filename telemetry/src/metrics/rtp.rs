@@ -1,0 +1,168 @@
+use std::sync::{Arc, Mutex};
+
+use super::{
+    counter::{MetricLabel, PaddedCounterFamily},
+    labels::{RtpFlowDirection, RtpForwardDestinationKind},
+};
+
+const RTP_FLOW_DIRECTION_COUNT: usize = <RtpFlowDirection as MetricLabel>::COUNT;
+const RTP_FORWARD_DESTINATION_COUNT: usize = <RtpForwardDestinationKind as MetricLabel>::COUNT;
+
+/// Worker-owned RTP packet metric recorder.
+///
+/// Packet loops keep one recorder for their full shard lifetime. Updates touch
+/// only this worker's padded atomics while `RuntimeMetrics` aggregates all
+/// registered recorders during snapshot export.
+#[derive(Debug, Default)]
+pub struct RtpMetricsRecorder {
+    packets: PaddedCounterFamily<RtpFlowDirection>,
+    payload_bytes: PaddedCounterFamily<RtpFlowDirection>,
+    forwarded_packets: PaddedCounterFamily<RtpForwardDestinationKind>,
+    forwarded_payload_bytes: PaddedCounterFamily<RtpForwardDestinationKind>,
+}
+
+impl RtpMetricsRecorder {
+    pub fn record_ingress(&self, payload_bytes: usize) {
+        self.packets.increment(RtpFlowDirection::Ingress);
+        self.payload_bytes
+            .add(RtpFlowDirection::Ingress, payload_bytes);
+    }
+
+    pub fn record_egress(&self, payload_bytes: usize) {
+        self.packets.increment(RtpFlowDirection::Egress);
+        self.payload_bytes
+            .add(RtpFlowDirection::Egress, payload_bytes);
+    }
+
+    pub fn record_forwarded(&self, destination: RtpForwardDestinationKind, payload_bytes: usize) {
+        self.forwarded_packets.increment(destination);
+        self.forwarded_payload_bytes.add(destination, payload_bytes);
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct RtpMetrics {
+    process_recorder: RtpMetricsRecorder,
+    worker_recorders: Mutex<Vec<Arc<RtpMetricsRecorder>>>,
+}
+
+impl RtpMetrics {
+    pub(super) fn register_worker(&self) -> Arc<RtpMetricsRecorder> {
+        let recorder = Arc::new(RtpMetricsRecorder::default());
+        {
+            let mut workers = match self.worker_recorders.lock() {
+                Ok(workers) => workers,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            workers.push(Arc::clone(&recorder));
+        }
+        recorder
+    }
+
+    pub(super) fn record_ingress(&self, payload_bytes: usize) {
+        self.process_recorder.record_ingress(payload_bytes);
+    }
+
+    pub(super) fn record_egress(&self, payload_bytes: usize) {
+        self.process_recorder.record_egress(payload_bytes);
+    }
+
+    pub(super) fn record_forwarded(
+        &self,
+        destination: RtpForwardDestinationKind,
+        payload_bytes: usize,
+    ) {
+        self.process_recorder
+            .record_forwarded(destination, payload_bytes);
+    }
+
+    pub(super) fn snapshot(&self) -> RtpMetricsSnapshot {
+        let mut snapshot = RtpMetricsSnapshot::default();
+        snapshot.add_recorder(&self.process_recorder);
+        {
+            let workers = match self.worker_recorders.lock() {
+                Ok(workers) => workers,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            for recorder in workers.iter() {
+                snapshot.add_recorder(recorder);
+            }
+        }
+        snapshot
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct RtpMetricsSnapshot {
+    packets: [u64; RTP_FLOW_DIRECTION_COUNT],
+    payload_bytes: [u64; RTP_FLOW_DIRECTION_COUNT],
+    forwarded_packets: [u64; RTP_FORWARD_DESTINATION_COUNT],
+    forwarded_payload_bytes: [u64; RTP_FORWARD_DESTINATION_COUNT],
+}
+
+impl RtpMetricsSnapshot {
+    pub(super) fn packets(&self, direction: RtpFlowDirection) -> u64 {
+        self.packets.get(direction.as_index()).copied().unwrap_or(0)
+    }
+
+    pub(super) fn payload_bytes(&self, direction: RtpFlowDirection) -> u64 {
+        self.payload_bytes
+            .get(direction.as_index())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(super) fn forwarded_packets(&self, destination: RtpForwardDestinationKind) -> u64 {
+        self.forwarded_packets
+            .get(destination.as_index())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(super) fn forwarded_payload_bytes(&self, destination: RtpForwardDestinationKind) -> u64 {
+        self.forwarded_payload_bytes
+            .get(destination.as_index())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn add_recorder(&mut self, recorder: &RtpMetricsRecorder) {
+        for direction in <RtpFlowDirection as MetricLabel>::VARIANTS {
+            self.add_flow(
+                *direction,
+                recorder.packets.load(*direction),
+                recorder.payload_bytes.load(*direction),
+            );
+        }
+        for destination in <RtpForwardDestinationKind as MetricLabel>::VARIANTS {
+            self.add_forwarded(
+                *destination,
+                recorder.forwarded_packets.load(*destination),
+                recorder.forwarded_payload_bytes.load(*destination),
+            );
+        }
+    }
+
+    fn add_flow(&mut self, direction: RtpFlowDirection, packets: u64, payload_bytes: u64) {
+        if let Some(counter) = self.packets.get_mut(direction.as_index()) {
+            *counter = counter.saturating_add(packets);
+        }
+        if let Some(counter) = self.payload_bytes.get_mut(direction.as_index()) {
+            *counter = counter.saturating_add(payload_bytes);
+        }
+    }
+
+    fn add_forwarded(
+        &mut self,
+        destination: RtpForwardDestinationKind,
+        packets: u64,
+        payload_bytes: u64,
+    ) {
+        if let Some(counter) = self.forwarded_packets.get_mut(destination.as_index()) {
+            *counter = counter.saturating_add(packets);
+        }
+        if let Some(counter) = self.forwarded_payload_bytes.get_mut(destination.as_index()) {
+            *counter = counter.saturating_add(payload_bytes);
+        }
+    }
+}

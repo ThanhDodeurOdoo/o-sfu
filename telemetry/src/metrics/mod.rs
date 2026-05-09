@@ -2,6 +2,7 @@ mod catalog;
 mod counter;
 mod descriptor;
 mod labels;
+mod rtp;
 mod snapshot;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -17,6 +18,7 @@ pub use labels::{
     RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, SourceSelectionKind,
     TransportCleanupFailureKind, TransportHealthState, TransportIceState, WsSessionLoopExitReason,
 };
+pub use rtp::RtpMetricsRecorder;
 pub use snapshot::{
     MetricFamilySnapshot, MetricHistogramBucketSnapshot, MetricHistogramSnapshot, MetricKind,
     MetricLabel, MetricSample, MetricValue, RuntimeMetricsSnapshot,

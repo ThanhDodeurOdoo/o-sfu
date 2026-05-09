@@ -34,7 +34,7 @@ use super::{
 };
 use crate::runtime::{
     media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
-    metrics::RuntimeMetrics,
+    metrics::{RtpMetricsRecorder, RuntimeMetrics},
 };
 
 /// Observe packet-path metadata before packets are forwarded.
@@ -47,6 +47,7 @@ pub(super) fn record_incoming_stats(
     state: &mut RtcBootstrapState,
     source_policy_signal: &SourcePolicySignal,
     metrics: &RuntimeMetrics,
+    rtp_metrics: &RtpMetricsRecorder,
     buffers: &mut PacketLoopBuffers,
 ) {
     let (pending_packets, dirty_source_policy_channel_ids) = (
@@ -111,7 +112,7 @@ pub(super) fn record_incoming_stats(
                     );
                 }
             }
-            metrics.record_rtp_ingress(payload_len);
+            rtp_metrics.record_ingress(payload_len);
         }
     }
     buffers.flush_source_policy_dirty(source_policy_signal);
@@ -208,6 +209,7 @@ pub(super) fn drain_relay_packets(
 pub(super) fn flush_forward_routes(
     state: &mut RtcBootstrapState,
     metrics: &RuntimeMetrics,
+    rtp_metrics: &RtpMetricsRecorder,
     buffers: &mut PacketLoopBuffers,
 ) {
     let (forwards, pending_packets) = (&buffers.forwards, &mut buffers.pending_packets);
@@ -249,8 +251,8 @@ pub(super) fn flush_forward_routes(
             Ok(ForwardSendOutcome::LocalRtc {
                 payload_bytes: Some(payload_len),
             }) => {
-                metrics.record_rtp_egress(payload_len);
-                metrics.record_rtp_forwarded(destination_kind, payload_len);
+                rtp_metrics.record_egress(payload_len);
+                rtp_metrics.record_forwarded(destination_kind, payload_len);
             }
             Ok(ForwardSendOutcome::SideEffect)
                 if matches!(
@@ -260,7 +262,7 @@ pub(super) fn flush_forward_routes(
                         | ForwardingDestination::InterNodeRelay(_)
                 ) =>
             {
-                metrics.record_rtp_forwarded(destination_kind, payload_len);
+                rtp_metrics.record_forwarded(destination_kind, payload_len);
             }
             Ok(ForwardSendOutcome::OverloadedRelay) => {
                 if let Some(destination_kind) = destination.relay_drop_kind() {
