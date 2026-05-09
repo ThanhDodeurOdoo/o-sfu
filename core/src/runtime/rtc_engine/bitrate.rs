@@ -38,6 +38,14 @@ impl MediaBitrateCounter {
         }
     }
 
+    /// Records one packet-loop-owned byte count into the current bitrate window.
+    ///
+    /// `MediaBitrateCounter` is shared so diagnostics can snapshot it from
+    /// another thread, but `record` has one writer: the RTC packet loop that
+    /// owns the registered media handle. That makes a release `fetch_add`
+    /// enough for per-packet writes. Exact saturating addition is intentionally
+    /// not part of the observable contract because one RTP bitrate window is
+    /// bounded by real transport packet sizes and cannot approach `u64::MAX`.
     pub(super) fn record(&self, now: Instant, payload_bytes: usize) -> bool {
         let now_nanos = self.nanos_since_origin(now);
         let window_start = self.window_start_nanos.load(Ordering::Acquire);
@@ -46,11 +54,8 @@ impl MediaBitrateCounter {
             self.window_start_nanos.store(now_nanos, Ordering::Release);
         }
         let payload_bytes = u64::try_from(payload_bytes).unwrap_or(u64::MAX);
-        let _ = self
-            .bytes_in_window
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                Some(current.saturating_add(payload_bytes))
-            });
+        self.bytes_in_window
+            .fetch_add(payload_bytes, Ordering::Release);
         !self.observed.swap(true, Ordering::AcqRel)
     }
 
@@ -252,7 +257,13 @@ impl RtcBootstrapState {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::{
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering as AtomicOrdering},
+        },
+        thread,
+    };
 
     use super::*;
     use crate::runtime::{UserId, rtc_engine::test_support::test_transport_session_key};
@@ -265,6 +276,28 @@ mod tests {
         assert!(bitrate.record(now, 120));
 
         assert_eq!(bitrate.snapshot(now), 960);
+    }
+
+    #[test]
+    fn incoming_media_bitrate_accumulates_same_window_bytes() {
+        let now = Instant::now();
+        let bitrate = MediaBitrateCounter::new(now);
+
+        assert!(bitrate.record(now, 120));
+        assert!(!bitrate.record(now + Duration::from_millis(200), 30));
+
+        assert_eq!(bitrate.snapshot(now + Duration::from_millis(200)), 1_200);
+    }
+
+    #[test]
+    fn incoming_media_bitrate_resets_before_recording_new_window() {
+        let now = Instant::now();
+        let bitrate = MediaBitrateCounter::new(now);
+
+        assert!(bitrate.record(now, 120));
+        assert!(!bitrate.record(now + Duration::from_secs(1), 30));
+
+        assert_eq!(bitrate.snapshot(now + Duration::from_secs(1)), 240);
     }
 
     #[test]
@@ -299,6 +332,38 @@ mod tests {
 
         assert!(bitrate.record(now, 1));
         assert!(!bitrate.record(now, 1));
+    }
+
+    #[test]
+    fn bitrate_snapshot_observes_packet_loop_thread_writes() {
+        let now = Instant::now();
+        let bitrate = Arc::new(MediaBitrateCounter::new(now));
+        let writer = Arc::clone(&bitrate);
+        let started = Arc::new(AtomicBool::new(false));
+        let writer_started = Arc::clone(&started);
+
+        let handle = thread::spawn(move || {
+            writer_started.store(true, AtomicOrdering::Release);
+            for _ in 0..1024 {
+                writer.record(now, 10);
+            }
+        });
+
+        while !started.load(AtomicOrdering::Acquire) {
+            thread::yield_now();
+        }
+
+        let mut observed_bits = 0;
+        for _ in 0..1024 {
+            observed_bits = bitrate.snapshot(now);
+            if observed_bits > 0 {
+                break;
+            }
+            thread::yield_now();
+        }
+
+        assert!(handle.join().is_ok());
+        assert!(observed_bits > 0 || bitrate.snapshot(now) > 0);
     }
 
     #[test]
