@@ -36,7 +36,8 @@ use crate::{
         RoomInstanceId, UserId,
         media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
         metrics::{
-            RtpForwardDestinationKind, RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt,
+            RtpForwardDestinationKind, RtpMetricsRecorder, RuntimeMetrics,
+            test_support::RuntimeMetricsSnapshotTestExt,
         },
         packet_sink_registry::{
             PacketSink as MediaPacketSink, PacketSinkLookup, RegisteredPacketSink,
@@ -353,7 +354,7 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
 }
 
 #[test]
-fn indexed_route_does_not_touch_recent_miss_state() -> Result<(), &'static str> {
+fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(), &'static str> {
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_045));
     let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_046));
     let session_key = test_transport_session_key(51, 0, 56, UserId::Integer(57));
@@ -380,6 +381,16 @@ fn indexed_route_does_not_touch_recent_miss_state() -> Result<(), &'static str> 
             .remote_addr_demux
             .remember_remote_addr(source_addr, &session_key)
     );
+    {
+        let Ok(mut snapshot) = snapshot_state.lock() else {
+            return Err("snapshot state lock poisoned");
+        };
+        assert!(
+            snapshot
+                .remote_addr_demux
+                .remember_remote_addr(source_addr, &session_key)
+        );
+    }
 
     let username = format!("{}:remote-ufrag", local_ice_credentials.ufrag);
     let packet = serialize_stun_message(
@@ -408,12 +419,89 @@ fn indexed_route_does_not_touch_recent_miss_state() -> Result<(), &'static str> 
     );
 
     assert_eq!(routing_state.fallback_attempts(), 0);
+    assert_eq!(
+        bootstrap_state
+            .remote_addr_demux
+            .session_key_for_remote_addr(source_addr),
+        Some(&session_key)
+    );
+    {
+        let Ok(snapshot) = snapshot_state.lock() else {
+            return Err("snapshot state lock poisoned");
+        };
+        assert_eq!(
+            snapshot
+                .remote_addr_demux
+                .session_key_for_remote_addr(source_addr),
+            Some(&session_key)
+        );
+    }
     assert!(routing_state.should_skip_scan(miss_key, &packet));
     assert!(routing_state.source_is_tracked(source_addr));
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_routes_indexed(), 1);
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 0);
     assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache(), 0);
+    Ok(())
+}
+
+#[test]
+fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static str> {
+    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_047));
+    let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_048));
+    let stale_session_key = test_transport_session_key(51, 0, 58, UserId::Integer(59));
+    let mut bootstrap_state = RtcBootstrapState::default();
+    let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+    let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
+    let metrics = RuntimeMetrics::default();
+
+    assert!(
+        bootstrap_state
+            .remote_addr_demux
+            .remember_remote_addr(source_addr, &stale_session_key)
+    );
+    {
+        let Ok(mut snapshot) = snapshot_state.lock() else {
+            return Err("snapshot state lock poisoned");
+        };
+        assert!(
+            snapshot
+                .remote_addr_demux
+                .remember_remote_addr(source_addr, &stale_session_key)
+        );
+    }
+
+    route_packet_to_matching_session(
+        &mut bootstrap_state,
+        &snapshot_state,
+        &mut routing_state,
+        &metrics,
+        source_addr,
+        candidate_addr,
+        &valid_rtp_packet(11, 111),
+    );
+
+    assert!(
+        bootstrap_state
+            .remote_addr_demux
+            .session_key_for_remote_addr(source_addr)
+            .is_none()
+    );
+    {
+        let Ok(snapshot) = snapshot_state.lock() else {
+            return Err("snapshot state lock poisoned");
+        };
+        assert!(
+            snapshot
+                .remote_addr_demux
+                .session_key_for_remote_addr(source_addr)
+                .is_none()
+        );
+    }
+    assert_eq!(routing_state.fallback_attempts(), 1);
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
+    assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
     Ok(())
 }
 
@@ -455,6 +543,38 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
     assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
     assert_eq!(metrics.snapshot().rtp_payload_bytes_egress(), 0);
     assert_eq!(metrics.snapshot().rtp_forwarded_packets_recording(), 1);
+}
+
+#[test]
+fn flush_forward_routes_writes_hot_rtp_metrics_only_to_the_worker_recorder() {
+    let source_session = test_transport_session_key(128, 0, 129, UserId::Integer(130));
+    let source_transport_media_id = TransportMediaId::new(131);
+    let mut state = RtcBootstrapState::default();
+    let sink = Arc::new(CountingSink::new());
+    let mut buffers = PacketLoopBuffers::new();
+    let metrics = RuntimeMetrics::default();
+    let rtp_metrics = RtpMetricsRecorder::default();
+    let packet = sample_forwarded_packet(source_session, "aud-up", b"payload");
+
+    buffers.pending_packets.push(packet);
+    buffers.forwards.push(
+        super::super::forwarding_destination::PacketForward::from_packet_sink(
+            0,
+            source_transport_media_id,
+            RegisteredPacketSink::new(
+                into_packet_sink(Arc::<CountingSink>::clone(&sink)),
+                RtpForwardDestinationKind::Recording,
+            ),
+        ),
+    );
+
+    flush_forward_routes(&mut state, &metrics, &rtp_metrics, &mut buffers);
+
+    assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.rtp_forwarded_packets_recording(), 0);
+    assert_eq!(snapshot.rtp_forwarded_payload_bytes_recording(), 0);
+    assert_eq!(snapshot.rtp_payload_bytes_egress(), 0);
 }
 
 #[test]

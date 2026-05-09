@@ -354,3 +354,94 @@ pub(super) fn first_featured_source_users_for_active_speakers(
         .take(limit)
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use o_sfu_router::{MediaKind, Rid};
+
+    use super::*;
+    use crate::runtime::source_model::{
+        PublishedSourceDescriptorParts, PublishedSourceOwner, SourceEncodingDescriptorParts,
+        SourceEncodingId, SourceModelError, SourcePolicy, SourceRoomPolicySelector, UserStreamId,
+    };
+
+    fn source_encoding(
+        source_id: PublishedSourceId,
+        encoding_id: SourceEncodingId,
+        rid: &str,
+        max_bitrate: u64,
+    ) -> SourceEncodingDescriptor {
+        SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
+            encoding_id,
+            source_id,
+            rid: Some(Rid::new(rid)),
+            primary_ssrc: None,
+            repair_ssrc: None,
+            max_bitrate: Some(max_bitrate),
+            resolution_scale: None,
+            max_framerate: None,
+            policy_role: None,
+            max_temporal_layer_id: None,
+            negotiated_format: None,
+        })
+    }
+
+    #[test]
+    fn route_input_uses_descriptor_owned_selectable_encoding_order() -> Result<(), SourceModelError>
+    {
+        let source_id = PublishedSourceId::from_raw(19);
+        let low_encoding_id = SourceEncodingId::from_raw(1);
+        let middle_encoding_id = SourceEncodingId::from_raw(2);
+        let high_encoding_id = SourceEncodingId::from_raw(3);
+        let source_user_id = UserId::Integer(4);
+        let consumer_user_id = UserId::Integer(5);
+        let source = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+            source_id,
+            owner: PublishedSourceOwner::new(source_user_id.clone()),
+            stream_id: UserStreamId::new("camera"),
+            media_kind: MediaKind::Video,
+            policy: SourcePolicy::hidden(),
+            mid: None,
+            encodings: vec![
+                source_encoding(source_id, high_encoding_id, "hi", 900_000),
+                source_encoding(source_id, low_encoding_id, "lo", 150_000),
+                source_encoding(source_id, middle_encoding_id, "mid", 450_000),
+            ],
+        })?;
+        let route = ReceiverVideoRouteInput::new(ReceiverVideoRouteInputParts {
+            user_count: 2,
+            source: &source,
+            consumer_user_id: &consumer_user_id,
+            consumer_connection_id: ConnectionId::from_raw(10),
+            source_user_id: &source_user_id,
+            source_connection_id: ConnectionId::from_raw(9),
+            source_transport_media_id: TransportMediaId::new(11),
+            consumer_transport_media_id: TransportMediaId::new(12),
+            current_selection: ConsumerSourceSelection::open(true),
+            layout_intent: ReceiverVideoLayoutIntent::new(
+                SourceRoomPolicySelector::VisibleThumbnail,
+            ),
+            visible_scalable_route_count: 1,
+            receiver_bandwidth_bps: None,
+        });
+
+        let selectable_encoding_ids = route
+            .encodings()
+            .iter()
+            .map(SourceEncodingDescriptor::encoding_id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            selectable_encoding_ids,
+            vec![low_encoding_id, middle_encoding_id, high_encoding_id]
+        );
+        assert_eq!(
+            route
+                .encodings()
+                .get(1)
+                .map(SourceEncodingDescriptor::encoding_id),
+            Some(middle_encoding_id)
+        );
+        Ok(())
+    }
+}
