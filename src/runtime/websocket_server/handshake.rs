@@ -313,13 +313,17 @@ async fn resolve_explicit_room(
     state: &RuntimeState,
     room_id: &str,
 ) -> Result<Arc<Room>, WebSocketCloseCode> {
-    state.rooms.get_by_uuid(room_id).await.ok_or_else(|| {
-        debug!(
-            room_id,
-            "authentication referenced an unknown explicit room"
-        );
-        WebSocketCloseCode::AuthFailed
-    })
+    state
+        .room_manager
+        .get_by_uuid(room_id)
+        .await
+        .ok_or_else(|| {
+            debug!(
+                room_id,
+                "authentication referenced an unknown explicit room"
+            );
+            WebSocketCloseCode::AuthFailed
+        })
 }
 
 async fn resolve_global_claims_room(
@@ -327,7 +331,7 @@ async fn resolve_global_claims_room(
     claims: &WebSocketConnectClaims,
     _remote_address: &str,
 ) -> Result<Arc<Room>, WebSocketCloseCode> {
-    let Some(room) = state.rooms.get_by_uuid(&claims.room_id).await else {
+    let Some(room) = state.room_manager.get_by_uuid(&claims.room_id).await else {
         debug!(
             room_id = claims.room_id,
             "verified websocket token referenced a missing room"
@@ -427,7 +431,7 @@ async fn join_user(
     let user_id = claims.user_id.clone();
     let permissions = claims.permissions.unwrap_or_default();
     let join_result = state
-        .rooms
+        .room_manager
         .join_user(
             room.uuid(),
             JoinUserRequest {
@@ -570,7 +574,7 @@ async fn cleanup_failed_session(
     connection_id: ConnectionId,
 ) {
     let _ = state
-        .rooms
+        .room_manager
         .close_session(room.uuid(), user_id, connection_id, &state.media_transport)
         .await;
 }

@@ -135,7 +135,7 @@ async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
     async {
         axum::Json(
             state
-                .rooms
+                .room_manager
                 .stats_snapshots(&state.media_transport)
                 .await
                 .into_iter()
@@ -209,7 +209,7 @@ async fn room(
             recording_address: query.recording_address,
         };
         let room = state
-            .rooms
+            .room_manager
             .serve_room(
                 issuer,
                 claims.key.as_deref(),
@@ -261,7 +261,7 @@ async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response 
         claims.normalize_runtime_user_ids();
         for (room_id, user_ids) in &claims.user_ids_by_room {
             state
-                .rooms
+                .room_manager
                 .disconnect_users(room_id, user_ids, &state.media_transport)
                 .await;
         }
@@ -301,8 +301,12 @@ fn authorization_token<'a>(headers: &'a HeaderMap, accepted_schemes: &[&str]) ->
 async fn diagnostics_summary(State(state): State<RuntimeState>) -> Response {
     async {
         axum::Json(
-            diagnostics::summary_response(&state.rooms, &state.media_transport, &state.diagnostics)
-                .await,
+            diagnostics::summary_response(
+                &state.room_manager,
+                &state.media_transport,
+                &state.diagnostics,
+            )
+            .await,
         )
         .into_response()
     }
@@ -312,8 +316,12 @@ async fn diagnostics_summary(State(state): State<RuntimeState>) -> Response {
 async fn diagnostics_rooms(State(state): State<RuntimeState>) -> Response {
     async {
         axum::Json(
-            diagnostics::rooms_response(&state.rooms, &state.media_transport, &state.diagnostics)
-                .await,
+            diagnostics::rooms_response(
+                &state.room_manager,
+                &state.media_transport,
+                &state.diagnostics,
+            )
+            .await,
         )
         .into_response()
     }
@@ -326,7 +334,7 @@ async fn diagnostics_room_detail(
 ) -> Response {
     async {
         let Some(payload) = diagnostics::room_detail_response(
-            &state.rooms,
+            &state.room_manager,
             &state.media_transport,
             &state.diagnostics,
             &room_id,
@@ -346,7 +354,7 @@ async fn diagnostics_room_users(
 ) -> Response {
     async {
         let Some(payload) = diagnostics::room_users_response(
-            &state.rooms,
+            &state.room_manager,
             &state.media_transport,
             &state.diagnostics,
             &room_id,
@@ -366,7 +374,7 @@ async fn diagnostics_room_graph(
 ) -> Response {
     async {
         let Some(payload) = diagnostics::room_detail_response(
-            &state.rooms,
+            &state.room_manager,
             &state.media_transport,
             &state.diagnostics,
             &room_id,
@@ -387,7 +395,7 @@ async fn diagnostics_user_graph(
 ) -> Response {
     async {
         let Some(payload) = diagnostics::room_detail_response(
-            &state.rooms,
+            &state.room_manager,
             &state.media_transport,
             &state.diagnostics,
             &room_id,
@@ -410,7 +418,7 @@ async fn diagnostics_user_detail(
 ) -> Response {
     async {
         match diagnostics::user_detail_response(
-            &state.rooms,
+            &state.room_manager,
             &state.media_transport,
             &state.diagnostics,
             &user_id,

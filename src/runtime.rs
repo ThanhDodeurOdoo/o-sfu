@@ -79,7 +79,7 @@ pub struct Runtime {
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeState {
     config: RuntimeConfig,
-    rooms: Arc<RoomManager>,
+    room_manager: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     media_transport: MediaTransport,
     media_core: MediaCore,
@@ -255,7 +255,7 @@ impl RuntimeState {
         let media_core = SfuCore::new(options.core, media_transport.clone());
         Self {
             config: config.clone(),
-            rooms,
+            room_manager: rooms,
             diagnostics,
             media_transport,
             media_core,

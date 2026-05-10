@@ -120,7 +120,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
         let exit_reason = super::session_loop::run(super::session_loop::UserLoop {
             writer: &mut ws_writer,
             reader: &mut ws_reader,
-            room_manager: state.rooms.as_ref(),
+            room_manager: state.room_manager.as_ref(),
             room: user_session.room.as_ref(),
             user_id: &user_session.user_id,
             connection_id: user_session.connection_id,
