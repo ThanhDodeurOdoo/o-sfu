@@ -137,13 +137,24 @@ pub enum SfuCoreError {
 
 /// Process-wide media facade.
 ///
-/// `SfuCore` owns immutable core options and one transport backend. It does
-/// not own websocket state, room membership or compatibility protocol mapping.
-/// Those stay in the server runtime and room engine.
+/// [`SfuCore`] is the main entry point for the media-core library. It owns the
+/// process-wide configuration and the transport backend. It does not manage
+/// websocket state or room membership because those belong to the server
+/// runtime and room engine.
 ///
-/// Use this type to create [`MediaSession`] handles. Media operations are
-/// intentionally not exposed as tuple-heavy methods on `SfuCore`, because a
-/// room, user id and connection id must stay paired for the whole operation.
+/// The core acts as a factory for [`MediaSession`] handles. By separating
+/// process-wide resources from connection-specific logic, the API avoids
+/// carrying technical dependencies like the transport handle through the
+/// application layer.
+///
+/// # Usage
+///
+/// Usually one instance of [`SfuCore`] is created during process initialization
+/// and shared across all user sessions.
+///
+/// ```ignore
+/// let core = SfuCore::new(options, transport);
+/// ```
 #[derive(Debug, Clone)]
 pub struct SfuCore {
     _options: CoreOptions,
@@ -152,21 +163,44 @@ pub struct SfuCore {
 
 /// Borrowed media handle for one room user connection.
 ///
-/// A `MediaSession` carries the room, user identity, connection identity and
-/// transport session key that belong together. Reuse it inside one
-/// orchestration step when several media operations target the same live
-/// connection.
+/// [`MediaSession`] is the user interface of the core. It bundles a room, user
+/// identity, connection identity, and the derived transport session key.
+/// This grouping ensures that orchestration logic always operates on a
+/// consistent tuple of identities without passing them as individual arguments
+/// to every method.
 ///
 /// # Lifecycle
 ///
-/// The handle does not keep the user connected. Mutating operations still ask
-/// room state whether the connection is current before they commit.
+/// Handles are intended to be short-lived and borrow-based. They should be
+/// created at the start of an orchestration step and dropped once the step
+/// is finished.
+///
+/// Holding a [`MediaSession`] does not guarantee the user is still connected
+/// or present in the room. All mutating operations perform an authoritative
+/// check against the room state before committing changes.
 ///
 /// # Concurrency
 ///
-/// Session methods are cold-path orchestration calls. They may await room
-/// locks, transport commands and cleanup effects. The room boundary remains
-/// responsible for releasing state locks before awaiting transport work.
+/// Methods on this handle are cold-path orchestration calls. They may
+/// involve awaiting room state locks, transport backend commands, or cleanup
+/// side-effects. The room boundary is responsible for managing its own
+/// synchronization to ensure that transport work does not hold room-wide
+/// locks for extended periods.
+///
+/// # Examples
+///
+/// Creating a session and requesting an initial offer:
+///
+/// ```ignore
+/// let session = core.session(&room, &user_id, connection_id);
+/// let (offer, caps) = session.create_initial_offer().await?;
+/// ```
+///
+/// Updating a subscription:
+///
+/// ```ignore
+/// session.update_subscription(&target_user_id, &intents).await;
+/// ```
 #[derive(Debug)]
 pub struct MediaSession<'a> {
     core: &'a SfuCore,
@@ -215,7 +249,7 @@ impl SfuCore {
 impl MediaSession<'_> {
     /// Return the current transport health for this endpoint.
     ///
-    /// `None` means the transport backend has no endpoint for this session key.
+    /// None means the transport backend has no endpoint for this session key.
     /// It does not prove that the user is absent from the room.
     #[must_use]
     pub fn endpoint_health(&self) -> Option<MediaEndpointHealth> {
@@ -230,9 +264,10 @@ impl MediaSession<'_> {
 
     /// Create the first transport offer for this session.
     ///
-    /// Store the returned [`OfferedMediaCapabilities`] with the pending request
-    /// and pass it back to [`Self::apply_initial_answer`]. The token preserves
-    /// the capability set used for this offer.
+    /// The returned [`OfferedMediaCapabilities`] must be stored with the
+    /// pending request and passed back to [`Self::apply_initial_answer`] to
+    /// ensure that the answer is interpreted against the exact capability
+    /// set used for the offer.
     ///
     /// # Errors
     ///
@@ -254,8 +289,9 @@ impl MediaSession<'_> {
 
     /// Create a follow-up offer after room state staged a media change.
     ///
-    /// `Ok(None)` is an ordinary no-op for backends or states that cannot emit
-    /// a renegotiation offer. Other transport failures are returned as errors.
+    /// Some transport backends or states may not support renegotiation.
+    /// In those cases this method returns Ok(None) as a normal no-op.
+    /// Other transport failures are returned as errors.
     ///
     /// # Errors
     ///
@@ -278,17 +314,16 @@ impl MediaSession<'_> {
 
     /// Apply the browser answer for the first offer.
     ///
-    /// The transport answer is applied first, then the answered SDP is
-    /// projected into router-native client capabilities. Room state is marked
-    /// negotiated only after those transport steps succeed. Any staged publish
-    /// work made valid by the answer is committed last.
+    /// The operation applies the transport answer first, then projects the
+    /// resulting SDP into router-native client capabilities. Room state is
+    /// marked as negotiated only after these steps succeed, and any staged
+    /// publishes made valid by the answer are committed last.
     ///
     /// # Errors
     ///
     /// Transport and capability projection errors mean answer application did
     /// not complete. [`SfuCoreError::SessionNegotiationRejected`] means room
-    /// state rejected the callback, usually because the connection became
-    /// stale while the browser was answering.
+    /// state rejected the callback because the connection became stale.
     pub async fn apply_initial_answer(
         &self,
         answer_sdp: &str,
@@ -349,8 +384,8 @@ impl MediaSession<'_> {
     /// Check whether this connection already has a staged publish for a stream.
     ///
     /// This is an idempotency hint for websocket orchestration. It is not an
-    /// authority to commit media by itself because another task can still win
-    /// or clean up the staged transaction before the answer arrives.
+    /// authority to commit media because another task could win or clean up
+    /// the staged transaction before the answer arrives.
     pub async fn has_staged_publish(&self, stream_id: &UserStreamId) -> bool {
         self.room
             .has_staged_publish(
@@ -364,7 +399,7 @@ impl MediaSession<'_> {
     /// Check whether the room currently has a live publication for this user.
     ///
     /// The result is room-authoritative at the moment of the state read. It
-    /// does not reserve the stream against a concurrent unpublish or user
+    /// does not reserve the stream against concurrent unpublish or user
     /// replacement.
     pub async fn is_stream_published(&self, stream_id: &UserStreamId) -> bool {
         self.room
@@ -372,9 +407,9 @@ impl MediaSession<'_> {
             .await
     }
 
-    /// Sets the user-visible activity state for an already published stream.
+    /// Set the user-visible activity state for an already published stream.
     ///
-    /// The outcome reports both room acceptance and the best-effort transport
+    /// The outcome reports both room acceptance and best-effort transport
     /// projection. A transport update failure does not mean the room-visible
     /// activity change was rejected.
     pub async fn set_publication_activity(
@@ -393,12 +428,12 @@ impl MediaSession<'_> {
             .await
     }
 
-    /// Persists this session's subscription intent for a target user.
+    /// Persist this session subscription intent for a target user.
     ///
-    /// The returned outcome is room-authoritative. A stale connection means the
-    /// caller is acting on a session that has already been replaced or removed.
-    /// The caller owns translation from compatibility download state into the
-    /// generic per-stream map.
+    /// The returned outcome is room-authoritative. A stale connection outcome
+    /// means the caller is acting on a session that has already been replaced
+    /// or removed. The caller owns translation from compatibility download
+    /// state into the generic per-stream map.
     pub async fn update_subscription(
         &self,
         target_user_id: &UserId,
@@ -417,7 +452,7 @@ impl MediaSession<'_> {
 
     /// Update room-visible user information for this connection.
     ///
-    /// `refresh` controls whether other users need a full snapshot or a normal
+    /// Refresh controls whether other users need a full snapshot or a normal
     /// incremental update. Stale connections are ignored by the room boundary.
     pub async fn update_user_info(&self, info: UserInfo, refresh: UserInfoRefresh) {
         self.room
@@ -431,16 +466,16 @@ impl MediaSession<'_> {
             .await;
     }
 
-    /// Reserves media for a publish that still needs renegotiation.
+    /// Reserve media for a publish that still needs renegotiation.
     ///
-    /// `Ok(PublishStageOutcome::Staged)` means the caller should request a new
-    /// offer. Duplicate and rejected outcomes are ordinary domain decisions.
-    /// `Err` means the transport could not reserve media and the publish cannot
-    /// safely continue.
+    /// Returns `Ok(PublishStageOutcome::Staged)` when the caller should
+    /// request a new offer. Duplicate and rejected outcomes are ordinary
+    /// domain decisions. Err means the transport could not reserve media
+    /// and the publish cannot safely continue.
     ///
-    /// The intent is the business-layer policy handoff. Core stores the stream
-    /// id as opaque identity and later uses the attached
-    /// [`crate::SourcePolicy`] when applying receiver layout and bandwidth decisions.
+    /// The intent represents the business-layer policy handoff. Core stores
+    /// the stream ID as opaque identity and uses the attached source policy
+    /// when applying receiver layout and bandwidth decisions.
     ///
     /// # Errors
     ///
@@ -461,11 +496,11 @@ impl MediaSession<'_> {
             .map_err(SfuCoreError::Transport)
     }
 
-    /// Cancels a pending publish reservation before it becomes a live track.
+    /// Cancel a pending publish reservation before it becomes a live track.
     ///
     /// The cleanup result is part of the returned outcome because rollback
-    /// consumes staged ownership even when transport cleanup races with session
-    /// teardown.
+    /// consumes staged ownership even when transport cleanup races with
+    /// session teardown.
     pub async fn rollback_staged_publish(
         &self,
         stream_id: &UserStreamId,
@@ -482,7 +517,7 @@ impl MediaSession<'_> {
 
     /// Roll back every staged publish owned by this connection.
     ///
-    /// User replacement, websocket close and failed admission use this as
+    /// User replacement, websocket close, and failed admission use this as
     /// best-effort cleanup for in-flight publish reservations. It does not
     /// close the transport session itself.
     pub async fn rollback_connection_publishes(&self) {
@@ -495,7 +530,7 @@ impl MediaSession<'_> {
             .await;
     }
 
-    /// Removes a live publication owned by this exact session.
+    /// Remove a live publication owned by this exact session.
     ///
     /// Missing publications are normal no-ops. Cleanup or state commit failures
     /// are explicit outcomes so callers do not infer failure reasons from a

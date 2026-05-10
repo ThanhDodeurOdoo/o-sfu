@@ -398,7 +398,7 @@ impl User {
     pub async fn publish(&mut self, stream_type: StreamType) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
         let stream_id = stream_id_for_stream_type(stream_type);
-        let has_queued_publish = self.state.negotiation.has_queued_publish(stream_type);
+        let has_queued_publish = self.state.negotiation_state.has_queued_publish(stream_type);
         {
             let media = self.media();
             if has_queued_publish || media.has_staged_publish(&stream_id).await {
@@ -414,15 +414,15 @@ impl User {
                 return Ok(UserOutput::new());
             }
         }
-        if self.state.negotiation.awaiting_answer() {
-            self.state.negotiation.queue_publish_slot(stream_type);
-            let _disposition = self.state.negotiation.request_renegotiation();
+        if self.state.negotiation_state.awaiting_answer() {
+            self.state.negotiation_state.queue_publish_slot(stream_type);
+            let _disposition = self.state.negotiation_state.schedule_renegotiation();
             return Ok(UserOutput::new());
         }
         if !self.stage_publish_slot(stream_type).await? {
             return Ok(UserOutput::new());
         }
-        self.request_renegotiation().await
+        self.renegotiate().await
     }
 
     /// Accept a client intent to stop publishing one compatibility stream.
@@ -439,7 +439,11 @@ impl User {
     /// cleanly.
     pub async fn unpublish(&mut self, stream_type: StreamType) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
-        if self.state.negotiation.clear_queued_publish(stream_type) {
+        if self
+            .state
+            .negotiation_state
+            .clear_queued_publish(stream_type)
+        {
             return Ok(UserOutput::new());
         }
         let media_disposition = {
@@ -462,13 +466,13 @@ impl User {
         match media_disposition {
             Some(UnpublishMediaDisposition::RolledBackStagedPublish { cleanup }) => {
                 Self::log_staged_publish_rollback(stream_type, cleanup);
-                let _disposition = self.state.negotiation.request_renegotiation();
+                let _disposition = self.state.negotiation_state.schedule_renegotiation();
                 Ok(UserOutput::new())
             }
             Some(UnpublishMediaDisposition::RemovedLivePublication { cleanup }) => {
                 Self::log_live_unpublish(stream_type, cleanup);
                 self.update_publication_info(stream_type, false).await?;
-                self.request_renegotiation().await
+                self.renegotiate().await
             }
             None => Ok(UserOutput::new()),
         }
@@ -577,7 +581,7 @@ impl User {
         self.state.wire_state.apply_remote_track_bootstrap(&track);
         let mut output = UserOutput::new()
             .with_signal(ServerMessage::Tracks(self.state.wire_state.snapshot()).into());
-        output.extend(self.request_renegotiation().await?);
+        output.extend(self.renegotiate().await?);
         Ok(output)
     }
 
@@ -597,7 +601,7 @@ impl User {
         let mut output = UserOutput::new()
             .with_signals(wire_messages.messages.into_iter().map(UserSignal::from));
         if wire_messages.needs_renegotiation {
-            output.extend(self.request_renegotiation().await?);
+            output.extend(self.renegotiate().await?);
         }
         Ok(output)
     }
@@ -627,7 +631,7 @@ impl User {
         let mut output = UserOutput::new()
             .with_signals(wire_messages.messages.into_iter().map(UserSignal::from));
         if wire_messages.needs_renegotiation {
-            output.extend(self.request_renegotiation().await?);
+            output.extend(self.renegotiate().await?);
         }
         Ok(output)
     }
@@ -687,7 +691,9 @@ impl User {
             ?request_id,
             "prepared negotiation request"
         );
-        self.state.negotiation.issue(request_id, request, action);
+        self.state
+            .negotiation_state
+            .issue(request_id, request, action);
         signal
     }
 
@@ -700,8 +706,8 @@ impl User {
             connection_id = ?self.connection_id
         )
     )]
-    async fn request_renegotiation(&mut self) -> Result<UserOutput, UserError> {
-        match self.state.negotiation.request_renegotiation() {
+    async fn renegotiate(&mut self) -> Result<UserOutput, UserError> {
+        match self.state.negotiation_state.schedule_renegotiation() {
             RenegotiationDisposition::Skip | RenegotiationDisposition::QueueOnly => {
                 Ok(UserOutput::new())
             }
@@ -739,7 +745,7 @@ impl User {
         &mut self,
         response_to: &RequestId,
     ) -> Option<ResolvedUserNegotiation> {
-        let Some(resolved) = self.state.negotiation.resolve_answer(response_to) else {
+        let Some(resolved) = self.state.negotiation_state.resolve_answer(response_to) else {
             warn!(
                 user_id = ?&self.id,
                 connection_id = ?self.connection_id,
@@ -761,7 +767,7 @@ impl User {
         if !needs_follow_up {
             return Ok(UserOutput::new());
         }
-        self.request_renegotiation().await
+        self.renegotiate().await
     }
 
     async fn apply_negotiation_action(
@@ -890,7 +896,7 @@ impl User {
     }
 
     async fn stage_queued_publish_slots(&mut self) -> Result<bool, UserError> {
-        let queued_publish_slots = self.state.negotiation.take_queued_publish_slots();
+        let queued_publish_slots = self.state.negotiation_state.take_queued_publish_slots();
         let mut staged_any = false;
         for slot in queued_publish_slots {
             if self.stage_publish_slot(slot).await? {

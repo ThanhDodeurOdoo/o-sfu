@@ -1,13 +1,16 @@
-//! `runtime` decide which concerns stay process-global, wires those long-lived subsystems
-//! together once, and then hands request-local work to the apporpriate child node instead of
-//! mixing admission, room state, and media execution in one place.
+//! process-global orchestrator, wires subsystems together and manage server lifecycle
+//!
+//! runtime acts as the entry point for the server process, owning long-lived subsystems
+//! like configuration, room management, metrics, and media transport. it ensures that
+//! background tasks are synchronized with the control-plane server and provides guaranteed
+//! cleanup through structured task management.
 //!
 //! ```text
 //! Runtime
 //! |- http_server          -> HTTP control-plane routes and server boot
 //! |- websocket_server     -> WebSocket upgrade, auth handshake, and steady-state socket loop
 //! |- core                 -> room engine, media transport, recording, metrics, and diagnostics
-//! `- telemetry crate      -> tracing setup, schemas, diagnostics, metrics, and exporters
+//! `- telemetry            -> tracing setup, schemas, diagnostics, metrics, and exporters
 //! ```
 
 use std::{future::Future, process, sync::Arc, time::Instant as StdInstant};
@@ -68,6 +71,11 @@ pub struct Runtime {
     media_transport: MediaTransport,
 }
 
+/// cheap-to-clone snapshot of runtime dependencies for per-request handlers
+///
+/// this is the standard shared state passed to axum handlers and websocket loops,
+/// providing access to the room manager, diagnostics, and media core without
+/// exposing the full runtime lifecycle.
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeState {
     config: RuntimeConfig,
@@ -97,6 +105,9 @@ impl Default for RuntimeServices {
 
 impl Runtime {
     /// Builds the process runtime from loaded configuration.
+    ///
+    /// this bootstraps the entire server instance, initializing telemetry,
+    /// creating the room manager, and preparing the media transport workers.
     ///
     /// # Errors
     ///
@@ -140,12 +151,18 @@ impl Runtime {
             .await
     }
 
+    /// default entrypoint for the production server loop
     async fn run_until_stopped(self) -> Result<()> {
         let state = self.state();
         self.serve(|shutdown_token| serve_http(state, shutdown_token))
             .await
     }
 
+    /// core execution lifecycle manager
+    ///
+    /// orchestrates the relationship between the control plane (the http/websocket server)
+    /// and the background workers. it ensures that background tasks are explicitly
+    /// joined and cleaned up when the server stops,
     async fn serve<F, HttpServer>(self, http_server: F) -> Result<()>
     where
         F: FnOnce(CancellationToken) -> HttpServer,
@@ -196,10 +213,12 @@ impl RuntimeTasks {
         }
     }
 
+    /// provides a child token that will be cancelled when the runtime tasks stop
     fn shutdown_token(&self) -> CancellationToken {
         self.shutdown_token.child_token()
     }
 
+    /// signals background tasks to stop and waits for their completion
     async fn shutdown(mut self) {
         self.shutdown_token.cancel();
         if let Some(source_packet_policy_sync) = self.source_packet_policy_sync.take()
@@ -216,6 +235,7 @@ impl RuntimeTasks {
 
 impl Drop for RuntimeTasks {
     fn drop(&mut self) {
+        // cancellation is idempotent, ensure tasks stop even if explicit shutdown was skipped
         self.shutdown_token.cancel();
         if let Some(source_packet_policy_sync) = self.source_packet_policy_sync.take() {
             source_packet_policy_sync.abort();

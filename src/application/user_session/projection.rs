@@ -1,3 +1,8 @@
+//! translation layer between internal core models and signaling protocol wire shapes
+//!
+//! this module isolates the conversion logic needed to map domain-native state into the format
+//! expected by the signaling protocol
+
 use o_sfu_protocol::{
     shared::{StreamType, UserId},
     signaling::{

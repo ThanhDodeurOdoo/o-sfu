@@ -1,3 +1,10 @@
+//! Signaling and compatibility state for one websocket connection.
+//!
+//! this module owns the pure state machines used to sequence server-authored
+//! requests and track the browser-facing track snapshot, it has no knowledge of
+//! transport resources or media core transactions, which keeps the transition
+//! logic deterministic and easy to test.
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     mem::take,
@@ -18,25 +25,28 @@ use crate::{
     runtime::room::{RemoteTrackBootstrap, RoomEventMessage, TrackBindingUpdate},
 };
 
+/// Connection-scoped signaling and compatibility state.
 #[derive(Debug, Default)]
 pub(super) struct UserState {
-    request_ids: UserRequestIds,
-    pub(super) negotiation: UserNegotiationState,
+    request_id_sequencer: UserRequestIdSequencer,
+    pub(super) negotiation_state: UserNegotiationState,
+    /// track and peer snapshot for the compatibility layer.
     pub(super) wire_state: UserWireState,
 }
 
 impl UserState {
     pub(super) fn next_request_id(&mut self) -> RequestId {
-        self.request_ids.next()
+        self.request_id_sequencer.next()
     }
 }
 
+/// Generator for monotonic server-authored request ids.
 #[derive(Debug, Default)]
-struct UserRequestIds {
+struct UserRequestIdSequencer {
     next_request_counter: u64,
 }
 
-impl UserRequestIds {
+impl UserRequestIdSequencer {
     fn next(&mut self) -> RequestId {
         let request_id = RequestId::new(format!("server-{}", self.next_request_counter));
         self.next_request_counter = self.next_request_counter.saturating_add(1);
@@ -46,23 +56,34 @@ impl UserRequestIds {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PendingUserAction {
+    /// the request expects to establish the first transport session.
     EstablishSession {
+        /// capabilities offered by the server for initial codec negotiation.
         offered_capabilities: OfferedMediaCapabilities,
     },
+    /// the request only refreshes an existing transport session.
     RefreshSession,
 }
 
+/// metadata for one unresolved server-authored request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PendingUserRequest {
+    /// unique id sent to the client.
     pub(super) request_id: RequestId,
+    /// original request payload used for re-validation on answer.
     pub(super) request: ServerRequest,
+    /// orchestration intent that triggered the request.
     pub(super) action: PendingUserAction,
 }
 
+/// Command returned to the orchestrator after a renegotiation request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RenegotiationDisposition {
+    /// no negotiation work is needed.
     Skip,
+    /// a request is already pending, the intent was queued for a follow-up.
     QueueOnly,
+    /// he session is stable and ready to issue a new offer immediately
     SendNow,
 }
 
@@ -72,17 +93,30 @@ pub(super) struct ResolvedUserNegotiation {
     pub(super) queued_renegotiation: bool,
 }
 
+/// Negotiation state machine for one browser session.
+///
+/// the machine ensures that only one server offer is pending at a time, it
+/// handles queuing for publish intents and room events that arrive while an
+/// answer is outstanding.
 #[derive(Debug)]
 pub(super) enum UserNegotiationState {
+    /// the connection is authenticated but the first offer is not yet issued.
     BeforeInitialOffer {
+        /// publish intents received before startup.
         queued_publish_slots: BTreeSet<StreamType>,
     },
+    /// the session is active and no server requests are pending.
     Stable {
+        /// follow-up publish intents waiting for the next stable window.
         queued_publish_slots: BTreeSet<StreamType>,
     },
+    /// an offer or renegotiation request has been sent to the browser.
     Negotiating {
+        /// metadata needed to apply the browser's answer.
         pending: PendingUserRequest,
+        /// follow-up publish intents received while this request is pending.
         queued_publish_slots: BTreeSet<StreamType>,
+        /// whether a generic renegotiation is needed after this answer.
         queued_renegotiation: bool,
     },
 }
@@ -118,6 +152,10 @@ impl UserNegotiationState {
         queued_publish_slots
     }
 
+    /// record a newly issued server request in the state machine.
+    ///
+    /// this moves the session to [`Self::Negotiating`] and preserves any existing
+    /// publish queue.
     pub(super) fn issue(
         &mut self,
         request_id: RequestId,
@@ -136,7 +174,12 @@ impl UserNegotiationState {
         };
     }
 
-    pub(super) fn request_renegotiation(&mut self) -> RenegotiationDisposition {
+    /// assess whether a new renegotiation offer can be sent right now.
+    ///
+    /// returns [`RenegotiationDisposition::SendNow`] if the state is stable,
+    /// otherwise it flags the machine to trigger a follow-up after the current
+    /// answer arrives.
+    pub(super) fn schedule_renegotiation(&mut self) -> RenegotiationDisposition {
         match self {
             Self::BeforeInitialOffer { .. } => RenegotiationDisposition::Skip,
             Self::Stable { .. } => RenegotiationDisposition::SendNow,
@@ -150,6 +193,10 @@ impl UserNegotiationState {
         }
     }
 
+    /// resolve a browser answer and return to stable state.
+    ///
+    /// returns the pending request metadata if the id matches, otherwise it
+    /// returns `None` and preserves the current state.
     pub(super) fn resolve_answer(
         &mut self,
         response_to: &RequestId,
@@ -222,9 +269,12 @@ impl UserNegotiationState {
     }
 }
 
+/// Envelope for ordered server messages produced by one room event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct UserWireMessages {
+    /// messages to be batched and sent through the websocket.
     pub(super) messages: Vec<ServerMessage>,
+    /// whether the event invalidated the browser's current track snapshot.
     pub(super) needs_renegotiation: bool,
 }
 
@@ -248,6 +298,10 @@ pub(super) struct UserWireState {
 }
 
 impl UserWireState {
+    /// build compatibility signaling for one authoritative room message.
+    ///
+    /// this method updates the local track snapshot and returns the ordered
+    /// signals that the browser needs to see the transition.
     pub(super) fn messages_for_room_event(
         &mut self,
         message: RoomEventMessage,
@@ -298,6 +352,7 @@ impl UserWireState {
         }
     }
 
+    /// bootstrap one newly visible remote track for the browser.
     pub(super) fn apply_remote_track_bootstrap(&mut self, track: &RemoteTrackBootstrap) {
         let Some(stream_type) = stream_type_for_stream_id(track.stream_id()) else {
             return;
@@ -311,10 +366,12 @@ impl UserWireState {
         );
     }
 
+    /// build a full snapshot of all current track bindings.
     pub(super) fn snapshot(&self) -> Vec<TrackBinding> {
         self.bindings_by_mid.values().cloned().collect()
     }
 
+    /// apply a track-level binding update and return the resulting signals.
     pub(super) fn messages_for_track_binding_update(
         &mut self,
         update: &TrackBindingUpdate,
@@ -469,7 +526,7 @@ mod tests {
 
         assert!(resolved.is_some());
         assert!(matches!(
-            state.request_renegotiation(),
+            state.schedule_renegotiation(),
             RenegotiationDisposition::SendNow
         ));
         assert_eq!(state.take_queued_publish_slots(), vec![StreamType::Camera]);
@@ -495,7 +552,7 @@ mod tests {
         );
         assert!(state.awaiting_answer());
         assert!(matches!(
-            state.request_renegotiation(),
+            state.schedule_renegotiation(),
             RenegotiationDisposition::QueueOnly
         ));
     }
