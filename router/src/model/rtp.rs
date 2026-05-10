@@ -1,11 +1,39 @@
+//! Router-native RTP model for the transport edge.
+//!
+//! This module defines the typed domain model used to describe media streams,
+//! codecs, and their negotiated properties. It sits between the signaling/SDP
+//! layer and the raw packet loop, allowing the router to reason about media
+//! without parsing raw bytes or string-heavy protocol bags.
+//!
+//! ### RTP Packet Context
+//!
+//! Most of the types defined here map directly to fields in the "RFC 3550"
+//! RTP header or its extensions:
+//!
+//! ```text
+//!  0                   1                   2                   3
+//!  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |V=2|P|X|  CC   |M|     PT      |       Sequence Number         |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |                           Timestamp                           |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |           Synchronization Source (SSRC) identifier            |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! ```
+//!
+//! - `V`: version (always 2)
+//! - `P`: padding bit
+//! - `X`: extension bit (if set, an extension header follows the SSRC)
+//! - `CC`: "CSRC count", the number of contributing source identifiers (0-15) that follow the SSRC
+//! - `M`: "Marker" bit, used by profiles to mark significant events like the end of a video frame
+//! - `PT`: "Payload Type" (identifies the codec)
+//! - `SSRC`: unique stream identifier
+//!
 //! RFC references for this module:
 //! - RTP base protocol: <https://www.rfc-editor.org/rfc/rfc3550>
 //! - RTP A/V profile payload assignments: <https://www.rfc-editor.org/rfc/rfc3551>
 //! - RTP header extension framework: <https://www.rfc-editor.org/rfc/rfc8285>
-//!
-//! This module define the router-native RTP model used at the transport edge.
-//! It keeps codec, header-extension, and stream-binding data in typed domain
-//! strcutures instead of protocol-shaped JSON bags.
 
 use std::borrow::Cow;
 
@@ -13,23 +41,33 @@ use o_sfu_rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
 
 use super::MediaKind;
 
+/// Canonical name for a media codec (e.g. "opus", "vp8", "h264")
 pub type MediaCodec = rfc_rtp::CodecName;
+
+/// Uniform resource identifier for a header extension (e.g. "urn:ietf:params:rtp-hdrext:ssrc-audio-level")
 pub type HeaderExtensionUri = rfc_webrtc::RtpHeaderExtensionUri;
 
-/// RTCP feedback categories used by codec capabilities and negotiated formats.
+/// Categories of feedback messages sent over RTCP to control stream behavior.
 ///
-/// Reference:
-/// - RFC 3550 (RTP/RTCP)
+/// These define how the receiver reports issues (like packet loss) or requests
+/// changes (like a new keyframe) to the sender.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RtcpFeedbackKind {
+    /// Generic negative acknowledgment (RFC 4585)
     Nack,
+    /// Picture loss indication (RFC 4585), used to request a full keyframe
     NackPli,
+    /// Full intra request (RFC 5104), a more forceful keyframe request
     CcmFir,
+    /// Google-specific receiver estimated maximum bitrate
     GoogRemb,
+    /// Transport-wide congestion control (draft-holmer-rmcat-transport-wide-cc-extensions)
     TransportCc,
+    /// Any other vendor-specific or experimental feedback type
     Other(String),
 }
 
+/// One negotiated RTCP feedback mechanism for a codec.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RtcpFeedback {
     kind: RtcpFeedbackKind,
@@ -53,6 +91,10 @@ impl RtcpFeedback {
     }
 }
 
+/// 7-bit identifier that maps an RTP packet to a specific negotiated codec format.
+///
+/// In modern WebRTC, these are usually "dynamic" (range 96-127), meaning their
+/// meaning is defined locally by the SDP for the duration of the session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PayloadType(u8);
 
@@ -80,7 +122,11 @@ impl From<PayloadType> for u8 {
     }
 }
 
-/// Synchronization source identifier for a media stream.
+/// Synchronization source identifier for a media stream (RFC 3550).
+///
+/// Every distinct stream of packets (e.g. one audio track, one camera layer)
+/// is assigned a random 32-bit SSRC. This allows multiple streams to be
+/// multiplexed over a single transport (e.g. one UDP port).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Ssrc(u32);
 
@@ -108,7 +154,11 @@ impl From<Ssrc> for u32 {
     }
 }
 
-/// RTP stream identifier used for simulcast or layered media.
+/// Restriction identifier (RFC 8853).
+///
+/// Used in "Simulcast" to label different encodings of the same source (e.g.
+/// "low" and "high" resolution). Unlike SSRC which is a random number that
+/// can change if a collision occurs, RID is a stable string label.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Rid(String);
 
@@ -136,7 +186,11 @@ impl From<String> for Rid {
     }
 }
 
-/// Media identification carried at the SDP and RTP routing boundary.
+/// Media identification (RFC 8843).
+///
+/// Ties an RTP stream to a specific "m=" section in the SDP. This is
+/// critical for "BUNDLE" where multiple media sections share one transport,
+/// as it provides a stable way to route packets to the correct logical track.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Mid(String);
 
@@ -164,6 +218,7 @@ impl From<String> for Mid {
     }
 }
 
+/// Local 4-bit identifier for a header extension (RFC 8285).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HeaderExtensionId(u8);
 
@@ -191,14 +246,23 @@ impl From<HeaderExtensionId> for u8 {
     }
 }
 
-/// Typed codec parameter (affects interoperability).
+/// Typed codec parameter that affects interoperability.
+///
+/// These correspond to "a=fmtp" parameters in SDP. Mismatched settings
+/// here usually mean the receiver cannot decode the sender's bitstream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodecSetting {
+    /// Associated payload type for RTX (RFC 4588)
     RtxAssociation(PayloadType),
+    /// H264-specific packetization mode (mode 0 or 1)
     H264PacketizationMode(u8),
+    /// H264 profile and level (e.g. "42e01f" for Constrained Baseline Level 3.1)
     H264ProfileLevelId(String),
+    /// VP9-specific profile identifier
     Vp9ProfileId(u8),
+    /// OPUS-specific flag for in-band forward error correction
     UseInBandFec(bool),
+    /// Generic catch-all for unknown or vendor parameters
     Other { key: String, value: String },
 }
 
@@ -232,7 +296,20 @@ impl CodecSetting {
     }
 }
 
-/// RTP header-extension capability or negotiated use.
+/// RTP header-extension configuration (RFC 8285).
+///
+/// Allows carrying extra metadata (like bandwidth estimation hints or
+/// audio levels) in a standard way within the RTP packet header.
+///
+/// ```text
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |      defined by profile       |           length              |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |  ID   |  len  |     data...                                   |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeaderExtension {
     uri: HeaderExtensionUri,
@@ -279,11 +356,10 @@ impl HeaderExtension {
 
 /// Codec capability advertised by a router or endpoint.
 ///
-/// `media_kind`, `codec`, and `clock_rate` identify the codec family,
-/// `payload_type` is optional because capability advertisements may express a
-/// preference instead of a fixed mapping, `channels` is only meaningful for
-/// audio, and `settings` plus `rtcp_feedback` preserve the interoperability
-/// constraints that matter during negotiation.
+/// Represents one possible way an endpoint can encode or decode media.
+/// The `payload_type` is optional here because capabilities are often
+/// just templates (e.g. "i support VP8") before a concrete session pins
+/// a specific PT number.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaCodecCapability {
     media_kind: MediaKind,
@@ -407,7 +483,7 @@ impl MediaCodecCapability {
     }
 }
 
-/// Full capability set for one RTP endpoint.
+/// Full set of codec and extension capabilities for an RTP endpoint.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MediaCapabilities {
     codecs: Vec<MediaCodecCapability>,
@@ -432,10 +508,10 @@ impl MediaCapabilities {
     }
 }
 
-/// One negotiated codec format inside a concrete media stream.
+/// Negotiated codec format for a concrete media stream.
 ///
-/// Unlike [`MediaCodecCapability`], the payload type is fixed here because this
-/// shape represents an actual producer, consumable stream, or consumer result.
+/// Unlike a capability, a format has a fixed `payload_type` that matches the
+/// actual value expected in the RTP packets on the wire.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaFormat {
     media_kind: MediaKind,
@@ -553,11 +629,10 @@ impl MediaFormat {
     }
 }
 
-/// Binding between a negotiated media format and the source-specific routing ids.
+/// Routing bridge between a negotiated media format and a physical stream.
 ///
-/// Depending on the flow, a binding may carry SSRC, RID, payload type remapping,
-/// and bitrate hints. The router keeps this data typed so transport code can map
-/// media packets without re-parsing protocol-shaped dictionaries.
+/// It ties the codec format to the network-level identifiers (SSRC or RID)
+/// used to identify the stream.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StreamBinding {
     ssrc: Option<Ssrc>,
@@ -637,11 +712,10 @@ impl StreamBinding {
     }
 }
 
-/// Concrete RTP stream description used at the router and transport boundary.
+/// Description of one logical media stream (e.g. "camera") at the router boundary.
 ///
-/// `formats` lists the negotiated codecs, `header_extensions` lists the
-/// negotiated extension set, `bindings` ties source ids such as SSRC or RID to
-/// those formats, and `mid` carries the media section identity when one exists.
+/// Combines negotiated formats (codecs), extensions, and the stream bindings
+/// that tell the router how to identify the packets on the wire.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MediaStream {
     formats: Vec<MediaFormat>,
