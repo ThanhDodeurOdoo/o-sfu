@@ -29,7 +29,7 @@ use super::{
         super::{
             bitrate::RtcBitrateState,
             commands::RtcWorkerResponse,
-            local_send_rewrite::forget_transport_media_rewrites,
+            local_send_rewrite::forget_transport_media_streams,
             media_registry::RegisteredMediaHandle,
             simulcast,
             state::{PendingRecvStream, RtcBootstrapState, RtcSessionState},
@@ -151,8 +151,8 @@ fn worker_remove_media(
             ..
         } => {
             if let Some(session_state) = state.users.get_mut(&session_key) {
-                forget_transport_media_rewrites(
-                    &mut session_state.local_send_rewrites,
+                forget_transport_media_streams(
+                    &mut session_state.consumer_streams,
                     transport_media_id,
                 );
             }

@@ -103,7 +103,7 @@ pub(super) fn ensure_session_rtc_state(
             max_bitrate_out_bps: Some(max_bitrate_out_bps),
             dtls_started: false,
             sdp_negotiation: SessionSdpNegotiationState::default(),
-            local_send_rewrites: HashMap::new(),
+            consumer_streams: HashMap::new(),
         },
     );
     Ok(true)

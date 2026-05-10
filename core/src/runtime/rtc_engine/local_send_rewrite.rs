@@ -1,9 +1,7 @@
-//! Receiver-local RTP identity rewriting for browser-bound media.
-//!
-//! Publisher RTP can arrive from several simulcast SSRCs while the browser
-//! consumer receives one downstream stream. This module contain the receiver-local
-//! identity for that stream: sequence number, RTP timestamp and the VP8 payload
-//! descriptor fields browsers use to order frames across layer switches.
+//! when switching between different quality levels (simulcast), the source packets
+//! change their sequence numbers and timestamps. this module hides those
+//! jumps from the browser by mapping them into one continuous, monotonic stream.
+//! for vp8, it also handles the picture identifiers to prevent playback glitches.
 
 use std::collections::HashMap;
 
@@ -13,160 +11,182 @@ use crate::runtime::media_transport::TransportMediaId;
 
 const VP8_LONG_PICTURE_ID_MODULUS: u16 = 1 << 15;
 
-/// Key for one browser consumer's rewritten RTP stream.
-///
-/// The key is intentionally not scoped by publisher RID. Fallback and selected
-/// simulcast layers must share one downstream identity because they are written
-/// into the same rid-less browser `StreamTx`.
+/// key for one consumer stream
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) struct LocalSendRewriteKey {
+pub(super) struct ConsumerStreamKey {
     transport_media_id: TransportMediaId,
 }
 
-/// Mutable identity anchors for one downstream browser RTP stream.
+/// state for one downstream video stream
 ///
-/// The source SSRC can change when route control moves between simulcast
-/// layers. The local anchors preserve a monotonic receiver view while keeping
-/// source deltas within one SSRC, so jitter buffer and VP8 decoder state do not
-/// see unrelated publisher identities as one discontinuous stream.
+/// it tracks the counters and offsets needed to keep the stream continuous for
+/// the browser even when the publisher source changes.
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct LocalSendRewriteState {
+pub(super) struct ConsumerStream {
+    /// the next sequence number to assign
     next_seq_no: SeqNo,
+    /// the current publisher source
     source_ssrc: Option<Ssrc>,
+    /// the publisher timestamp used as the start of the current projection
     source_timestamp_anchor: u32,
-    local_timestamp_anchor: u32,
-    last_local_timestamp: Option<u32>,
+    /// the consumer timestamp used as the start of the current projection
+    projected_timestamp_anchor: u32,
+    /// the last timestamp we sent to the browser
+    last_projected_timestamp: Option<u32>,
     source_picture_id_anchor: Option<u16>,
-    local_picture_id_anchor: Option<u16>,
-    last_local_picture_id: Option<u16>,
+    projected_picture_id_anchor: Option<u16>,
+    last_projected_picture_id: Option<u16>,
     source_tl0_pic_idx_anchor: Option<u8>,
-    local_tl0_pic_idx_anchor: Option<u8>,
-    last_local_tl0_pic_idx: Option<u8>,
+    projected_tl0_pic_idx_anchor: Option<u8>,
+    last_projected_tl0_pic_idx: Option<u8>,
 }
 
-impl LocalSendRewriteState {
+impl ConsumerStream {
     fn take_seq_no(&mut self) -> SeqNo {
         self.next_seq_no.inc()
     }
 
-    fn rewrite(
+    /// assigns a sequential id to a packet so it follows the previous one
+    ///
+    /// if we switch to a different quality level (ssrc), we calculate a new
+    /// offset so the browser doesn't see a jump in timestamps or sequence numbers.
+    fn project(
         &mut self,
         source_ssrc: Ssrc,
         source_timestamp: u32,
         vp8_payload: Vp8PayloadIdentity,
-    ) -> LocalSendRewrite {
+    ) -> ProjectedIdentity {
         let seq_no = self.take_seq_no();
         let previous_source_ssrc = self.source_ssrc;
         if previous_source_ssrc != Some(source_ssrc) {
+            // when the source ssrc changes, we pick up the timestamp right after the
+            // last one we sent to keep the timeline continuous
             let rtp_timestamp = self
-                .last_local_timestamp
+                .last_projected_timestamp
                 .map_or(source_timestamp, |timestamp| timestamp.wrapping_add(1));
             self.source_ssrc = Some(source_ssrc);
             self.source_timestamp_anchor = source_timestamp;
-            self.local_timestamp_anchor = rtp_timestamp;
-            self.last_local_timestamp = Some(rtp_timestamp);
+            self.projected_timestamp_anchor = rtp_timestamp;
+            self.last_projected_timestamp = Some(rtp_timestamp);
+            // we must also re-anchor vp8 identifiers on the next packet
             self.reset_vp8_source_anchors();
-            let rewritten_vp8_payload = self.rewrite_vp8_payload(vp8_payload);
-            return LocalSendRewrite {
+            let projected_vp8_payload = self.project_vp8_payload(vp8_payload);
+            return ProjectedIdentity {
                 seq_no,
                 rtp_timestamp,
-                vp8_payload: rewritten_vp8_payload,
+                vp8_payload: projected_vp8_payload,
                 previous_source_ssrc,
                 source_switched: previous_source_ssrc.is_some(),
             };
         }
+        // if the source is the same, we just apply the offset we calculated when
+        // we first anchored this ssrc
         let rtp_timestamp = self
-            .local_timestamp_anchor
+            .projected_timestamp_anchor
             .wrapping_add(source_timestamp.wrapping_sub(self.source_timestamp_anchor));
-        self.last_local_timestamp = Some(rtp_timestamp);
-        let rewritten_vp8_payload = self.rewrite_vp8_payload(vp8_payload);
-        LocalSendRewrite {
+        self.last_projected_timestamp = Some(rtp_timestamp);
+        let projected_vp8_payload = self.project_vp8_payload(vp8_payload);
+        ProjectedIdentity {
             seq_no,
             rtp_timestamp,
-            vp8_payload: rewritten_vp8_payload,
+            vp8_payload: projected_vp8_payload,
             previous_source_ssrc,
             source_switched: false,
         }
     }
 
+    /// clears the vp8 offsets so they are recalculated on the next packet
     fn reset_vp8_source_anchors(&mut self) {
         self.source_picture_id_anchor = None;
-        self.local_picture_id_anchor = None;
+        self.projected_picture_id_anchor = None;
         self.source_tl0_pic_idx_anchor = None;
-        self.local_tl0_pic_idx_anchor = None;
+        self.projected_tl0_pic_idx_anchor = None;
     }
 
-    fn rewrite_vp8_payload(&mut self, vp8_payload: Vp8PayloadIdentity) -> Vp8PayloadIdentity {
+    /// maps vp8 identifiers to be continuous with the previous ones
+    fn project_vp8_payload(&mut self, vp8_payload: Vp8PayloadIdentity) -> Vp8PayloadIdentity {
         Vp8PayloadIdentity {
             picture_id: vp8_payload
                 .picture_id
-                .map(|picture_id| self.rewrite_picture_id(picture_id)),
+                .map(|picture_id| self.project_picture_id(picture_id)),
             tl0_pic_idx: vp8_payload
                 .tl0_pic_idx
-                .map(|tl0_pic_idx| self.rewrite_tl0_pic_idx(tl0_pic_idx)),
+                .map(|tl0_pic_idx| self.project_tl0_pic_idx(tl0_pic_idx)),
         }
     }
 
-    fn rewrite_picture_id(&mut self, source_picture_id: u16) -> u16 {
-        let local_picture_id = match (self.source_picture_id_anchor, self.local_picture_id_anchor) {
-            (Some(source_anchor), Some(local_anchor)) => {
+    /// maps a vp8 picture id to a continuous value
+    fn project_picture_id(&mut self, source_picture_id: u16) -> u16 {
+        let projected_picture_id = match (
+            self.source_picture_id_anchor,
+            self.projected_picture_id_anchor,
+        ) {
+            (Some(source_anchor), Some(projected_anchor)) => {
+                // vp8 picture ids use a 15-bit space as per rfc 7741
                 let source_delta =
                     source_picture_id.wrapping_sub(source_anchor) % VP8_LONG_PICTURE_ID_MODULUS;
-                local_anchor.wrapping_add(source_delta) % VP8_LONG_PICTURE_ID_MODULUS
+                projected_anchor.wrapping_add(source_delta) % VP8_LONG_PICTURE_ID_MODULUS
             }
             _ => self
-                .last_local_picture_id
+                .last_projected_picture_id
                 .map_or(source_picture_id, |last| {
                     last.wrapping_add(1) % VP8_LONG_PICTURE_ID_MODULUS
                 }),
         };
         self.source_picture_id_anchor = Some(source_picture_id);
-        self.local_picture_id_anchor = Some(local_picture_id);
-        self.last_local_picture_id = Some(local_picture_id);
-        local_picture_id
+        self.projected_picture_id_anchor = Some(projected_picture_id);
+        self.last_projected_picture_id = Some(projected_picture_id);
+        projected_picture_id
     }
 
-    fn rewrite_tl0_pic_idx(&mut self, source_tl0_pic_idx: u8) -> u8 {
-        let local_tl0_pic_idx = match (
+    /// maps a vp8 temporal index to a continuous value
+    fn project_tl0_pic_idx(&mut self, source_tl0_pic_idx: u8) -> u8 {
+        let projected_tl0_pic_idx = match (
             self.source_tl0_pic_idx_anchor,
-            self.local_tl0_pic_idx_anchor,
+            self.projected_tl0_pic_idx_anchor,
         ) {
-            (Some(source_anchor), Some(local_anchor)) => {
-                local_anchor.wrapping_add(source_tl0_pic_idx.wrapping_sub(source_anchor))
+            (Some(source_anchor), Some(projected_anchor)) => {
+                projected_anchor.wrapping_add(source_tl0_pic_idx.wrapping_sub(source_anchor))
             }
             _ => self
-                .last_local_tl0_pic_idx
+                .last_projected_tl0_pic_idx
                 .map_or(source_tl0_pic_idx, |last| last.wrapping_add(1)),
         };
         self.source_tl0_pic_idx_anchor = Some(source_tl0_pic_idx);
-        self.local_tl0_pic_idx_anchor = Some(local_tl0_pic_idx);
-        self.last_local_tl0_pic_idx = Some(local_tl0_pic_idx);
-        local_tl0_pic_idx
+        self.projected_tl0_pic_idx_anchor = Some(projected_tl0_pic_idx);
+        self.last_projected_tl0_pic_idx = Some(projected_tl0_pic_idx);
+        projected_tl0_pic_idx
     }
 }
 
+/// the projected identity for a single packet
+///
+/// contains the continuous sequence number, timestamp, and any codec-specific
+/// identifiers that the browser expects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct LocalSendRewrite {
+pub(super) struct ProjectedIdentity {
+    /// the continuous sequence number for the packet
     seq_no: SeqNo,
+    /// the continuous timestamp for the packet
     rtp_timestamp: u32,
+    /// smooth vp8 identifiers if the packet is vp8
     vp8_payload: Vp8PayloadIdentity,
+    /// the ssrc that was active before this packet
     previous_source_ssrc: Option<Ssrc>,
+    /// true if this packet is the first one from a new source
     source_switched: bool,
 }
 
-/// VP8 payload descriptor fields that must stay continuous downstream.
-///
-/// RFC 7741 makes these fields optional, so packets without them can still be
-/// forwarded. When they exist, rewriting them together with timestamps avoids a
-/// browser decoder seeing one downstream SSRC with unrelated publisher picture
-/// spaces after a simulcast layer switch.
+/// vp8-specific identifiers that need smoothing
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct Vp8PayloadIdentity {
+    /// frame identifier used for loss detection and reordering
     pub(super) picture_id: Option<u16>,
+    /// temporal layer index used for layer decoding
     pub(super) tl0_pic_idx: Option<u8>,
 }
 
-impl LocalSendRewrite {
+impl ProjectedIdentity {
     pub(super) const fn seq_no(self) -> SeqNo {
         self.seq_no
     }
@@ -188,38 +208,30 @@ impl LocalSendRewrite {
     }
 }
 
-/// Return the next receiver-local RTP identity for a consumer stream.
+/// calculates the next sequential identity for a packet
 ///
-/// Fresh subscribers must not inherit the publisher sequence space because the
-/// browser does not have the corresponding SRTP rollover info. The key is
-/// scoped by consumer transport media so fallback and selected simulcast layers
-/// share one receiver-safe local sequence and timestamp space.
-///
-/// This is hot-path code. It mutates one small per-consumer state entry and
-/// does not inspect room policy or signaling state.
-pub(super) fn next_rewritten_rtp_identity(
-    rewrites: &mut HashMap<LocalSendRewriteKey, LocalSendRewriteState>,
+/// fresh consumers must start from a clean counter because the browser
+/// is not aware of the publisher's history. it also ensures that switching
+/// between quality levels is invisible to the browser.
+pub(super) fn next_projected_rtp_identity(
+    streams: &mut HashMap<ConsumerStreamKey, ConsumerStream>,
     transport_media_id: TransportMediaId,
     source_ssrc: Ssrc,
     source_timestamp: u32,
     vp8_payload: Vp8PayloadIdentity,
-) -> LocalSendRewrite {
-    rewrites
-        .entry(LocalSendRewriteKey { transport_media_id })
+) -> ProjectedIdentity {
+    streams
+        .entry(ConsumerStreamKey { transport_media_id })
         .or_default()
-        .rewrite(source_ssrc, source_timestamp, vp8_payload)
+        .project(source_ssrc, source_timestamp, vp8_payload)
 }
 
-/// Drop every local send rewrite entry owned by one consumer transport media.
-///
-/// consumer teardown and replacement must forget this state so any later
-/// rebuilt consumer starts from a fresh local counter instead of continuing an
-/// old stream identity.
-pub(super) fn forget_transport_media_rewrites(
-    rewrites: &mut HashMap<LocalSendRewriteKey, LocalSendRewriteState>,
+/// clears any stored stream state for a consumer
+pub(super) fn forget_transport_media_streams(
+    streams: &mut HashMap<ConsumerStreamKey, ConsumerStream>,
     transport_media_id: TransportMediaId,
 ) {
-    rewrites.retain(|key, _| key.transport_media_id != transport_media_id);
+    streams.retain(|key, _| key.transport_media_id != transport_media_id);
 }
 
 #[cfg(test)]
@@ -227,20 +239,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rewritten_sequence_numbers_start_in_initial_roc_and_increment_per_stream() {
+    fn projected_sequence_numbers_start_in_initial_roc_and_increment_per_stream() {
         let source_seq: SeqNo = 131_072.into();
         let transport_media_id = TransportMediaId::new(41);
-        let mut rewrites = HashMap::new();
+        let mut streams = HashMap::new();
 
-        let first = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let first = next_projected_rtp_identity(
+            &mut streams,
             transport_media_id,
             Ssrc::from(111),
             1234,
             Vp8PayloadIdentity::default(),
         );
-        let second = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let second = next_projected_rtp_identity(
+            &mut streams,
             transport_media_id,
             Ssrc::from(111),
             1234,
@@ -253,26 +265,26 @@ mod tests {
     }
 
     #[test]
-    fn rewritten_sequence_numbers_are_scoped_by_consumer_stream() {
+    fn projected_sequence_numbers_are_scoped_by_consumer_stream() {
         let transport_media_id = TransportMediaId::new(42);
-        let mut rewrites = HashMap::new();
+        let mut streams = HashMap::new();
 
-        let first = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let first = next_projected_rtp_identity(
+            &mut streams,
             transport_media_id,
             Ssrc::from(111),
             1234,
             Vp8PayloadIdentity::default(),
         );
-        let second = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let second = next_projected_rtp_identity(
+            &mut streams,
             transport_media_id,
             Ssrc::from(111),
             1234,
             Vp8PayloadIdentity::default(),
         );
-        let other = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let other = next_projected_rtp_identity(
+            &mut streams,
             TransportMediaId::new(43),
             Ssrc::from(111),
             1234,
@@ -285,29 +297,29 @@ mod tests {
     }
 
     #[test]
-    fn forgetting_transport_media_rewrites_drops_all_stream_state_for_that_consumer() {
+    fn forgetting_transport_media_streams_drops_all_stream_state_for_that_consumer() {
         let transport_media_id = TransportMediaId::new(44);
-        let mut rewrites = HashMap::new();
+        let mut streams = HashMap::new();
 
-        let first = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let first = next_projected_rtp_identity(
+            &mut streams,
             transport_media_id,
             Ssrc::from(111),
             1234,
             Vp8PayloadIdentity::default(),
         );
-        let _ = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let _ = next_projected_rtp_identity(
+            &mut streams,
             transport_media_id,
             Ssrc::from(111),
             1234,
             Vp8PayloadIdentity::default(),
         );
 
-        forget_transport_media_rewrites(&mut rewrites, transport_media_id);
+        forget_transport_media_streams(&mut streams, transport_media_id);
 
-        let reset = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let reset = next_projected_rtp_identity(
+            &mut streams,
             transport_media_id,
             Ssrc::from(111),
             1234,
@@ -319,19 +331,19 @@ mod tests {
     }
 
     #[test]
-    fn rewritten_timestamps_preserve_source_deltas_on_one_ssrc() {
+    fn projected_timestamps_preserve_source_deltas_on_one_ssrc() {
         let transport_media_id = TransportMediaId::new(45);
-        let mut rewrites = HashMap::new();
+        let mut streams = HashMap::new();
 
-        let first = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let first = next_projected_rtp_identity(
+            &mut streams,
             transport_media_id,
             Ssrc::from(111),
             10_000,
             Vp8PayloadIdentity::default(),
         );
-        let second = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let second = next_projected_rtp_identity(
+            &mut streams,
             transport_media_id,
             Ssrc::from(111),
             13_000,
@@ -345,26 +357,26 @@ mod tests {
     }
 
     #[test]
-    fn rewritten_timestamps_stay_monotonic_across_simulcast_ssrc_switches() {
+    fn projected_timestamps_stay_monotonic_across_simulcast_ssrc_switches() {
         let transport_media_id = TransportMediaId::new(46);
-        let mut rewrites = HashMap::new();
+        let mut streams = HashMap::new();
 
-        let low = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let low = next_projected_rtp_identity(
+            &mut streams,
             transport_media_id,
             Ssrc::from(111),
             90_000,
             Vp8PayloadIdentity::default(),
         );
-        let high = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let high = next_projected_rtp_identity(
+            &mut streams,
             transport_media_id,
             Ssrc::from(222),
             1_000,
             Vp8PayloadIdentity::default(),
         );
-        let high_next = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let high_next = next_projected_rtp_identity(
+            &mut streams,
             transport_media_id,
             Ssrc::from(222),
             4_000,
@@ -379,12 +391,12 @@ mod tests {
     }
 
     #[test]
-    fn rewritten_vp8_picture_ids_stay_continuous_across_simulcast_ssrc_switches() {
+    fn projected_vp8_picture_ids_stay_continuous_across_simulcast_ssrc_switches() {
         let transport_media_id = TransportMediaId::new(47);
-        let mut rewrites = HashMap::new();
+        let mut streams = HashMap::new();
 
-        let low = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let low = next_projected_rtp_identity(
+            &mut streams,
             transport_media_id,
             Ssrc::from(111),
             90_000,
@@ -393,8 +405,8 @@ mod tests {
                 tl0_pic_idx: Some(250),
             },
         );
-        let high = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let high = next_projected_rtp_identity(
+            &mut streams,
             transport_media_id,
             Ssrc::from(222),
             1_000,
@@ -403,8 +415,8 @@ mod tests {
                 tl0_pic_idx: Some(4),
             },
         );
-        let high_next = next_rewritten_rtp_identity(
-            &mut rewrites,
+        let high_next = next_projected_rtp_identity(
+            &mut streams,
             transport_media_id,
             Ssrc::from(222),
             4_000,

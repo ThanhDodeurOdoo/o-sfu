@@ -3,7 +3,7 @@
 //! The forwarding planner has already selected a packet and a destination when
 //! this module runs. This file owns the last translation before str0m queues a
 //! packet for the receiver: rewrite publisher metadata into the consumer MID,
-//! strip publisher RID extensions and apply receiver-local RTP identity.
+//! strip publisher RID extensions and apply projected RTP identity.
 
 use std::time::Instant;
 
@@ -16,7 +16,7 @@ use str0m::{
 use tracing::debug;
 
 use super::{
-    local_send_rewrite::{LocalSendRewrite, Vp8PayloadIdentity, next_rewritten_rtp_identity},
+    local_send_rewrite::{ProjectedIdentity, Vp8PayloadIdentity, next_projected_rtp_identity},
     shared_payload::SharedPayload,
     state::RtcSessionState,
 };
@@ -129,33 +129,33 @@ impl LocalPacketDestination {
                 tl0_pic_idx: descriptor.tl0_pic_idx(),
             })
             .unwrap_or_default();
-        let local_send_rewrites = &mut session_state.local_send_rewrites;
+        let local_send_streams = &mut session_state.consumer_streams;
         let rtc = &mut session_state.rtc;
         let write_result = {
             let mut direct_api = rtc.direct_api();
             if let Some(stream_tx) = direct_api.stream_tx_by_mid(self.mid, None) {
-                let rewrite = next_rewritten_rtp_identity(
-                    local_send_rewrites,
+                let identity = next_projected_rtp_identity(
+                    local_send_streams,
                     self.transport_media_id,
                     rtp.header().ssrc,
                     rtp.header().timestamp,
                     vp8_payload,
                 );
-                if rewrite.source_switched() {
+                if identity.source_switched() {
                     debug!(
                         ?self.transport_media_id,
                         mid = ?self.mid,
-                        previous_source_ssrc = ?rewrite.previous_source_ssrc(),
+                        previous_source_ssrc = ?identity.previous_source_ssrc(),
                         source_ssrc = ?rtp.header().ssrc,
                         source_rtp_timestamp = rtp.header().timestamp,
-                        outbound_rtp_timestamp = rewrite.rtp_timestamp(),
+                        outbound_rtp_timestamp = identity.rtp_timestamp(),
                         source_vp8_picture_id = ?vp8_payload.picture_id,
-                        outbound_vp8_picture_id = ?rewrite.vp8_payload().picture_id,
-                        "rewrote local RTP identity after producer SSRC switch"
+                        outbound_vp8_picture_id = ?identity.vp8_payload().picture_id,
+                        "projected consumer RTP identity after producer SSRC switch"
                     );
                 }
                 let write_context = RtpWriteContext {
-                    rewrite,
+                    identity,
                     nackable,
                     is_last_destination,
                     mid: self.mid,
@@ -174,7 +174,7 @@ impl LocalPacketDestination {
 
 #[derive(Clone, Copy)]
 struct RtpWriteContext {
-    rewrite: LocalSendRewrite,
+    identity: ProjectedIdentity,
     nackable: bool,
     is_last_destination: bool,
     mid: Mid,
@@ -196,7 +196,7 @@ fn write_rtp(
     let ext_vals = outbound_extension_values(rtp.header(), context.mid);
     let mut payload = rtp.payload.take_write_payload(context.is_last_destination);
     if let Some(descriptor) = context.vp8_descriptor {
-        let vp8_payload = context.rewrite.vp8_payload();
+        let vp8_payload = context.identity.vp8_payload();
         vp8::rewrite_payload_descriptor(
             &mut payload,
             descriptor,
@@ -209,8 +209,8 @@ fn write_rtp(
     stream_tx
         .write_rtp_with_csrc(
             payload_type,
-            context.rewrite.seq_no(),
-            context.rewrite.rtp_timestamp(),
+            context.identity.seq_no(),
+            context.identity.rtp_timestamp(),
             rtp.timestamp(),
             rtp.header().marker,
             ext_vals,

@@ -27,7 +27,7 @@ use tokio::net::UdpSocket;
 use super::{
     bitrate::MediaBitrateCounter,
     demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux},
-    local_send_rewrite::{LocalSendRewriteKey, LocalSendRewriteState},
+    local_send_rewrite::{ConsumerStream, ConsumerStreamKey},
     media_registry::{
         ConsumerMidLookupKey, ProducerMidLookupKey, ProducerSsrcLookupKey, RegisteredMediaHandle,
         RemoteSourceRegistration,
@@ -57,12 +57,12 @@ pub(super) struct RtcSessionState {
     pub(super) max_bitrate_out_bps: Option<u64>,
     pub(super) dtls_started: bool,
     pub(super) sdp_negotiation: SessionSdpNegotiationState,
-    /// Receiver-local RTP identity state keyed by consumer transport media.
+    /// Monotonic RTP identity state keyed by consumer transport media.
     ///
     /// This belongs to the destination session because the browser sees one
     /// local RTP stream per consumer route, independent from whichever
     /// publisher SSRC or RID currently feeds that route.
-    pub(super) local_send_rewrites: HashMap<LocalSendRewriteKey, LocalSendRewriteState>,
+    pub(super) consumer_streams: HashMap<ConsumerStreamKey, ConsumerStream>,
 }
 
 #[derive(Default)]
