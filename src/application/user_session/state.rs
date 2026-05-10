@@ -147,9 +147,7 @@ impl UserNegotiationState {
     }
 
     pub(super) fn take_queued_publish_slots(&mut self) -> Vec<StreamType> {
-        let queued_publish_slots = self.queued_publish_slots().iter().copied().collect();
-        self.queued_publish_slots_mut().clear();
-        queued_publish_slots
+        take(self.queued_publish_slots_mut()).into_iter().collect()
     }
 
     /// record a newly issued server request in the state machine.
@@ -254,18 +252,7 @@ impl UserNegotiationState {
     }
 
     fn take_phase_queue(&mut self) -> BTreeSet<StreamType> {
-        match take(self) {
-            Self::BeforeInitialOffer {
-                queued_publish_slots,
-            }
-            | Self::Stable {
-                queued_publish_slots,
-            }
-            | Self::Negotiating {
-                queued_publish_slots,
-                ..
-            } => queued_publish_slots,
-        }
+        take(self.queued_publish_slots_mut())
     }
 }
 
@@ -298,14 +285,11 @@ pub(super) struct UserWireState {
 }
 
 impl UserWireState {
-    /// build compatibility signaling for one authoritative room message.
+    /// apply one room message to the local wire state.
     ///
     /// this method updates the local track snapshot and returns the ordered
     /// signals that the browser needs to see the transition.
-    pub(super) fn messages_for_room_event(
-        &mut self,
-        message: RoomEventMessage,
-    ) -> UserWireMessages {
+    pub(super) fn apply_room_event(&mut self, message: RoomEventMessage) -> UserWireMessages {
         match message {
             RoomEventMessage::Broadcast { sender_id, message } => {
                 UserWireMessages::messages(vec![ServerMessage::Broadcast(ServerBroadcastPayload {
@@ -320,15 +304,12 @@ impl UserWireState {
                 })])
             }
             RoomEventMessage::UserDeparted { user_id } => {
-                let removed_tracks = self
-                    .bindings_by_mid
-                    .values()
-                    .any(|binding| binding.user_id == user_id);
+                let initial_len = self.bindings_by_mid.len();
                 self.bindings_by_mid
                     .retain(|_mid, binding| binding.user_id != user_id);
                 UserWireMessages {
                     messages: vec![ServerMessage::PeerLeft(PeerLeftPayload { user_id })],
-                    needs_renegotiation: removed_tracks,
+                    needs_renegotiation: self.bindings_by_mid.len() != initial_len,
                 }
             }
             RoomEventMessage::UserInfoChanged(snapshot) => {
@@ -371,18 +352,16 @@ impl UserWireState {
         self.bindings_by_mid.values().cloned().collect()
     }
 
-    /// apply a track-level binding update and return the resulting signals.
-    pub(super) fn messages_for_track_binding_update(
+    pub(super) fn apply_track_binding_update(
         &mut self,
         update: &TrackBindingUpdate,
     ) -> UserWireMessages {
-        let user_id = update.user_id.clone();
         let Some(stream_type) = stream_type_for_stream_id(&update.stream_id) else {
             return UserWireMessages::messages(Vec::new());
         };
         let changed = match update.active {
-            Some(active) => self.set_track_active(&user_id, stream_type, active),
-            None => self.remove_track_binding(&user_id, stream_type),
+            Some(active) => self.set_track_active(&update.user_id, stream_type, active),
+            None => self.remove_track_binding(&update.user_id, stream_type),
         };
         if !changed {
             return UserWireMessages::messages(Vec::new());

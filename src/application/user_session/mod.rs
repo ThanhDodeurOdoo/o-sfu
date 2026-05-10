@@ -81,13 +81,6 @@ impl UserOutput {
         self
     }
 
-    /// Append a sequence of signals that was already ordered by the caller.
-    #[must_use]
-    pub fn with_signals(mut self, signals: impl IntoIterator<Item = UserSignal>) -> Self {
-        self.signals.extend(signals);
-        self
-    }
-
     /// Merge another transition output after this one.
     ///
     /// This is used when a single high-level action first emits compatibility
@@ -100,6 +93,19 @@ impl UserOutput {
     #[must_use]
     pub fn into_signals(self) -> Vec<UserSignal> {
         self.signals
+    }
+
+    /// Create an output from a sequence of compatibility messages.
+    pub fn from_messages(messages: impl IntoIterator<Item = ServerMessage>) -> Self {
+        messages.into_iter().map(UserSignal::from).collect()
+    }
+}
+
+impl FromIterator<UserSignal> for UserOutput {
+    fn from_iter<T: IntoIterator<Item = UserSignal>>(iter: T) -> Self {
+        Self {
+            signals: iter.into_iter().collect(),
+        }
     }
 }
 
@@ -594,16 +600,8 @@ impl User {
         &mut self,
         update: TrackBindingUpdate,
     ) -> Result<UserOutput, UserError> {
-        let wire_messages = self
-            .state
-            .wire_state
-            .messages_for_track_binding_update(&update);
-        let mut output = UserOutput::new()
-            .with_signals(wire_messages.messages.into_iter().map(UserSignal::from));
-        if wire_messages.needs_renegotiation {
-            output.extend(self.renegotiate().await?);
-        }
-        Ok(output)
+        let wire_messages = self.state.wire_state.apply_track_binding_update(&update);
+        self.finalize_wire_messages(wire_messages).await
     }
 
     async fn reject_stale_connection(&self) -> Result<(), UserError> {
@@ -627,9 +625,15 @@ impl User {
         &mut self,
         message: RoomEventMessage,
     ) -> Result<UserOutput, UserError> {
-        let wire_messages = self.state.wire_state.messages_for_room_event(message);
-        let mut output = UserOutput::new()
-            .with_signals(wire_messages.messages.into_iter().map(UserSignal::from));
+        let wire_messages = self.state.wire_state.apply_room_event(message);
+        self.finalize_wire_messages(wire_messages).await
+    }
+
+    async fn finalize_wire_messages(
+        &mut self,
+        wire_messages: state::UserWireMessages,
+    ) -> Result<UserOutput, UserError> {
+        let mut output = UserOutput::from_messages(wire_messages.messages);
         if wire_messages.needs_renegotiation {
             output.extend(self.renegotiate().await?);
         }
@@ -965,23 +969,18 @@ fn subscription_intents_from_download_states(
     states: &DownloadStates,
 ) -> BTreeMap<UserStreamId, SourceSubscriptionIntent> {
     let mut intents = BTreeMap::new();
-    if states.audio.is_some() {
-        intents.insert(
-            stream_id_for_stream_type(StreamType::Audio),
-            SourceSubscriptionIntent::new(states.audio, None),
-        );
-    }
-    if states.camera.is_some() || states.camera_layout.is_some() {
-        intents.insert(
-            stream_id_for_stream_type(StreamType::Camera),
-            SourceSubscriptionIntent::new(states.camera, states.camera_layout),
-        );
-    }
-    if states.screen.is_some() || states.screen_layout.is_some() {
-        intents.insert(
-            stream_id_for_stream_type(StreamType::Screen),
-            SourceSubscriptionIntent::new(states.screen, states.screen_layout),
-        );
+    let streams = [
+        (StreamType::Audio, states.audio, None),
+        (StreamType::Camera, states.camera, states.camera_layout),
+        (StreamType::Screen, states.screen, states.screen_layout),
+    ];
+    for (stream_type, media, layout) in streams {
+        if media.is_some() || layout.is_some() {
+            intents.insert(
+                stream_id_for_stream_type(stream_type),
+                SourceSubscriptionIntent::new(media, layout),
+            );
+        }
     }
     intents
 }
