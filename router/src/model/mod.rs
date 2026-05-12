@@ -1,5 +1,5 @@
 //! The modules in this tree define the pure routing state machine, the typed
-//! RTP/domain models used at its boundary, and some helpers (for test/proofs)
+//! RTP/domain models used at its boundary, and narrow test-support helpers.
 mod consumer;
 mod consumer_capability;
 mod diagnostic;

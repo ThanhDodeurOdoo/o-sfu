@@ -44,9 +44,11 @@ cargo test --workspace --doc
 ```
 
 The `cargo test -p o-sfu-proofs` step used by PR CI is not Kani execution. It
-compiles the proof crate and runs normal Rust tests, including the router drift
-chec. The `#[kani::proof]` harnesses run only through `cargo kani` in the
-formal-verification workflow or in a local proof run.
+compiles the proof crate and any normal Rust tests in that crate. The
+`#[kani::proof]` harnesses run only through `cargo kani` in the
+formal-verification workflow or in a local proof run. Router Kani harnesses call
+the production `o_sfu_router::Router` through pubilc router APIs and inspect
+state only through the read-only `router_state_snapshot` test-support export
 
 ## Dependency check
 
@@ -148,12 +150,6 @@ Run all proofs:
 
 ```bash
 cargo kani -p o-sfu-proofs
-```
-
-Run the production-router drift check for the proof model:
-
-```bash
-cargo test -p o-sfu-proofs --release router::drift_tests
 ```
 
 Run one harness:

@@ -1,4 +1,4 @@
-//! Read-only router state inspection for drift and subsystem tests.
+//! Read-only router state inspection for proofs and subsystem tests.
 
 use super::{
     ConsumerId, ConsumerRouteState, MediaKind, ProducerId, ProducerRouteState, Router, RouterId,

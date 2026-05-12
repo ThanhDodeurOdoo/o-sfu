@@ -110,7 +110,7 @@ impl Consumer {
 
     /// Returns a copy of this consumer with a different producer shadow.
     ///
-    /// This is mainly for tests and proof models. Production code should let
+    /// This is mainly for fixtures that construct staged values. Production code should let
     /// [`Router::add_consumer`](super::Router::add_consumer) and
     /// [`Router::set_producer_route_state`](super::Router::set_producer_route_state)
     /// manage producer shadowing.
