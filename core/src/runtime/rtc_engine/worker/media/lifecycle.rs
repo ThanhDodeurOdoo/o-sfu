@@ -126,7 +126,40 @@ fn worker_remove_media(
     if handle.session_key() != session_key {
         return Err(TransportAdapterError::InvalidInput);
     }
-    stage_last_mid_removal_before_unregistering_handle(state, transport_media_id, &handle)?;
+    if can_unregister_unnegotiated_producer(state, &handle) {
+        debug!(
+            user_id = ?session_key.user_id(),
+            media_worker_id = session_key.media_worker_id(),
+            ?transport_media_id,
+            mid = ?handle.mid(),
+            "released unnegotiated producer media without staging sdp removal"
+        );
+        return unregister_media_handle(state, bitrate_state, transport_media_id);
+    }
+    if let Err(error) =
+        stage_last_mid_removal_before_unregistering_handle(state, transport_media_id, &handle)
+    {
+        if !matches!(error, TransportAdapterError::InvalidInput)
+            || !can_unregister_unnegotiated_producer(state, &handle)
+        {
+            return Err(error);
+        }
+        debug!(
+            user_id = ?session_key.user_id(),
+            media_worker_id = session_key.media_worker_id(),
+            ?transport_media_id,
+            mid = ?handle.mid(),
+            "released unnegotiated producer media after removal staging failed"
+        );
+    }
+    unregister_media_handle(state, bitrate_state, transport_media_id)
+}
+
+fn unregister_media_handle(
+    state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    transport_media_id: TransportMediaId,
+) -> Result<(), TransportAdapterError> {
     let Some(handle) = state.remove_media_handle(transport_media_id) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
@@ -171,8 +204,8 @@ fn worker_remove_media(
 /// Stage or apply removal before the public transport-handle registry changes.
 ///
 /// If removal cannot be represented in the user's live or staged SDP, the
-/// registry entry must remain intact so ownership and route bookeeping do not
-/// drift away from the RTC state
+/// caller may only unregister producer media that never gained negotiated RTP
+/// parameters.
 fn stage_last_mid_removal_before_unregistering_handle(
     state: &mut RtcBootstrapState,
     transport_media_id: TransportMediaId,
@@ -196,6 +229,23 @@ fn stage_last_mid_removal_before_unregistering_handle(
         session_state.rtc.direct_api().remove_media(handle.mid());
         Ok(())
     }
+}
+
+fn can_unregister_unnegotiated_producer(
+    state: &RtcBootstrapState,
+    handle: &RegisteredMediaHandle,
+) -> bool {
+    let RegisteredMediaHandle::Producer { session_key, mid } = handle else {
+        return false;
+    };
+    state.users.get(session_key).is_some_and(|session_state| {
+        session_state.sdp_negotiation.initial_offer_applied
+            && !offer_is_awaiting_answer(session_state)
+            && !session_state
+                .sdp_negotiation
+                .negotiated_producer_parameters
+                .contains_key(mid)
+    })
 }
 
 fn session_has_other_mid_user(

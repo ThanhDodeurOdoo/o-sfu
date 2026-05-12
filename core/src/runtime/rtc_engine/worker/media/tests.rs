@@ -1400,27 +1400,27 @@ fn add_send_media_uses_supplied_time_for_initial_selected_rid_gate() {
     );
 }
 
-#[test]
-fn remove_media_keeps_registered_handle_when_negotiated_removal_cannot_stage() {
-    let session_key = test_transport_session_key(161, 0, 162, UserId::Integer(163));
+fn prepare_already_absent_producer_registration(
+    state: &mut RtcBootstrapState,
+    session_key: &TransportSessionKey,
+    producer_mid: Mid,
+    negotiated_parameters: Option<RouterRtpParameters>,
+) -> TransportMediaId {
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 47_100));
-    let producer_mid = Mid::from("cam-up");
-    let mut state = RtcBootstrapState::default();
-
     assert!(
         bootstrap::ensure_session_rtc_state(
             &mut state.users,
-            &session_key,
+            session_key,
             candidate_addr,
             10_000_000,
             MediaCodecFlags::default(),
         )
         .is_ok()
     );
-    let session_state = state.users.get_mut(&session_key);
+    let session_state = state.users.get_mut(session_key);
     assert!(session_state.is_some());
     let Some(session_state) = session_state else {
-        return;
+        return TransportMediaId::default();
     };
     {
         let mut direct_api = session_state.rtc.direct_api();
@@ -1428,11 +1428,56 @@ fn remove_media_keeps_registered_handle_when_negotiated_removal_cannot_stage() {
         direct_api.remove_media(producer_mid);
     }
     session_state.sdp_negotiation.initial_offer_applied = true;
+    if let Some(parameters) = negotiated_parameters {
+        session_state
+            .sdp_negotiation
+            .negotiated_producer_parameters
+            .insert(producer_mid, parameters);
+    }
 
-    let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+    state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: session_key.clone(),
         mid: producer_mid,
-    });
+    })
+}
+
+#[test]
+fn remove_media_releases_unnegotiated_producer_when_removal_cannot_stage() {
+    let session_key = test_transport_session_key(161, 0, 162, UserId::Integer(163));
+    let producer_mid = Mid::from("cam-up");
+    let mut state = RtcBootstrapState::default();
+    let transport_media_id =
+        prepare_already_absent_producer_registration(&mut state, &session_key, producer_mid, None);
+    let bitrate_state = Arc::new(Mutex::new(RtcBitrateState::default()));
+    let (response_tx, response_rx) = oneshot::channel();
+
+    respond_remove_media(
+        &mut state,
+        &bitrate_state,
+        &session_key,
+        transport_media_id,
+        response_tx,
+    );
+
+    assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
+    assert!(state.media_handle(transport_media_id).is_none());
+    assert!(state.dirty_sessions.contains(&session_key));
+}
+
+#[test]
+fn remove_media_keeps_negotiated_handle_when_removal_cannot_stage() {
+    let session_key = test_transport_session_key(261, 0, 262, UserId::Integer(263));
+    let producer_mid = Mid::from("cam-up-negotiated");
+    let mut state = RtcBootstrapState::default();
+    let negotiated_parameters =
+        RouterRtpParameters::new(vec![], vec![], vec![StreamBinding::new().with_ssrc(72_701)])
+            .with_mid(producer_mid.to_string());
+    let transport_media_id = prepare_already_absent_producer_registration(
+        &mut state,
+        &session_key,
+        producer_mid,
+        Some(negotiated_parameters),
+    );
     let bitrate_state = Arc::new(Mutex::new(RtcBitrateState::default()));
     let (response_tx, response_rx) = oneshot::channel();
 

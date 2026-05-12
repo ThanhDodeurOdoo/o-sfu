@@ -948,6 +948,86 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
 }
 
 #[tokio::test]
+async fn rtc_session_cleanup_releases_declined_staged_producer_without_follow_up_offer() {
+    let adapter = RtcTransportShard::default();
+    let session_key = transport_key(1, 48, UserId::Integer(48));
+
+    let mut remote = build_remote_rtc(55_009);
+    let initial_offer = adapter
+        .negotiation()
+        .create_initial_session_offer(&session_key)
+        .await
+        .expect("initial offer should succeed");
+    apply_offer_answer(
+        &adapter,
+        &session_key,
+        &mut remote,
+        initial_offer.into_sdp(),
+    )
+    .await;
+
+    let producer_media_id = adapter
+        .media()
+        .add_recv_media(
+            &session_key,
+            Str0mMediaKind::Video,
+            &sample_router_rtp_parameters("compat-producer-mid-declined", 92_000),
+        )
+        .await
+        .expect("protocol producer media should stage an addition offer");
+    let producer_mid = resolve_mid(&adapter, producer_media_id)
+        .await
+        .expect("producer media should expose its staged mid");
+    let addition_offer = adapter
+        .negotiation()
+        .create_session_renegotiation_offer(&session_key)
+        .await
+        .expect("addition offer should be available");
+    let answer = remote
+        .sdp_api()
+        .accept_offer(
+            SdpOffer::from_sdp_string(&addition_offer.into_sdp())
+                .expect("addition offer should parse"),
+        )
+        .expect("remote answer should build")
+        .to_sdp_string();
+    let declined_answer = answer_with_mid_direction(&answer, &producer_mid.to_string(), "inactive");
+
+    let applied_answer = adapter
+        .negotiation()
+        .apply_session_answer(&session_key, &declined_answer)
+        .await
+        .expect("declined producer answer should apply");
+
+    assert!(
+        applied_answer
+            .negotiated_producer_parameters(producer_media_id)
+            .is_none()
+    );
+    assert_eq!(
+        adapter
+            .media()
+            .remove_media(&session_key, producer_media_id)
+            .await,
+        Ok(())
+    );
+    assert_eq!(
+        adapter
+            .media()
+            .negotiated_producer_parameters(&session_key, producer_media_id)
+            .await,
+        Err(TransportAdapterError::TransportUnavailable)
+    );
+    assert_eq!(
+        adapter
+            .negotiation()
+            .create_session_renegotiation_offer(&session_key)
+            .await,
+        Err(TransportAdapterError::UnsupportedFeature)
+    );
+}
+
+#[tokio::test]
 async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pending() {
     let adapter = RtcTransportShard::default();
     let source_session_key = transport_key(1, 42, UserId::Integer(42));
@@ -1085,6 +1165,21 @@ fn media_section_for_mid<'a>(sdp: &'a str, mid: &str) -> Option<&'a str> {
         .find("\r\nm=")
         .map_or(sdp.len(), |offset| marker_start + offset + 2);
     Some(&sdp[section_start..section_end])
+}
+
+fn answer_with_mid_direction(answer_sdp: &str, mid: &str, direction: &str) -> String {
+    let Some(section) = media_section_for_mid(answer_sdp, mid) else {
+        return answer_sdp.to_owned();
+    };
+    let next_direction = format!("a={direction}");
+    let mut updated_section = section.to_owned();
+    for current_direction in ["a=sendrecv", "a=sendonly", "a=recvonly", "a=inactive"] {
+        if updated_section.contains(current_direction) {
+            updated_section = updated_section.replacen(current_direction, &next_direction, 1);
+            break;
+        }
+    }
+    answer_sdp.replacen(section, &updated_section, 1)
 }
 
 fn assert_default_vp8_upload_slot(upload_slots: &[SessionUploadSlot]) {
