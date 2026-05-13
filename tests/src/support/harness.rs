@@ -18,7 +18,7 @@ use o_sfu::{
         HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims, WebSocketConnectClaims, sign,
     },
     config::{
-        AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
+        AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
         MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig,
         TransportConfig, UserConfig, VideoBitrateLimits,
     },
@@ -394,8 +394,8 @@ pub fn test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
         transport: TransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             rtc_port_range: RtcPortRange::new(40_000, 49_999),
-            max_bitrate_in_bps: 8_000_000,
-            max_bitrate_out_bps: 10_000_000,
+            max_bitrate_in: Bitrate::from_mbps(8),
+            max_bitrate_out: Bitrate::from_mbps(10),
             video_bitrate_limits: VideoBitrateLimits::default(),
             rtc_media_worker_count: 1,
             room_sharding_policy: RoomShardingPolicy::strict_single_router(),

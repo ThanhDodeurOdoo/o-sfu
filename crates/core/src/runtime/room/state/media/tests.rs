@@ -25,7 +25,7 @@ use super::super::{
     },
 };
 use crate::{
-    MediaCodecFlags,
+    Bitrate, MediaCodecFlags,
     runtime::{
         ConnectionId, RoomInstanceId, TestSourceKind, UserId, UserPermissions,
         media_transport::TransportMediaId,
@@ -654,8 +654,8 @@ fn commit_published_track_registers_all_source_encodings() {
         encodings[1].primary_ssrc(),
         Some(o_sfu_router::Ssrc::new(31_002))
     );
-    assert_eq!(encodings[0].max_bitrate(), Some(150_000));
-    assert_eq!(encodings[1].max_bitrate(), Some(900_000));
+    assert_eq!(encodings[0].max_bitrate(), Some(Bitrate::from_kbps(150)));
+    assert_eq!(encodings[1].max_bitrate(), Some(Bitrate::from_kbps(900)));
     assert_eq!(
         state
             .inspect_source_encoding_ids_for_transport_media_id(transport_media_id)

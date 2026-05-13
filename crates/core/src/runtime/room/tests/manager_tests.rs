@@ -4,8 +4,8 @@ use tokio::sync::Notify;
 
 use super::fixtures::*;
 use crate::{
-    LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts, MediaCodecFlags,
-    RuntimeFeatureFlags,
+    Bitrate, LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts,
+    MediaCodecFlags, RuntimeFeatureFlags,
     runtime::{
         diagnostics::DiagnosticsStore, media_transport::TransportPlacementPressureSnapshot,
         metrics::RuntimeMetrics, packet_sink_registry::RoomPacketSinkRegistry,
@@ -433,7 +433,7 @@ async fn load_triggered_room_uses_transport_pressure_for_new_placement()
             min_receiver_count: 99,
             max_active_consumers_per_router: 99,
             max_fanout_per_source: 99,
-            egress_bitrate_threshold_bps: 128,
+            egress_bitrate_threshold: Bitrate::from_bps(128),
             activation_window: 1,
             ..LocalSpilloverPolicyParts::conservative()
         })?,
@@ -457,7 +457,7 @@ async fn load_triggered_room_uses_transport_pressure_for_new_placement()
     assert_user_placement(&room, &UserId::Integer(10), RouterId(0), 0).await;
 
     fake.set_placement_pressure_snapshot(TransportPlacementPressureSnapshot {
-        egress_bitrate_bps: 256,
+        egress_bitrate: Bitrate::from_bps(256),
         ..Default::default()
     });
 

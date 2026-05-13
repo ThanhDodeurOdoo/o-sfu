@@ -21,12 +21,15 @@ use super::{
     },
     input::{ReceiverVideoPolicyInput, ReceiverVideoRouteInput, SelectableRouteEncodings},
 };
-use crate::runtime::{
-    media_transport::{ActiveSpeakerSource, ReceiverBandwidthSnapshot},
-    source_model::{
-        ConsumerSourceSelection, OverBudgetExceptionReason, PolicyPauseReason,
-        ReceiverVideoBudgetDiagnostics, SourceAdaptationPolicy, SourceEncodingDescriptor,
-        SourceRoomPolicySelector, SourceRoutePriority, SourceSelector, UploadLayerPolicyRole,
+use crate::{
+    Bitrate,
+    runtime::{
+        media_transport::{ActiveSpeakerSource, ReceiverBandwidthSnapshot},
+        source_model::{
+            ConsumerSourceSelection, OverBudgetExceptionReason, PolicyPauseReason,
+            ReceiverVideoBudgetDiagnostics, SourceAdaptationPolicy, SourceEncodingDescriptor,
+            SourceRoomPolicySelector, SourceRoutePriority, SourceSelector, UploadLayerPolicyRole,
+        },
     },
 };
 
@@ -94,7 +97,7 @@ struct ConsumerAdaptationPlan {
 struct PlannedReceiverRoute<'a> {
     route: &'a ReceiverVideoRouteInput<'a>,
     adaptation: ConsumerAdaptationPlan,
-    selected_bitrate_bps: u64,
+    selected_bitrate: Bitrate,
     action: VideoRouteAction,
     outcomes: BudgetSolverOutcomes,
 }
@@ -123,9 +126,9 @@ impl super::super::shared::RoomState {
 fn plan_receiver_routes<'a>(
     routes: &'a [ReceiverVideoRouteInput<'a>],
 ) -> Vec<ReceiverVideoRouteAction<'a>> {
-    let Some(receiver_bandwidth_bps) = routes
+    let Some(receiver_bandwidth) = routes
         .iter()
-        .find_map(ReceiverVideoRouteInput::receiver_bandwidth_bps)
+        .find_map(ReceiverVideoRouteInput::receiver_bandwidth)
     else {
         let planned_routes = routes
             .iter()
@@ -133,10 +136,7 @@ fn plan_receiver_routes<'a>(
                 let adaptation = consumer_route_adaptation_plan(route)?;
                 Some(PlannedReceiverRoute {
                     route,
-                    selected_bitrate_bps: selector_bitrate_bps(
-                        route.encodings(),
-                        adaptation.selector,
-                    ),
+                    selected_bitrate: selector_bitrate(route.encodings(), adaptation.selector),
                     action: VideoRouteAction::Send(adaptation.selector),
                     adaptation,
                     outcomes: adaptation_outcomes(
@@ -157,7 +157,7 @@ fn plan_receiver_routes<'a>(
         .iter()
         .filter_map(|route| {
             let adaptation = consumer_route_adaptation_plan(route)?;
-            let selected_bitrate_bps = selector_bitrate_bps(route.encodings(), adaptation.selector);
+            let selected_bitrate = selector_bitrate(route.encodings(), adaptation.selector);
             let outcomes = adaptation_outcomes(
                 route.encodings(),
                 route.current_selection(),
@@ -166,14 +166,14 @@ fn plan_receiver_routes<'a>(
             Some(PlannedReceiverRoute {
                 route,
                 adaptation,
-                selected_bitrate_bps,
+                selected_bitrate,
                 action: VideoRouteAction::Send(adaptation.selector),
                 outcomes,
             })
         })
         .collect::<Vec<_>>();
-    apply_receiver_overload_policy(&mut planned_routes, receiver_bandwidth_bps);
-    let budget = receiver_budget_diagnostics(&planned_routes, Some(receiver_bandwidth_bps));
+    apply_receiver_overload_policy(&mut planned_routes, receiver_bandwidth);
+    let budget = receiver_budget_diagnostics(&planned_routes, Some(receiver_bandwidth));
     planned_routes
         .into_iter()
         .filter_map(|route| planned_route_action(route, budget))
@@ -190,39 +190,38 @@ fn consumer_route_adaptation_plan(
         route.current_selection(),
         route.layout_intent().uses_featured_quality(),
         route.visible_scalable_route_count(),
-        route.receiver_bandwidth_bps(),
+        route.receiver_bandwidth(),
     )
 }
 
 fn apply_receiver_overload_policy(
     planned_routes: &mut [PlannedReceiverRoute<'_>],
-    receiver_bandwidth_bps: u64,
+    receiver_bandwidth: Bitrate,
 ) {
-    let mut selected_bitrate_bps = selected_receiver_bitrate_bps(planned_routes);
-    if selected_bitrate_bps <= receiver_bandwidth_bps {
+    let mut selected_bitrate = selected_receiver_bitrate(planned_routes);
+    if selected_bitrate <= receiver_bandwidth {
         return;
     }
     for route in planned_routes
         .iter_mut()
         .filter(|route| route_can_downgrade(route))
     {
-        let Some((selector, bitrate_bps)) = cheapest_useful_encoding(route.route.encodings())
-        else {
+        let Some((selector, bitrate)) = cheapest_useful_encoding(route.route.encodings()) else {
             route.action = VideoRouteAction::Pause(PolicyPauseReason::MissingUsableLayer);
-            selected_bitrate_bps = selected_bitrate_bps.saturating_sub(route.selected_bitrate_bps);
-            route.selected_bitrate_bps = 0;
+            selected_bitrate = selected_bitrate.saturating_sub(route.selected_bitrate);
+            route.selected_bitrate = Bitrate::zero();
             continue;
         };
-        if bitrate_bps < route.selected_bitrate_bps {
-            selected_bitrate_bps = selected_bitrate_bps
-                .saturating_sub(route.selected_bitrate_bps)
-                .saturating_add(bitrate_bps);
-            route.selected_bitrate_bps = bitrate_bps;
+        if bitrate < route.selected_bitrate {
+            selected_bitrate = selected_bitrate
+                .saturating_sub(route.selected_bitrate)
+                .saturating_add(bitrate);
+            route.selected_bitrate = bitrate;
             route.action = VideoRouteAction::Send(selector);
             route.outcomes = BudgetSolverOutcomes::degraded();
         }
     }
-    if selected_bitrate_bps <= receiver_bandwidth_bps {
+    if selected_bitrate <= receiver_bandwidth {
         return;
     }
     let mut pause_order = planned_routes
@@ -236,14 +235,14 @@ fn apply_receiver_overload_policy(
         let Some(route) = planned_routes.get_mut(index) else {
             continue;
         };
-        if selected_bitrate_bps <= receiver_bandwidth_bps {
+        if selected_bitrate <= receiver_bandwidth {
             break;
         }
         let pause_reason = pause_reason_for_route(route);
         route.action = VideoRouteAction::Pause(pause_reason);
         route.outcomes = BudgetSolverOutcomes::paused();
-        selected_bitrate_bps = selected_bitrate_bps.saturating_sub(route.selected_bitrate_bps);
-        route.selected_bitrate_bps = 0;
+        selected_bitrate = selected_bitrate.saturating_sub(route.selected_bitrate);
+        route.selected_bitrate = Bitrate::zero();
     }
 }
 
@@ -333,17 +332,17 @@ fn budget_outcomes(
 
 fn receiver_budget_diagnostics(
     planned_routes: &[PlannedReceiverRoute<'_>],
-    receiver_bandwidth_bps: Option<u64>,
+    receiver_bandwidth: Option<Bitrate>,
 ) -> ReceiverVideoBudgetDiagnostics {
-    let selected_video_bitrate_bps = selected_receiver_bitrate_bps(planned_routes);
-    let over_budget_exception_reason = receiver_bandwidth_bps
-        .filter(|budget| selected_video_bitrate_bps > *budget)
+    let selected_video_bitrate = selected_receiver_bitrate(planned_routes);
+    let over_budget_exception_reason = receiver_bandwidth
+        .filter(|budget| selected_video_bitrate > *budget)
         .map(|_budget| OverBudgetExceptionReason::ProtectedRoute);
     ReceiverVideoBudgetDiagnostics::new(
-        receiver_bandwidth_bps,
-        receiver_bandwidth_bps,
+        receiver_bandwidth,
+        receiver_bandwidth,
         active_video_route_count(planned_routes),
-        selected_video_bitrate_bps,
+        selected_video_bitrate,
         over_budget_exception_reason,
     )
 }
@@ -360,8 +359,8 @@ fn adaptation_outcomes(
     current: ConsumerSourceSelection,
     selector: SourceSelector,
 ) -> BudgetSolverOutcomes {
-    let current_bitrate = selector_bitrate_bps(encodings, current.selector());
-    let selected_bitrate = selector_bitrate_bps(encodings, selector);
+    let current_bitrate = selector_bitrate(encodings, current.selector());
+    let selected_bitrate = selector_bitrate(encodings, selector);
     if selected_bitrate < current_bitrate {
         BudgetSolverOutcomes::degraded()
     } else {
@@ -376,7 +375,7 @@ fn consumer_adaptation_plan(
     current: ConsumerSourceSelection,
     featured: bool,
     visible_scalable_route_count: usize,
-    receiver_bandwidth_bps: Option<u64>,
+    receiver_bandwidth: Option<Bitrate>,
 ) -> Option<ConsumerAdaptationPlan> {
     match adaptation_policy {
         SourceAdaptationPolicy::ReadableDetail => {
@@ -393,7 +392,7 @@ fn consumer_adaptation_plan(
         user_count,
         featured,
         visible_scalable_route_count,
-        receiver_bandwidth_bps,
+        receiver_bandwidth,
         encodings,
     );
     let target_selector = SourceSelector::Encoding(encodings.get(target_index)?.encoding_id());
@@ -406,7 +405,7 @@ fn consumer_adaptation_plan(
             request_keyframe: selector_changed,
         });
     }
-    if receiver_bandwidth_bps.is_none() {
+    if receiver_bandwidth.is_none() {
         return Some(ConsumerAdaptationPlan {
             selector: target_selector,
             pressure_observations: 0,
@@ -462,12 +461,12 @@ fn consumer_adaptation_plan(
     })
 }
 
-fn selected_receiver_bitrate_bps(planned_routes: &[PlannedReceiverRoute<'_>]) -> u64 {
+fn selected_receiver_bitrate(planned_routes: &[PlannedReceiverRoute<'_>]) -> Bitrate {
     planned_routes
         .iter()
         .filter(|route| matches!(route.action, VideoRouteAction::Send(_)))
-        .fold(0_u64, |total, route| {
-            total.saturating_add(route.selected_bitrate_bps)
+        .fold(Bitrate::zero(), |total, route| {
+            total.saturating_add(route.selected_bitrate)
         })
 }
 
@@ -511,7 +510,7 @@ fn pause_reason_for_route(route: &PlannedReceiverRoute<'_>) -> PolicyPauseReason
 
 fn cheapest_useful_encoding(
     encodings: SelectableRouteEncodings<'_>,
-) -> Option<(SourceSelector, u64)> {
+) -> Option<(SourceSelector, Bitrate)> {
     encodings
         .iter()
         .filter(|encoding| {
@@ -529,7 +528,7 @@ fn cheapest_useful_encoding(
         })
 }
 
-fn selector_bitrate_bps(encodings: SelectableRouteEncodings<'_>, selector: SourceSelector) -> u64 {
+fn selector_bitrate(encodings: SelectableRouteEncodings<'_>, selector: SourceSelector) -> Bitrate {
     selector
         .selected_encoding()
         .and_then(|encoding_id| {
@@ -568,31 +567,31 @@ fn desired_encoding_index(
     user_count: usize,
     featured: bool,
     visible_scalable_route_count: usize,
-    receiver_bandwidth_bps: Option<u64>,
+    receiver_bandwidth: Option<Bitrate>,
     encodings: SelectableRouteEncodings<'_>,
 ) -> usize {
     let highest_index = encodings.len().saturating_sub(1);
     if user_count < MULTIPARTY_SCALABLE_VIDEO_SELECTION_THRESHOLD {
         return highest_index;
     }
-    let Some(receiver_bandwidth_bps) = receiver_bandwidth_bps else {
+    let Some(receiver_bandwidth) = receiver_bandwidth else {
         return if featured { highest_index } else { 0 };
     };
-    let budget_bps = if featured {
-        receiver_bandwidth_bps
+    let budget = if featured {
+        receiver_bandwidth
     } else {
         let divisor = u64::try_from(visible_scalable_route_count)
             .unwrap_or(u64::MAX)
             .saturating_mul(THUMBNAIL_BUDGET_DIVISOR)
             .max(1);
-        receiver_bandwidth_bps / divisor
+        receiver_bandwidth.divided_by(divisor)
     };
-    highest_affordable_encoding_index(encodings, budget_bps, featured)
+    highest_affordable_encoding_index(encodings, budget, featured)
 }
 
 fn highest_affordable_encoding_index(
     encodings: SelectableRouteEncodings<'_>,
-    budget_bps: u64,
+    budget: Bitrate,
     featured: bool,
 ) -> usize {
     if encodings
@@ -611,7 +610,7 @@ fn highest_affordable_encoding_index(
         .filter(|(_index, encoding)| {
             encoding
                 .max_bitrate()
-                .is_some_and(|bitrate| bitrate <= budget_bps)
+                .is_some_and(|bitrate| bitrate <= budget)
         })
         .last()
         .map_or(0, |(index, _encoding)| index)

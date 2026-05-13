@@ -4,33 +4,38 @@ use std::{
 };
 
 use super::shared::{ConsumerKey, RoomState};
-use crate::runtime::{
-    ConnectionId, UserId,
-    diagnostics::{
-        DiagnosticsActiveSpeaker, DiagnosticsActiveSpeakerReason, DiagnosticsActiveSpeakerState,
-        DiagnosticsIncomingBitrate, DiagnosticsMediaKind, DiagnosticsOverBudgetExceptionReason,
-        DiagnosticsPolicyPauseReason, DiagnosticsPublication, DiagnosticsQualitySummary,
-        DiagnosticsRouteState, DiagnosticsSource, DiagnosticsSourceEncoding,
-        DiagnosticsSourceSelection, DiagnosticsSourceSelectionReason, DiagnosticsSourceSelector,
-        DiagnosticsSubscription, DiagnosticsTemporalLayerMetadata,
-        DiagnosticsTemporalLayerSelection, DiagnosticsUserTransport, DiagnosticsUserView,
-        DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
-    },
-    media_transport::{
-        ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSourceDiagnostic,
-        TransportMediaId,
-    },
-    source_model::{
-        ConsumerSourceSelection, OverBudgetExceptionReason, PolicyPauseReason,
-        PublishedSourceDescriptor, PublishedSourceId, SourceEncodingDescriptor, SourceEncodingId,
-        SourceRoomPolicySelector, SourceRoutePriority, SourceSelector, SourceTemporalLayerId,
+use crate::{
+    Bitrate,
+    runtime::{
+        ConnectionId, UserId,
+        diagnostics::{
+            DiagnosticsActiveSpeaker, DiagnosticsActiveSpeakerReason,
+            DiagnosticsActiveSpeakerState, DiagnosticsIncomingBitrate, DiagnosticsMediaKind,
+            DiagnosticsOverBudgetExceptionReason, DiagnosticsPolicyPauseReason,
+            DiagnosticsPublication, DiagnosticsQualitySummary, DiagnosticsRouteState,
+            DiagnosticsSource, DiagnosticsSourceEncoding, DiagnosticsSourceSelection,
+            DiagnosticsSourceSelectionReason, DiagnosticsSourceSelector, DiagnosticsSubscription,
+            DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection,
+            DiagnosticsUserTransport, DiagnosticsUserView, DiagnosticsVideoLayoutRole,
+            DiagnosticsVideoRoutePriority,
+        },
+        media_transport::{
+            ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSourceDiagnostic,
+            TransportMediaId,
+        },
+        source_model::{
+            ConsumerSourceSelection, OverBudgetExceptionReason, PolicyPauseReason,
+            PublishedSourceDescriptor, PublishedSourceId, SourceEncodingDescriptor,
+            SourceEncodingId, SourceRoomPolicySelector, SourceRoutePriority, SourceSelector,
+            SourceTemporalLayerId,
+        },
     },
 };
 
 impl RoomState {
     pub(in crate::runtime) fn diagnostics_incoming_bitrate_by_session(
         &self,
-        per_media: &[(TransportMediaId, u64)],
+        per_media: &[(TransportMediaId, Bitrate)],
     ) -> BTreeMap<UserId, DiagnosticsIncomingBitrate> {
         let mut incoming_bitrate = BTreeMap::new();
         for (transport_media_id, bits) in per_media {
@@ -40,19 +45,19 @@ impl RoomState {
             let session_bitrate: &mut DiagnosticsIncomingBitrate = incoming_bitrate
                 .entry(entry.owner_user_id().clone())
                 .or_default();
-            session_bitrate.total = session_bitrate.total.saturating_add(*bits);
+            session_bitrate.total = session_bitrate.total.saturating_add(bits.as_bps());
             let stream_bitrate = session_bitrate
                 .by_stream_bps
                 .entry(entry.stream_id().to_string())
                 .or_default();
-            *stream_bitrate = stream_bitrate.saturating_add(*bits);
+            *stream_bitrate = stream_bitrate.saturating_add(bits.as_bps());
         }
         incoming_bitrate
     }
 
     pub(in crate::runtime) fn diagnostics_incoming_bitrate_by_source(
         &self,
-        per_media: &[(TransportMediaId, u64)],
+        per_media: &[(TransportMediaId, Bitrate)],
     ) -> BTreeMap<PublishedSourceId, u64> {
         let mut incoming_bitrate: BTreeMap<PublishedSourceId, u64> = BTreeMap::new();
         for (transport_media_id, bits) in per_media {
@@ -60,7 +65,7 @@ impl RoomState {
                 continue;
             };
             let source_bitrate = incoming_bitrate.entry(entry.source_id()).or_default();
-            *source_bitrate = (*source_bitrate).saturating_add(*bits);
+            *source_bitrate = (*source_bitrate).saturating_add(bits.as_bps());
         }
         incoming_bitrate
     }
@@ -264,7 +269,7 @@ fn diagnostics_source_encoding(encoding: &SourceEncodingDescriptor) -> Diagnosti
     DiagnosticsSourceEncoding {
         codec: negotiated_format.map(|format| format.codec_name().to_owned()),
         encoding_id: encoding.encoding_id().as_u64(),
-        max_bitrate_bps: encoding.max_bitrate(),
+        max_bitrate_bps: encoding.max_bitrate().map(Bitrate::as_bps),
         resolution_scale: encoding.resolution_scale(),
         max_framerate: encoding.max_framerate(),
         policy_role: encoding
@@ -301,7 +306,9 @@ fn diagnostics_source_selection(
     DiagnosticsSourceSelection {
         active: selection.active(),
         active_video_route_count: budget.active_video_route_count(),
-        latest_receiver_bandwidth_estimate_bps: budget.latest_receiver_bandwidth_bps(),
+        latest_receiver_bandwidth_estimate_bps: budget
+            .latest_receiver_bandwidth()
+            .map(Bitrate::as_bps),
         over_budget_exception_reason: budget
             .over_budget_exception_reason()
             .map(diagnostics_over_budget_exception_reason),
@@ -314,9 +321,10 @@ fn diagnostics_source_selection(
         selector: diagnostics_source_selector(selection.selector()),
         selected_estimated_bitrate_bps: selected_encoding_id
             .and_then(|encoding_id| source.encoding(encoding_id))
-            .and_then(SourceEncodingDescriptor::max_bitrate),
-        selected_video_bitrate_bps: budget.selected_video_bitrate_bps(),
-        selected_video_budget_bps: budget.selected_video_budget_bps(),
+            .and_then(SourceEncodingDescriptor::max_bitrate)
+            .map(Bitrate::as_bps),
+        selected_video_bitrate_bps: budget.selected_video_bitrate().as_bps(),
+        selected_video_budget_bps: budget.selected_video_budget().map(Bitrate::as_bps),
         selected_encoding_id: selected_encoding_id.map(SourceEncodingId::as_u64),
         selected_rid: selected_encoding_id
             .and_then(|encoding_id| source.encoding(encoding_id))

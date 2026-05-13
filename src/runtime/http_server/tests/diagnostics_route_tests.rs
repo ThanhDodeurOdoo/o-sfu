@@ -219,7 +219,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     )
     .await;
     if let Some(fake) = test_state.media_transport.as_fake_transport() {
-        fake.set_receiver_bandwidth_estimate(bob_session_id.clone(), 200_000);
+        fake.set_receiver_bandwidth_estimate(bob_session_id.clone(), Bitrate::from_kbps(200));
     }
     let Some(alice_connection_id) = room
         .test_api()

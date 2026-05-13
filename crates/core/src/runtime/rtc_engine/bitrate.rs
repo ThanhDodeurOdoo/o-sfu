@@ -14,8 +14,9 @@ use std::{
 };
 
 use super::state::RtcBootstrapState;
-use crate::runtime::media_transport::{
-    TransportBitrateSnapshot, TransportMediaId, TransportSessionKey,
+use crate::{
+    Bitrate,
+    runtime::media_transport::{TransportBitrateSnapshot, TransportMediaId, TransportSessionKey},
 };
 
 const BITRATE_WINDOW_NANOS: u64 = 1_000_000_000;
@@ -59,15 +60,17 @@ impl MediaBitrateCounter {
         !self.observed.swap(true, Ordering::AcqRel)
     }
 
-    fn snapshot(&self, now: Instant) -> u64 {
+    fn snapshot(&self, now: Instant) -> Bitrate {
         let now_nanos = self.nanos_since_origin(now);
         let window_start = self.window_start_nanos.load(Ordering::Acquire);
         if now_nanos.saturating_sub(window_start) >= BITRATE_WINDOW_NANOS {
-            return 0;
+            return Bitrate::zero();
         }
-        self.bytes_in_window
-            .load(Ordering::Acquire)
-            .saturating_mul(8)
+        Bitrate::from_bps(
+            self.bytes_in_window
+                .load(Ordering::Acquire)
+                .saturating_mul(8),
+        )
     }
 
     fn nanos_since_origin(&self, now: Instant) -> u64 {
@@ -104,12 +107,12 @@ impl SessionIncomingBitrates {
         self.per_media.is_empty()
     }
 
-    fn snapshot(&self, now: Instant) -> Vec<(TransportMediaId, u64)> {
+    fn snapshot(&self, now: Instant) -> Vec<(TransportMediaId, Bitrate)> {
         self.per_media
             .iter()
             .filter_map(|(media_id, bitrate)| {
                 let bits = bitrate.snapshot(now);
-                if bits > 0 {
+                if bits > Bitrate::zero() {
                     Some((*media_id, bits))
                 } else {
                     None
@@ -118,11 +121,11 @@ impl SessionIncomingBitrates {
             .collect()
     }
 
-    fn total(&self, now: Instant) -> u64 {
+    fn total(&self, now: Instant) -> Bitrate {
         self.per_media
             .values()
             .map(|bitrate| bitrate.snapshot(now))
-            .sum()
+            .fold(Bitrate::zero(), Bitrate::saturating_add)
     }
 }
 
@@ -196,11 +199,11 @@ impl RtcBitrateState {
         &self,
         session_keys: &[TransportSessionKey],
         now: Instant,
-    ) -> u64 {
+    ) -> Bitrate {
         session_keys
             .iter()
             .filter_map(|session_key| self.egress_bitrates_by_session.get(session_key))
-            .fold(0_u64, |total, bitrate| {
+            .fold(Bitrate::zero(), |total, bitrate| {
                 total.saturating_add(bitrate.snapshot(now))
             })
     }
@@ -275,7 +278,7 @@ mod tests {
 
         assert!(bitrate.record(now, 120));
 
-        assert_eq!(bitrate.snapshot(now), 960);
+        assert_eq!(bitrate.snapshot(now), Bitrate::from_bps(960));
     }
 
     #[test]
@@ -286,7 +289,10 @@ mod tests {
         assert!(bitrate.record(now, 120));
         assert!(!bitrate.record(now + Duration::from_millis(200), 30));
 
-        assert_eq!(bitrate.snapshot(now + Duration::from_millis(200)), 1_200);
+        assert_eq!(
+            bitrate.snapshot(now + Duration::from_millis(200)),
+            Bitrate::from_bps(1_200)
+        );
     }
 
     #[test]
@@ -297,7 +303,10 @@ mod tests {
         assert!(bitrate.record(now, 120));
         assert!(!bitrate.record(now + Duration::from_secs(1), 30));
 
-        assert_eq!(bitrate.snapshot(now + Duration::from_secs(1)), 240);
+        assert_eq!(
+            bitrate.snapshot(now + Duration::from_secs(1)),
+            Bitrate::from_bps(240)
+        );
     }
 
     #[test]
@@ -309,7 +318,7 @@ mod tests {
 
         assert_eq!(
             bitrate.snapshot(now + Duration::from_secs(1) + Duration::from_millis(1)),
-            0
+            Bitrate::zero()
         );
     }
 
@@ -322,7 +331,10 @@ mod tests {
 
         assert!(counter.record(now, 125));
 
-        assert_eq!(state.egress_bitrate_snapshot_at(&[session_key], now), 1_000);
+        assert_eq!(
+            state.egress_bitrate_snapshot_at(&[session_key], now),
+            Bitrate::from_bps(1_000)
+        );
     }
 
     #[test]
@@ -353,17 +365,17 @@ mod tests {
             thread::yield_now();
         }
 
-        let mut observed_bits = 0;
+        let mut observed_bitrate = Bitrate::zero();
         for _ in 0..1024 {
-            observed_bits = bitrate.snapshot(now);
-            if observed_bits > 0 {
+            observed_bitrate = bitrate.snapshot(now);
+            if observed_bitrate > Bitrate::zero() {
                 break;
             }
             thread::yield_now();
         }
 
         assert!(handle.join().is_ok());
-        assert!(observed_bits > 0 || bitrate.snapshot(now) > 0);
+        assert!(observed_bitrate > Bitrate::zero() || bitrate.snapshot(now) > Bitrate::zero());
     }
 
     #[test]

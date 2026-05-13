@@ -7,24 +7,24 @@ use str0m::media::{
 };
 
 use crate::{
-    VideoBitrateLimits,
+    Bitrate, VideoBitrateLimits,
     runtime::{media_transport::SessionUploadEncoding, source_model::UploadLayerPolicyRole},
 };
 
 pub(super) const DEFAULT_LOW_RID: &str = "lo";
 pub(super) const DEFAULT_HIGH_RID: &str = "hi";
-pub(super) const DEFAULT_LOW_MAX_BITRATE_BPS: u64 = 150_000;
+pub(super) const DEFAULT_LOW_MAX_BITRATE: Bitrate = Bitrate::from_kbps(150);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::rtc_engine) struct NegotiatedRid {
     pub(in crate::runtime::rtc_engine) rid: Str0mRid,
-    pub(in crate::runtime::rtc_engine) max_bitrate: Option<u64>,
+    pub(in crate::runtime::rtc_engine) max_bitrate: Option<Bitrate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SimulcastLayerSpec<'a> {
     pub(super) rid: &'a str,
-    pub(super) max_bitrate: Option<u64>,
+    pub(super) max_bitrate: Option<Bitrate>,
     pub(super) resolution_scale: u16,
     pub(super) max_framerate: Option<u16>,
     pub(super) policy_role: UploadLayerPolicyRole,
@@ -33,11 +33,11 @@ pub(super) struct SimulcastLayerSpec<'a> {
 pub(super) fn default_layer_specs(
     video_bitrate_limits: VideoBitrateLimits,
 ) -> [SimulcastLayerSpec<'static>; 2] {
-    let high_max_bitrate = video_bitrate_limits.max_video_bitrate_bps();
+    let high_max_bitrate = video_bitrate_limits.max_video_bitrate();
     [
         SimulcastLayerSpec {
             rid: DEFAULT_LOW_RID,
-            max_bitrate: Some(DEFAULT_LOW_MAX_BITRATE_BPS.min(high_max_bitrate)),
+            max_bitrate: Some(DEFAULT_LOW_MAX_BITRATE.min(high_max_bitrate)),
             resolution_scale: 2,
             max_framerate: None,
             policy_role: UploadLayerPolicyRole::Thumbnail,
@@ -62,7 +62,7 @@ pub(super) fn recv_simulcast_from_specs(layers: &[SimulcastLayerSpec<'_>]) -> St
                 attributes: layer.max_bitrate.map(|max_bitrate| {
                     vec![(
                         webrtc::sdp::rid_restriction::MAX_BITRATE.to_owned(),
-                        max_bitrate.to_string(),
+                        max_bitrate.as_bps().to_string(),
                     )]
                 }),
             })
@@ -102,7 +102,7 @@ pub(super) fn layers_from_rid_bindings(
         }
         layers.push(SimulcastLayerSpec {
             rid,
-            max_bitrate: encoding.max_bitrate(),
+            max_bitrate: encoding.max_bitrate().map(Bitrate::from_bps),
             resolution_scale: resolution_scale_for_index(layers.len()),
             max_framerate: None,
             policy_role: policy_role_for_index(layers.len()),
@@ -160,13 +160,13 @@ fn parse_send_rid(line: &str) -> Option<NegotiatedRid> {
     })
 }
 
-fn parse_max_bitrate(restrictions: &str) -> Option<u64> {
+fn parse_max_bitrate(restrictions: &str) -> Option<Bitrate> {
     restrictions
         .split(';')
         .filter_map(|restriction| restriction.split_once('='))
         .find_map(|(key, value)| {
             (key.trim() == webrtc::sdp::rid_restriction::MAX_BITRATE)
-                .then(|| value.trim().parse::<u64>().ok())
+                .then(|| value.trim().parse::<u64>().ok().map(Bitrate::from_bps))
                 .flatten()
         })
 }

@@ -25,7 +25,7 @@ pub(super) use super::super::{
     test_support::{DebugPacketGate, DebugRouteEntry, test_transport_session_key},
 };
 pub(super) use crate::{
-    CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
+    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
     runtime::{
         UserId,
         diagnostics::DiagnosticsStore,
@@ -78,12 +78,12 @@ pub(super) fn sample_router_rtp_parameters_with_rid(
 }
 
 pub(super) fn rtc_engine_with_bitrate_limits(
-    max_bitrate_in_bps: u64,
-    max_bitrate_out_bps: u64,
+    max_bitrate_in: Bitrate,
+    max_bitrate_out: Bitrate,
 ) -> RtcTransportShard {
     rtc_engine_for_test(
-        max_bitrate_in_bps,
-        max_bitrate_out_bps,
+        max_bitrate_in,
+        max_bitrate_out,
         MediaCodecFlags::default(),
         CodecPreferences::default(),
     )
@@ -91,8 +91,8 @@ pub(super) fn rtc_engine_with_bitrate_limits(
 
 pub(super) fn rtc_engine_with_codec_flags(codec_flags: MediaCodecFlags) -> RtcTransportShard {
     rtc_engine_for_test(
-        8_000_000,
-        10_000_000,
+        Bitrate::from_mbps(8),
+        Bitrate::from_mbps(10),
         codec_flags,
         CodecPreferences::default(),
     )
@@ -102,19 +102,24 @@ pub(super) fn rtc_engine_with_codec_policy(
     codec_flags: MediaCodecFlags,
     codec_preferences: CodecPreferences,
 ) -> RtcTransportShard {
-    rtc_engine_for_test(8_000_000, 10_000_000, codec_flags, codec_preferences)
+    rtc_engine_for_test(
+        Bitrate::from_mbps(8),
+        Bitrate::from_mbps(10),
+        codec_flags,
+        codec_preferences,
+    )
 }
 
 fn rtc_engine_for_test(
-    max_bitrate_in_bps: u64,
-    max_bitrate_out_bps: u64,
+    max_bitrate_in: Bitrate,
+    max_bitrate_out: Bitrate,
     codec_flags: MediaCodecFlags,
     codec_preferences: CodecPreferences,
 ) -> RtcTransportShard {
     RtcTransportShard::new(
         &RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(max_bitrate_in_bps, max_bitrate_out_bps),
+            bitrate_limits: SessionBitrateLimits::new(max_bitrate_in, max_bitrate_out),
             video_bitrate_limits: crate::VideoBitrateLimits::default(),
             rtc_port_range: RtcPortRange::new(40_000, 49_999),
             codec_flags,
@@ -195,14 +200,14 @@ pub(super) async fn session_stream_tx_ssrc(
 pub(super) async fn session_max_bitrate_in(
     adapter: &RtcTransportShard,
     session_key: &TransportSessionKey,
-) -> Option<u64> {
+) -> Option<Bitrate> {
     adapter.debug_session_max_bitrate_in(session_key).await
 }
 
 pub(super) async fn session_max_bitrate_out(
     adapter: &RtcTransportShard,
     session_key: &TransportSessionKey,
-) -> Option<u64> {
+) -> Option<Bitrate> {
     adapter.debug_session_max_bitrate_out(session_key).await
 }
 

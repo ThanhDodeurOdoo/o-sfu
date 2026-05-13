@@ -9,7 +9,8 @@
 use std::{net::IpAddr, sync::Arc};
 
 use crate::{
-    CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits, VideoBitrateLimits,
+    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
+    VideoBitrateLimits,
     runtime::{
         diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -73,13 +74,13 @@ impl RtcTransportConfig {
     }
 
     #[must_use]
-    pub const fn max_bitrate_in_bps(&self) -> u64 {
-        self.bitrate_limits.max_bitrate_in_bps()
+    pub const fn max_bitrate_in(&self) -> Bitrate {
+        self.bitrate_limits.max_bitrate_in()
     }
 
     #[must_use]
-    pub const fn max_bitrate_out_bps(&self) -> u64 {
-        self.bitrate_limits.max_bitrate_out_bps()
+    pub const fn max_bitrate_out(&self) -> Bitrate {
+        self.bitrate_limits.max_bitrate_out()
     }
 
     #[must_use]

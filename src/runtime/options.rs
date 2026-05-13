@@ -27,8 +27,8 @@ impl RuntimeOptions {
                     public_ip: config.transport.public_ip,
                     rtc_port_range: config.transport.rtc_port_range,
                     bitrate_limits: SessionBitrateLimits::new(
-                        config.transport.max_bitrate_in_bps,
-                        config.transport.max_bitrate_out_bps,
+                        config.transport.max_bitrate_in,
+                        config.transport.max_bitrate_out,
                     ),
                     video_bitrate_limits: config.transport.video_bitrate_limits,
                 },
@@ -83,8 +83,8 @@ mod tests {
     use super::RuntimeOptions;
     use crate::{
         config::{
-            AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
-            MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags,
+            AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig,
+            HttpConfig, MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags,
             TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
         },
         core::server::room::DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
@@ -108,9 +108,9 @@ mod tests {
             },
             transport: TransportConfig {
                 public_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
-                max_bitrate_in_bps: 1_234_000,
-                max_bitrate_out_bps: 5_678_000,
-                video_bitrate_limits: VideoBitrateLimits::new(4_321_000),
+                max_bitrate_in: Bitrate::from_kbps(1_234),
+                max_bitrate_out: Bitrate::from_kbps(5_678),
+                video_bitrate_limits: VideoBitrateLimits::new(Bitrate::from_kbps(4_321)),
                 rtc_port_range: RtcPortRange::new(50_000, 50_099),
                 rtc_media_worker_count: 4,
                 room_sharding_policy: RoomShardingPolicy::bounded_local_spillover(2),
@@ -143,8 +143,8 @@ mod tests {
             config.transport.rtc_port_range
         );
         assert_eq!(
-            options.core.media.bitrate_limits.max_bitrate_in_bps(),
-            config.transport.max_bitrate_in_bps
+            options.core.media.bitrate_limits.max_bitrate_in(),
+            config.transport.max_bitrate_in
         );
         assert_eq!(
             options.core.media.video_bitrate_limits,

@@ -44,7 +44,7 @@ use super::{
     session_drain::drain_ready_sessions,
 };
 use crate::{
-    CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
+    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
     runtime::{
         diagnostics::DiagnosticsStore,
         media_transport::SourcePolicySignal,
@@ -63,9 +63,9 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopConfig {
     /// Public ICE-lite address advertised by sessions created on this shard.
     pub public_ip: IpAddr,
     /// Maximum inbound bitrate applied when new RTC engine sessions are created.
-    pub max_bitrate_in_bps: u64,
+    pub max_bitrate_in: Bitrate,
     /// Maximum outbound bitrate applied when new RTC engine sessions are created.
-    pub max_bitrate_out_bps: u64,
+    pub max_bitrate_out: Bitrate,
     /// Video bitrate policy projected into session and route-control decisions.
     pub video_bitrate_limits: VideoBitrateLimits,
     /// UDP port range used when the worker opens or reuses its shard socket.
@@ -281,8 +281,8 @@ fn handle_control_input_and_clear_routing_cache(
             snapshot_state,
             now: Instant::now(),
             public_ip: config.public_ip,
-            max_bitrate_in_bps: config.max_bitrate_in_bps,
-            max_bitrate_out_bps: config.max_bitrate_out_bps,
+            max_bitrate_in: config.max_bitrate_in,
+            max_bitrate_out: config.max_bitrate_out,
             video_bitrate_limits: config.video_bitrate_limits,
             rtc_port_range: config.rtc_port_range,
             codec_flags: config.codec_flags,

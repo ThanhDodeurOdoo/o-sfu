@@ -30,14 +30,17 @@ use super::{
     relay::RelayRouteEffect,
     subscription::{ConsumerBootstrapProducerSnapshot, PendingConsumerBootstrapTarget},
 };
-use crate::runtime::{
-    ConnectionId, UserId,
-    media_transport::TransportMediaId,
-    source_model::{
-        PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
-        PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-        SourceEncodingId, SourceModelError, SourcePolicy, SourcePublishIntent,
-        UploadLayerPolicyRole, UserStreamId,
+use crate::{
+    Bitrate,
+    runtime::{
+        ConnectionId, UserId,
+        media_transport::TransportMediaId,
+        source_model::{
+            PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
+            PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
+            SourceEncodingId, SourceModelError, SourcePolicy, SourcePublishIntent,
+            UploadLayerPolicyRole, UserStreamId,
+        },
     },
 };
 
@@ -358,7 +361,7 @@ impl RoomState {
                     rid: binding.rid().map(Rid::new),
                     primary_ssrc: binding.ssrc().map(Ssrc::new),
                     repair_ssrc: None,
-                    max_bitrate: binding.max_bitrate(),
+                    max_bitrate: binding.max_bitrate().map(Bitrate::from_bps),
                     resolution_scale: upload_profile.map(|profile| profile.resolution_scale),
                     max_framerate: upload_profile.and_then(|profile| profile.max_framerate),
                     policy_role: upload_profile.map(|profile| profile.policy_role),

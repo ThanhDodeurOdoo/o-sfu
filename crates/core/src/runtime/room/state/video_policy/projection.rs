@@ -79,12 +79,15 @@ mod tests {
     use o_sfu_router::{MediaKind, Rid};
 
     use super::*;
-    use crate::runtime::{
-        UserId,
-        source_model::{
-            PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
-            SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
-            SourceOperatingPoint, SourcePolicy, SourceTemporalLayerId, UserStreamId,
+    use crate::{
+        Bitrate,
+        runtime::{
+            UserId,
+            source_model::{
+                PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
+                SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
+                SourceOperatingPoint, SourcePolicy, SourceTemporalLayerId, UserStreamId,
+            },
         },
     };
 
@@ -107,7 +110,7 @@ mod tests {
         source_id: PublishedSourceId,
         encoding_id: SourceEncodingId,
         rid: Option<&str>,
-        max_bitrate: Option<u64>,
+        max_bitrate: Option<Bitrate>,
     ) -> SourceEncodingDescriptor {
         SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
             encoding_id,
@@ -151,8 +154,18 @@ mod tests {
         let high_encoding_id = SourceEncodingId::from_raw(1);
         let low_encoding_id = SourceEncodingId::from_raw(2);
         let source = source_with_encodings(vec![
-            encoding(source_id, high_encoding_id, Some("hi"), Some(750_000)),
-            encoding(source_id, low_encoding_id, Some("lo"), Some(150_000)),
+            encoding(
+                source_id,
+                high_encoding_id,
+                Some("hi"),
+                Some(Bitrate::from_kbps(750)),
+            ),
+            encoding(
+                source_id,
+                low_encoding_id,
+                Some("lo"),
+                Some(Bitrate::from_kbps(150)),
+            ),
         ]);
 
         let selector = lowest_declared_encoding(&source)

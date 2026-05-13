@@ -783,7 +783,7 @@ impl Room {
             .collect::<Vec<_>>();
         let transport_snapshot = observability_port.transport_bitrate_snapshot(&session_keys);
         let mut incoming_bitrate = IncomingBitrateSnapshot {
-            total: transport_snapshot.total,
+            total: transport_snapshot.total.as_bps(),
             ..Default::default()
         };
         for (transport_media_id, bits) in transport_snapshot.per_media {
@@ -793,7 +793,7 @@ impl Room {
                 continue;
             };
             let entry = incoming_bitrate.by_stream.entry(stream_id).or_default();
-            *entry = entry.saturating_add(bits);
+            *entry = entry.saturating_add(bits.as_bps());
         }
         let (count, active_stream_counts) = state.user_stats_counts();
         drop(state);

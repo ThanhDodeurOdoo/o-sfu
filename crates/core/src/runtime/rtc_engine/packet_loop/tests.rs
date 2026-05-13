@@ -31,7 +31,7 @@ use super::{
     keyframe_requests::{PendingKeyframeRequest, flush_pending_keyframe_requests},
 };
 use crate::{
-    MediaCodecFlags,
+    Bitrate, MediaCodecFlags,
     runtime::{
         RoomInstanceId, UserId,
         media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
@@ -322,14 +322,14 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
         &mut bootstrap_state.users,
         &first_session,
         candidate_addr,
-        10_000_000,
+        Bitrate::from_mbps(10),
         MediaCodecFlags::default(),
     );
     let second_created = bootstrap::ensure_session_rtc_state(
         &mut bootstrap_state.users,
         &second_session,
         candidate_addr,
-        10_000_000,
+        Bitrate::from_mbps(10),
         MediaCodecFlags::default(),
     );
 
@@ -367,7 +367,7 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
         &mut bootstrap_state.users,
         &session_key,
         candidate_addr,
-        10_000_000,
+        Bitrate::from_mbps(10),
         MediaCodecFlags::default(),
     );
     assert_eq!(created, Ok(true));
@@ -694,7 +694,7 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() {
             &mut state.users,
             &consumer_session,
             candidate_addr,
-            10_000_000,
+            Bitrate::from_mbps(10),
             MediaCodecFlags::default(),
         )
         .is_ok()
@@ -926,7 +926,7 @@ fn flush_pending_keyframe_requests_marks_local_source_sessions_dirty() {
             &mut state.users,
             &source_session,
             candidate_addr,
-            10_000_000,
+            Bitrate::from_mbps(10),
             MediaCodecFlags::default(),
         )
         .is_ok()
@@ -1105,7 +1105,7 @@ fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_f
             &mut state.users,
             &source_session,
             candidate_addr,
-            10_000_000,
+            Bitrate::from_mbps(10),
             MediaCodecFlags::default(),
         )
         .is_ok()

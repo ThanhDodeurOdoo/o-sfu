@@ -77,7 +77,8 @@ async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
 
 #[tokio::test]
 async fn rtc_session_bootstrap_applies_configured_outgoing_bitrate_cap() {
-    let adapter = rtc_engine_with_bitrate_limits(1_500_000, 2_500_000);
+    let adapter =
+        rtc_engine_with_bitrate_limits(Bitrate::from_kbps(1_500), Bitrate::from_kbps(2_500));
     let session_key = transport_key(1, 181, UserId::Integer(181));
 
     assert!(
@@ -89,13 +90,14 @@ async fn rtc_session_bootstrap_applies_configured_outgoing_bitrate_cap() {
     );
     assert_eq!(
         session_max_bitrate_out(&adapter, &session_key).await,
-        Some(2_500_000)
+        Some(Bitrate::from_kbps(2_500))
     );
 }
 
 #[tokio::test]
 async fn rtc_recv_media_applies_configured_incoming_bitrate_cap() {
-    let adapter = rtc_engine_with_bitrate_limits(1_234_567, 7_654_321);
+    let adapter =
+        rtc_engine_with_bitrate_limits(Bitrate::from_bps(1_234_567), Bitrate::from_bps(7_654_321));
     let session_key = transport_key(1, 182, UserId::Integer(182));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 52_525);
 
@@ -113,7 +115,7 @@ async fn rtc_recv_media_applies_configured_incoming_bitrate_cap() {
     );
     assert_eq!(
         session_max_bitrate_in(&adapter, &session_key).await,
-        Some(1_234_567)
+        Some(Bitrate::from_bps(1_234_567))
     );
 }
 
@@ -504,14 +506,14 @@ async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
     .await;
 
     let snapshot = adapter.transport_bitrate_snapshot(slice::from_ref(&session_key));
-    assert_eq!(snapshot.total, 960);
+    assert_eq!(snapshot.total, Bitrate::from_bps(960));
     assert_eq!(snapshot.per_media.len(), 1);
     assert_eq!(
         snapshot
             .per_media
             .first()
             .expect("should have media bitrate"),
-        &(transport_media_id, 960)
+        &(transport_media_id, Bitrate::from_bps(960))
     );
 }
 
@@ -546,7 +548,7 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
             now + Duration::from_secs(2),
         )
     };
-    assert_eq!(snapshot.total, 0);
+    assert_eq!(snapshot.total, Bitrate::zero());
     assert!(snapshot.per_media.is_empty());
 }
 
@@ -579,7 +581,7 @@ async fn rtc_incoming_bitrate_snapshot_ignores_closed_sessions() {
         adapter
             .transport_bitrate_snapshot(slice::from_ref(&session_key))
             .total,
-        960
+        Bitrate::from_bps(960)
     );
 
     assert!(
@@ -591,7 +593,7 @@ async fn rtc_incoming_bitrate_snapshot_ignores_closed_sessions() {
     );
 
     let snapshot = adapter.transport_bitrate_snapshot(slice::from_ref(&session_key));
-    assert_eq!(snapshot.total, 0);
+    assert_eq!(snapshot.total, Bitrate::zero());
     assert!(snapshot.per_media.is_empty());
 }
 

@@ -9,7 +9,7 @@ use o_sfu_router::MediaStream as RouterRtpParameters;
 use thiserror::Error;
 
 use crate::{
-    ConnectionId, RoomInstanceId,
+    Bitrate, ConnectionId, RoomInstanceId,
     runtime::{UserId, source_model::UploadLayerPolicyRole},
 };
 
@@ -112,8 +112,8 @@ impl AppliedSessionAnswer {
 /// Point-in-time bitrate measurement aggregated across one or more transport users.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TransportBitrateSnapshot {
-    pub total: u64,
-    pub per_media: Vec<(TransportMediaId, u64)>,
+    pub total: Bitrate,
+    pub per_media: Vec<(TransportMediaId, Bitrate)>,
 }
 
 /// Latest receiver-side bandwidth estimates keyed by transport user.
@@ -123,13 +123,13 @@ pub struct TransportBitrateSnapshot {
 /// loop routing state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReceiverBandwidthSnapshot {
-    pub per_session: Vec<(TransportSessionKey, u64)>,
+    pub per_session: Vec<(TransportSessionKey, Bitrate)>,
 }
 
 /// Transport-observed pressure used by room-local placement policy.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TransportPlacementPressureSnapshot {
-    pub egress_bitrate_bps: u64,
+    pub egress_bitrate: Bitrate,
     pub packet_loop_lag_ms: u64,
     pub command_backlog_depth: usize,
     pub relay_mailbox_depth: usize,
@@ -140,9 +140,7 @@ impl TransportPlacementPressureSnapshot {
     #[must_use]
     pub fn merged_with(self, other: Self) -> Self {
         Self {
-            egress_bitrate_bps: self
-                .egress_bitrate_bps
-                .saturating_add(other.egress_bitrate_bps),
+            egress_bitrate: self.egress_bitrate.saturating_add(other.egress_bitrate),
             packet_loop_lag_ms: self.packet_loop_lag_ms.max(other.packet_loop_lag_ms),
             command_backlog_depth: self.command_backlog_depth.max(other.command_backlog_depth),
             relay_mailbox_depth: self.relay_mailbox_depth.max(other.relay_mailbox_depth),
@@ -432,7 +430,7 @@ pub struct SessionUploadSlot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionUploadEncoding {
     pub rid: String,
-    pub max_bitrate: Option<u64>,
+    pub max_bitrate: Option<Bitrate>,
     pub resolution_scale: Option<u16>,
     pub max_framerate: Option<u16>,
     pub policy_role: Option<UploadLayerPolicyRole>,

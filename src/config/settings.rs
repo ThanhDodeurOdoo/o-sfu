@@ -1,5 +1,7 @@
 use std::net::{IpAddr, SocketAddr};
 
+use o_sfu_core::Bitrate;
+
 use super::{
     CodecPreferences, MediaCodecFlags, RoomShardingPolicy, RtcPortRange, VideoBitrateLimits,
     diagnostics::DiagnosticsConfig, feature_flags::RuntimeFeatureFlags, telemetry::TelemetryConfig,
@@ -40,8 +42,8 @@ pub struct UserConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransportConfig {
     pub public_ip: IpAddr,
-    pub max_bitrate_in_bps: u64,
-    pub max_bitrate_out_bps: u64,
+    pub max_bitrate_in: Bitrate,
+    pub max_bitrate_out: Bitrate,
     pub video_bitrate_limits: VideoBitrateLimits,
     pub rtc_port_range: RtcPortRange,
     pub rtc_media_worker_count: usize,

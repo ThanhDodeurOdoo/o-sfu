@@ -18,7 +18,7 @@ use super::{
 #[cfg(test)]
 use crate::runtime::media_transport::TransportMediaId;
 use crate::{
-    MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
+    Bitrate, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
     runtime::{
         diagnostics::DiagnosticsStore,
         media_transport::{
@@ -137,7 +137,7 @@ impl RtcTransportShard {
     pub async fn debug_session_max_bitrate_in(
         &self,
         session_key: &TransportSessionKey,
-    ) -> Option<u64> {
+    ) -> Option<Bitrate> {
         self.request_debug_worker(|response| DebugRtcWorkerCommand::SessionMaxBitrateIn {
             session_key: session_key.clone(),
             response,
@@ -150,7 +150,7 @@ impl RtcTransportShard {
     pub async fn debug_session_max_bitrate_out(
         &self,
         session_key: &TransportSessionKey,
-    ) -> Option<u64> {
+    ) -> Option<Bitrate> {
         self.request_debug_worker(|response| DebugRtcWorkerCommand::SessionMaxBitrateOut {
             session_key: session_key.clone(),
             response,
@@ -271,7 +271,10 @@ impl Default for RtcTransportShard {
         Self::new(
             &RtcTransportConfig {
                 public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-                bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
+                bitrate_limits: SessionBitrateLimits::new(
+                    Bitrate::from_mbps(8),
+                    Bitrate::from_mbps(10),
+                ),
                 video_bitrate_limits: crate::VideoBitrateLimits::default(),
                 rtc_port_range: RtcPortRange::new(40_000, 49_999),
                 codec_flags: MediaCodecFlags::default(),

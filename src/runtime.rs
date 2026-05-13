@@ -412,8 +412,8 @@ mod tests {
     use super::{Result, RoomManager, Runtime};
     use crate::{
         config::{
-            AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
-            MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags,
+            AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig,
+            HttpConfig, MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags,
             TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
         },
         core::server::room::DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
@@ -477,8 +477,8 @@ mod tests {
             },
             transport: TransportConfig {
                 public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-                max_bitrate_in_bps: 8_000_000,
-                max_bitrate_out_bps: 10_000_000,
+                max_bitrate_in: Bitrate::from_mbps(8),
+                max_bitrate_out: Bitrate::from_mbps(10),
                 video_bitrate_limits: VideoBitrateLimits::default(),
                 rtc_port_range: RtcPortRange::new(41_000, 41_009),
                 rtc_media_worker_count: 1,

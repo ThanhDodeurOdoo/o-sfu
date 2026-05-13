@@ -16,12 +16,15 @@ use super::{
     super::shared::RoomState,
     layout::{ReceiverVideoLayoutIntent, featured_source_user_ids_for_active_speakers},
 };
-use crate::runtime::{
-    ConnectionId, UserId,
-    media_transport::{ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportMediaId},
-    source_model::{
-        ActiveSpeakerSourceRole, ConsumerSourceSelection, PublishedSourceDescriptor,
-        PublishedSourceId, SourceAdaptationPolicy, SourceEncodingDescriptor,
+use crate::{
+    Bitrate,
+    runtime::{
+        ConnectionId, UserId,
+        media_transport::{ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportMediaId},
+        source_model::{
+            ActiveSpeakerSourceRole, ConsumerSourceSelection, PublishedSourceDescriptor,
+            PublishedSourceId, SourceAdaptationPolicy, SourceEncodingDescriptor,
+        },
     },
 };
 
@@ -94,7 +97,7 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
                         .get(&consumer_key.consumer_user_id)
                         .copied()
                         .unwrap_or(1),
-                    receiver_bandwidth_bps: receiver_bandwidth_by_user
+                    receiver_bandwidth: receiver_bandwidth_by_user
                         .get(&consumer_key.consumer_user_id)
                         .copied(),
                 }))
@@ -122,7 +125,7 @@ pub(in crate::runtime::room) struct ReceiverVideoRouteInput<'a> {
     current_selection: ConsumerSourceSelection,
     layout_intent: ReceiverVideoLayoutIntent,
     visible_scalable_route_count: usize,
-    receiver_bandwidth_bps: Option<u64>,
+    receiver_bandwidth: Option<Bitrate>,
 }
 
 /// Construction input for [`ReceiverVideoRouteInput`].
@@ -142,7 +145,7 @@ pub(in crate::runtime::room) struct ReceiverVideoRouteInputParts<'a> {
     pub(in crate::runtime::room) current_selection: ConsumerSourceSelection,
     pub(in crate::runtime::room) layout_intent: ReceiverVideoLayoutIntent,
     pub(in crate::runtime::room) visible_scalable_route_count: usize,
-    pub(in crate::runtime::room) receiver_bandwidth_bps: Option<u64>,
+    pub(in crate::runtime::room) receiver_bandwidth: Option<Bitrate>,
 }
 
 impl<'a> ReceiverVideoRouteInput<'a> {
@@ -160,7 +163,7 @@ impl<'a> ReceiverVideoRouteInput<'a> {
             current_selection: parts.current_selection,
             layout_intent: parts.layout_intent,
             visible_scalable_route_count: parts.visible_scalable_route_count,
-            receiver_bandwidth_bps: parts.receiver_bandwidth_bps,
+            receiver_bandwidth: parts.receiver_bandwidth,
         }
     }
 
@@ -216,8 +219,8 @@ impl<'a> ReceiverVideoRouteInput<'a> {
         self.visible_scalable_route_count
     }
 
-    pub(in crate::runtime::room) const fn receiver_bandwidth_bps(&self) -> Option<u64> {
-        self.receiver_bandwidth_bps
+    pub(in crate::runtime::room) const fn receiver_bandwidth(&self) -> Option<Bitrate> {
+        self.receiver_bandwidth
     }
 
     pub(in crate::runtime::room) fn encodings(&self) -> SelectableRouteEncodings<'a> {
@@ -299,7 +302,7 @@ fn visible_scalable_route_counts_by_consumer(
     counts
 }
 
-fn receiver_bandwidth_by_user(snapshot: &ReceiverBandwidthSnapshot) -> BTreeMap<UserId, u64> {
+fn receiver_bandwidth_by_user(snapshot: &ReceiverBandwidthSnapshot) -> BTreeMap<UserId, Bitrate> {
     snapshot
         .per_session
         .iter()
@@ -369,7 +372,7 @@ mod tests {
         source_id: PublishedSourceId,
         encoding_id: SourceEncodingId,
         rid: &str,
-        max_bitrate: u64,
+        max_bitrate: Bitrate,
     ) -> SourceEncodingDescriptor {
         SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
             encoding_id,
@@ -403,9 +406,14 @@ mod tests {
             policy: SourcePolicy::hidden(),
             mid: None,
             encodings: vec![
-                source_encoding(source_id, high_encoding_id, "hi", 900_000),
-                source_encoding(source_id, low_encoding_id, "lo", 150_000),
-                source_encoding(source_id, middle_encoding_id, "mid", 450_000),
+                source_encoding(source_id, high_encoding_id, "hi", Bitrate::from_kbps(900)),
+                source_encoding(source_id, low_encoding_id, "lo", Bitrate::from_kbps(150)),
+                source_encoding(
+                    source_id,
+                    middle_encoding_id,
+                    "mid",
+                    Bitrate::from_kbps(450),
+                ),
             ],
         })?;
         let route = ReceiverVideoRouteInput::new(ReceiverVideoRouteInputParts {
@@ -422,7 +430,7 @@ mod tests {
                 SourceRoomPolicySelector::VisibleThumbnail,
             ),
             visible_scalable_route_count: 1,
-            receiver_bandwidth_bps: None,
+            receiver_bandwidth: None,
         });
 
         let selectable_encoding_ids = route

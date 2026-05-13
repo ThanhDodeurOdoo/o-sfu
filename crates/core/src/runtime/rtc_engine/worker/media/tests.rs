@@ -20,7 +20,7 @@ use super::{
     respond_set_remote_source_packet_gate,
 };
 use crate::{
-    MediaCodecFlags,
+    Bitrate, MediaCodecFlags,
     runtime::{
         UserId,
         media_transport::{TransportAdapterError, TransportMediaId, TransportSessionKey},
@@ -62,7 +62,7 @@ fn prepare_source_session_with_rid(
             &mut state.users,
             source_session,
             candidate_addr,
-            10_000_000,
+            Bitrate::from_mbps(10),
             MediaCodecFlags::default(),
         )
         .is_ok()
@@ -1260,7 +1260,7 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
             &mut state.users,
             &consumer_session,
             SocketAddr::from(([127, 0, 0, 1], 47_101)),
-            10_000_000,
+            Bitrate::from_mbps(10),
             MediaCodecFlags::default(),
         )
         .is_ok()
@@ -1358,7 +1358,7 @@ fn add_send_media_uses_supplied_time_for_initial_selected_rid_gate() {
             &mut state.users,
             &consumer_session,
             SocketAddr::from(([127, 0, 0, 1], 47_102)),
-            10_000_000,
+            Bitrate::from_mbps(10),
             MediaCodecFlags::default(),
         )
         .is_ok()
@@ -1412,7 +1412,7 @@ fn prepare_already_absent_producer_registration(
             &mut state.users,
             session_key,
             candidate_addr,
-            10_000_000,
+            Bitrate::from_mbps(10),
             MediaCodecFlags::default(),
         )
         .is_ok()

@@ -11,13 +11,17 @@ use str0m::{Event, IceConnectionState, bwe::BweKind};
 use tracing::{debug, trace};
 
 use super::super::state::{RtcSnapshotState, TransportSessionHealth};
-use crate::runtime::{
-    diagnostics::{
-        DiagnosticsStore, diagnostics_room_instance_id, health_json_value, maybe_health_json_value,
+use crate::{
+    Bitrate,
+    runtime::{
+        diagnostics::{
+            DiagnosticsStore, diagnostics_room_instance_id, health_json_value,
+            maybe_health_json_value,
+        },
+        media_transport::{SourcePolicySignal, TransportSessionKey},
+        metrics::{self, RuntimeMetrics, TransportIceState},
+        telemetry::schema,
     },
-    media_transport::{SourcePolicySignal, TransportSessionKey},
-    metrics::{self, RuntimeMetrics, TransportIceState},
-    telemetry::schema,
 };
 
 /// Log a transport event at the level useful for packet-loop diagnostics.
@@ -115,8 +119,10 @@ fn observe_receiver_bandwidth(
     session_key: &TransportSessionKey,
     kind: &BweKind,
 ) {
-    let Some(estimate_bps) = (match kind {
-        BweKind::Twcc(bitrate) | BweKind::Remb(_, bitrate) => Some(bitrate.as_u64()),
+    let Some(estimate) = (match kind {
+        BweKind::Twcc(bitrate) | BweKind::Remb(_, bitrate) => {
+            Some(Bitrate::from_bps(bitrate.as_u64()))
+        }
         _ => None,
     }) else {
         return;
@@ -124,7 +130,7 @@ fn observe_receiver_bandwidth(
     let Ok(mut snapshot_state) = snapshot_state.lock() else {
         return;
     };
-    if snapshot_state.set_receiver_bandwidth(session_key, estimate_bps) == Some(estimate_bps) {
+    if snapshot_state.set_receiver_bandwidth(session_key, estimate) == Some(estimate) {
         return;
     }
     source_policy_signal.mark_dirty(session_key.room_instance_id());

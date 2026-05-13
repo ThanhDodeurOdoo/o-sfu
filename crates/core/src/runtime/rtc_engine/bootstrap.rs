@@ -14,7 +14,7 @@ use std::{
 use o_sfu_rfc::webrtc;
 use str0m::{
     Candidate, Rtc,
-    bwe::Bitrate,
+    bwe::Bitrate as Str0mBitrate,
     format::{Codec, CodecConfig, FormatParams},
     media::Frequency,
 };
@@ -23,7 +23,7 @@ use tracing::info;
 
 use super::state::{RtcSessionState, SessionSdpNegotiationState, SharedRtcSocket};
 use crate::{
-    MediaCodecFlags, RtcPortRange,
+    Bitrate, MediaCodecFlags, RtcPortRange,
     runtime::media_transport::{TransportAdapterError, TransportSessionKey},
 };
 
@@ -72,7 +72,7 @@ pub(super) fn ensure_session_rtc_state(
     users: &mut BTreeMap<TransportSessionKey, RtcSessionState>,
     session_key: &TransportSessionKey,
     candidate_addr: SocketAddr,
-    max_bitrate_out_bps: u64,
+    max_bitrate_out: Bitrate,
     codec_flags: MediaCodecFlags,
 ) -> Result<bool, TransportAdapterError> {
     if users.contains_key(session_key) {
@@ -80,11 +80,11 @@ pub(super) fn ensure_session_rtc_state(
     }
     let started_at = Instant::now();
     let mut rtc = rtc_builder(codec_flags)
-        .enable_bwe(Some(Bitrate::bps(max_bitrate_out_bps)))
+        .enable_bwe(Some(Str0mBitrate::bps(max_bitrate_out.as_bps())))
         .set_ice_lite(true)
         .build(started_at);
     rtc.bwe()
-        .set_desired_bitrate(Bitrate::bps(max_bitrate_out_bps));
+        .set_desired_bitrate(Str0mBitrate::bps(max_bitrate_out.as_bps()));
     let candidate = Candidate::host(candidate_addr, webrtc::IceTransport::Udp.as_str())
         .map_err(|_error| TransportAdapterError::TransportUnavailable)?;
     if rtc.add_local_candidate(candidate).is_none() {
@@ -98,9 +98,9 @@ pub(super) fn ensure_session_rtc_state(
             started_at,
             local_ice_ufrag,
             #[cfg(test)]
-            max_bitrate_in_bps: None,
+            max_bitrate_in: None,
             #[cfg(test)]
-            max_bitrate_out_bps: Some(max_bitrate_out_bps),
+            max_bitrate_out: Some(max_bitrate_out),
             dtls_started: false,
             sdp_negotiation: SessionSdpNegotiationState::default(),
             consumer_streams: HashMap::new(),

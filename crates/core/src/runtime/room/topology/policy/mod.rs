@@ -3,7 +3,7 @@ mod load;
 #[cfg(test)]
 pub(in crate::runtime::room) use load::LoadPressureReason;
 
-use crate::{RoomShardingPolicy, RoomSpilloverMode};
+use crate::{Bitrate, RoomShardingPolicy, RoomSpilloverMode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(in crate::runtime::room) struct TopologyPressureSnapshot {
@@ -11,7 +11,7 @@ pub(in crate::runtime::room) struct TopologyPressureSnapshot {
     pub active_consumer_count: usize,
     pub pending_consumer_count: usize,
     pub max_source_fanout: usize,
-    pub egress_bitrate_bps: u64,
+    pub egress_bitrate: Bitrate,
     pub packet_loop_lag_ms: u64,
     pub command_backlog_depth: usize,
     pub relay_mailbox_depth: usize,

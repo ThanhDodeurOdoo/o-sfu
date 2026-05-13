@@ -469,9 +469,12 @@ mod tests {
     use super::*;
     use crate::{
         application::stream_catalog::source_publish_intent_for_stream_type,
-        core::server::source_model::{
-            PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
-            SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
+        core::{
+            Bitrate,
+            server::source_model::{
+                PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
+                SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
+            },
         },
     };
 
@@ -569,7 +572,7 @@ mod tests {
             rid: Some(Rid::new("hi")),
             primary_ssrc: None,
             repair_ssrc: None,
-            max_bitrate: Some(900_000),
+            max_bitrate: Some(Bitrate::from_kbps(900)),
             resolution_scale: None,
             max_framerate: None,
             policy_role: None,

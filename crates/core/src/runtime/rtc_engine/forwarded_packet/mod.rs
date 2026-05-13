@@ -279,7 +279,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        MediaCodecFlags,
+        Bitrate, MediaCodecFlags,
         runtime::{
             UserId,
             rtc_engine::{
@@ -321,7 +321,7 @@ mod tests {
                 &mut state.users,
                 &session_key,
                 candidate_addr,
-                10_000_000,
+                Bitrate::from_mbps(10),
                 MediaCodecFlags::default().with_h264(true),
             )
             .is_ok()

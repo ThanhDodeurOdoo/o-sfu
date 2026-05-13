@@ -2,8 +2,8 @@ use std::{net::IpAddr, num::NonZeroUsize};
 
 use anyhow::{Context, Result, anyhow, ensure};
 use o_sfu_core::{
-    LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts, RoomShardingPolicy,
-    RtcPortRange, VideoBitrateLimits,
+    Bitrate, LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts,
+    RoomShardingPolicy, RtcPortRange, VideoBitrateLimits,
 };
 
 use super::{TransportConfig, parsing::parse_env_or_default};
@@ -29,7 +29,7 @@ pub(super) fn load_transport_config(
         &mut get_var,
         "MAX_VIDEO_BITRATE",
         "u64",
-        VideoBitrateLimits::DEFAULT_MAX_VIDEO_BITRATE_BPS,
+        VideoBitrateLimits::DEFAULT_MAX_VIDEO_BITRATE.as_bps(),
     )?;
     let rtc_max_port = parse_env_or_default(&mut get_var, "RTC_MAX_PORT", "u16", 49_999)?;
     let rtc_media_worker_count =
@@ -57,9 +57,9 @@ pub(super) fn load_transport_config(
     )?;
     Ok(TransportConfig {
         public_ip,
-        max_bitrate_in_bps,
-        max_bitrate_out_bps,
-        video_bitrate_limits: VideoBitrateLimits::new(max_video_bitrate_bps),
+        max_bitrate_in: Bitrate::from_bps(max_bitrate_in_bps),
+        max_bitrate_out: Bitrate::from_bps(max_bitrate_out_bps),
+        video_bitrate_limits: VideoBitrateLimits::new(Bitrate::from_bps(max_video_bitrate_bps)),
         rtc_port_range,
         rtc_media_worker_count,
         room_sharding_policy,
@@ -116,12 +116,12 @@ fn load_local_spillover_policy(
             "usize",
             LocalSpilloverPolicy::DEFAULT_MAX_FANOUT_PER_SOURCE,
         )?,
-        egress_bitrate_threshold_bps: parse_env_or_default(
+        egress_bitrate_threshold: Bitrate::from_bps(parse_env_or_default(
             get_var,
             "ROOM_SPILLOVER_EGRESS_BITRATE_BPS",
             "u64",
-            LocalSpilloverPolicy::DEFAULT_EGRESS_BITRATE_THRESHOLD_BPS,
-        )?,
+            LocalSpilloverPolicy::DEFAULT_EGRESS_BITRATE_THRESHOLD.as_bps(),
+        )?),
         packet_loop_lag_threshold_ms: parse_env_or_default(
             get_var,
             "ROOM_SPILLOVER_PACKET_LOOP_LAG_MS",
@@ -252,7 +252,7 @@ mod tests {
     use o_sfu_core::{LocalSpilloverPolicy, RoomSpilloverMode};
 
     use super::{
-        RoomShardingPolicy, RtcPortRange, TransportConfig, VideoBitrateLimits,
+        Bitrate, RoomShardingPolicy, RtcPortRange, TransportConfig, VideoBitrateLimits,
         load_transport_config,
     };
 
@@ -278,8 +278,8 @@ mod tests {
             config.ok(),
             Some(TransportConfig {
                 public_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
-                max_bitrate_in_bps: 8_000_000,
-                max_bitrate_out_bps: 10_000_000,
+                max_bitrate_in: Bitrate::from_mbps(8),
+                max_bitrate_out: Bitrate::from_mbps(10),
                 video_bitrate_limits: VideoBitrateLimits::default(),
                 rtc_port_range: RtcPortRange::new(40_000, 49_999),
                 rtc_media_worker_count: 1,
@@ -301,11 +301,11 @@ mod tests {
         let Some(config) = config.ok() else {
             return;
         };
-        assert_eq!(config.max_bitrate_in_bps, 1_234_567);
-        assert_eq!(config.max_bitrate_out_bps, 7_654_321);
+        assert_eq!(config.max_bitrate_in, Bitrate::from_bps(1_234_567));
+        assert_eq!(config.max_bitrate_out, Bitrate::from_bps(7_654_321));
         assert_eq!(
             config.video_bitrate_limits,
-            VideoBitrateLimits::new(2_345_678)
+            VideoBitrateLimits::new(Bitrate::from_bps(2_345_678))
         );
     }
 
@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(policy.min_receiver_count(), 8);
         assert_eq!(policy.max_active_consumers_per_router(), 9);
         assert_eq!(policy.max_fanout_per_source(), 10);
-        assert_eq!(policy.egress_bitrate_threshold_bps(), 1_200);
+        assert_eq!(policy.egress_bitrate_threshold(), Bitrate::from_bps(1_200));
         assert_eq!(policy.packet_loop_lag_threshold_ms(), 7);
         assert_eq!(policy.command_backlog_threshold(), 11);
         assert_eq!(policy.relay_mailbox_depth_threshold(), 12);
