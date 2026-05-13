@@ -12,6 +12,7 @@
 //! may move behind narrower re-exports during the cleanup sequence.
 
 pub mod diagnostics;
+mod hot_path;
 pub mod media_transport;
 pub mod metrics;
 pub mod packet_sink_registry;
