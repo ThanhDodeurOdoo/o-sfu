@@ -16,10 +16,10 @@ anyhow.workspace = true
 base64.workspace = true
 futures-util.workspace = true
 o-sfu = { path = "..", default-features = false }
-o-sfu-protocol = { path = "../protocol" }
-o-sfu-rfc = { path = "../rfc" }
-o-sfu-router = { path = "../router" }
-o-sfu-telemetry = { path = "../telemetry" }
+o-sfu-protocol = { path = "../crates/protocol" }
+o-sfu-rfc = { path = "../crates/rfc" }
+o-sfu-router = { path = "../crates/router" }
+o-sfu-telemetry = { path = "../crates/telemetry" }
 reqwest = { version = "0.13", default-features = false, features = [
     "json",
     "query",

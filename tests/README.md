@@ -18,7 +18,7 @@ cargo fmt
 cargo check -p o-sfu
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --release
-npm --prefix client run verify
+npm --prefix crates/client run verify
 ```
 
 ## CI tests

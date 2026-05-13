@@ -1,14 +1,14 @@
 [workspace]
 exclude = ["tests/fuzz"]
 members = [
-    "cluster",
-    "core",
-    "model",
-    "protocol",
-    "rfc",
-    "router",
-    "telemetry",
-    "telemetry/macros",
+    "crates/cluster",
+    "crates/core",
+    "crates/model",
+    "crates/protocol",
+    "crates/rfc",
+    "crates/router",
+    "crates/telemetry",
+    "crates/telemetry/macros",
     "tests",
     "tests/proofs",
 ]
@@ -27,13 +27,13 @@ base64 = "0.22"
 bitflags = "2.6"
 futures-util = "0.3"
 hmac = "0.13"
-o-sfu-protocol = { path = "protocol" }
-o-sfu-cluster = { path = "cluster" }
-o-sfu-core = { path = "core" }
-o-sfu-model = { path = "model" }
-o-sfu-rfc = { path = "rfc" }
-o-sfu-router = { path = "router" }
-o-sfu-telemetry = { path = "telemetry", default-features = false }
+o-sfu-protocol = { path = "crates/protocol" }
+o-sfu-cluster = { path = "crates/cluster" }
+o-sfu-core = { path = "crates/core" }
+o-sfu-model = { path = "crates/model" }
+o-sfu-rfc = { path = "crates/rfc" }
+o-sfu-router = { path = "crates/router" }
+o-sfu-telemetry = { path = "crates/telemetry", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.11.0"
