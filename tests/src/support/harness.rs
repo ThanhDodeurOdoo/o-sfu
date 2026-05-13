@@ -171,6 +171,19 @@ impl TestServer {
         .await
     }
 
+    pub async fn wait_for_user_media_worker(
+        &self,
+        room_id: &str,
+        user_id: &UserId,
+        expected_media_worker_id: usize,
+    ) -> bool {
+        wait_for_test_predicate(|| async {
+            let room = self.room_detail(room_id).await?;
+            (user_media_worker_id(&room, user_id) == Some(expected_media_worker_id)).then_some(())
+        })
+        .await
+    }
+
     async fn wait_for_consumer_route_state(
         &self,
         room_id: &str,
@@ -232,6 +245,13 @@ fn audio_source_active_speaker<'room>(
         })?
         .active_speaker
         .as_ref()
+}
+
+fn user_media_worker_id(room: &DiagnosticsRoomDetail, user_id: &UserId) -> Option<usize> {
+    room.users
+        .iter()
+        .find(|user| user.user_id == *user_id)
+        .map(|user| user.transport.media_worker_id)
 }
 
 fn video_subscription_selected_rid<'room>(
