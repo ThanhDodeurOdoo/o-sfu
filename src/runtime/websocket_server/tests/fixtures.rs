@@ -20,7 +20,9 @@ pub(super) use tokio::{
 };
 pub(super) use tokio_tungstenite::{
     connect_async,
-    tungstenite::{self, protocol::frame::coding::CloseCode},
+    tungstenite::{
+        self, client::IntoClientRequest, http::HeaderValue, protocol::frame::coding::CloseCode,
+    },
 };
 
 use crate::config::RoomShardingPolicy;
@@ -141,7 +143,7 @@ pub(super) struct TestServer {
 }
 
 impl TestServer {
-    fn url(&self) -> String {
+    pub(super) fn url(&self) -> String {
         format!("ws://{}/", self.addr)
     }
 }
@@ -162,6 +164,8 @@ pub(super) fn test_config(
         auth: AuthConfig {
             key: TEST_AUTH_KEY.to_owned(),
             authentication_timeout_ms,
+            max_pre_auth_websocket_sessions: 512,
+            max_pre_auth_websocket_sessions_per_origin: 16,
         },
         http: HttpConfig {
             bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
@@ -240,6 +244,13 @@ async fn spawn_test_server_impl(
         room_size,
     );
     config.features = feature_flags;
+    spawn_test_server_from_config(config, media_transport).await
+}
+
+async fn spawn_test_server_from_config(
+    config: Config,
+    media_transport: MediaTransport,
+) -> Option<TestServer> {
     let diagnostics = Arc::new(DiagnosticsStore::default());
     let metrics = Arc::new(RuntimeMetrics::default());
     let room_manager = Arc::new(RoomManager::new(
@@ -247,7 +258,7 @@ async fn spawn_test_server_impl(
             1,
             RoomRuntimePolicy::new(
                 RoomAdmissionPolicy::new(config.user.room_size),
-                feature_flags,
+                config.features,
                 rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
             )
             .with_room_sharding_policy(config.transport.room_sharding_policy),
@@ -283,6 +294,33 @@ async fn spawn_test_server_impl(
         media_transport,
         state,
     })
+}
+
+pub(super) async fn spawn_test_server_with_pre_auth_capacity(
+    authentication_timeout_ms: u64,
+    room_size: usize,
+    max_pre_auth_websocket_sessions: usize,
+    max_pre_auth_websocket_sessions_per_origin: usize,
+) -> Option<TestServer> {
+    let mut config = test_config(authentication_timeout_ms, 10_000, 60_000, room_size);
+    config.auth.max_pre_auth_websocket_sessions = max_pre_auth_websocket_sessions;
+    config.auth.max_pre_auth_websocket_sessions_per_origin =
+        max_pre_auth_websocket_sessions_per_origin;
+    spawn_test_server_from_config(config, MediaTransport::fake_for_testing()).await
+}
+
+pub(super) async fn spawn_proxy_trusted_test_server_with_pre_auth_capacity(
+    authentication_timeout_ms: u64,
+    room_size: usize,
+    max_pre_auth_websocket_sessions: usize,
+    max_pre_auth_websocket_sessions_per_origin: usize,
+) -> Option<TestServer> {
+    let mut config = test_config(authentication_timeout_ms, 10_000, 60_000, room_size);
+    config.http.trust_proxy_headers = true;
+    config.auth.max_pre_auth_websocket_sessions = max_pre_auth_websocket_sessions;
+    config.auth.max_pre_auth_websocket_sessions_per_origin =
+        max_pre_auth_websocket_sessions_per_origin;
+    spawn_test_server_from_config(config, MediaTransport::fake_for_testing()).await
 }
 
 pub(super) async fn spawn_test_server_with_adapter(
@@ -394,6 +432,19 @@ pub(super) async fn wait_for_fake_webrtc_events(
 
 pub(super) async fn connect_websocket(server: &TestServer) -> Option<TestWebSocket> {
     let websocket = connect_async(server.url()).await.ok()?;
+    Some(websocket.0)
+}
+
+pub(super) async fn connect_websocket_with_forwarded_for(
+    server: &TestServer,
+    forwarded_for: &str,
+) -> Option<TestWebSocket> {
+    let mut request = server.url().into_client_request().ok()?;
+    let forwarded_for = HeaderValue::from_str(forwarded_for).ok()?;
+    request
+        .headers_mut()
+        .insert("x-forwarded-for", forwarded_for);
+    let websocket = connect_async(request).await.ok()?;
     Some(websocket.0)
 }
 

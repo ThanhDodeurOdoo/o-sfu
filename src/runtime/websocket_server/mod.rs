@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! websocket_server
+//! |- admission        -> pre-auth WebSocket concurrency budget
 //! |- controller       -> upgrade boundary and outer user lifecycle
 //! |- handshake        -> first-frame authentication and room admission
 //! |- session_loop     -> steady-state reader/writer loop after admission
@@ -12,6 +13,7 @@
 //!
 //! The rest of the runtime should treat this module as the sole owner of WebSocket
 //! mechanics such as close codes, ping/pong liveness, and reader/writer management.
+mod admission;
 mod controller;
 mod handshake;
 pub(crate) mod io;
@@ -19,6 +21,7 @@ mod session_loop;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use admission::PreAuthWebSocketAdmission;
 pub(crate) use controller::{close_writer, upgrade};
 pub use handshake::decode_auth_payload_text;
 pub(crate) use io::WsWriter;

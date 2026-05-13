@@ -78,6 +78,16 @@ impl ConfigLogView<'_> {
         )?;
         writeln!(
             formatter,
+            "    - max_pre_auth_websocket_sessions={}",
+            config.auth.max_pre_auth_websocket_sessions
+        )?;
+        writeln!(
+            formatter,
+            "    - max_pre_auth_websocket_sessions_per_origin={}",
+            config.auth.max_pre_auth_websocket_sessions_per_origin
+        )?;
+        writeln!(
+            formatter,
             "    - user_timeout_ms={}",
             config.user.timeout_ms
         )?;
@@ -254,6 +264,8 @@ mod tests {
             auth: AuthConfig {
                 key: "test-key".to_owned(),
                 authentication_timeout_ms: 10_000,
+                max_pre_auth_websocket_sessions: 512,
+                max_pre_auth_websocket_sessions_per_origin: 16,
             },
             http: HttpConfig {
                 bind_address,
@@ -290,6 +302,8 @@ mod tests {
         let config = test_config(SocketAddr::from(([127, 0, 0, 1], 8070)));
         let rendered = ConfigLogView::new(&config, 42).to_string();
         assert!(rendered.contains("diagnostics_access=loopback_only"));
+        assert!(rendered.contains("max_pre_auth_websocket_sessions=512"));
+        assert!(rendered.contains("max_pre_auth_websocket_sessions_per_origin=16"));
         assert!(rendered.contains("service_instance_id=pid-42"));
     }
 

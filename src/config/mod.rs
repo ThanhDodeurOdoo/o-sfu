@@ -18,6 +18,10 @@ pub(crate) use self::log_view::ConfigLogView;
 pub use self::{
     diagnostics::DiagnosticsConfig,
     feature_flags::RuntimeFeatureFlags,
-    settings::{AuthConfig, CodecConfig, Config, HttpConfig, TransportConfig, UserConfig},
+    settings::{
+        AuthConfig, CodecConfig, Config, DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS,
+        DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN, HttpConfig, TransportConfig,
+        UserConfig,
+    },
     telemetry::{TelemetryConfig, TelemetryLogFormat, TelemetryResource, TraceExportConfig},
 };

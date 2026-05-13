@@ -1,5 +1,94 @@
+use tungstenite::http::StatusCode;
+
 use super::fixtures::*;
 use crate::runtime::auth::MAX_JWT_TOKEN_BYTES;
+
+#[tokio::test]
+async fn websocket_rejects_pre_auth_connections_over_configured_capacity() {
+    let server = spawn_test_server_with_pre_auth_capacity(1_000, 100, 1, 1).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let first = connect_websocket(&server).await;
+    assert!(first.is_some());
+    let Some(mut first) = first else {
+        return;
+    };
+
+    let rejected = timeout(Duration::from_millis(200), connect_async(server.url())).await;
+    assert!(
+        rejected.is_ok(),
+        "pre-auth cap rejection should complete promptly: {rejected:?}"
+    );
+    let Some(result) = rejected.ok() else {
+        return;
+    };
+    match result {
+        Err(tungstenite::Error::Http(response)) => {
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        }
+        other => panic!("expected websocket HTTP rejection, got {other:?}"),
+    }
+
+    assert!(first.close(None).await.is_ok());
+}
+
+#[tokio::test]
+async fn websocket_rejects_pre_auth_connections_over_origin_capacity() {
+    let server = spawn_test_server_with_pre_auth_capacity(1_000, 100, 2, 1).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let first = connect_websocket(&server).await;
+    assert!(first.is_some());
+    let Some(mut first) = first else {
+        return;
+    };
+
+    let rejected = timeout(Duration::from_millis(200), connect_async(server.url())).await;
+    assert!(
+        rejected.is_ok(),
+        "per-origin pre-auth cap rejection should complete promptly: {rejected:?}"
+    );
+    let Some(result) = rejected.ok() else {
+        return;
+    };
+    match result {
+        Err(tungstenite::Error::Http(response)) => {
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        }
+        other => panic!("expected websocket HTTP rejection, got {other:?}"),
+    }
+
+    assert!(first.close(None).await.is_ok());
+}
+
+#[tokio::test]
+async fn websocket_pre_auth_origin_cap_allows_distinct_trusted_origins() {
+    let server = spawn_proxy_trusted_test_server_with_pre_auth_capacity(1_000, 100, 2, 1).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let first = connect_websocket_with_forwarded_for(&server, "198.51.100.24").await;
+    assert!(first.is_some());
+    let Some(mut first) = first else {
+        return;
+    };
+    let second = connect_websocket_with_forwarded_for(&server, "203.0.113.8").await;
+    assert!(
+        second.is_some(),
+        "distinct trusted origins should each receive one pre-auth slot"
+    );
+    let Some(mut second) = second else {
+        return;
+    };
+
+    assert!(first.close(None).await.is_ok());
+    assert!(second.close(None).await.is_ok());
+}
 
 #[tokio::test]
 async fn websocket_times_out_when_client_never_authenticates() {
@@ -25,6 +114,89 @@ async fn websocket_times_out_when_client_never_authenticates() {
     let metrics = server.state.metrics.snapshot();
     assert_eq!(metrics.ws_connections_accepted(), 1);
     assert_eq!(metrics.ws_handshake_rejected_timeout(), 1);
+}
+
+#[tokio::test]
+async fn websocket_pre_auth_permit_is_released_after_auth_timeout() {
+    let server = spawn_test_server_with_pre_auth_capacity(25, 100, 1, 1).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let first = connect_websocket(&server).await;
+    assert!(first.is_some());
+    let Some(mut first) = first else {
+        return;
+    };
+
+    assert_eq!(
+        read_close_code(&mut first).await,
+        Some(CloseCode::Library(4107)),
+    );
+    sleep(Duration::from_millis(20)).await;
+
+    let second = connect_websocket(&server).await;
+    assert!(
+        second.is_some(),
+        "pre-auth permit should be reusable after auth timeout"
+    );
+}
+
+#[tokio::test]
+async fn websocket_pre_auth_permit_is_released_after_auth_failure() {
+    let server = spawn_test_server_with_pre_auth_capacity(1_000, 100, 1, 1).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let first = connect_websocket(&server).await;
+    assert!(first.is_some());
+    let Some(mut first) = first else {
+        return;
+    };
+
+    let send_result = first
+        .send(tungstenite::Message::Text(
+            serde_json::to_string(&vec![serde_json::json!({
+                "t": "info",
+                "p": {},
+            })])
+            .unwrap_or_default()
+            .into(),
+        ))
+        .await;
+    assert!(send_result.is_ok());
+    assert_eq!(read_close_code(&mut first).await, Some(CloseCode::Protocol));
+    sleep(Duration::from_millis(20)).await;
+
+    let second = connect_websocket(&server).await;
+    assert!(
+        second.is_some(),
+        "pre-auth permit should be reusable after auth failure"
+    );
+}
+
+#[tokio::test]
+async fn websocket_pre_auth_permit_is_released_after_early_client_close() {
+    let server = spawn_test_server_with_pre_auth_capacity(1_000, 100, 1, 1).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let first = connect_websocket(&server).await;
+    assert!(first.is_some());
+    let Some(mut first) = first else {
+        return;
+    };
+
+    assert!(first.close(None).await.is_ok());
+    sleep(Duration::from_millis(20)).await;
+
+    let second = connect_websocket(&server).await;
+    assert!(
+        second.is_some(),
+        "pre-auth permit should be reusable after early client close"
+    );
 }
 
 #[tokio::test]
@@ -84,6 +256,33 @@ async fn websocket_authenticates_with_room_key_and_sends_welcome_payload() {
     assert_eq!(metrics.ws_handshake_credentials_received(), 1);
     assert_eq!(metrics.ws_users_joined(), 1);
     assert_eq!(metrics.ws_user_loops_started(), 1);
+}
+
+#[tokio::test]
+async fn websocket_pre_auth_permit_is_released_after_auth_success() {
+    let server = spawn_test_server_with_pre_auth_capacity(1_000, 100, 1, 1).await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
+    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(77));
+    assert!(token.is_some());
+    let Some(token) = token else {
+        return;
+    };
+    let authenticated = authenticate_and_read_welcome(&server, &token).await;
+    assert!(authenticated.is_some());
+    let Some((mut first, _welcome)) = authenticated else {
+        return;
+    };
+
+    let second = connect_websocket(&server).await;
+    assert!(
+        second.is_some(),
+        "pre-auth permit should be reusable after auth succeeds"
+    );
+    assert!(first.close(None).await.is_ok());
 }
 
 #[tokio::test]

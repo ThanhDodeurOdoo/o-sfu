@@ -3,7 +3,8 @@ use std::{env, net::SocketAddr};
 use anyhow::{Context, Result, ensure};
 
 use super::{
-    AuthConfig, CodecConfig, ConfigLogView, HttpConfig, UserConfig,
+    AuthConfig, CodecConfig, ConfigLogView, DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS,
+    DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN, HttpConfig, UserConfig,
     codec_flags::load_media_codec_flags, codec_preferences::load_codec_preferences,
     diagnostics::load_diagnostics_config, feature_flags::load_runtime_feature_flags,
     parsing::parse_optional_env, settings::Config, telemetry::load_telemetry_config,
@@ -17,8 +18,10 @@ impl Config {
     /// # Errors
     ///
     /// Returns an error when `AUTH_KEY` is missing, `BIND_ADDRESS` is invalid,
-    /// `AUTHENTICATION_TIMEOUT_MS` is invalid, `ROOM_SIZE` is zero,
-    /// `USER_TIMEOUT_MS` is invalid, `PING_INTERVAL_MS` is invalid,
+    /// `AUTHENTICATION_TIMEOUT_MS` is invalid,
+    /// `MAX_PRE_AUTH_WEBSOCKET_SESSIONS` is invalid,
+    /// `MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN` is invalid,
+    /// `ROOM_SIZE` is zero, `USER_TIMEOUT_MS` is invalid, `PING_INTERVAL_MS` is invalid,
     /// `USER_OUTBOUND_QUEUE_BYTE_CAPACITY` is invalid, `PROXY` is invalid,
     /// `PUBLIC_IP` is missing or invalid, or `RTC_MIN_PORT`/`RTC_MAX_PORT`
     /// are invalid.
@@ -36,13 +39,7 @@ impl Config {
             .unwrap_or_else(|| "0.0.0.0:8070".to_owned())
             .parse()
             .context("BIND_ADDRESS must be a valid socket address")?;
-        let auth_key = get_var("AUTH_KEY").context("AUTH_KEY env variable is required")?;
-        let authentication_timeout_ms = parse_optional_env(
-            &mut get_var,
-            "AUTHENTICATION_TIMEOUT_MS",
-            "AUTHENTICATION_TIMEOUT_MS must be a valid u64",
-        )?
-        .unwrap_or(10_000);
+        let auth = load_auth_config(&mut get_var)?;
         let room_size =
             parse_optional_env(&mut get_var, "ROOM_SIZE", "ROOM_SIZE must be a valid usize")?
                 .unwrap_or(100);
@@ -100,10 +97,7 @@ impl Config {
             "USER_OUTBOUND_QUEUE_BYTE_CAPACITY must be greater than zero"
         );
         Ok(Self {
-            auth: AuthConfig {
-                key: auth_key,
-                authentication_timeout_ms,
-            },
+            auth,
             http: HttpConfig {
                 bind_address,
                 trust_proxy_headers,
@@ -127,12 +121,49 @@ impl Config {
     }
 }
 
+fn load_auth_config(get_var: &mut impl FnMut(&str) -> Option<String>) -> Result<AuthConfig> {
+    let key = get_var("AUTH_KEY").context("AUTH_KEY env variable is required")?;
+    let authentication_timeout_ms = parse_optional_env(
+        &mut *get_var,
+        "AUTHENTICATION_TIMEOUT_MS",
+        "AUTHENTICATION_TIMEOUT_MS must be a valid u64",
+    )?
+    .unwrap_or(10_000);
+    let max_pre_auth_websocket_sessions = parse_optional_env(
+        &mut *get_var,
+        "MAX_PRE_AUTH_WEBSOCKET_SESSIONS",
+        "MAX_PRE_AUTH_WEBSOCKET_SESSIONS must be a valid usize",
+    )?
+    .unwrap_or(DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS);
+    let max_pre_auth_websocket_sessions_per_origin = parse_optional_env(
+        &mut *get_var,
+        "MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN",
+        "MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN must be a valid usize",
+    )?
+    .unwrap_or(DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN);
+    ensure!(
+        max_pre_auth_websocket_sessions > 0,
+        "MAX_PRE_AUTH_WEBSOCKET_SESSIONS must be greater than zero"
+    );
+    ensure!(
+        max_pre_auth_websocket_sessions_per_origin > 0,
+        "MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN must be greater than zero"
+    );
+    Ok(AuthConfig {
+        key,
+        authentication_timeout_ms,
+        max_pre_auth_websocket_sessions,
+        max_pre_auth_websocket_sessions_per_origin,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
         config::{
-            Bitrate, CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
-            RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
+            Bitrate, CodecPreferences, Config, DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS,
+            DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN, DiagnosticsConfig, MediaCodecFlags,
+            RtcPortRange, RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
         },
         core::server::room::{
             DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
@@ -163,6 +194,14 @@ mod tests {
         assert_eq!(config.http.bind_address.to_string(), "0.0.0.0:8070");
         assert_eq!(config.auth.key, "dGVzdC1rZXk=");
         assert_eq!(config.auth.authentication_timeout_ms, 10_000);
+        assert_eq!(
+            config.auth.max_pre_auth_websocket_sessions,
+            DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS
+        );
+        assert_eq!(
+            config.auth.max_pre_auth_websocket_sessions_per_origin,
+            DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN
+        );
         assert_eq!(config.user.room_size, 100);
         assert_eq!(config.user.timeout_ms, 10_000);
         assert_eq!(config.user.ping_interval_ms, 60_000);
@@ -237,6 +276,28 @@ mod tests {
             "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
             "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
             "PING_INTERVAL_MS" => Some("0".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn config_rejects_zero_pre_auth_websocket_sessions() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "MAX_PRE_AUTH_WEBSOCKET_SESSIONS" => Some("0".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn config_rejects_zero_pre_auth_websocket_sessions_per_origin() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN" => Some("0".to_owned()),
             _ => None,
         });
         assert!(config.is_err());

@@ -84,6 +84,7 @@ pub(super) struct RuntimeState {
     media_transport: MediaTransport,
     media_core: MediaCore,
     metrics: Arc<RuntimeMetrics>,
+    pre_auth_websocket_admission: websocket_server::PreAuthWebSocketAdmission,
 }
 
 #[derive(Debug, Clone)]
@@ -253,6 +254,10 @@ impl RuntimeState {
         media_transport: MediaTransport,
     ) -> Self {
         let media_core = SfuCore::new(options.core, media_transport.clone());
+        let pre_auth_websocket_admission = websocket_server::PreAuthWebSocketAdmission::new(
+            config.auth.max_pre_auth_websocket_sessions,
+            config.auth.max_pre_auth_websocket_sessions_per_origin,
+        );
         Self {
             config: config.clone(),
             room_manager: rooms,
@@ -260,6 +265,7 @@ impl RuntimeState {
             media_transport,
             media_core,
             metrics,
+            pre_auth_websocket_admission,
         }
     }
 
@@ -466,6 +472,8 @@ mod tests {
             auth: AuthConfig {
                 key: "dGVzdC1rZXk=".to_owned(),
                 authentication_timeout_ms: 1_000,
+                max_pre_auth_websocket_sessions: 512,
+                max_pre_auth_websocket_sessions_per_origin: 16,
             },
             http: HttpConfig {
                 bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),

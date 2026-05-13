@@ -7,6 +7,9 @@ use super::{
     diagnostics::DiagnosticsConfig, feature_flags::RuntimeFeatureFlags, telemetry::TelemetryConfig,
 };
 
+pub const DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS: usize = 512;
+pub const DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN: usize = 16;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub auth: AuthConfig,
@@ -23,6 +26,8 @@ pub struct Config {
 pub struct AuthConfig {
     pub key: String,
     pub authentication_timeout_ms: u64,
+    pub max_pre_auth_websocket_sessions: usize,
+    pub max_pre_auth_websocket_sessions_per_origin: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

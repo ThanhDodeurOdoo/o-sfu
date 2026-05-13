@@ -27,14 +27,18 @@ use axum::{
         ConnectInfo, Extension, State,
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
     },
-    http::HeaderMap,
-    response::Response,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 use futures_util::{SinkExt, StreamExt, stream::SplitStream};
 use o_sfu_protocol::{shared::UserId, signaling::WebSocketCloseCode};
-use tracing::{Instrument, Span, field, info};
+use tracing::{Instrument, Span, field, info, warn};
 
-use super::{WsWriter, io::MAX_CLIENT_FRAME_BYTES};
+use super::{
+    WsWriter,
+    admission::{PreAuthWebSocketAdmissionRejection, PreAuthWebSocketPermit},
+    io::MAX_CLIENT_FRAME_BYTES,
+};
 use crate::{
     application::user_session::User,
     core::server::room::{Room, UserOutboundReceiver},
@@ -70,10 +74,46 @@ pub(crate) async fn upgrade(
         state.config.http.trust_proxy_headers,
         connect_info.map(|Extension(ConnectInfo(addr))| addr),
     ));
+    let pre_auth_permit = match state
+        .pre_auth_websocket_admission
+        .try_acquire(remote_address.as_ref())
+    {
+        Ok(permit) => permit,
+        Err(rejection) => {
+            reject_pre_auth_admission(&state, remote_address.as_ref(), rejection);
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
     websocket
         .max_message_size(MAX_CLIENT_FRAME_BYTES)
         .max_frame_size(MAX_CLIENT_FRAME_BYTES)
-        .on_upgrade(move |socket| handle_socket(socket, state, remote_address))
+        .on_upgrade(move |socket| handle_socket(socket, state, remote_address, pre_auth_permit))
+}
+
+fn reject_pre_auth_admission(
+    state: &RuntimeState,
+    remote_address: &str,
+    rejection: PreAuthWebSocketAdmissionRejection,
+) {
+    match rejection {
+        PreAuthWebSocketAdmissionRejection::Global => {
+            warn!(
+                event = telemetry_event::WS_HANDSHAKE_REJECTED,
+                remote_address,
+                max_pre_auth_websocket_sessions = state.config.auth.max_pre_auth_websocket_sessions,
+                "rejecting websocket upgrade because global pre-auth admission is full"
+            );
+        }
+        PreAuthWebSocketAdmissionRejection::Origin => {
+            warn!(
+                event = telemetry_event::WS_HANDSHAKE_REJECTED,
+                remote_address,
+                max_pre_auth_websocket_sessions_per_origin =
+                    state.config.auth.max_pre_auth_websocket_sessions_per_origin,
+                "rejecting websocket upgrade because origin pre-auth admission is full"
+            );
+        }
+    }
 }
 
 /// Owns one upgraded WebSocket from first split through final room cleanup.
@@ -83,7 +123,12 @@ pub(crate) async fn upgrade(
 /// user loop, and then closes the logical room user exactly once. Keeping that
 /// sequencing here prevent handshake code and steady-state protocol code from racing to
 /// clean up the same room user.
-async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: Arc<str>) {
+async fn handle_socket(
+    socket: WebSocket,
+    state: RuntimeState,
+    remote_address: Arc<str>,
+    pre_auth_permit: PreAuthWebSocketPermit,
+) {
     async move {
         let current_span = Span::current();
         current_span.record(
@@ -107,6 +152,7 @@ async fn handle_socket(socket: WebSocket, state: RuntimeState, remote_address: A
             &mut ws_writer,
             &mut ws_reader,
             Arc::clone(&remote_address),
+            pre_auth_permit,
         )
         .instrument(handshake_span)
         .await

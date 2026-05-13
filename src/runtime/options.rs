@@ -97,6 +97,8 @@ mod tests {
             auth: AuthConfig {
                 key: "dGVzdC1rZXk=".to_owned(),
                 authentication_timeout_ms: 1_500,
+                max_pre_auth_websocket_sessions: 512,
+                max_pre_auth_websocket_sessions_per_origin: 16,
             },
             http: HttpConfig {
                 bind_address: SocketAddr::from(([127, 0, 0, 1], 8090)),

@@ -32,7 +32,9 @@ use tokio::time::timeout;
 use tracing::{Instrument, Span, debug, field, info, instrument, warn};
 
 use super::{
-    WsWriter, close_writer,
+    WsWriter,
+    admission::PreAuthWebSocketPermit,
+    close_writer,
     controller::{ConnectedUser, WsReader},
     io::send_user_output,
 };
@@ -100,9 +102,11 @@ pub(super) async fn establish_user(
     writer: &mut WsWriter,
     reader: &mut WsReader,
     remote_address: Arc<str>,
+    pre_auth_permit: PreAuthWebSocketPermit,
 ) -> Option<ConnectedUser> {
     let (room, claims) =
         authenticate_handshake_session(state, writer, reader, remote_address.as_ref()).await?;
+    drop(pre_auth_permit);
     let mut joined_user =
         join_user(state, writer, room, claims, Arc::clone(&remote_address)).await?;
     state.metrics.record_ws_user_joined();
