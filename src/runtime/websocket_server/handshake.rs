@@ -39,7 +39,8 @@ use super::{
 use crate::{
     application::user_session::User,
     core::server::room::{
-        JoinUserRequest, Room, RoomManagerJoinError, UserOutboundReceiver, UserOutboundSender,
+        JoinUserRequest, Room, RoomManagerJoinError, UserOutboundQueueLimits, UserOutboundReceiver,
+        UserOutboundSender,
     },
     runtime::{
         ConnectionId, RuntimeState,
@@ -424,8 +425,11 @@ async fn join_user(
     claims: WebSocketConnectClaims,
     remote_address: Arc<str>,
 ) -> Option<JoinedUser> {
-    let (outbound_tx, outbound_rx) = UserOutboundSender::channel(
-        state.config.user.outbound_queue_capacity,
+    let (outbound_tx, outbound_rx) = UserOutboundSender::channel_with_limits(
+        UserOutboundQueueLimits::new(
+            state.config.user.outbound_queue_capacity,
+            state.config.user.outbound_queue_byte_capacity,
+        ),
         Arc::clone(&state.metrics),
     );
     let user_id = claims.user_id.clone();

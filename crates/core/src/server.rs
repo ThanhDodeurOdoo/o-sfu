@@ -35,14 +35,16 @@ pub mod room {
     //! Room orchestration facade used by HTTP, websocket, and application code.
 
     pub use crate::runtime::room::{
-        ConsumerRouteState, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY, IncomingBitrateSnapshot,
-        JoinUserRequest, LocalRoomRouterPlacements, LocalRoomRouterPlacementsError,
-        LocalRouterRuntimeContext, RemoteTrackBootstrap, Room, RoomAdmissionPolicy, RoomConfig,
-        RoomEventMessage, RoomEventRequest, RoomJoinError, RoomManager, RoomManagerConfig,
-        RoomManagerDeps, RoomManagerJoinError, RoomMediaCounts, RoomRuntimeContext,
-        RoomRuntimePolicy, RoomUserPermissions, RoomUserStatsSnapshot,
-        RuntimeRoomDirectorySnapshot, RuntimeRoomStatsSnapshot, TrackBindingUpdate,
-        UserCloseReason, UserOutbound, UserOutboundEvent, UserOutboundOverflow,
+        BroadcastPayload, BroadcastPayloadError, ConsumerRouteState,
+        DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
+        IncomingBitrateSnapshot, JoinUserRequest, LocalRoomRouterPlacements,
+        LocalRoomRouterPlacementsError, LocalRouterRuntimeContext, MAX_BROADCAST_PAYLOAD_BYTES,
+        RemoteTrackBootstrap, Room, RoomAdmissionPolicy, RoomConfig, RoomEventMessage,
+        RoomEventRequest, RoomJoinError, RoomManager, RoomManagerConfig, RoomManagerDeps,
+        RoomManagerJoinError, RoomMediaCounts, RoomRuntimeContext, RoomRuntimePolicy,
+        RoomUserPermissions, RoomUserStatsSnapshot, RuntimeRoomDirectorySnapshot,
+        RuntimeRoomStatsSnapshot, TrackBindingUpdate, UserCloseReason, UserOutbound,
+        UserOutboundEvent, UserOutboundOverflow, UserOutboundOverflowKind, UserOutboundQueueLimits,
         UserOutboundReceiver, UserOutboundSendError, UserOutboundSender, rtp_capabilities,
     };
     #[cfg(any(test, feature = "testing-transport"))]

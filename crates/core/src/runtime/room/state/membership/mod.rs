@@ -4,7 +4,8 @@ use tracing::{debug, error, warn};
 
 use super::{
     super::{
-        RoomEventMessage, RoomJoinError, RoomUserPermissions, UserCloseReason,
+        BroadcastPayload, BroadcastPayloadError, RoomEventMessage, RoomJoinError,
+        RoomUserPermissions, UserCloseReason,
         outbound::{MessageFanout, OutboundSender},
         topology::{RoomTopology, RoomTopologyError, TopologyPressureSnapshot},
         user_negotiation::{UserNegotiation, UserNegotiationUpdate},
@@ -478,14 +479,17 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
         message: serde_json::Value,
-    ) -> Option<MessageFanout> {
-        self.user_for_connection(user_id, connection_id)?;
-        Some(self.fanout_all_except(
+    ) -> Result<Option<MessageFanout>, BroadcastPayloadError> {
+        if self.user_for_connection(user_id, connection_id).is_none() {
+            return Ok(None);
+        }
+        let message = BroadcastPayload::try_new(message)?;
+        Ok(Some(self.fanout_all_except(
             &RoomEventMessage::Broadcast {
                 sender_id: user_id.clone(),
                 message,
             },
             Some(user_id),
-        ))
+        )))
     }
 }

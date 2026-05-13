@@ -535,6 +535,10 @@ async fn handle_outbound_event(
 async fn handle_outbound_overflow(writer: &mut WsWriter, overflow: UserOutboundOverflow) {
     warn!(
         capacity = overflow.capacity(),
+        byte_capacity = overflow.byte_capacity(),
+        queued_bytes = overflow.queued_bytes(),
+        message_bytes = overflow.message_bytes(),
+        overflow_kind = ?overflow.kind(),
         "closing websocket because the outbound queue overflowed"
     );
     close_writer_bounded(writer, WebSocketCloseCode::Kicked).await;

@@ -47,7 +47,9 @@ pub use controller::{
     RoomJoinError, RoomManagerJoinError, RoomMediaCounts, RoomRuntimeContext, RoomRuntimePolicy,
     RoomUserStatsSnapshot, TrackBindingUpdate, UserOutbound,
 };
-pub use events::RoomEventMessage;
+pub use events::{
+    BroadcastPayload, BroadcastPayloadError, MAX_BROADCAST_PAYLOAD_BYTES, RoomEventMessage,
+};
 pub use lifecycle::{RoomUserPermissions, UserCloseReason};
 pub use manager::{
     JoinUserRequest, RoomManager, RoomManagerConfig, RoomManagerDeps, RuntimeRoomDirectorySnapshot,
@@ -56,7 +58,8 @@ pub use manager::{
 #[cfg(any(test, feature = "testing-transport"))]
 pub(in crate::runtime::room) use membership::UserCleanup;
 pub use outbound::{
-    DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY, UserOutboundEvent, UserOutboundOverflow,
+    DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
+    UserOutboundEvent, UserOutboundOverflow, UserOutboundOverflowKind, UserOutboundQueueLimits,
     UserOutboundReceiver, UserOutboundSendError, UserOutboundSender,
 };
 pub use state::{ConsumerRouteState, RemoteTrackBootstrap};

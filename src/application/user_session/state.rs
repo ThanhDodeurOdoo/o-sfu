@@ -294,7 +294,7 @@ impl UserWireState {
             RoomEventMessage::Broadcast { sender_id, message } => {
                 UserWireMessages::messages(vec![ServerMessage::Broadcast(ServerBroadcastPayload {
                     sender_id,
-                    message,
+                    message: message.to_json(),
                 })])
             }
             RoomEventMessage::UserJoined { user_id, info } => {

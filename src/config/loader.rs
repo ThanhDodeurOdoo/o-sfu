@@ -9,16 +9,19 @@ use super::{
     parsing::parse_optional_env, settings::Config, telemetry::load_telemetry_config,
     transport::load_transport_config,
 };
-use crate::core::server::room::DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY;
+use crate::core::server::room::{
+    DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
+};
 
 impl Config {
     /// # Errors
     ///
     /// Returns an error when `AUTH_KEY` is missing, `BIND_ADDRESS` is invalid,
     /// `AUTHENTICATION_TIMEOUT_MS` is invalid, `ROOM_SIZE` is zero,
-    /// `USER_TIMEOUT_MS` is invalid, `PING_INTERVAL_MS` is invalid, `PROXY`
-    /// is invalid, `PUBLIC_IP` is missing or invalid, or
-    /// `RTC_MIN_PORT`/`RTC_MAX_PORT` are invalid.
+    /// `USER_TIMEOUT_MS` is invalid, `PING_INTERVAL_MS` is invalid,
+    /// `USER_OUTBOUND_QUEUE_BYTE_CAPACITY` is invalid, `PROXY` is invalid,
+    /// `PUBLIC_IP` is missing or invalid, or `RTC_MIN_PORT`/`RTC_MAX_PORT`
+    /// are invalid.
     pub fn from_env() -> Result<Self> {
         Self::from_var_lookup(|key| env::var(key).ok())
     }
@@ -61,6 +64,12 @@ impl Config {
             "USER_OUTBOUND_QUEUE_CAPACITY must be a valid usize",
         )?
         .unwrap_or(DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY);
+        let outbound_queue_byte_capacity = parse_optional_env(
+            &mut get_var,
+            "USER_OUTBOUND_QUEUE_BYTE_CAPACITY",
+            "USER_OUTBOUND_QUEUE_BYTE_CAPACITY must be a valid usize",
+        )?
+        .unwrap_or(DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY);
         let trust_proxy_headers = parse_optional_env(
             &mut get_var,
             "PROXY",
@@ -86,6 +95,10 @@ impl Config {
             outbound_queue_capacity > 0,
             "USER_OUTBOUND_QUEUE_CAPACITY must be greater than zero"
         );
+        ensure!(
+            outbound_queue_byte_capacity > 0,
+            "USER_OUTBOUND_QUEUE_BYTE_CAPACITY must be greater than zero"
+        );
         Ok(Self {
             auth: AuthConfig {
                 key: auth_key,
@@ -100,6 +113,7 @@ impl Config {
                 timeout_ms: user_timeout_ms,
                 ping_interval_ms,
                 outbound_queue_capacity,
+                outbound_queue_byte_capacity,
             },
             transport,
             codecs: CodecConfig {
@@ -120,7 +134,9 @@ mod tests {
             Bitrate, CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
             RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
         },
-        core::server::room::DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
+        core::server::room::{
+            DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
+        },
     };
 
     #[test]
@@ -153,6 +169,10 @@ mod tests {
         assert_eq!(
             config.user.outbound_queue_capacity,
             DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY
+        );
+        assert_eq!(
+            config.user.outbound_queue_byte_capacity,
+            DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY
         );
         assert!(!config.http.trust_proxy_headers);
         assert_eq!(config.features, RuntimeFeatureFlags::default());
@@ -228,6 +248,17 @@ mod tests {
             "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
             "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
             "USER_OUTBOUND_QUEUE_CAPACITY" => Some("0".to_owned()),
+            _ => None,
+        });
+        assert!(config.is_err());
+    }
+
+    #[test]
+    fn config_rejects_zero_user_outbound_queue_byte_capacity() {
+        let config = Config::from_var_lookup(|key| match key {
+            "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+            "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+            "USER_OUTBOUND_QUEUE_BYTE_CAPACITY" => Some("0".to_owned()),
             _ => None,
         });
         assert!(config.is_err());

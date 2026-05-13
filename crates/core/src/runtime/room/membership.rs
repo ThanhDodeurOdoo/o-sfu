@@ -26,7 +26,8 @@ use o_sfu_router::MediaCapabilities;
 use tracing::warn;
 
 use super::{
-    Room, RoomJoinError, RoomUserPermissions, UserOutbound, UserOutboundSender,
+    BroadcastPayloadError, Room, RoomJoinError, RoomUserPermissions, UserOutbound,
+    UserOutboundSender,
     cleanup::{
         CleanupFailureAction, CleanupReconciler, CleanupRetryAction, TransportCleanupOperation,
     },
@@ -318,19 +319,25 @@ impl Room {
     /// The sender identity is checked against authoritative room state before
     /// fan-out is emitted. Stale senders are ignored because websocket code can
     /// race with replacement or teardown.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BroadcastPayloadError`] when the payload exceeds the room
+    /// broadcast byte limit or cannot be measured as serialized JSON.
     pub async fn broadcast(
         &self,
         sender_id: &UserId,
         connection_id: ConnectionId,
         message: serde_json::Value,
-    ) {
+    ) -> Result<(), BroadcastPayloadError> {
         let fanout = {
             let state = self.state.read().await;
             state.broadcast_fanout(sender_id, connection_id, message)
-        };
+        }?;
         if let Some(fanout) = fanout {
             fanout.emit();
         }
+        Ok(())
     }
 
     /// Check whether room state still binds a user to a runtime connection.

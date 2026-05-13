@@ -336,6 +336,8 @@ impl User {
     /// # Errors
     ///
     /// Returns [`UserError::Kicked`] if the room no longer owns this connection.
+    /// Returns [`UserError::ProtocolViolation`] when the payload exceeds the
+    /// room broadcast byte limit.
     pub async fn update_info(&self, info: UserInfo) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
         self.media()
@@ -370,7 +372,8 @@ impl User {
         self.reject_stale_connection().await?;
         self.room
             .broadcast(&self.id, self.connection_id, message)
-            .await;
+            .await
+            .map_err(|_error| UserError::ProtocolViolation)?;
         Ok(UserOutput::new())
     }
 

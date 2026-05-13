@@ -5,7 +5,10 @@ use crate::{
         diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
-        room::{RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy, rtp_capabilities},
+        room::{
+            BroadcastPayloadError, MAX_BROADCAST_PAYLOAD_BYTES, RoomManagerConfig, RoomManagerDeps,
+            RoomRuntimePolicy, UserOutboundOverflowKind, UserOutboundQueueLimits, rtp_capabilities,
+        },
     },
 };
 
@@ -1001,12 +1004,14 @@ async fn broadcast_reaches_all_except_sender() {
         .await;
 
     let sender_id = UserId::Integer(2);
-    room.broadcast(
-        &sender_id,
-        user_connection_id(&room, &sender_id).await,
-        serde_json::json!({"text": "hi"}),
-    )
-    .await;
+    let broadcast = room
+        .broadcast(
+            &sender_id,
+            user_connection_id(&room, &sender_id).await,
+            serde_json::json!({"text": "hi"}),
+        )
+        .await;
+    assert!(broadcast.is_ok());
 
     assert!(rx1.try_recv().is_ok(), "user 1 should receive broadcast");
     assert!(
@@ -1064,18 +1069,22 @@ async fn outbound_queue_overflow_marks_slow_consumer() {
         .await;
 
     let driver_connection = user_connection_id(&room, &driver_user).await;
-    room.broadcast(
-        &driver_user,
-        driver_connection,
-        serde_json::json!({"text": "first"}),
-    )
-    .await;
-    room.broadcast(
-        &driver_user,
-        driver_connection,
-        serde_json::json!({"text": "second"}),
-    )
-    .await;
+    let first = room
+        .broadcast(
+            &driver_user,
+            driver_connection,
+            serde_json::json!({"text": "first"}),
+        )
+        .await;
+    assert!(first.is_ok());
+    let second = room
+        .broadcast(
+            &driver_user,
+            driver_connection,
+            serde_json::json!({"text": "second"}),
+        )
+        .await;
+    assert!(second.is_ok());
 
     assert!(slow_rx.has_overflowed());
     assert!(matches!(
@@ -1085,6 +1094,175 @@ async fn outbound_queue_overflow_marks_slow_consumer() {
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.ws_outbound_queue_overflows(), 1);
     assert_eq!(snapshot.ws_outbound_queued_messages(), 1);
+}
+
+#[tokio::test]
+async fn outbound_queue_byte_overflow_marks_slow_consumer() {
+    let manager = RoomManager::for_test();
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+    let metrics = Arc::new(RuntimeMetrics::default());
+    let limits = UserOutboundQueueLimits::new(16, 1_300);
+    let (slow_tx, mut slow_rx) =
+        UserOutboundSender::channel_with_limits(limits, Arc::clone(&metrics));
+    let (driver_tx, _driver_rx) = test_sender();
+    let slow_user = UserId::Integer(1);
+    let driver_user = UserId::Integer(2);
+    let _ = room
+        .test_api()
+        .lifecycle()
+        .join_user(slow_user.clone(), None, UserPermissions::default(), slow_tx)
+        .await;
+    let _ = room
+        .test_api()
+        .lifecycle()
+        .join_user(
+            driver_user.clone(),
+            None,
+            UserPermissions::default(),
+            driver_tx,
+        )
+        .await;
+    drain_outbound(&mut slow_rx);
+
+    let driver_connection = user_connection_id(&room, &driver_user).await;
+    let first = room
+        .broadcast(
+            &driver_user,
+            driver_connection,
+            serde_json::json!({"text": "x".repeat(900)}),
+        )
+        .await;
+    assert!(first.is_ok());
+    let second = room
+        .broadcast(
+            &driver_user,
+            driver_connection,
+            serde_json::json!({"text": "y".repeat(900)}),
+        )
+        .await;
+    assert!(second.is_ok());
+
+    assert!(slow_rx.has_overflowed());
+    assert!(matches!(
+        slow_rx.recv_event().await,
+        UserOutboundEvent::Overflow(overflow)
+            if overflow.kind() == UserOutboundOverflowKind::QueuedBytes
+                && overflow.byte_capacity() == 1_300
+    ));
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.ws_outbound_queue_overflows(), 1);
+    assert_eq!(snapshot.ws_outbound_queued_messages(), 1);
+}
+
+#[tokio::test]
+async fn broadcast_rejects_payloads_above_room_limit() {
+    let manager = RoomManager::for_test();
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+    let (sender_tx, _sender_rx) = test_sender();
+    let (receiver_tx, mut receiver_rx) = test_sender();
+    let sender_id = UserId::Integer(1);
+    let receiver_id = UserId::Integer(2);
+    let _ = room
+        .test_api()
+        .lifecycle()
+        .join_user(
+            sender_id.clone(),
+            None,
+            UserPermissions::default(),
+            sender_tx,
+        )
+        .await;
+    let _ = room
+        .test_api()
+        .lifecycle()
+        .join_user(receiver_id, None, UserPermissions::default(), receiver_tx)
+        .await;
+    drain_outbound(&mut receiver_rx);
+
+    let result = room
+        .broadcast(
+            &sender_id,
+            user_connection_id(&room, &sender_id).await,
+            serde_json::json!({"text": "x".repeat(MAX_BROADCAST_PAYLOAD_BYTES)}),
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(BroadcastPayloadError::TooLarge { actual, limit })
+            if actual > limit && limit == MAX_BROADCAST_PAYLOAD_BYTES
+    ));
+    assert!(receiver_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn full_room_large_broadcast_reuses_shared_payload_storage() {
+    let manager = RoomManager::for_test();
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+    let mut receivers = Vec::new();
+    for user_index in 1..=100 {
+        let (sender, receiver) = test_sender();
+        let user_id = UserId::Integer(user_index);
+        let result = room
+            .test_api()
+            .lifecycle()
+            .join_user(user_id.clone(), None, UserPermissions::default(), sender)
+            .await;
+        assert!(result.is_ok());
+        receivers.push((user_id, receiver));
+    }
+    for (_user_id, receiver) in &mut receivers {
+        drain_outbound(receiver);
+    }
+
+    let sender_id = UserId::Integer(100);
+    let payload = serde_json::json!({"text": "x".repeat(MAX_BROADCAST_PAYLOAD_BYTES - 64)});
+    let result = room
+        .broadcast(
+            &sender_id,
+            user_connection_id(&room, &sender_id).await,
+            payload.clone(),
+        )
+        .await;
+    assert!(result.is_ok());
+
+    let mut first_payload = None;
+    let mut recipient_count = 0;
+    for (user_id, receiver) in &mut receivers {
+        let messages = drain_outbound(receiver);
+        if user_id == &sender_id {
+            assert!(messages.is_empty());
+            continue;
+        }
+        assert!(matches!(
+            messages.as_slice(),
+            [UserOutbound::Message(RoomEventMessage::Broadcast { .. })]
+        ));
+        let [
+            UserOutbound::Message(RoomEventMessage::Broadcast {
+                sender_id: observed_sender,
+                message,
+            }),
+        ] = messages.as_slice()
+        else {
+            continue;
+        };
+        assert_eq!(observed_sender, &sender_id);
+        assert_eq!(message.to_json(), payload);
+        if let Some(first_payload) = &first_payload {
+            assert!(message.shares_storage_with(first_payload));
+        } else {
+            first_payload = Some(message.clone());
+        }
+        recipient_count += 1;
+    }
+    assert_eq!(recipient_count, 99);
 }
 
 #[tokio::test]

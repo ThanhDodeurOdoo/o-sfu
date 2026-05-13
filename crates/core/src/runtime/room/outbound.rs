@@ -1,30 +1,80 @@
-use std::{future::pending, sync::Arc};
+use std::{
+    future::pending,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use tokio::sync::{
     mpsc::{self, error::TrySendError},
     watch,
 };
 
-use super::{RoomEventMessage, UserOutbound};
+use super::{RoomEventMessage, UserOutbound, events::MAX_BROADCAST_PAYLOAD_BYTES};
 use crate::runtime::metrics::RuntimeMetrics;
 
 pub const DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY: usize = 128;
+pub const DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY: usize =
+    DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY * MAX_BROADCAST_PAYLOAD_BYTES;
 
 pub(super) type OutboundSender = UserOutboundSender;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UserOutboundOverflow {
-    capacity: usize,
+    kind: UserOutboundOverflowKind,
+    message_capacity: usize,
+    byte_capacity: usize,
+    queued_bytes: usize,
+    message_bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserOutboundOverflowKind {
+    MessageCount,
+    QueuedBytes,
 }
 
 impl UserOutboundOverflow {
-    const fn new(capacity: usize) -> Self {
-        Self { capacity }
+    const fn new(
+        kind: UserOutboundOverflowKind,
+        message_capacity: usize,
+        byte_capacity: usize,
+        queued_bytes: usize,
+        message_bytes: usize,
+    ) -> Self {
+        Self {
+            kind,
+            message_capacity,
+            byte_capacity,
+            queued_bytes,
+            message_bytes,
+        }
     }
 
     #[must_use]
     pub const fn capacity(self) -> usize {
-        self.capacity
+        self.message_capacity
+    }
+
+    #[must_use]
+    pub const fn kind(self) -> UserOutboundOverflowKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn byte_capacity(self) -> usize {
+        self.byte_capacity
+    }
+
+    #[must_use]
+    pub const fn queued_bytes(self) -> usize {
+        self.queued_bytes
+    }
+
+    #[must_use]
+    pub const fn message_bytes(self) -> usize {
+        self.message_bytes
     }
 }
 
@@ -41,61 +91,176 @@ pub enum UserOutboundEvent {
     Closed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UserOutboundQueueLimits {
+    message_capacity: usize,
+    byte_capacity: usize,
+}
+
+impl UserOutboundQueueLimits {
+    #[must_use]
+    pub fn new(message_capacity: usize, byte_capacity: usize) -> Self {
+        Self {
+            message_capacity: message_capacity.max(1),
+            byte_capacity: byte_capacity.max(1),
+        }
+    }
+
+    #[must_use]
+    pub const fn message_capacity(self) -> usize {
+        self.message_capacity
+    }
+
+    #[must_use]
+    pub const fn byte_capacity(self) -> usize {
+        self.byte_capacity
+    }
+}
+
+impl Default for UserOutboundQueueLimits {
+    fn default() -> Self {
+        Self::new(
+            DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
+            DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY,
+        )
+    }
+}
+
+#[derive(Debug)]
+struct QueuedUserOutbound {
+    outbound: UserOutbound,
+    bytes: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct UserOutboundSender {
-    messages: mpsc::Sender<UserOutbound>,
+    messages: mpsc::Sender<QueuedUserOutbound>,
     overflow: watch::Sender<Option<UserOutboundOverflow>>,
     metrics: Arc<RuntimeMetrics>,
-    capacity: usize,
+    limits: UserOutboundQueueLimits,
+    queued_bytes: Arc<AtomicUsize>,
 }
 
 #[derive(Debug)]
 pub struct UserOutboundReceiver {
-    messages: mpsc::Receiver<UserOutbound>,
+    messages: mpsc::Receiver<QueuedUserOutbound>,
     overflow: watch::Receiver<Option<UserOutboundOverflow>>,
     metrics: Arc<RuntimeMetrics>,
+    queued_bytes: Arc<AtomicUsize>,
 }
 
 impl UserOutboundSender {
     #[must_use]
     pub fn channel(capacity: usize, metrics: Arc<RuntimeMetrics>) -> (Self, UserOutboundReceiver) {
-        let capacity = capacity.max(1);
-        let (messages_tx, messages_rx) = mpsc::channel(capacity);
+        Self::channel_with_limits(
+            UserOutboundQueueLimits::new(capacity, DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY),
+            metrics,
+        )
+    }
+
+    #[must_use]
+    pub fn channel_with_limits(
+        limits: UserOutboundQueueLimits,
+        metrics: Arc<RuntimeMetrics>,
+    ) -> (Self, UserOutboundReceiver) {
+        let (messages_tx, messages_rx) = mpsc::channel(limits.message_capacity());
         let (overflow_tx, overflow_rx) = watch::channel(None);
+        let queued_bytes = Arc::new(AtomicUsize::new(0));
         (
             Self {
                 messages: messages_tx,
                 overflow: overflow_tx,
                 metrics: Arc::clone(&metrics),
-                capacity,
+                limits,
+                queued_bytes: Arc::clone(&queued_bytes),
             },
             UserOutboundReceiver {
                 messages: messages_rx,
                 overflow: overflow_rx,
                 metrics,
+                queued_bytes,
             },
         )
     }
 
     /// # Errors
     ///
-    /// Returns `Full` when the bounded queue has reached capacity. Returns
-    /// `Closed` when the receiver was dropped before the message could be
-    /// queued.
+    /// Returns `Full` when the bounded queue has reached its message or byte
+    /// capacity. Returns `Closed` when the receiver was dropped before the
+    /// message could be queued.
     pub fn send(&self, outbound: UserOutbound) -> Result<(), UserOutboundSendError> {
-        match self.messages.try_send(outbound) {
+        let bytes = outbound.queued_bytes();
+        self.reserve_bytes(bytes)?;
+        match self
+            .messages
+            .try_send(QueuedUserOutbound { outbound, bytes })
+        {
             Ok(()) => {
                 self.metrics.add_ws_outbound_queued_messages(1);
                 Ok(())
             }
             Err(TrySendError::Full(_outbound)) => {
-                let overflow = UserOutboundOverflow::new(self.capacity);
-                self.metrics.record_ws_outbound_queue_overflow();
-                let _sent = self.overflow.send(Some(overflow));
+                self.release_bytes(bytes);
+                let overflow = self.mark_overflow(
+                    UserOutboundOverflowKind::MessageCount,
+                    self.queued_bytes.load(Ordering::Acquire),
+                    bytes,
+                );
                 Err(UserOutboundSendError::Full(overflow))
             }
-            Err(TrySendError::Closed(_outbound)) => Err(UserOutboundSendError::Closed),
+            Err(TrySendError::Closed(_outbound)) => {
+                self.release_bytes(bytes);
+                Err(UserOutboundSendError::Closed)
+            }
         }
+    }
+
+    fn reserve_bytes(&self, bytes: usize) -> Result<(), UserOutboundSendError> {
+        let byte_capacity = self.limits.byte_capacity();
+        let mut queued = self.queued_bytes.load(Ordering::Acquire);
+        loop {
+            let Some(next) = queued.checked_add(bytes) else {
+                let overflow =
+                    self.mark_overflow(UserOutboundOverflowKind::QueuedBytes, queued, bytes);
+                return Err(UserOutboundSendError::Full(overflow));
+            };
+            if next > byte_capacity {
+                let overflow =
+                    self.mark_overflow(UserOutboundOverflowKind::QueuedBytes, queued, bytes);
+                return Err(UserOutboundSendError::Full(overflow));
+            }
+            match self.queued_bytes.compare_exchange_weak(
+                queued,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_previous) => return Ok(()),
+                Err(current) => queued = current,
+            }
+        }
+    }
+
+    fn release_bytes(&self, bytes: usize) {
+        self.queued_bytes.fetch_sub(bytes, Ordering::AcqRel);
+    }
+
+    fn mark_overflow(
+        &self,
+        kind: UserOutboundOverflowKind,
+        queued_bytes: usize,
+        message_bytes: usize,
+    ) -> UserOutboundOverflow {
+        let overflow = UserOutboundOverflow::new(
+            kind,
+            self.limits.message_capacity(),
+            self.limits.byte_capacity(),
+            queued_bytes,
+            message_bytes,
+        );
+        self.metrics.record_ws_outbound_queue_overflow();
+        let _sent = self.overflow.send(Some(overflow));
+        overflow
     }
 }
 
@@ -106,9 +271,10 @@ impl UserOutboundReceiver {
     }
 
     pub async fn recv(&mut self) -> Option<UserOutbound> {
-        let message = self.messages.recv().await;
-        self.record_received(message.is_some());
-        message
+        self.messages
+            .recv()
+            .await
+            .map(|message| self.record_received(message))
     }
 
     /// # Errors
@@ -116,9 +282,9 @@ impl UserOutboundReceiver {
     /// Returns `Empty` when no queued message is immediately available. Returns
     /// `Disconnected` when every sender was dropped and the queue is empty.
     pub fn try_recv(&mut self) -> Result<UserOutbound, mpsc::error::TryRecvError> {
-        let message = self.messages.try_recv();
-        self.record_received(message.is_ok());
-        message
+        self.messages
+            .try_recv()
+            .map(|message| self.record_received(message))
     }
 
     pub async fn recv_event(&mut self) -> UserOutboundEvent {
@@ -131,24 +297,33 @@ impl UserOutboundReceiver {
                 UserOutboundEvent::Overflow(overflow)
             }
             message = self.messages.recv() => {
-                self.record_received(message.is_some());
-                message.map_or(UserOutboundEvent::Closed, UserOutboundEvent::Message)
+                message.map_or(UserOutboundEvent::Closed, |message| {
+                    UserOutboundEvent::Message(self.record_received(message))
+                })
             }
         }
     }
 
-    fn record_received(&self, received: bool) {
-        if received {
-            self.metrics.add_ws_outbound_queued_messages(-1);
-        }
+    fn record_received(&self, message: QueuedUserOutbound) -> UserOutbound {
+        self.queued_bytes.fetch_sub(message.bytes, Ordering::AcqRel);
+        self.metrics.add_ws_outbound_queued_messages(-1);
+        message.outbound
     }
 }
 
 impl Drop for UserOutboundReceiver {
     fn drop(&mut self) {
-        let pending = i64::try_from(self.messages.len()).unwrap_or(i64::MAX);
+        let mut pending = 0_i64;
+        let mut bytes = 0_usize;
+        while let Ok(message) = self.messages.try_recv() {
+            pending = pending.saturating_add(1);
+            bytes = bytes.saturating_add(message.bytes);
+        }
         if pending > 0 {
             self.metrics.add_ws_outbound_queued_messages(-pending);
+        }
+        if bytes > 0 {
+            self.queued_bytes.fetch_sub(bytes, Ordering::AcqRel);
         }
     }
 }
@@ -175,7 +350,7 @@ pub(super) struct MessageFanout {
 impl MessageFanout {
     pub(super) fn emit(self) {
         for recipient in self.recipients {
-            let _ = recipient.send(UserOutbound::Message(self.message.clone()));
+            let _result = recipient.send(UserOutbound::Message(self.message.clone()));
         }
     }
 }

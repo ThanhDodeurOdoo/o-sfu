@@ -474,6 +474,16 @@ impl Default for RoomConfig {
     }
 }
 
+impl UserOutbound {
+    #[must_use]
+    pub(super) fn queued_bytes(&self) -> usize {
+        match self {
+            Self::Message(message) => message.queued_bytes(),
+            Self::Request(_) | Self::TrackBindingUpdate(_) | Self::Close(_) => 1024,
+        }
+    }
+}
+
 /// Best-effort inbound bitrate totals grouped by orchestration stream id.
 ///
 /// These numbers are cold-path observability data assembled from transport

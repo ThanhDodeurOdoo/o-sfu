@@ -306,7 +306,7 @@ fn stale_connection_cannot_broadcast() {
         serde_json::Value::String(String::from("hello")),
     );
 
-    assert!(fanout.is_none());
+    assert!(matches!(fanout, Ok(None)));
 }
 
 #[test]
