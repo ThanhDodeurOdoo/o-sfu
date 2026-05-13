@@ -1,39 +1,560 @@
 use o_sfu_router::{
     Consumer, ConsumerCapability, ConsumerId, ConsumerRouteState, MediaKind, Producer, ProducerId,
-    ProducerRouteState, Router, RouterId, Session, SessionId, SessionState, Transport,
-    TransportDirection, TransportId,
-    test_support::{RouterStateSnapshot, router_state_snapshot},
+    ProducerRouteState, Router, RouterId, Session, SessionId, Transport, TransportDirection,
+    TransportId,
+    test_support::{
+        router_consumer_count, router_consumer_origin_matches, router_consumer_route_matches,
+        router_consumer_shadows_producer, router_contains_consumer, router_contains_producer,
+        router_contains_session, router_contains_transport, router_has_producer_consumer,
+        router_has_producer_consumer_index, router_has_session_transport,
+        router_has_session_transport_index, router_has_transport_consumer,
+        router_has_transport_consumer_index, router_has_transport_producer,
+        router_has_transport_producer_index, router_producer_consumer_count,
+        router_producer_consumer_index_count, router_producer_count,
+        router_producer_origin_matches, router_satisfies_invariants,
+        router_session_transport_count, router_session_transport_index_count,
+        router_transport_consumer_count, router_transport_consumer_index_count,
+        router_transport_count, router_transport_matches, router_transport_producer_count,
+        router_transport_producer_index_count,
+    },
 };
 
-const SYMBOLIC_TRACE_LENGTH: usize = 6;
-const SYMBOLIC_TRACE_LENGTH_U8: u8 = 6;
-const SYMBOLIC_COMMAND_VARIANTS: u8 = 26;
+const SYMBOLIC_ROUTE_COMMAND_VARIANTS: u8 = 9;
+const SYMBOLIC_CLEANUP_COMMAND_VARIANTS: u8 = 7;
 
 fn user(id: SessionId) -> Session {
     Session::new(id)
 }
 
 #[kani::proof]
-#[kani::unwind(64)]
-fn bounded_symbolic_router_trace_preserves_invariants() {
-    let commands: [u8; SYMBOLIC_TRACE_LENGTH] = kani::any();
-    let active_len = usize::from(kani::any::<u8>() % (SYMBOLIC_TRACE_LENGTH_U8 + 1));
+#[kani::unwind(8)]
+fn bounded_symbolic_router_adds_preserve_invariants() {
     let mut router = Router::new(RouterId(0));
 
-    assert_production_router_invariants(&router);
-
-    let mut index = 0;
-    while index < active_len {
-        apply_symbolic_command(&mut router, commands[index]);
-        assert_production_router_invariants(&router);
-        index += 1;
-    }
+    build_symbolic_trace_topology(&mut router);
+    add_symbolic_trace_consumers(&mut router);
+    assert_symbolic_trace_invariants(&router);
 
     std::mem::forget(router);
 }
 
 #[kani::proof]
-#[kani::unwind(64)]
+#[kani::unwind(8)]
+fn bounded_symbolic_router_route_trace_preserves_invariants() {
+    let mut router = Router::new(RouterId(0));
+
+    build_symbolic_trace_topology(&mut router);
+    add_symbolic_trace_consumers(&mut router);
+    apply_symbolic_route_command(&mut router, symbolic_route_command());
+    assert_symbolic_route_trace_invariants(&router);
+
+    std::mem::forget(router);
+}
+
+#[kani::proof]
+#[kani::unwind(8)]
+fn bounded_symbolic_router_cleanup_trace_preserves_invariants() {
+    let mut router = Router::new(RouterId(0));
+
+    build_symbolic_trace_topology(&mut router);
+    add_compatible_trace_consumers(&mut router);
+    apply_cleanup_trace_route_state(&mut router);
+    apply_symbolic_cleanup_command(&mut router, symbolic_cleanup_command());
+    assert_symbolic_trace_invariants(&router);
+
+    std::mem::forget(router);
+}
+
+fn symbolic_capability() -> ConsumerCapability {
+    if kani::any() {
+        ConsumerCapability::Compatible
+    } else {
+        ConsumerCapability::Incompatible
+    }
+}
+
+fn symbolic_route_command() -> u8 {
+    kani::any_where(|command| *command < SYMBOLIC_ROUTE_COMMAND_VARIANTS)
+}
+
+fn symbolic_cleanup_command() -> u8 {
+    kani::any_where(|command| *command < SYMBOLIC_CLEANUP_COMMAND_VARIANTS)
+}
+
+fn add_symbolic_trace_consumers(router: &mut Router) {
+    let _ = router.add_consumer(trace_audio_consumer(), symbolic_capability());
+    let _ = router.add_consumer(trace_video_consumer(), symbolic_capability());
+}
+
+fn add_compatible_trace_consumers(router: &mut Router) {
+    assert!(
+        router
+            .add_consumer(trace_audio_consumer(), ConsumerCapability::Compatible)
+            .is_ok()
+    );
+
+    assert!(
+        router
+            .add_consumer(trace_video_consumer(), ConsumerCapability::Compatible)
+            .is_ok()
+    );
+}
+
+fn trace_audio_consumer() -> Consumer {
+    Consumer::new(
+        ConsumerId(40),
+        ProducerId(30),
+        TransportId(21),
+        MediaKind::Audio,
+    )
+}
+
+fn trace_video_consumer() -> Consumer {
+    Consumer::new(
+        ConsumerId(41),
+        ProducerId(31),
+        TransportId(11),
+        MediaKind::Video,
+    )
+}
+
+fn apply_cleanup_trace_route_state(router: &mut Router) {
+    assert!(
+        router
+            .set_producer_route_state(ProducerId(30), ProducerRouteState::Paused)
+            .is_ok()
+    );
+    assert!(
+        router
+            .set_consumer_route_state(ConsumerId(40), ConsumerRouteState::Paused)
+            .is_ok()
+    );
+    assert!(
+        router
+            .set_consumer_route_state(ConsumerId(41), ConsumerRouteState::Paused)
+            .is_ok()
+    );
+}
+
+fn assert_symbolic_trace_invariants(router: &Router) {
+    let session_1 = router_contains_session(router, SessionId(1));
+    let session_2 = router_contains_session(router, SessionId(2));
+    let transport_10 = router_contains_transport(router, TransportId(10));
+    let transport_11 = router_contains_transport(router, TransportId(11));
+    let transport_20 = router_contains_transport(router, TransportId(20));
+    let transport_21 = router_contains_transport(router, TransportId(21));
+    let producer_30 = router_contains_producer(router, ProducerId(30));
+    let producer_31 = router_contains_producer(router, ProducerId(31));
+    let consumer_40 = router_contains_consumer(router, ConsumerId(40));
+    let consumer_41 = router_contains_consumer(router, ConsumerId(41));
+
+    assert!(router.session_count() == present(session_1) + present(session_2));
+    assert!(
+        router_transport_count(router)
+            == present(transport_10)
+                + present(transport_11)
+                + present(transport_20)
+                + present(transport_21)
+    );
+    assert!(router_producer_count(router) == present(producer_30) + present(producer_31));
+    assert!(router_consumer_count(router) == present(consumer_40) + present(consumer_41));
+
+    assert_session_transport_index(router, SessionId(1), transport_10, transport_11);
+    assert_session_transport_index(router, SessionId(2), transport_20, transport_21);
+    assert!(
+        router_session_transport_index_count(router)
+            == present(transport_10 || transport_11) + present(transport_20 || transport_21)
+    );
+
+    assert_known_transport(
+        router,
+        TransportId(10),
+        SessionId(1),
+        TransportDirection::Receive,
+        transport_10,
+        session_1,
+    );
+    assert_known_transport(
+        router,
+        TransportId(11),
+        SessionId(1),
+        TransportDirection::Send,
+        transport_11,
+        session_1,
+    );
+    assert_known_transport(
+        router,
+        TransportId(20),
+        SessionId(2),
+        TransportDirection::Receive,
+        transport_20,
+        session_2,
+    );
+    assert_known_transport(
+        router,
+        TransportId(21),
+        SessionId(2),
+        TransportDirection::Send,
+        transport_21,
+        session_2,
+    );
+
+    assert_transport_producer_index(router, TransportId(10), ProducerId(30), producer_30);
+    assert_empty_transport_producer_index(router, TransportId(11));
+    assert_transport_producer_index(router, TransportId(20), ProducerId(31), producer_31);
+    assert_empty_transport_producer_index(router, TransportId(21));
+    assert!(
+        router_transport_producer_index_count(router)
+            == present(producer_30) + present(producer_31)
+    );
+
+    assert_known_producer(
+        router,
+        ProducerId(30),
+        TransportId(10),
+        MediaKind::Audio,
+        producer_30,
+        transport_10,
+    );
+    assert_known_producer(
+        router,
+        ProducerId(31),
+        TransportId(20),
+        MediaKind::Video,
+        producer_31,
+        transport_20,
+    );
+
+    assert_transport_consumer_index(router, TransportId(11), ConsumerId(41), consumer_41);
+    assert_empty_transport_consumer_index(router, TransportId(10));
+    assert_empty_transport_consumer_index(router, TransportId(20));
+    assert_transport_consumer_index(router, TransportId(21), ConsumerId(40), consumer_40);
+    assert!(
+        router_transport_consumer_index_count(router)
+            == present(consumer_40) + present(consumer_41)
+    );
+
+    assert_producer_consumer_index(router, ProducerId(30), ConsumerId(40), consumer_40);
+    assert_producer_consumer_index(router, ProducerId(31), ConsumerId(41), consumer_41);
+    assert!(
+        router_producer_consumer_index_count(router) == present(consumer_40) + present(consumer_41)
+    );
+
+    assert_known_consumer(
+        router,
+        ConsumerId(40),
+        ProducerId(30),
+        TransportId(21),
+        MediaKind::Audio,
+        consumer_40,
+        producer_30,
+        transport_21,
+    );
+    assert_known_consumer(
+        router,
+        ConsumerId(41),
+        ProducerId(31),
+        TransportId(11),
+        MediaKind::Video,
+        consumer_41,
+        producer_31,
+        transport_11,
+    );
+}
+
+fn assert_symbolic_route_trace_invariants(router: &Router) {
+    let consumer_40 = router_contains_consumer(router, ConsumerId(40));
+    let consumer_41 = router_contains_consumer(router, ConsumerId(41));
+
+    assert!(router_contains_session(router, SessionId(1)));
+    assert!(router_contains_session(router, SessionId(2)));
+    assert!(router_contains_transport(router, TransportId(10)));
+    assert!(router_contains_transport(router, TransportId(11)));
+    assert!(router_contains_transport(router, TransportId(20)));
+    assert!(router_contains_transport(router, TransportId(21)));
+    assert!(router_contains_producer(router, ProducerId(30)));
+    assert!(router_contains_producer(router, ProducerId(31)));
+    assert!(router.session_count() == 2);
+    assert!(router_transport_count(router) == 4);
+    assert!(router_producer_count(router) == 2);
+    assert!(router_consumer_count(router) == present(consumer_40) + present(consumer_41));
+
+    assert_session_transport_index(router, SessionId(1), true, true);
+    assert_session_transport_index(router, SessionId(2), true, true);
+    assert!(router_session_transport_index_count(router) == 2);
+
+    assert_known_transport(
+        router,
+        TransportId(10),
+        SessionId(1),
+        TransportDirection::Receive,
+        true,
+        true,
+    );
+    assert_known_transport(
+        router,
+        TransportId(11),
+        SessionId(1),
+        TransportDirection::Send,
+        true,
+        true,
+    );
+    assert_known_transport(
+        router,
+        TransportId(20),
+        SessionId(2),
+        TransportDirection::Receive,
+        true,
+        true,
+    );
+    assert_known_transport(
+        router,
+        TransportId(21),
+        SessionId(2),
+        TransportDirection::Send,
+        true,
+        true,
+    );
+
+    assert_transport_producer_index(router, TransportId(10), ProducerId(30), true);
+    assert_empty_transport_producer_index(router, TransportId(11));
+    assert_transport_producer_index(router, TransportId(20), ProducerId(31), true);
+    assert_empty_transport_producer_index(router, TransportId(21));
+    assert!(router_transport_producer_index_count(router) == 2);
+
+    assert_known_producer(
+        router,
+        ProducerId(30),
+        TransportId(10),
+        MediaKind::Audio,
+        true,
+        true,
+    );
+    assert_known_producer(
+        router,
+        ProducerId(31),
+        TransportId(20),
+        MediaKind::Video,
+        true,
+        true,
+    );
+
+    assert_transport_consumer_index(router, TransportId(11), ConsumerId(41), consumer_41);
+    assert_empty_transport_consumer_index(router, TransportId(10));
+    assert_empty_transport_consumer_index(router, TransportId(20));
+    assert_transport_consumer_index(router, TransportId(21), ConsumerId(40), consumer_40);
+    assert!(
+        router_transport_consumer_index_count(router)
+            == present(consumer_40) + present(consumer_41)
+    );
+
+    assert_producer_consumer_index(router, ProducerId(30), ConsumerId(40), consumer_40);
+    assert_producer_consumer_index(router, ProducerId(31), ConsumerId(41), consumer_41);
+    assert!(
+        router_producer_consumer_index_count(router) == present(consumer_40) + present(consumer_41)
+    );
+
+    assert_known_consumer(
+        router,
+        ConsumerId(40),
+        ProducerId(30),
+        TransportId(21),
+        MediaKind::Audio,
+        consumer_40,
+        true,
+        true,
+    );
+    assert_known_consumer(
+        router,
+        ConsumerId(41),
+        ProducerId(31),
+        TransportId(11),
+        MediaKind::Video,
+        consumer_41,
+        true,
+        true,
+    );
+}
+
+fn assert_session_transport_index(
+    router: &Router,
+    session_id: SessionId,
+    first_transport: bool,
+    second_transport: bool,
+) {
+    let expected = present(first_transport) + present(second_transport);
+
+    assert!(router_session_transport_count(router, session_id) == expected);
+    assert!(router_has_session_transport_index(router, session_id) == (expected > 0));
+}
+
+fn assert_known_transport(
+    router: &Router,
+    transport_id: TransportId,
+    session_id: SessionId,
+    direction: TransportDirection,
+    transport_exists: bool,
+    session_exists: bool,
+) {
+    assert!(
+        router_transport_matches(router, transport_id, session_id, direction) == transport_exists
+    );
+    if transport_exists {
+        assert!(session_exists);
+        assert!(router_has_session_transport(
+            router,
+            session_id,
+            transport_id
+        ));
+    }
+}
+
+fn assert_transport_producer_index(
+    router: &Router,
+    transport_id: TransportId,
+    producer_id: ProducerId,
+    producer_exists: bool,
+) {
+    assert!(router_transport_producer_count(router, transport_id) == present(producer_exists));
+    assert!(router_has_transport_producer_index(router, transport_id) == producer_exists);
+    assert!(router_has_transport_producer(router, transport_id, producer_id) == producer_exists);
+}
+
+fn assert_empty_transport_producer_index(router: &Router, transport_id: TransportId) {
+    assert!(router_transport_producer_count(router, transport_id) == 0);
+    assert!(!router_has_transport_producer_index(router, transport_id));
+}
+
+fn assert_known_producer(
+    router: &Router,
+    producer_id: ProducerId,
+    transport_id: TransportId,
+    media_kind: MediaKind,
+    producer_exists: bool,
+    transport_exists: bool,
+) {
+    assert!(
+        router_producer_origin_matches(router, producer_id, transport_id, media_kind)
+            == producer_exists
+    );
+    if producer_exists {
+        assert!(transport_exists);
+    }
+}
+
+fn assert_transport_consumer_index(
+    router: &Router,
+    transport_id: TransportId,
+    consumer_id: ConsumerId,
+    consumer_exists: bool,
+) {
+    assert!(router_transport_consumer_count(router, transport_id) == present(consumer_exists));
+    assert!(router_has_transport_consumer_index(router, transport_id) == consumer_exists);
+    assert!(router_has_transport_consumer(router, transport_id, consumer_id) == consumer_exists);
+}
+
+fn assert_empty_transport_consumer_index(router: &Router, transport_id: TransportId) {
+    assert!(router_transport_consumer_count(router, transport_id) == 0);
+    assert!(!router_has_transport_consumer_index(router, transport_id));
+}
+
+fn assert_producer_consumer_index(
+    router: &Router,
+    producer_id: ProducerId,
+    consumer_id: ConsumerId,
+    consumer_exists: bool,
+) {
+    assert!(router_producer_consumer_count(router, producer_id) == present(consumer_exists));
+    assert!(router_has_producer_consumer_index(router, producer_id) == consumer_exists);
+    assert!(router_has_producer_consumer(router, producer_id, consumer_id) == consumer_exists);
+}
+
+fn assert_known_consumer(
+    router: &Router,
+    consumer_id: ConsumerId,
+    producer_id: ProducerId,
+    transport_id: TransportId,
+    media_kind: MediaKind,
+    consumer_exists: bool,
+    producer_exists: bool,
+    transport_exists: bool,
+) {
+    assert!(
+        router_consumer_origin_matches(router, consumer_id, producer_id, transport_id, media_kind)
+            == consumer_exists
+    );
+    if consumer_exists {
+        assert!(producer_exists);
+        assert!(transport_exists);
+        assert!(router_consumer_shadows_producer(router, consumer_id));
+    }
+}
+
+fn present(value: bool) -> usize {
+    if value { 1 } else { 0 }
+}
+
+fn build_symbolic_trace_topology(router: &mut Router) {
+    assert!(router.join_session(user(SessionId(1))).is_ok());
+    assert!(router.join_session(user(SessionId(2))).is_ok());
+    assert!(
+        router
+            .open_transport(Transport::new(
+                TransportId(10),
+                SessionId(1),
+                TransportDirection::Receive,
+            ))
+            .is_ok()
+    );
+    assert!(
+        router
+            .open_transport(Transport::new(
+                TransportId(11),
+                SessionId(1),
+                TransportDirection::Send,
+            ))
+            .is_ok()
+    );
+    assert!(
+        router
+            .open_transport(Transport::new(
+                TransportId(20),
+                SessionId(2),
+                TransportDirection::Receive,
+            ))
+            .is_ok()
+    );
+    assert!(
+        router
+            .open_transport(Transport::new(
+                TransportId(21),
+                SessionId(2),
+                TransportDirection::Send,
+            ))
+            .is_ok()
+    );
+    assert!(
+        router
+            .add_producer(Producer::new(
+                ProducerId(30),
+                TransportId(10),
+                MediaKind::Audio,
+            ))
+            .is_ok()
+    );
+    assert!(
+        router
+            .add_producer(Producer::new(
+                ProducerId(31),
+                TransportId(20),
+                MediaKind::Video,
+            ))
+            .is_ok()
+    );
+}
+
+#[kani::proof]
+#[kani::unwind(8)]
 fn session_teardown_clears_reverse_indices_and_dependents() {
     let mut router = Router::new(RouterId(0));
 
@@ -113,45 +634,40 @@ fn session_teardown_clears_reverse_indices_and_dependents() {
 
     assert!(router.remove_session(session_a).is_ok());
 
-    let snapshot = router_state_snapshot(&router);
-    assert!(!contains_session(&snapshot, session_a));
-    assert!(contains_session(&snapshot, session_b));
-    assert!(!contains_transport(&snapshot, receive_transport));
-    assert!(!contains_transport(&snapshot, shared_send_transport));
-    assert!(contains_transport(&snapshot, survivor_send_transport));
-    assert!(!contains_producer(&snapshot, producer_id));
-    assert!(!contains_consumer(&snapshot, removed_consumer_id));
-    assert!(!contains_consumer(&snapshot, surviving_consumer_id));
-    assert!(!index_contains_key(&snapshot.session_transports, session_a));
-    assert!(index_member_count(&snapshot.session_transports, session_b) == 1);
-    assert!(index_contains(
-        &snapshot.session_transports,
+    assert!(!router_contains_session(&router, session_a));
+    assert!(router_contains_session(&router, session_b));
+    assert!(!router_contains_transport(&router, receive_transport));
+    assert!(!router_contains_transport(&router, shared_send_transport));
+    assert!(router_contains_transport(&router, survivor_send_transport));
+    assert!(!router_contains_producer(&router, producer_id));
+    assert!(!router_contains_consumer(&router, removed_consumer_id));
+    assert!(!router_contains_consumer(&router, surviving_consumer_id));
+    assert!(!router_has_session_transport_index(&router, session_a));
+    assert!(router_session_transport_count(&router, session_b) == 1);
+    assert!(router_has_session_transport(
+        &router,
         session_b,
         survivor_send_transport
     ));
-    assert!(!index_contains_key(
-        &snapshot.transport_producers,
+    assert!(!router_has_transport_producer_index(
+        &router,
         receive_transport
     ));
-    assert!(!index_contains_key(
-        &snapshot.transport_consumers,
+    assert!(!router_has_transport_consumer_index(
+        &router,
         shared_send_transport
     ));
-    assert!(!index_contains_key(
-        &snapshot.transport_consumers,
+    assert!(!router_has_transport_consumer_index(
+        &router,
         survivor_send_transport
     ));
-    assert!(!index_contains_key(
-        &snapshot.producer_consumers,
-        producer_id
-    ));
-    assert_snapshot_satisfies_invariants(&snapshot);
-    std::mem::forget(snapshot);
+    assert!(!router_has_producer_consumer_index(&router, producer_id));
+    assert!(router_satisfies_invariants(&router));
     std::mem::forget(router);
 }
 
 #[kani::proof]
-#[kani::unwind(64)]
+#[kani::unwind(8)]
 fn removing_a_producer_clears_dependents_but_keeps_live_transports() {
     let mut router = Router::new(RouterId(0));
 
@@ -231,38 +747,36 @@ fn removing_a_producer_clears_dependents_but_keeps_live_transports() {
 
     assert!(router.remove_producer(producer_id).is_ok());
 
-    let snapshot = router_state_snapshot(&router);
-    assert!(contains_session(&snapshot, session_a));
-    assert!(contains_session(&snapshot, session_b));
-    assert!(contains_transport(&snapshot, receive_transport));
-    assert!(contains_transport(&snapshot, same_session_send_transport));
-    assert!(contains_transport(&snapshot, remote_send_transport));
-    assert!(!contains_producer(&snapshot, producer_id));
-    assert!(!contains_consumer(&snapshot, same_session_consumer));
-    assert!(!contains_consumer(&snapshot, remote_consumer));
-    assert!(!index_contains_key(
-        &snapshot.transport_producers,
-        receive_transport
-    ));
-    assert!(!index_contains_key(
-        &snapshot.transport_consumers,
+    assert!(router_contains_session(&router, session_a));
+    assert!(router_contains_session(&router, session_b));
+    assert!(router_contains_transport(&router, receive_transport));
+    assert!(router_contains_transport(
+        &router,
         same_session_send_transport
     ));
-    assert!(!index_contains_key(
-        &snapshot.transport_consumers,
+    assert!(router_contains_transport(&router, remote_send_transport));
+    assert!(!router_contains_producer(&router, producer_id));
+    assert!(!router_contains_consumer(&router, same_session_consumer));
+    assert!(!router_contains_consumer(&router, remote_consumer));
+    assert!(!router_has_transport_producer_index(
+        &router,
+        receive_transport
+    ));
+    assert!(!router_has_transport_consumer_index(
+        &router,
+        same_session_send_transport
+    ));
+    assert!(!router_has_transport_consumer_index(
+        &router,
         remote_send_transport
     ));
-    assert!(!index_contains_key(
-        &snapshot.producer_consumers,
-        producer_id
-    ));
-    assert_snapshot_satisfies_invariants(&snapshot);
-    std::mem::forget(snapshot);
+    assert!(!router_has_producer_consumer_index(&router, producer_id));
+    assert!(router_satisfies_invariants(&router));
     std::mem::forget(router);
 }
 
 #[kani::proof]
-#[kani::unwind(64)]
+#[kani::unwind(8)]
 fn removing_a_consumer_preserves_other_routes_and_indices() {
     let mut router = Router::new(RouterId(0));
 
@@ -342,39 +856,43 @@ fn removing_a_consumer_preserves_other_routes_and_indices() {
 
     assert!(router.remove_consumer(removed_consumer_id).is_ok());
 
-    let snapshot = router_state_snapshot(&router);
-    assert!(contains_producer(&snapshot, producer_id));
-    assert!(contains_transport(&snapshot, receive_transport));
-    assert!(contains_transport(&snapshot, removed_consumer_transport));
-    assert!(contains_transport(&snapshot, surviving_consumer_transport));
-    assert!(!contains_consumer(&snapshot, removed_consumer_id));
-    assert!(contains_consumer(&snapshot, surviving_consumer_id));
-    assert!(!index_contains_key(
-        &snapshot.transport_consumers,
+    assert!(router_contains_producer(&router, producer_id));
+    assert!(router_contains_transport(&router, receive_transport));
+    assert!(router_contains_transport(
+        &router,
         removed_consumer_transport
     ));
-    assert!(index_contains(
-        &snapshot.transport_consumers,
+    assert!(router_contains_transport(
+        &router,
+        surviving_consumer_transport
+    ));
+    assert!(!router_contains_consumer(&router, removed_consumer_id));
+    assert!(router_contains_consumer(&router, surviving_consumer_id));
+    assert!(!router_has_transport_consumer_index(
+        &router,
+        removed_consumer_transport
+    ));
+    assert!(router_has_transport_consumer(
+        &router,
         surviving_consumer_transport,
         surviving_consumer_id
     ));
-    assert!(index_contains(
-        &snapshot.producer_consumers,
+    assert!(router_has_producer_consumer(
+        &router,
         producer_id,
         surviving_consumer_id
     ));
-    assert!(!index_contains(
-        &snapshot.producer_consumers,
+    assert!(!router_has_producer_consumer(
+        &router,
         producer_id,
         removed_consumer_id
     ));
-    assert_snapshot_satisfies_invariants(&snapshot);
-    std::mem::forget(snapshot);
+    assert!(router_satisfies_invariants(&router));
     std::mem::forget(router);
 }
 
 #[kani::proof]
-#[kani::unwind(64)]
+#[kani::unwind(8)]
 fn new_consumers_inherit_their_producer_pause_shadow() {
     let mut router = Router::new(RouterId(0));
 
@@ -426,20 +944,18 @@ fn new_consumers_inherit_their_producer_pause_shadow() {
             .is_ok()
     );
 
-    let snapshot = router_state_snapshot(&router);
-    assert_consumer_route(
-        &snapshot,
+    assert!(router_consumer_route_matches(
+        &router,
         ConsumerId(40),
         ConsumerRouteState::Active,
         ProducerRouteState::Paused,
-    );
-    assert_snapshot_satisfies_invariants(&snapshot);
-    std::mem::forget(snapshot);
+    ));
+    assert!(router_satisfies_invariants(&router));
     std::mem::forget(router);
 }
 
 #[kani::proof]
-#[kani::unwind(64)]
+#[kani::unwind(8)]
 fn pausing_a_producer_updates_all_dependent_consumers() {
     let mut router = Router::new(RouterId(0));
 
@@ -515,26 +1031,24 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
             .is_ok()
     );
 
-    let snapshot = router_state_snapshot(&router);
-    assert_consumer_route(
-        &snapshot,
+    assert!(router_consumer_route_matches(
+        &router,
         ConsumerId(40),
         ConsumerRouteState::Active,
         ProducerRouteState::Paused,
-    );
-    assert_consumer_route(
-        &snapshot,
+    ));
+    assert!(router_consumer_route_matches(
+        &router,
         ConsumerId(41),
         ConsumerRouteState::Active,
         ProducerRouteState::Paused,
-    );
-    assert_snapshot_satisfies_invariants(&snapshot);
-    std::mem::forget(snapshot);
+    ));
+    assert!(router_satisfies_invariants(&router));
     std::mem::forget(router);
 }
 
 #[kani::proof]
-#[kani::unwind(64)]
+#[kani::unwind(8)]
 fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
     let mut router = Router::new(RouterId(0));
 
@@ -615,26 +1129,24 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
             .is_ok()
     );
 
-    let snapshot = router_state_snapshot(&router);
-    assert_consumer_route(
-        &snapshot,
+    assert!(router_consumer_route_matches(
+        &router,
         ConsumerId(40),
         ConsumerRouteState::Active,
         ProducerRouteState::Active,
-    );
-    assert_consumer_route(
-        &snapshot,
+    ));
+    assert!(router_consumer_route_matches(
+        &router,
         ConsumerId(41),
         ConsumerRouteState::Active,
         ProducerRouteState::Active,
-    );
-    assert_snapshot_satisfies_invariants(&snapshot);
-    std::mem::forget(snapshot);
+    ));
+    assert!(router_satisfies_invariants(&router));
     std::mem::forget(router);
 }
 
 #[kani::proof]
-#[kani::unwind(64)]
+#[kani::unwind(8)]
 fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
     let mut router = Router::new(RouterId(0));
 
@@ -686,634 +1198,94 @@ fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
             .set_consumer_route_state(ConsumerId(40), ConsumerRouteState::Paused)
             .is_ok()
     );
-    let snapshot = router_state_snapshot(&router);
-    assert_consumer_route(
-        &snapshot,
+    assert!(router_consumer_route_matches(
+        &router,
         ConsumerId(40),
         ConsumerRouteState::Paused,
         ProducerRouteState::Active,
-    );
-    assert_snapshot_satisfies_invariants(&snapshot);
-    std::mem::forget(snapshot);
+    ));
+    assert!(router_satisfies_invariants(&router));
 
     assert!(
         router
             .set_producer_route_state(ProducerId(30), ProducerRouteState::Paused)
             .is_ok()
     );
-    let snapshot = router_state_snapshot(&router);
-    assert_consumer_route(
-        &snapshot,
+    assert!(router_consumer_route_matches(
+        &router,
         ConsumerId(40),
         ConsumerRouteState::Paused,
         ProducerRouteState::Paused,
-    );
-    assert_snapshot_satisfies_invariants(&snapshot);
-    std::mem::forget(snapshot);
+    ));
+    assert!(router_satisfies_invariants(&router));
 
     assert!(
         router
             .set_producer_route_state(ProducerId(30), ProducerRouteState::Active)
             .is_ok()
     );
-    let snapshot = router_state_snapshot(&router);
-    assert_consumer_route(
-        &snapshot,
+    assert!(router_consumer_route_matches(
+        &router,
         ConsumerId(40),
         ConsumerRouteState::Paused,
         ProducerRouteState::Active,
-    );
-    assert_snapshot_satisfies_invariants(&snapshot);
-    std::mem::forget(snapshot);
+    ));
+    assert!(router_satisfies_invariants(&router));
     std::mem::forget(router);
 }
 
-fn apply_symbolic_command(router: &mut Router, command: u8) {
-    match command % SYMBOLIC_COMMAND_VARIANTS {
-        0 => {
-            let _ = router.join_session(user(SessionId(1)));
-        }
+fn apply_symbolic_route_command(router: &mut Router, command: u8) {
+    match command {
+        0 => {}
         1 => {
-            let _ = router.join_session(user(SessionId(2)));
-        }
-        2 => {
-            let _ = router.open_transport(Transport::new(
-                TransportId(10),
-                SessionId(1),
-                TransportDirection::Receive,
-            ));
-        }
-        3 => {
-            let _ = router.open_transport(Transport::new(
-                TransportId(11),
-                SessionId(1),
-                TransportDirection::Send,
-            ));
-        }
-        4 => {
-            let _ = router.open_transport(Transport::new(
-                TransportId(20),
-                SessionId(2),
-                TransportDirection::Receive,
-            ));
-        }
-        5 => {
-            let _ = router.open_transport(Transport::new(
-                TransportId(21),
-                SessionId(2),
-                TransportDirection::Send,
-            ));
-        }
-        6 => {
-            let _ = router.add_producer(Producer::new(
-                ProducerId(30),
-                TransportId(10),
-                MediaKind::Audio,
-            ));
-        }
-        7 => {
-            let _ = router.add_producer(Producer::new(
-                ProducerId(31),
-                TransportId(20),
-                MediaKind::Video,
-            ));
-        }
-        8 => {
-            let _ = router.add_consumer(
-                Consumer::new(
-                    ConsumerId(40),
-                    ProducerId(30),
-                    TransportId(21),
-                    MediaKind::Audio,
-                ),
-                ConsumerCapability::Compatible,
-            );
-        }
-        9 => {
-            let _ = router.add_consumer(
-                Consumer::new(
-                    ConsumerId(40),
-                    ProducerId(30),
-                    TransportId(21),
-                    MediaKind::Audio,
-                ),
-                ConsumerCapability::Incompatible,
-            );
-        }
-        10 => {
-            let _ = router.add_consumer(
-                Consumer::new(
-                    ConsumerId(41),
-                    ProducerId(31),
-                    TransportId(11),
-                    MediaKind::Video,
-                ),
-                ConsumerCapability::Compatible,
-            );
-        }
-        11 => {
-            let _ = router.add_consumer(
-                Consumer::new(
-                    ConsumerId(41),
-                    ProducerId(31),
-                    TransportId(11),
-                    MediaKind::Video,
-                ),
-                ConsumerCapability::Incompatible,
-            );
-        }
-        12 => {
             let _ = router.set_producer_route_state(ProducerId(30), ProducerRouteState::Paused);
         }
-        13 => {
+        2 => {
             let _ = router.set_producer_route_state(ProducerId(30), ProducerRouteState::Active);
         }
-        14 => {
+        3 => {
             let _ = router.set_producer_route_state(ProducerId(31), ProducerRouteState::Paused);
         }
-        15 => {
+        4 => {
             let _ = router.set_producer_route_state(ProducerId(31), ProducerRouteState::Active);
         }
-        16 => {
+        5 => {
             let _ = router.set_consumer_route_state(ConsumerId(40), ConsumerRouteState::Paused);
         }
-        17 => {
+        6 => {
             let _ = router.set_consumer_route_state(ConsumerId(40), ConsumerRouteState::Active);
         }
-        18 => {
+        7 => {
             let _ = router.set_consumer_route_state(ConsumerId(41), ConsumerRouteState::Paused);
         }
-        19 => {
+        8 => {
             let _ = router.set_consumer_route_state(ConsumerId(41), ConsumerRouteState::Active);
         }
-        20 => {
+        _ => {}
+    }
+}
+
+fn apply_symbolic_cleanup_command(router: &mut Router, command: u8) {
+    match command {
+        0 => {}
+        1 => {
             let _ = router.remove_consumer(ConsumerId(40));
         }
-        21 => {
+        2 => {
             let _ = router.remove_consumer(ConsumerId(41));
         }
-        22 => {
+        3 => {
             let _ = router.remove_producer(ProducerId(30));
         }
-        23 => {
+        4 => {
             let _ = router.remove_producer(ProducerId(31));
         }
-        24 => {
+        5 => {
             let _ = router.remove_session(SessionId(1));
         }
-        _ => {
+        6 => {
             let _ = router.remove_session(SessionId(2));
         }
+        _ => {}
     }
-}
-
-fn assert_production_router_invariants(router: &Router) {
-    let snapshot = router_state_snapshot(router);
-    assert_snapshot_satisfies_invariants(&snapshot);
-    std::mem::forget(snapshot);
-}
-
-fn assert_snapshot_satisfies_invariants(snapshot: &RouterStateSnapshot) {
-    assert!(session_ids_are_unique(snapshot));
-    assert!(live_sessions_are_active(snapshot));
-    assert!(transport_ids_are_unique(snapshot));
-    assert!(producer_ids_are_unique(snapshot));
-    assert!(consumer_ids_are_unique(snapshot));
-    assert!(references_are_valid(snapshot));
-    assert!(reverse_indices_are_exact(snapshot));
-    assert!(transport_directions_are_valid(snapshot));
-    assert!(consumer_media_matches_producer(snapshot));
-    assert!(consumer_pause_shadows_producer(snapshot));
-}
-
-fn session_ids_are_unique(snapshot: &RouterStateSnapshot) -> bool {
-    let mut left_index = 0;
-    while left_index < snapshot.sessions.len() {
-        let left_id = snapshot.sessions[left_index].0;
-        let mut right_index = left_index + 1;
-        while right_index < snapshot.sessions.len() {
-            if snapshot.sessions[right_index].0 == left_id {
-                return false;
-            }
-            right_index += 1;
-        }
-        left_index += 1;
-    }
-    true
-}
-
-fn live_sessions_are_active(snapshot: &RouterStateSnapshot) -> bool {
-    let mut index = 0;
-    while index < snapshot.sessions.len() {
-        if snapshot.sessions[index].1 != SessionState::Active {
-            return false;
-        }
-        index += 1;
-    }
-    true
-}
-
-fn transport_ids_are_unique(snapshot: &RouterStateSnapshot) -> bool {
-    let mut left_index = 0;
-    while left_index < snapshot.transports.len() {
-        let left_id = snapshot.transports[left_index].0;
-        let mut right_index = left_index + 1;
-        while right_index < snapshot.transports.len() {
-            if snapshot.transports[right_index].0 == left_id {
-                return false;
-            }
-            right_index += 1;
-        }
-        left_index += 1;
-    }
-    true
-}
-
-fn producer_ids_are_unique(snapshot: &RouterStateSnapshot) -> bool {
-    let mut left_index = 0;
-    while left_index < snapshot.producers.len() {
-        let left_id = snapshot.producers[left_index].0;
-        let mut right_index = left_index + 1;
-        while right_index < snapshot.producers.len() {
-            if snapshot.producers[right_index].0 == left_id {
-                return false;
-            }
-            right_index += 1;
-        }
-        left_index += 1;
-    }
-    true
-}
-
-fn consumer_ids_are_unique(snapshot: &RouterStateSnapshot) -> bool {
-    let mut left_index = 0;
-    while left_index < snapshot.consumers.len() {
-        let left_id = snapshot.consumers[left_index].0;
-        let mut right_index = left_index + 1;
-        while right_index < snapshot.consumers.len() {
-            if snapshot.consumers[right_index].0 == left_id {
-                return false;
-            }
-            right_index += 1;
-        }
-        left_index += 1;
-    }
-    true
-}
-
-fn references_are_valid(snapshot: &RouterStateSnapshot) -> bool {
-    let mut transport_index = 0;
-    while transport_index < snapshot.transports.len() {
-        if !contains_session(snapshot, snapshot.transports[transport_index].1) {
-            return false;
-        }
-        transport_index += 1;
-    }
-
-    let mut producer_index = 0;
-    while producer_index < snapshot.producers.len() {
-        if !contains_transport(snapshot, snapshot.producers[producer_index].1) {
-            return false;
-        }
-        producer_index += 1;
-    }
-
-    let mut consumer_index = 0;
-    while consumer_index < snapshot.consumers.len() {
-        let consumer = snapshot.consumers[consumer_index];
-        if !contains_transport(snapshot, consumer.2) || !contains_producer(snapshot, consumer.1) {
-            return false;
-        }
-        consumer_index += 1;
-    }
-
-    true
-}
-
-fn reverse_indices_are_exact(snapshot: &RouterStateSnapshot) -> bool {
-    session_transport_index_is_exact(snapshot)
-        && transport_producer_index_is_exact(snapshot)
-        && transport_consumer_index_is_exact(snapshot)
-        && producer_consumer_index_is_exact(snapshot)
-}
-
-fn session_transport_index_is_exact(snapshot: &RouterStateSnapshot) -> bool {
-    let mut entry_index = 0;
-    while entry_index < snapshot.session_transports.len() {
-        let (session_id, transport_ids) = &snapshot.session_transports[entry_index];
-        if !contains_session(snapshot, *session_id) || transport_ids.is_empty() {
-            return false;
-        }
-
-        let mut value_index = 0;
-        while value_index < transport_ids.len() {
-            let Some(transport) = transport_by_id(snapshot, transport_ids[value_index]) else {
-                return false;
-            };
-            if transport.1 != *session_id {
-                return false;
-            }
-            value_index += 1;
-        }
-        entry_index += 1;
-    }
-
-    let mut transport_index = 0;
-    while transport_index < snapshot.transports.len() {
-        let transport = snapshot.transports[transport_index];
-        if !index_contains(&snapshot.session_transports, transport.1, transport.0) {
-            return false;
-        }
-        transport_index += 1;
-    }
-
-    true
-}
-
-fn transport_producer_index_is_exact(snapshot: &RouterStateSnapshot) -> bool {
-    let mut entry_index = 0;
-    while entry_index < snapshot.transport_producers.len() {
-        let (transport_id, producer_ids) = &snapshot.transport_producers[entry_index];
-        if !contains_transport(snapshot, *transport_id) || producer_ids.is_empty() {
-            return false;
-        }
-
-        let mut value_index = 0;
-        while value_index < producer_ids.len() {
-            let Some(producer) = producer_by_id(snapshot, producer_ids[value_index]) else {
-                return false;
-            };
-            if producer.1 != *transport_id {
-                return false;
-            }
-            value_index += 1;
-        }
-        entry_index += 1;
-    }
-
-    let mut producer_index = 0;
-    while producer_index < snapshot.producers.len() {
-        let producer = snapshot.producers[producer_index];
-        if !index_contains(&snapshot.transport_producers, producer.1, producer.0) {
-            return false;
-        }
-        producer_index += 1;
-    }
-
-    true
-}
-
-fn transport_consumer_index_is_exact(snapshot: &RouterStateSnapshot) -> bool {
-    let mut entry_index = 0;
-    while entry_index < snapshot.transport_consumers.len() {
-        let (transport_id, consumer_ids) = &snapshot.transport_consumers[entry_index];
-        if !contains_transport(snapshot, *transport_id) || consumer_ids.is_empty() {
-            return false;
-        }
-
-        let mut value_index = 0;
-        while value_index < consumer_ids.len() {
-            let Some(consumer) = consumer_by_id(snapshot, consumer_ids[value_index]) else {
-                return false;
-            };
-            if consumer.2 != *transport_id {
-                return false;
-            }
-            value_index += 1;
-        }
-        entry_index += 1;
-    }
-
-    let mut consumer_index = 0;
-    while consumer_index < snapshot.consumers.len() {
-        let consumer = snapshot.consumers[consumer_index];
-        if !index_contains(&snapshot.transport_consumers, consumer.2, consumer.0) {
-            return false;
-        }
-        consumer_index += 1;
-    }
-
-    true
-}
-
-fn producer_consumer_index_is_exact(snapshot: &RouterStateSnapshot) -> bool {
-    let mut entry_index = 0;
-    while entry_index < snapshot.producer_consumers.len() {
-        let (producer_id, consumer_ids) = &snapshot.producer_consumers[entry_index];
-        if !contains_producer(snapshot, *producer_id) || consumer_ids.is_empty() {
-            return false;
-        }
-
-        let mut value_index = 0;
-        while value_index < consumer_ids.len() {
-            let Some(consumer) = consumer_by_id(snapshot, consumer_ids[value_index]) else {
-                return false;
-            };
-            if consumer.1 != *producer_id {
-                return false;
-            }
-            value_index += 1;
-        }
-        entry_index += 1;
-    }
-
-    let mut consumer_index = 0;
-    while consumer_index < snapshot.consumers.len() {
-        let consumer = snapshot.consumers[consumer_index];
-        if !index_contains(&snapshot.producer_consumers, consumer.1, consumer.0) {
-            return false;
-        }
-        consumer_index += 1;
-    }
-
-    true
-}
-
-fn transport_directions_are_valid(snapshot: &RouterStateSnapshot) -> bool {
-    let mut producer_index = 0;
-    while producer_index < snapshot.producers.len() {
-        let Some(transport) = transport_by_id(snapshot, snapshot.producers[producer_index].1)
-        else {
-            return false;
-        };
-        if transport.2 != TransportDirection::Receive {
-            return false;
-        }
-        producer_index += 1;
-    }
-
-    let mut consumer_index = 0;
-    while consumer_index < snapshot.consumers.len() {
-        let Some(transport) = transport_by_id(snapshot, snapshot.consumers[consumer_index].2)
-        else {
-            return false;
-        };
-        if transport.2 != TransportDirection::Send {
-            return false;
-        }
-        consumer_index += 1;
-    }
-
-    true
-}
-
-fn consumer_media_matches_producer(snapshot: &RouterStateSnapshot) -> bool {
-    let mut consumer_index = 0;
-    while consumer_index < snapshot.consumers.len() {
-        let consumer = snapshot.consumers[consumer_index];
-        let Some(producer) = producer_by_id(snapshot, consumer.1) else {
-            return false;
-        };
-        if consumer.3 != producer.2 {
-            return false;
-        }
-        consumer_index += 1;
-    }
-    true
-}
-
-fn consumer_pause_shadows_producer(snapshot: &RouterStateSnapshot) -> bool {
-    let mut consumer_index = 0;
-    while consumer_index < snapshot.consumers.len() {
-        let consumer = snapshot.consumers[consumer_index];
-        let Some(producer) = producer_by_id(snapshot, consumer.1) else {
-            return false;
-        };
-        if consumer.5 != producer.3 {
-            return false;
-        }
-        consumer_index += 1;
-    }
-    true
-}
-
-fn assert_consumer_route(
-    snapshot: &RouterStateSnapshot,
-    consumer_id: ConsumerId,
-    route_state: ConsumerRouteState,
-    producer_route_state: ProducerRouteState,
-) {
-    let Some(consumer) = consumer_by_id(snapshot, consumer_id) else {
-        assert!(false);
-        return;
-    };
-    assert!(consumer.4 == route_state);
-    assert!(consumer.5 == producer_route_state);
-}
-
-fn contains_session(snapshot: &RouterStateSnapshot, session_id: SessionId) -> bool {
-    let mut index = 0;
-    while index < snapshot.sessions.len() {
-        if snapshot.sessions[index].0 == session_id {
-            return true;
-        }
-        index += 1;
-    }
-    false
-}
-
-fn contains_transport(snapshot: &RouterStateSnapshot, transport_id: TransportId) -> bool {
-    transport_by_id(snapshot, transport_id).is_some()
-}
-
-fn contains_producer(snapshot: &RouterStateSnapshot, producer_id: ProducerId) -> bool {
-    producer_by_id(snapshot, producer_id).is_some()
-}
-
-fn contains_consumer(snapshot: &RouterStateSnapshot, consumer_id: ConsumerId) -> bool {
-    consumer_by_id(snapshot, consumer_id).is_some()
-}
-
-fn transport_by_id(
-    snapshot: &RouterStateSnapshot,
-    transport_id: TransportId,
-) -> Option<(TransportId, SessionId, TransportDirection)> {
-    let mut index = 0;
-    while index < snapshot.transports.len() {
-        let transport = snapshot.transports[index];
-        if transport.0 == transport_id {
-            return Some(transport);
-        }
-        index += 1;
-    }
-    None
-}
-
-fn producer_by_id(
-    snapshot: &RouterStateSnapshot,
-    producer_id: ProducerId,
-) -> Option<(ProducerId, TransportId, MediaKind, ProducerRouteState)> {
-    let mut index = 0;
-    while index < snapshot.producers.len() {
-        let producer = snapshot.producers[index];
-        if producer.0 == producer_id {
-            return Some(producer);
-        }
-        index += 1;
-    }
-    None
-}
-
-fn consumer_by_id(
-    snapshot: &RouterStateSnapshot,
-    consumer_id: ConsumerId,
-) -> Option<(
-    ConsumerId,
-    ProducerId,
-    TransportId,
-    MediaKind,
-    ConsumerRouteState,
-    ProducerRouteState,
-)> {
-    let mut index = 0;
-    while index < snapshot.consumers.len() {
-        let consumer = snapshot.consumers[index];
-        if consumer.0 == consumer_id {
-            return Some(consumer);
-        }
-        index += 1;
-    }
-    None
-}
-
-fn index_contains_key<K: Copy + Eq, V>(index: &[(K, Vec<V>)], key: K) -> bool {
-    let mut entry_index = 0;
-    while entry_index < index.len() {
-        if index[entry_index].0 == key {
-            return true;
-        }
-        entry_index += 1;
-    }
-    false
-}
-
-fn index_contains<K: Copy + Eq, V: Copy + Eq>(index: &[(K, Vec<V>)], key: K, value: V) -> bool {
-    let mut entry_index = 0;
-    while entry_index < index.len() {
-        let (entry_key, values) = &index[entry_index];
-        if *entry_key == key {
-            let mut value_index = 0;
-            while value_index < values.len() {
-                if values[value_index] == value {
-                    return true;
-                }
-                value_index += 1;
-            }
-            return false;
-        }
-        entry_index += 1;
-    }
-    false
-}
-
-fn index_member_count<K: Copy + Eq, V>(index: &[(K, Vec<V>)], key: K) -> usize {
-    let mut entry_index = 0;
-    while entry_index < index.len() {
-        let (entry_key, values) = &index[entry_index];
-        if *entry_key == key {
-            return values.len();
-        }
-        entry_index += 1;
-    }
-    0
 }

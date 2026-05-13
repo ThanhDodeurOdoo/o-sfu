@@ -24,19 +24,55 @@ jobs:
             command: >-
               cargo kani -p o-sfu-proofs
               --harness h264_profile_level_id_parse_matches_rfc_patterns
-          - shard: router-teardown
+          - shard: router-symbolic-adds
             command: >-
               cargo kani -p o-sfu-proofs
-              --harness bounded_symbolic_router_trace_preserves_invariants
+              -Z unstable-options
+              --harness bounded_symbolic_router_adds_preserve_invariants
+          - shard: router-symbolic-routing
+            command: >-
+              cargo kani -p o-sfu-proofs
+              -Z unstable-options
+              --harness bounded_symbolic_router_route_trace_preserves_invariants
+          - shard: router-symbolic-cleanup
+            command: >-
+              cargo kani -p o-sfu-proofs
+              -Z unstable-options
+              --harness bounded_symbolic_router_cleanup_trace_preserves_invariants
+          - shard: router-session-teardown
+            command: >-
+              cargo kani -p o-sfu-proofs
+              -Z unstable-options
               --harness session_teardown_clears_reverse_indices_and_dependents
-              --harness removing_a_producer_clears_dependents_but_keeps_live_transports
-              --harness removing_a_consumer_preserves_other_routes_and_indices
-          - shard: router-pause
+          - shard: router-producer-removal
             command: >-
               cargo kani -p o-sfu-proofs
+              -Z unstable-options
+              --harness removing_a_producer_clears_dependents_but_keeps_live_transports
+          - shard: router-consumer-removal
+            command: >-
+              cargo kani -p o-sfu-proofs
+              -Z unstable-options
+              --harness removing_a_consumer_preserves_other_routes_and_indices
+          - shard: router-consumer-inherit-pause
+            command: >-
+              cargo kani -p o-sfu-proofs
+              -Z unstable-options
               --harness new_consumers_inherit_their_producer_pause_shadow
+          - shard: router-producer-pause
+            command: >-
+              cargo kani -p o-sfu-proofs
+              -Z unstable-options
               --harness pausing_a_producer_updates_all_dependent_consumers
+          - shard: router-producer-resume
+            command: >-
+              cargo kani -p o-sfu-proofs
+              -Z unstable-options
               --harness resuming_a_producer_clears_dependent_consumer_pause_shadows
+          - shard: router-consumer-local-pause
+            command: >-
+              cargo kani -p o-sfu-proofs
+              -Z unstable-options
               --harness consumer_local_pause_stays_independent_from_producer_shadow_updates
           - shard: protocol-recovery-close
             command: >-

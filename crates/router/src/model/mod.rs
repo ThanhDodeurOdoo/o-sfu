@@ -8,6 +8,7 @@ mod ids;
 mod media;
 mod observer;
 mod producer;
+mod proof_storage;
 mod route_state;
 mod router;
 mod rtp;
