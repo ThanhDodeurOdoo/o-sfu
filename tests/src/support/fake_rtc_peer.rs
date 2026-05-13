@@ -10,14 +10,15 @@ use std::{
 };
 
 use o_sfu_protocol::signaling::SessionDescriptionPayload;
+use o_sfu_rfc::rtp::CodecName;
 use o_sfu_router::MediaKind;
 use str0m::{
     Candidate, Event, IceConnectionState, Input, Output, Rtc,
     change::SdpOffer,
     format::{Codec, PayloadParams},
-    media::{Mid, Pt},
+    media::{Mid, Pt, Rid},
     net::{Protocol, Receive},
-    rtp::{ExtensionValues, RtpPacket},
+    rtp::{RtpPacket, Ssrc},
 };
 use tokio::{net::UdpSocket, time::timeout};
 use tokio_util::bytes::Bytes;
@@ -41,12 +42,13 @@ pub struct FakeRtcPeer {
     send_paths: BTreeMap<MediaKind, ProtocolSendPath>,
     connected: bool,
     start_wallclock: Instant,
+    next_synthetic_ssrc: u32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ProtocolSendPath {
     mid: Mid,
-    payload_type: Pt,
+    rids: Vec<Rid>,
 }
 
 impl FakeRtcPeer {
@@ -64,12 +66,13 @@ impl FakeRtcPeer {
             send_paths: BTreeMap::new(),
             connected: false,
             start_wallclock: Instant::now(),
+            next_synthetic_ssrc: 0x0f00_0001,
         })
     }
 
     pub fn answer_offer(&mut self, offer_sdp: &str) -> Option<SessionDescriptionPayload> {
         let offer = SdpOffer::from_sdp_string(offer_sdp).ok()?;
-        self.send_paths = collect_protocol_send_paths(offer_sdp, &self.rtc);
+        self.send_paths = collect_protocol_send_paths(offer_sdp);
         let answer = self.rtc.sdp_api().accept_offer(offer).ok()?;
         self.rtc.handle_input(Input::Timeout(Instant::now())).ok()?;
         Some(SessionDescriptionPayload {
@@ -104,7 +107,7 @@ impl FakeRtcPeer {
     ) -> Option<()> {
         for _ in 0..frame_count {
             let frame = source.next_frame(clock);
-            self.write_rtp_packet(source.media_kind(), frame)?;
+            self.write_rtp_packet(frame)?;
             pump_until(
                 &mut self.rtc,
                 &self.socket,
@@ -125,7 +128,7 @@ impl FakeRtcPeer {
     ) -> Option<Vec<u8>> {
         let frame = source.next_frame(clock);
         let expected_payload = frame.payload.clone();
-        self.write_rtp_packet(source.media_kind(), frame)?;
+        self.write_rtp_packet(frame)?;
         pump_until(
             &mut self.rtc,
             &self.socket,
@@ -149,23 +152,57 @@ impl FakeRtcPeer {
         .await
     }
 
-    fn write_rtp_packet(&mut self, media_kind: MediaKind, frame: FakeMediaFrame) -> Option<()> {
-        let send_path = *self.send_paths.get(&media_kind)?;
+    fn write_rtp_packet(&mut self, frame: FakeMediaFrame) -> Option<()> {
+        let send_path = self.send_paths.get(&frame.media_kind)?.clone();
+        let payload_type = payload_type_for_codec(&self.rtc, &frame.codec)?;
+        let stream_rid = frame.rid.as_deref().map(Rid::from);
+        let extension_rid = frame.rid.as_deref().map(Rid::from);
+        if !send_path.accepts_rid(stream_rid) {
+            return None;
+        }
+        self.ensure_tx_stream(send_path.mid, stream_rid);
+        let mut extension_values = frame.extension_values;
+        extension_values.mid = Some(send_path.mid);
+        extension_values.rid = extension_rid;
         self.rtc
             .direct_api()
-            .stream_tx_by_mid(send_path.mid, None)?
+            .stream_tx_by_mid(send_path.mid, stream_rid)?
             .write_rtp(
-                send_path.payload_type,
+                payload_type,
                 u64::from(frame.sequence_number).into(),
                 frame.rtp_timestamp,
                 self.start_wallclock + frame.emitted_at,
-                false,
-                ExtensionValues::default(),
+                frame.marker,
+                extension_values,
                 false,
                 frame.payload,
             )
             .ok()?;
         Some(())
+    }
+
+    fn ensure_tx_stream(&mut self, mid: Mid, rid: Option<Rid>) {
+        if self.rtc.direct_api().stream_tx_by_mid(mid, rid).is_some() {
+            return;
+        }
+        let ssrc = self.next_synthetic_ssrc();
+        self.rtc
+            .direct_api()
+            .declare_stream_tx(ssrc, None, mid, rid);
+    }
+
+    fn next_synthetic_ssrc(&mut self) -> Ssrc {
+        let ssrc = self.next_synthetic_ssrc;
+        self.next_synthetic_ssrc = self.next_synthetic_ssrc.wrapping_add(1);
+        Ssrc::from(ssrc)
+    }
+}
+
+impl ProtocolSendPath {
+    fn accepts_rid(&self, rid: Option<Rid>) -> bool {
+        rid.map_or(self.rids.is_empty(), |rid| {
+            !self.rids.is_empty() && self.rids.contains(&rid)
+        })
     }
 }
 
@@ -329,17 +366,15 @@ async fn pump_until_rtp(
     None
 }
 
-fn collect_protocol_send_paths(
-    offer_sdp: &str,
-    rtc: &Rtc,
-) -> BTreeMap<MediaKind, ProtocolSendPath> {
+fn collect_protocol_send_paths(offer_sdp: &str) -> BTreeMap<MediaKind, ProtocolSendPath> {
     let mut send_paths = BTreeMap::new();
     let mut current_kind: Option<MediaKind> = None;
     let mut current_mid: Option<Mid> = None;
+    let mut current_rids = Vec::new();
     let mut current_direction = OfferDirection::Inactive;
 
     let mut flush_section =
-        |kind: Option<MediaKind>, mid: Option<Mid>, direction: OfferDirection| {
+        |kind: Option<MediaKind>, mid: Option<Mid>, rids: Vec<Rid>, direction: OfferDirection| {
             let Some(kind) = kind else {
                 return;
             };
@@ -349,25 +384,24 @@ fn collect_protocol_send_paths(
             let Some(mid) = mid else {
                 return;
             };
-            let Some(payload_type) = payload_type_for_media_kind(rtc, kind) else {
-                return;
-            };
-            send_paths.insert(kind, ProtocolSendPath { mid, payload_type });
+            send_paths.insert(kind, ProtocolSendPath { mid, rids });
         };
 
     for raw_line in offer_sdp.lines() {
         let line = raw_line.trim_end_matches('\r');
         if let Some(kind) = parse_offer_media_kind(line) {
-            flush_section(current_kind, current_mid, current_direction);
+            flush_section(current_kind, current_mid, current_rids, current_direction);
             current_kind = Some(kind);
             current_mid = None;
+            current_rids = Vec::new();
             current_direction = OfferDirection::Inactive;
             continue;
         }
         if line.starts_with("m=") {
-            flush_section(current_kind, current_mid, current_direction);
+            flush_section(current_kind, current_mid, current_rids, current_direction);
             current_kind = None;
             current_mid = None;
+            current_rids = Vec::new();
             current_direction = OfferDirection::Inactive;
             continue;
         }
@@ -375,22 +409,32 @@ fn collect_protocol_send_paths(
             current_mid = Some(Mid::from(mid));
             continue;
         }
+        if let Some(rid) = parse_rid(line) {
+            current_rids.push(rid);
+            continue;
+        }
         if let Some(direction) = OfferDirection::parse(line) {
             current_direction = direction;
         }
     }
-    flush_section(current_kind, current_mid, current_direction);
+    flush_section(current_kind, current_mid, current_rids, current_direction);
     send_paths
 }
 
-fn payload_type_for_media_kind(rtc: &Rtc, media_kind: MediaKind) -> Option<Pt> {
-    let codec = match media_kind {
-        MediaKind::Audio => Codec::Opus,
-        MediaKind::Video => Codec::Vp8,
-    };
+fn payload_type_for_codec(rtc: &Rtc, codec_name: &CodecName) -> Option<Pt> {
+    let codec = str0m_codec(codec_name)?;
     rtc.codec_config()
         .find(|params| params.spec().codec == codec)
         .map(PayloadParams::pt)
+}
+
+fn str0m_codec(codec_name: &CodecName) -> Option<Codec> {
+    match codec_name {
+        CodecName::Opus => Some(Codec::Opus),
+        CodecName::Vp8 => Some(Codec::Vp8),
+        CodecName::H264 => Some(Codec::H264),
+        CodecName::Rtx | CodecName::Other(_) => None,
+    }
 }
 
 fn parse_offer_media_kind(line: &str) -> Option<MediaKind> {
@@ -401,6 +445,12 @@ fn parse_offer_media_kind(line: &str) -> Option<MediaKind> {
     } else {
         None
     }
+}
+
+fn parse_rid(line: &str) -> Option<Rid> {
+    let rest = line.strip_prefix("a=rid:")?;
+    let rid = rest.split_whitespace().next()?;
+    Some(Rid::from(rid))
 }
 
 #[derive(Clone, Copy, Default)]

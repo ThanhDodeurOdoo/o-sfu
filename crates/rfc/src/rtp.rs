@@ -139,6 +139,33 @@ pub mod codec_name {
     pub const RTX: &str = "rtx";
 }
 
+/// Opus RTP payload-format constants.
+///
+/// Reference: RFC 7587 for the RTP payload format and RFC 6716 for the
+/// packet table-of-contents layout.
+pub mod opus {
+    /// RTP clock rate for Opus payloads.
+    ///
+    /// Reference: RFC 7587 section 4.1.
+    pub const RTP_CLOCK_RATE_HZ: u32 = 48_000;
+
+    /// Opus packet frame-count codes from the table-of-contents byte.
+    ///
+    /// Reference: RFC 6716 section 3.1.
+    pub mod frame_count_code {
+        /// One frame in the Opus packet.
+        pub const ONE_FRAME: u8 = 0;
+    }
+
+    /// Opus table-of-contents configuration numbers.
+    ///
+    /// Reference: RFC 6716 section 3.1.
+    pub mod toc_config {
+        /// SILK-only wideband packet with a 20 ms frame duration.
+        pub const SILK_WIDEBAND_20_MS: u8 = 9;
+    }
+}
+
 /// VP8 RTP payload helpers.
 ///
 /// These helpers operate on the codec payload slice, not on the full RTP
@@ -168,17 +195,38 @@ pub mod codec_name {
 /// +-------------+-------------------+-------------+----------------+
 /// ```
 pub mod vp8 {
-    const X_BIT: u8 = 0b1000_0000;
-    const S_BIT: u8 = 0b0001_0000;
+    /// Extended control bits are present in the VP8 payload descriptor.
+    pub const X_BIT: u8 = 0b1000_0000;
+
+    /// Start of VP8 partition bit in the payload descriptor.
+    pub const S_BIT: u8 = 0b0001_0000;
+
     const PARTITION_ID_MASK: u8 = 0b0000_1111;
-    const I_BIT: u8 = 0b1000_0000;
-    const L_BIT: u8 = 0b0100_0000;
-    const T_BIT: u8 = 0b0010_0000;
+
+    /// `PictureID` present bit in the extended VP8 payload descriptor.
+    pub const I_BIT: u8 = 0b1000_0000;
+
+    /// TL0PICIDX present bit in the extended VP8 payload descriptor.
+    pub const L_BIT: u8 = 0b0100_0000;
+
+    /// TID/Y/KEYIDX present bit in the extended VP8 payload descriptor.
+    pub const T_BIT: u8 = 0b0010_0000;
+
     const K_BIT: u8 = 0b0001_0000;
-    const LONG_PICTURE_ID_BIT: u8 = 0b1000_0000;
-    const VP8_INTERFRAME_BIT: u8 = 0b0000_0001;
+
+    /// Long `PictureID` marker bit in the VP8 `PictureID` field.
+    pub const LONG_PICTURE_ID_BIT: u8 = 0b1000_0000;
+
+    /// VP8 payload-header P bit set for interframes.
+    pub const INTERFRAME_BIT: u8 = 0b0000_0001;
+
     const SHORT_PICTURE_ID_MASK: u16 = 0x7f;
-    const LONG_PICTURE_ID_MASK: u16 = 0x7fff;
+
+    /// Value mask for the 15-bit VP8 long `PictureID` field.
+    pub const LONG_PICTURE_ID_MASK: u16 = 0x7fff;
+
+    /// Value mask for the two-bit VP8 temporal-layer identity.
+    pub const TEMPORAL_LAYER_ID_MASK: u8 = 0b0000_0011;
 
     /// Offset-carrying view of the VP8 descriptor fields that o-sfu may need
     /// to rewrite before forwarding a packet to a browser consumer.
@@ -286,7 +334,7 @@ pub mod vp8 {
         } else {
             extended_payload_header(rest)
         };
-        payload_header.is_some_and(|header| header & VP8_INTERFRAME_BIT == 0)
+        payload_header.is_some_and(|header| header & INTERFRAME_BIT == 0)
     }
 
     /// Parses the RFC 7741 VP8 payload descriptor fields that must stay
@@ -598,11 +646,23 @@ pub mod fmtp {
 pub mod h264 {
     use std::cmp::Ordering;
 
-    const NAL_UNIT_TYPE_MASK: u8 = 0x1f;
-    const NAL_UNIT_TYPE_IDR: u8 = 5;
-    const NAL_UNIT_TYPE_STAP_A: u8 = 24;
-    const NAL_UNIT_TYPE_FU_A: u8 = 28;
-    const FU_START_BIT: u8 = 0x80;
+    /// Mask for the H264 NAL unit type field.
+    pub const NAL_UNIT_TYPE_MASK: u8 = 0x1f;
+
+    /// Highest NRI value for reference NAL units.
+    pub const NAL_REF_IDC_HIGH: u8 = 0b0110_0000;
+
+    /// H264 IDR slice NAL unit type.
+    pub const NAL_UNIT_TYPE_IDR: u8 = 5;
+
+    /// H264 STAP-A aggregation packet type.
+    pub const NAL_UNIT_TYPE_STAP_A: u8 = 24;
+
+    /// H264 FU-A fragmentation packet type.
+    pub const NAL_UNIT_TYPE_FU_A: u8 = 28;
+
+    /// FU-A start bit in the FU header.
+    pub const FU_START_BIT: u8 = 0x80;
 
     /// Parsed H264 `profile-level-id` value.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

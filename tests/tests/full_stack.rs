@@ -5,20 +5,20 @@
 
 use std::time::Duration;
 
-use o_sfu::http::IncomingBitRateStatsResponse;
+use o_sfu::{config::MediaCodecFlags, http::IncomingBitRateStatsResponse};
 use o_sfu_protocol::{
-    shared::{DownloadStates, StreamType, UserId, UserInfo},
+    shared::{DownloadStates, StreamType, UserId, UserInfo, VideoLayoutIntent},
     signaling::{ServerMessage, ServerRequest, TrackBinding},
 };
 use o_sfu_tests::support::{
     TEST_ROOM_KEY, TestServer, create_room,
-    fake_media::{FakeClock, FakeMediaSource},
+    fake_media::{FakeClock, FakeMediaSource, SYNTHETIC_OPUS_ONE_FRAME_TOC},
     metrics_text,
     protocol_full_stack::{
         ProtocolFakePeer, connect_fake_peer, connect_two_fake_peers,
         connect_two_rtc_ready_fake_peers,
     },
-    spawn_room_server, spawn_test_server, stats, test_config,
+    spawn_room_server, spawn_room_server_with_config, spawn_test_server, stats, test_config,
 };
 use tokio::{
     task::yield_now,
@@ -42,6 +42,12 @@ fn fake_media_source_uses_manual_clock_deterministically() {
     assert_eq!(second.rtp_timestamp, 960);
     assert_eq!(first.payload.len(), 160);
     assert_eq!(second.payload.len(), 160);
+    assert_eq!(
+        first.payload.first().copied(),
+        Some(SYNTHETIC_OPUS_ONE_FRAME_TOC)
+    );
+    assert_eq!(first.extension_values.audio_level, Some(-32));
+    assert_eq!(first.extension_values.voice_activity, Some(true));
 }
 
 #[tokio::test]
@@ -368,6 +374,175 @@ async fn fake_rtc_peers_export_transport_and_rtp_metrics_during_live_media() {
         after_live_metrics.transport_health_transitions_connected_to_unset
             - during_live_metrics.transport_health_transitions_connected_to_unset,
         2
+    );
+}
+
+#[tokio::test]
+async fn fake_rtc_peers_forward_vp8_high_rid_keyframe_without_browsers() {
+    let room_server = spawn_room_server("issuer-vp8-synthetic").await;
+    assert!(room_server.is_some());
+    let Some(room_server) = room_server else {
+        return;
+    };
+    let (server, room) = room_server.into_parts();
+
+    let setup = connect_two_rtc_ready_fake_peers(
+        &server,
+        &room,
+        UserId::Integer(92),
+        UserId::Integer(93),
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(setup.is_some());
+    let Some((mut publisher, mut subscriber)) = setup else {
+        return;
+    };
+
+    let mut source = FakeMediaSource::vp8_camera_high();
+    assert!(publisher.publish_track(&source).await.is_some());
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    let track_binding = assert_track_snapshot(
+        &mut subscriber,
+        UserId::Integer(92),
+        StreamType::Camera,
+        true,
+    )
+    .await;
+    assert!(subscriber.complete_next_negotiation().await.is_some());
+    assert_video_subscription_enabled(&mut subscriber, UserId::Integer(92)).await;
+    assert_consumer_route_active(
+        &server,
+        &room,
+        &subscriber,
+        &UserId::Integer(92),
+        track_binding.stream_type,
+    )
+    .await;
+
+    let mut clock = FakeClock::default();
+    assert_synthetic_video_packet_forwarded(
+        &mut publisher,
+        &mut subscriber,
+        &mut source,
+        &mut clock,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn fake_rtc_peers_forward_h264_high_rid_idr_without_browsers() {
+    let mut config = test_config(1_000, 10);
+    config.codecs.flags = MediaCodecFlags::default().with_vp8(false).with_h264(true);
+    let room_server =
+        spawn_room_server_with_config(config, "issuer-h264-synthetic", Some(TEST_ROOM_KEY)).await;
+    assert!(room_server.is_some());
+    let Some(room_server) = room_server else {
+        return;
+    };
+    let (server, room) = room_server.into_parts();
+
+    let setup = connect_two_rtc_ready_fake_peers(
+        &server,
+        &room,
+        UserId::Integer(94),
+        UserId::Integer(95),
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(setup.is_some());
+    let Some((mut publisher, mut subscriber)) = setup else {
+        return;
+    };
+
+    let mut source = FakeMediaSource::h264_camera_high();
+    assert!(publisher.publish_track(&source).await.is_some());
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    let track_binding = assert_track_snapshot(
+        &mut subscriber,
+        UserId::Integer(94),
+        StreamType::Camera,
+        true,
+    )
+    .await;
+    assert!(subscriber.complete_next_negotiation().await.is_some());
+    assert_video_subscription_enabled(&mut subscriber, UserId::Integer(94)).await;
+    assert_consumer_route_active(
+        &server,
+        &room,
+        &subscriber,
+        &UserId::Integer(94),
+        track_binding.stream_type,
+    )
+    .await;
+
+    let mut clock = FakeClock::default();
+    assert_synthetic_video_packet_forwarded(
+        &mut publisher,
+        &mut subscriber,
+        &mut source,
+        &mut clock,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn fake_rtc_peer_rejects_invalid_synthetic_send_paths_without_panics() {
+    let room_server = spawn_room_server("issuer-invalid-synthetic-send").await;
+    assert!(room_server.is_some());
+    let Some(room_server) = room_server else {
+        return;
+    };
+    let (server, room) = room_server.into_parts();
+
+    let setup = connect_two_rtc_ready_fake_peers(
+        &server,
+        &room,
+        UserId::Integer(96),
+        UserId::Integer(97),
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(setup.is_some());
+    let Some((mut publisher, mut subscriber)) = setup else {
+        return;
+    };
+
+    let source = FakeMediaSource::vp8_camera_high();
+    assert!(publisher.publish_track(&source).await.is_some());
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    let track_binding = assert_track_snapshot(
+        &mut subscriber,
+        UserId::Integer(96),
+        StreamType::Camera,
+        true,
+    )
+    .await;
+    assert!(subscriber.complete_next_negotiation().await.is_some());
+    assert_video_subscription_enabled(&mut subscriber, UserId::Integer(96)).await;
+    assert_consumer_route_active(
+        &server,
+        &room,
+        &subscriber,
+        &UserId::Integer(96),
+        track_binding.stream_type,
+    )
+    .await;
+
+    let mut clock = FakeClock::default();
+    let mut unsupported_codec = FakeMediaSource::unsupported_camera_codec();
+    let mut missing_rid = FakeMediaSource::vp8_camera_with_rid("missing");
+    assert!(
+        publisher
+            .send_rtp_packet(&mut unsupported_codec, &mut clock)
+            .await
+            .is_none()
+    );
+    assert!(
+        publisher
+            .send_rtp_packet(&mut missing_rid, &mut clock)
+            .await
+            .is_none()
     );
 }
 
@@ -972,6 +1147,39 @@ async fn assert_audio_packet_forwarded(
     source: &mut FakeMediaSource,
     clock: &mut FakeClock,
 ) -> u64 {
+    assert_packet_forwarded(publisher, subscriber, source, clock).await
+}
+
+async fn assert_synthetic_video_packet_forwarded(
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
+    source: &mut FakeMediaSource,
+    clock: &mut FakeClock,
+) -> u64 {
+    for _ in 0..3 {
+        let expected_payload = publisher.send_rtp_packet(source, clock).await;
+        assert!(expected_payload.is_some());
+        let Some(expected_payload) = expected_payload else {
+            return 0;
+        };
+        let received_packet = subscriber.read_rtp_packet(Duration::from_secs(2)).await;
+        if let Some(received_packet) = received_packet {
+            assert_eq!(
+                received_packet.payload.as_ref(),
+                expected_payload.as_slice()
+            );
+            return u64::try_from(expected_payload.len()).unwrap_or(u64::MAX);
+        }
+    }
+    panic!("synthetic video packet should be forwarded after route warmup");
+}
+
+async fn assert_packet_forwarded(
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
+    source: &mut FakeMediaSource,
+    clock: &mut FakeClock,
+) -> u64 {
     let expected_payload = publisher.send_rtp_packet(source, clock).await;
     assert!(expected_payload.is_some());
     let Some(expected_payload) = expected_payload else {
@@ -988,6 +1196,25 @@ async fn assert_audio_packet_forwarded(
         expected_payload.as_slice()
     );
     u64::try_from(expected_payload.len()).unwrap_or(u64::MAX)
+}
+
+async fn assert_video_subscription_enabled(
+    subscriber: &mut ProtocolFakePeer,
+    publisher_user_id: UserId,
+) {
+    assert!(
+        subscriber
+            .update_subscription(
+                publisher_user_id,
+                DownloadStates {
+                    camera: Some(true),
+                    camera_layout: Some(VideoLayoutIntent::Featured),
+                    ..DownloadStates::default()
+                },
+            )
+            .await
+            .is_some()
+    );
 }
 
 async fn assert_audio_packet_dropped(
