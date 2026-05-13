@@ -32,13 +32,11 @@ export const videoUploadSlot = (
         simulcastEncodings = [
             {
                 maxBitrate: 150000,
-                policyRole: "thumbnail",
                 rid: "lo",
                 resolutionScale: 2
             },
             {
                 maxBitrate: 900000,
-                policyRole: "featured",
                 rid: "hi",
                 resolutionScale: 1
             }

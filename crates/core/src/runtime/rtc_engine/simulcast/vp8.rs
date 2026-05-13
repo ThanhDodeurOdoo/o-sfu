@@ -4,7 +4,7 @@ use o_sfu_rfc::rtp as rfc_rtp;
 use o_sfu_router::MediaStream as RouterRtpParameters;
 
 use super::common::{self, SimulcastLayerSpec};
-use crate::VideoBitrateLimits;
+use crate::{VideoBitrateLimits, runtime::media_transport::SessionUploadEncoding};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Vp8SimulcastProfile {
@@ -32,5 +32,19 @@ impl Vp8SimulcastProfile {
             return None;
         }
         common::layers_from_rid_bindings(rtp_parameters)
+    }
+
+    pub(super) fn upload_encodings_from_specs(
+        layers: &[SimulcastLayerSpec<'_>],
+    ) -> Vec<SessionUploadEncoding> {
+        layers
+            .iter()
+            .map(|layer| SessionUploadEncoding {
+                rid: layer.rid.to_owned(),
+                max_bitrate: layer.max_bitrate,
+                resolution_scale: Some(layer.resolution_scale),
+                max_framerate: layer.max_framerate,
+            })
+            .collect()
     }
 }

@@ -28,7 +28,7 @@ use crate::{
     Bitrate, MediaCodecFlags,
     runtime::{
         ConnectionId, RoomInstanceId, TestSourceKind, UserId, UserPermissions,
-        media_transport::TransportMediaId,
+        media_transport::{SessionUploadEncoding, TransportMediaId},
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
         recording::RecordingService,
@@ -41,7 +41,7 @@ use crate::{
         source_model::{
             ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceDescriptorParts,
             PublishedSourceId, PublishedSourceOwner, SourceEncodingDescriptor,
-            SourceEncodingDescriptorParts, SourceEncodingId, SourceSelector,
+            SourceEncodingDescriptorParts, SourceEncodingId, SourceSelector, UploadLayerPolicyRole,
             test_support::{
                 TestSubscriptionStates, source_kind_for_stream_id,
                 source_publish_intent_for_source, stream_id_for_source,
@@ -84,6 +84,38 @@ fn join_test_user(state: &mut RoomState, user_id: &UserId) {
         state
             .apply_join(user_id, None, UserPermissions::default(), sender, false,)
             .is_ok()
+    );
+}
+
+fn test_upload_encodings() -> Vec<SessionUploadEncoding> {
+    vec![
+        SessionUploadEncoding {
+            rid: "lo".to_owned(),
+            max_bitrate: Some(Bitrate::from_kbps(180)),
+            resolution_scale: Some(4),
+            max_framerate: Some(15),
+        },
+        SessionUploadEncoding {
+            rid: "hi".to_owned(),
+            max_bitrate: Some(Bitrate::from_kbps(950)),
+            resolution_scale: Some(1),
+            max_framerate: None,
+        },
+    ]
+}
+
+fn assert_upload_profile_metadata(encodings: &[&SourceEncodingDescriptor]) {
+    assert_eq!(encodings[0].resolution_scale(), Some(4));
+    assert_eq!(encodings[0].max_framerate(), Some(15));
+    assert_eq!(
+        encodings[0].policy_role(),
+        Some(UploadLayerPolicyRole::Thumbnail)
+    );
+    assert_eq!(encodings[1].resolution_scale(), Some(1));
+    assert_eq!(encodings[1].max_framerate(), None);
+    assert_eq!(
+        encodings[1].policy_role(),
+        Some(UploadLayerPolicyRole::Featured)
     );
 }
 
@@ -611,7 +643,10 @@ fn commit_published_track_registers_all_source_encodings() {
             &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
         )
         .expect("publish descriptor should validate once the user is publish-ready")
-        .into_prepared_track(consumable_rtp_parameters);
+        .into_prepared_track_with_upload_encodings(
+            consumable_rtp_parameters,
+            test_upload_encodings(),
+        );
     let transport_media_id = TransportMediaId::new(101);
 
     assert!(
@@ -656,6 +691,7 @@ fn commit_published_track_registers_all_source_encodings() {
     );
     assert_eq!(encodings[0].max_bitrate(), Some(Bitrate::from_kbps(150)));
     assert_eq!(encodings[1].max_bitrate(), Some(Bitrate::from_kbps(900)));
+    assert_upload_profile_metadata(&encodings);
     assert_eq!(
         state
             .inspect_source_encoding_ids_for_transport_media_id(transport_media_id)

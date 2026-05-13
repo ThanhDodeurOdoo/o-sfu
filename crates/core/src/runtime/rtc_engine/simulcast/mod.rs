@@ -96,7 +96,7 @@ impl SimulcastCodecProfile {
                             .unwrap_or_default()
                     },
                 );
-                common::upload_encodings_from_specs(&layers)
+                vp8::Vp8SimulcastProfile::upload_encodings_from_specs(&layers)
             }
             Self::H264(profile) => {
                 let _ = h264::H264SimulcastProfile::rtx_allowed();
@@ -107,7 +107,7 @@ impl SimulcastCodecProfile {
                             .unwrap_or_default()
                     },
                 );
-                common::upload_encodings_from_specs(&layers)
+                h264::H264SimulcastProfile::upload_encodings_from_specs(&layers)
             }
         }
     }
@@ -190,7 +190,7 @@ mod tests {
     use str0m::media::{MediaKind, Rid as Str0mRid};
 
     use super::*;
-    use crate::{Bitrate, runtime::source_model::UploadLayerPolicyRole};
+    use crate::Bitrate;
 
     const ANSWER_HIGH_MAX_BITRATE: Bitrate = Bitrate::from_kbps(900);
 
@@ -240,16 +240,14 @@ mod tests {
                 SessionUploadEncoding {
                     rid: common::DEFAULT_LOW_RID.to_owned(),
                     max_bitrate: None,
-                    resolution_scale: Some(2),
+                    resolution_scale: None,
                     max_framerate: None,
-                    policy_role: Some(UploadLayerPolicyRole::Thumbnail),
                 },
                 SessionUploadEncoding {
                     rid: common::DEFAULT_HIGH_RID.to_owned(),
                     max_bitrate: None,
-                    resolution_scale: Some(1),
+                    resolution_scale: None,
                     max_framerate: None,
-                    policy_role: Some(UploadLayerPolicyRole::Featured),
                 },
             ]
         );
@@ -265,14 +263,12 @@ mod tests {
                     max_bitrate: None,
                     resolution_scale: Some(2),
                     max_framerate: None,
-                    policy_role: Some(UploadLayerPolicyRole::Thumbnail),
                 },
                 SessionUploadEncoding {
                     rid: common::DEFAULT_HIGH_RID.to_owned(),
                     max_bitrate: None,
                     resolution_scale: Some(1),
                     max_framerate: None,
-                    policy_role: Some(UploadLayerPolicyRole::Featured),
                 },
             ]
         );
@@ -327,9 +323,17 @@ mod tests {
         assert_eq!(
             encodings
                 .iter()
-                .map(|encoding| encoding.rid.as_str())
+                .map(|encoding| (
+                    encoding.rid.as_str(),
+                    encoding.max_bitrate,
+                    encoding.resolution_scale,
+                    encoding.max_framerate,
+                ))
                 .collect::<Vec<_>>(),
-            vec![common::DEFAULT_LOW_RID, common::DEFAULT_HIGH_RID]
+            vec![
+                (common::DEFAULT_LOW_RID, None, None, None),
+                (common::DEFAULT_HIGH_RID, None, None, None),
+            ]
         );
     }
 

@@ -48,8 +48,6 @@ pub struct NegotiationUploadEncoding {
     pub resolution_scale: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_framerate: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub policy_role: Option<UploadLayerPolicyRole>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

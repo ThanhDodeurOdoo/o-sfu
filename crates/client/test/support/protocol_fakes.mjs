@@ -171,13 +171,11 @@ export class FakeProtocolCore {
                         simulcastEncodings: [
                             {
                                 maxBitrate: 150000,
-                                policyRole: "thumbnail",
                                 rid: "lo",
                                 resolutionScale: 0
                             },
                             {
                                 maxBitrate: 900000,
-                                policyRole: "featured",
                                 rid: "hi",
                                 resolutionScale: 1
                             }

@@ -570,10 +570,6 @@ function validateNegotiationUploadSlots(value: unknown, context: string): void {
                 uploadEncoding.maxFramerate,
                 `${context}[${slotIndex}].simulcastEncodings[${encodingIndex}].maxFramerate`
             );
-            validateOptionalPolicyRole(
-                uploadEncoding.policyRole,
-                `${context}[${slotIndex}].simulcastEncodings[${encodingIndex}].policyRole`
-            );
         }
     });
 }

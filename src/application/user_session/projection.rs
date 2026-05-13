@@ -63,7 +63,6 @@ fn protocol_upload_encoding(encoding: UploadEncoding) -> NegotiationUploadEncodi
         max_bitrate: encoding.max_bitrate.map(Bitrate::as_bps),
         resolution_scale: encoding.resolution_scale,
         max_framerate: encoding.max_framerate,
-        policy_role: encoding.policy_role.map(protocol_upload_layer_policy_role),
     }
 }
 

@@ -27,9 +27,7 @@ use crate::{
         UserId, UserInfo,
         media_transport::MediaTransport,
         room::Room,
-        source_model::{
-            SourcePublishIntent, SourceSubscriptionIntent, UploadLayerPolicyRole, UserStreamId,
-        },
+        source_model::{SourcePublishIntent, SourceSubscriptionIntent, UserStreamId},
     },
     transport::{
         AppliedSessionAnswer, NegotiationPort, ObservabilityPort, SessionOffer,
@@ -98,8 +96,6 @@ pub struct UploadEncoding {
     pub resolution_scale: Option<u16>,
     /// Optional sender-side frame-rate ceiling for this layer.
     pub max_framerate: Option<u16>,
-    /// Server-owned role that explains how room policy may use this layer.
-    pub policy_role: Option<UploadLayerPolicyRole>,
 }
 
 /// Best-effort transport health for a media endpoint.
@@ -605,7 +601,6 @@ impl From<SessionUploadEncoding> for UploadEncoding {
             max_bitrate: encoding.max_bitrate,
             resolution_scale: encoding.resolution_scale,
             max_framerate: encoding.max_framerate,
-            policy_role: encoding.policy_role,
         }
     }
 }

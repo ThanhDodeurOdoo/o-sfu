@@ -9,7 +9,7 @@ use o_sfu_rfc::rtp as rfc_rtp;
 use o_sfu_router::{CodecSetting, MediaFormat, MediaStream as RouterRtpParameters};
 
 use super::common::{self, SimulcastLayerSpec};
-use crate::VideoBitrateLimits;
+use crate::{VideoBitrateLimits, runtime::media_transport::SessionUploadEncoding};
 
 const CHROMIUM_PACKETIZATION_MODE: u8 = 1;
 const CHROMIUM_CONSTRAINED_BASELINE_PROFILE_LEVEL_ID: &str = "42e01f";
@@ -51,6 +51,20 @@ impl H264SimulcastProfile {
             return None;
         }
         common::layers_from_rid_bindings(rtp_parameters)
+    }
+
+    pub(super) fn upload_encodings_from_specs(
+        layers: &[SimulcastLayerSpec<'_>],
+    ) -> Vec<SessionUploadEncoding> {
+        layers
+            .iter()
+            .map(|layer| SessionUploadEncoding {
+                rid: layer.rid.to_owned(),
+                max_bitrate: None,
+                resolution_scale: None,
+                max_framerate: None,
+            })
+            .collect()
     }
 }
 

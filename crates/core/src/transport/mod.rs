@@ -11,7 +11,7 @@ pub use source_policy::{
 };
 pub use types::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
-    ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerPacketGateUpdate,
+    ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerPacketGateUpdate,
     ReceiverBandwidthSnapshot, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
     SourcePacketGate, SourcePacketOperatingPoint, TransportAdapterError, TransportBitrateSnapshot,
     TransportMediaId, TransportPlacementPressureSnapshot, TransportRelayRouteAction,

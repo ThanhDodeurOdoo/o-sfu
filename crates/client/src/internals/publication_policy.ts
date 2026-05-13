@@ -4,7 +4,6 @@ import type { PeerConnectionTransceiver } from "./browser_types.js";
 export type SimulcastEncodingOffer = {
     maxFramerate?: number;
     maxBitrate?: number;
-    policyRole?: "featured" | "thumbnail" | "degradedThumbnail";
     rid: string;
     resolutionScale?: number;
 };
@@ -20,7 +19,6 @@ export type UploadPublicationPlan = {
 };
 
 const MIN_SIMULCAST_ENCODINGS = 2;
-const PRODUCTION_SIMULCAST_CODEC = "VP8";
 
 export async function applyUploadPublicationPolicy(
     streamType: StreamType,
@@ -32,9 +30,6 @@ export async function applyUploadPublicationPolicy(
     }
     if (!plan || plan.simulcastEncodings.length < MIN_SIMULCAST_ENCODINGS) {
         return singleEncoding("offer did not advertise multiple simulcast encodings");
-    }
-    if (!plan.codecs.some((codec) => codec.toUpperCase() === PRODUCTION_SIMULCAST_CODEC)) {
-        return singleEncoding("offer did not include the production VP8 simulcast path");
     }
     if (!transceiver.sender.getParameters || !transceiver.sender.setParameters) {
         return singleEncoding("sender parameter API is unavailable");
@@ -94,8 +89,7 @@ function isValidSimulcastEncodingOffer(encoding: SimulcastEncodingOffer): boolea
         encoding.rid.length > 0 &&
         isOptionalPositiveInteger(encoding.maxBitrate) &&
         isOptionalPositiveInteger(encoding.maxFramerate) &&
-        isOptionalPositiveNumber(encoding.resolutionScale) &&
-        isValidPolicyRole(encoding.policyRole)
+        isOptionalPositiveNumber(encoding.resolutionScale)
     );
 }
 
@@ -105,13 +99,4 @@ function isOptionalPositiveInteger(value: number | undefined): boolean {
 
 function isOptionalPositiveNumber(value: number | undefined): boolean {
     return value === undefined || (Number.isFinite(value) && value > 0);
-}
-
-function isValidPolicyRole(value: SimulcastEncodingOffer["policyRole"]): boolean {
-    return (
-        value === undefined ||
-        value === "featured" ||
-        value === "thumbnail" ||
-        value === "degradedThumbnail"
-    );
 }

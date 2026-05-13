@@ -36,8 +36,8 @@ use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
     runtime::{
         media_transport::{
-            AppliedSessionAnswer, SessionOffer, SessionUploadSlot, TransportAdapterError,
-            TransportMediaId, TransportSessionKey,
+            AppliedProducer, AppliedSessionAnswer, SessionOffer, SessionUploadEncoding,
+            SessionUploadSlot, TransportAdapterError, TransportMediaId, TransportSessionKey,
         },
         metrics::RuntimeMetrics,
     },
@@ -223,6 +223,10 @@ fn worker_apply_session_answer(
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
     session_state.sdp_negotiation.initial_offer_applied = true;
     session_state.sdp_negotiation.staged_offer_sdp = None;
+    let staged_upload_slots = session_state
+        .sdp_negotiation
+        .staged_offer_upload_slots
+        .clone();
     session_state
         .sdp_negotiation
         .staged_offer_upload_slots
@@ -248,16 +252,32 @@ fn worker_apply_session_answer(
             session_key,
             remote_candidate_addrs.iter().copied(),
         );
-    Ok(AppliedSessionAnswer::from_negotiated_producers(
+    Ok(AppliedSessionAnswer::from_negotiated_producer_details(
         producer_handles
             .into_iter()
             .filter_map(|(transport_media_id, mid)| {
-                refreshed_by_mid
-                    .get(&mid)
-                    .cloned()
-                    .map(|parameters| (transport_media_id, parameters))
+                refreshed_by_mid.get(&mid).cloned().map(|parameters| {
+                    (
+                        transport_media_id,
+                        AppliedProducer::new(
+                            parameters,
+                            upload_encodings_for_mid(&staged_upload_slots, mid),
+                        ),
+                    )
+                })
             }),
     ))
+}
+
+fn upload_encodings_for_mid(
+    upload_slots: &[SessionUploadSlot],
+    mid: Mid,
+) -> Vec<SessionUploadEncoding> {
+    let mid = mid.to_string();
+    upload_slots
+        .iter()
+        .find(|slot| slot.mid == mid)
+        .map_or_else(Vec::new, |slot| slot.simulcast_encodings.clone())
 }
 
 fn answer_remote_candidate_addrs(answer: &SdpAnswer) -> Vec<SocketAddr> {
