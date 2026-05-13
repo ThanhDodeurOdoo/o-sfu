@@ -32,7 +32,10 @@ use o_sfu_protocol::{
     shared::{StreamType, UserId, UserPermissions},
     signaling::{EnvelopeBatch, ServerEnvelope, ServerMessage, WelcomePayload},
 };
-use o_sfu_telemetry::diagnostics::{DiagnosticsRoomDetail, DiagnosticsRouteState};
+use o_sfu_telemetry::diagnostics::{
+    DiagnosticsActiveSpeaker, DiagnosticsActiveSpeakerReason, DiagnosticsActiveSpeakerState,
+    DiagnosticsRoomDetail, DiagnosticsRouteState, DiagnosticsVideoLayoutRole,
+};
 use reqwest::StatusCode;
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -64,6 +67,8 @@ pub struct TestRoomServer {
 }
 
 const TEST_POLL_DEADLINE: Duration = Duration::from_secs(3);
+const FEATURED_POLICY_ROLE: &str = "featured";
+const THUMBNAIL_POLICY_ROLE: &str = "thumbnail";
 
 impl TestServer {
     #[must_use]
@@ -131,6 +136,41 @@ impl TestServer {
         .await
     }
 
+    pub async fn wait_for_audio_source_active_speaker(
+        &self,
+        room_id: &str,
+        owner_user_id: &UserId,
+        expected_state: DiagnosticsActiveSpeakerState,
+        expected_reason: DiagnosticsActiveSpeakerReason,
+        expected_last_audio_level_dbov: Option<i8>,
+    ) -> bool {
+        wait_for_test_predicate(|| async {
+            let room = self.room_detail(room_id).await?;
+            let active_speaker = audio_source_active_speaker(&room, owner_user_id)?;
+            (active_speaker.state == expected_state
+                && active_speaker.reason == expected_reason
+                && active_speaker.last_audio_level_dbov == expected_last_audio_level_dbov)
+                .then_some(())
+        })
+        .await
+    }
+
+    pub async fn wait_for_video_subscription_selected_rid(
+        &self,
+        room_id: &str,
+        consumer_user_id: &UserId,
+        producer_user_id: &UserId,
+        expected_rid: &str,
+    ) -> bool {
+        wait_for_test_predicate(|| async {
+            let room = self.room_detail(room_id).await?;
+            let selected_rid =
+                video_subscription_selected_rid(&room, consumer_user_id, producer_user_id)?;
+            (selected_rid == expected_rid).then_some(())
+        })
+        .await
+    }
+
     async fn wait_for_consumer_route_state(
         &self,
         room_id: &str,
@@ -177,6 +217,62 @@ impl TestServer {
             return None;
         }
         response.json::<DiagnosticsRoomDetail>().await.ok()
+    }
+}
+
+fn audio_source_active_speaker<'room>(
+    room: &'room DiagnosticsRoomDetail,
+    owner_user_id: &UserId,
+) -> Option<&'room DiagnosticsActiveSpeaker> {
+    room.sources
+        .iter()
+        .find(|source| {
+            source.owner_user_id == *owner_user_id
+                && source.stream_id == stream_id_for_stream_type(StreamType::Audio)
+        })?
+        .active_speaker
+        .as_ref()
+}
+
+fn video_subscription_selected_rid<'room>(
+    room: &'room DiagnosticsRoomDetail,
+    consumer_user_id: &UserId,
+    producer_user_id: &UserId,
+) -> Option<&'room str> {
+    let subscription = room
+        .users
+        .iter()
+        .find(|user| user.user_id == *consumer_user_id)?
+        .subscriptions
+        .iter()
+        .find(|subscription| {
+            subscription.producer_user_id == *producer_user_id
+                && subscription.stream_id == stream_id_for_stream_type(StreamType::Camera)
+        })?;
+
+    if let Some(selected_rid) = subscription.selection.selected_rid.as_deref() {
+        return Some(selected_rid);
+    }
+
+    let policy_role = policy_role_for_layout_role(subscription.layout_role?)?;
+    room.sources
+        .iter()
+        .find(|source| source.source_id == subscription.source_id)?
+        .encodings
+        .iter()
+        .find(|encoding| encoding.policy_role.as_deref() == Some(policy_role))?
+        .rid
+        .as_deref()
+}
+
+fn policy_role_for_layout_role(layout_role: DiagnosticsVideoLayoutRole) -> Option<&'static str> {
+    match layout_role {
+        DiagnosticsVideoLayoutRole::Pinned
+        | DiagnosticsVideoLayoutRole::Featured
+        | DiagnosticsVideoLayoutRole::ReadableDetail
+        | DiagnosticsVideoLayoutRole::ActiveSpeaker => Some(FEATURED_POLICY_ROLE),
+        DiagnosticsVideoLayoutRole::VisibleThumbnail => Some(THUMBNAIL_POLICY_ROLE),
+        DiagnosticsVideoLayoutRole::Hidden | DiagnosticsVideoLayoutRole::Overflow => None,
     }
 }
 
