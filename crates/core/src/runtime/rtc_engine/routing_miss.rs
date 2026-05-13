@@ -22,11 +22,15 @@
 //! by source address and limits varied probe traffic that would otherwise bypass
 //! the exact miss cache.
 
+mod fingerprint;
+
 use std::{
     collections::{HashMap, VecDeque},
     net::SocketAddr,
     time::{Duration, Instant},
 };
+
+use self::fingerprint::packet_fingerprint;
 
 /// Maximum exact negative route decisions retained by one packet-loop worker.
 ///
@@ -88,33 +92,6 @@ impl PacketLoopRoutingMissKey {
             packet_fingerprint: packet_fingerprint(packet),
         }
     }
-}
-
-/// Computes a small fingerprint for routing-miss prefiltering.
-///
-/// This is not a hash table security boundary. It samples length, prefix and
-/// suffix so common RTP or STUN variations usually differ before the exact byte
-/// comparison. Empty and short packets are still handled deterministically.
-///
-/// After playing with some benchmarks, it seems like SIMD can be use for some perf gains
-/// but ``std::simd`` is nightly so we probably need to use some arch flags
-fn packet_fingerprint(packet: &[u8]) -> u64 {
-    fn load_u64(bytes: &[u8]) -> u64 {
-        let mut buffer = [0_u8; 8];
-        for (slot, byte) in buffer.iter_mut().zip(bytes.iter().copied()) {
-            *slot = byte;
-        }
-        u64::from_le_bytes(buffer)
-    }
-
-    let len = u64::try_from(packet.len()).map_or(u64::MAX, |len| len);
-    let prefix = load_u64(packet);
-    let suffix = load_u64(
-        packet
-            .get(packet.len().saturating_sub(8)..)
-            .unwrap_or(packet),
-    );
-    len.rotate_left(17) ^ prefix.rotate_left(29) ^ suffix.rotate_left(43)
 }
 
 #[cfg(feature = "internal-benchmarks")]
