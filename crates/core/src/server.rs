@@ -100,7 +100,7 @@ pub mod transport {
         },
         transport::{
             ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
-            ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerActivity,
+            ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,
             ConsumerPacketGateUpdate, MediaPort, NegotiationPort, ObservabilityPort,
             ProducerActivity, ReceiverBandwidthSnapshot, SessionOffer, SessionPort,
             SessionUploadEncoding, SessionUploadSlot, SourcePacketGate, SourcePacketOperatingPoint,

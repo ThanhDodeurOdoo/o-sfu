@@ -17,7 +17,6 @@ use crate::{
     runtime::{
         media_transport::{SessionUploadSlot, TransportMediaId},
         rtc_engine::client_rtp_capabilities_from_answer,
-        source_model::UploadLayerPolicyRole,
     },
 };
 
@@ -132,20 +131,12 @@ async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
         Some(Bitrate::from_kbps(150))
     );
     assert_eq!(video_slot.simulcast_encodings[0].resolution_scale, Some(2));
-    assert_eq!(
-        video_slot.simulcast_encodings[0].policy_role,
-        Some(UploadLayerPolicyRole::Thumbnail)
-    );
     assert_eq!(video_slot.simulcast_encodings[1].rid, "hi");
     assert_eq!(
         video_slot.simulcast_encodings[1].max_bitrate,
         Some(Bitrate::from_mbps(4))
     );
     assert_eq!(video_slot.simulcast_encodings[1].resolution_scale, Some(1));
-    assert_eq!(
-        video_slot.simulcast_encodings[1].policy_role,
-        Some(UploadLayerPolicyRole::Featured)
-    );
 }
 
 #[tokio::test]
@@ -195,7 +186,11 @@ async fn rtc_initial_session_offer_advertises_h264_simulcast_when_vp8_is_disable
     );
     assert_eq!(video_slot.simulcast_encodings.len(), 2);
     assert_eq!(video_slot.simulcast_encodings[0].rid, "lo");
+    assert_eq!(video_slot.simulcast_encodings[0].max_bitrate, None);
+    assert_eq!(video_slot.simulcast_encodings[0].resolution_scale, None);
     assert_eq!(video_slot.simulcast_encodings[1].rid, "hi");
+    assert_eq!(video_slot.simulcast_encodings[1].max_bitrate, None);
+    assert_eq!(video_slot.simulcast_encodings[1].resolution_scale, None);
 }
 
 #[tokio::test]

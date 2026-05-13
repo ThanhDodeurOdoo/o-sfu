@@ -8,10 +8,7 @@ use o_sfu_rfc::webrtc::MediaKind;
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use thiserror::Error;
 
-use crate::{
-    Bitrate, ConnectionId, RoomInstanceId,
-    runtime::{UserId, source_model::UploadLayerPolicyRole},
-};
+use crate::{Bitrate, ConnectionId, RoomInstanceId, runtime::UserId};
 
 /// Room-scoped media-transport user identity.
 ///
@@ -85,7 +82,36 @@ pub enum TransportSessionHealth {
 /// pass instead of issuing a second transport lookup.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppliedSessionAnswer {
-    negotiated_producer_parameters: BTreeMap<TransportMediaId, RouterRtpParameters>,
+    negotiated_producers: BTreeMap<TransportMediaId, AppliedProducer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedProducer {
+    rtp_parameters: RouterRtpParameters,
+    upload_encodings: Vec<SessionUploadEncoding>,
+}
+
+impl AppliedProducer {
+    #[must_use]
+    pub fn new(
+        rtp_parameters: RouterRtpParameters,
+        upload_encodings: Vec<SessionUploadEncoding>,
+    ) -> Self {
+        Self {
+            rtp_parameters,
+            upload_encodings,
+        }
+    }
+
+    #[must_use]
+    pub const fn rtp_parameters(&self) -> &RouterRtpParameters {
+        &self.rtp_parameters
+    }
+
+    #[must_use]
+    pub fn upload_encodings(&self) -> &[SessionUploadEncoding] {
+        &self.upload_encodings
+    }
 }
 
 impl AppliedSessionAnswer {
@@ -96,7 +122,24 @@ impl AppliedSessionAnswer {
         >,
     ) -> Self {
         Self {
-            negotiated_producer_parameters: negotiated_producer_parameters.into_iter().collect(),
+            negotiated_producers: negotiated_producer_parameters
+                .into_iter()
+                .map(|(transport_media_id, rtp_parameters)| {
+                    (
+                        transport_media_id,
+                        AppliedProducer::new(rtp_parameters, Vec::new()),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    #[must_use]
+    pub fn from_negotiated_producer_details(
+        negotiated_producers: impl IntoIterator<Item = (TransportMediaId, AppliedProducer)>,
+    ) -> Self {
+        Self {
+            negotiated_producers: negotiated_producers.into_iter().collect(),
         }
     }
 
@@ -105,7 +148,19 @@ impl AppliedSessionAnswer {
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<&RouterRtpParameters> {
-        self.negotiated_producer_parameters.get(&transport_media_id)
+        self.negotiated_producers
+            .get(&transport_media_id)
+            .map(AppliedProducer::rtp_parameters)
+    }
+
+    #[must_use]
+    pub fn negotiated_producer_upload_encodings(
+        &self,
+        transport_media_id: TransportMediaId,
+    ) -> &[SessionUploadEncoding] {
+        self.negotiated_producers
+            .get(&transport_media_id)
+            .map_or(&[], AppliedProducer::upload_encodings)
     }
 }
 
@@ -433,5 +488,4 @@ pub struct SessionUploadEncoding {
     pub max_bitrate: Option<Bitrate>,
     pub resolution_scale: Option<u16>,
     pub max_framerate: Option<u16>,
-    pub policy_role: Option<UploadLayerPolicyRole>,
 }

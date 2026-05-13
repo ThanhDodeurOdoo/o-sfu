@@ -34,7 +34,7 @@ use crate::{
     Bitrate,
     runtime::{
         ConnectionId, UserId,
-        media_transport::TransportMediaId,
+        media_transport::{SessionUploadEncoding, TransportMediaId},
         source_model::{
             PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
             PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
@@ -91,6 +91,7 @@ pub(in crate::runtime::room) struct PreparedPublishedTrack {
     media_kind: RouterMediaKind,
     policy: SourcePolicy,
     consumable_rtp_parameters: RouterRtpParameters,
+    upload_encodings: Vec<SessionUploadEncoding>,
 }
 
 #[derive(Debug)]
@@ -354,17 +355,24 @@ impl RoomState {
             .encodings()
             .map(|binding| {
                 let encoding_id = SourceEncodingId::allocate(&mut self.next_source_encoding_id);
-                let upload_profile = upload_profile_for_rid(binding.rid());
+                let upload_profile =
+                    upload_profile_for_rid(&pending.upload_encodings, binding.rid());
+                let policy_role =
+                    upload_profile.map(|profile| upload_layer_policy_role_for_rank(profile.rank));
                 SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
                     encoding_id,
                     source_id,
                     rid: binding.rid().map(Rid::new),
                     primary_ssrc: binding.ssrc().map(Ssrc::new),
                     repair_ssrc: None,
-                    max_bitrate: binding.max_bitrate().map(Bitrate::from_bps),
-                    resolution_scale: upload_profile.map(|profile| profile.resolution_scale),
-                    max_framerate: upload_profile.and_then(|profile| profile.max_framerate),
-                    policy_role: upload_profile.map(|profile| profile.policy_role),
+                    max_bitrate: binding
+                        .max_bitrate()
+                        .map(Bitrate::from_bps)
+                        .or_else(|| upload_profile.and_then(MatchedUploadEncoding::max_bitrate)),
+                    resolution_scale: upload_profile
+                        .and_then(MatchedUploadEncoding::resolution_scale),
+                    max_framerate: upload_profile.and_then(MatchedUploadEncoding::max_framerate),
+                    policy_role,
                     max_temporal_layer_id: None,
                     negotiated_format: negotiated_format_for_binding(
                         &pending.consumable_rtp_parameters,
@@ -621,9 +629,21 @@ impl ValidatedPublishDescriptor {
     }
 
     /// Freezes the validated publish inputs together with router-ready RTP data.
+    #[allow(
+        dead_code,
+        reason = "room state tests use this helper when upload-profile metadata is irrelevant"
+    )]
     pub(in crate::runtime::room) fn into_prepared_track(
         self,
         consumable_rtp_parameters: RouterRtpParameters,
+    ) -> PreparedPublishedTrack {
+        self.into_prepared_track_with_upload_encodings(consumable_rtp_parameters, Vec::new())
+    }
+
+    pub(in crate::runtime::room) fn into_prepared_track_with_upload_encodings(
+        self,
+        consumable_rtp_parameters: RouterRtpParameters,
+        upload_encodings: Vec<SessionUploadEncoding>,
     ) -> PreparedPublishedTrack {
         PreparedPublishedTrack {
             owner_user_id: self.owner_user_id,
@@ -632,6 +652,7 @@ impl ValidatedPublishDescriptor {
             media_kind: self.media_kind,
             policy: self.policy,
             consumable_rtp_parameters,
+            upload_encodings,
         }
     }
 }
@@ -674,26 +695,43 @@ impl UnpublishTrackOutcome {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct UploadLayerProfile {
-    resolution_scale: u16,
-    max_framerate: Option<u16>,
-    policy_role: UploadLayerPolicyRole,
+fn upload_profile_for_rid<'a>(
+    upload_encodings: &'a [SessionUploadEncoding],
+    rid: Option<&str>,
+) -> Option<MatchedUploadEncoding<'a>> {
+    let rid = rid?;
+    upload_encodings
+        .iter()
+        .enumerate()
+        .find(|(_rank, encoding)| encoding.rid == rid)
+        .map(|(rank, encoding)| MatchedUploadEncoding { rank, encoding })
 }
 
-fn upload_profile_for_rid(rid: Option<&str>) -> Option<UploadLayerProfile> {
-    match rid {
-        Some("lo") => Some(UploadLayerProfile {
-            resolution_scale: 2,
-            max_framerate: None,
-            policy_role: UploadLayerPolicyRole::Thumbnail,
-        }),
-        Some("hi") => Some(UploadLayerProfile {
-            resolution_scale: 1,
-            max_framerate: None,
-            policy_role: UploadLayerPolicyRole::Featured,
-        }),
-        _ => None,
+#[derive(Debug, Clone, Copy)]
+struct MatchedUploadEncoding<'a> {
+    rank: usize,
+    encoding: &'a SessionUploadEncoding,
+}
+
+impl MatchedUploadEncoding<'_> {
+    const fn max_bitrate(self) -> Option<Bitrate> {
+        self.encoding.max_bitrate
+    }
+
+    const fn resolution_scale(self) -> Option<u16> {
+        self.encoding.resolution_scale
+    }
+
+    const fn max_framerate(self) -> Option<u16> {
+        self.encoding.max_framerate
+    }
+}
+
+const fn upload_layer_policy_role_for_rank(rank: usize) -> UploadLayerPolicyRole {
+    if rank == 0 {
+        UploadLayerPolicyRole::Thumbnail
+    } else {
+        UploadLayerPolicyRole::Featured
     }
 }
 

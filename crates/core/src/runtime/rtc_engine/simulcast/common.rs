@@ -6,10 +6,7 @@ use str0m::media::{
     Mid, Rid as Str0mRid, Simulcast as Str0mSimulcast, SimulcastLayer as Str0mSimulcastLayer,
 };
 
-use crate::{
-    Bitrate, VideoBitrateLimits,
-    runtime::{media_transport::SessionUploadEncoding, source_model::UploadLayerPolicyRole},
-};
+use crate::{Bitrate, VideoBitrateLimits};
 
 pub(super) const DEFAULT_LOW_RID: &str = "lo";
 pub(super) const DEFAULT_HIGH_RID: &str = "hi";
@@ -27,7 +24,6 @@ pub(super) struct SimulcastLayerSpec<'a> {
     pub(super) max_bitrate: Option<Bitrate>,
     pub(super) resolution_scale: u16,
     pub(super) max_framerate: Option<u16>,
-    pub(super) policy_role: UploadLayerPolicyRole,
 }
 
 pub(super) fn default_layer_specs(
@@ -40,14 +36,12 @@ pub(super) fn default_layer_specs(
             max_bitrate: Some(DEFAULT_LOW_MAX_BITRATE.min(high_max_bitrate)),
             resolution_scale: 2,
             max_framerate: None,
-            policy_role: UploadLayerPolicyRole::Thumbnail,
         },
         SimulcastLayerSpec {
             rid: DEFAULT_HIGH_RID,
             max_bitrate: Some(high_max_bitrate),
             resolution_scale: 1,
             max_framerate: None,
-            policy_role: UploadLayerPolicyRole::Featured,
         },
     ]
 }
@@ -70,21 +64,6 @@ pub(super) fn recv_simulcast_from_specs(layers: &[SimulcastLayerSpec<'_>]) -> St
     }
 }
 
-pub(super) fn upload_encodings_from_specs(
-    layers: &[SimulcastLayerSpec<'_>],
-) -> Vec<SessionUploadEncoding> {
-    layers
-        .iter()
-        .map(|layer| SessionUploadEncoding {
-            rid: layer.rid.to_owned(),
-            max_bitrate: layer.max_bitrate,
-            resolution_scale: Some(layer.resolution_scale),
-            max_framerate: layer.max_framerate,
-            policy_role: Some(layer.policy_role),
-        })
-        .collect()
-}
-
 pub(super) fn layers_from_rid_bindings(
     rtp_parameters: &RouterRtpParameters,
 ) -> Option<Vec<SimulcastLayerSpec<'_>>> {
@@ -105,7 +84,6 @@ pub(super) fn layers_from_rid_bindings(
             max_bitrate: encoding.max_bitrate().map(Bitrate::from_bps),
             resolution_scale: resolution_scale_for_index(layers.len()),
             max_framerate: None,
-            policy_role: policy_role_for_index(layers.len()),
         });
     }
     (layers.len() >= 2).then_some(layers)
@@ -173,12 +151,4 @@ fn parse_max_bitrate(restrictions: &str) -> Option<Bitrate> {
 
 fn resolution_scale_for_index(index: usize) -> u16 {
     if index == 0 { 2 } else { 1 }
-}
-
-fn policy_role_for_index(index: usize) -> UploadLayerPolicyRole {
-    if index == 0 {
-        UploadLayerPolicyRole::Thumbnail
-    } else {
-        UploadLayerPolicyRole::Featured
-    }
 }

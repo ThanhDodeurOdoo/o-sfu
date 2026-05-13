@@ -891,7 +891,7 @@ test("renegotiation configures RID simulcast before answering supported video pu
     );
 });
 
-test("renegotiation falls back to single encoding when the codec path is unsupported", async () => {
+test("renegotiation configures RID simulcast from server-owned upload slots", async () => {
     const { client, core, emitMessage, peerConnections, connectWithWelcome } =
         createSfuClientHarness();
 
@@ -907,9 +907,39 @@ test("renegotiation falls back to single encoding when the codec path is unsuppo
     const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "2");
     assert.ok(transceiver);
     assert.equal(transceiver.sender.track, track);
-    assert.deepEqual(transceiver.sender.setParametersCalls, []);
+    assert.deepEqual(transceiver.sender.setParametersCalls, [
+        {
+            encodings: [
+                {
+                    active: true,
+                    maxBitrate: 150000,
+                    rid: "lo",
+                    scaleResolutionDownBy: 2
+                },
+                {
+                    active: true,
+                    maxBitrate: 900000,
+                    rid: "hi",
+                    scaleResolutionDownBy: 1
+                }
+            ]
+        }
+    ]);
     assert.deepEqual(peerConnections[0].answerSnapshots.at(-1)[2].senderParameters, {
-        encodings: []
+        encodings: [
+            {
+                active: true,
+                maxBitrate: 150000,
+                rid: "lo",
+                scaleResolutionDownBy: 2
+            },
+            {
+                active: true,
+                maxBitrate: 900000,
+                rid: "hi",
+                scaleResolutionDownBy: 1
+            }
+        ]
     });
     assert.deepEqual(core.submittedAnswers.at(-1), {
         negotiationKind: "renegotiate",

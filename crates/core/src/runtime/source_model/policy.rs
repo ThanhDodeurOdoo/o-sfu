@@ -347,17 +347,17 @@ pub enum PolicyPauseReason {
     MissingUsableLayer,
 }
 
-/// Server-owned role for one advertised upload encoding.
+/// Server-owned role for one published source encoding.
 ///
 /// The role lets the budget planner understand what an encoding is meant for
-/// without reading product stream names. It is advertised to the browser as
-/// sender metadata and later copied into the source descriptor after negotiation.
+/// without reading product stream names. Room state assigns it when committing
+/// the source descriptor after transport negotiation.
 ///
 /// # Example situation
 ///
-/// A two-layer video offer can mark the high layer as [`Self::Featured`] and the
-/// low layer as [`Self::Thumbnail`]. The budget planner can then choose the low
-/// layer for a secondary tile without knowing why the product created the
+/// A two-layer video source can mark the high layer as [`Self::Featured`] and
+/// the low layer as [`Self::Thumbnail`]. The budget planner can then choose the
+/// low layer for a secondary tile without knowing why the product created the
 /// source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadLayerPolicyRole {

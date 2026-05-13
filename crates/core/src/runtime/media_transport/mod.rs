@@ -39,7 +39,7 @@ pub use runtime_adapter::{
 
 pub use crate::transport::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
-    ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerActivity,
+    ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,
     ConsumerPacketGateUpdate, MediaPort, ObservabilityPort, ProducerActivity,
     ReceiverBandwidthSnapshot, SessionOffer, SessionPort, SessionUploadEncoding, SessionUploadSlot,
     SourcePacketGate, SourcePacketOperatingPoint, SourcePolicySignal, TransportAdapterError,

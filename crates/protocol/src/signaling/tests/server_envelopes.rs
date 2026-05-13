@@ -210,14 +210,12 @@ fn protocol_server_offer_serializes_upload_slot_metadata() -> serde_json::Result
                         max_bitrate: Some(150_000),
                         resolution_scale: Some(2),
                         max_framerate: None,
-                        policy_role: Some(UploadLayerPolicyRole::Thumbnail),
                     },
                     NegotiationUploadEncoding {
                         rid: String::from("hi"),
                         max_bitrate: Some(900_000),
                         resolution_scale: Some(1),
                         max_framerate: None,
-                        policy_role: Some(UploadLayerPolicyRole::Featured),
                     },
                 ],
             }],
@@ -240,14 +238,12 @@ fn protocol_server_offer_serializes_upload_slot_metadata() -> serde_json::Result
                         {
                             "rid": "lo",
                             "maxBitrate": 150_000,
-                            "resolutionScale": 2,
-                            "policyRole": "thumbnail",
+                            "resolutionScale": 2
                         },
                         {
                             "rid": "hi",
                             "maxBitrate": 900_000,
-                            "resolutionScale": 1,
-                            "policyRole": "featured",
+                            "resolutionScale": 1
                         }
                     ]
                 }]

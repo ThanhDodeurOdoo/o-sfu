@@ -41,7 +41,7 @@ use crate::{
         diagnostics::DiagnosticsEventData,
         media_transport::{
             AppliedSessionAnswer, ConsumerActivity, MediaPort, ObservabilityPort, SessionPort,
-            TransportAdapterError, TransportMediaId,
+            SessionUploadEncoding, TransportAdapterError, TransportMediaId,
         },
         source_model::{SourcePublishIntent, UserStreamId},
         telemetry::schema::event as telemetry_event,
@@ -325,8 +325,17 @@ impl PendingPublishTransaction {
             );
             return None;
         };
-        self.commit_with_parameters(room, observability_port, media_port, negotiated_parameters)
-            .await
+        let upload_encodings = applied_answer
+            .negotiated_producer_upload_encodings(transport_media_id)
+            .to_vec();
+        self.commit_with_parameters_and_upload_encodings(
+            room,
+            observability_port,
+            media_port,
+            negotiated_parameters,
+            upload_encodings,
+        )
+        .await
     }
 
     /// Commits a staged publish when the caller already has router native
@@ -336,12 +345,34 @@ impl PendingPublishTransaction {
     /// resolved transport negotiation. It has the same ownership contract as
     /// `commit`: success transfers transport media to the live producer and
     /// rejection consumes the reservation through cleanup.
+    #[allow(
+        dead_code,
+        reason = "room media test harnesses use this narrow entrypoint to commit pre-negotiated RTP parameters"
+    )]
     pub(super) async fn commit_with_parameters(
         self,
         room: &Room,
         observability_port: &impl ObservabilityPort,
         media_port: &(impl MediaPort + SessionPort),
         consumable_rtp_parameters: RouterRtpParameters,
+    ) -> Option<UserStreamId> {
+        self.commit_with_parameters_and_upload_encodings(
+            room,
+            observability_port,
+            media_port,
+            consumable_rtp_parameters,
+            Vec::new(),
+        )
+        .await
+    }
+
+    async fn commit_with_parameters_and_upload_encodings(
+        self,
+        room: &Room,
+        observability_port: &impl ObservabilityPort,
+        media_port: &(impl MediaPort + SessionPort),
+        consumable_rtp_parameters: RouterRtpParameters,
+        upload_encodings: Vec<SessionUploadEncoding>,
     ) -> Option<UserStreamId> {
         let Self {
             descriptor,
@@ -361,7 +392,10 @@ impl PendingPublishTransaction {
             // user was replaced or lost publish readiness while transport
             // work was happening, `commit_published_track` rejects it and we
             // compensate by removing the reserved transport media below
-            let prepared_track = descriptor.into_prepared_track(consumable_rtp_parameters);
+            let prepared_track = descriptor.into_prepared_track_with_upload_encodings(
+                consumable_rtp_parameters,
+                upload_encodings,
+            );
             let consumer_targets = state.commit_published_track(prepared_track, transport_media_id);
             let media_counts_after = RoomMediaCounts {
                 publications: state.publication_count(),
