@@ -10,7 +10,7 @@ use std::{
 };
 
 use o_sfu_protocol::signaling::SessionDescriptionPayload;
-use o_sfu_rfc::rtp::CodecName;
+use o_sfu_rfc::{rtp::CodecName, webrtc};
 use o_sfu_router::MediaKind;
 use str0m::{
     Candidate, Event, IceConnectionState, Input, Output, Rtc,
@@ -48,7 +48,13 @@ pub struct FakeRtcPeer {
 #[derive(Clone)]
 struct ProtocolSendPath {
     mid: Mid,
-    rids: Vec<Rid>,
+    rids: Vec<ProtocolRid>,
+}
+
+#[derive(Clone)]
+struct ProtocolRid {
+    rid: Rid,
+    max_bitrate: Option<u64>,
 }
 
 impl FakeRtcPeer {
@@ -74,9 +80,10 @@ impl FakeRtcPeer {
         let offer = SdpOffer::from_sdp_string(offer_sdp).ok()?;
         self.send_paths = collect_protocol_send_paths(offer_sdp);
         let answer = self.rtc.sdp_api().accept_offer(offer).ok()?;
+        let answer_sdp = answer_with_simulcast_send_rids(&answer.to_sdp_string(), &self.send_paths);
         self.rtc.handle_input(Input::Timeout(Instant::now())).ok()?;
         Some(SessionDescriptionPayload {
-            sdp: answer.to_sdp_string(),
+            sdp: answer_sdp,
             upload_slots: Vec::new(),
         })
     }
@@ -201,7 +208,7 @@ impl FakeRtcPeer {
 impl ProtocolSendPath {
     fn accepts_rid(&self, rid: Option<Rid>) -> bool {
         rid.map_or(self.rids.is_empty(), |rid| {
-            !self.rids.is_empty() && self.rids.contains(&rid)
+            !self.rids.is_empty() && self.rids.iter().any(|candidate| candidate.rid == rid)
         })
     }
 }
@@ -373,19 +380,21 @@ fn collect_protocol_send_paths(offer_sdp: &str) -> BTreeMap<MediaKind, ProtocolS
     let mut current_rids = Vec::new();
     let mut current_direction = OfferDirection::Inactive;
 
-    let mut flush_section =
-        |kind: Option<MediaKind>, mid: Option<Mid>, rids: Vec<Rid>, direction: OfferDirection| {
-            let Some(kind) = kind else {
-                return;
-            };
-            if !direction.allows_local_send() {
-                return;
-            }
-            let Some(mid) = mid else {
-                return;
-            };
-            send_paths.insert(kind, ProtocolSendPath { mid, rids });
+    let mut flush_section = |kind: Option<MediaKind>,
+                             mid: Option<Mid>,
+                             rids: Vec<ProtocolRid>,
+                             direction: OfferDirection| {
+        let Some(kind) = kind else {
+            return;
         };
+        if !direction.allows_local_send() {
+            return;
+        }
+        let Some(mid) = mid else {
+            return;
+        };
+        send_paths.insert(kind, ProtocolSendPath { mid, rids });
+    };
 
     for raw_line in offer_sdp.lines() {
         let line = raw_line.trim_end_matches('\r');
@@ -409,7 +418,7 @@ fn collect_protocol_send_paths(offer_sdp: &str) -> BTreeMap<MediaKind, ProtocolS
             current_mid = Some(Mid::from(mid));
             continue;
         }
-        if let Some(rid) = parse_rid(line) {
+        if let Some(rid) = parse_recv_rid(line) {
             current_rids.push(rid);
             continue;
         }
@@ -447,10 +456,102 @@ fn parse_offer_media_kind(line: &str) -> Option<MediaKind> {
     }
 }
 
-fn parse_rid(line: &str) -> Option<Rid> {
-    let rest = line.strip_prefix("a=rid:")?;
-    let rid = rest.split_whitespace().next()?;
-    Some(Rid::from(rid))
+fn answer_with_simulcast_send_rids(
+    answer_sdp: &str,
+    send_paths: &BTreeMap<MediaKind, ProtocolSendPath>,
+) -> String {
+    send_paths
+        .values()
+        .filter(|send_path| !send_path.rids.is_empty())
+        .fold(answer_sdp.to_owned(), |answer_sdp, send_path| {
+            answer_with_mid_send_rids(&answer_sdp, send_path)
+        })
+}
+
+fn answer_with_mid_send_rids(answer_sdp: &str, send_path: &ProtocolSendPath) -> String {
+    let marker = format!(
+        "{}{}:{}\r\n",
+        webrtc::sdp::ATTRIBUTE_PREFIX,
+        webrtc::sdp::attribute::MID,
+        send_path.mid
+    );
+    let mut replacement = marker.clone();
+    for rid in &send_path.rids {
+        replacement.push_str(&sdp_rid_line(rid, webrtc::sdp::rid::DIRECTION_SEND));
+        replacement.push_str("\r\n");
+    }
+    replacement.push_str(&sdp_simulcast_line(
+        webrtc::sdp::simulcast::DIRECTION_SEND,
+        &send_path.rids,
+    ));
+    replacement.push_str("\r\n");
+    answer_sdp.replacen(&marker, &replacement, 1)
+}
+
+fn sdp_rid_line(rid: &ProtocolRid, direction: &str) -> String {
+    let mut line = format!(
+        "{}{}:{} {}",
+        webrtc::sdp::ATTRIBUTE_PREFIX,
+        webrtc::sdp::attribute::RID,
+        rid.rid,
+        direction
+    );
+    if let Some(max_bitrate) = rid.max_bitrate {
+        line.push(' ');
+        line.push_str(webrtc::sdp::rid_restriction::MAX_BITRATE);
+        line.push('=');
+        line.push_str(&max_bitrate.to_string());
+    }
+    line
+}
+
+fn sdp_simulcast_line(direction: &str, rids: &[ProtocolRid]) -> String {
+    let separator = webrtc::sdp::simulcast::STREAM_SEPARATOR.to_string();
+    let rid_values = rids
+        .iter()
+        .map(|rid| rid.rid.to_string())
+        .collect::<Vec<_>>()
+        .join(&separator);
+    format!(
+        "{}{}:{} {}",
+        webrtc::sdp::ATTRIBUTE_PREFIX,
+        webrtc::sdp::attribute::SIMULCAST,
+        direction,
+        rid_values
+    )
+}
+
+fn parse_recv_rid(line: &str) -> Option<ProtocolRid> {
+    let rid_prefix = format!(
+        "{}{}:",
+        webrtc::sdp::ATTRIBUTE_PREFIX,
+        webrtc::sdp::attribute::RID
+    );
+    let rest = line.trim_end_matches('\r').strip_prefix(&rid_prefix)?;
+    let mut parts = rest.splitn(3, ' ');
+    let rid = parts.next()?;
+    if !webrtc::sdp::rid::is_id(rid) {
+        return None;
+    }
+    let direction = parts.next()?;
+    if webrtc::RtpStreamDirection::parse(direction) != Some(webrtc::RtpStreamDirection::Recv) {
+        return None;
+    }
+    Some(ProtocolRid {
+        rid: Rid::from(rid),
+        max_bitrate: parts.next().and_then(parse_max_bitrate),
+    })
+}
+
+fn parse_max_bitrate(restrictions: &str) -> Option<u64> {
+    restrictions
+        .split(';')
+        .filter_map(|restriction| restriction.split_once('='))
+        .find_map(|(key, value)| {
+            (key.trim() == webrtc::sdp::rid_restriction::MAX_BITRATE)
+                .then(|| value.trim().parse::<u64>().ok())
+                .flatten()
+        })
 }
 
 #[derive(Clone, Copy, Default)]

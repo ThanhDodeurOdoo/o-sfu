@@ -16,6 +16,7 @@ const AUDIO_PACKET_PAYLOAD_LEN: usize = 160;
 const OPUS_FRAME_BODY_LEN: usize = AUDIO_PACKET_PAYLOAD_LEN - 1;
 pub const SYNTHETIC_OPUS_ONE_FRAME_TOC: u8 =
     (rtp::opus::toc_config::SILK_WIDEBAND_20_MS << 3) | rtp::opus::frame_count_code::ONE_FRAME;
+const SYNTHETIC_H264_FUA_IDR_CONTINUATION_HEADER: u8 = rtp::h264::NAL_UNIT_TYPE_IDR;
 
 const VIDEO_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 const VIDEO_TIMESTAMP_STEP: u32 = 2_970;
@@ -154,6 +155,17 @@ impl Default for SyntheticOpusStream {
     }
 }
 
+impl SyntheticOpusStream {
+    #[must_use]
+    pub fn with_audio_activity(audio_level_dbov: i8, voice_activity: bool) -> Self {
+        Self {
+            audio_level_dbov,
+            voice_activity,
+            ..Self::default()
+        }
+    }
+}
+
 impl SyntheticRtpStream for SyntheticOpusStream {
     fn stream_type(&self) -> StreamType {
         StreamType::Audio
@@ -197,6 +209,7 @@ pub struct SyntheticVp8Stream {
     tl0_pic_idx: u8,
     temporal_layer_id: u8,
     next_keyframe: bool,
+    keyframe_after_next: bool,
 }
 
 impl SyntheticVp8Stream {
@@ -213,12 +226,22 @@ impl SyntheticVp8Stream {
             tl0_pic_idx: 1,
             temporal_layer_id: frame_marking::BASE_LAYER_ID,
             next_keyframe: true,
+            keyframe_after_next: false,
         }
     }
 
     #[must_use]
     pub fn high() -> Self {
         Self::new(Some("hi".to_owned()))
+    }
+
+    #[must_use]
+    pub fn with_next_keyframe(next_keyframe: bool) -> Self {
+        Self {
+            next_keyframe,
+            keyframe_after_next: true,
+            ..Self::high()
+        }
     }
 }
 
@@ -234,7 +257,7 @@ impl SyntheticRtpStream for SyntheticVp8Stream {
     fn next_packet(&mut self, clock: &mut FakeClock) -> SyntheticRtpPacket {
         let timing = self.timing.next(clock);
         let keyframe = self.next_keyframe;
-        self.next_keyframe = false;
+        self.next_keyframe = self.keyframe_after_next;
         let body = deterministic_payload(
             VIDEO_PAYLOAD_BODY_LEN,
             self.timing.payload_seed,
@@ -272,6 +295,8 @@ impl SyntheticRtpStream for SyntheticVp8Stream {
 pub struct SyntheticH264Stream {
     timing: SyntheticTiming,
     rid: Option<String>,
+    next_idr: bool,
+    idr_after_next: bool,
 }
 
 impl SyntheticH264Stream {
@@ -284,12 +309,23 @@ impl SyntheticH264Stream {
                 H264_PAYLOAD_SEED,
             ),
             rid,
+            next_idr: true,
+            idr_after_next: false,
         }
     }
 
     #[must_use]
     pub fn high() -> Self {
         Self::new(Some("hi".to_owned()))
+    }
+
+    #[must_use]
+    pub fn with_idr(next_idr: bool) -> Self {
+        Self {
+            next_idr,
+            idr_after_next: true,
+            ..Self::high()
+        }
     }
 }
 
@@ -304,6 +340,8 @@ impl SyntheticRtpStream for SyntheticH264Stream {
 
     fn next_packet(&mut self, clock: &mut FakeClock) -> SyntheticRtpPacket {
         let timing = self.timing.next(clock);
+        let idr = self.next_idr;
+        self.next_idr = self.idr_after_next;
         let body = deterministic_payload(
             VIDEO_PAYLOAD_BODY_LEN,
             self.timing.payload_seed,
@@ -319,10 +357,10 @@ impl SyntheticRtpStream for SyntheticH264Stream {
             media_kind: MediaKind::Video,
             rid: self.rid.clone(),
             extension_values: ExtensionValues {
-                frame_mark: Some(frame_marking_value(frame_marking::BASE_LAYER_ID, true)),
+                frame_mark: Some(frame_marking_value(frame_marking::BASE_LAYER_ID, idr)),
                 ..ExtensionValues::default()
             },
-            payload: synthetic_h264_single_nal_unit_idr_payload(&body),
+            payload: synthetic_h264_payload(&body, idr),
         }
     }
 }
@@ -502,6 +540,21 @@ fn synthetic_h264_single_nal_unit_idr_payload(nal_body: &[u8]) -> Vec<u8> {
     payload
 }
 
+fn synthetic_h264_payload(nal_body: &[u8], idr: bool) -> Vec<u8> {
+    if idr {
+        return synthetic_h264_single_nal_unit_idr_payload(nal_body);
+    }
+    synthetic_h264_fua_idr_continuation_payload(nal_body)
+}
+
+fn synthetic_h264_fua_idr_continuation_payload(fragment_body: &[u8]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(fragment_body.len() + 2);
+    payload.push(rtp::h264::NAL_REF_IDC_HIGH | rtp::h264::NAL_UNIT_TYPE_FU_A);
+    payload.push(SYNTHETIC_H264_FUA_IDR_CONTINUATION_HEADER);
+    payload.extend_from_slice(fragment_body);
+    payload
+}
+
 #[cfg(test)]
 fn synthetic_h264_stap_a_payload(nal_units: &[&[u8]]) -> Option<Vec<u8>> {
     let mut payload = Vec::new();
@@ -542,6 +595,16 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_opus_audio_activity_builder_sets_extensions() {
+        let mut clock = FakeClock::default();
+        let mut stream = SyntheticOpusStream::with_audio_activity(-12, false);
+        let packet = stream.next_packet(&mut clock);
+
+        assert_eq!(packet.extension_values.audio_level, Some(-12));
+        assert_eq!(packet.extension_values.voice_activity, Some(false));
+    }
+
+    #[test]
     fn synthetic_vp8_payload_round_trips_descriptor_fields() {
         let payload =
             synthetic_vp8_payload_with_long_picture_id(0x1234, 42, 2, true, &[0xaa, 0xbb]);
@@ -562,6 +625,17 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_vp8_builder_can_start_with_interframe_then_keyframe() {
+        let mut clock = FakeClock::default();
+        let mut stream = SyntheticVp8Stream::with_next_keyframe(false);
+        let interframe = stream.next_packet(&mut clock);
+        let keyframe = stream.next_packet(&mut clock);
+
+        assert!(!vp8::payload_starts_keyframe(&interframe.payload));
+        assert!(vp8::payload_starts_keyframe(&keyframe.payload));
+    }
+
+    #[test]
     fn synthetic_h264_idr_payloads_are_detected() {
         let single = synthetic_h264_single_nal_unit_idr_payload(&[0x01, 0x02]);
         assert!(h264::payload_starts_idr(&single));
@@ -575,5 +649,16 @@ mod tests {
 
         let fua = synthetic_h264_fua_idr_start_payload(&[0x03, 0x04]);
         assert!(h264::payload_starts_idr(&fua));
+    }
+
+    #[test]
+    fn synthetic_h264_builder_can_start_without_idr_then_emit_idr() {
+        let mut clock = FakeClock::default();
+        let mut stream = SyntheticH264Stream::with_idr(false);
+        let non_idr = stream.next_packet(&mut clock);
+        let idr = stream.next_packet(&mut clock);
+
+        assert!(!h264::payload_starts_idr(&non_idr.payload));
+        assert!(h264::payload_starts_idr(&idr.payload));
     }
 }
