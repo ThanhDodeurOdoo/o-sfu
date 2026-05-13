@@ -151,7 +151,7 @@ impl RoomState {
             active_consumer_count: self.consumer_index.len(),
             pending_consumer_count: self.pending_consumer_bootstraps.len(),
             max_source_fanout,
-            egress_bitrate_bps: transport_pressure.egress_bitrate_bps,
+            egress_bitrate: transport_pressure.egress_bitrate,
             packet_loop_lag_ms: transport_pressure.packet_loop_lag_ms,
             command_backlog_depth: transport_pressure.command_backlog_depth,
             relay_mailbox_depth: transport_pressure.relay_mailbox_depth,

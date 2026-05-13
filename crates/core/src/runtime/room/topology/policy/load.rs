@@ -1,5 +1,5 @@
 use super::{CleanupInput, HomePlacementDecision, HomePlacementInput, TopologyPressureSnapshot};
-use crate::LocalSpilloverPolicy;
+use crate::{Bitrate, LocalSpilloverPolicy};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::runtime::room) enum LoadPressureReason {
@@ -126,8 +126,8 @@ fn pressure_reason(
     if pressure.max_source_fanout > policy.max_fanout_per_source() {
         return Some(LoadPressureReason::SourceFanout);
     }
-    if policy.egress_bitrate_threshold_bps() > 0
-        && pressure.egress_bitrate_bps >= policy.egress_bitrate_threshold_bps()
+    if policy.egress_bitrate_threshold() > Bitrate::zero()
+        && pressure.egress_bitrate >= policy.egress_bitrate_threshold()
     {
         return Some(LoadPressureReason::EgressBitrate);
     }

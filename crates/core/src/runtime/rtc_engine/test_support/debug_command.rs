@@ -4,6 +4,8 @@ use std::{net::SocketAddr, time::Instant};
 use str0m::media::Mid;
 use tokio::sync::oneshot;
 
+#[cfg(test)]
+use crate::Bitrate;
 use crate::runtime::media_transport::{TransportMediaId, TransportSessionKey};
 
 pub(in crate::runtime::rtc_engine) enum DebugRtcWorkerCommand {
@@ -40,12 +42,12 @@ pub(in crate::runtime::rtc_engine) enum DebugRtcWorkerCommand {
     #[cfg(test)]
     SessionMaxBitrateIn {
         session_key: TransportSessionKey,
-        response: oneshot::Sender<Option<u64>>,
+        response: oneshot::Sender<Option<Bitrate>>,
     },
     #[cfg(test)]
     SessionMaxBitrateOut {
         session_key: TransportSessionKey,
-        response: oneshot::Sender<Option<u64>>,
+        response: oneshot::Sender<Option<Bitrate>>,
     },
     #[cfg(test)]
     RouteEntry {

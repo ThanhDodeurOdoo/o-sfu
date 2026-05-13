@@ -2,6 +2,8 @@ use std::net::IpAddr;
 
 use bitflags::bitflags;
 
+use crate::Bitrate;
+
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct MediaCodecSet: u16 {
@@ -75,8 +77,8 @@ pub struct LocalSpilloverPolicy {
     max_active_consumers_per_router: usize,
     /// Receiver fan-out allowed for one published source before it is pressured.
     max_fanout_per_source: usize,
-    /// Aggregate transport egress bitrate threshold, in bits per second.
-    egress_bitrate_threshold_bps: u64,
+    /// Aggregate transport egress bitrate threshold.
+    egress_bitrate_threshold: Bitrate,
     /// Packet-loop scheduling lag threshold, in milliseconds.
     packet_loop_lag_threshold_ms: u64,
     /// Queued transport command depth that indicates control-path pressure.
@@ -101,7 +103,7 @@ pub struct LocalSpilloverPolicyParts {
     pub min_receiver_count: usize,
     pub max_active_consumers_per_router: usize,
     pub max_fanout_per_source: usize,
-    pub egress_bitrate_threshold_bps: u64,
+    pub egress_bitrate_threshold: Bitrate,
     pub packet_loop_lag_threshold_ms: u64,
     pub command_backlog_threshold: usize,
     pub relay_mailbox_depth_threshold: usize,
@@ -253,7 +255,7 @@ impl LocalSpilloverPolicy {
     pub const DEFAULT_MIN_RECEIVER_COUNT: usize = 16;
     pub const DEFAULT_MAX_ACTIVE_CONSUMERS_PER_ROUTER: usize = 64;
     pub const DEFAULT_MAX_FANOUT_PER_SOURCE: usize = 48;
-    pub const DEFAULT_EGRESS_BITRATE_THRESHOLD_BPS: u64 = 750_000_000;
+    pub const DEFAULT_EGRESS_BITRATE_THRESHOLD: Bitrate = Bitrate::from_mbps(750);
     pub const DEFAULT_PACKET_LOOP_LAG_THRESHOLD_MS: u64 = 20;
     pub const DEFAULT_COMMAND_BACKLOG_THRESHOLD: usize = 128;
     pub const DEFAULT_RELAY_MAILBOX_DEPTH_THRESHOLD: usize = 128;
@@ -295,7 +297,7 @@ impl LocalSpilloverPolicy {
             min_receiver_count: parts.min_receiver_count,
             max_active_consumers_per_router: parts.max_active_consumers_per_router,
             max_fanout_per_source: parts.max_fanout_per_source,
-            egress_bitrate_threshold_bps: parts.egress_bitrate_threshold_bps,
+            egress_bitrate_threshold: parts.egress_bitrate_threshold,
             packet_loop_lag_threshold_ms: parts.packet_loop_lag_threshold_ms,
             command_backlog_threshold: parts.command_backlog_threshold,
             relay_mailbox_depth_threshold: parts.relay_mailbox_depth_threshold,
@@ -312,7 +314,7 @@ impl LocalSpilloverPolicy {
             min_receiver_count: Self::DEFAULT_MIN_RECEIVER_COUNT,
             max_active_consumers_per_router: Self::DEFAULT_MAX_ACTIVE_CONSUMERS_PER_ROUTER,
             max_fanout_per_source: Self::DEFAULT_MAX_FANOUT_PER_SOURCE,
-            egress_bitrate_threshold_bps: Self::DEFAULT_EGRESS_BITRATE_THRESHOLD_BPS,
+            egress_bitrate_threshold: Self::DEFAULT_EGRESS_BITRATE_THRESHOLD,
             packet_loop_lag_threshold_ms: Self::DEFAULT_PACKET_LOOP_LAG_THRESHOLD_MS,
             command_backlog_threshold: Self::DEFAULT_COMMAND_BACKLOG_THRESHOLD,
             relay_mailbox_depth_threshold: Self::DEFAULT_RELAY_MAILBOX_DEPTH_THRESHOLD,
@@ -338,8 +340,8 @@ impl LocalSpilloverPolicy {
     }
 
     #[must_use]
-    pub const fn egress_bitrate_threshold_bps(self) -> u64 {
-        self.egress_bitrate_threshold_bps
+    pub const fn egress_bitrate_threshold(self) -> Bitrate {
+        self.egress_bitrate_threshold
     }
 
     #[must_use]
@@ -382,8 +384,7 @@ impl LocalSpilloverPolicyParts {
             max_active_consumers_per_router:
                 LocalSpilloverPolicy::DEFAULT_MAX_ACTIVE_CONSUMERS_PER_ROUTER,
             max_fanout_per_source: LocalSpilloverPolicy::DEFAULT_MAX_FANOUT_PER_SOURCE,
-            egress_bitrate_threshold_bps:
-                LocalSpilloverPolicy::DEFAULT_EGRESS_BITRATE_THRESHOLD_BPS,
+            egress_bitrate_threshold: LocalSpilloverPolicy::DEFAULT_EGRESS_BITRATE_THRESHOLD,
             packet_loop_lag_threshold_ms:
                 LocalSpilloverPolicy::DEFAULT_PACKET_LOOP_LAG_THRESHOLD_MS,
             command_backlog_threshold: LocalSpilloverPolicy::DEFAULT_COMMAND_BACKLOG_THRESHOLD,
@@ -410,7 +411,9 @@ impl Default for LocalSpilloverPolicyParts {
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts};
+    use super::{
+        Bitrate, LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts,
+    };
 
     #[test]
     fn local_spillover_policy_rejects_invalid_required_fields() {
@@ -474,7 +477,7 @@ mod tests {
     #[test]
     fn local_spillover_policy_accepts_disabled_transport_pressure_signals() {
         let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
-            egress_bitrate_threshold_bps: 0,
+            egress_bitrate_threshold: Bitrate::zero(),
             packet_loop_lag_threshold_ms: 0,
             command_backlog_threshold: 0,
             relay_mailbox_depth_threshold: 0,
@@ -486,7 +489,7 @@ mod tests {
         let Ok(policy) = policy else {
             return;
         };
-        assert_eq!(policy.egress_bitrate_threshold_bps(), 0);
+        assert_eq!(policy.egress_bitrate_threshold(), Bitrate::zero());
         assert_eq!(policy.packet_loop_lag_threshold_ms(), 0);
         assert_eq!(policy.command_backlog_threshold(), 0);
         assert_eq!(policy.relay_mailbox_depth_threshold(), 0);
@@ -570,54 +573,52 @@ impl RtcPortRange {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionBitrateLimits {
-    max_bitrate_in_bps: u64,
-    max_bitrate_out_bps: u64,
+    max_bitrate_in: Bitrate,
+    max_bitrate_out: Bitrate,
 }
 
 impl SessionBitrateLimits {
     #[must_use]
-    pub const fn new(max_bitrate_in_bps: u64, max_bitrate_out_bps: u64) -> Self {
+    pub const fn new(max_bitrate_in: Bitrate, max_bitrate_out: Bitrate) -> Self {
         Self {
-            max_bitrate_in_bps,
-            max_bitrate_out_bps,
+            max_bitrate_in,
+            max_bitrate_out,
         }
     }
 
     #[must_use]
-    pub const fn max_bitrate_in_bps(&self) -> u64 {
-        self.max_bitrate_in_bps
+    pub const fn max_bitrate_in(self) -> Bitrate {
+        self.max_bitrate_in
     }
 
     #[must_use]
-    pub const fn max_bitrate_out_bps(&self) -> u64 {
-        self.max_bitrate_out_bps
+    pub const fn max_bitrate_out(self) -> Bitrate {
+        self.max_bitrate_out
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoBitrateLimits {
-    max_video_bitrate_bps: u64,
+    max_video_bitrate: Bitrate,
 }
 
 impl VideoBitrateLimits {
-    pub const DEFAULT_MAX_VIDEO_BITRATE_BPS: u64 = 4_000_000;
+    pub const DEFAULT_MAX_VIDEO_BITRATE: Bitrate = Bitrate::from_mbps(4);
 
     #[must_use]
-    pub const fn new(max_video_bitrate_bps: u64) -> Self {
-        Self {
-            max_video_bitrate_bps,
-        }
+    pub const fn new(max_video_bitrate: Bitrate) -> Self {
+        Self { max_video_bitrate }
     }
 
     #[must_use]
-    pub const fn max_video_bitrate_bps(self) -> u64 {
-        self.max_video_bitrate_bps
+    pub const fn max_video_bitrate(self) -> Bitrate {
+        self.max_video_bitrate
     }
 }
 
 impl Default for VideoBitrateLimits {
     fn default() -> Self {
-        Self::new(Self::DEFAULT_MAX_VIDEO_BITRATE_BPS)
+        Self::new(Self::DEFAULT_MAX_VIDEO_BITRATE)
     }
 }
 

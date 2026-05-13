@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use o_sfu_router::MediaCapabilities;
 
 use crate::{
-    ConnectionId, CoreOptions, MediaSessionContext, PublicationActivity,
+    Bitrate, ConnectionId, CoreOptions, MediaSessionContext, PublicationActivity,
     PublicationActivityOutcome, PublishStageOutcome, RollbackStagedPublishOutcome,
     SessionNegotiationOutcome, SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
     runtime::{
@@ -93,7 +93,7 @@ pub struct UploadEncoding {
     /// RID the browser should use for this encoding layer.
     pub rid: String,
     /// Sender-side bitrate ceiling for this layer when the offer declares one.
-    pub max_bitrate: Option<u64>,
+    pub max_bitrate: Option<Bitrate>,
     /// Sender-side resolution downscale for this layer.
     pub resolution_scale: Option<u16>,
     /// Optional sender-side frame-rate ceiling for this layer.

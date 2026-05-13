@@ -11,7 +11,7 @@ use str0m::{Candidate, Rtc, change::SdpOffer};
 
 use super::{api::NegotiatedPublish, fixtures::*};
 use crate::{
-    MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
+    Bitrate, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
     runtime::{
         diagnostics::{
             DiagnosticsPolicyPauseReason, DiagnosticsStore, DiagnosticsVideoLayoutRole,
@@ -2546,7 +2546,10 @@ fn build_real_rtc_media_transport() -> MediaTransport {
     match RtcTransport::builder()
         .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
+            bitrate_limits: SessionBitrateLimits::new(
+                Bitrate::from_mbps(8),
+                Bitrate::from_mbps(10),
+            ),
             video_bitrate_limits: crate::VideoBitrateLimits::default(),
             rtc_port_range: RtcPortRange::new(46_200, 46_299),
             codec_flags: MediaCodecFlags::default(),

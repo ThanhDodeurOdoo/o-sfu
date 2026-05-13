@@ -14,7 +14,7 @@ use tokio::time::timeout;
 
 use super::{MediaTransport, RtcTransport, RtcTransportBuildError};
 use crate::{
-    MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
+    Bitrate, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
     runtime::{
         ConnectionId, RoomInstanceId, UserId,
         diagnostics::DiagnosticsStore,
@@ -281,7 +281,10 @@ fn test_rtc_engine(worker_count: usize, rtc_port_range: RtcPortRange) -> MediaTr
     match RtcTransport::builder()
         .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
+            bitrate_limits: SessionBitrateLimits::new(
+                Bitrate::from_mbps(8),
+                Bitrate::from_mbps(10),
+            ),
             video_bitrate_limits: crate::VideoBitrateLimits::default(),
             rtc_port_range,
             codec_flags: MediaCodecFlags::default(),
@@ -313,7 +316,10 @@ fn rtc_transport_builder_uses_one_worker_by_default() {
     let result = RtcTransport::builder()
         .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
+            bitrate_limits: SessionBitrateLimits::new(
+                Bitrate::from_mbps(8),
+                Bitrate::from_mbps(10),
+            ),
             video_bitrate_limits: crate::VideoBitrateLimits::default(),
             rtc_port_range: RtcPortRange::new(46_200, 46_200),
             codec_flags: MediaCodecFlags::default(),
@@ -334,7 +340,10 @@ fn rtc_transport_builder_rejects_invalid_worker_count() {
     let result = RtcTransport::builder()
         .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
+            bitrate_limits: SessionBitrateLimits::new(
+                Bitrate::from_mbps(8),
+                Bitrate::from_mbps(10),
+            ),
             video_bitrate_limits: crate::VideoBitrateLimits::default(),
             rtc_port_range: RtcPortRange::new(46_210, 46_211),
             codec_flags: MediaCodecFlags::default(),
@@ -359,7 +368,10 @@ fn rtc_transport_builder_rejects_invalid_port_split() {
     let result = RtcTransport::builder()
         .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
+            bitrate_limits: SessionBitrateLimits::new(
+                Bitrate::from_mbps(8),
+                Bitrate::from_mbps(10),
+            ),
             video_bitrate_limits: crate::VideoBitrateLimits::default(),
             rtc_port_range: RtcPortRange::new(46_220, 46_221),
             codec_flags: MediaCodecFlags::default(),

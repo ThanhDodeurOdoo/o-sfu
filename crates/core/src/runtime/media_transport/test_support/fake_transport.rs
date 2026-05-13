@@ -13,6 +13,7 @@ use tokio::time::sleep;
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::RoomInstanceId;
 use crate::{
+    Bitrate,
     runtime::{
         UserId,
         media_transport::{
@@ -92,7 +93,7 @@ struct FakeMediaTransportState {
     blocked_session_closes: BTreeSet<TransportSessionKey>,
     negotiated_producer_parameters: BTreeMap<TransportMediaId, RouterRtpParameters>,
     active_speaker_sources: Vec<ActiveSpeakerSource>,
-    receiver_bandwidth_estimates: BTreeMap<UserId, u64>,
+    receiver_bandwidth_estimates: BTreeMap<UserId, Bitrate>,
     placement_pressure: TransportPlacementPressureSnapshot,
     delays: FakeMediaTransportDelays,
 }
@@ -276,7 +277,7 @@ impl FakeMediaTransport {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub fn set_receiver_bandwidth_estimate(&self, user_id: UserId, estimate_bps: u64) {
+    pub fn set_receiver_bandwidth_estimate(&self, user_id: UserId, estimate: Bitrate) {
         let dirty_room_instance_ids = self.mutate_state(|state| {
             let dirty_room_instance_ids = state
                 .media_owners
@@ -285,9 +286,7 @@ impl FakeMediaTransport {
                     (session_key.user_id() == &user_id).then_some(session_key.room_instance_id())
                 })
                 .collect::<Vec<_>>();
-            state
-                .receiver_bandwidth_estimates
-                .insert(user_id, estimate_bps);
+            state.receiver_bandwidth_estimates.insert(user_id, estimate);
             dirty_room_instance_ids
         });
         for room_instance_id in dirty_room_instance_ids {
@@ -346,7 +345,7 @@ impl FakeMediaTransport {
                         .receiver_bandwidth_estimates
                         .get(session_key.user_id())
                         .copied()
-                        .map(|estimate_bps| (session_key.clone(), estimate_bps))
+                        .map(|estimate| (session_key.clone(), estimate))
                 })
                 .collect(),
         })

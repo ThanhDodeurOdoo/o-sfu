@@ -2,6 +2,7 @@ use super::{
     PolicyPauseReason, ReceiverVideoBudgetDiagnostics, SourceEncodingId, SourceOperatingPoint,
     SourceRoomPolicySelector,
 };
+use crate::Bitrate;
 
 /// Resolved packet-selection command for one consumer/source route.
 ///
@@ -92,7 +93,7 @@ impl ConsumerSourceSelection {
             active,
             selector: SourceSelector::Open,
             policy_pause_reason: None,
-            budget: ReceiverVideoBudgetDiagnostics::new(None, None, 0, 0, None),
+            budget: ReceiverVideoBudgetDiagnostics::new(None, None, 0, Bitrate::zero(), None),
             pressure_observations: 0,
             upgrade_observations: 0,
         }

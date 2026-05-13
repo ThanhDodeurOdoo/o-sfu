@@ -127,7 +127,10 @@ async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
     assert_eq!(video_slot.codecs, vec![String::from("VP8")]);
     assert_eq!(video_slot.simulcast_encodings.len(), 2);
     assert_eq!(video_slot.simulcast_encodings[0].rid, "lo");
-    assert_eq!(video_slot.simulcast_encodings[0].max_bitrate, Some(150_000));
+    assert_eq!(
+        video_slot.simulcast_encodings[0].max_bitrate,
+        Some(Bitrate::from_kbps(150))
+    );
     assert_eq!(video_slot.simulcast_encodings[0].resolution_scale, Some(2));
     assert_eq!(
         video_slot.simulcast_encodings[0].policy_role,
@@ -136,7 +139,7 @@ async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
     assert_eq!(video_slot.simulcast_encodings[1].rid, "hi");
     assert_eq!(
         video_slot.simulcast_encodings[1].max_bitrate,
-        Some(4_000_000)
+        Some(Bitrate::from_mbps(4))
     );
     assert_eq!(video_slot.simulcast_encodings[1].resolution_scale, Some(1));
     assert_eq!(
@@ -281,7 +284,8 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
 
 #[tokio::test]
 async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
-    let adapter = rtc_engine_with_bitrate_limits(2_222_222, 3_333_333);
+    let adapter =
+        rtc_engine_with_bitrate_limits(Bitrate::from_bps(2_222_222), Bitrate::from_bps(3_333_333));
     let session_key = transport_key(1, 135, UserId::Integer(135));
 
     let mut remote = build_remote_rtc(55_135);
@@ -405,7 +409,8 @@ async fn rtc_initial_session_offer_rejects_overlapping_pending_offer() {
 
 #[tokio::test]
 async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
-    let adapter = rtc_engine_with_bitrate_limits(2_222_222, 3_333_333);
+    let adapter =
+        rtc_engine_with_bitrate_limits(Bitrate::from_bps(2_222_222), Bitrate::from_bps(3_333_333));
     let session_key = transport_key(1, 45, UserId::Integer(45));
 
     let mut remote = build_remote_rtc(55_006);
@@ -454,7 +459,7 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
     );
     assert_eq!(
         session_max_bitrate_in(&adapter, &session_key).await,
-        Some(2_222_222),
+        Some(Bitrate::from_bps(2_222_222)),
         "renegotiated recv media should reapply the incoming bitrate cap after the answer lands"
     );
 
@@ -1208,8 +1213,8 @@ fn assert_default_vp8_upload_slot(upload_slots: &[SessionUploadSlot]) {
             ))
             .collect::<Vec<_>>(),
         vec![
-            ("lo", Some(150_000), Some(2)),
-            ("hi", Some(4_000_000), Some(1))
+            ("lo", Some(Bitrate::from_kbps(150)), Some(2)),
+            ("hi", Some(Bitrate::from_mbps(4)), Some(1))
         ]
     );
 }

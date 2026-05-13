@@ -4,6 +4,7 @@ use super::{
     PublishedSourceId, PublishedSourceOwner, SourceEncodingId, SourceModelError, SourcePolicy,
     SourceTemporalLayerId, UploadLayerPolicyRole, UserStreamId,
 };
+use crate::Bitrate;
 
 /// Authoritative room-domain description of one published source.
 ///
@@ -162,7 +163,7 @@ fn selectable_encoding_indices(encodings: &[SourceEncodingDescriptor]) -> Vec<us
             encodings
                 .get(*index)
                 .and_then(SourceEncodingDescriptor::max_bitrate)
-                .unwrap_or(u64::MAX)
+                .unwrap_or(Bitrate::from_bps(u64::MAX))
         });
     }
     indices
@@ -210,7 +211,7 @@ pub struct SourceEncodingDescriptor {
     /// Repair RTP SSRC such as RTX when known.
     repair_ssrc: Option<Ssrc>,
     /// Sender-declared bitrate ceiling for this encoding.
-    max_bitrate: Option<u64>,
+    max_bitrate: Option<Bitrate>,
     /// Sender-side resolution downscale advertised for this encoding.
     resolution_scale: Option<u16>,
     /// Sender-side frame-rate ceiling advertised for this encoding.
@@ -272,7 +273,7 @@ impl SourceEncodingDescriptor {
     }
 
     #[must_use]
-    pub const fn max_bitrate(&self) -> Option<u64> {
+    pub const fn max_bitrate(&self) -> Option<Bitrate> {
         self.max_bitrate
     }
 
@@ -320,7 +321,7 @@ pub struct SourceEncodingDescriptorParts {
     /// Repair RTP SSRC when available.
     pub repair_ssrc: Option<Ssrc>,
     /// Optional bitrate ceiling advertised for this encoding.
-    pub max_bitrate: Option<u64>,
+    pub max_bitrate: Option<Bitrate>,
     /// Optional resolution downscale advertised for this encoding.
     pub resolution_scale: Option<u16>,
     /// Optional frame-rate ceiling advertised for this encoding.

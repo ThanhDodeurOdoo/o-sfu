@@ -43,12 +43,15 @@ use super::{
     },
     facade::{RtcTransportObservabilityFacade, RtcTransportShard, RtcWorkerHandle},
 };
-use crate::runtime::{
-    RoomInstanceId,
-    media_transport::{
-        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ReceiverBandwidthSnapshot,
-        TransportAdapterError, TransportBitrateSnapshot, TransportPlacementPressureSnapshot,
-        TransportSessionKey,
+use crate::{
+    Bitrate,
+    runtime::{
+        RoomInstanceId,
+        media_transport::{
+            ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ReceiverBandwidthSnapshot,
+            TransportAdapterError, TransportBitrateSnapshot, TransportPlacementPressureSnapshot,
+            TransportSessionKey,
+        },
     },
 };
 
@@ -143,8 +146,8 @@ impl RtcTransportShard {
         info!(
             relay_target_id = ?self.relay_target_id,
             public_ip = %self.public_ip,
-            max_bitrate_in_bps = self.max_bitrate_in_bps,
-            max_bitrate_out_bps = self.max_bitrate_out_bps,
+            max_bitrate_in_bps = self.max_bitrate_in.as_bps(),
+            max_bitrate_out_bps = self.max_bitrate_out.as_bps(),
             rtc_port_range_min = self.rtc_port_range.min(),
             rtc_port_range_max = self.rtc_port_range.max(),
             "booted rtc packet loop shard"
@@ -152,8 +155,8 @@ impl RtcTransportShard {
         current_runtime.spawn(packet_loop::run_packet_loop(
             PacketLoopConfig {
                 public_ip: self.public_ip,
-                max_bitrate_in_bps: self.max_bitrate_in_bps,
-                max_bitrate_out_bps: self.max_bitrate_out_bps,
+                max_bitrate_in: self.max_bitrate_in,
+                max_bitrate_out: self.max_bitrate_out,
                 video_bitrate_limits: self.video_bitrate_limits,
                 rtc_port_range: self.rtc_port_range,
                 codec_flags: self.codec_flags,
@@ -294,9 +297,9 @@ impl RtcTransportObservabilityFacade<'_> {
             return TransportPlacementPressureSnapshot::default();
         };
         let now = Instant::now();
-        let egress_bitrate_bps = match worker_handle.bitrate_state.lock() {
+        let egress_bitrate = match worker_handle.bitrate_state.lock() {
             Ok(bitrate_state) => bitrate_state.egress_bitrate_snapshot_at(session_keys, now),
-            Err(_error) => 0,
+            Err(_error) => Bitrate::zero(),
         };
         let packet_loop_lag_ms = match worker_handle.snapshot_state.lock() {
             Ok(snapshot_state) => snapshot_state.packet_loop_lag_ms_at(now),
@@ -305,7 +308,7 @@ impl RtcTransportObservabilityFacade<'_> {
         let command_backlog_depth = sender_backlog_depth(&worker_handle.command_tx);
         let relay_mailbox_depth = worker_handle.relay_mailbox.backlog_depth();
         TransportPlacementPressureSnapshot {
-            egress_bitrate_bps,
+            egress_bitrate,
             packet_loop_lag_ms,
             command_backlog_depth,
             relay_mailbox_depth,

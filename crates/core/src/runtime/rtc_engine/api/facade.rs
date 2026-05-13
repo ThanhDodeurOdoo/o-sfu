@@ -37,7 +37,7 @@ use super::super::{
     state::RtcSnapshotState,
 };
 use crate::{
-    CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
+    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
     runtime::{
         diagnostics::DiagnosticsStore,
         media_transport::{
@@ -91,8 +91,8 @@ pub struct RtcTransportShard {
     /// First transport media id reserved for this shard's packet loop.
     pub(super) media_id_base: u64,
     pub(super) public_ip: IpAddr,
-    pub(super) max_bitrate_in_bps: u64,
-    pub(super) max_bitrate_out_bps: u64,
+    pub(super) max_bitrate_in: Bitrate,
+    pub(super) max_bitrate_out: Bitrate,
     pub(super) video_bitrate_limits: VideoBitrateLimits,
     pub(super) rtc_port_range: RtcPortRange,
     pub(super) codec_flags: MediaCodecFlags,
@@ -140,8 +140,8 @@ impl RtcTransportShard {
             ),
             media_id_base,
             public_ip: config.public_ip(),
-            max_bitrate_in_bps: config.max_bitrate_in_bps(),
-            max_bitrate_out_bps: config.max_bitrate_out_bps(),
+            max_bitrate_in: config.max_bitrate_in(),
+            max_bitrate_out: config.max_bitrate_out(),
             video_bitrate_limits: config.video_bitrate_limits(),
             rtc_port_range: config.rtc_port_range(),
             codec_flags: config.codec_flags(),

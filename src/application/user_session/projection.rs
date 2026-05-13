@@ -13,7 +13,7 @@ use o_sfu_protocol::{
 };
 
 use crate::core::{
-    NegotiationOffer, UploadEncoding, UploadLayerPolicyRole, UploadSlot,
+    Bitrate, NegotiationOffer, UploadEncoding, UploadLayerPolicyRole, UploadSlot,
     server::source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
 };
 
@@ -60,7 +60,7 @@ fn protocol_upload_slot(slot: UploadSlot) -> NegotiationUploadSlot {
 fn protocol_upload_encoding(encoding: UploadEncoding) -> NegotiationUploadEncoding {
     NegotiationUploadEncoding {
         rid: encoding.rid,
-        max_bitrate: encoding.max_bitrate,
+        max_bitrate: encoding.max_bitrate.map(Bitrate::as_bps),
         resolution_scale: encoding.resolution_scale,
         max_framerate: encoding.max_framerate,
         policy_role: encoding.policy_role.map(protocol_upload_layer_policy_role),
@@ -73,7 +73,7 @@ fn source_encodings(source: &PublishedSourceDescriptor) -> Vec<SourceEncodingDes
         .map(|encoding| SourceEncodingDescriptor {
             encoding_id: encoding.encoding_id().to_string(),
             rid: encoding.rid().map(|rid| rid.as_str().to_owned()),
-            max_bitrate: encoding.max_bitrate(),
+            max_bitrate: encoding.max_bitrate().map(Bitrate::as_bps),
             resolution_scale: encoding.resolution_scale(),
             max_framerate: encoding.max_framerate(),
             policy_role: encoding

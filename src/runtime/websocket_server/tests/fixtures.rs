@@ -29,7 +29,7 @@ pub(super) use crate::{
         source_publish_intent_for_stream_type, stream_id_for_stream_type,
     },
     config::{
-        AuthConfig, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
+        AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
         MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig, TransportConfig,
         UserConfig, VideoBitrateLimits,
     },
@@ -175,8 +175,8 @@ pub(super) fn test_config(
         transport: TransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             rtc_port_range: RtcPortRange::new(40_000, 49_999),
-            max_bitrate_in_bps: 8_000_000,
-            max_bitrate_out_bps: 10_000_000,
+            max_bitrate_in: Bitrate::from_mbps(8),
+            max_bitrate_out: Bitrate::from_mbps(10),
             video_bitrate_limits: VideoBitrateLimits::default(),
             rtc_media_worker_count: 1,
             room_sharding_policy: RoomShardingPolicy::strict_single_router(),
@@ -337,7 +337,10 @@ pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
     match RtcTransport::builder()
         .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(8_000_000, 10_000_000),
+            bitrate_limits: SessionBitrateLimits::new(
+                Bitrate::from_mbps(8),
+                Bitrate::from_mbps(10),
+            ),
             video_bitrate_limits: VideoBitrateLimits::default(),
             rtc_port_range: RtcPortRange::new(47_200, 47_299),
             codec_flags: MediaCodecFlags::default(),

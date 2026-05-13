@@ -9,16 +9,19 @@ use super::{
     super::types::{ConsumerPacketGateRequest, RouteSourceKind},
     remote_source, selected_rid,
 };
-use crate::runtime::{
-    media_transport::{
-        TransportAdapterError, TransportMediaId, TransportResult, TransportSessionKey,
-    },
-    rtc_engine::{
-        commands::{ConsumerPacketGateCommand, RemoteSourceControl},
-        demux::{MediaRouteDestination, MediaRouteEntry},
-        media_registry::RegisteredMediaHandle,
-        route_control::{PacketLayerGate, aggregate_packet_gates},
-        state::RtcBootstrapState,
+use crate::{
+    Bitrate,
+    runtime::{
+        media_transport::{
+            TransportAdapterError, TransportMediaId, TransportResult, TransportSessionKey,
+        },
+        rtc_engine::{
+            commands::{ConsumerPacketGateCommand, RemoteSourceControl},
+            demux::{MediaRouteDestination, MediaRouteEntry},
+            media_registry::RegisteredMediaHandle,
+            route_control::{PacketLayerGate, aggregate_packet_gates},
+            state::RtcBootstrapState,
+        },
     },
 };
 
@@ -58,7 +61,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn consumer_packet_gate(
     consumer_rtp_parameters: &RouterRtpParameters,
 ) -> PacketLayerGate {
     let mut first_rid: Option<Rid> = None;
-    let mut lowest_bitrate_rid: Option<(Rid, u64)> = None;
+    let mut lowest_bitrate_rid: Option<(Rid, Bitrate)> = None;
     let mut all_encodings_have_bitrate = true;
     for encoding in consumer_rtp_parameters.encodings() {
         let Some(rid) = encoding.rid().map(Rid::from) else {
@@ -67,7 +70,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn consumer_packet_gate(
         if first_rid.is_none() {
             first_rid = Some(rid);
         }
-        let bitrate = encoding.max_bitrate();
+        let bitrate = encoding.max_bitrate().map(Bitrate::from_bps);
         all_encodings_have_bitrate &= bitrate.is_some();
         if let Some(bitrate) = bitrate {
             match lowest_bitrate_rid.as_mut() {

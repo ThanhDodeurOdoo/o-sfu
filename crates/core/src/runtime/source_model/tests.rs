@@ -9,7 +9,7 @@ use o_sfu_rfc::rtp::frame_marking;
 use o_sfu_router::{MediaCodec, MediaFormat, MediaKind, Mid, PayloadType, Rid, Ssrc};
 
 use super::*;
-use crate::runtime::UserId;
+use crate::{Bitrate, runtime::UserId};
 
 fn video_format(payload_type: u8) -> MediaFormat {
     MediaFormat::new(
@@ -29,7 +29,7 @@ fn source_encoding(
         source_id,
         encoding_id,
         Some(rid),
-        Some(150_000 * encoding_id.as_u64()),
+        Some(Bitrate::from_kbps(150 * encoding_id.as_u64())),
     )
 }
 
@@ -37,7 +37,7 @@ fn source_encoding_with_options(
     source_id: PublishedSourceId,
     encoding_id: SourceEncodingId,
     rid: Option<&str>,
-    max_bitrate: Option<u64>,
+    max_bitrate: Option<Bitrate>,
 ) -> SourceEncodingDescriptor {
     let raw_encoding_id =
         u32::try_from(encoding_id.as_u64()).expect("test encoding id should fit in u32");
@@ -99,7 +99,7 @@ fn descriptor_keeps_source_encoding_identity_separate() {
     assert_eq!(encodings[0].rid().map(Rid::as_str), Some("lo"));
     assert_eq!(encodings[0].primary_ssrc(), Some(Ssrc::new(101)));
     assert_eq!(encodings[0].repair_ssrc(), Some(Ssrc::new(201)));
-    assert_eq!(encodings[0].max_bitrate(), Some(150_000));
+    assert_eq!(encodings[0].max_bitrate(), Some(Bitrate::from_kbps(150)));
     assert_eq!(encodings[0].max_temporal_layer_id(), None);
     assert_eq!(
         encodings[0]
@@ -130,9 +130,24 @@ fn descriptor_orders_selectable_encodings_by_bitrate() {
         policy: SourcePolicy::hidden(),
         mid: None,
         encodings: vec![
-            source_encoding_with_options(source_id, high_encoding_id, Some("hi"), Some(900_000)),
-            source_encoding_with_options(source_id, low_encoding_id, Some("lo"), Some(150_000)),
-            source_encoding_with_options(source_id, middle_encoding_id, Some("mid"), Some(450_000)),
+            source_encoding_with_options(
+                source_id,
+                high_encoding_id,
+                Some("hi"),
+                Some(Bitrate::from_kbps(900)),
+            ),
+            source_encoding_with_options(
+                source_id,
+                low_encoding_id,
+                Some("lo"),
+                Some(Bitrate::from_kbps(150)),
+            ),
+            source_encoding_with_options(
+                source_id,
+                middle_encoding_id,
+                Some("mid"),
+                Some(Bitrate::from_kbps(450)),
+            ),
         ],
     })
     .expect("source descriptor should be valid");
@@ -191,13 +206,13 @@ fn descriptor_excludes_selectable_encodings_when_rid_is_missing() {
                 source_id,
                 SourceEncodingId::from_raw(1),
                 Some("lo"),
-                Some(150_000),
+                Some(Bitrate::from_kbps(150)),
             ),
             source_encoding_with_options(
                 source_id,
                 SourceEncodingId::from_raw(2),
                 None,
-                Some(450_000),
+                Some(Bitrate::from_kbps(450)),
             ),
         ],
     })

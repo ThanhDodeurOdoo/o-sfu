@@ -14,7 +14,7 @@ use o_sfu_router::{
     RtcpFeedbackKind, StreamBinding,
 };
 use str0m::{
-    bwe::Bitrate,
+    bwe::Bitrate as Str0mBitrate,
     change::{DirectApi, SdpAnswer},
     format::PayloadParams,
     media::{Direction, MediaKind as Str0mMediaKind, Mid, Rid},
@@ -31,9 +31,9 @@ use super::super::{
     simulcast,
     state::{RtcBootstrapState, RtcSessionState},
 };
-use crate::runtime::media_transport::TransportSessionKey;
 #[cfg(test)]
 use crate::runtime::media_transport::{TransportAdapterError, TransportMediaId};
+use crate::{Bitrate, runtime::media_transport::TransportSessionKey};
 
 #[cfg(test)]
 pub(super) fn respond_resolve_negotiated_producer_parameters(
@@ -54,7 +54,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
     session_key: &TransportSessionKey,
     producer_mids: &[Mid],
     answer_sdp: &str,
-    max_bitrate_in_bps: u64,
+    max_bitrate_in: Bitrate,
 ) -> Vec<(Mid, RouterRtpParameters)> {
     let mut refreshed_parameters = Vec::with_capacity(producer_mids.len());
     let producer_mid_set = producer_mids.iter().copied().collect::<BTreeSet<_>>();
@@ -110,7 +110,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
                 rids,
                 primary_ssrcs,
             );
-            apply_projected_recv_streams(session_state, mid, &bindings, max_bitrate_in_bps);
+            apply_projected_recv_streams(session_state, mid, &bindings, max_bitrate_in);
             let Some(parameters) =
                 build_projected_parameters(mid, formats, header_extensions, bindings)
             else {
@@ -160,15 +160,15 @@ fn apply_projected_recv_streams(
     session_state: &mut RtcSessionState,
     mid: Mid,
     bindings: &[StreamBinding],
-    max_bitrate_in_bps: u64,
+    max_bitrate_in: Bitrate,
 ) {
     let mut api = session_state.rtc.direct_api();
     for binding in bindings {
-        apply_projected_recv_stream(&mut api, mid, binding, max_bitrate_in_bps);
+        apply_projected_recv_stream(&mut api, mid, binding, max_bitrate_in);
     }
     #[cfg(test)]
     {
-        session_state.max_bitrate_in_bps = Some(max_bitrate_in_bps);
+        session_state.max_bitrate_in = Some(max_bitrate_in);
     }
 }
 
@@ -176,7 +176,7 @@ fn apply_projected_recv_stream(
     api: &mut DirectApi<'_>,
     mid: Mid,
     binding: &StreamBinding,
-    max_bitrate_in_bps: u64,
+    max_bitrate_in: Bitrate,
 ) {
     let Some(ssrc) = binding.ssrc() else {
         return;
@@ -184,13 +184,13 @@ fn apply_projected_recv_stream(
     let rid = binding.rid().map(Rid::from);
     if api.stream_rx_by_mid(mid, rid).is_some() {
         if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
-            stream_rx.request_remb(Bitrate::bps(max_bitrate_in_bps));
+            stream_rx.request_remb(Str0mBitrate::bps(max_bitrate_in.as_bps()));
         }
         return;
     }
     api.expect_stream_rx(ssrc.into(), None, mid, rid);
     if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
-        stream_rx.request_remb(Bitrate::bps(max_bitrate_in_bps));
+        stream_rx.request_remb(Str0mBitrate::bps(max_bitrate_in.as_bps()));
     }
 }
 
@@ -344,7 +344,7 @@ fn project_bindings(
                     binding = binding.with_payload_type(payload_type);
                 }
                 if let Some(max_bitrate) = rid.max_bitrate {
-                    binding = binding.with_max_bitrate(max_bitrate);
+                    binding = binding.with_max_bitrate(max_bitrate.as_bps());
                 }
                 if let Some(ssrc) = stream_rx_ssrc(session_state, mid, Some(rid.rid)) {
                     binding = binding.with_ssrc(ssrc);

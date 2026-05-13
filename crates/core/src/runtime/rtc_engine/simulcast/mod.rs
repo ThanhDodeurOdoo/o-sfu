@@ -190,9 +190,9 @@ mod tests {
     use str0m::media::{MediaKind, Rid as Str0mRid};
 
     use super::*;
-    use crate::runtime::source_model::UploadLayerPolicyRole;
+    use crate::{Bitrate, runtime::source_model::UploadLayerPolicyRole};
 
-    const ANSWER_HIGH_MAX_BITRATE_BPS: u64 = 900_000;
+    const ANSWER_HIGH_MAX_BITRATE: Bitrate = Bitrate::from_kbps(900);
 
     #[test]
     fn answer_send_rid_projection_preserves_declared_bitrate() {
@@ -219,11 +219,11 @@ mod tests {
             vec![
                 NegotiatedRid {
                     rid: Str0mRid::from(common::DEFAULT_LOW_RID),
-                    max_bitrate: Some(common::DEFAULT_LOW_MAX_BITRATE_BPS),
+                    max_bitrate: Some(common::DEFAULT_LOW_MAX_BITRATE),
                 },
                 NegotiatedRid {
                     rid: Str0mRid::from(common::DEFAULT_HIGH_RID),
-                    max_bitrate: Some(ANSWER_HIGH_MAX_BITRATE_BPS),
+                    max_bitrate: Some(ANSWER_HIGH_MAX_BITRATE),
                 },
             ]
         );

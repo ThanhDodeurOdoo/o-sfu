@@ -35,10 +35,13 @@ use super::{
     relay_registry::RelaySourceRegistration,
     route_control::RouteControlState,
 };
-use crate::runtime::media_transport::{
-    ReceiverBandwidthSnapshot, SessionUploadSlot, TransportMediaId, TransportSessionKey,
-};
 pub use crate::transport::TransportSessionHealth;
+use crate::{
+    Bitrate,
+    runtime::media_transport::{
+        ReceiverBandwidthSnapshot, SessionUploadSlot, TransportMediaId, TransportSessionKey,
+    },
+};
 
 const PACKET_LOOP_LAG_SAMPLE_TTL: Duration = Duration::from_secs(1);
 
@@ -52,9 +55,9 @@ pub(super) struct RtcSessionState {
     pub(super) started_at: Instant,
     pub(super) local_ice_ufrag: String,
     #[cfg(test)]
-    pub(super) max_bitrate_in_bps: Option<u64>,
+    pub(super) max_bitrate_in: Option<Bitrate>,
     #[cfg(test)]
-    pub(super) max_bitrate_out_bps: Option<u64>,
+    pub(super) max_bitrate_out: Option<Bitrate>,
     pub(super) dtls_started: bool,
     pub(super) sdp_negotiation: SessionSdpNegotiationState,
     /// Monotonic RTP identity state keyed by consumer transport media.
@@ -447,7 +450,7 @@ pub struct RtcSnapshotState {
     pub(super) remote_addr_demux: RemoteAddrDemux,
     pub(super) live_sessions: BTreeSet<TransportSessionKey>,
     transport_health_by_session: BTreeMap<TransportSessionKey, TransportSessionHealth>,
-    receiver_bandwidth_by_session: BTreeMap<TransportSessionKey, u64>,
+    receiver_bandwidth_by_session: BTreeMap<TransportSessionKey, Bitrate>,
     packet_loop_lag_ms: u64,
     packet_loop_lag_observed_at: Option<Instant>,
 }
@@ -490,10 +493,10 @@ impl RtcSnapshotState {
     pub(super) fn set_receiver_bandwidth(
         &mut self,
         session_key: &TransportSessionKey,
-        estimate_bps: u64,
-    ) -> Option<u64> {
+        estimate: Bitrate,
+    ) -> Option<Bitrate> {
         self.receiver_bandwidth_by_session
-            .insert(session_key.clone(), estimate_bps)
+            .insert(session_key.clone(), estimate)
     }
 
     pub fn receiver_bandwidth_snapshot(
@@ -507,7 +510,7 @@ impl RtcSnapshotState {
                     self.receiver_bandwidth_by_session
                         .get(session_key)
                         .copied()
-                        .map(|estimate_bps| (session_key.clone(), estimate_bps))
+                        .map(|estimate| (session_key.clone(), estimate))
                 })
                 .collect(),
         }

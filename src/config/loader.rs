@@ -117,7 +117,7 @@ impl Config {
 mod tests {
     use crate::{
         config::{
-            CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
+            Bitrate, CodecPreferences, Config, DiagnosticsConfig, MediaCodecFlags, RtcPortRange,
             RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
         },
         core::server::room::DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
@@ -161,8 +161,8 @@ mod tests {
         assert_eq!(config.diagnostics, DiagnosticsConfig::default());
         assert_eq!(config.telemetry, TelemetryConfig::default());
         assert_eq!(config.transport.public_ip.to_string(), "127.0.0.1");
-        assert_eq!(config.transport.max_bitrate_in_bps, 8_000_000);
-        assert_eq!(config.transport.max_bitrate_out_bps, 10_000_000);
+        assert_eq!(config.transport.max_bitrate_in, Bitrate::from_mbps(8));
+        assert_eq!(config.transport.max_bitrate_out, Bitrate::from_mbps(10));
         assert_eq!(
             config.transport.video_bitrate_limits,
             VideoBitrateLimits::default()

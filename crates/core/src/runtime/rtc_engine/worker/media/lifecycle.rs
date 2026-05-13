@@ -18,7 +18,7 @@ use std::{
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::{
-    bwe::Bitrate,
+    bwe::Bitrate as Str0mBitrate,
     media::{Direction, MediaKind, Mid, Rid},
     rtp::Ssrc,
 };
@@ -43,7 +43,7 @@ use super::{
     types::AddSendMediaRequest,
 };
 use crate::{
-    CodecPreferences, MediaCodecFlags, VideoBitrateLimits,
+    Bitrate, CodecPreferences, MediaCodecFlags, VideoBitrateLimits,
     runtime::media_transport::{
         SessionUploadSlot, TransportAdapterError, TransportMediaId, TransportResult,
         TransportSessionKey,
@@ -52,7 +52,7 @@ use crate::{
 
 #[derive(Clone, Copy)]
 pub struct RecvMediaPolicy {
-    pub max_bitrate_in_bps: u64,
+    pub max_bitrate_in: Bitrate,
     pub video_bitrate_limits: VideoBitrateLimits,
     pub codec_flags: MediaCodecFlags,
     pub codec_preferences: CodecPreferences,
@@ -347,11 +347,11 @@ fn worker_add_recv_media(
             for (ssrc, rid) in recv_encoding_identities(rtp_parameters) {
                 api.expect_stream_rx(ssrc, None, mid, rid);
                 if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
-                    stream_rx.request_remb(Bitrate::bps(policy.max_bitrate_in_bps));
+                    stream_rx.request_remb(Str0mBitrate::bps(policy.max_bitrate_in.as_bps()));
                 }
                 #[cfg(test)]
                 {
-                    session_state.max_bitrate_in_bps = Some(policy.max_bitrate_in_bps);
+                    session_state.max_bitrate_in = Some(policy.max_bitrate_in);
                 }
             }
         }

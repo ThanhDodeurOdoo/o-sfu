@@ -8,6 +8,8 @@ use tokio::sync::oneshot;
 use super::debug_command::{
     DebugPacketGate, DebugRouteDestination, DebugRouteEntry, DebugRtcWorkerCommand,
 };
+#[cfg(test)]
+use crate::Bitrate;
 use crate::runtime::{
     media_transport::{TransportMediaId, TransportSessionKey},
     rtc_engine::{
@@ -358,12 +360,12 @@ fn respond_debug_session_stream_tx_ssrc(
 fn respond_debug_session_max_bitrate_in(
     state: &RtcBootstrapState,
     session_key: &TransportSessionKey,
-    response: oneshot::Sender<Option<u64>>,
+    response: oneshot::Sender<Option<Bitrate>>,
 ) {
     let value = state
         .users
         .get(session_key)
-        .and_then(|session_state| session_state.max_bitrate_in_bps);
+        .and_then(|session_state| session_state.max_bitrate_in);
     let _ = response.send(value);
 }
 
@@ -371,12 +373,12 @@ fn respond_debug_session_max_bitrate_in(
 fn respond_debug_session_max_bitrate_out(
     state: &RtcBootstrapState,
     session_key: &TransportSessionKey,
-    response: oneshot::Sender<Option<u64>>,
+    response: oneshot::Sender<Option<Bitrate>>,
 ) {
     let value = state
         .users
         .get(session_key)
-        .and_then(|session_state| session_state.max_bitrate_out_bps);
+        .and_then(|session_state| session_state.max_bitrate_out);
     let _ = response.send(value);
 }
 

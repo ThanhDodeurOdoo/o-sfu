@@ -27,7 +27,7 @@ use super::{
     session,
 };
 use crate::{
-    CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
+    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
     runtime::{
         RoomInstanceId,
         media_transport::{
@@ -42,8 +42,8 @@ pub struct WorkerCommandContext<'a> {
     pub snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
     pub now: Instant,
     pub public_ip: IpAddr,
-    pub max_bitrate_in_bps: u64,
-    pub max_bitrate_out_bps: u64,
+    pub max_bitrate_in: Bitrate,
+    pub max_bitrate_out: Bitrate,
     pub video_bitrate_limits: VideoBitrateLimits,
     pub rtc_port_range: RtcPortRange,
     pub codec_flags: MediaCodecFlags,
@@ -113,7 +113,7 @@ pub fn handle_worker_command(
                 state,
                 context.bitrate_state,
                 media::RecvMediaPolicy {
-                    max_bitrate_in_bps: context.max_bitrate_in_bps,
+                    max_bitrate_in: context.max_bitrate_in,
                     video_bitrate_limits: context.video_bitrate_limits,
                     codec_flags: context.codec_flags,
                     codec_preferences: context.codec_preferences,
@@ -141,7 +141,7 @@ fn handle_negotiation_command(
             context.snapshot_state,
             OfferBootstrapConfig {
                 public_ip: context.public_ip,
-                max_bitrate_out_bps: context.max_bitrate_out_bps,
+                max_bitrate_out: context.max_bitrate_out,
                 video_bitrate_limits: context.video_bitrate_limits,
                 rtc_port_range: context.rtc_port_range,
                 codec_flags: context.codec_flags,
@@ -173,7 +173,7 @@ fn handle_negotiation_command(
             response,
         } => negotiation::respond_apply_session_answer(
             state,
-            context.max_bitrate_in_bps,
+            context.max_bitrate_in,
             &session_key,
             &answer_sdp,
             response,

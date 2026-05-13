@@ -71,6 +71,7 @@
 //! session facade targets the runtime [`server::room::Room`] implementation.
 //! Normal server application code should use [`MediaCore`] and should not name
 //! concrete RTC workers or fake transport variants.
+mod bitrate;
 mod ids;
 mod options;
 mod room;
@@ -79,6 +80,7 @@ pub mod server;
 mod sfu;
 pub mod transport;
 
+pub use bitrate::Bitrate;
 pub use ids::{ConnectionId, RoomInstanceId};
 pub use options::{
     AudioCodecPreference, CodecOptions, CodecPreferences, CoreOptions, LocalSpilloverPolicy,

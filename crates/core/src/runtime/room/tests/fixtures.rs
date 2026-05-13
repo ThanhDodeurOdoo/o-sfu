@@ -19,7 +19,7 @@ pub(super) use super::super::{
 };
 use crate::runtime::room::user_negotiation::{UserNegotiationUpdate, UserTransportReady};
 pub(super) use crate::{
-    PublicationActivity, PublishStageOutcome, RollbackStagedPublishOutcome,
+    Bitrate, PublicationActivity, PublishStageOutcome, RollbackStagedPublishOutcome,
     SessionNegotiationOutcome, SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
     runtime::{
         ConnectionId, TestSourceKind, UserId, UserInfo, UserPermissions, VideoLayoutIntent,
@@ -666,8 +666,10 @@ impl SourcePolicyScenario {
     }
 
     pub(super) fn set_receiver_budget(&self, raw_user_id: i64, estimate_bps: u64) {
-        self.fake
-            .set_receiver_bandwidth_estimate(UserId::Integer(raw_user_id), estimate_bps);
+        self.fake.set_receiver_bandwidth_estimate(
+            UserId::Integer(raw_user_id),
+            Bitrate::from_bps(estimate_bps),
+        );
     }
 
     pub(super) fn event_cursor(&self) -> usize {
