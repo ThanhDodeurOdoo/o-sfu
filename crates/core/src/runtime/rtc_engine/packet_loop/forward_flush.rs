@@ -33,6 +33,7 @@ use super::{
     buffers::PacketLoopBuffers,
 };
 use crate::runtime::{
+    hot_path::unlikely,
     media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
     metrics::{RtpMetricsRecorder, RuntimeMetrics},
 };
@@ -75,7 +76,7 @@ pub(super) fn record_incoming_stats(
                 audio_level,
                 packet.received_at(),
             );
-            if audio_policy_changed {
+            if unlikely(audio_policy_changed) {
                 dirty_source_policy_channel_ids
                     .push(packet.source_session_key().room_instance_id());
             }
@@ -94,7 +95,7 @@ pub(super) fn record_incoming_stats(
             let first_ingress = state
                 .record_incoming_bitrate(transport_media_id, packet.received_at(), payload_len)
                 .unwrap_or(false);
-            if first_ingress {
+            if unlikely(first_ingress) {
                 debug!(
                     user_id = ?packet.source_session_key().user_id(),
                     media_worker_id = packet.source_session_key().media_worker_id(),
