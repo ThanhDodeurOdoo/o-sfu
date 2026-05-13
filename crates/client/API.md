@@ -11,7 +11,7 @@ const sfu = new SfuClient();
 The compatibility bundle is built with:
 
 ```bash
-npm --prefix client run build:odoo
+npm --prefix crates/client run build:odoo
 ```
 
 The bundle is intentionally close to the old Node SFU client API. New code should

@@ -8,9 +8,9 @@ rust-version = "1.93"
 version.workspace = true
 
 [dependencies]
-o-sfu-protocol = { path = "../../protocol", features = ["verification-models"] }
-o-sfu-rfc = { path = "../../rfc" }
-o-sfu-router = { path = "../../router", features = ["test-support"] }
+o-sfu-protocol = { path = "../../crates/protocol", features = ["verification-models"] }
+o-sfu-rfc = { path = "../../crates/rfc" }
+o-sfu-router = { path = "../../crates/router", features = ["test-support"] }
 serde_json.workspace = true
 
 [lints]

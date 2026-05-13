@@ -3,13 +3,7 @@ FROM rust:1.95.0-bookworm AS builder
 WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
-COPY cluster ./cluster
-COPY model ./model
-COPY core ./core
-COPY protocol ./protocol
-COPY router ./router
-COPY rfc ./rfc
-COPY telemetry ./telemetry
+COPY crates ./crates
 COPY tests ./tests
 COPY src ./src
 

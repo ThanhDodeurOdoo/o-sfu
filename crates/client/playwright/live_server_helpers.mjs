@@ -290,7 +290,7 @@ export async function spawnLiveServer({
     }
     const child = spawn(
         "cargo",
-        ["run", "--quiet", "--manifest-path", "../Cargo.toml", "-p", "o-sfu"],
+        ["run", "--quiet", "--manifest-path", "../../Cargo.toml", "-p", "o-sfu"],
         {
             cwd: fileURLToPath(new URL("../", import.meta.url)),
             env,

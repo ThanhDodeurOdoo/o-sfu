@@ -1,5 +1,5 @@
 error: missing `metrics` argument
- --> $WORKSPACE/telemetry/tests/ui/fail/measure_duration_missing_metrics.rs
+ --> $WORKSPACE/crates/telemetry/tests/ui/fail/measure_duration_missing_metrics.rs
   |
   | #[measure_duration(record = "record_duration")]
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

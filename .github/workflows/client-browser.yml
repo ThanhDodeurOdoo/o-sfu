@@ -25,7 +25,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: client
+        working-directory: crates/client
 
     steps:
       - name: Checkout repository
@@ -46,7 +46,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: client/package-lock.json
+          cache-dependency-path: crates/client/package-lock.json
 
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked
@@ -65,5 +65,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-${{ matrix.browser }}
-          path: client/playwright-report
+          path: crates/client/playwright-report
           retention-days: 14
