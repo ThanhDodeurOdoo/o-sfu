@@ -1,11 +1,10 @@
 //! Pure router state machine plus the reverse indexes that keep teardown local.
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use super::{
     Consumer, ConsumerCapability, ConsumerId, ConsumerRouteState, NoopRouterObserver, Producer,
     ProducerId, ProducerRouteState, RouterError, RouterEvent, RouterId, RouterObserver, Session,
     SessionId, Transport, TransportDirection, TransportId,
+    proof_storage::{BTreeMap, BTreeSet},
 };
 
 /// Pure routing state for one router instance.
@@ -107,10 +106,7 @@ impl<O: RouterObserver> Router<O> {
             return Err(RouterError::DuplicateTransport(transport_id));
         }
         self.transports.insert(transport_id, transport);
-        self.session_transports
-            .entry(session_id)
-            .or_default()
-            .insert(transport_id);
+        Self::insert_index_member(&mut self.session_transports, session_id, transport_id);
         Ok(())
     }
 
@@ -139,10 +135,7 @@ impl<O: RouterObserver> Router<O> {
             return Err(RouterError::DuplicateProducer(producer_id));
         }
         self.producers.insert(producer_id, producer);
-        self.transport_producers
-            .entry(transport_id)
-            .or_default()
-            .insert(producer_id);
+        Self::insert_index_member(&mut self.transport_producers, transport_id, producer_id);
         self.observer.on_event(RouterEvent::ProducerAdded {
             session_id,
             transport_id,
@@ -209,14 +202,8 @@ impl<O: RouterObserver> Router<O> {
         }
         consumer.set_producer_route_state(producer.route_state());
         self.consumers.insert(consumer_id, consumer);
-        self.transport_consumers
-            .entry(transport_id)
-            .or_default()
-            .insert(consumer_id);
-        self.producer_consumers
-            .entry(producer_id)
-            .or_default()
-            .insert(consumer_id);
+        Self::insert_index_member(&mut self.transport_consumers, transport_id, consumer_id);
+        Self::insert_index_member(&mut self.producer_consumers, producer_id, consumer_id);
         Ok(())
     }
 
@@ -242,13 +229,30 @@ impl<O: RouterObserver> Router<O> {
         };
         producer.set_route_state(route_state);
 
-        let consumer_ids: Vec<_> = self
-            .producer_consumers
-            .get(&producer_id)
-            .map_or_else(Vec::new, |ids| ids.iter().copied().collect());
-        for consumer_id in consumer_ids {
-            if let Some(consumer) = self.consumers.get_mut(&consumer_id) {
-                consumer.set_producer_route_state(route_state);
+        // Kani verifies this update through fixed-slot proof storage. The
+        // production path collects ids first to satisfy borrowing over BTreeMap,
+        // while the proof path avoids a heap-backed Vec that expands CBMC state.
+        #[cfg(not(kani))]
+        {
+            let consumer_ids: Vec<_> = self
+                .producer_consumers
+                .get(&producer_id)
+                .map_or_else(Vec::new, |ids| ids.iter().copied().collect());
+            for consumer_id in consumer_ids {
+                if let Some(consumer) = self.consumers.get_mut(&consumer_id) {
+                    consumer.set_producer_route_state(route_state);
+                }
+            }
+        }
+
+        #[cfg(kani)]
+        {
+            if let Some(consumer_ids) = self.producer_consumers.get(&producer_id).copied() {
+                for consumer_id in consumer_ids {
+                    if let Some(consumer) = self.consumers.get_mut(&consumer_id) {
+                        consumer.set_producer_route_state(route_state);
+                    }
+                }
             }
         }
 
@@ -391,25 +395,61 @@ impl<O: RouterObserver> Router<O> {
         );
     }
 
-    fn take_ids<K, V>(index: &mut BTreeMap<K, BTreeSet<V>>, key: &K) -> Vec<V>
+    fn take_ids<K, V>(index: &mut BTreeMap<K, BTreeSet<V>>, key: &K) -> BTreeSet<V>
     where
-        K: Ord,
-        V: Ord,
+        K: Copy + Ord,
+        V: Copy + Ord,
     {
-        index
-            .remove(key)
-            .map_or_else(Vec::new, |ids| ids.into_iter().collect())
+        index.remove(key).unwrap_or_default()
+    }
+
+    fn insert_index_member<K, V>(index: &mut BTreeMap<K, BTreeSet<V>>, key: K, value: V)
+    where
+        K: Copy + Ord,
+        V: Copy + Ord,
+    {
+        // Kani's proof map is fixed-slot storage. Using entry().or_default() here
+        // would require a synthetic entry API that returns mutable references through
+        // symbolic slot indexes, so the proof branch spells out get-or-create directly.
+        #[cfg(not(kani))]
+        {
+            index.entry(key).or_default().insert(value);
+        }
+
+        #[cfg(kani)]
+        {
+            if let Some(values) = index.get_mut(&key) {
+                values.insert(value);
+                return;
+            }
+
+            let mut values = BTreeSet::new();
+            values.insert(value);
+            index.insert(key, values);
+        }
     }
 
     fn remove_index_member<K, V>(index: &mut BTreeMap<K, BTreeSet<V>>, key: K, value: &V)
     where
         K: Copy + Ord,
-        V: Ord,
+        V: Copy + Ord,
     {
+        // Kani proves teardown through fixed-slot maps. Spelling out the
+        // Option branch avoids cloning the is_some_and closure into every
+        // symbolic cleanup path while keeping the same remove-if-empty update.
+        #[cfg(not(kani))]
         let should_remove_key = index.get_mut(&key).is_some_and(|values| {
             values.remove(value);
             values.is_empty()
         });
+
+        #[cfg(kani)]
+        let should_remove_key = if let Some(values) = index.get_mut(&key) {
+            values.remove(value);
+            values.is_empty()
+        } else {
+            false
+        };
 
         if should_remove_key {
             index.remove(&key);

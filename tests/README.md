@@ -43,12 +43,14 @@ cargo test -p o-sfu-tests
 cargo test --workspace --doc
 ```
 
-The `cargo test -p o-sfu-proofs` step used by PR CI is not Kani execution. It
-compiles the proof crate and any normal Rust tests in that crate. The
-`#[kani::proof]` harnesses run only through `cargo kani` in the
-formal-verification workflow or in a local proof run. Router Kani harnesses call
-the production `o_sfu_router::Router` through pubilc router APIs and inspect
-state only through the read-only `router_state_snapshot` test-support export
+Proof notes:
+
+- `cargo test -p o-sfu-proofs` compiles proofs only
+- `cargo kani` executes `#[kani::proof]` harnesses
+- router Kani harnesses call the production `o_sfu_router::Router`
+- Kani builds use router bounded proof storage
+- normal builds use `std::collections::BTreeMap` plus `BTreeSet`
+- scheduled formal verification runs one router proof per one-hour shard
 
 ## Dependency check
 
@@ -146,14 +148,22 @@ cargo install --locked kani-verifier
 cargo kani setup
 ```
 
-Run all proofs:
+Run all scheduled proofs:
 
 ```bash
 cargo kani -p o-sfu-proofs
 ```
 
-Run one harness:
+Run one scheduled harness:
 
 ```bash
-cargo kani -p o-sfu-proofs --harness session_teardown_clears_reverse_indices_and_dependents
+cargo kani -p o-sfu-proofs --harness h264_profile_level_id_parse_matches_rfc_patterns
+```
+
+Run one router proof:
+
+```bash
+cargo kani -p o-sfu-proofs \
+  -Z unstable-options \
+  --harness session_teardown_clears_reverse_indices_and_dependents
 ```
