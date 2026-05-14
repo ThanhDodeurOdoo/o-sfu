@@ -28,7 +28,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::super::{
-    bitrate::RtcBitrateState,
+    bitrate::BitrateRegistry,
     commands::{
         CloseSessionOutcome, CloseSessionState, ConsumerPacketGateCommand, RemoteSourceControl,
         RtcWorkerCommand,
@@ -59,7 +59,7 @@ pub struct RtcWorkerHandle {
     #[cfg(any(test, feature = "testing-transport"))]
     pub(super) debug_handle: super::super::test_support::RtcWorkerDebugHandle,
     pub(super) relay_mailbox: RelayPacketMailbox,
-    pub bitrate_state: Arc<Mutex<RtcBitrateState>>,
+    pub bitrate_registry: Arc<Mutex<BitrateRegistry>>,
     pub snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     pub(super) packet_loop_lag: Arc<PacketLoopLagSnapshot>,
     pub(super) shutdown_token: CancellationToken,

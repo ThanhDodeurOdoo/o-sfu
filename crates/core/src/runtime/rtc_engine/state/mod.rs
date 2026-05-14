@@ -85,7 +85,7 @@ pub(super) struct PendingRecvStream {
 }
 
 #[derive(Default)]
-pub(super) struct RtcBootstrapState {
+pub(super) struct PacketLoopState {
     pub(super) shared_socket: Option<SharedRtcSocket>,
     pub(super) users: BTreeMap<TransportSessionKey, RtcSessionState>,
     pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
@@ -124,7 +124,7 @@ pub(super) struct RtcBootstrapState {
     pub(super) next_media_id: u64,
 }
 
-impl RtcBootstrapState {
+impl PacketLoopState {
     pub(super) fn mark_session_dirty(&mut self, session_key: &TransportSessionKey) {
         let Some(session_state) = self.users.get_mut(session_key) else {
             return;

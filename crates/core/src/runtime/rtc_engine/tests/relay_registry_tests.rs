@@ -5,14 +5,14 @@ use crate::runtime::{
     UserId,
     media_transport::TransportMediaId,
     rtc_engine::{
-        state::RtcBootstrapState,
+        state::PacketLoopState,
         test_support::{sample_forwarded_packet, test_transport_session_key},
     },
 };
 
 #[test]
 fn worker_local_relay_targets_track_active_sources() {
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let (mailbox, _rx) = RelayPacketMailbox::channel_for_test();
     let source_transport_media_id = TransportMediaId::new(8);
     let relay_target = RelayTargetId::new(1);
@@ -35,7 +35,7 @@ fn worker_local_relay_targets_track_active_sources() {
 
 #[test]
 fn worker_local_relay_targets_forward_packets_through_registered_mailboxes() {
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let (mailbox, mut relay_rx) = RelayPacketMailbox::channel_for_test();
     let source_transport_media_id = TransportMediaId::new(9);
     let session_key = test_transport_session_key(13, 0, 14, UserId::Integer(15));
@@ -59,7 +59,7 @@ fn worker_local_relay_targets_forward_packets_through_registered_mailboxes() {
     if let Some(mut forwarded) = forwarded {
         assert_eq!(forwarded.payload(), b"payload");
         assert_eq!(
-            forwarded.resolve_source_transport_media_id(&RtcBootstrapState::default()),
+            forwarded.resolve_source_transport_media_id(&PacketLoopState::default()),
             Some(TransportMediaId::new(9))
         );
     }
@@ -67,7 +67,7 @@ fn worker_local_relay_targets_forward_packets_through_registered_mailboxes() {
 
 #[test]
 fn worker_local_relay_targets_keep_multiple_target_mailboxes_per_source() {
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let (first_mailbox, mut first_rx) = RelayPacketMailbox::channel_for_test();
     let (second_mailbox, mut second_rx) = RelayPacketMailbox::channel_for_test();
     let source_transport_media_id = TransportMediaId::new(11);
@@ -102,7 +102,7 @@ fn worker_local_relay_targets_keep_multiple_target_mailboxes_per_source() {
 
 #[test]
 fn worker_local_relay_targets_do_not_reference_count_room_owners() {
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let (mailbox, _rx) = RelayPacketMailbox::channel_for_test();
     let source_transport_media_id = TransportMediaId::new(12);
     let relay_target = RelayTargetId::new(1);
@@ -134,7 +134,7 @@ fn worker_local_relay_targets_do_not_reference_count_room_owners() {
 
 #[test]
 fn worker_local_relay_targets_keep_sources_independent() {
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let first_source_transport_media_id = TransportMediaId::new(31);
     let second_source_transport_media_id = TransportMediaId::new(32);
     let (first_mailbox, _first_rx) = RelayPacketMailbox::channel_for_test();
@@ -180,7 +180,7 @@ fn worker_local_relay_targets_keep_sources_independent() {
 
 #[test]
 fn worker_local_relay_targets_only_forward_to_targets_with_active_routes() {
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let (first_mailbox, _first_rx) = RelayPacketMailbox::channel_for_test();
     let (second_mailbox, _second_rx) = RelayPacketMailbox::channel_for_test();
     let source_transport_media_id = TransportMediaId::new(41);
@@ -229,7 +229,7 @@ fn worker_local_relay_targets_only_forward_to_targets_with_active_routes() {
 
 #[test]
 fn worker_local_relay_targets_forward_packets_through_registered_inter_node_targets() {
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let (sender, mut relay_rx) = InterNodeRelaySender::channel_for_test();
     let source_transport_media_id = TransportMediaId::new(41);
     let session_key = test_transport_session_key(33, 0, 34, UserId::Integer(35));
@@ -257,7 +257,7 @@ fn worker_local_relay_targets_forward_packets_through_registered_inter_node_targ
     };
     assert_eq!(forwarded.payload(), b"payload");
     assert_eq!(
-        forwarded.resolve_source_transport_media_id(&RtcBootstrapState::default()),
+        forwarded.resolve_source_transport_media_id(&PacketLoopState::default()),
         Some(source_transport_media_id)
     );
 }

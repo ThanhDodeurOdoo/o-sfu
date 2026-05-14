@@ -1,13 +1,13 @@
 use super::fixtures::*;
-use crate::runtime::rtc_engine::{bootstrap::ensure_session_rtc_state, state::RtcBootstrapState};
+use crate::runtime::rtc_engine::{bootstrap::ensure_session_rtc_state, state::PacketLoopState};
 
-fn collect_ready_sessions(state: &mut RtcBootstrapState, now: Instant) -> Vec<TransportSessionKey> {
+fn collect_ready_sessions(state: &mut PacketLoopState, now: Instant) -> Vec<TransportSessionKey> {
     let mut ready_sessions = Vec::new();
     state.collect_ready_sessions(now, &mut ready_sessions);
     ready_sessions
 }
 
-fn insert_live_session(state: &mut RtcBootstrapState, session_key: &TransportSessionKey) {
+fn insert_live_session(state: &mut PacketLoopState, session_key: &TransportSessionKey) {
     assert!(matches!(
         ensure_session_rtc_state(
             &mut state.users,
@@ -21,40 +21,40 @@ fn insert_live_session(state: &mut RtcBootstrapState, session_key: &TransportSes
 }
 
 #[test]
-fn rtc_bootstrap_state_reassigns_remote_addr_between_sessions() {
-    let mut bootstrap_state = RtcBootstrapState::default();
+fn packet_loop_state_reassigns_remote_addr_between_sessions() {
+    let mut packet_loop_state = PacketLoopState::default();
     let source_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 45_001);
     let first_session_key = transport_key_on_worker(1, 0, 30, UserId::Integer(30));
     let second_session_key = transport_key_on_worker(2, 1, 30, UserId::Integer(30));
 
-    let _ = bootstrap_state
+    let _ = packet_loop_state
         .remote_addr_demux
         .remember_remote_addr(source_addr, &first_session_key);
     assert_eq!(
-        bootstrap_state
+        packet_loop_state
             .remote_addr_demux
             .session_key_for_remote_addr(source_addr),
         Some(&first_session_key)
     );
 
-    let _ = bootstrap_state
+    let _ = packet_loop_state
         .remote_addr_demux
         .remember_remote_addr(source_addr, &second_session_key);
 
     assert_eq!(
-        bootstrap_state
+        packet_loop_state
             .remote_addr_demux
             .session_key_for_remote_addr(source_addr),
         Some(&second_session_key)
     );
     assert!(
-        bootstrap_state
+        packet_loop_state
             .remote_addr_demux
             .session_addrs_for(&first_session_key)
             .is_none()
     );
     assert_eq!(
-        bootstrap_state
+        packet_loop_state
             .remote_addr_demux
             .session_addrs_for(&second_session_key),
         Some([source_addr].as_slice())
@@ -62,8 +62,8 @@ fn rtc_bootstrap_state_reassigns_remote_addr_between_sessions() {
 }
 
 #[test]
-fn rtc_bootstrap_state_tracks_dirty_and_timed_out_sessions_separately() {
-    let mut state = RtcBootstrapState::default();
+fn packet_loop_state_tracks_dirty_and_timed_out_sessions_separately() {
+    let mut state = PacketLoopState::default();
     let first_session_key = transport_key_on_worker(1, 0, 31, UserId::Integer(31));
     let second_session_key = transport_key_on_worker(1, 0, 32, UserId::Integer(32));
     let now = Instant::now();
@@ -86,8 +86,8 @@ fn rtc_bootstrap_state_tracks_dirty_and_timed_out_sessions_separately() {
 }
 
 #[test]
-fn rtc_bootstrap_state_prefers_latest_session_timeout_deadline() {
-    let mut state = RtcBootstrapState::default();
+fn packet_loop_state_prefers_latest_session_timeout_deadline() {
+    let mut state = PacketLoopState::default();
     let session_key = transport_key_on_worker(1, 0, 33, UserId::Integer(33));
     let now = Instant::now();
     let first_timeout = now + Duration::from_millis(50);
@@ -106,8 +106,8 @@ fn rtc_bootstrap_state_prefers_latest_session_timeout_deadline() {
 }
 
 #[test]
-fn rtc_bootstrap_state_deduplicates_repeated_dirty_session_marks_on_drain() {
-    let mut state = RtcBootstrapState::default();
+fn packet_loop_state_deduplicates_repeated_dirty_session_marks_on_drain() {
+    let mut state = PacketLoopState::default();
     let session_key = transport_key_on_worker(1, 0, 34, UserId::Integer(34));
     let now = Instant::now();
 
@@ -123,8 +123,8 @@ fn rtc_bootstrap_state_deduplicates_repeated_dirty_session_marks_on_drain() {
 }
 
 #[test]
-fn rtc_bootstrap_state_clears_all_dirty_duplicates_for_removed_session() {
-    let mut state = RtcBootstrapState::default();
+fn packet_loop_state_clears_all_dirty_duplicates_for_removed_session() {
+    let mut state = PacketLoopState::default();
     let removed_session_key = transport_key_on_worker(1, 0, 35, UserId::Integer(35));
     let retained_session_key = transport_key_on_worker(1, 0, 36, UserId::Integer(36));
     let now = Instant::now();

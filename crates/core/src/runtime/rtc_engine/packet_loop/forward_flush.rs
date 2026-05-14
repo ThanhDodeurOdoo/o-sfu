@@ -27,7 +27,7 @@ use super::{
         forwarded_packet::ForwardedPacket,
         forwarding_destination::{ForwardSendOutcome, ForwardingDestination},
         media_registry::RegisteredMediaHandle,
-        state::RtcBootstrapState,
+        state::PacketLoopState,
         worker::{apply_source_rid_readiness, request_keyframe_for_source},
     },
     buffers::PacketLoopBuffers,
@@ -45,7 +45,7 @@ use crate::runtime::{
 /// source-policy wakeups so the room layer is notified once per changed room
 /// after the batch has been inspected.
 pub(super) fn record_incoming_stats(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_policy_signal: &SourcePolicySignal,
     metrics: &impl RtcRouteControlMetrics,
     rtp_metrics: &RtpMetricsRecorder,
@@ -117,7 +117,7 @@ pub(super) fn record_incoming_stats(
 }
 
 fn flush_pending_rid_readiness(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     buffers: &mut PacketLoopBuffers,
 ) {
@@ -139,7 +139,7 @@ fn flush_pending_rid_readiness(
 }
 
 fn flush_pending_first_video_keyframes(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     buffers: &mut PacketLoopBuffers,
 ) {
@@ -168,7 +168,7 @@ fn flush_pending_first_video_keyframes(
 /// selected-RID gates and late subscribers converge without making room policy
 /// inspect packet payloads.
 fn request_first_video_keyframe(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     source_session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
@@ -189,7 +189,7 @@ fn request_first_video_keyframe(
 }
 
 fn source_is_video(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
 ) -> bool {
@@ -250,7 +250,7 @@ pub(super) fn drain_relay_packets(
 /// dropped. Other destination errors are logged and the loop continues flushing
 /// the remaining planned destinations.
 pub(super) fn flush_forward_routes(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
     rtp_metrics: &RtpMetricsRecorder,
     buffers: &mut PacketLoopBuffers,

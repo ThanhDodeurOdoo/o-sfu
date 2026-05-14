@@ -1,12 +1,12 @@
 //! Worker-local media lifecycle for one RTC shard.
 //!
 //! This module contain producer and consumer media declaration plus transport-handle
-//! teardown inside `RtcBootstrapState`. Route ownership and relay tracking
+//! teardown inside `PacketLoopState`. Route ownership and relay tracking
 //! stay in `control/`, while offer/answer transitions remain in
 //! `worker/negotiation.rs`.
 //!
 //! The helpers here rely on two invariants:
-//! - worker commands are serialized through one mutable `RtcBootstrapState`
+//! - worker commands are serialized through one mutable `PacketLoopState`
 //! - the signaling edge obeys the one-outstanding-offer rule and does not try
 //!   to hand out a second local offer while the previous one still awaits an
 //!   answer
@@ -27,14 +27,14 @@ use tracing::{debug, warn};
 use super::{
     super::{
         super::{
-            bitrate::RtcBitrateState,
+            bitrate::BitrateRegistry,
             commands::RtcWorkerResponse,
             local_send_rewrite::forget_transport_media_streams,
             media_registry::{
                 DecoderRefreshCodec, RegisteredMediaHandle, RemoteSourceRegistration,
             },
             simulcast,
-            state::{PendingRecvStream, RtcBootstrapState, RtcSessionState},
+            state::{PacketLoopState, PendingRecvStream, RtcSessionState},
         },
         negotiation,
     },
@@ -70,7 +70,7 @@ struct RemoteSourceRollback {
 
 impl RemoteSourceRollback {
     fn capture(
-        state: &RtcBootstrapState,
+        state: &PacketLoopState,
         is_remote_source: bool,
         source_transport_media_id: TransportMediaId,
     ) -> Self {
@@ -92,7 +92,7 @@ impl RemoteSourceRollback {
         }
     }
 
-    fn rollback(&self, state: &mut RtcBootstrapState) {
+    fn rollback(&self, state: &mut PacketLoopState) {
         if !self.is_remote_source {
             return;
         }
@@ -108,23 +108,23 @@ impl RemoteSourceRollback {
 }
 
 pub fn respond_remove_media(
-    state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
     response: RtcWorkerResponse<()>,
 ) {
     let _ = response.send(worker_remove_media(
         state,
-        bitrate_state,
+        bitrate_registry,
         session_key,
         transport_media_id,
     ));
 }
 
 pub fn respond_add_recv_media(
-    state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     policy: RecvMediaPolicy,
     session_key: &TransportSessionKey,
     media_kind: MediaKind,
@@ -133,7 +133,7 @@ pub fn respond_add_recv_media(
 ) {
     let _ = response.send(worker_add_recv_media(
         state,
-        bitrate_state,
+        bitrate_registry,
         policy,
         session_key,
         media_kind,
@@ -142,7 +142,7 @@ pub fn respond_add_recv_media(
 }
 
 pub fn respond_add_send_media(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     request: AddSendMediaRequest<'_>,
     now: Instant,
     response: RtcWorkerResponse<TransportMediaId>,
@@ -151,7 +151,7 @@ pub fn respond_add_send_media(
 }
 
 pub fn respond_resolve_media_mid(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     transport_media_id: TransportMediaId,
     response: RtcWorkerResponse<Option<String>>,
 ) {
@@ -164,8 +164,8 @@ pub fn respond_resolve_media_mid(
 /// Remove one registered transport media handle and reconcile every dependent
 /// SDP, route, and remote-source side effect that still points at it.
 fn worker_remove_media(
-    state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
 ) -> Result<(), TransportAdapterError> {
@@ -183,7 +183,7 @@ fn worker_remove_media(
             mid = ?handle.mid(),
             "released unnegotiated producer media without staging sdp removal"
         );
-        return unregister_media_handle(state, bitrate_state, transport_media_id);
+        return unregister_media_handle(state, bitrate_registry, transport_media_id);
     }
     if let Err(error) =
         stage_last_mid_removal_before_unregistering_handle(state, transport_media_id, &handle)
@@ -201,12 +201,12 @@ fn worker_remove_media(
             "released unnegotiated producer media after removal staging failed"
         );
     }
-    unregister_media_handle(state, bitrate_state, transport_media_id)
+    unregister_media_handle(state, bitrate_registry, transport_media_id)
 }
 
 fn unregister_media_handle(
-    state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     transport_media_id: TransportMediaId,
 ) -> Result<(), TransportAdapterError> {
     let Some(handle) = state.remove_media_handle(transport_media_id) else {
@@ -214,7 +214,7 @@ fn unregister_media_handle(
     };
     match handle {
         RegisteredMediaHandle::Producer { session_key, mid } => {
-            if let Ok(mut bitrate) = bitrate_state.lock() {
+            if let Ok(mut bitrate) = bitrate_registry.lock() {
                 bitrate.remove_incoming_media(&session_key, transport_media_id);
             }
             if let Some(session_state) = state.users.get_mut(&session_key) {
@@ -256,7 +256,7 @@ fn unregister_media_handle(
 /// caller may only unregister producer media that never gained negotiated RTP
 /// parameters.
 fn stage_last_mid_removal_before_unregistering_handle(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     transport_media_id: TransportMediaId,
     handle: &RegisteredMediaHandle,
 ) -> Result<(), TransportAdapterError> {
@@ -281,7 +281,7 @@ fn stage_last_mid_removal_before_unregistering_handle(
 }
 
 fn can_unregister_unnegotiated_producer(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     handle: &RegisteredMediaHandle,
 ) -> bool {
     let RegisteredMediaHandle::Producer { session_key, mid } = handle else {
@@ -298,7 +298,7 @@ fn can_unregister_unnegotiated_producer(
 }
 
 fn session_has_other_mid_user(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     session_key: &TransportSessionKey,
     mid: Mid,
     excluded_transport_media_id: TransportMediaId,
@@ -366,8 +366,8 @@ fn worker_stage_native_media_removal(
 /// there is no committed negotiated description to keep in sync yet. After that
 /// point every addition must stage the next renegotiation offer first.
 fn worker_add_recv_media(
-    state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     policy: RecvMediaPolicy,
     session_key: &TransportSessionKey,
     media_kind: MediaKind,
@@ -411,7 +411,7 @@ fn worker_add_recv_media(
         session_key: session_key.clone(),
         mid,
     });
-    if let Ok(mut bitrate) = bitrate_state.lock() {
+    if let Ok(mut bitrate) = bitrate_registry.lock() {
         let counter =
             bitrate.register_incoming_media(session_key, transport_media_id, Instant::now());
         state.register_incoming_bitrate_counter(transport_media_id, counter);
@@ -491,14 +491,14 @@ fn worker_stage_native_recv_media(
 }
 
 /// Declare one send-only media line for a consumer route and register the
-/// corresponding route-source ownership in the worker bootstrap state.
+/// corresponding route-source ownership in the worker packet-loop state.
 ///
 /// Remote-source registration, consumer-media declaration, and route creation
 /// form one logical edge. If the consumer user is gone or media staging
 /// fails, any provisional remote-source registration is restored before the
 /// error escapes.
 fn worker_add_send_media(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     request: AddSendMediaRequest<'_>,
     now: Instant,
 ) -> TransportResult<TransportMediaId> {

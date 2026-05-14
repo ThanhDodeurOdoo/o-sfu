@@ -7,7 +7,7 @@ use super::{
     forwarded_packet::ForwardedPacket,
     local_forwarding::LocalPacketDestination,
     relay_registry::{InterNodeRelaySender, RelayEnqueueOutcome, RelayPacketMailbox},
-    state::RtcBootstrapState,
+    state::PacketLoopState,
 };
 use crate::runtime::{
     media_transport::{TransportMediaId, TransportSessionKey},
@@ -157,7 +157,7 @@ impl ForwardingDestination {
 
     pub(super) fn send(
         &self,
-        state: &mut RtcBootstrapState,
+        state: &mut PacketLoopState,
         packet: &mut ForwardedPacket,
         is_last_destination: bool,
     ) -> Result<ForwardSendOutcome, RtcError> {
@@ -185,7 +185,7 @@ impl LocalRtcPacketDestination {
 
     fn send(
         &self,
-        state: &mut RtcBootstrapState,
+        state: &mut PacketLoopState,
         packet: &mut ForwardedPacket,
         is_last_destination: bool,
     ) -> Result<ForwardSendOutcome, RtcError> {
@@ -385,7 +385,7 @@ mod tests {
         let _ =
             forward
                 .destination()
-                .send(&mut RtcBootstrapState::default(), &mut relay_packet, true);
+                .send(&mut PacketLoopState::default(), &mut relay_packet, true);
         assert!(relay_rx.try_recv().is_ok());
     }
 
@@ -410,7 +410,7 @@ mod tests {
         let _ =
             forward
                 .destination()
-                .send(&mut RtcBootstrapState::default(), &mut relay_packet, true);
+                .send(&mut PacketLoopState::default(), &mut relay_packet, true);
         assert!(relay_rx.try_recv().is_ok());
     }
 }

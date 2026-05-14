@@ -17,12 +17,12 @@ use crate::runtime::{
         commands::ConsumerPacketGateCommand,
         relay_registry::{RelayTargetId, RelayTargetTransport},
         route_control::PacketLayerGate,
-        state::RtcBootstrapState,
+        state::PacketLoopState,
     },
 };
 
 pub fn respond_set_producer_active(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
     active: bool,
@@ -37,7 +37,7 @@ pub fn respond_set_producer_active(
 }
 
 pub fn respond_set_consumer_active(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     consumer_session_key: &TransportSessionKey,
     consumer_transport_media_id: TransportMediaId,
     source_session_key: &TransportSessionKey,
@@ -61,7 +61,7 @@ pub fn respond_set_consumer_active(
 /// oneshot response boundary at the command edge while the worker function
 /// revalidates the route before mutating packet-gate state.
 pub fn respond_set_consumer_packet_gate(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     request: ConsumerPacketGateRequest<'_>,
     now: Instant,
     response: oneshot::Sender<Result<(), TransportAdapterError>>,
@@ -70,7 +70,7 @@ pub fn respond_set_consumer_packet_gate(
 }
 
 pub fn respond_set_consumer_packet_gates(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     updates: Vec<ConsumerPacketGateCommand>,
@@ -87,7 +87,7 @@ pub fn respond_set_consumer_packet_gates(
 }
 
 pub fn respond_request_consumer_keyframe(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
     consumer_session_key: &TransportSessionKey,
     consumer_transport_media_id: TransportMediaId,
@@ -106,7 +106,7 @@ pub fn respond_request_consumer_keyframe(
 }
 
 pub fn respond_add_relay_target(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     target_id: RelayTargetId,
@@ -123,7 +123,7 @@ pub fn respond_add_relay_target(
 }
 
 pub fn respond_remove_relay_target(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_transport_media_id: TransportMediaId,
     target_id: RelayTargetId,
     response: oneshot::Sender<Result<(), TransportAdapterError>>,
@@ -133,7 +133,7 @@ pub fn respond_remove_relay_target(
 }
 
 pub fn respond_set_relay_target_active(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     target_id: RelayTargetId,
@@ -150,7 +150,7 @@ pub fn respond_set_relay_target_active(
 }
 
 pub fn respond_set_remote_source_packet_gate(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     target_id: RelayTargetId,

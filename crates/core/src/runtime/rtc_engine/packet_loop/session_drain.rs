@@ -5,7 +5,7 @@
 //! module contain that polling for sessions that are dirty or whose timeout has
 //! elapsed.
 //!
-//! The scheduler lives in `RtcBootstrapState`. This file only consumes the
+//! The scheduler lives in `PacketLoopState`. This file only consumes the
 //! ready set returned by that scheduler and writes newly produced work into
 //! `PacketLoopBuffers`. It avoids scanning all sessions on every
 //! turn.
@@ -23,7 +23,7 @@ use tokio::net::UdpSocket;
 use tracing::{trace, warn};
 
 use super::{
-    super::state::{RtcBootstrapState, RtcSessionState, RtcSnapshotState},
+    super::state::{PacketLoopState, RtcSessionState, RtcSnapshotState},
     buffers::PacketLoopBuffers,
     event_observation::{log_rtc_event, observe_rtc_event},
     keyframe_requests::PendingKeyframeRequest,
@@ -45,10 +45,10 @@ pub(super) struct SessionDrainContext<'a> {
 /// Poll every session that the scheduler reports as ready.
 ///
 /// Readiness comes from dirty-session marks and exact timeout deadlines stored
-/// in `RtcBootstrapState`. Sessions that disappeared before the drain are
+/// in `PacketLoopState`. Sessions that disappeared before the drain are
 /// ignored, which keeps teardown races harmless for already queued wakeups.
 pub(super) fn drain_ready_sessions(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     context: &SessionDrainContext<'_>,
     buffers: &mut PacketLoopBuffers,
     now: Instant,

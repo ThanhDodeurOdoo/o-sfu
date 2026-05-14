@@ -52,7 +52,7 @@ use crate::{
             media_registry::RegisteredMediaHandle,
             relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayTargetId},
             route_control::{KeyframeRequestDecision, PacketLayerGate},
-            state::{RtcBootstrapState, RtcSnapshotState},
+            state::{PacketLoopState, RtcSnapshotState},
             test_support::{
                 sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
                 sample_forwarded_packet_with_rid, sample_forwarded_packet_without_mid,
@@ -87,7 +87,7 @@ impl MediaPacketSink for CountingSink {
 }
 
 fn populate_forward_routes(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     packet_sinks: &impl PacketSinkLookup,
     metrics: &impl RtcRouteControlMetrics,
     pending_packets: &mut [super::super::forwarded_packet::ForwardedPacket],
@@ -136,7 +136,7 @@ fn serialize_stun_message(message: &StunMessage<'_>, password: Option<&[u8]>) ->
 
 #[test]
 fn recent_miss_cache_skips_repeated_scans_for_the_same_source() {
-    let mut bootstrap_state = RtcBootstrapState::default();
+    let mut packet_loop_state = PacketLoopState::default();
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
@@ -146,7 +146,7 @@ fn recent_miss_cache_skips_repeated_scans_for_the_same_source() {
     let packet = valid_rtp_packet(1, 11);
 
     route_packet_to_matching_session(
-        &mut bootstrap_state,
+        &mut packet_loop_state,
         &snapshot_state,
         &mut routing_state,
         &rtc_metrics,
@@ -155,7 +155,7 @@ fn recent_miss_cache_skips_repeated_scans_for_the_same_source() {
         &packet,
     );
     route_packet_to_matching_session(
-        &mut bootstrap_state,
+        &mut packet_loop_state,
         &snapshot_state,
         &mut routing_state,
         &rtc_metrics,
@@ -174,7 +174,7 @@ fn recent_miss_cache_skips_repeated_scans_for_the_same_source() {
 
 #[test]
 fn recent_miss_cache_clears_on_topology_change() {
-    let mut bootstrap_state = RtcBootstrapState::default();
+    let mut packet_loop_state = PacketLoopState::default();
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
@@ -184,7 +184,7 @@ fn recent_miss_cache_clears_on_topology_change() {
     let packet = valid_rtp_packet(2, 22);
 
     route_packet_to_matching_session(
-        &mut bootstrap_state,
+        &mut packet_loop_state,
         &snapshot_state,
         &mut routing_state,
         &rtc_metrics,
@@ -194,7 +194,7 @@ fn recent_miss_cache_clears_on_topology_change() {
     );
     routing_state.clear_on_topology_change();
     route_packet_to_matching_session(
-        &mut bootstrap_state,
+        &mut packet_loop_state,
         &snapshot_state,
         &mut routing_state,
         &rtc_metrics,
@@ -212,7 +212,7 @@ fn recent_miss_cache_clears_on_topology_change() {
 
 #[test]
 fn recent_miss_cache_does_not_skip_different_packets_from_the_same_source() {
-    let mut bootstrap_state = RtcBootstrapState::default();
+    let mut packet_loop_state = PacketLoopState::default();
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
@@ -221,7 +221,7 @@ fn recent_miss_cache_does_not_skip_different_packets_from_the_same_source() {
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_020));
 
     route_packet_to_matching_session(
-        &mut bootstrap_state,
+        &mut packet_loop_state,
         &snapshot_state,
         &mut routing_state,
         &rtc_metrics,
@@ -230,7 +230,7 @@ fn recent_miss_cache_does_not_skip_different_packets_from_the_same_source() {
         &valid_rtp_packet(3, 33),
     );
     route_packet_to_matching_session(
-        &mut bootstrap_state,
+        &mut packet_loop_state,
         &snapshot_state,
         &mut routing_state,
         &rtc_metrics,
@@ -249,7 +249,7 @@ fn recent_miss_cache_does_not_skip_different_packets_from_the_same_source() {
 
 #[test]
 fn source_rate_limiter_bounds_varied_unknown_source_misses() {
-    let mut bootstrap_state = RtcBootstrapState::default();
+    let mut packet_loop_state = PacketLoopState::default();
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
@@ -266,7 +266,7 @@ fn source_rate_limiter_bounds_varied_unknown_source_misses() {
         (10, 110),
     ] {
         route_packet_to_matching_session(
-            &mut bootstrap_state,
+            &mut packet_loop_state,
             &snapshot_state,
             &mut routing_state,
             &rtc_metrics,
@@ -286,7 +286,7 @@ fn source_rate_limiter_bounds_varied_unknown_source_misses() {
 
 #[test]
 fn malformed_udp_datagram_counts_as_malformed_drop_without_scan_metrics() {
-    let mut bootstrap_state = RtcBootstrapState::default();
+    let mut packet_loop_state = PacketLoopState::default();
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
@@ -295,7 +295,7 @@ fn malformed_udp_datagram_counts_as_malformed_drop_without_scan_metrics() {
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_030));
 
     route_packet_to_matching_session(
-        &mut bootstrap_state,
+        &mut packet_loop_state,
         &snapshot_state,
         &mut routing_state,
         &rtc_metrics,
@@ -316,7 +316,7 @@ fn malformed_udp_datagram_counts_as_malformed_drop_without_scan_metrics() {
 #[test]
 fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_040));
-    let mut bootstrap_state = RtcBootstrapState::default();
+    let mut packet_loop_state = PacketLoopState::default();
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
@@ -327,14 +327,14 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
     let unknown_source_addr = SocketAddr::from(([127, 0, 0, 1], 45_041));
 
     let first_created = bootstrap::ensure_session_rtc_state(
-        &mut bootstrap_state.users,
+        &mut packet_loop_state.users,
         &first_session,
         candidate_addr,
         Bitrate::from_mbps(10),
         MediaCodecFlags::default(),
     );
     let second_created = bootstrap::ensure_session_rtc_state(
-        &mut bootstrap_state.users,
+        &mut packet_loop_state.users,
         &second_session,
         candidate_addr,
         Bitrate::from_mbps(10),
@@ -345,7 +345,7 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
     assert_eq!(second_created, Ok(true));
 
     route_packet_to_matching_session(
-        &mut bootstrap_state,
+        &mut packet_loop_state,
         &snapshot_state,
         &mut routing_state,
         &rtc_metrics,
@@ -366,27 +366,27 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_045));
     let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_046));
     let session_key = test_transport_session_key(51, 0, 56, UserId::Integer(57));
-    let mut bootstrap_state = RtcBootstrapState::default();
+    let mut packet_loop_state = PacketLoopState::default();
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
     let rtc_metrics = metrics.register_rtc_worker();
 
     let created = bootstrap::ensure_session_rtc_state(
-        &mut bootstrap_state.users,
+        &mut packet_loop_state.users,
         &session_key,
         candidate_addr,
         Bitrate::from_mbps(10),
         MediaCodecFlags::default(),
     );
     assert_eq!(created, Ok(true));
-    let local_ice_credentials = bootstrap_state
+    let local_ice_credentials = packet_loop_state
         .users
         .get_mut(&session_key)
         .map(|session_state| session_state.rtc.direct_api().local_ice_credentials())
         .ok_or("session state missing after creation")?;
     assert!(
-        bootstrap_state
+        packet_loop_state
             .remote_addr_demux
             .remember_remote_addr(source_addr, &session_key)
     );
@@ -418,7 +418,7 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
     assert!(routing_state.source_is_tracked(source_addr));
 
     route_packet_to_matching_session(
-        &mut bootstrap_state,
+        &mut packet_loop_state,
         &snapshot_state,
         &mut routing_state,
         &rtc_metrics,
@@ -429,7 +429,7 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
 
     assert_eq!(routing_state.fallback_attempts(), 0);
     assert_eq!(
-        bootstrap_state
+        packet_loop_state
             .remote_addr_demux
             .session_key_for_remote_addr(source_addr),
         Some(&session_key)
@@ -459,14 +459,14 @@ fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static 
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_047));
     let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_048));
     let stale_session_key = test_transport_session_key(51, 0, 58, UserId::Integer(59));
-    let mut bootstrap_state = RtcBootstrapState::default();
+    let mut packet_loop_state = PacketLoopState::default();
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
     let rtc_metrics = metrics.register_rtc_worker();
 
     assert!(
-        bootstrap_state
+        packet_loop_state
             .remote_addr_demux
             .remember_remote_addr(source_addr, &stale_session_key)
     );
@@ -482,7 +482,7 @@ fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static 
     }
 
     route_packet_to_matching_session(
-        &mut bootstrap_state,
+        &mut packet_loop_state,
         &snapshot_state,
         &mut routing_state,
         &rtc_metrics,
@@ -492,7 +492,7 @@ fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static 
     );
 
     assert!(
-        bootstrap_state
+        packet_loop_state
             .remote_addr_demux
             .session_key_for_remote_addr(source_addr)
             .is_none()
@@ -518,7 +518,7 @@ fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static 
 #[test]
 fn recording_forward_destination_captures_packets_without_bypassing_the_contract() {
     let producer_session = test_transport_session_key(18, 0, 19, UserId::Integer(20));
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let sink = Arc::new(CountingSink::new());
     let _source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
@@ -560,7 +560,7 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
 fn flush_forward_routes_writes_hot_rtp_metrics_only_to_the_worker_recorder() {
     let source_session = test_transport_session_key(128, 0, 129, UserId::Integer(130));
     let source_transport_media_id = TransportMediaId::new(131);
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let sink = Arc::new(CountingSink::new());
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
@@ -592,7 +592,7 @@ fn flush_forward_routes_writes_hot_rtp_metrics_only_to_the_worker_recorder() {
 fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() {
     let producer_session = test_transport_session_key(88, 0, 89, UserId::Integer(90));
     let producer_mid = Mid::from("cam-up");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: producer_session.clone(),
         mid: producer_mid,
@@ -635,7 +635,7 @@ fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() 
 fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
     let source_session = test_transport_session_key(118, 0, 119, UserId::Integer(120));
     let source_transport_media_id = TransportMediaId::new(121);
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let sink = Arc::new(CountingSink::new());
     let (relay_mailbox, mut intra_node_rx) = RelayPacketMailbox::channel_for_test();
     let (inter_node_sender, mut inter_node_rx) = InterNodeRelaySender::channel_for_test();
@@ -695,7 +695,7 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() {
     let producer_session = test_transport_session_key(218, 0, 219, UserId::Integer(220));
     let consumer_session = test_transport_session_key(218, 0, 221, UserId::Integer(222));
     let consumer_mid = Mid::from("cam-down");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
     let rtp_metrics = metrics.register_rtp_worker();
@@ -746,7 +746,7 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() {
 
 #[test]
 fn packet_loop_dirty_marks_are_unique_until_the_session_is_drained() {
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let session = test_transport_session_key(318, 0, 319, UserId::Integer(320));
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_052));
     let now = Instant::now();
@@ -777,7 +777,7 @@ fn packet_loop_dirty_marks_are_unique_until_the_session_is_drained() {
 
 #[test]
 fn packet_loop_wakes_immediately_when_forwarding_marks_a_session_dirty() {
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let session = test_transport_session_key(318, 0, 319, UserId::Integer(320));
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_053));
     let future_timeout = Instant::now() + Duration::from_secs(30);
@@ -821,7 +821,7 @@ async fn packet_loop_mailbox_wakes_for_relay_without_control_or_socket_input() {
 fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_tracking() {
     let producer_session = test_transport_session_key(28, 0, 29, UserId::Integer(30));
     let consumer_session = test_transport_session_key(28, 0, 31, UserId::Integer(32));
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let rtp_metrics = metrics.register_rtp_worker();
@@ -924,7 +924,7 @@ fn drain_relay_packets_ingests_owned_forwarded_packets_from_the_mailbox() {
     assert_eq!(forwarded.source_session_key(), &source_session);
     assert_eq!(forwarded.payload(), b"payload");
     assert_eq!(
-        forwarded.resolve_source_transport_media_id(&RtcBootstrapState::default()),
+        forwarded.resolve_source_transport_media_id(&PacketLoopState::default()),
         Some(TransportMediaId::new(17))
     );
 }
@@ -950,7 +950,7 @@ fn drain_relay_packets_stops_at_the_configured_cap() {
 fn flush_forward_routes_records_relay_overload_drops() {
     let source_session = test_transport_session_key(29, 0, 30, UserId::Integer(31));
     let source_transport_media_id = TransportMediaId::new(32);
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test_with_capacity(1);
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
@@ -989,7 +989,7 @@ fn flush_pending_keyframe_requests_marks_local_source_sessions_dirty() {
     let consumer_session = test_transport_session_key(61, 0, 64, UserId::Integer(65));
     let source_mid = Mid::from("cam-up");
     let consumer_mid = Mid::from("cam-down");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
     let rtc_metrics = metrics.register_rtc_worker();
@@ -1044,7 +1044,7 @@ fn flush_pending_keyframe_requests_forwards_remote_sources_by_transport_media_id
     let consumer_session = test_transport_session_key(71, 1, 74, UserId::Integer(75));
     let consumer_mid = Mid::from("cam-down");
     let source_transport_media_id = TransportMediaId::new(91);
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
     let rtc_metrics = metrics.register_rtc_worker();
@@ -1099,7 +1099,7 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
     let second_consumer_session = test_transport_session_key(81, 1, 86, UserId::Integer(87));
     let consumer_mid = Mid::from("cam-down");
     let source_transport_media_id = TransportMediaId::new(101);
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
     let rtc_metrics = metrics.register_rtc_worker();
@@ -1171,7 +1171,7 @@ fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_f
     let first_consumer_session = test_transport_session_key(91, 0, 94, UserId::Integer(95));
     let second_consumer_session = test_transport_session_key(91, 0, 96, UserId::Integer(97));
     let source_mid = Mid::from("cam-up");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
     let rtc_metrics = metrics.register_rtc_worker();

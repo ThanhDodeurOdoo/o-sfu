@@ -16,7 +16,7 @@ use super::super::test_support::{DebugRtcWorkerCommand, handle_debug_worker_comm
 use super::super::{
     commands::RtcWorkerCommand,
     forwarded_packet::ForwardedPacket,
-    state::RtcBootstrapState,
+    state::PacketLoopState,
     worker::{WorkerCommandContext, handle_worker_command},
 };
 
@@ -183,11 +183,7 @@ impl PacketLoopControlInput {
     /// The caller remains responsible for invalidating packet-routing hints
     /// after dispatch. Both variants may change ownership indexes that demux
     /// recovery relies on.
-    pub(super) fn dispatch(
-        self,
-        state: &mut RtcBootstrapState,
-        context: &WorkerCommandContext<'_>,
-    ) {
+    pub(super) fn dispatch(self, state: &mut PacketLoopState, context: &WorkerCommandContext<'_>) {
         match self {
             Self::Command(command) => handle_worker_command(state, context, command),
             #[cfg(any(test, feature = "testing-transport"))]

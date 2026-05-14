@@ -15,9 +15,9 @@ use tokio::sync::oneshot;
 
 use super::{
     super::{
-        bitrate::RtcBitrateState,
+        bitrate::BitrateRegistry,
         commands::{CloseSessionOutcome, CloseSessionState},
-        state::{RtcBootstrapState, RtcSnapshotState},
+        state::{PacketLoopState, RtcSnapshotState},
     },
     media::refresh_source_packet_gate,
 };
@@ -27,21 +27,26 @@ use crate::runtime::{
 };
 
 pub(super) fn respond_close_session(
-    state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     session_key: &TransportSessionKey,
     metrics: &RuntimeMetrics,
     response: oneshot::Sender<Result<CloseSessionOutcome, TransportAdapterError>>,
 ) {
-    let close_outcome =
-        worker_close_session(state, bitrate_state, snapshot_state, session_key, metrics);
+    let close_outcome = worker_close_session(
+        state,
+        bitrate_registry,
+        snapshot_state,
+        session_key,
+        metrics,
+    );
     let _ = response.send(Ok(close_outcome));
 }
 
 fn worker_close_session(
-    state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     session_key: &TransportSessionKey,
     metrics: &RuntimeMetrics,
@@ -95,7 +100,7 @@ fn worker_close_session(
             None,
         );
     }
-    if let Ok(mut bitrate) = bitrate_state.lock() {
+    if let Ok(mut bitrate) = bitrate_registry.lock() {
         bitrate.remove_session(session_key);
     }
     if let Some(removed_session) = removed_session {

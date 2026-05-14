@@ -35,7 +35,7 @@ use tracing::{debug, trace, warn};
 
 use super::super::{
     routing_miss::{PacketLoopRoutingMissKey, PacketLoopRoutingState},
-    state::{RtcBootstrapState, RtcSnapshotState},
+    state::{PacketLoopState, RtcSnapshotState},
 };
 use crate::runtime::{
     media_transport::TransportSessionKey,
@@ -114,7 +114,7 @@ impl<'a> Iterator for CandidateSessionKeys<'a> {
 /// but the route can still be considered learned because ownership and packet
 /// validity are separate concerns.
 pub(super) fn route_packet_to_matching_session(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     routing_state: &mut PacketLoopRoutingState,
     metrics: &RtcMetricsRecorder,
@@ -189,7 +189,7 @@ pub(super) fn route_packet_to_matching_session(
 }
 
 fn route_packet_with_cached_session(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
@@ -259,7 +259,7 @@ fn route_packet_with_cached_session(
 }
 
 fn matching_indexed_session_key_for_packet(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet: &[u8],
@@ -432,7 +432,7 @@ struct PacketRouteContext<'a> {
 /// Feeding can still fail if the packet is invalid for the current transport
 /// state, but a failure does not by itself disprove ownership of the tuple.
 fn route_packet_to_session(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
     route: &PacketRouteContext<'_>,
     input: Input<'_>,
@@ -506,7 +506,7 @@ fn route_packet_to_session(
 /// It only avoids the recovery-index probe because there is no candidate set to
 /// narrow.
 fn route_packet_by_single_session(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     routing_state: &mut PacketLoopRoutingState,
     miss_key: PacketLoopRoutingMissKey,
     route: &PacketRouteContext<'_>,
@@ -555,7 +555,7 @@ fn route_packet_by_single_session(
 /// consults the corresponding demux index and verifies only the resulting
 /// candidate sessions with `Rtc::accepts()`.
 fn route_packet_by_recovery_index(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     routing_state: &mut PacketLoopRoutingState,
     miss_key: PacketLoopRoutingMissKey,
     route: &PacketRouteContext<'_>,

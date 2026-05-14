@@ -18,9 +18,9 @@ use tokio::sync::oneshot;
 use super::publication;
 use super::{
     super::{
-        bitrate::RtcBitrateState,
+        bitrate::BitrateRegistry,
         commands::RtcWorkerCommand,
-        state::{RtcBootstrapState, RtcSnapshotState},
+        state::{PacketLoopState, RtcSnapshotState},
     },
     media,
     negotiation::{self, OfferBootstrapConfig},
@@ -38,7 +38,7 @@ use crate::{
 };
 
 pub struct WorkerCommandContext<'a> {
-    pub bitrate_state: &'a Arc<Mutex<RtcBitrateState>>,
+    pub bitrate_registry: &'a Arc<Mutex<BitrateRegistry>>,
     pub snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
     pub now: Instant,
     pub public_ip: IpAddr,
@@ -56,7 +56,7 @@ pub struct WorkerCommandContext<'a> {
 /// Callers must already serialize access to `state`, this function assumes it
 /// runs on the packet-loop task that owns the shard.
 pub fn handle_worker_command(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     context: &WorkerCommandContext<'_>,
     command: RtcWorkerCommand,
 ) {
@@ -75,7 +75,7 @@ pub fn handle_worker_command(
             response,
         } => session::respond_close_session(
             state,
-            context.bitrate_state,
+            context.bitrate_registry,
             context.snapshot_state,
             &session_key,
             context.metrics,
@@ -111,7 +111,7 @@ pub fn handle_worker_command(
         | RtcWorkerCommand::RequestConsumerKeyframe { .. } => {
             handle_media_command(
                 state,
-                context.bitrate_state,
+                context.bitrate_registry,
                 media::RecvMediaPolicy {
                     max_bitrate_in: context.max_bitrate_in,
                     video_bitrate_limits: context.video_bitrate_limits,
@@ -127,7 +127,7 @@ pub fn handle_worker_command(
 }
 
 fn handle_negotiation_command(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     context: &WorkerCommandContext<'_>,
     command: RtcWorkerCommand,
 ) {
@@ -137,7 +137,7 @@ fn handle_negotiation_command(
             response,
         } => negotiation::respond_create_initial_session_offer(
             state,
-            context.bitrate_state,
+            context.bitrate_registry,
             context.snapshot_state,
             OfferBootstrapConfig {
                 public_ip: context.public_ip,
@@ -183,7 +183,7 @@ fn handle_negotiation_command(
 }
 
 fn respond_active_speaker_source_snapshot(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     response: oneshot::Sender<Result<Vec<ActiveSpeakerSource>, TransportAdapterError>>,
 ) {
     let snapshot = state.active_speaker_source_snapshot(Instant::now());
@@ -191,7 +191,7 @@ fn respond_active_speaker_source_snapshot(
 }
 
 fn respond_active_speaker_diagnostic_snapshot(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     response: oneshot::Sender<Result<Vec<ActiveSpeakerSourceDiagnostic>, TransportAdapterError>>,
 ) {
     let snapshot = state.active_speaker_diagnostic_snapshot(Instant::now());
@@ -199,7 +199,7 @@ fn respond_active_speaker_diagnostic_snapshot(
 }
 
 fn respond_next_active_speaker_deadline(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     response: oneshot::Sender<Result<Option<Instant>, TransportAdapterError>>,
 ) {
     let deadline = state
@@ -209,7 +209,7 @@ fn respond_next_active_speaker_deadline(
 }
 
 fn respond_expired_active_speaker_room_instance_ids(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     now: Instant,
     response: oneshot::Sender<Result<BTreeSet<RoomInstanceId>, TransportAdapterError>>,
 ) {
@@ -218,8 +218,8 @@ fn respond_expired_active_speaker_room_instance_ids(
 }
 
 fn handle_media_command(
-    state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     recv_media_policy: media::RecvMediaPolicy,
     metrics: &RuntimeMetrics,
     now: Instant,
@@ -232,7 +232,7 @@ fn handle_media_command(
             response,
         } => media::respond_remove_media(
             state,
-            bitrate_state,
+            bitrate_registry,
             &session_key,
             transport_media_id,
             response,
@@ -244,7 +244,7 @@ fn handle_media_command(
             response,
         } => media::respond_add_recv_media(
             state,
-            bitrate_state,
+            bitrate_registry,
             recv_media_policy,
             &session_key,
             media_kind,
@@ -289,7 +289,7 @@ fn handle_media_command(
 }
 
 fn handle_media_route_control_command(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
     now: Instant,
     command: RtcWorkerCommand,
@@ -370,7 +370,7 @@ fn handle_media_route_control_command(
     }
 }
 
-fn handle_relay_route_control_command(state: &mut RtcBootstrapState, command: RtcWorkerCommand) {
+fn handle_relay_route_control_command(state: &mut PacketLoopState, command: RtcWorkerCommand) {
     match command {
         RtcWorkerCommand::AddRelayTarget {
             source_session_key,
@@ -415,7 +415,7 @@ fn handle_relay_route_control_command(state: &mut RtcBootstrapState, command: Rt
 }
 
 fn handle_consumer_packet_gate_update(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     command: RtcWorkerCommand,
     now: Instant,
 ) {
@@ -444,7 +444,7 @@ fn handle_consumer_packet_gate_update(
 }
 
 fn handle_consumer_packet_gate_batch_update(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     command: RtcWorkerCommand,
     now: Instant,
 ) {
@@ -467,7 +467,7 @@ fn handle_consumer_packet_gate_batch_update(
 }
 
 fn handle_consumer_keyframe_request(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
     command: RtcWorkerCommand,
 ) {

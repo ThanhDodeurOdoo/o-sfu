@@ -26,13 +26,13 @@ use crate::{
         media_transport::{TransportAdapterError, TransportMediaId, TransportSessionKey},
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
         rtc_engine::{
-            bitrate::RtcBitrateState,
+            bitrate::BitrateRegistry,
             bootstrap,
             commands::{ConsumerPacketGateCommand, RemoteSourceControl, RtcWorkerCommand},
             media_registry::RegisteredMediaHandle,
             relay_registry::{RelayPacketMailbox, RelayTargetId},
             route_control::{KeyframeRequestDecision, PacketLayerGate},
-            state::RtcBootstrapState,
+            state::PacketLoopState,
             test_support::{
                 RouteDestinationFixture, RouteSourceFixture, test_transport_session_key,
             },
@@ -41,7 +41,7 @@ use crate::{
 };
 
 fn prepare_source_session(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_session: &TransportSessionKey,
     source_mid: Mid,
     ssrc: u32,
@@ -50,7 +50,7 @@ fn prepare_source_session(
 }
 
 fn prepare_source_session_with_rid(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_session: &TransportSessionKey,
     source_mid: Mid,
     ssrc: u32,
@@ -80,7 +80,7 @@ fn prepare_source_session_with_rid(
 }
 
 fn add_source_rid_stream(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_session: &TransportSessionKey,
     source_mid: Mid,
     ssrc: u32,
@@ -98,7 +98,7 @@ fn add_source_rid_stream(
 }
 
 fn assert_consumer_packet_gate(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_transport_media_id: TransportMediaId,
     consumer_session: &TransportSessionKey,
     packet_gate: &PacketLayerGate,
@@ -119,7 +119,7 @@ fn assert_consumer_packet_gate(
 }
 
 struct PendingSelectedRidRoute {
-    state: RtcBootstrapState,
+    state: PacketLoopState,
     metrics: RuntimeMetrics,
     source_session: TransportSessionKey,
     consumer_session: TransportSessionKey,
@@ -135,7 +135,7 @@ fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
     let consumer_mid = Mid::from("cam-down");
     let selected_rid = Rid::from("hi");
     let fallback_rid = Rid::from("lo");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id = prepare_source_session_with_rid(
         &mut state,
@@ -190,7 +190,7 @@ fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
 fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
     let source_session = test_transport_session_key(101, 0, 102, UserId::Integer(103));
     let source_mid = Mid::from("cam-up");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
     let (_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
     let source_transport_media_id =
@@ -219,7 +219,7 @@ fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
 fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
     let source_session = test_transport_session_key(111, 0, 112, UserId::Integer(113));
     let source_mid = Mid::from("cam-up");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
     let (mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
     let source_transport_media_id =
@@ -265,7 +265,7 @@ fn consumer_keyframe_request_marks_local_video_source_dirty() {
     let consumer_session = test_transport_session_key(115, 0, 118, UserId::Integer(119));
     let source_mid = Mid::from("cam-up");
     let consumer_mid = Mid::from("cam-down");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id =
         prepare_source_session(&mut state, &source_session, source_mid, 88_001);
@@ -302,7 +302,7 @@ fn consumer_keyframe_request_uses_rid_scoped_local_video_source() {
     let source_mid = Mid::from("cam-up");
     let consumer_mid = Mid::from("cam-down");
     let selected_rid = Rid::from("hi");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id = prepare_source_session_with_rid(
         &mut state,
@@ -344,7 +344,7 @@ fn open_consumer_keyframe_request_refreshes_simulcast_video_source() {
     let consumer_session = test_transport_session_key(225, 0, 228, UserId::Integer(229));
     let source_mid = Mid::from("cam-up");
     let consumer_mid = Mid::from("cam-down");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id = prepare_source_session_with_rid(
         &mut state,
@@ -410,7 +410,7 @@ fn consumer_keyframe_request_forwards_remote_video_refresh() {
     let consumer_session = test_transport_session_key(125, 1, 128, UserId::Integer(129));
     let consumer_mid = Mid::from("cam-down");
     let source_transport_media_id = TransportMediaId::new(131);
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
     let (control_tx, mut control_rx) = mpsc::channel(1);
 
@@ -467,7 +467,7 @@ fn consumer_keyframe_request_forwards_remote_video_refresh_with_selected_rid() {
     let consumer_mid = Mid::from("cam-down");
     let selected_rid = Rid::from("hi");
     let source_transport_media_id = TransportMediaId::new(231);
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
     let (control_tx, mut control_rx) = mpsc::channel(1);
 
@@ -527,7 +527,7 @@ fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate(
     let source_mid = Mid::from("cam-up");
     let first_consumer_mid = Mid::from("cam-down-a");
     let second_consumer_mid = Mid::from("cam-down-b");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let source_transport_media_id =
         prepare_source_session(&mut state, &source_session, source_mid, 88_889);
     RouteSourceFixture::existing(
@@ -588,7 +588,7 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
     let source_mid = Mid::from("cam-up");
     let consumer_mid = Mid::from("cam-down");
     let selected_rid = Rid::from("hi");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let source_transport_media_id = prepare_source_session_with_rid(
         &mut state,
         &source_session,
@@ -807,7 +807,7 @@ fn selected_rid_activation_sends_bounded_follow_up_keyframe_refreshes() {
     let source_mid = Mid::from("cam-up");
     let consumer_mid = Mid::from("cam-down");
     let selected_rid = Rid::from("hi");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id = prepare_source_session_with_rid(
         &mut state,
@@ -869,7 +869,7 @@ fn selected_rid_keyframe_refreshes_are_timer_driven_after_activation() {
     let source_mid = Mid::from("cam-up");
     let consumer_mid = Mid::from("cam-down");
     let selected_rid = Rid::from("hi");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id = prepare_source_session_with_rid(
         &mut state,
@@ -914,7 +914,7 @@ fn selected_rid_packet_gate_blocks_when_selected_rid_goes_stale() {
     let consumer_mid = Mid::from("cam-down");
     let selected_rid = Rid::from("hi");
     let fallback_rid = Rid::from("lo");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id = prepare_source_session_with_rid(
         &mut state,
@@ -1009,7 +1009,7 @@ fn batched_consumer_packet_gates_keep_remote_relay_open_during_rid_bootstrap() {
     let second_consumer_session = test_transport_session_key(141, 1, 146, UserId::Integer(147));
     let first_consumer_mid = Mid::from("cam-down-a");
     let second_consumer_mid = Mid::from("cam-down-b");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let source_transport_media_id = TransportMediaId::new(41);
     let (command_tx, mut command_rx) = mpsc::channel(4);
     assert!(
@@ -1075,7 +1075,7 @@ fn explicit_consumer_block_still_blocks_remote_relay() {
     let source_session = test_transport_session_key(141, 0, 152, UserId::Integer(153));
     let consumer_session = test_transport_session_key(141, 1, 154, UserId::Integer(155));
     let consumer_mid = Mid::from("cam-down");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let source_transport_media_id = TransportMediaId::new(51);
     let (command_tx, mut command_rx) = mpsc::channel(4);
     assert!(
@@ -1118,7 +1118,7 @@ fn selected_consumer_rid_keeps_remote_relay_open() {
     let source_session = test_transport_session_key(141, 0, 162, UserId::Integer(163));
     let consumer_session = test_transport_session_key(141, 1, 164, UserId::Integer(165));
     let consumer_mid = Mid::from("cam-down");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let source_transport_media_id = TransportMediaId::new(61);
     let (command_tx, mut command_rx) = mpsc::channel(4);
     assert!(
@@ -1160,7 +1160,7 @@ fn selected_consumer_rid_keeps_remote_relay_open() {
 fn add_send_media_rolls_back_remote_source_registration_when_consumer_session_is_missing() {
     let source_session = test_transport_session_key(151, 0, 152, UserId::Integer(153));
     let consumer_session = test_transport_session_key(151, 1, 154, UserId::Integer(155));
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let source_transport_media_id = TransportMediaId::new(33);
     let (command_tx, _command_rx) = mpsc::channel(1);
     let remote_source_control = RemoteSourceControl::new(command_tx, RelayTargetId::new(10));
@@ -1198,7 +1198,7 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
     let consumer_session = test_transport_session_key(151, 0, 158, UserId::Integer(159));
     let source_mid = Mid::from("cam-up");
     let consumer_mid = Mid::from("cam-down");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let source_transport_media_id =
         prepare_source_session(&mut state, &source_session, source_mid, 71_001);
     assert!(
@@ -1289,7 +1289,7 @@ fn add_send_media_uses_supplied_time_for_initial_selected_rid_gate() {
     let source_mid = Mid::from("cam-up");
     let consumer_mid = Mid::from("cam-down");
     let selected_rid = Rid::from("lo");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let source_transport_media_id = prepare_source_session_with_rid(
         &mut state,
         &source_session,
@@ -1347,7 +1347,7 @@ fn add_send_media_uses_supplied_time_for_initial_selected_rid_gate() {
 }
 
 fn prepare_already_absent_producer_registration(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
     producer_mid: Mid,
     negotiated_parameters: Option<RouterRtpParameters>,
@@ -1391,15 +1391,15 @@ fn prepare_already_absent_producer_registration(
 fn remove_media_releases_unnegotiated_producer_when_removal_cannot_stage() {
     let session_key = test_transport_session_key(161, 0, 162, UserId::Integer(163));
     let producer_mid = Mid::from("cam-up");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let transport_media_id =
         prepare_already_absent_producer_registration(&mut state, &session_key, producer_mid, None);
-    let bitrate_state = Arc::new(Mutex::new(RtcBitrateState::default()));
+    let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
     let (response_tx, response_rx) = oneshot::channel();
 
     respond_remove_media(
         &mut state,
-        &bitrate_state,
+        &bitrate_registry,
         &session_key,
         transport_media_id,
         response_tx,
@@ -1414,7 +1414,7 @@ fn remove_media_releases_unnegotiated_producer_when_removal_cannot_stage() {
 fn remove_media_keeps_negotiated_handle_when_removal_cannot_stage() {
     let session_key = test_transport_session_key(261, 0, 262, UserId::Integer(263));
     let producer_mid = Mid::from("cam-up-negotiated");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let negotiated_parameters =
         RouterRtpParameters::new(vec![], vec![], vec![StreamBinding::new().with_ssrc(72_701)])
             .with_mid(producer_mid.to_string());
@@ -1424,12 +1424,12 @@ fn remove_media_keeps_negotiated_handle_when_removal_cannot_stage() {
         producer_mid,
         Some(negotiated_parameters),
     );
-    let bitrate_state = Arc::new(Mutex::new(RtcBitrateState::default()));
+    let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
     let (response_tx, response_rx) = oneshot::channel();
 
     respond_remove_media(
         &mut state,
-        &bitrate_state,
+        &bitrate_registry,
         &session_key,
         transport_media_id,
         response_tx,
@@ -1451,7 +1451,7 @@ fn request_keyframe_ignores_wrong_source_owner() {
     let source_session = test_transport_session_key(131, 0, 132, UserId::Integer(133));
     let wrong_session = test_transport_session_key(131, 0, 134, UserId::Integer(135));
     let source_mid = Mid::from("cam-up");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id =
         prepare_source_session(&mut state, &source_session, source_mid, 99_999);
@@ -1477,7 +1477,7 @@ fn remote_source_packet_gate_ignores_wrong_source_owner() {
     let source_session = test_transport_session_key(141, 0, 142, UserId::Integer(143));
     let wrong_session = test_transport_session_key(141, 0, 144, UserId::Integer(145));
     let source_mid = Mid::from("cam-up");
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let source_transport_media_id =
         prepare_source_session(&mut state, &source_session, source_mid, 101_010);
 

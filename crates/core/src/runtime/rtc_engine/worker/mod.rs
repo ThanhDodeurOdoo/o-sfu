@@ -1,6 +1,6 @@
 //! Worker-local RTC command handling for one shard
 //!
-//! The packet loop owns the mutable [`RtcBootstrapState`](super::state::RtcBootstrapState)
+//! The packet loop owns the mutable [`PacketLoopState`](super::state::PacketLoopState)
 //! for a shard and calls into this module whenever a control-plane command needs
 //! to mutate it. That keeps async facade code out of the state-transition layer
 //! while preserving one serialized owner for user, negotiation, media, and

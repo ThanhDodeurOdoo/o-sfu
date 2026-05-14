@@ -1,7 +1,7 @@
 //! Media handle tracking for the RTC transport shard.
 //!
 //! Owns the transport-media registry and the negotiation-facing producer
-//! `(session_key, mid)` reverse lookup within `RtcBootstrapState`, plus the
+//! `(session_key, mid)` reverse lookup within `PacketLoopState`, plus the
 //! worker-local remote-source placeholders used by cross-worker relay routes.
 
 use std::{collections::BTreeSet, time::Instant};
@@ -13,7 +13,7 @@ use str0m::{
 };
 use tracing::{debug, warn};
 
-use super::{commands::RemoteSourceControl, state::RtcBootstrapState};
+use super::{commands::RemoteSourceControl, state::PacketLoopState};
 use crate::runtime::{
     RoomInstanceId,
     media_transport::{
@@ -140,10 +140,10 @@ impl ConsumerMidLookupKey {
 }
 
 // ---------------------------------------------------------------------------
-// Media registry methods on RtcBootstrapState
+// Media registry methods on PacketLoopState
 // ---------------------------------------------------------------------------
 
-impl RtcBootstrapState {
+impl PacketLoopState {
     pub(super) fn register_media_handle(
         &mut self,
         handle: RegisteredMediaHandle,
@@ -628,7 +628,7 @@ mod tests {
 
     #[test]
     fn consumer_media_lookup_uses_the_reverse_index() {
-        let mut state = RtcBootstrapState::default();
+        let mut state = PacketLoopState::default();
         let source_transport_media_id = TransportMediaId::new(8);
         let consumer_session = test_transport_session_key(12, 0, 13, UserId::Integer(14));
         let consumer_mid = Mid::from("aud-down");
@@ -648,7 +648,7 @@ mod tests {
 
     #[test]
     fn consumer_media_lookup_clears_when_the_handle_is_removed() {
-        let mut state = RtcBootstrapState::default();
+        let mut state = PacketLoopState::default();
         let source_transport_media_id = TransportMediaId::new(9);
         let consumer_session = test_transport_session_key(15, 0, 16, UserId::Integer(17));
         let consumer_mid = Mid::from("cam-down");
@@ -687,7 +687,7 @@ mod tests {
         let producer_session = test_transport_session_key(18, 0, 19, UserId::Integer(20));
         let producer_mid = Mid::from("cam-up");
         let producer_ssrc = 55_555_u32;
-        let mut state = RtcBootstrapState::default();
+        let mut state = PacketLoopState::default();
         let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
             session_key: producer_session.clone(),
             mid: producer_mid,
@@ -715,7 +715,7 @@ mod tests {
         let producer_mid = Mid::from("cam-up");
         let first_ssrc = 77_777_u32;
         let second_ssrc = 88_888_u32;
-        let mut state = RtcBootstrapState::default();
+        let mut state = PacketLoopState::default();
         let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
             session_key: producer_session.clone(),
             mid: producer_mid,
@@ -759,7 +759,7 @@ mod tests {
 
     #[test]
     fn expired_active_speaker_channels_are_resolved_from_source_owners() {
-        let mut state = RtcBootstrapState::default();
+        let mut state = PacketLoopState::default();
         let first_session = test_transport_session_key(31, 0, 32, UserId::Integer(33));
         let second_session = test_transport_session_key(34, 0, 35, UserId::Integer(36));
         let first_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {

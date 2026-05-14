@@ -26,9 +26,9 @@ use tracing::debug;
 
 use super::{
     super::{
-        bitrate::RtcBitrateState,
+        bitrate::BitrateRegistry,
         bootstrap, simulcast,
-        state::{RtcBootstrapState, RtcSnapshotState},
+        state::{PacketLoopState, RtcSnapshotState},
     },
     publication::refresh_negotiated_producer_parameters,
 };
@@ -58,8 +58,8 @@ pub(super) struct OfferBootstrapConfig<'a> {
 }
 
 pub(super) fn respond_create_initial_session_offer(
-    state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: OfferBootstrapConfig<'_>,
     session_key: &TransportSessionKey,
@@ -67,7 +67,7 @@ pub(super) fn respond_create_initial_session_offer(
 ) {
     let _ = response.send(worker_create_initial_session_offer(
         state,
-        bitrate_state,
+        bitrate_registry,
         snapshot_state,
         config,
         session_key,
@@ -75,7 +75,7 @@ pub(super) fn respond_create_initial_session_offer(
 }
 
 pub(super) fn respond_create_session_renegotiation_offer(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
     response: oneshot::Sender<Result<SessionOffer, TransportAdapterError>>,
 ) {
@@ -86,7 +86,7 @@ pub(super) fn respond_create_session_renegotiation_offer(
 }
 
 pub(super) fn respond_apply_session_answer(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     max_bitrate_in: Bitrate,
     session_key: &TransportSessionKey,
     answer_sdp: &str,
@@ -101,19 +101,19 @@ pub(super) fn respond_apply_session_answer(
 }
 
 /// Create the first local offer for a user after ensuring the worker has
-/// bootstrap state and the user still has no negotiated media.
+/// packet-loop state and the user still has no negotiated media.
 ///
 /// The initial offer is reserved for the transport bootstrap and capability
 /// probe flow. Once media has been registered or an earlier initial offer is in
 /// flight, callers must use the renegotiation path instead.
 fn worker_create_initial_session_offer(
-    state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: OfferBootstrapConfig<'_>,
     session_key: &TransportSessionKey,
 ) -> Result<SessionOffer, TransportAdapterError> {
-    ensure_session_ready_for_offer(state, bitrate_state, snapshot_state, config, session_key)?;
+    ensure_session_ready_for_offer(state, bitrate_registry, snapshot_state, config, session_key)?;
     if state.session_has_registered_media(session_key) {
         return Err(TransportAdapterError::UnsupportedFeature);
     }
@@ -158,7 +158,7 @@ fn worker_create_initial_session_offer(
 }
 
 fn worker_create_session_renegotiation_offer(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
 ) -> Result<SessionOffer, TransportAdapterError> {
     let Some(session_state) = state.users.get_mut(session_key) else {
@@ -185,7 +185,7 @@ fn worker_create_session_renegotiation_offer(
 /// parameters, stage any deferred removals, and index the remote candidate
 /// addresses that later packet-loop recovery depends on.
 fn worker_apply_session_answer(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     max_bitrate_in: Bitrate,
     session_key: &TransportSessionKey,
     answer_sdp: &str,
@@ -461,8 +461,8 @@ pub(super) fn offered_codecs(
 }
 
 fn ensure_session_ready_for_offer(
-    state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: OfferBootstrapConfig<'_>,
     session_key: &TransportSessionKey,
@@ -486,7 +486,7 @@ fn ensure_session_ready_for_offer(
     if let Ok(mut snapshot) = snapshot_state.lock() {
         snapshot.add_session(session_key);
     }
-    if let Ok(mut bitrate) = bitrate_state.lock() {
+    if let Ok(mut bitrate) = bitrate_registry.lock() {
         let counter = bitrate.register_session_egress(session_key, Instant::now());
         state.register_egress_bitrate_counter(session_key.clone(), counter);
     }
