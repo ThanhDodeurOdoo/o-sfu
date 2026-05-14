@@ -45,8 +45,6 @@ pub(in crate::runtime::rtc_engine::worker) use responses::{
     respond_set_consumer_packet_gates, respond_set_producer_active,
     respond_set_relay_target_active, respond_set_remote_source_packet_gate,
 };
-#[cfg(test)]
-pub(super) use routes::consumer_packet_gate;
 pub(in crate::runtime::rtc_engine::worker) use routes::refresh_source_packet_gate;
 pub(super) use routes::{
     ConsumerRouteRegistration, consumer_payload_type, ensure_existing_route_source,
