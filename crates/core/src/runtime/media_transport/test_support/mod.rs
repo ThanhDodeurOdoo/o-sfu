@@ -9,7 +9,7 @@ use o_sfu_router::MediaStream as RouterRtpParameters;
 #[cfg(any(test, feature = "testing-transport"))]
 use str0m::media::Mid;
 
-use super::runtime_adapter::MediaTransport;
+use super::MediaTransport;
 #[cfg(any(test, feature = "testing-transport"))]
 use super::shard_set::RtcTransportShardSet;
 #[cfg(any(test, feature = "testing-transport"))]
