@@ -12,7 +12,10 @@ import {
     publishSyntheticCamera,
     setCameraDownload,
     spawnLiveServer,
-    unpublishCamera
+    unpublishCamera,
+    waitForCameraSubscriptionSelectedRid,
+    waitForDecodedRemoteCameraFrame,
+    waitForUserMediaWorker
 } from "./live_server_helpers.mjs";
 
 const PUBLISHER_SESSION_ID = 41;
@@ -166,6 +169,97 @@ test("late-joining subscriber receives the already-live publication", async ({ c
             kind: "video",
             readyState: "live"
         });
+});
+
+test("load-triggered spillover relays VP8 camera between real browsers", async ({
+    browserName,
+    context
+}) => {
+    test.skip(
+        browserName === "firefox",
+        "the bundled Playwright Firefox build does not decode the current VP8 live relay flow"
+    );
+    test.setTimeout(45_000);
+    const liveServerPorts =
+        browserName === "firefox"
+            ? {
+                  bindPort: 18087,
+                  rtcMaxPort: 58455,
+                  rtcMinPort: 58392
+              }
+            : {
+                  bindPort: 18086,
+                  rtcMaxPort: 58391,
+                  rtcMinPort: 58328
+              };
+    const server = await spawnLiveServer({
+        bindPort: liveServerPorts.bindPort,
+        codecFlags: { vp8: true },
+        rtcMaxPort: liveServerPorts.rtcMaxPort,
+        rtcMinPort: liveServerPorts.rtcMinPort,
+        spillover: {
+            activationWindow: 1,
+            minReceivers: 2,
+            mode: "load-triggered",
+            roomMaxLocalRouters: 2,
+            rtcMediaWorkerCount: 2
+        }
+    });
+    try {
+        const channelUuid = await createChannel({
+            authKey: server.authKey,
+            httpBaseUrl: server.httpBaseUrl
+        });
+        const publisher = await createPeerPage(context);
+        const subscriber = await createPeerPage(context);
+
+        await connectPeer(publisher, {
+            channelUuid,
+            jwt: createConnectToken(channelUuid, PUBLISHER_SESSION_ID, server.authKey),
+            url: server.wsUrl
+        });
+        await expect.poll(async () => (await peerSnapshot(publisher)).state).toBe("connected");
+        await waitForUserMediaWorker({
+            expectedMediaWorkerId: 0,
+            httpBaseUrl: server.httpBaseUrl,
+            roomId: channelUuid,
+            userId: PUBLISHER_SESSION_ID
+        });
+
+        await connectPeer(subscriber, {
+            channelUuid,
+            jwt: createConnectToken(channelUuid, SUBSCRIBER_SESSION_ID, server.authKey),
+            url: server.wsUrl
+        });
+        await expect.poll(async () => (await peerSnapshot(subscriber)).state).toBe("connected");
+        await waitForUserMediaWorker({
+            expectedMediaWorkerId: 1,
+            httpBaseUrl: server.httpBaseUrl,
+            roomId: channelUuid,
+            userId: SUBSCRIBER_SESSION_ID
+        });
+
+        await publishSyntheticCamera(publisher, "load-spillover-vp8");
+        await expectCameraTrackUpdate(subscriber, PUBLISHER_SESSION_ID, true);
+        await setCameraDownload(subscriber, PUBLISHER_SESSION_ID, true, "featured");
+        await waitForCameraSubscriptionSelectedRid({
+            consumerSessionId: SUBSCRIBER_SESSION_ID,
+            expectedRid: "hi",
+            httpBaseUrl: server.httpBaseUrl,
+            producerSessionId: PUBLISHER_SESSION_ID,
+            roomId: channelUuid
+        });
+
+        const decodedFrame = await waitForDecodedRemoteCameraFrame(
+            subscriber,
+            PUBLISHER_SESSION_ID
+        );
+        expect(decodedFrame.width).toBeGreaterThan(0);
+        expect(decodedFrame.height).toBeGreaterThan(0);
+        expect(decodedFrame.pixel.alpha).toBe(255);
+    } finally {
+        await server.stop();
+    }
 });
 
 test("H264-only live publish applies RID simulcast and renders when supported", async ({
