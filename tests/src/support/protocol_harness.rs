@@ -116,9 +116,14 @@ impl ProtocolWebSocketClient {
     }
 
     pub async fn send_message(&mut self, message: ClientMessage) -> Option<()> {
+        self.send_messages(vec![message]).await
+    }
+
+    pub async fn send_messages(&mut self, messages: Vec<ClientMessage>) -> Option<()> {
         self.websocket
             .send(tungstenite::Message::Text(
-                encode_client_batch(vec![ClientEnvelope::Message(message)])?.into(),
+                encode_client_batch(messages.into_iter().map(ClientEnvelope::Message).collect())?
+                    .into(),
             ))
             .await
             .ok()?;

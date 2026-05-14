@@ -6,13 +6,14 @@
 use std::collections::BTreeMap;
 
 use o_sfu::{
-    config::RtcPortRange,
+    config::{Config, RtcPortRange},
     http::{DISCONNECT_PATH, STATS_PATH, StatsResponse},
 };
 use o_sfu_protocol::{
     shared::{DownloadStates, StreamType, UserId, UserInfo},
     signaling::{
-        ClientMessage, ServerMessage, ServerRequest, StreamIntentPayload, SubscribePayload,
+        ClientBroadcastPayload, ClientMessage, ServerMessage, ServerRequest, StreamIntentPayload,
+        SubscribePayload,
     },
 };
 use o_sfu_tests::support::{
@@ -25,8 +26,11 @@ use o_sfu_tests::support::{
     signed_connect_claims, spawn_test_server,
 };
 use reqwest::StatusCode;
-use tokio::time::Duration;
+use tokio::time::{Duration, timeout};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
+const SLOW_CONSUMER_BATCH_LEN: usize = 64;
+const SLOW_CONSUMER_PAYLOAD_BYTES: usize = 1_024;
 
 #[tokio::test]
 async fn websocket_welcome_and_initial_offer_work_from_integration_test() {
@@ -328,6 +332,80 @@ async fn broadcast_reaches_other_user_from_integration_test() {
     } else {
         panic!("expected broadcast update");
     }
+}
+
+#[tokio::test]
+async fn websocket_slow_consumer_overflow_closes_only_slow_socket_from_integration_test() {
+    let server = spawn_test_server(slow_consumer_overflow_config()).await;
+    assert!(server.is_ok());
+    let Some(server) = server.ok() else {
+        return;
+    };
+    let room = create_room(&server, "issuer-slow-consumer-overflow", None).await;
+    assert!(room.is_some());
+    let Some(room) = room else {
+        return;
+    };
+    let slow_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(31));
+    let driver_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(32));
+    let witness_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(33));
+    assert!(slow_token.is_some());
+    assert!(driver_token.is_some());
+    assert!(witness_token.is_some());
+    let (Some(slow_token), Some(driver_token), Some(witness_token)) =
+        (slow_token, driver_token, witness_token)
+    else {
+        return;
+    };
+
+    let peers =
+        connect_protocol_pair(&server, &slow_token, &driver_token, UserId::Integer(32)).await;
+    assert!(peers.is_some());
+    let Some((mut slow, mut driver)) = peers else {
+        return;
+    };
+
+    let sent = driver.send_messages(slow_consumer_broadcast_batch()).await;
+    assert!(sent.is_some());
+
+    let slow_close = timeout(Duration::from_secs(5), slow.read_close_code())
+        .await
+        .ok()
+        .flatten();
+    assert_eq!(slow_close, Some(CloseCode::Library(4108)));
+
+    let departed = read_until_server_message(&mut driver, Duration::from_secs(1), |message| {
+        matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == UserId::Integer(31))
+    })
+    .await;
+    assert!(departed.is_some());
+
+    let witness =
+        ProtocolWebSocketClient::authenticate_and_negotiate(&server, &witness_token).await;
+    assert!(witness.is_some());
+    let Some((witness, _welcome)) = witness else {
+        return;
+    };
+    let rejoined = read_until_server_message(&mut driver, Duration::from_secs(1), |message| {
+        matches!(message, ServerMessage::PeerJoined(payload) if payload.user_id == UserId::Integer(33))
+    })
+    .await;
+    assert!(rejoined.is_some());
+    assert!(witness.close().await.is_some());
+
+    let metrics = metrics_text(&server).await;
+    assert!(metrics.is_some());
+    let Some(metrics) = metrics else {
+        return;
+    };
+    assert!(metric_value(&metrics, "osfu_ws_outbound_queue_overflows_total").unwrap_or(0) > 0);
+    assert_eq!(
+        metric_value(
+            &metrics,
+            "osfu_ws_user_loop_exits_total{reason=\"outbound_queue_overflow\"}"
+        ),
+        Some(1)
+    );
 }
 
 #[tokio::test]
@@ -1010,4 +1088,31 @@ async fn mismatched_explicit_room_id_is_rejected_from_integration_test() {
         client.read_close_code().await,
         Some(CloseCode::Library(4106))
     );
+}
+
+fn slow_consumer_overflow_config() -> Config {
+    let mut config = protocol_test_config(1_000, 10);
+    config.user.outbound_queue_capacity = 1;
+    config.user.outbound_queue_byte_capacity = 64 * 1024;
+    config
+}
+
+fn slow_consumer_broadcast_batch() -> Vec<ClientMessage> {
+    let payload = "x".repeat(SLOW_CONSUMER_PAYLOAD_BYTES);
+    (0..SLOW_CONSUMER_BATCH_LEN)
+        .map(|index| {
+            ClientMessage::Broadcast(ClientBroadcastPayload {
+                message: serde_json::json!({
+                    "index": index,
+                    "payload": payload.clone(),
+                }),
+            })
+        })
+        .collect()
+}
+
+fn metric_value(metrics_text: &str, sample_name: &str) -> Option<u64> {
+    metrics_text
+        .lines()
+        .find_map(|line| line.strip_prefix(sample_name)?.trim().parse().ok())
 }
