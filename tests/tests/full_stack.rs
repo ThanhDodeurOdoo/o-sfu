@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use o_sfu::{
     config::{Config, MediaCodecFlags, RoomShardingPolicy},
+    core::{LocalSpilloverPolicy, LocalSpilloverPolicyParts},
     http::IncomingBitRateStatsResponse,
 };
 use o_sfu_protocol::{
@@ -832,6 +833,336 @@ async fn fake_rtc_cross_worker_h264_selected_rid_requires_idr_after_relay() {
         &mut clock,
     )
     .await;
+}
+
+#[tokio::test]
+async fn fake_rtc_load_triggered_spillover_relays_vp8_after_threshold() {
+    let room_server = spawn_room_server_with_config(
+        load_triggered_spillover_test_config(),
+        "issuer-load-spillover-vp8-selected-rid",
+        Some(TEST_ROOM_KEY),
+    )
+    .await;
+    assert!(room_server.is_some());
+    let Some(room_server) = room_server else {
+        return;
+    };
+    let (server, room) = room_server.into_parts();
+    let publisher_user_id = UserId::Integer(190);
+    let local_subscriber_user_id = UserId::Integer(191);
+    let spillover_subscriber_user_id = UserId::Integer(192);
+
+    let setup = Box::pin(connect_load_triggered_spillover_rtc_peers(
+        &server,
+        &room,
+        publisher_user_id.clone(),
+        local_subscriber_user_id,
+        spillover_subscriber_user_id,
+    ))
+    .await;
+    assert!(setup.is_some());
+    let Some((mut publisher, _local_subscriber, mut spillover_subscriber)) = setup else {
+        return;
+    };
+
+    let mut high_source = FakeMediaSource::new(SyntheticVp8Stream::with_next_keyframe(false));
+    assert!(publisher.publish_track(&high_source).await.is_some());
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    let track_binding = assert_track_snapshot(
+        &mut spillover_subscriber,
+        publisher_user_id.clone(),
+        StreamType::Camera,
+        true,
+    )
+    .await;
+    assert!(
+        spillover_subscriber
+            .complete_next_negotiation()
+            .await
+            .is_some()
+    );
+    assert_video_subscription_enabled(&mut spillover_subscriber, publisher_user_id.clone()).await;
+    assert_consumer_route_active(
+        &server,
+        &room,
+        &spillover_subscriber,
+        &publisher_user_id,
+        track_binding.stream_type,
+    )
+    .await;
+    assert!(
+        server
+            .wait_for_video_subscription_selected_rid(
+                &room,
+                spillover_subscriber.user_id(),
+                &publisher_user_id,
+                "hi",
+            )
+            .await
+    );
+
+    let mut clock = FakeClock::default();
+    assert_synthetic_video_packet_dropped(
+        &mut publisher,
+        &mut spillover_subscriber,
+        &mut high_source,
+        &mut clock,
+    )
+    .await;
+    assert_synthetic_video_packet_forwarded(
+        &mut publisher,
+        &mut spillover_subscriber,
+        &mut high_source,
+        &mut clock,
+    )
+    .await;
+
+    let mut low_source = FakeMediaSource::vp8_camera_with_rid("lo");
+    assert_synthetic_video_packet_dropped(
+        &mut publisher,
+        &mut spillover_subscriber,
+        &mut low_source,
+        &mut clock,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn fake_rtc_load_triggered_spillover_releases_remote_route_after_subscriber_leaves() {
+    let room_server = spawn_room_server_with_config(
+        load_triggered_spillover_test_config(),
+        "issuer-load-spillover-release-route",
+        Some(TEST_ROOM_KEY),
+    )
+    .await;
+    assert!(room_server.is_some());
+    let Some(room_server) = room_server else {
+        return;
+    };
+    let (server, room) = room_server.into_parts();
+    let publisher_user_id = UserId::Integer(193);
+    let local_subscriber_user_id = UserId::Integer(194);
+    let spillover_subscriber_user_id = UserId::Integer(195);
+
+    let setup = Box::pin(connect_load_triggered_spillover_rtc_peers(
+        &server,
+        &room,
+        publisher_user_id.clone(),
+        local_subscriber_user_id.clone(),
+        spillover_subscriber_user_id.clone(),
+    ))
+    .await;
+    assert!(setup.is_some());
+    let Some((mut publisher, mut local_subscriber, mut spillover_subscriber)) = setup else {
+        return;
+    };
+
+    let mut source = FakeMediaSource::vp8_camera_high();
+    assert!(publisher.publish_track(&source).await.is_some());
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    let local_track = assert_track_snapshot(
+        &mut local_subscriber,
+        publisher_user_id.clone(),
+        StreamType::Camera,
+        true,
+    )
+    .await;
+    assert!(local_subscriber.complete_next_negotiation().await.is_some());
+    assert_video_subscription_enabled(&mut local_subscriber, publisher_user_id.clone()).await;
+    let spillover_track = assert_track_snapshot(
+        &mut spillover_subscriber,
+        publisher_user_id.clone(),
+        StreamType::Camera,
+        true,
+    )
+    .await;
+    assert!(
+        spillover_subscriber
+            .complete_next_negotiation()
+            .await
+            .is_some()
+    );
+    assert_video_subscription_enabled(&mut spillover_subscriber, publisher_user_id.clone()).await;
+    assert_consumer_route_active(
+        &server,
+        &room,
+        &spillover_subscriber,
+        &publisher_user_id,
+        spillover_track.stream_type,
+    )
+    .await;
+
+    let mut clock = FakeClock::default();
+    assert_synthetic_video_packet_forwarded(
+        &mut publisher,
+        &mut spillover_subscriber,
+        &mut source,
+        &mut clock,
+    )
+    .await;
+    assert!(
+        local_subscriber
+            .read_rtp_packet(Duration::from_secs(2))
+            .await
+            .is_some()
+    );
+
+    assert!(spillover_subscriber.close().await.is_some());
+    assert!(
+        server
+            .wait_for_consumer_route_absence(
+                &room,
+                &spillover_subscriber_user_id,
+                &publisher_user_id,
+                spillover_track.stream_type,
+            )
+            .await
+    );
+    assert_consumer_route_active(
+        &server,
+        &room,
+        &local_subscriber,
+        &publisher_user_id,
+        local_track.stream_type,
+    )
+    .await;
+    assert_synthetic_video_packet_forwarded(
+        &mut publisher,
+        &mut local_subscriber,
+        &mut source,
+        &mut clock,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn fake_rtc_load_triggered_spillover_preserves_download_mute_after_subscriber_replacement() {
+    let room_server = spawn_room_server_with_config(
+        load_triggered_spillover_test_config(),
+        "issuer-load-spillover-replacement-mute",
+        Some(TEST_ROOM_KEY),
+    )
+    .await;
+    assert!(room_server.is_some());
+    let Some(room_server) = room_server else {
+        return;
+    };
+    let (server, room) = room_server.into_parts();
+    let publisher_user_id = UserId::Integer(196);
+    let local_subscriber_user_id = UserId::Integer(197);
+    let spillover_subscriber_user_id = UserId::Integer(198);
+
+    let setup = Box::pin(connect_load_triggered_spillover_rtc_peers(
+        &server,
+        &room,
+        publisher_user_id.clone(),
+        local_subscriber_user_id,
+        spillover_subscriber_user_id.clone(),
+    ))
+    .await;
+    assert!(setup.is_some());
+    let Some((mut publisher, _local_subscriber, mut spillover_subscriber)) = setup else {
+        return;
+    };
+
+    Box::pin(assert_load_triggered_spillover_replacement_mute_flow(
+        &server,
+        &room,
+        &mut publisher,
+        &mut spillover_subscriber,
+        publisher_user_id,
+        spillover_subscriber_user_id,
+    ))
+    .await;
+}
+
+async fn assert_load_triggered_spillover_replacement_mute_flow(
+    server: &TestServer,
+    room: &str,
+    publisher: &mut ProtocolFakePeer,
+    spillover_subscriber: &mut ProtocolFakePeer,
+    publisher_user_id: UserId,
+    spillover_subscriber_user_id: UserId,
+) {
+    let mut source = FakeMediaSource::audio();
+    assert!(publisher.publish_track(&source).await.is_some());
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    let track_binding = assert_track_snapshot(
+        spillover_subscriber,
+        publisher_user_id.clone(),
+        StreamType::Audio,
+        true,
+    )
+    .await;
+    assert!(
+        spillover_subscriber
+            .complete_next_negotiation()
+            .await
+            .is_some()
+    );
+    assert_consumer_route_active(
+        server,
+        room,
+        spillover_subscriber,
+        &publisher_user_id,
+        track_binding.stream_type,
+    )
+    .await;
+
+    assert!(
+        spillover_subscriber
+            .update_subscription(
+                publisher_user_id.clone(),
+                DownloadStates {
+                    audio: Some(false),
+                    ..DownloadStates::default()
+                },
+            )
+            .await
+            .is_some()
+    );
+    assert_consumer_route_inactive(
+        server,
+        room,
+        spillover_subscriber,
+        &publisher_user_id,
+        track_binding.stream_type,
+    )
+    .await;
+
+    let mut clock = FakeClock::default();
+    assert_audio_packet_dropped(publisher, spillover_subscriber, &mut source, &mut clock).await;
+
+    let replacement = connect_load_triggered_spillover_replacement(
+        server,
+        room,
+        spillover_subscriber,
+        &spillover_subscriber_user_id,
+        0,
+    )
+    .await;
+    assert!(replacement.is_some());
+    let Some(mut replacement) = replacement else {
+        return;
+    };
+
+    let replacement_track = assert_track_snapshot(
+        &mut replacement,
+        publisher_user_id.clone(),
+        StreamType::Audio,
+        true,
+    )
+    .await;
+    assert!(replacement.complete_next_negotiation().await.is_some());
+    assert_consumer_route_inactive(
+        server,
+        room,
+        &replacement,
+        &publisher_user_id,
+        replacement_track.stream_type,
+    )
+    .await;
+    assert_audio_packet_dropped(publisher, &mut replacement, &mut source, &mut clock).await;
 }
 
 #[tokio::test]
@@ -1765,6 +2096,22 @@ fn cross_worker_test_config() -> Config {
     config
 }
 
+fn load_triggered_spillover_test_config() -> Config {
+    let mut config = test_config(1_000, 10);
+    let policy = match LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+        min_receiver_count: 3,
+        activation_window: 1,
+        ..LocalSpilloverPolicyParts::conservative()
+    }) {
+        Ok(policy) => policy,
+        Err(error) => panic!("load-triggered spillover test policy should be valid: {error}"),
+    };
+    config.transport.rtc_media_worker_count = 2;
+    config.transport.room_sharding_policy =
+        RoomShardingPolicy::load_triggered_local_spillover(2, policy);
+    config
+}
+
 async fn assert_cross_worker_placement(
     server: &TestServer,
     room: &str,
@@ -1781,6 +2128,161 @@ async fn assert_cross_worker_placement(
             .wait_for_user_media_worker(room, subscriber_user_id, 1)
             .await
     );
+}
+
+async fn connect_load_triggered_spillover_rtc_peers(
+    server: &TestServer,
+    room: &str,
+    publisher_user_id: UserId,
+    local_subscriber_user_id: UserId,
+    spillover_subscriber_user_id: UserId,
+) -> Option<(ProtocolFakePeer, ProtocolFakePeer, ProtocolFakePeer)> {
+    let activation_user_id = load_triggered_activation_user_id(&spillover_subscriber_user_id);
+    let mut publisher =
+        connect_load_triggered_peer_on_worker(server, room, &publisher_user_id, 0).await?;
+    let mut local_subscriber = connect_load_triggered_local_subscriber(
+        server,
+        room,
+        &mut publisher,
+        &local_subscriber_user_id,
+    )
+    .await?;
+    let activation_peer = connect_load_triggered_activation_peer(
+        server,
+        room,
+        &mut publisher,
+        &mut local_subscriber,
+        &activation_user_id,
+    )
+    .await?;
+    let mut spillover_subscriber = Box::pin(connect_load_triggered_spillover_subscriber(
+        server,
+        room,
+        &mut publisher,
+        &mut local_subscriber,
+        &spillover_subscriber_user_id,
+    ))
+    .await?;
+    assert_load_triggered_spillover_placement(
+        server,
+        room,
+        &publisher_user_id,
+        &local_subscriber_user_id,
+        &spillover_subscriber_user_id,
+    )
+    .await;
+
+    assert!(activation_peer.close().await.is_some());
+    assert_departure_message_protocol(&mut publisher, activation_user_id.clone()).await;
+    assert_departure_message_protocol(&mut local_subscriber, activation_user_id.clone()).await;
+    assert_departure_message_protocol(&mut spillover_subscriber, activation_user_id).await;
+
+    Some((publisher, local_subscriber, spillover_subscriber))
+}
+
+async fn connect_load_triggered_peer_on_worker(
+    server: &TestServer,
+    room: &str,
+    user_id: &UserId,
+    worker_id: usize,
+) -> Option<ProtocolFakePeer> {
+    let mut peer = connect_fake_peer(server, room, user_id.clone(), TEST_ROOM_KEY).await?;
+    peer.wait_until_connected(Duration::from_secs(5)).await?;
+    assert_user_media_worker(server, room, user_id, worker_id).await;
+    Some(peer)
+}
+
+async fn connect_load_triggered_local_subscriber(
+    server: &TestServer,
+    room: &str,
+    publisher: &mut ProtocolFakePeer,
+    local_subscriber_user_id: &UserId,
+) -> Option<ProtocolFakePeer> {
+    let peer =
+        connect_load_triggered_peer_on_worker(server, room, local_subscriber_user_id, 0).await?;
+    assert_peer_joined_message_protocol(publisher, local_subscriber_user_id.clone()).await;
+    Some(peer)
+}
+
+async fn connect_load_triggered_activation_peer(
+    server: &TestServer,
+    room: &str,
+    publisher: &mut ProtocolFakePeer,
+    local_subscriber: &mut ProtocolFakePeer,
+    activation_user_id: &UserId,
+) -> Option<ProtocolFakePeer> {
+    let mut peer =
+        connect_fake_peer(server, room, activation_user_id.clone(), TEST_ROOM_KEY).await?;
+    peer.wait_until_connected(Duration::from_secs(5)).await?;
+    assert_peer_joined_message_protocol(publisher, activation_user_id.clone()).await;
+    assert_peer_joined_message_protocol(local_subscriber, activation_user_id.clone()).await;
+    Some(peer)
+}
+
+async fn connect_load_triggered_spillover_subscriber(
+    server: &TestServer,
+    room: &str,
+    publisher: &mut ProtocolFakePeer,
+    local_subscriber: &mut ProtocolFakePeer,
+    spillover_subscriber_user_id: &UserId,
+) -> Option<ProtocolFakePeer> {
+    let peer = connect_load_triggered_peer_on_worker(server, room, spillover_subscriber_user_id, 1)
+        .await?;
+    assert_peer_joined_message_protocol(publisher, spillover_subscriber_user_id.clone()).await;
+    assert_peer_joined_message_protocol(local_subscriber, spillover_subscriber_user_id.clone())
+        .await;
+    Some(peer)
+}
+
+async fn assert_load_triggered_spillover_placement(
+    server: &TestServer,
+    room: &str,
+    publisher_user_id: &UserId,
+    local_subscriber_user_id: &UserId,
+    spillover_subscriber_user_id: &UserId,
+) {
+    assert_user_media_worker(server, room, publisher_user_id, 0).await;
+    assert_user_media_worker(server, room, local_subscriber_user_id, 0).await;
+    assert_user_media_worker(server, room, spillover_subscriber_user_id, 1).await;
+}
+
+async fn assert_user_media_worker(
+    server: &TestServer,
+    room: &str,
+    user_id: &UserId,
+    worker_id: usize,
+) {
+    assert!(
+        server
+            .wait_for_user_media_worker(room, user_id, worker_id)
+            .await
+    );
+}
+
+async fn connect_load_triggered_spillover_replacement(
+    server: &TestServer,
+    room: &str,
+    previous_peer: &mut ProtocolFakePeer,
+    user_id: &UserId,
+    worker_id: usize,
+) -> Option<ProtocolFakePeer> {
+    let mut replacement = connect_fake_peer(server, room, user_id.clone(), TEST_ROOM_KEY).await?;
+    assert_eq!(
+        previous_peer.read_close_code().await,
+        Some(CloseCode::Library(4108))
+    );
+    replacement
+        .wait_until_connected(Duration::from_secs(5))
+        .await?;
+    assert_user_media_worker(server, room, user_id, worker_id).await;
+    Some(replacement)
+}
+
+fn load_triggered_activation_user_id(spillover_subscriber_user_id: &UserId) -> UserId {
+    match spillover_subscriber_user_id {
+        UserId::Integer(value) => UserId::Integer(value.saturating_add(10_000)),
+        UserId::String(value) => UserId::String(format!("{value}-activation")),
+    }
 }
 
 async fn assert_audio_packet_forwarded(
