@@ -16,8 +16,8 @@
 //!   sockets, worker-local relay routing or deterministic test backends
 //! - select the active backend for the build. Production builds wrap the real
 //!   RTC engine through [`RtcTransport`], while test builds can also select a
-//!   deterministic fake transport without putting fake-only behavior on the
-//!   production path.
+//!   deterministic fake transport through the same transport handle without
+//!   putting fake-only behavior on the production path.
 //!
 //! Code above this module should depend on [`MediaTransport`] or one of the
 //! concern-oriented port traits. Code below this module, especially the RTC
@@ -25,13 +25,11 @@
 //! Keeping that split explicit prevents room and signaling orchestration from
 //! growing knowledge of the concrete WebRTC implementation.
 
-mod backend;
 mod config;
 mod runtime_adapter;
 mod shard_set;
 #[cfg(any(test, feature = "testing-transport"))]
 pub mod test_support;
-use backend::MediaTransportBackend;
 pub use config::{MediaTransportDeps, RtcTransportConfig};
 pub use runtime_adapter::{
     MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,

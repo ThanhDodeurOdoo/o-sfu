@@ -9,9 +9,9 @@ use o_sfu_router::MediaStream as RouterRtpParameters;
 #[cfg(any(test, feature = "testing-transport"))]
 use str0m::media::Mid;
 
+use super::runtime_adapter::MediaTransport;
 #[cfg(any(test, feature = "testing-transport"))]
 use super::shard_set::RtcTransportShardSet;
-use super::{MediaTransportBackend, runtime_adapter::MediaTransport};
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::rtc_engine::test_support::DebugRouteEntry;
 #[cfg(test)]
@@ -41,17 +41,15 @@ impl MediaTransport {
     )]
     #[must_use]
     pub fn from_fake_transport(transport: Arc<FakeMediaTransport>) -> Self {
-        Self {
-            backend: MediaTransportBackend::from_fake(transport),
-        }
+        Self::Fake(transport)
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     #[must_use]
     pub const fn as_fake_transport(&self) -> Option<&Arc<FakeMediaTransport>> {
-        match &self.backend {
-            MediaTransportBackend::Rtc(_) => None,
-            MediaTransportBackend::Fake(transport) => Some(transport),
+        match self {
+            Self::Rtc(_) => None,
+            Self::Fake(transport) => Some(transport),
         }
     }
 
@@ -61,8 +59,8 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<RouterRtpParameters, TransportAdapterError> {
-        match &self.backend {
-            MediaTransportBackend::Rtc(transport) => {
+        match self {
+            Self::Rtc(transport) => {
                 transport
                     .shards()
                     .shard_for_user(session_key)
@@ -70,7 +68,7 @@ impl MediaTransport {
                     .negotiated_producer_parameters(session_key, transport_media_id)
                     .await
             }
-            MediaTransportBackend::Fake(transport) => {
+            Self::Fake(transport) => {
                 transport
                     .negotiated_producer_parameters(session_key, transport_media_id)
                     .await
@@ -80,9 +78,9 @@ impl MediaTransport {
 
     #[cfg(test)]
     pub(super) fn as_rtc_shard_set(&self) -> Option<&Arc<RtcTransportShardSet>> {
-        match &self.backend {
-            MediaTransportBackend::Rtc(transport) => Some(transport.shards()),
-            MediaTransportBackend::Fake(_) => None,
+        match self {
+            Self::Rtc(transport) => Some(transport.shards()),
+            Self::Fake(_) => None,
         }
     }
 
@@ -92,7 +90,7 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         health: TransportSessionHealth,
     ) {
-        if let MediaTransportBackend::Rtc(adapter) = &self.backend {
+        if let Self::Rtc(adapter) = self {
             adapter
                 .shards()
                 .shard_for_user(session_key)
@@ -107,12 +105,8 @@ impl MediaTransport {
         source_mid: Mid,
     ) -> Option<DebugRouteEntry> {
         match self {
-            Self {
-                backend: MediaTransportBackend::Fake(_),
-            } => None,
-            Self {
-                backend: MediaTransportBackend::Rtc(adapter),
-            } => {
+            Self::Fake(_) => None,
+            Self::Rtc(adapter) => {
                 adapter
                     .shards()
                     .debug_route_entry(source_session_key, source_mid)
@@ -128,12 +122,8 @@ impl MediaTransport {
         consumer_mid: Mid,
     ) -> Option<DebugRouteEntry> {
         match self {
-            Self {
-                backend: MediaTransportBackend::Fake(_),
-            } => None,
-            Self {
-                backend: MediaTransportBackend::Rtc(adapter),
-            } => {
+            Self::Fake(_) => None,
+            Self::Rtc(adapter) => {
                 adapter
                     .shards()
                     .debug_route_entry_by_consumer_mid(consumer_session_key, consumer_mid)
@@ -148,12 +138,8 @@ impl MediaTransport {
         source_transport_media_id: TransportMediaId,
     ) -> Option<DebugRouteEntry> {
         match self {
-            Self {
-                backend: MediaTransportBackend::Fake(_),
-            } => None,
-            Self {
-                backend: MediaTransportBackend::Rtc(adapter),
-            } => {
+            Self::Fake(_) => None,
+            Self::Rtc(adapter) => {
                 adapter
                     .shards()
                     .debug_route_entry_by_media_id(source_transport_media_id)
