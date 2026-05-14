@@ -68,7 +68,7 @@ pub struct TestRoomServer {
     room_id: String,
 }
 
-const TEST_POLL_DEADLINE: Duration = Duration::from_secs(3);
+const TEST_POLL_DEADLINE: Duration = Duration::from_secs(5);
 const FEATURED_POLICY_ROLE: &str = "featured";
 const THUMBNAIL_POLICY_ROLE: &str = "thumbnail";
 

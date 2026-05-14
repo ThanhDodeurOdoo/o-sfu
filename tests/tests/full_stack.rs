@@ -3,7 +3,7 @@
     reason = "integration tests use panic-based assertions for clear failures"
 )]
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use o_sfu::{
     config::{Config, MediaCodecFlags, RoomShardingPolicy},
@@ -29,10 +29,17 @@ use o_sfu_tests::support::{
     spawn_room_server, spawn_room_server_with_config, spawn_test_server, stats, test_config,
 };
 use tokio::{
+    sync::{Mutex, MutexGuard},
     task::yield_now,
     time::{sleep, timeout},
 };
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
+static FULL_STACK_TEST_LOCK: Mutex<()> = Mutex::const_new(());
+
+async fn full_stack_test_guard() -> MutexGuard<'static, ()> {
+    FULL_STACK_TEST_LOCK.lock().await
+}
 
 #[test]
 fn fake_media_source_uses_manual_clock_deterministically() {
@@ -60,6 +67,7 @@ fn fake_media_source_uses_manual_clock_deterministically() {
 
 #[tokio::test]
 async fn fake_peers_publish_and_receive_track_snapshot_over_real_server_entries() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-a").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -85,6 +93,7 @@ async fn fake_peers_publish_and_receive_track_snapshot_over_real_server_entries(
 
 #[tokio::test]
 async fn fake_peers_keep_room_topology_isolation_with_same_user_ids() {
+    let _guard = full_stack_test_guard().await;
     let config = test_config(1_000, 10);
 
     let server = spawn_test_server(config).await.ok();
@@ -128,6 +137,7 @@ async fn fake_peers_keep_room_topology_isolation_with_same_user_ids() {
 
 #[tokio::test]
 async fn fake_peers_cover_publish_unpublish_late_join_and_disconnect_deterministically() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-b").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -165,6 +175,7 @@ async fn fake_peers_cover_publish_unpublish_late_join_and_disconnect_determinist
 
 #[tokio::test]
 async fn fake_peers_cover_user_replacement_and_republish_over_protocol_user_flow() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-c").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -206,6 +217,7 @@ async fn fake_peers_cover_user_replacement_and_republish_over_protocol_user_flow
 
 #[tokio::test]
 async fn fake_rtc_peer_media_updates_room_stats_deterministically() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-d").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -256,6 +268,7 @@ async fn fake_rtc_peer_media_updates_room_stats_deterministically() {
 
 #[tokio::test]
 async fn fake_rtc_peers_export_longer_transport_lifetimes_after_steady_state_run() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-lifetime-metrics").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -297,6 +310,7 @@ async fn fake_rtc_peers_export_longer_transport_lifetimes_after_steady_state_run
 
 #[tokio::test]
 async fn fake_rtc_peers_export_transport_and_rtp_metrics_during_live_media() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-live-metrics").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -387,6 +401,7 @@ async fn fake_rtc_peers_export_transport_and_rtp_metrics_during_live_media() {
 
 #[tokio::test]
 async fn fake_rtc_opus_vad_true_drives_active_speaker_diagnostics() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-opus-active-speaker").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -436,6 +451,7 @@ async fn fake_rtc_opus_vad_true_drives_active_speaker_diagnostics() {
 
 #[tokio::test]
 async fn fake_rtc_cross_worker_opus_vad_true_forwards_and_drives_active_speaker() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server_with_config(
         cross_worker_test_config(),
         "issuer-cross-worker-opus-active-speaker",
@@ -501,6 +517,7 @@ async fn fake_rtc_cross_worker_opus_vad_true_forwards_and_drives_active_speaker(
 
 #[tokio::test]
 async fn fake_rtc_opus_vad_false_blocks_audio_forwarding() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-opus-vad-false").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -550,6 +567,7 @@ async fn fake_rtc_opus_vad_false_blocks_audio_forwarding() {
 
 #[tokio::test]
 async fn fake_rtc_cross_worker_opus_vad_false_blocks_relay_fanout() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server_with_config(
         cross_worker_test_config(),
         "issuer-cross-worker-opus-vad-false",
@@ -615,6 +633,7 @@ async fn fake_rtc_cross_worker_opus_vad_false_blocks_relay_fanout() {
 
 #[tokio::test]
 async fn fake_rtc_peers_forward_vp8_high_rid_keyframe_without_browsers() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-vp8-synthetic").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -668,6 +687,7 @@ async fn fake_rtc_peers_forward_vp8_high_rid_keyframe_without_browsers() {
 
 #[tokio::test]
 async fn fake_rtc_cross_worker_vp8_selected_rid_survives_relay() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server_with_config(
         cross_worker_test_config(),
         "issuer-cross-worker-vp8-selected-rid",
@@ -762,6 +782,7 @@ async fn fake_rtc_cross_worker_vp8_selected_rid_survives_relay() {
 
 #[tokio::test]
 async fn fake_rtc_cross_worker_h264_selected_rid_requires_idr_after_relay() {
+    let _guard = full_stack_test_guard().await;
     let mut config = cross_worker_test_config();
     config.codecs.flags = MediaCodecFlags::default().with_vp8(false).with_h264(true);
     let room_server = spawn_room_server_with_config(
@@ -837,6 +858,7 @@ async fn fake_rtc_cross_worker_h264_selected_rid_requires_idr_after_relay() {
 
 #[tokio::test]
 async fn fake_rtc_load_triggered_spillover_relays_vp8_after_threshold() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server_with_config(
         load_triggered_spillover_test_config(),
         "issuer-load-spillover-vp8-selected-rid",
@@ -929,6 +951,7 @@ async fn fake_rtc_load_triggered_spillover_relays_vp8_after_threshold() {
 
 #[tokio::test]
 async fn fake_rtc_load_triggered_spillover_releases_remote_route_after_subscriber_leaves() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server_with_config(
         load_triggered_spillover_test_config(),
         "issuer-load-spillover-release-route",
@@ -953,25 +976,46 @@ async fn fake_rtc_load_triggered_spillover_releases_remote_route_after_subscribe
     ))
     .await;
     assert!(setup.is_some());
-    let Some((mut publisher, mut local_subscriber, mut spillover_subscriber)) = setup else {
+    let Some((mut publisher, mut local_subscriber, spillover_subscriber)) = setup else {
         return;
     };
 
+    Box::pin(assert_load_triggered_spillover_release_route_flow(
+        &server,
+        &room,
+        &mut publisher,
+        &mut local_subscriber,
+        spillover_subscriber,
+        &publisher_user_id,
+        &spillover_subscriber_user_id,
+    ))
+    .await;
+}
+
+async fn assert_load_triggered_spillover_release_route_flow(
+    server: &TestServer,
+    room: &str,
+    publisher: &mut ProtocolFakePeer,
+    local_subscriber: &mut ProtocolFakePeer,
+    mut spillover_subscriber: ProtocolFakePeer,
+    publisher_user_id: &UserId,
+    spillover_subscriber_user_id: &UserId,
+) {
     let mut source = FakeMediaSource::vp8_camera_high();
     assert!(publisher.publish_track(&source).await.is_some());
     assert!(publisher.complete_next_negotiation().await.is_some());
     let local_track = assert_track_snapshot(
-        &mut local_subscriber,
-        publisher_user_id.clone(),
+        local_subscriber,
+        publisher_user_id.to_owned(),
         StreamType::Camera,
         true,
     )
     .await;
     assert!(local_subscriber.complete_next_negotiation().await.is_some());
-    assert_video_subscription_enabled(&mut local_subscriber, publisher_user_id.clone()).await;
+    assert_video_subscription_enabled(local_subscriber, publisher_user_id.to_owned()).await;
     let spillover_track = assert_track_snapshot(
         &mut spillover_subscriber,
-        publisher_user_id.clone(),
+        publisher_user_id.to_owned(),
         StreamType::Camera,
         true,
     )
@@ -982,19 +1026,20 @@ async fn fake_rtc_load_triggered_spillover_releases_remote_route_after_subscribe
             .await
             .is_some()
     );
-    assert_video_subscription_enabled(&mut spillover_subscriber, publisher_user_id.clone()).await;
+    assert_video_subscription_enabled(&mut spillover_subscriber, publisher_user_id.to_owned())
+        .await;
     assert_consumer_route_active(
-        &server,
-        &room,
+        server,
+        room,
         &spillover_subscriber,
-        &publisher_user_id,
+        publisher_user_id,
         spillover_track.stream_type,
     )
     .await;
 
     let mut clock = FakeClock::default();
     assert_synthetic_video_packet_forwarded(
-        &mut publisher,
+        publisher,
         &mut spillover_subscriber,
         &mut source,
         &mut clock,
@@ -1011,32 +1056,28 @@ async fn fake_rtc_load_triggered_spillover_releases_remote_route_after_subscribe
     assert!(
         server
             .wait_for_consumer_route_absence(
-                &room,
-                &spillover_subscriber_user_id,
-                &publisher_user_id,
+                room,
+                spillover_subscriber_user_id,
+                publisher_user_id,
                 spillover_track.stream_type,
             )
             .await
     );
     assert_consumer_route_active(
-        &server,
-        &room,
-        &local_subscriber,
-        &publisher_user_id,
+        server,
+        room,
+        local_subscriber,
+        publisher_user_id,
         local_track.stream_type,
     )
     .await;
-    assert_synthetic_video_packet_forwarded(
-        &mut publisher,
-        &mut local_subscriber,
-        &mut source,
-        &mut clock,
-    )
-    .await;
+    assert_synthetic_video_packet_forwarded(publisher, local_subscriber, &mut source, &mut clock)
+        .await;
 }
 
 #[tokio::test]
 async fn fake_rtc_load_triggered_spillover_preserves_download_mute_after_subscriber_replacement() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server_with_config(
         load_triggered_spillover_test_config(),
         "issuer-load-spillover-replacement-mute",
@@ -1167,6 +1208,7 @@ async fn assert_load_triggered_spillover_replacement_mute_flow(
 
 #[tokio::test]
 async fn fake_rtc_vp8_selected_rid_requires_keyframe_before_forwarding() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-vp8-selected-rid-keyframe").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -1232,6 +1274,7 @@ async fn fake_rtc_vp8_selected_rid_requires_keyframe_before_forwarding() {
 
 #[tokio::test]
 async fn fake_rtc_vp8_selected_rid_drops_other_rids_after_activation() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-vp8-selected-rid-filter").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -1311,6 +1354,7 @@ async fn fake_rtc_vp8_selected_rid_drops_other_rids_after_activation() {
 
 #[tokio::test]
 async fn fake_rtc_peers_forward_h264_high_rid_idr_without_browsers() {
+    let _guard = full_stack_test_guard().await;
     let mut config = test_config(1_000, 10);
     config.codecs.flags = MediaCodecFlags::default().with_vp8(false).with_h264(true);
     let room_server =
@@ -1367,6 +1411,7 @@ async fn fake_rtc_peers_forward_h264_high_rid_idr_without_browsers() {
 
 #[tokio::test]
 async fn fake_rtc_h264_selected_rid_requires_idr_before_forwarding() {
+    let _guard = full_stack_test_guard().await;
     let mut config = test_config(1_000, 10);
     config.codecs.flags = MediaCodecFlags::default().with_vp8(false).with_h264(true);
     let room_server =
@@ -1436,6 +1481,7 @@ async fn fake_rtc_h264_selected_rid_requires_idr_before_forwarding() {
 
 #[tokio::test]
 async fn fake_rtc_peer_rejects_invalid_synthetic_send_paths_without_panics() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-invalid-synthetic-send").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -1496,6 +1542,7 @@ async fn fake_rtc_peer_rejects_invalid_synthetic_send_paths_without_panics() {
 
 #[tokio::test]
 async fn fake_rtc_peers_rebootstrap_user_replacement_without_stale_media_routes() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-replacement-rtc").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -1584,6 +1631,7 @@ async fn fake_rtc_peers_rebootstrap_user_replacement_without_stale_media_routes(
 
 #[tokio::test]
 async fn fake_rtc_replacement_unpublish_and_republish_leave_no_stale_consumer_state() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-replacement-unpublish").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -1757,6 +1805,7 @@ async fn assert_replacement_unpublish_and_republish_audio(
 
 #[tokio::test]
 async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotiation() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-subscriber-replacement-mute").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -1905,6 +1954,7 @@ async fn assert_replacement_subscriber_inherits_muted_audio_download(
 
 #[tokio::test]
 async fn fake_rtc_replaced_socket_cannot_emit_presence_updates_after_rejoin() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-replacement-rtc-info").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -1946,6 +1996,7 @@ async fn fake_rtc_replaced_socket_cannot_emit_presence_updates_after_rejoin() {
 
 #[tokio::test]
 async fn fake_rtc_replaced_socket_cannot_finish_a_queued_publish_negotiation() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-replacement-rtc-queued-publish").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -2029,6 +2080,7 @@ async fn fake_rtc_replaced_socket_cannot_finish_a_queued_publish_negotiation() {
 
 #[tokio::test]
 async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_browsers() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-e").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -2053,6 +2105,7 @@ async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_brows
 
 #[tokio::test]
 async fn fake_rtc_peers_stop_forwarding_after_explicit_upload_unpublish() {
+    let _guard = full_stack_test_guard().await;
     let room_server = spawn_room_server("issuer-f").await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
@@ -2306,12 +2359,7 @@ async fn assert_synthetic_video_packet_forwarded(
         let Some(expected_payload) = expected_payload else {
             return 0;
         };
-        let received_packet = subscriber.read_rtp_packet(Duration::from_secs(2)).await;
-        if let Some(received_packet) = received_packet {
-            assert_eq!(
-                received_packet.payload.as_ref(),
-                expected_payload.as_slice()
-            );
+        if read_expected_rtp_payload(subscriber, &expected_payload, Duration::from_secs(5)).await {
             return u64::try_from(expected_payload.len()).unwrap_or(u64::MAX);
         }
     }
@@ -2346,16 +2394,28 @@ async fn assert_packet_forwarded(
         return 0;
     };
 
-    let received_packet = subscriber.read_rtp_packet(Duration::from_secs(2)).await;
-    assert!(received_packet.is_some());
-    let Some(received_packet) = received_packet else {
-        return 0;
-    };
-    assert_eq!(
-        received_packet.payload.as_ref(),
-        expected_payload.as_slice()
-    );
+    assert!(read_expected_rtp_payload(subscriber, &expected_payload, Duration::from_secs(5)).await);
     u64::try_from(expected_payload.len()).unwrap_or(u64::MAX)
+}
+
+async fn read_expected_rtp_payload(
+    subscriber: &mut ProtocolFakePeer,
+    expected_payload: &[u8],
+    timeout_window: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout_window;
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        let Some(received_packet) = subscriber.read_rtp_packet(deadline - now).await else {
+            return false;
+        };
+        if received_packet.payload.as_ref() == expected_payload {
+            return true;
+        }
+    }
 }
 
 async fn assert_video_subscription_enabled(
