@@ -11,6 +11,7 @@
 //! turn.
 
 use std::{
+    mem::take,
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -44,8 +45,9 @@ pub(super) fn drain_ready_sessions(
     buffers: &mut PacketLoopBuffers,
     now: Instant,
 ) {
-    let ready_sessions = state.take_ready_sessions(now);
-    for user_id in ready_sessions {
+    state.collect_ready_sessions(now, &mut buffers.ready_sessions);
+    let mut ready_sessions = take(&mut buffers.ready_sessions);
+    for user_id in ready_sessions.drain(..) {
         let session_timeout = {
             let Some(session_state) = state.users.get_mut(&user_id) else {
                 continue;
@@ -62,6 +64,7 @@ pub(super) fn drain_ready_sessions(
         };
         state.update_session_timeout(&user_id, session_timeout);
     }
+    buffers.ready_sessions = ready_sessions;
 }
 
 /// Drain all ready outputs from one session's `Rtc` instance.

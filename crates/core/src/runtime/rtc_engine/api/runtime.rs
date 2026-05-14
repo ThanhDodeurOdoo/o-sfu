@@ -127,6 +127,7 @@ impl RtcTransportShard {
         let (relay_tx, relay_rx) = mpsc::channel(RELAY_MAILBOX_CAPACITY);
         let bitrate_state = Arc::new(Mutex::new(RtcBitrateState::default()));
         let snapshot_state = Arc::new(Mutex::new(super::super::state::RtcSnapshotState::default()));
+        let packet_loop_lag = Arc::new(packet_loop::PacketLoopLagSnapshot::new(Instant::now()));
         let shutdown_token = CancellationToken::new();
         let worker_handle = RtcWorkerHandle {
             command_tx,
@@ -135,6 +136,7 @@ impl RtcTransportShard {
             relay_mailbox: RelayPacketMailbox::new(relay_tx),
             bitrate_state: Arc::clone(&bitrate_state),
             snapshot_state: Arc::clone(&snapshot_state),
+            packet_loop_lag: Arc::clone(&packet_loop_lag),
             shutdown_token: shutdown_token.clone(),
         };
         let worker_handle = worker_slot.store(worker_handle);
@@ -167,6 +169,8 @@ impl RtcTransportShard {
                 source_policy_signal: Arc::clone(&self.source_policy_signal),
                 metrics: Arc::clone(&self.metrics),
                 rtp_metrics: Arc::clone(&self.rtp_metrics),
+                rtc_metrics: Arc::clone(&self.rtc_metrics),
+                packet_loop_lag,
             },
             bitrate_state,
             snapshot_state,
@@ -301,10 +305,7 @@ impl RtcTransportObservabilityFacade<'_> {
             Ok(bitrate_state) => bitrate_state.egress_bitrate_snapshot_at(session_keys, now),
             Err(_error) => Bitrate::zero(),
         };
-        let packet_loop_lag_ms = match worker_handle.snapshot_state.lock() {
-            Ok(snapshot_state) => snapshot_state.packet_loop_lag_ms_at(now),
-            Err(_error) => 0,
-        };
+        let packet_loop_lag_ms = worker_handle.packet_loop_lag.packet_loop_lag_ms_at(now);
         let command_backlog_depth = sender_backlog_depth(&worker_handle.command_tx);
         let relay_mailbox_depth = worker_handle.relay_mailbox.backlog_depth();
         TransportPlacementPressureSnapshot {
@@ -401,4 +402,46 @@ fn backlog_pressure_score(backlog_depth: usize, capacity: usize) -> u8 {
     }
     let score = backlog_depth.saturating_mul(100) / capacity;
     u8::try_from(score.min(100)).map_or(100, |value| value)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn placement_pressure_reads_packet_loop_lag_from_atomic_snapshot() -> Result<(), &'static str> {
+        let adapter = RtcTransportShard::default();
+        let now = Instant::now();
+        let started_at = now.checked_sub(Duration::from_millis(200)).unwrap_or(now);
+        let packet_loop_lag = Arc::new(packet_loop::PacketLoopLagSnapshot::new(started_at));
+        packet_loop_lag.publish_for_test(37, started_at + Duration::from_millis(150));
+        let (command_tx, _command_rx) = mpsc::channel(1);
+        let (relay_tx, _relay_rx) = mpsc::channel(RELAY_MAILBOX_CAPACITY);
+        let debug_channels = super::super::super::test_support::RtcWorkerDebugChannels::new();
+
+        let worker_handle = RtcWorkerHandle {
+            command_tx,
+            debug_handle: debug_channels.handle(),
+            relay_mailbox: RelayPacketMailbox::new(relay_tx),
+            bitrate_state: Arc::new(Mutex::new(RtcBitrateState::default())),
+            snapshot_state: Arc::new(Mutex::new(
+                super::super::super::state::RtcSnapshotState::default(),
+            )),
+            packet_loop_lag,
+            shutdown_token: CancellationToken::new(),
+        };
+        {
+            let Ok(mut worker_slot) = adapter.worker_handle.lock() else {
+                return Err("worker slot lock poisoned");
+            };
+            worker_slot.store(worker_handle);
+        }
+
+        let snapshot = adapter.placement_pressure_snapshot(&[]);
+
+        assert_eq!(snapshot.packet_loop_lag_ms, 37);
+        Ok(())
+    }
 }

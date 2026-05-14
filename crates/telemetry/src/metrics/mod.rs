@@ -2,6 +2,7 @@ mod catalog;
 mod counter;
 mod descriptor;
 mod labels;
+mod rtc;
 mod rtp;
 mod snapshot;
 
@@ -18,6 +19,7 @@ pub use labels::{
     RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, SourceSelectionKind,
     TransportCleanupFailureKind, TransportHealthState, TransportIceState, WsSessionLoopExitReason,
 };
+pub use rtc::{RtcMetricsRecorder, RtcRouteControlMetrics};
 pub use rtp::RtpMetricsRecorder;
 pub use snapshot::{
     MetricFamilySnapshot, MetricHistogramBucketSnapshot, MetricHistogramSnapshot, MetricKind,

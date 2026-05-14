@@ -14,7 +14,7 @@ use super::{
 };
 use crate::runtime::{
     media_transport::{TransportMediaId, TransportSessionKey},
-    metrics::{RtcRouteControlOutcome, RuntimeMetrics},
+    metrics::{RtcRouteControlMetrics, RtcRouteControlOutcome},
     rtc_engine::{
         demux::{MediaRouteDestination, MediaRouteEntry},
         media_registry::RegisteredMediaHandle,
@@ -96,7 +96,7 @@ const SELECTED_RID_KEYFRAME_RETRY_DELAYS: [Duration; 5] = [
 /// keyframe refreshes. Room policy remains the owner of which RID is selected.
 pub fn observe_source_rid_readiness(
     state: &mut RtcBootstrapState,
-    metrics: &RuntimeMetrics,
+    metrics: &impl RtcRouteControlMetrics,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     rid: Rid,
@@ -188,7 +188,7 @@ pub fn observe_source_rid_readiness(
 /// after teardown and is handled as a dropped best-effort refresh.
 pub fn drain_due_rid_keyframe_refreshes(
     state: &mut RtcBootstrapState,
-    metrics: &RuntimeMetrics,
+    metrics: &impl RtcRouteControlMetrics,
     now: Instant,
 ) {
     for (source_transport_media_id, rid) in state.drain_due_rid_keyframe_refreshes_for_all(now) {
@@ -412,7 +412,7 @@ fn add_unique_rid(rids: &mut Vec<Rid>, rid: Rid) {
 
 fn request_live_rid_keyframe(
     state: &mut RtcBootstrapState,
-    metrics: &RuntimeMetrics,
+    metrics: &impl RtcRouteControlMetrics,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     rid: Rid,
@@ -506,7 +506,7 @@ fn schedule_live_rid_keyframe_retries(
 
 fn drain_live_rid_keyframe_retries(
     state: &mut RtcBootstrapState,
-    metrics: &RuntimeMetrics,
+    metrics: &impl RtcRouteControlMetrics,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     rid: Rid,

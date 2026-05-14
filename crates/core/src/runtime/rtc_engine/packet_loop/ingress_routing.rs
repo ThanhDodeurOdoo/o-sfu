@@ -39,7 +39,7 @@ use super::super::{
 };
 use crate::runtime::{
     media_transport::TransportSessionKey,
-    metrics::{RtcDatagramDropReason, RtcDatagramRoutePath, RuntimeMetrics},
+    metrics::{RtcDatagramDropReason, RtcDatagramRoutePath, RtcMetricsRecorder},
 };
 
 enum CachedRouteOutcome {
@@ -117,7 +117,7 @@ pub(super) fn route_packet_to_matching_session(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     routing_state: &mut PacketLoopRoutingState,
-    metrics: &RuntimeMetrics,
+    metrics: &RtcMetricsRecorder,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet: &[u8],
@@ -423,7 +423,7 @@ fn log_malformed_datagram(source_addr: SocketAddr) {
 
 struct PacketRouteContext<'a> {
     snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
-    metrics: &'a RuntimeMetrics,
+    metrics: &'a RtcMetricsRecorder,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet: &'a [u8],

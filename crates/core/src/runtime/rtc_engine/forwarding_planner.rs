@@ -35,7 +35,7 @@ use super::{
 };
 use crate::runtime::{
     media_transport::TransportMediaId as RouteTransportMediaId,
-    metrics::{RtcRouteControlOutcome, RuntimeMetrics},
+    metrics::{RtcRouteControlMetrics, RtcRouteControlOutcome},
     packet_sink_registry::{PacketSinkLookup, RegisteredPacketSink},
 };
 
@@ -51,7 +51,7 @@ use crate::runtime::{
 pub(super) fn populate_forward_routes_for_packet(
     state: &RtcBootstrapState,
     packet_sinks: &impl PacketSinkLookup,
-    metrics: &RuntimeMetrics,
+    metrics: &impl RtcRouteControlMetrics,
     packet_idx: usize,
     packet: &mut ForwardedPacket,
     forwards: &mut Vec<PacketForward>,
@@ -148,7 +148,7 @@ fn reserve_forward_capacity(
 /// downstream destination.
 fn source_packet_gate_permits(
     state: &RtcBootstrapState,
-    metrics: &RuntimeMetrics,
+    metrics: &impl RtcRouteControlMetrics,
     source_transport_media_id: RouteTransportMediaId,
     metadata: PacketLayerMetadata,
 ) -> bool {

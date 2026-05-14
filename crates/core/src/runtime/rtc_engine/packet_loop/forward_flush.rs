@@ -35,7 +35,7 @@ use super::{
 use crate::runtime::{
     hot_path::unlikely,
     media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
-    metrics::{RtpMetricsRecorder, RuntimeMetrics},
+    metrics::{RtcRouteControlMetrics, RtpMetricsRecorder, RuntimeMetrics},
 };
 
 /// Observe packet-path metadata before packets are forwarded.
@@ -47,7 +47,7 @@ use crate::runtime::{
 pub(super) fn record_incoming_stats(
     state: &mut RtcBootstrapState,
     source_policy_signal: &SourcePolicySignal,
-    metrics: &RuntimeMetrics,
+    metrics: &impl RtcRouteControlMetrics,
     rtp_metrics: &RtpMetricsRecorder,
     buffers: &mut PacketLoopBuffers,
 ) {
@@ -127,7 +127,7 @@ pub(super) fn record_incoming_stats(
 /// inspect packet payloads.
 fn request_first_video_keyframe(
     state: &mut RtcBootstrapState,
-    metrics: &RuntimeMetrics,
+    metrics: &impl RtcRouteControlMetrics,
     source_session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
     now: Instant,
