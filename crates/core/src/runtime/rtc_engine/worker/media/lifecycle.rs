@@ -30,7 +30,9 @@ use super::{
             bitrate::RtcBitrateState,
             commands::RtcWorkerResponse,
             local_send_rewrite::forget_transport_media_streams,
-            media_registry::RegisteredMediaHandle,
+            media_registry::{
+                DecoderRefreshCodec, RegisteredMediaHandle, RemoteSourceRegistration,
+            },
             simulcast,
             state::{PendingRecvStream, RtcBootstrapState, RtcSessionState},
         },
@@ -40,7 +42,7 @@ use super::{
         ConsumerRouteRegistration, ensure_route_source_registered, register_consumer_route,
         remove_consumer_route,
     },
-    types::AddSendMediaRequest,
+    types::{AddSendMediaRequest, RouteSourceKind},
 };
 use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, VideoBitrateLimits,
@@ -56,6 +58,53 @@ pub struct RecvMediaPolicy {
     pub video_bitrate_limits: VideoBitrateLimits,
     pub codec_flags: MediaCodecFlags,
     pub codec_preferences: CodecPreferences,
+}
+
+#[derive(Clone)]
+struct RemoteSourceRollback {
+    is_remote_source: bool,
+    source_transport_media_id: TransportMediaId,
+    previous_registration: Option<RemoteSourceRegistration>,
+    previous_decoder_refresh_codec: Option<DecoderRefreshCodec>,
+}
+
+impl RemoteSourceRollback {
+    fn capture(
+        state: &RtcBootstrapState,
+        is_remote_source: bool,
+        source_transport_media_id: TransportMediaId,
+    ) -> Self {
+        let previous_registration = is_remote_source
+            .then(|| {
+                state
+                    .remote_source_registration(source_transport_media_id)
+                    .cloned()
+            })
+            .flatten();
+        let previous_decoder_refresh_codec = is_remote_source
+            .then(|| state.source_decoder_refresh_codec(source_transport_media_id))
+            .flatten();
+        Self {
+            is_remote_source,
+            source_transport_media_id,
+            previous_registration,
+            previous_decoder_refresh_codec,
+        }
+    }
+
+    fn rollback(&self, state: &mut RtcBootstrapState) {
+        if !self.is_remote_source {
+            return;
+        }
+        state.restore_remote_source_registration(
+            self.source_transport_media_id,
+            self.previous_registration.clone(),
+        );
+        state.restore_source_decoder_refresh_codec(
+            self.source_transport_media_id,
+            self.previous_decoder_refresh_codec,
+        );
+    }
 }
 
 pub fn respond_remove_media(
@@ -461,14 +510,11 @@ fn worker_add_send_media(
         remote_source_control,
         consumer_rtp_parameters,
     } = request;
-    let previous_remote_source_registration = (source_session_key.media_worker_id()
-        != consumer_session_key.media_worker_id())
-    .then(|| {
-        state
-            .remote_source_registration(source_transport_media_id)
-            .cloned()
-    })
-    .flatten();
+    let remote_source_rollback = RemoteSourceRollback::capture(
+        state,
+        source_session_key.media_worker_id() != consumer_session_key.media_worker_id(),
+        source_transport_media_id,
+    );
     let route_source = match ensure_route_source_registered(
         state,
         consumer_session_key,
@@ -490,16 +536,14 @@ fn worker_add_send_media(
             return Err(error);
         }
     };
-    let rollback_remote_source_registration = |state: &mut RtcBootstrapState| {
-        if matches!(route_source, super::types::RouteSourceKind::Remote) {
-            state.restore_remote_source_registration(
-                source_transport_media_id,
-                previous_remote_source_registration.clone(),
-            );
-        }
-    };
+    if matches!(route_source, RouteSourceKind::Remote) {
+        state.refresh_source_decoder_refresh_codec(
+            source_transport_media_id,
+            consumer_rtp_parameters,
+        );
+    }
     let Some(session_state) = state.users.get_mut(consumer_session_key) else {
-        rollback_remote_source_registration(state);
+        remote_source_rollback.rollback(state);
         return Err(TransportAdapterError::TransportUnavailable);
     };
     let mid = if session_state.sdp_negotiation.initial_offer_applied {
@@ -507,7 +551,7 @@ fn worker_add_send_media(
             Ok(mid) => mid,
             Err(error) => {
                 let _ = session_state;
-                rollback_remote_source_registration(state);
+                remote_source_rollback.rollback(state);
                 return Err(error);
             }
         }

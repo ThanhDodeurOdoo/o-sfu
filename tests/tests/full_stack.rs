@@ -760,6 +760,81 @@ async fn fake_rtc_cross_worker_vp8_selected_rid_survives_relay() {
 }
 
 #[tokio::test]
+async fn fake_rtc_cross_worker_h264_selected_rid_requires_idr_after_relay() {
+    let mut config = cross_worker_test_config();
+    config.codecs.flags = MediaCodecFlags::default().with_vp8(false).with_h264(true);
+    let room_server = spawn_room_server_with_config(
+        config,
+        "issuer-cross-worker-h264-selected-rid",
+        Some(TEST_ROOM_KEY),
+    )
+    .await;
+    assert!(room_server.is_some());
+    let Some(room_server) = room_server else {
+        return;
+    };
+    let (server, room) = room_server.into_parts();
+    let publisher_user_id = UserId::Integer(184);
+    let subscriber_user_id = UserId::Integer(185);
+
+    let setup = connect_two_rtc_ready_fake_peers(
+        &server,
+        &room,
+        publisher_user_id.clone(),
+        subscriber_user_id.clone(),
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(setup.is_some());
+    let Some((mut publisher, mut subscriber)) = setup else {
+        return;
+    };
+    assert_cross_worker_placement(&server, &room, &publisher_user_id, &subscriber_user_id).await;
+
+    let mut source = FakeMediaSource::new(SyntheticH264Stream::with_idr(false));
+    assert!(publisher.publish_track(&source).await.is_some());
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    let track_binding = assert_track_snapshot(
+        &mut subscriber,
+        publisher_user_id.clone(),
+        StreamType::Camera,
+        true,
+    )
+    .await;
+    assert!(subscriber.complete_next_negotiation().await.is_some());
+    assert_video_subscription_enabled(&mut subscriber, publisher_user_id.clone()).await;
+    assert_consumer_route_active(
+        &server,
+        &room,
+        &subscriber,
+        &publisher_user_id,
+        track_binding.stream_type,
+    )
+    .await;
+    assert!(
+        server
+            .wait_for_video_subscription_selected_rid(
+                &room,
+                subscriber.user_id(),
+                &publisher_user_id,
+                "hi",
+            )
+            .await
+    );
+
+    let mut clock = FakeClock::default();
+    assert_synthetic_video_packet_dropped(&mut publisher, &mut subscriber, &mut source, &mut clock)
+        .await;
+    assert_synthetic_video_packet_forwarded(
+        &mut publisher,
+        &mut subscriber,
+        &mut source,
+        &mut clock,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn fake_rtc_vp8_selected_rid_requires_keyframe_before_forwarding() {
     let room_server = spawn_room_server("issuer-vp8-selected-rid-keyframe").await;
     assert!(room_server.is_some());

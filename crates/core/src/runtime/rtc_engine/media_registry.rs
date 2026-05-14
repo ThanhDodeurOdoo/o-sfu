@@ -6,6 +6,7 @@
 
 use std::{collections::BTreeSet, time::Instant};
 
+use o_sfu_rfc::rtp;
 use str0m::{
     media::{Mid, Rid},
     rtp::Ssrc,
@@ -56,6 +57,33 @@ impl RegisteredMediaHandle {
 pub(super) struct RemoteSourceRegistration {
     source_session_key: TransportSessionKey,
     source_control: RemoteSourceControl,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DecoderRefreshCodec {
+    H264,
+    Vp8,
+    Unsupported,
+}
+
+impl DecoderRefreshCodec {
+    fn from_parameters(parameters: &o_sfu_router::MediaStream) -> Option<Self> {
+        let mut has_vp8 = false;
+        let mut has_unsupported_primary = false;
+        for format in parameters.formats() {
+            match format.codec() {
+                &rtp::CodecName::H264 => return Some(Self::H264),
+                &rtp::CodecName::Vp8 => has_vp8 = true,
+                codec if !codec.is_rtx() => has_unsupported_primary = true,
+                _ => {}
+            }
+        }
+        if has_vp8 {
+            Some(Self::Vp8)
+        } else {
+            has_unsupported_primary.then_some(Self::Unsupported)
+        }
+    }
 }
 
 impl RemoteSourceRegistration {
@@ -168,6 +196,8 @@ impl RtcBootstrapState {
             self.clear_producer_ssrc_bindings(transport_media_id, session_key);
             self.forget_live_producer_rids(transport_media_id);
             self.route_control.forget_source(transport_media_id);
+            self.source_decoder_refresh_codecs
+                .remove(&transport_media_id);
             self.remove_incoming_bitrate_counter(transport_media_id);
         } else if let RegisteredMediaHandle::Consumer {
             session_key, mid, ..
@@ -227,6 +257,8 @@ impl RtcBootstrapState {
                 .remove(&source_transport_media_id);
             self.forget_live_producer_rids(source_transport_media_id);
             self.route_control.forget_source(source_transport_media_id);
+            self.source_decoder_refresh_codecs
+                .remove(&source_transport_media_id);
         }
     }
 
@@ -251,6 +283,8 @@ impl RtcBootstrapState {
             .remove(&source_transport_media_id);
         self.forget_live_producer_rids(source_transport_media_id);
         self.route_control.forget_source(source_transport_media_id);
+        self.source_decoder_refresh_codecs
+            .remove(&source_transport_media_id);
     }
 
     pub(super) fn prune_unrouted_remote_sources(&mut self) {
@@ -275,6 +309,53 @@ impl RtcBootstrapState {
                         .remote_source_registry
                         .contains_key(source_transport_media_id)
             });
+        self.source_decoder_refresh_codecs
+            .retain(|source_transport_media_id, _codec| {
+                self.mid_registry
+                    .contains_key(&source_transport_media_id.as_u64())
+                    || self
+                        .remote_source_registry
+                        .contains_key(source_transport_media_id)
+            });
+    }
+
+    pub(super) fn source_decoder_refresh_codec(
+        &self,
+        source_transport_media_id: TransportMediaId,
+    ) -> Option<DecoderRefreshCodec> {
+        self.source_decoder_refresh_codecs
+            .get(&source_transport_media_id)
+            .copied()
+    }
+
+    pub(super) fn refresh_source_decoder_refresh_codec(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        parameters: &o_sfu_router::MediaStream,
+    ) -> Option<DecoderRefreshCodec> {
+        let previous = self.source_decoder_refresh_codec(source_transport_media_id);
+        if let Some(codec) = DecoderRefreshCodec::from_parameters(parameters) {
+            self.source_decoder_refresh_codecs
+                .insert(source_transport_media_id, codec);
+        } else {
+            self.source_decoder_refresh_codecs
+                .remove(&source_transport_media_id);
+        }
+        previous
+    }
+
+    pub(super) fn restore_source_decoder_refresh_codec(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        previous_codec: Option<DecoderRefreshCodec>,
+    ) {
+        if let Some(previous_codec) = previous_codec {
+            self.source_decoder_refresh_codecs
+                .insert(source_transport_media_id, previous_codec);
+        } else {
+            self.source_decoder_refresh_codecs
+                .remove(&source_transport_media_id);
+        }
     }
 
     pub(super) fn active_speaker_source_snapshot(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
@@ -471,6 +552,7 @@ impl RtcBootstrapState {
             return;
         };
         self.clear_producer_ssrc_bindings(transport_media_id, session_key);
+        self.refresh_source_decoder_refresh_codec(transport_media_id, parameters);
         let bindings = parameters
             .bindings()
             .filter_map(|binding| {
@@ -513,6 +595,8 @@ impl RtcBootstrapState {
             return;
         };
         self.clear_producer_ssrc_bindings(transport_media_id, session_key);
+        self.source_decoder_refresh_codecs
+            .remove(&transport_media_id);
         self.producer_ssrcs_by_media
             .entry(transport_media_id)
             .or_default();
