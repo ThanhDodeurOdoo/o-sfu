@@ -16,7 +16,7 @@
 //! This module observes packets and executes planned sends. It does not decide
 //! subscriptions or room membership.
 
-use std::time::Instant;
+use std::{mem::take, time::Instant};
 
 use str0m::media::{KeyframeRequestKind, MediaKind};
 use tokio::sync::mpsc;
@@ -28,7 +28,7 @@ use super::{
         forwarding_destination::{ForwardSendOutcome, ForwardingDestination},
         media_registry::RegisteredMediaHandle,
         state::RtcBootstrapState,
-        worker::{observe_source_rid_readiness, request_keyframe_for_source},
+        worker::{apply_source_rid_readiness, request_keyframe_for_source},
     },
     buffers::PacketLoopBuffers,
 };
@@ -51,11 +51,8 @@ pub(super) fn record_incoming_stats(
     rtp_metrics: &RtpMetricsRecorder,
     buffers: &mut PacketLoopBuffers,
 ) {
-    let (pending_packets, dirty_source_policy_channel_ids) = (
-        &mut buffers.pending_packets,
-        &mut buffers.dirty_source_policy_channel_ids,
-    );
-    for packet in pending_packets {
+    let mut pending_packets = take(&mut buffers.pending_packets);
+    for packet in &mut pending_packets {
         if let Some(transport_media_id) = packet.resolve_source_transport_media_id(state) {
             if packet.route_control_mid().is_some() {
                 // MID proves which producer this packet belongs to. Persist the
@@ -77,21 +74,22 @@ pub(super) fn record_incoming_stats(
                 packet.received_at(),
             );
             if unlikely(audio_policy_changed) {
-                dirty_source_policy_channel_ids
+                buffers
+                    .dirty_source_policy_channel_ids
                     .push(packet.source_session_key().room_instance_id());
             }
             let metadata = packet.resolve_route_control_layer_metadata(state);
-            let activated_selected_rid = metadata.rid().is_some_and(|rid| {
-                observe_source_rid_readiness(
-                    state,
-                    metrics,
+            if let Some(rid) = metadata.rid() {
+                state.observe_producer_rid_packet(transport_media_id, rid, packet.received_at());
+                let is_keyframe = packet.route_control_decoder_refresh(state, transport_media_id);
+                buffers.push_rid_readiness(
                     packet.source_session_key(),
                     transport_media_id,
                     rid,
-                    packet.route_control_decoder_refresh(state, transport_media_id),
+                    is_keyframe,
                     packet.received_at(),
-                )
-            });
+                );
+            }
             let first_ingress = state
                 .record_incoming_bitrate(transport_media_id, packet.received_at(), payload_len)
                 .unwrap_or(false);
@@ -103,20 +101,64 @@ pub(super) fn record_incoming_stats(
                     payload_bytes = payload_len,
                     "observed first RTP ingress for published media"
                 );
-                if !activated_selected_rid {
-                    request_first_video_keyframe(
-                        state,
-                        metrics,
-                        packet.source_session_key(),
-                        transport_media_id,
-                        packet.received_at(),
-                    );
-                }
+                buffers.push_first_video_keyframe(
+                    packet.source_session_key(),
+                    transport_media_id,
+                    packet.received_at(),
+                );
             }
             rtp_metrics.record_ingress(payload_len);
         }
     }
+    buffers.pending_packets = pending_packets;
+    flush_pending_rid_readiness(state, metrics, buffers);
+    flush_pending_first_video_keyframes(state, metrics, buffers);
     buffers.flush_source_policy_dirty(source_policy_signal);
+}
+
+fn flush_pending_rid_readiness(
+    state: &mut RtcBootstrapState,
+    metrics: &impl RtcRouteControlMetrics,
+    buffers: &mut PacketLoopBuffers,
+) {
+    for pending in buffers.pending_rid_readiness.drain(..) {
+        if apply_source_rid_readiness(
+            state,
+            metrics,
+            &pending.source_session_key,
+            pending.source_transport_media_id,
+            pending.rid,
+            pending.is_keyframe,
+            pending.observed_at,
+        ) {
+            buffers
+                .rid_readiness_changed_sources
+                .push(pending.source_transport_media_id);
+        }
+    }
+}
+
+fn flush_pending_first_video_keyframes(
+    state: &mut RtcBootstrapState,
+    metrics: &impl RtcRouteControlMetrics,
+    buffers: &mut PacketLoopBuffers,
+) {
+    for pending in buffers.pending_first_video_keyframes.drain(..) {
+        if buffers
+            .rid_readiness_changed_sources
+            .contains(&pending.source_transport_media_id)
+        {
+            continue;
+        }
+        request_first_video_keyframe(
+            state,
+            metrics,
+            &pending.source_session_key,
+            pending.source_transport_media_id,
+            pending.observed_at,
+        );
+    }
+    buffers.rid_readiness_changed_sources.clear();
 }
 
 /// Request a keyframe when the first packet for a video producer appears.
@@ -214,11 +256,8 @@ pub(super) fn flush_forward_routes(
     buffers: &mut PacketLoopBuffers,
 ) {
     let (forwards, pending_packets) = (&buffers.forwards, &mut buffers.pending_packets);
-    buffers.relay_packets.clear();
-    buffers
-        .relay_packets
-        .resize_with(pending_packets.len(), || None);
-    let relay_packets = &mut buffers.relay_packets;
+    buffers.relay_packet = None;
+    buffers.relay_packet_idx = None;
     for (forward_idx, forward) in forwards.iter().enumerate() {
         let is_last_destination = forwards
             .get(forward_idx + 1)
@@ -237,13 +276,11 @@ pub(super) fn flush_forward_routes(
                 else {
                     continue;
                 };
-                let Some(shared_packet) = relay_packets.get_mut(packet_idx) else {
-                    continue;
-                };
-                Some(
-                    shared_packet
-                        .get_or_insert_with(|| packet.share_for_relay(source_transport_media_id)),
-                )
+                if buffers.relay_packet_idx != Some(packet_idx) {
+                    buffers.relay_packet = Some(packet.share_for_relay(source_transport_media_id));
+                    buffers.relay_packet_idx = Some(packet_idx);
+                }
+                buffers.relay_packet.as_mut()
             }
             ForwardingDestination::LocalRtc(_) | ForwardingDestination::PacketSink(_) => None,
         };

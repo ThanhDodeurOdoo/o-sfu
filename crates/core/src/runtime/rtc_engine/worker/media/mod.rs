@@ -7,8 +7,10 @@ mod lifecycle;
 mod tests;
 mod types;
 
+#[cfg(test)]
+use control::observe_source_rid_readiness;
 pub(in crate::runtime::rtc_engine) use control::{
-    drain_due_rid_keyframe_refreshes, observe_source_rid_readiness,
+    apply_source_rid_readiness, drain_due_rid_keyframe_refreshes,
 };
 pub(super) use control::{
     refresh_source_packet_gate, respond_add_relay_target, respond_remove_relay_target,

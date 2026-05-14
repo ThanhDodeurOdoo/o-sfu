@@ -139,6 +139,15 @@ pub(super) fn route_packet_to_matching_session(
         }
         CachedRouteOutcome::NotMatched => {}
     }
+    let now = Instant::now();
+    if routing_state.source_is_blocked(source_addr, now) {
+        metrics.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
+        trace!(
+            source = %source_addr,
+            "dropping UDP datagram because sustained unknown-source misses exhausted the rtc recovery budget for this source"
+        );
+        return;
+    }
     let miss_key = PacketLoopRoutingMissKey::new(source_addr, candidate_addr, packet);
     // The recent-miss cache proves that no session accepted an identical packet
     // from this source recently. It must be cleared on topology or ICE changes
@@ -151,7 +160,6 @@ pub(super) fn route_packet_to_matching_session(
         );
         return;
     }
-    let now = Instant::now();
     // This is purely a defensive mechanism against unknown-source traffic.
     // It is not part of ICE or RTP correctness.
     // Legitimate traffic should have been learned via STUN before hitting this path.
@@ -247,15 +255,6 @@ fn route_packet_with_cached_session(
     } else {
         state.mark_session_dirty(&session_key);
     }
-    if state
-        .remote_addr_demux
-        .remember_remote_addr(source_addr, &session_key)
-        && let Ok(mut snapshot) = snapshot_state.lock()
-    {
-        let _ = snapshot
-            .remote_addr_demux
-            .remember_remote_addr(source_addr, &session_key);
-    }
     CachedRouteOutcome::Routed
 }
 
@@ -264,7 +263,7 @@ fn matching_indexed_session_key_for_packet(
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet: &[u8],
-    now: Instant,
+    input: &Input<'_>,
 ) -> IndexedSessionRecoveryOutcome {
     let packet_index_probe = match packet_index_probe(source_addr, packet) {
         Ok(packet_index_probe) => packet_index_probe,
@@ -292,9 +291,6 @@ fn matching_indexed_session_key_for_packet(
                 |candidate_session_keys| CandidateSessionKeys::Slice(candidate_session_keys.iter()),
             ),
     };
-    let Some(input) = receive_input(now, source_addr, candidate_addr, packet) else {
-        return IndexedSessionRecoveryOutcome::Malformed;
-    };
     let mut examined_sessions: usize = 0;
     let mut stale_session_keys = Vec::new();
     let matched_session_key = {
@@ -310,7 +306,7 @@ fn matching_indexed_session_key_for_packet(
             // `Rtc::accepts()` is the authoritative demux decision.
             // It accounts for ICE nomination, credentials, and candidate sets.
             // The probe/index only reduces the number of sessions we test here.
-            if session_state.rtc.accepts(&input) {
+            if session_state.rtc.accepts(input) {
                 matched_session_key = Some(session_key.clone());
                 break;
             }
@@ -439,18 +435,10 @@ fn route_packet_to_session(
     state: &mut RtcBootstrapState,
     session_key: &TransportSessionKey,
     route: &PacketRouteContext<'_>,
+    input: Input<'_>,
     route_resolution: &'static str,
 ) -> bool {
     let Some(session_state) = state.users.get_mut(session_key) else {
-        return false;
-    };
-    let Some(input) = receive_input(
-        route.now,
-        route.source_addr,
-        route.candidate_addr,
-        route.packet,
-    ) else {
-        log_malformed_datagram(route.source_addr);
         return false;
     };
     let handle_result = session_state.rtc.handle_input(input);
@@ -556,7 +544,7 @@ fn route_packet_by_single_session(
         );
         return;
     }
-    if route_packet_to_session(state, &session_key, route, "single-user-scan") {
+    if route_packet_to_session(state, &session_key, route, input, "single-user-scan") {
         routing_state.record_fallback_route_success(miss_key, route.packet, route.source_addr);
     }
 }
@@ -574,12 +562,24 @@ fn route_packet_by_recovery_index(
 ) {
     #[cfg(test)]
     routing_state.record_fallback_attempt();
+    let Some(input) = receive_input(
+        route.now,
+        route.source_addr,
+        route.candidate_addr,
+        route.packet,
+    ) else {
+        route
+            .metrics
+            .record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
+        log_malformed_datagram(route.source_addr);
+        return;
+    };
     let session_key = match matching_indexed_session_key_for_packet(
         state,
         route.source_addr,
         route.candidate_addr,
         route.packet,
-        route.now,
+        &input,
     ) {
         IndexedSessionRecoveryOutcome::Matched {
             session_key,
@@ -612,7 +612,7 @@ fn route_packet_by_recovery_index(
             return;
         }
     };
-    if route_packet_to_session(state, &session_key, route, "recovery-index") {
+    if route_packet_to_session(state, &session_key, route, input, "recovery-index") {
         routing_state.record_fallback_route_success(miss_key, route.packet, route.source_addr);
     }
 }

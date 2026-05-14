@@ -310,6 +310,14 @@ impl UnknownSourceRateLimiter {
         self.entry_mut(source_addr).allow_probe(now)
     }
 
+    /// Returns whether the source is inside a live cooldown without creating a
+    /// new limiter entry for unseen sources.
+    fn is_blocked(&mut self, source_addr: SocketAddr, now: Instant) -> bool {
+        self.entries
+            .get_mut(&source_addr)
+            .is_some_and(|entry| !entry.allow_probe(now))
+    }
+
     /// Records that fallback recovery found no matching session for a source.
     ///
     /// Capacity enforcement happens after the miss so the source that triggered
@@ -427,6 +435,11 @@ impl PacketLoopRoutingState {
         now: Instant,
     ) -> bool {
         !self.source_rate_limiter.allow_probe(source_addr, now)
+    }
+
+    /// Returns whether a source is already blocked before packet fingerprinting.
+    pub(super) fn source_is_blocked(&mut self, source_addr: SocketAddr, now: Instant) -> bool {
+        self.source_rate_limiter.is_blocked(source_addr, now)
     }
 
     /// Records that fallback recovery found no session for this packet.

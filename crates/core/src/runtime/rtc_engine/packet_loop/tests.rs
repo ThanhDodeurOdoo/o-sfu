@@ -23,11 +23,13 @@ use str0m::{
     rtp::Ssrc,
 };
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use super::{
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers},
     forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
     ingress_routing::route_packet_to_matching_session,
+    input::{PacketLoopInputReceivers, PacketLoopMailboxInput},
     keyframe_requests::{PendingKeyframeRequest, flush_pending_keyframe_requests},
 };
 use crate::{
@@ -738,21 +740,81 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() {
     flush_forward_routes(&mut state, &metrics, &rtp_metrics, &mut buffers);
 
     assert!(state.dirty_sessions.contains(&consumer_session));
+    assert!(buffers.relay_packet_idx.is_none());
     assert_eq!(metrics.snapshot().rtp_forwarded_packets_local_rtc(), 1);
+}
+
+#[test]
+fn packet_loop_dirty_marks_are_unique_until_the_session_is_drained() {
+    let mut state = RtcBootstrapState::default();
+    let session = test_transport_session_key(318, 0, 319, UserId::Integer(320));
+    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_052));
+    let now = Instant::now();
+
+    assert!(
+        bootstrap::ensure_session_rtc_state(
+            &mut state.users,
+            &session,
+            candidate_addr,
+            Bitrate::from_mbps(10),
+            MediaCodecFlags::default(),
+        )
+        .is_ok()
+    );
+    state.mark_session_dirty(&session);
+    state.mark_session_dirty(&session);
+    let mut ready_sessions = Vec::new();
+    state.collect_ready_sessions(now, &mut ready_sessions);
+
+    assert_eq!(ready_sessions, vec![session.clone()]);
+
+    ready_sessions.clear();
+    state.mark_session_dirty(&session);
+    state.collect_ready_sessions(now, &mut ready_sessions);
+
+    assert_eq!(ready_sessions, vec![session]);
 }
 
 #[test]
 fn packet_loop_wakes_immediately_when_forwarding_marks_a_session_dirty() {
     let mut state = RtcBootstrapState::default();
     let session = test_transport_session_key(318, 0, 319, UserId::Integer(320));
+    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_053));
     let future_timeout = Instant::now() + Duration::from_secs(30);
 
+    assert!(
+        bootstrap::ensure_session_rtc_state(
+            &mut state.users,
+            &session,
+            candidate_addr,
+            Bitrate::from_mbps(10),
+            MediaCodecFlags::default(),
+        )
+        .is_ok()
+    );
     state.update_session_timeout(&session, Some(future_timeout));
     state.mark_session_dirty(&session);
 
     let deadline = super::loop_driver::next_timeout_deadline(&mut state);
 
     assert!(deadline.is_some_and(|deadline| deadline <= Instant::now()));
+}
+
+#[tokio::test]
+async fn packet_loop_mailbox_wakes_for_relay_without_control_or_socket_input() {
+    let source_session = test_transport_session_key(26, 0, 27, UserId::Integer(28));
+    let packet = sample_forwarded_packet(source_session, "aud-up", b"payload");
+    let (_command_tx, command_rx) = mpsc::channel(1);
+    let (relay_tx, relay_rx) = mpsc::channel(1);
+    let mut inputs = PacketLoopInputReceivers::new(command_rx, relay_rx, CancellationToken::new());
+
+    assert!(relay_tx.send(packet).await.is_ok());
+
+    assert!(matches!(
+        inputs.recv_control_or_relay().await,
+        Some(PacketLoopMailboxInput::Relay)
+    ));
+    assert!(inputs.take_woken_relay_packet().is_some());
 }
 
 #[test]
