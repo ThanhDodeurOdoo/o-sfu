@@ -10,7 +10,7 @@
 //! - drain already queued commands before touching media
 //! - pump dirty or timed-out sessions and bounded relay packets
 //! - flush all staged UDP transmits outside any shared-state lock
-//! - wait for the next shutdown, command, timeout or UDP datagram event
+//! - wait for the next shutdown, command, relay, timeout or UDP datagram event
 //! - try to route one received datagram into its owning `str0m::Rtc`
 //!
 //! Shared observable state is updated through narrow side channels. The packet
@@ -19,7 +19,7 @@
 //! configuration dependencies.
 
 use std::{
-    io::Error as IoError,
+    io::{Error as IoError, ErrorKind},
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -31,6 +31,7 @@ use tracing::warn;
 use super::{
     super::{
         bitrate::RtcBitrateState,
+        forwarded_packet::ForwardedPacket,
         forwarding_planner::populate_forward_routes_for_packet,
         routing_miss::PacketLoopRoutingState,
         state::{RtcBootstrapState, RtcSnapshotState},
@@ -39,10 +40,10 @@ use super::{
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers, RECEIVE_BUFFER_LEN},
     forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
     ingress_routing::route_packet_to_matching_session,
-    input::{PacketLoopControlInput, PacketLoopInputReceivers},
+    input::{PacketLoopControlInput, PacketLoopInputReceivers, PacketLoopMailboxInput},
     keyframe_requests::flush_pending_keyframe_requests,
     lag::{PacketLoopLagPublisher, PacketLoopLagSnapshot},
-    session_drain::drain_ready_sessions,
+    session_drain::{SessionDrainContext, drain_ready_sessions},
 };
 use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
@@ -107,21 +108,61 @@ struct SnapshotInfo {
     socket: Arc<UdpSocket>,
     candidate_addr: SocketAddr,
     next_timeout: Option<Instant>,
+    turn_started_at: Instant,
 }
 
 /// External input that resumes the worker after the pump phase.
 ///
-/// A timeout wake is represented as `Datagram { received_size: 0, .. }`. That
-/// keeps the driver on one input path while letting `next_timeout_deadline`
-/// wake ready sessions without fabricating a command.
 enum NextLoopInput {
+    ReadyNow,
     Control(PacketLoopControlInput),
+    RelayPacket,
     Datagram {
         source_addr: SocketAddr,
         candidate_addr: SocketAddr,
         received_size: usize,
     },
 }
+
+struct PacketLoopTurnContext {
+    buffers: PacketLoopBuffers,
+    packet_sink_cache: PacketSinkRouteCache,
+    staged_relay_packet: Option<ForwardedPacket>,
+    lag_publisher: PacketLoopLagPublisher,
+    ready_now_budget: usize,
+    udp_burst_budget: usize,
+}
+
+struct PacketLoopApplyContext<'a> {
+    bootstrap_state: &'a mut RtcBootstrapState,
+    bitrate_state: &'a Arc<Mutex<RtcBitrateState>>,
+    snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
+    config: &'a PacketLoopConfig,
+    routing_state: &'a mut PacketLoopRoutingState,
+    inputs: &'a mut PacketLoopInputReceivers,
+    receive_buffer: &'a mut [u8],
+}
+
+impl PacketLoopTurnContext {
+    fn new(started_at: Instant) -> Self {
+        Self {
+            buffers: PacketLoopBuffers::new(),
+            packet_sink_cache: PacketSinkRouteCache::default(),
+            staged_relay_packet: None,
+            lag_publisher: PacketLoopLagPublisher::new(started_at),
+            ready_now_budget: MAX_READY_NOW_INPUTS_BEFORE_YIELD,
+            udp_burst_budget: MAX_UDP_DATAGRAMS_PER_TURN,
+        }
+    }
+
+    fn reset_ready_now_budget(&mut self) {
+        self.ready_now_budget = MAX_READY_NOW_INPUTS_BEFORE_YIELD;
+    }
+}
+
+const MAX_CONTROL_INPUTS_PER_TURN: usize = 64;
+const MAX_UDP_DATAGRAMS_PER_TURN: usize = 16;
+const MAX_READY_NOW_INPUTS_BEFORE_YIELD: usize = 32;
 
 /// Run the shard-local media packet loop until shutdown or worker-channel close.
 ///
@@ -150,21 +191,18 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
     };
     let mut routing_state = PacketLoopRoutingState::new();
     let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
-    let mut buffers = PacketLoopBuffers::new();
-    let mut packet_sink_cache = PacketSinkRouteCache::default();
-    let mut lag_publisher = PacketLoopLagPublisher::new(Instant::now());
+    let mut turn = PacketLoopTurnContext::new(Instant::now());
 
     loop {
-        // draining commands
-        while let Some(input) = inputs.try_recv_control() {
-            handle_control_input_and_clear_routing_cache(
-                &mut bootstrap_state,
-                &bitrate_state,
-                &snapshot_state,
-                &config,
-                input,
-                &mut routing_state,
-            );
+        if !drain_queued_control_inputs(
+            &mut bootstrap_state,
+            &bitrate_state,
+            &snapshot_state,
+            &config,
+            &mut inputs,
+            &mut routing_state,
+        ) {
+            return;
         }
 
         let snapshot = snapshot_and_pump(
@@ -172,99 +210,151 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
             &snapshot_state,
             &config,
             inputs.relay_rx(),
-            &mut buffers,
-            &mut packet_sink_cache,
-            &mut lag_publisher,
+            &mut turn,
         );
 
         if let Some(info) = snapshot.as_ref() {
-            for pending_transmit in buffers.pending_transmits() {
-                if info
-                    .socket
-                    .send_to(
-                        pending_transmit.contents.as_slice(),
-                        pending_transmit.destination,
-                    )
-                    .await
-                    .is_err()
-                {
-                    warn!(
-                        destination = %pending_transmit.destination,
-                        "failed to send packet-loop transport datagram"
-                    );
-                }
-            }
+            flush_staged_transmits(&info.socket, &turn.buffers).await;
+            record_packet_loop_lag(
+                &config.packet_loop_lag,
+                &mut turn.lag_publisher,
+                info.turn_started_at,
+            );
         }
 
-        let Some(next_input) =
-            wait_for_next_loop_input(snapshot, &mut inputs, &mut receive_buffer).await
+        let Some(next_input) = wait_for_next_loop_input(
+            snapshot,
+            &mut inputs,
+            &mut receive_buffer,
+            &mut turn.ready_now_budget,
+            &mut turn.udp_burst_budget,
+        )
+        .await
         else {
             return;
         };
+        if !matches!(next_input, NextLoopInput::ReadyNow) {
+            turn.reset_ready_now_budget();
+        }
 
-        let _ = apply_ingress_for_next_turn(
-            &mut bootstrap_state,
-            &bitrate_state,
-            &snapshot_state,
-            &config,
+        let mut apply_context = PacketLoopApplyContext {
+            bootstrap_state: &mut bootstrap_state,
+            bitrate_state: &bitrate_state,
+            snapshot_state: &snapshot_state,
+            config: &config,
+            routing_state: &mut routing_state,
+            inputs: &mut inputs,
+            receive_buffer: &mut receive_buffer,
+        };
+        apply_ingress_for_next_turn(
+            &mut apply_context,
             next_input,
-            &receive_buffer,
-            &mut routing_state,
+            &mut turn.staged_relay_packet,
         );
     }
+}
+
+async fn flush_staged_transmits(socket: &UdpSocket, buffers: &PacketLoopBuffers) {
+    for pending_transmit in buffers.pending_transmits() {
+        if socket
+            .send_to(
+                pending_transmit.contents.as_slice(),
+                pending_transmit.destination,
+            )
+            .await
+            .is_err()
+        {
+            warn!(
+                destination = %pending_transmit.destination,
+                "failed to send packet-loop transport datagram"
+            );
+        }
+    }
+}
+
+fn drain_queued_control_inputs(
+    bootstrap_state: &mut RtcBootstrapState,
+    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    config: &PacketLoopConfig,
+    inputs: &mut PacketLoopInputReceivers,
+    routing_state: &mut PacketLoopRoutingState,
+) -> bool {
+    for _ in 0..MAX_CONTROL_INPUTS_PER_TURN {
+        if inputs.shutdown_cancelled() {
+            return false;
+        }
+        let Some(input) = inputs.try_recv_control() else {
+            return true;
+        };
+        handle_control_input_and_clear_routing_cache(
+            bootstrap_state,
+            bitrate_state,
+            snapshot_state,
+            config,
+            input,
+            routing_state,
+        );
+    }
+    true
 }
 
 /// Apply the event that woke the worker after the pump phase.
 ///
 /// Control inputs mutate authoritative worker state and conservatively
 /// invalidate ingress routing hints. Datagram inputs are routed into the owning
-/// `str0m::Rtc` if the receive buffer contains a non-empty packet. A
-/// zero-length datagram input is the driver's internal timeout wake and only
-/// causes the next turn to poll ready sessions.
+/// `str0m::Rtc`. Queued UDP datagrams can resume following turns without
+/// another socket await, but every datagram still gets a pump between inputs.
+/// Relay input is staged for the next pump so it reuses the same bounded relay
+/// drain path as already queued relay packets.
 fn apply_ingress_for_next_turn(
-    bootstrap_state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    config: &PacketLoopConfig,
+    context: &mut PacketLoopApplyContext<'_>,
     next_input: NextLoopInput,
-    receive_buffer: &[u8],
-    routing_state: &mut PacketLoopRoutingState,
-) -> bool {
+    staged_relay_packet: &mut Option<ForwardedPacket>,
+) {
     match next_input {
+        NextLoopInput::ReadyNow => {}
         NextLoopInput::Control(command) => {
             handle_control_input_and_clear_routing_cache(
-                bootstrap_state,
-                bitrate_state,
-                snapshot_state,
-                config,
+                context.bootstrap_state,
+                context.bitrate_state,
+                context.snapshot_state,
+                context.config,
                 command,
-                routing_state,
+                context.routing_state,
             );
-            true
+        }
+        NextLoopInput::RelayPacket => {
+            *staged_relay_packet = context.inputs.take_woken_relay_packet();
         }
         NextLoopInput::Datagram {
             source_addr,
             candidate_addr,
             received_size,
         } => {
-            if received_size == 0 {
-                return false;
-            }
-            let Some(packet) = receive_buffer.get(..received_size) else {
-                return false;
-            };
-            route_packet_to_matching_session(
-                bootstrap_state,
-                snapshot_state,
-                routing_state,
-                &config.rtc_metrics,
-                source_addr,
-                candidate_addr,
-                packet,
-            );
-            true
+            route_received_datagram(context, source_addr, candidate_addr, received_size);
         }
     }
+}
+
+fn route_received_datagram(
+    context: &mut PacketLoopApplyContext<'_>,
+    source_addr: SocketAddr,
+    candidate_addr: SocketAddr,
+    received_size: usize,
+) {
+    let Some(packet) = context.receive_buffer.get(..received_size) else {
+        return;
+    };
+    route_packet_to_matching_session(
+        context.bootstrap_state,
+        context.snapshot_state,
+        context.routing_state,
+        &context.config.rtc_metrics,
+        source_addr,
+        candidate_addr,
+        packet,
+    );
 }
 
 /// Execute one control input against authoritative worker state.
@@ -313,13 +403,11 @@ fn snapshot_and_pump(
     state: &mut RtcBootstrapState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: &PacketLoopConfig,
-    relay_rx: &mut mpsc::Receiver<super::super::forwarded_packet::ForwardedPacket>,
-    buffers: &mut PacketLoopBuffers,
-    packet_sink_cache: &mut PacketSinkRouteCache,
-    lag_publisher: &mut PacketLoopLagPublisher,
+    relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
+    turn: &mut PacketLoopTurnContext,
 ) -> Option<SnapshotInfo> {
     let turn_started_at = Instant::now();
-    buffers.clear();
+    turn.buffers.clear();
     let (socket, candidate_addr) = {
         let shared_socket = state.shared_socket.as_ref()?;
         (
@@ -327,47 +415,55 @@ fn snapshot_and_pump(
             shared_socket.candidate_addr,
         )
     };
+    if let Some(packet) = turn.staged_relay_packet.take() {
+        turn.buffers.pending_packets.push(packet);
+    }
     let now = Instant::now();
-    drain_ready_sessions(
-        state,
+    let session_drain_context = SessionDrainContext {
         snapshot_state,
-        &config.diagnostics,
-        &config.metrics,
-        &config.source_policy_signal,
-        buffers,
-        now,
-    );
+        diagnostics: &config.diagnostics,
+        metrics: &config.metrics,
+        source_policy_signal: &config.source_policy_signal,
+        socket: &socket,
+    };
+    drain_ready_sessions(state, &session_drain_context, &mut turn.buffers, now);
     drain_relay_packets(
         relay_rx,
-        &mut buffers.pending_packets,
+        &mut turn.buffers.pending_packets,
         MAX_RELAY_PACKETS_PER_ITERATION,
     );
     drain_due_rid_keyframe_refreshes(state, &*config.rtc_metrics, now);
-    flush_pending_keyframe_requests(state, &*config.rtc_metrics, buffers);
+    flush_pending_keyframe_requests(state, &*config.rtc_metrics, &mut turn.buffers);
     record_incoming_stats(
         state,
         &config.source_policy_signal,
         &*config.rtc_metrics,
         &config.rtp_metrics,
-        buffers,
+        &mut turn.buffers,
     );
-    packet_sink_cache.refresh_from(&config.packet_sink_registry);
-    for (packet_idx, packet) in buffers.pending_packets.iter_mut().enumerate() {
+    turn.packet_sink_cache
+        .refresh_from(&config.packet_sink_registry);
+    for (packet_idx, packet) in turn.buffers.pending_packets.iter_mut().enumerate() {
         populate_forward_routes_for_packet(
             state,
-            packet_sink_cache,
+            &turn.packet_sink_cache,
             &*config.rtc_metrics,
             packet_idx,
             packet,
-            &mut buffers.forwards,
+            &mut turn.buffers.forwards,
         );
     }
-    flush_forward_routes(state, &config.metrics, &config.rtp_metrics, buffers);
-    record_packet_loop_lag(&config.packet_loop_lag, lag_publisher, turn_started_at);
+    flush_forward_routes(
+        state,
+        &config.metrics,
+        &config.rtp_metrics,
+        &mut turn.buffers,
+    );
     Some(SnapshotInfo {
         socket,
         candidate_addr,
         next_timeout: next_timeout_deadline(state),
+        turn_started_at,
     })
 }
 
@@ -409,52 +505,103 @@ async fn wait_for_next_loop_input(
     snapshot: Option<SnapshotInfo>,
     inputs: &mut PacketLoopInputReceivers,
     receive_buffer: &mut [u8],
+    ready_now_budget: &mut usize,
+    udp_burst_budget: &mut usize,
 ) -> Option<NextLoopInput> {
     let Some(info) = snapshot else {
-        return inputs.recv_control().await.map(NextLoopInput::Control);
+        return inputs.recv_control_or_relay().await.map(mailbox_to_input);
     };
+    if let Some(next_timeout) = info.next_timeout
+        && next_timeout <= Instant::now()
+        && *ready_now_budget > 0
+    {
+        *ready_now_budget = (*ready_now_budget).saturating_sub(1);
+        return Some(NextLoopInput::ReadyNow);
+    }
+    if let Some(next_input) = try_recv_queued_datagram(&info, receive_buffer, udp_burst_budget) {
+        return Some(next_input);
+    }
     tokio::select! {
         biased;
-        next_input = inputs.recv_control() => next_input.map(NextLoopInput::Control),
-        next_input = wait_for_socket_input(&info, receive_buffer) => Some(next_input),
+        next_input = inputs.recv_control_or_relay() => next_input.map(mailbox_to_input),
+        next_input = wait_for_socket_input(&info, receive_buffer, ready_now_budget, udp_burst_budget) => Some(next_input),
     }
 }
 
-async fn wait_for_socket_input(info: &SnapshotInfo, receive_buffer: &mut [u8]) -> NextLoopInput {
+fn try_recv_queued_datagram(
+    info: &SnapshotInfo,
+    receive_buffer: &mut [u8],
+    udp_burst_budget: &mut usize,
+) -> Option<NextLoopInput> {
+    if *udp_burst_budget == 0 {
+        return None;
+    }
+    match info.socket.try_recv_from(receive_buffer) {
+        Ok((received_size, source_addr)) => {
+            *udp_burst_budget = (*udp_burst_budget).saturating_sub(1);
+            Some(NextLoopInput::Datagram {
+                source_addr,
+                candidate_addr: info.candidate_addr,
+                received_size,
+            })
+        }
+        Err(error) if error.kind() == ErrorKind::WouldBlock => {
+            *udp_burst_budget = MAX_UDP_DATAGRAMS_PER_TURN;
+            None
+        }
+        Err(_error) => {
+            warn!("rtc packet loop failed to receive datagram");
+            Some(NextLoopInput::ReadyNow)
+        }
+    }
+}
+
+fn mailbox_to_input(input: PacketLoopMailboxInput) -> NextLoopInput {
+    match input {
+        PacketLoopMailboxInput::Control(command) => NextLoopInput::Control(command),
+        PacketLoopMailboxInput::Relay => NextLoopInput::RelayPacket,
+    }
+}
+
+async fn wait_for_socket_input(
+    info: &SnapshotInfo,
+    receive_buffer: &mut [u8],
+    ready_now_budget: &mut usize,
+    udp_burst_budget: &mut usize,
+) -> NextLoopInput {
     let receive = info.socket.recv_from(receive_buffer);
     let result = if let Some(next_timeout) = info.next_timeout {
         match timeout(socket_wait_duration(next_timeout), receive).await {
             Ok(result) => result,
-            Err(_elapsed) => return empty_datagram_loop_input(info.candidate_addr),
+            Err(_elapsed) => {
+                *ready_now_budget = MAX_READY_NOW_INPUTS_BEFORE_YIELD;
+                return NextLoopInput::ReadyNow;
+            }
         }
     } else {
         receive.await
     };
-    handle_socket_receive_result(result, info.candidate_addr)
+    handle_socket_receive_result(result, info.candidate_addr, udp_burst_budget)
 }
 
 fn handle_socket_receive_result(
     result: Result<(usize, SocketAddr), IoError>,
     candidate_addr: SocketAddr,
+    udp_burst_budget: &mut usize,
 ) -> NextLoopInput {
     match result {
-        Ok((received_size, source_addr)) => NextLoopInput::Datagram {
-            source_addr,
-            candidate_addr,
-            received_size,
-        },
+        Ok((received_size, source_addr)) => {
+            *udp_burst_budget = MAX_UDP_DATAGRAMS_PER_TURN.saturating_sub(1);
+            NextLoopInput::Datagram {
+                source_addr,
+                candidate_addr,
+                received_size,
+            }
+        }
         Err(_error) => {
             warn!("rtc packet loop failed to receive datagram");
-            empty_datagram_loop_input(candidate_addr)
+            NextLoopInput::ReadyNow
         }
-    }
-}
-
-fn empty_datagram_loop_input(candidate_addr: SocketAddr) -> NextLoopInput {
-    NextLoopInput::Datagram {
-        source_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
-        candidate_addr,
-        received_size: 0,
     }
 }
 

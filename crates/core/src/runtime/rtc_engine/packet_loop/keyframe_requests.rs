@@ -58,7 +58,6 @@ impl PendingKeyframeRequest {
 /// Local sources are driven by the same worker state. Remote sources are owned
 /// by another worker or node and must be reached through source-control
 /// messaging.
-#[derive(Clone)]
 pub(super) enum ResolvedKeyframeRoute {
     Local {
         source_session_key: TransportSessionKey,
@@ -74,10 +73,9 @@ pub(super) enum ResolvedKeyframeRoute {
 /// Multiple consumers can ask for the same source during one packet-loop turn.
 /// Coalescing keeps the request stream proportional to source media instead of
 /// fanout count and upgrades request kind when a stronger request is observed.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub(super) struct CoalescedKeyframeRequest {
     source_transport_media_id: TransportMediaId,
-    route: ResolvedKeyframeRoute,
     rid: Option<Rid>,
     kind: KeyframeRequestKind,
 }
@@ -85,13 +83,11 @@ pub(super) struct CoalescedKeyframeRequest {
 impl CoalescedKeyframeRequest {
     fn new(
         source_transport_media_id: TransportMediaId,
-        route: ResolvedKeyframeRoute,
         rid: Option<Rid>,
         kind: KeyframeRequestKind,
     ) -> Self {
         Self {
             source_transport_media_id,
-            route,
             rid,
             kind,
         }
@@ -124,12 +120,8 @@ pub(super) fn flush_pending_keyframe_requests(
         ) else {
             continue;
         };
-        let Some(route) = resolve_keyframe_route(state, source_transport_media_id) else {
-            continue;
-        };
         coalesced_requests.push(CoalescedKeyframeRequest::new(
             source_transport_media_id,
-            route,
             request.consumer_rid,
             request.kind,
         ));
@@ -172,7 +164,11 @@ fn flush_coalesced_keyframe_request(
     coalesced_request: CoalescedKeyframeRequest,
     now: Instant,
 ) {
-    match coalesced_request.route {
+    let Some(route) = resolve_keyframe_route(state, coalesced_request.source_transport_media_id)
+    else {
+        return;
+    };
+    match route {
         ResolvedKeyframeRoute::Local { source_session_key } => {
             debug!(
                 ?source_session_key,

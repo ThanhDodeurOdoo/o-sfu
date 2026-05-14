@@ -42,6 +42,8 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopInputReceivers {
     /// bounded by the packet-loop turn budget and must not starve lifecycle
     /// commands or shutdown.
     relay_rx: mpsc::Receiver<ForwardedPacket>,
+    /// First relay packet that woke the worker from the wait phase.
+    woken_relay_packet: Option<ForwardedPacket>,
     /// Cancellation signal for the worker task.
     ///
     /// The token is cloned into the facade handle so session cleanup can stop a
@@ -70,6 +72,12 @@ pub(super) enum PacketLoopControlInput {
     Debug(DebugRtcWorkerCommand),
 }
 
+/// Mailbox input that can wake the worker while it waits for external work.
+pub(super) enum PacketLoopMailboxInput {
+    Control(PacketLoopControlInput),
+    Relay,
+}
+
 impl PacketLoopInputReceivers {
     /// Build the production receiver bundle for a newly booted packet loop.
     ///
@@ -84,6 +92,7 @@ impl PacketLoopInputReceivers {
         Self {
             command_rx,
             relay_rx,
+            woken_relay_packet: None,
             shutdown_token,
             #[cfg(any(test, feature = "testing-transport"))]
             debug_rx: None,
@@ -113,6 +122,14 @@ impl PacketLoopInputReceivers {
         &mut self.relay_rx
     }
 
+    pub(super) fn shutdown_cancelled(&self) -> bool {
+        self.shutdown_token.is_cancelled()
+    }
+
+    pub(super) fn take_woken_relay_packet(&mut self) -> Option<ForwardedPacket> {
+        self.woken_relay_packet.take()
+    }
+
     /// Drain already queued control input without awaiting.
     ///
     /// The loop calls this before media pumping so queued lifecycle work runs
@@ -131,24 +148,32 @@ impl PacketLoopInputReceivers {
         None
     }
 
-    /// Wait for shutdown or the next control input.
+    /// Wait for shutdown, control input or one relay packet.
     ///
-    /// `None` means the worker should stop because shutdown fired or an owned
-    /// control receiver closed. The packet loop calls this only after it has
-    /// released mutable state and flushed staged socket writes.
-    pub(super) async fn recv_control(&mut self) -> Option<PacketLoopControlInput> {
+    /// `None` means the worker should stop because shutdown fired or the owned
+    /// command receiver closed. Relay receiver closure is ignored because relay
+    /// handles are optional side inputs, not the worker lifetime owner.
+    pub(super) async fn recv_control_or_relay(&mut self) -> Option<PacketLoopMailboxInput> {
         #[cfg(any(test, feature = "testing-transport"))]
         {
             if let Some(debug_rx) = self.debug_rx.as_mut() {
-                return recv_control_with_debug(
+                return recv_mailbox_with_debug(
                     &mut self.command_rx,
+                    &mut self.relay_rx,
+                    &mut self.woken_relay_packet,
                     debug_rx,
                     &self.shutdown_token,
                 )
                 .await;
             }
         }
-        recv_production_control(&mut self.command_rx, &self.shutdown_token).await
+        recv_production_mailbox(
+            &mut self.command_rx,
+            &mut self.relay_rx,
+            &mut self.woken_relay_packet,
+            &self.shutdown_token,
+        )
+        .await
     }
 }
 
@@ -173,43 +198,70 @@ impl PacketLoopControlInput {
     }
 }
 
-/// Wait on production control inputs.
+/// Wait on production mailbox inputs.
 ///
 /// Shutdown is biased ahead of commands so teardown can interrupt an idle
 /// worker. A closed command receiver ends the worker because facade command
-/// delivery is the production lifetime owner.
-async fn recv_production_control(
+/// delivery is the production lifetime owner. A closed relay receiver is
+/// ignored because relay traffic is optional for single-worker rooms.
+async fn recv_production_mailbox(
     command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
+    relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
+    woken_relay_packet: &mut Option<ForwardedPacket>,
     shutdown_token: &CancellationToken,
-) -> Option<PacketLoopControlInput> {
-    tokio::select! {
-        biased;
-        () = shutdown_token.cancelled() => None,
-        maybe_command = command_rx.recv() => {
-            maybe_command.map(PacketLoopControlInput::Command)
+) -> Option<PacketLoopMailboxInput> {
+    loop {
+        tokio::select! {
+            biased;
+            () = shutdown_token.cancelled() => return None,
+            maybe_command = command_rx.recv() => {
+                return maybe_command
+                    .map(PacketLoopControlInput::Command)
+                    .map(PacketLoopMailboxInput::Control);
+            }
+            maybe_packet = relay_rx.recv() => {
+                if let Some(packet) = maybe_packet {
+                    *woken_relay_packet = Some(packet);
+                    return Some(PacketLoopMailboxInput::Relay);
+                }
+            }
         }
     }
 }
 
-/// Wait on production and debug control inputs in testing builds.
+/// Wait on production and debug mailbox inputs in testing builds.
 ///
 /// Production commands stay before debug commands in the biased wait. This
 /// keeps lifecycle and cleanup behavior representative while still allowing
 /// tests to inspect or prepare worker-local state deterministically.
 #[cfg(any(test, feature = "testing-transport"))]
-async fn recv_control_with_debug(
+async fn recv_mailbox_with_debug(
     command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
+    relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
+    woken_relay_packet: &mut Option<ForwardedPacket>,
     debug_rx: &mut mpsc::Receiver<DebugRtcWorkerCommand>,
     shutdown_token: &CancellationToken,
-) -> Option<PacketLoopControlInput> {
-    tokio::select! {
-        biased;
-        () = shutdown_token.cancelled() => None,
-        maybe_command = command_rx.recv() => {
-            maybe_command.map(PacketLoopControlInput::Command)
-        }
-        maybe_command = debug_rx.recv() => {
-            maybe_command.map(PacketLoopControlInput::Debug)
+) -> Option<PacketLoopMailboxInput> {
+    loop {
+        tokio::select! {
+            biased;
+            () = shutdown_token.cancelled() => return None,
+            maybe_command = command_rx.recv() => {
+                return maybe_command
+                    .map(PacketLoopControlInput::Command)
+                    .map(PacketLoopMailboxInput::Control);
+            }
+            maybe_command = debug_rx.recv() => {
+                return maybe_command
+                    .map(PacketLoopControlInput::Debug)
+                    .map(PacketLoopMailboxInput::Control);
+            }
+            maybe_packet = relay_rx.recv() => {
+                if let Some(packet) = maybe_packet {
+                    *woken_relay_packet = Some(packet);
+                    return Some(PacketLoopMailboxInput::Relay);
+                }
+            }
         }
     }
 }

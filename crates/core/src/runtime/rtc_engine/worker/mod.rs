@@ -21,5 +21,5 @@ mod session;
 
 pub use dispatcher::{WorkerCommandContext, handle_worker_command};
 pub(super) use media::{
-    drain_due_rid_keyframe_refreshes, observe_source_rid_readiness, request_keyframe_for_source,
+    apply_source_rid_readiness, drain_due_rid_keyframe_refreshes, request_keyframe_for_source,
 };

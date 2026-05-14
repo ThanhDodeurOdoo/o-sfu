@@ -102,6 +102,7 @@ pub(super) fn ensure_session_rtc_state(
             #[cfg(test)]
             max_bitrate_out: Some(max_bitrate_out),
             dtls_started: false,
+            packet_loop_dirty: false,
             sdp_negotiation: SessionSdpNegotiationState::default(),
             consumer_streams: HashMap::new(),
         },

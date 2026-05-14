@@ -11,12 +11,15 @@
 //! turn.
 
 use std::{
+    io::ErrorKind,
     mem::take,
+    net::SocketAddr,
     sync::{Arc, Mutex},
     time::Instant,
 };
 
 use str0m::{Event, Input, Output};
+use tokio::net::UdpSocket;
 use tracing::{trace, warn};
 
 use super::{
@@ -31,6 +34,14 @@ use crate::runtime::{
     metrics::RuntimeMetrics,
 };
 
+pub(super) struct SessionDrainContext<'a> {
+    pub(super) snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
+    pub(super) diagnostics: &'a Arc<DiagnosticsStore>,
+    pub(super) metrics: &'a RuntimeMetrics,
+    pub(super) source_policy_signal: &'a SourcePolicySignal,
+    pub(super) socket: &'a UdpSocket,
+}
+
 /// Poll every session that the scheduler reports as ready.
 ///
 /// Readiness comes from dirty-session marks and exact timeout deadlines stored
@@ -38,10 +49,7 @@ use crate::runtime::{
 /// ignored, which keeps teardown races harmless for already queued wakeups.
 pub(super) fn drain_ready_sessions(
     state: &mut RtcBootstrapState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    diagnostics: &Arc<DiagnosticsStore>,
-    metrics: &RuntimeMetrics,
-    source_policy_signal: &SourcePolicySignal,
+    context: &SessionDrainContext<'_>,
     buffers: &mut PacketLoopBuffers,
     now: Instant,
 ) {
@@ -52,15 +60,7 @@ pub(super) fn drain_ready_sessions(
             let Some(session_state) = state.users.get_mut(&user_id) else {
                 continue;
             };
-            drain_single_session(
-                &user_id,
-                session_state,
-                snapshot_state,
-                diagnostics,
-                metrics,
-                source_policy_signal,
-                buffers,
-            )
+            drain_single_session(&user_id, session_state, context, buffers)
         };
         state.update_session_timeout(&user_id, session_timeout);
     }
@@ -81,17 +81,18 @@ pub(super) fn drain_ready_sessions(
 fn drain_single_session(
     session_key: &TransportSessionKey,
     session_state: &mut RtcSessionState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    diagnostics: &Arc<DiagnosticsStore>,
-    metrics: &RuntimeMetrics,
-    source_policy_signal: &SourcePolicySignal,
+    context: &SessionDrainContext<'_>,
     buffers: &mut PacketLoopBuffers,
 ) -> Option<Instant> {
     loop {
-        let now = Instant::now();
         match session_state.rtc.poll_output() {
             Ok(Output::Transmit(transmit)) => {
-                buffers.push_pending_transmit(transmit.destination, &transmit.contents);
+                try_send_or_stage_transmit(
+                    context.socket,
+                    buffers,
+                    transmit.destination,
+                    &transmit.contents,
+                );
             }
             Ok(Output::Event(Event::RtpPacket(packet))) => {
                 buffers.pending_packets.push(
@@ -116,16 +117,17 @@ fn drain_single_session(
             }
             Ok(Output::Event(event)) => {
                 observe_rtc_event(
-                    snapshot_state,
-                    diagnostics,
-                    metrics,
-                    source_policy_signal,
+                    context.snapshot_state,
+                    context.diagnostics,
+                    context.metrics,
+                    context.source_policy_signal,
                     session_key,
                     &event,
                 );
                 log_rtc_event(session_key, &event);
             }
             Ok(Output::Timeout(timeout_at)) => {
+                let now = Instant::now();
                 if timeout_at <= now {
                     if session_state.rtc.handle_input(Input::Timeout(now)).is_err() {
                         warn!(
@@ -148,6 +150,26 @@ fn drain_single_session(
                 );
                 return None;
             }
+        }
+    }
+}
+
+fn try_send_or_stage_transmit(
+    socket: &UdpSocket,
+    buffers: &mut PacketLoopBuffers,
+    destination: SocketAddr,
+    contents: &[u8],
+) {
+    match socket.try_send_to(contents, destination) {
+        Ok(_sent) => {}
+        Err(error) if error.kind() == ErrorKind::WouldBlock => {
+            buffers.push_pending_transmit(destination, contents);
+        }
+        Err(_error) => {
+            warn!(
+                destination = %destination,
+                "failed to send packet-loop transport datagram"
+            );
         }
     }
 }

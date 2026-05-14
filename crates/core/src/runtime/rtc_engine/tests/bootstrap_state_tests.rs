@@ -1,10 +1,23 @@
 use super::fixtures::*;
-use crate::runtime::rtc_engine::state::RtcBootstrapState;
+use crate::runtime::rtc_engine::{bootstrap::ensure_session_rtc_state, state::RtcBootstrapState};
 
 fn collect_ready_sessions(state: &mut RtcBootstrapState, now: Instant) -> Vec<TransportSessionKey> {
     let mut ready_sessions = Vec::new();
     state.collect_ready_sessions(now, &mut ready_sessions);
     ready_sessions
+}
+
+fn insert_live_session(state: &mut RtcBootstrapState, session_key: &TransportSessionKey) {
+    assert!(matches!(
+        ensure_session_rtc_state(
+            &mut state.users,
+            session_key,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 40_000),
+            Bitrate::from_mbps(10),
+            MediaCodecFlags::default(),
+        ),
+        Ok(true)
+    ));
 }
 
 #[test]
@@ -57,6 +70,8 @@ fn rtc_bootstrap_state_tracks_dirty_and_timed_out_sessions_separately() {
     let first_timeout = now + Duration::from_millis(20);
     let second_timeout = now + Duration::from_millis(40);
 
+    insert_live_session(&mut state, &first_session_key);
+    insert_live_session(&mut state, &second_session_key);
     state.update_session_timeout(&first_session_key, Some(first_timeout));
     state.update_session_timeout(&second_session_key, Some(second_timeout));
     state.mark_session_dirty(&second_session_key);
@@ -78,6 +93,7 @@ fn rtc_bootstrap_state_prefers_latest_session_timeout_deadline() {
     let first_timeout = now + Duration::from_millis(50);
     let updated_timeout = now + Duration::from_millis(10);
 
+    insert_live_session(&mut state, &session_key);
     state.update_session_timeout(&session_key, Some(first_timeout));
     state.update_session_timeout(&session_key, Some(updated_timeout));
 
@@ -95,6 +111,7 @@ fn rtc_bootstrap_state_deduplicates_repeated_dirty_session_marks_on_drain() {
     let session_key = transport_key_on_worker(1, 0, 34, UserId::Integer(34));
     let now = Instant::now();
 
+    insert_live_session(&mut state, &session_key);
     state.mark_session_dirty(&session_key);
     state.mark_session_dirty(&session_key);
     state.update_session_timeout(&session_key, Some(now));
@@ -112,6 +129,8 @@ fn rtc_bootstrap_state_clears_all_dirty_duplicates_for_removed_session() {
     let retained_session_key = transport_key_on_worker(1, 0, 36, UserId::Integer(36));
     let now = Instant::now();
 
+    insert_live_session(&mut state, &removed_session_key);
+    insert_live_session(&mut state, &retained_session_key);
     state.mark_session_dirty(&removed_session_key);
     state.mark_session_dirty(&retained_session_key);
     state.mark_session_dirty(&removed_session_key);

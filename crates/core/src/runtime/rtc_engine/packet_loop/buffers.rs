@@ -12,7 +12,9 @@
 //! Values stored here are staged work that must either be flushed during the
 //! current turn or dropped as part of clearing the turn.
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Instant};
+
+use str0m::media::Rid;
 
 use super::{
     super::{forwarded_packet::ForwardedPacket, forwarding_destination::PacketForward},
@@ -20,7 +22,7 @@ use super::{
 };
 use crate::runtime::{
     RoomInstanceId,
-    media_transport::{SourcePolicySignal, TransportSessionKey},
+    media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
 };
 
 pub(super) const RECEIVE_BUFFER_LEN: usize = 2000;
@@ -53,6 +55,20 @@ impl PendingTransmit {
     }
 }
 
+pub(super) struct PendingRidReadiness {
+    pub(super) source_session_key: TransportSessionKey,
+    pub(super) source_transport_media_id: TransportMediaId,
+    pub(super) rid: Rid,
+    pub(super) is_keyframe: bool,
+    pub(super) observed_at: Instant,
+}
+
+pub(super) struct PendingFirstVideoKeyframe {
+    pub(super) source_session_key: TransportSessionKey,
+    pub(super) source_transport_media_id: TransportMediaId,
+    pub(super) observed_at: Instant,
+}
+
 /// Per-worker scratch buffers reused across packet-loop turns.
 ///
 /// # Hot-path contract
@@ -69,18 +85,25 @@ pub(super) struct PacketLoopBuffers {
     pub(super) pending_transmit_count: usize,
     /// Media packets produced by local adapter sessions or inbound relays.
     pub(super) pending_packets: Vec<ForwardedPacket>,
-    /// Shared relay packet cache keyed by `pending_packets` index.
+    /// Shared relay packet cache for the current planned packet.
     ///
-    /// Relay flush can have multiple relay destinations for one packet. This
-    /// vector ensures the payload is promoted to shared ownership once for that
-    /// source packet, then reused by all relay destinations in the same turn.
-    pub(super) relay_packets: Vec<Option<ForwardedPacket>>,
+    /// Relay flush can have multiple relay destinations for one packet. The
+    /// planner orders forwards by packet index, so one cached packet plus its
+    /// index is enough to avoid dense scratch writes for local-only turns.
+    pub(super) relay_packet: Option<ForwardedPacket>,
+    pub(super) relay_packet_idx: Option<usize>,
     /// Raw keyframe feedback emitted by consumer sessions before source lookup.
     pub(super) pending_keyframe_requests: Vec<(TransportSessionKey, PendingKeyframeRequest)>,
     /// Sessions ready for polling after dirty and timeout scheduling is merged.
     pub(super) ready_sessions: Vec<TransportSessionKey>,
     /// Source-keyed feedback after duplicate requests are merged.
     pub(super) coalesced_keyframe_requests: Vec<CoalescedKeyframeRequest>,
+    /// Source/RID-keyed readiness work after packet-level liveness is updated.
+    pub(super) pending_rid_readiness: Vec<PendingRidReadiness>,
+    /// First-ingress keyframe probes delayed until RID readiness work is known.
+    pub(super) pending_first_video_keyframes: Vec<PendingFirstVideoKeyframe>,
+    /// Sources whose selected-RID route state changed during this turn.
+    pub(super) rid_readiness_changed_sources: Vec<TransportMediaId>,
     /// Rooms whose source policy must be recomputed after packet observations.
     pub(super) dirty_source_policy_channel_ids: Vec<RoomInstanceId>,
     /// Concrete forwarding destinations planned for `pending_packets`.
@@ -98,10 +121,14 @@ impl PacketLoopBuffers {
             pending_transmits: Vec::with_capacity(64),
             pending_transmit_count: 0,
             pending_packets: Vec::with_capacity(32),
-            relay_packets: Vec::with_capacity(32),
+            relay_packet: None,
+            relay_packet_idx: None,
             pending_keyframe_requests: Vec::with_capacity(8),
             ready_sessions: Vec::with_capacity(32),
             coalesced_keyframe_requests: Vec::with_capacity(8),
+            pending_rid_readiness: Vec::with_capacity(8),
+            pending_first_video_keyframes: Vec::with_capacity(8),
+            rid_readiness_changed_sources: Vec::with_capacity(8),
             dirty_source_policy_channel_ids: Vec::with_capacity(8),
             forwards: Vec::with_capacity(64),
         }
@@ -115,10 +142,14 @@ impl PacketLoopBuffers {
     pub(super) fn clear(&mut self) {
         self.pending_transmit_count = 0;
         self.pending_packets.clear();
-        self.relay_packets.clear();
+        self.relay_packet = None;
+        self.relay_packet_idx = None;
         self.pending_keyframe_requests.clear();
         self.ready_sessions.clear();
         self.coalesced_keyframe_requests.clear();
+        self.pending_rid_readiness.clear();
+        self.pending_first_video_keyframes.clear();
+        self.rid_readiness_changed_sources.clear();
         self.dirty_source_policy_channel_ids.clear();
         self.forwards.clear();
     }
@@ -144,6 +175,53 @@ impl PacketLoopBuffers {
         self.pending_transmits
             .iter()
             .take(self.pending_transmit_count)
+    }
+
+    pub(super) fn push_rid_readiness(
+        &mut self,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        rid: Rid,
+        is_keyframe: bool,
+        observed_at: Instant,
+    ) {
+        if let Some(pending) = self.pending_rid_readiness.iter_mut().find(|pending| {
+            pending.source_transport_media_id == source_transport_media_id && pending.rid == rid
+        }) {
+            pending.is_keyframe |= is_keyframe;
+            if pending.observed_at < observed_at {
+                pending.observed_at = observed_at;
+            }
+            return;
+        }
+        self.pending_rid_readiness.push(PendingRidReadiness {
+            source_session_key: source_session_key.clone(),
+            source_transport_media_id,
+            rid,
+            is_keyframe,
+            observed_at,
+        });
+    }
+
+    pub(super) fn push_first_video_keyframe(
+        &mut self,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        observed_at: Instant,
+    ) {
+        if self
+            .pending_first_video_keyframes
+            .iter()
+            .any(|pending| pending.source_transport_media_id == source_transport_media_id)
+        {
+            return;
+        }
+        self.pending_first_video_keyframes
+            .push(PendingFirstVideoKeyframe {
+                source_session_key: source_session_key.clone(),
+                source_transport_media_id,
+                observed_at,
+            });
     }
 
     #[cfg(test)]

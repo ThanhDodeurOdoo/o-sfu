@@ -94,6 +94,7 @@ const SELECTED_RID_KEYFRAME_RETRY_DELAYS: [Duration; 5] = [
 /// while the selected layer waits for a keyframe, or suspend a stale strict gate
 /// that no longer has fresh packets. It only mutates transport state and queues
 /// keyframe refreshes. Room policy remains the owner of which RID is selected.
+#[cfg(test)]
 pub fn observe_source_rid_readiness(
     state: &mut RtcBootstrapState,
     metrics: &impl RtcRouteControlMetrics,
@@ -114,6 +115,31 @@ pub fn observe_source_rid_readiness(
             "observed first live RTP for producer RID"
         );
     }
+    apply_source_rid_readiness(
+        state,
+        metrics,
+        source_session_key,
+        source_transport_media_id,
+        rid,
+        is_keyframe,
+        now,
+    )
+}
+
+/// Apply source/RID readiness work after packet-level liveness was recorded.
+///
+/// Packet-loop batches can call this once per unique source/RID observed in a
+/// turn. That keeps route scans proportional to unique readiness changes rather
+/// than packet count while preserving per-packet liveness updates.
+pub(in crate::runtime::rtc_engine) fn apply_source_rid_readiness(
+    state: &mut RtcBootstrapState,
+    metrics: &impl RtcRouteControlMetrics,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    rid: Rid,
+    is_keyframe: bool,
+    now: Instant,
+) -> bool {
     let mut scratch = take(&mut state.rid_readiness_scratch);
     let route_update = update_rid_readiness_routes(
         state,

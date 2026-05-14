@@ -56,6 +56,7 @@ pub(super) struct RtcSessionState {
     #[cfg(test)]
     pub(super) max_bitrate_out: Option<Bitrate>,
     pub(super) dtls_started: bool,
+    pub(super) packet_loop_dirty: bool,
     pub(super) sdp_negotiation: SessionSdpNegotiationState,
     /// Monotonic RTP identity state keyed by consumer transport media.
     ///
@@ -125,6 +126,13 @@ pub(super) struct RtcBootstrapState {
 
 impl RtcBootstrapState {
     pub(super) fn mark_session_dirty(&mut self, session_key: &TransportSessionKey) {
+        let Some(session_state) = self.users.get_mut(session_key) else {
+            return;
+        };
+        if session_state.packet_loop_dirty {
+            return;
+        }
+        session_state.packet_loop_dirty = true;
         self.dirty_sessions.push(session_key.clone());
     }
 
@@ -137,7 +145,12 @@ impl RtcBootstrapState {
         now: Instant,
         ready_sessions: &mut Vec<TransportSessionKey>,
     ) {
-        ready_sessions.append(&mut self.dirty_sessions);
+        for session_key in self.dirty_sessions.drain(..) {
+            if let Some(session_state) = self.users.get_mut(&session_key) {
+                session_state.packet_loop_dirty = false;
+                ready_sessions.push(session_key);
+            }
+        }
         while let Some(Reverse((deadline, session_key))) = self.timeout_queue.peek().cloned() {
             let Some(current_deadline) = self.session_timeouts.get(&session_key).copied() else {
                 self.timeout_queue.pop();
@@ -189,6 +202,9 @@ impl RtcBootstrapState {
 
     pub(super) fn clear_session_schedule(&mut self, session_key: &TransportSessionKey) {
         self.dirty_sessions.retain(|dirty| dirty != session_key);
+        if let Some(session_state) = self.users.get_mut(session_key) {
+            session_state.packet_loop_dirty = false;
+        }
         self.session_timeouts.remove(session_key);
     }
 
