@@ -33,6 +33,7 @@ use super::super::{
         CloseSessionOutcome, CloseSessionState, ConsumerPacketGateCommand, RemoteSourceControl,
         RtcWorkerCommand,
     },
+    packet_loop::PacketLoopLagSnapshot,
     relay_registry::{RelayPacketMailbox, RelayTargetId, RelayTargetTransport},
     state::RtcSnapshotState,
 };
@@ -45,7 +46,7 @@ use crate::{
             SessionOffer, SourcePacketGate, SourcePolicySignal, TransportAdapterError,
             TransportMediaId, TransportResult, TransportSessionKey,
         },
-        metrics::{RtpMetricsRecorder, RuntimeMetrics},
+        metrics::{RtcMetricsRecorder, RtpMetricsRecorder, RuntimeMetrics},
         packet_sink_registry::RoomPacketSinkRegistry,
     },
 };
@@ -60,6 +61,7 @@ pub struct RtcWorkerHandle {
     pub(super) relay_mailbox: RelayPacketMailbox,
     pub bitrate_state: Arc<Mutex<RtcBitrateState>>,
     pub snapshot_state: Arc<Mutex<RtcSnapshotState>>,
+    pub(super) packet_loop_lag: Arc<PacketLoopLagSnapshot>,
     pub(super) shutdown_token: CancellationToken,
 }
 
@@ -102,6 +104,7 @@ pub struct RtcTransportShard {
     pub(super) source_policy_signal: Arc<SourcePolicySignal>,
     pub metrics: Arc<RuntimeMetrics>,
     pub(super) rtp_metrics: Arc<RtpMetricsRecorder>,
+    pub(super) rtc_metrics: Arc<RtcMetricsRecorder>,
     pub(super) worker_handle: Mutex<super::runtime::WorkerHandleSlot<RtcWorkerHandle>>,
 }
 
@@ -133,7 +136,6 @@ impl RtcTransportShard {
         media_id_base: u64,
     ) -> Self {
         let metrics = deps.metrics();
-        let rtp_metrics = metrics.register_rtp_worker();
         Self {
             relay_target_id: RelayTargetId::new(
                 NEXT_RELAY_TARGET_ID.fetch_add(1, Ordering::Relaxed),
@@ -149,8 +151,9 @@ impl RtcTransportShard {
             diagnostics: deps.diagnostics(),
             packet_sink_registry: deps.packet_sink_registry(),
             source_policy_signal,
-            metrics,
-            rtp_metrics,
+            metrics: Arc::clone(&metrics),
+            rtp_metrics: metrics.register_rtp_worker(),
+            rtc_metrics: metrics.register_rtc_worker(),
             worker_handle: Mutex::new(super::runtime::WorkerHandleSlot::default()),
         }
     }

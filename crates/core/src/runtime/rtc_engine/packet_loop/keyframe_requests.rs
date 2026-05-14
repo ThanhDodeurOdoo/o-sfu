@@ -28,7 +28,7 @@ use super::{
 };
 use crate::runtime::{
     media_transport::{TransportMediaId, TransportSessionKey},
-    metrics::{RtcRouteControlOutcome, RuntimeMetrics},
+    metrics::{RtcRouteControlMetrics, RtcRouteControlOutcome},
 };
 
 /// Keyframe feedback emitted by one consumer session before producer lookup.
@@ -111,7 +111,7 @@ impl CoalescedKeyframeRequest {
 /// the feedback was flushed and is treated as a benign stale request.
 pub(super) fn flush_pending_keyframe_requests(
     state: &mut RtcBootstrapState,
-    metrics: &RuntimeMetrics,
+    metrics: &impl RtcRouteControlMetrics,
     buffers: &mut PacketLoopBuffers,
 ) {
     let pending_keyframe_requests = &mut buffers.pending_keyframe_requests;
@@ -168,7 +168,7 @@ pub(super) fn flush_pending_keyframe_requests(
 /// leaves the worker so repeated feedback does not flood another relay target.
 fn flush_coalesced_keyframe_request(
     state: &mut RtcBootstrapState,
-    metrics: &RuntimeMetrics,
+    metrics: &impl RtcRouteControlMetrics,
     coalesced_request: CoalescedKeyframeRequest,
     now: Instant,
 ) {

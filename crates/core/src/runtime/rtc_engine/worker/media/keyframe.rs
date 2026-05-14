@@ -19,7 +19,7 @@ use super::{
 };
 use crate::runtime::{
     media_transport::{TransportAdapterError, TransportMediaId, TransportSessionKey},
-    metrics::{RtcRouteControlOutcome, RuntimeMetrics},
+    metrics::{RtcRouteControlMetrics, RtcRouteControlOutcome, RuntimeMetrics},
 };
 
 pub fn respond_request_remote_keyframe(
@@ -50,7 +50,7 @@ pub fn respond_request_remote_keyframe(
 /// know how producer ownership or per-source throttling are represented.
 pub fn request_keyframe_for_source(
     state: &mut RtcBootstrapState,
-    metrics: &RuntimeMetrics,
+    metrics: &impl RtcRouteControlMetrics,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     rid: Option<Rid>,
@@ -340,7 +340,7 @@ fn should_absorb_keyframe_request(
 
 fn request_keyframe_from_producer(
     state: &mut RtcBootstrapState,
-    metrics: &RuntimeMetrics,
+    metrics: &impl RtcRouteControlMetrics,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     mid: Mid,

@@ -305,6 +305,47 @@ fn metrics_snapshot_keeps_rtp_counts_after_worker_handle_drop() {
 }
 
 #[test]
+fn metrics_snapshot_aggregates_worker_local_rtc_recorders() {
+    let metrics = RuntimeMetrics::default();
+    let first_worker = metrics.register_rtc_worker();
+    let second_worker = metrics.register_rtc_worker();
+
+    metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
+    first_worker.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
+    first_worker.record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
+    first_worker.record_rtc_datagram_fallback_scan(3);
+    first_worker.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
+    second_worker.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
+    second_worker.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
+
+    let snapshot = metrics.snapshot();
+
+    assert_eq!(snapshot.rtc_datagram_routes_indexed(), 1);
+    assert_eq!(snapshot.rtc_datagram_routes_scan(), 1);
+    assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
+    assert_eq!(snapshot.rtc_datagram_drops_malformed(), 1);
+    assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
+    assert_eq!(snapshot.rtc_datagram_scan_users(), 3);
+    assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
+    assert_eq!(snapshot.rtc_route_control_absorbed(), 1);
+}
+
+#[test]
+fn metrics_snapshot_keeps_rtc_counts_after_worker_handle_drop() {
+    let metrics = RuntimeMetrics::default();
+    {
+        let worker = metrics.register_rtc_worker();
+        worker.record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
+    }
+    let replacement_worker = metrics.register_rtc_worker();
+    replacement_worker.record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
+
+    let snapshot = metrics.snapshot();
+
+    assert_eq!(snapshot.rtc_datagram_drops_no_user(), 2);
+}
+
+#[test]
 fn transport_health_transition_updates_connected_and_disconnected_gauges() {
     let metrics = RuntimeMetrics::default();
 

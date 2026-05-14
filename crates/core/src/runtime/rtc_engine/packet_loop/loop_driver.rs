@@ -41,6 +41,7 @@ use super::{
     ingress_routing::route_packet_to_matching_session,
     input::{PacketLoopControlInput, PacketLoopInputReceivers},
     keyframe_requests::flush_pending_keyframe_requests,
+    lag::{PacketLoopLagPublisher, PacketLoopLagSnapshot},
     session_drain::drain_ready_sessions,
 };
 use crate::{
@@ -48,7 +49,7 @@ use crate::{
     runtime::{
         diagnostics::DiagnosticsStore,
         media_transport::SourcePolicySignal,
-        metrics::{RtpMetricsRecorder, RuntimeMetrics},
+        metrics::{RtcMetricsRecorder, RtpMetricsRecorder, RuntimeMetrics},
         packet_sink_registry::{PacketSinkRouteCache, RoomPacketSinkRegistry},
     },
 };
@@ -91,6 +92,10 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopConfig {
     pub metrics: Arc<RuntimeMetrics>,
     /// Worker-local RTP metric recorder used by packet forwarding.
     pub rtp_metrics: Arc<RtpMetricsRecorder>,
+    /// Worker-local RTC packet-loop metric recorder.
+    pub rtc_metrics: Arc<RtcMetricsRecorder>,
+    /// Shared atomic packet-loop lag snapshot.
+    pub packet_loop_lag: Arc<PacketLoopLagSnapshot>,
 }
 
 /// Socket snapshot used for the wait phase of one packet-loop turn.
@@ -147,6 +152,7 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
     let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
     let mut buffers = PacketLoopBuffers::new();
     let mut packet_sink_cache = PacketSinkRouteCache::default();
+    let mut lag_publisher = PacketLoopLagPublisher::new(Instant::now());
 
     loop {
         // draining commands
@@ -168,6 +174,7 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
             inputs.relay_rx(),
             &mut buffers,
             &mut packet_sink_cache,
+            &mut lag_publisher,
         );
 
         if let Some(info) = snapshot.as_ref() {
@@ -250,7 +257,7 @@ fn apply_ingress_for_next_turn(
                 bootstrap_state,
                 snapshot_state,
                 routing_state,
-                &config.metrics,
+                &config.rtc_metrics,
                 source_addr,
                 candidate_addr,
                 packet,
@@ -309,6 +316,7 @@ fn snapshot_and_pump(
     relay_rx: &mut mpsc::Receiver<super::super::forwarded_packet::ForwardedPacket>,
     buffers: &mut PacketLoopBuffers,
     packet_sink_cache: &mut PacketSinkRouteCache,
+    lag_publisher: &mut PacketLoopLagPublisher,
 ) -> Option<SnapshotInfo> {
     let turn_started_at = Instant::now();
     buffers.clear();
@@ -334,12 +342,12 @@ fn snapshot_and_pump(
         &mut buffers.pending_packets,
         MAX_RELAY_PACKETS_PER_ITERATION,
     );
-    drain_due_rid_keyframe_refreshes(state, &config.metrics, now);
-    flush_pending_keyframe_requests(state, &config.metrics, buffers);
+    drain_due_rid_keyframe_refreshes(state, &*config.rtc_metrics, now);
+    flush_pending_keyframe_requests(state, &*config.rtc_metrics, buffers);
     record_incoming_stats(
         state,
         &config.source_policy_signal,
-        &config.metrics,
+        &*config.rtc_metrics,
         &config.rtp_metrics,
         buffers,
     );
@@ -348,14 +356,14 @@ fn snapshot_and_pump(
         populate_forward_routes_for_packet(
             state,
             packet_sink_cache,
-            &config.metrics,
+            &*config.rtc_metrics,
             packet_idx,
             packet,
             &mut buffers.forwards,
         );
     }
     flush_forward_routes(state, &config.metrics, &config.rtp_metrics, buffers);
-    record_packet_loop_lag(snapshot_state, turn_started_at);
+    record_packet_loop_lag(&config.packet_loop_lag, lag_publisher, turn_started_at);
     Some(SnapshotInfo {
         socket,
         candidate_addr,
@@ -363,17 +371,12 @@ fn snapshot_and_pump(
     })
 }
 
-fn record_packet_loop_lag(snapshot_state: &Arc<Mutex<RtcSnapshotState>>, turn_started_at: Instant) {
-    let observed_at = Instant::now();
-    let lag_ms = u64::try_from(
-        observed_at
-            .saturating_duration_since(turn_started_at)
-            .as_millis(),
-    )
-    .map_or(u64::MAX, |value| value);
-    if let Ok(mut snapshot) = snapshot_state.lock() {
-        snapshot.set_packet_loop_lag_ms(lag_ms, observed_at);
-    }
+fn record_packet_loop_lag(
+    snapshot: &PacketLoopLagSnapshot,
+    publisher: &mut PacketLoopLagPublisher,
+    turn_started_at: Instant,
+) {
+    publisher.observe(snapshot, turn_started_at, Instant::now());
 }
 
 /// Return the next time the loop must wake without external input.

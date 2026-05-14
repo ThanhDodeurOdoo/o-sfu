@@ -9,7 +9,6 @@ pub(in crate::runtime::rtc_engine) mod test_support;
 use std::{
     cmp::{Ordering as CmpOrdering, Reverse},
     collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap},
-    mem::take,
     net::SocketAddr,
     sync::Arc,
     time::{Duration, Instant},
@@ -42,8 +41,6 @@ use crate::{
         ReceiverBandwidthSnapshot, SessionUploadSlot, TransportMediaId, TransportSessionKey,
     },
 };
-
-const PACKET_LOOP_LAG_SAMPLE_TTL: Duration = Duration::from_secs(1);
 
 pub(super) struct SharedRtcSocket {
     pub(super) socket: Arc<UdpSocket>,
@@ -120,7 +117,7 @@ pub(super) struct RtcBootstrapState {
     pub(super) relay_targets: BTreeMap<TransportMediaId, RelaySourceRegistration>,
     pub(super) remote_addr_demux: RemoteAddrDemux,
     pub(super) mid_registry: BTreeMap<u64, RegisteredMediaHandle>,
-    pub(super) dirty_sessions: BTreeSet<TransportSessionKey>,
+    pub(super) dirty_sessions: Vec<TransportSessionKey>,
     pub(super) session_timeouts: BTreeMap<TransportSessionKey, Instant>,
     pub(super) timeout_queue: BinaryHeap<Reverse<(Instant, TransportSessionKey)>>,
     pub(super) next_media_id: u64,
@@ -128,15 +125,19 @@ pub(super) struct RtcBootstrapState {
 
 impl RtcBootstrapState {
     pub(super) fn mark_session_dirty(&mut self, session_key: &TransportSessionKey) {
-        self.dirty_sessions.insert(session_key.clone());
+        self.dirty_sessions.push(session_key.clone());
     }
 
     pub(super) fn has_dirty_sessions(&self) -> bool {
         !self.dirty_sessions.is_empty()
     }
 
-    pub(super) fn take_ready_sessions(&mut self, now: Instant) -> BTreeSet<TransportSessionKey> {
-        let mut ready_sessions = take(&mut self.dirty_sessions);
+    pub(super) fn collect_ready_sessions(
+        &mut self,
+        now: Instant,
+        ready_sessions: &mut Vec<TransportSessionKey>,
+    ) {
+        ready_sessions.append(&mut self.dirty_sessions);
         while let Some(Reverse((deadline, session_key))) = self.timeout_queue.peek().cloned() {
             let Some(current_deadline) = self.session_timeouts.get(&session_key).copied() else {
                 self.timeout_queue.pop();
@@ -151,9 +152,10 @@ impl RtcBootstrapState {
             }
             self.timeout_queue.pop();
             self.session_timeouts.remove(&session_key);
-            ready_sessions.insert(session_key);
+            ready_sessions.push(session_key);
         }
-        ready_sessions
+        ready_sessions.sort_unstable();
+        ready_sessions.dedup();
     }
 
     pub(super) fn update_session_timeout(
@@ -186,7 +188,7 @@ impl RtcBootstrapState {
     }
 
     pub(super) fn clear_session_schedule(&mut self, session_key: &TransportSessionKey) {
-        self.dirty_sessions.remove(session_key);
+        self.dirty_sessions.retain(|dirty| dirty != session_key);
         self.session_timeouts.remove(session_key);
     }
 
@@ -452,8 +454,6 @@ pub struct RtcSnapshotState {
     pub(super) live_sessions: BTreeSet<TransportSessionKey>,
     transport_health_by_session: BTreeMap<TransportSessionKey, TransportSessionHealth>,
     receiver_bandwidth_by_session: BTreeMap<TransportSessionKey, Bitrate>,
-    packet_loop_lag_ms: u64,
-    packet_loop_lag_observed_at: Option<Instant>,
 }
 
 impl RtcSnapshotState {
@@ -514,22 +514,6 @@ impl RtcSnapshotState {
                         .map(|estimate| (session_key.clone(), estimate))
                 })
                 .collect(),
-        }
-    }
-
-    pub(super) fn set_packet_loop_lag_ms(&mut self, lag_ms: u64, observed_at: Instant) {
-        self.packet_loop_lag_ms = lag_ms;
-        self.packet_loop_lag_observed_at = Some(observed_at);
-    }
-
-    pub fn packet_loop_lag_ms_at(&self, now: Instant) -> u64 {
-        match self.packet_loop_lag_observed_at {
-            Some(observed_at)
-                if now.saturating_duration_since(observed_at) <= PACKET_LOOP_LAG_SAMPLE_TTL =>
-            {
-                self.packet_loop_lag_ms
-            }
-            Some(_) | None => 0,
         }
     }
 }

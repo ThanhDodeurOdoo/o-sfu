@@ -7,9 +7,11 @@ use super::{
         MetricBucketLabel, MetricLabel as MetricStorageLabel, UpDownCounterFamily,
     },
     labels::{
-        ControlPlaneDurationBucket, HttpRoute, RecordingActionOutcome, RtpFlowDirection,
-        RtpForwardDestinationKind, TransportHealthTransition,
+        ControlPlaneDurationBucket, HttpRoute, RecordingActionOutcome, RtcDatagramDropReason,
+        RtcDatagramRoutePath, RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind,
+        TransportHealthTransition,
     },
+    rtc::RtcMetricsSnapshot,
     rtp::RtpMetricsSnapshot,
     snapshot::{
         MetricFamilySnapshot, MetricHistogramBucketSnapshot, MetricHistogramSnapshot, MetricKind,
@@ -439,31 +441,47 @@ metric_catalog! {
         name: "osfu_rtc_datagram_routes_total",
         help: "Total RTC UDP datagrams accepted by routing path.",
         kind: Counter,
-        samples: |metrics| counter_family_samples(&metrics.rtc_datagram_routes, "path")
+        samples: |metrics| rtc_datagram_route_samples(
+            &metrics.rtc_metrics.snapshot(),
+            "path",
+            RtcMetricsSnapshot::datagram_routes
+        )
     },
     RtcDatagramDropsTotal {
         name: "osfu_rtc_datagram_drops_total",
         help: "Total RTC UDP datagrams dropped before reaching a live user.",
         kind: Counter,
-        samples: |metrics| counter_family_samples(&metrics.rtc_datagram_drops, "reason")
+        samples: |metrics| rtc_datagram_drop_samples(
+            &metrics.rtc_metrics.snapshot(),
+            "reason",
+            RtcMetricsSnapshot::datagram_drops
+        )
     },
     RtcDatagramFallbackScansTotal {
         name: "osfu_rtc_datagram_fallback_scans_total",
         help: "Total fallback scans across RTC users for UDP datagram routing.",
         kind: Counter,
-        samples: |metrics| vec![unlabeled_counter(metrics.rtc_datagram_fallback_scans.load())]
+        samples: |metrics| vec![
+            unlabeled_counter(metrics.rtc_metrics.snapshot().datagram_fallback_scans())
+        ]
     },
     RtcDatagramScanUsersTotal {
         name: "osfu_rtc_datagram_scan_users_total",
         help: "Total RTC users examined by UDP fallback scans.",
         kind: Counter,
-        samples: |metrics| vec![unlabeled_counter(metrics.rtc_datagram_scan_users.load())]
+        samples: |metrics| vec![
+            unlabeled_counter(metrics.rtc_metrics.snapshot().datagram_scan_users())
+        ]
     },
     RtcRouteControlTotal {
         name: "osfu_rtc_route_control_total",
         help: "Total RTC route-control decisions observed at the transport boundary.",
         kind: Counter,
-        samples: |metrics| counter_family_samples(&metrics.rtc_route_control, "outcome")
+        samples: |metrics| rtc_route_control_samples(
+            &metrics.rtc_metrics.snapshot(),
+            "outcome",
+            RtcMetricsSnapshot::route_control
+        )
     },
     SourceSelectionUpdatesTotal {
         name: "osfu_source_selection_updates_total",
@@ -509,6 +527,39 @@ fn rtp_forward_destination_samples(
     read: fn(&RtpMetricsSnapshot, RtpForwardDestinationKind) -> u64,
 ) -> Vec<MetricSample> {
     <RtpForwardDestinationKind as MetricStorageLabel>::VARIANTS
+        .iter()
+        .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
+        .collect()
+}
+
+fn rtc_datagram_route_samples(
+    snapshot: &RtcMetricsSnapshot,
+    label_name: &'static str,
+    read: fn(&RtcMetricsSnapshot, RtcDatagramRoutePath) -> u64,
+) -> Vec<MetricSample> {
+    <RtcDatagramRoutePath as MetricStorageLabel>::VARIANTS
+        .iter()
+        .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
+        .collect()
+}
+
+fn rtc_datagram_drop_samples(
+    snapshot: &RtcMetricsSnapshot,
+    label_name: &'static str,
+    read: fn(&RtcMetricsSnapshot, RtcDatagramDropReason) -> u64,
+) -> Vec<MetricSample> {
+    <RtcDatagramDropReason as MetricStorageLabel>::VARIANTS
+        .iter()
+        .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
+        .collect()
+}
+
+fn rtc_route_control_samples(
+    snapshot: &RtcMetricsSnapshot,
+    label_name: &'static str,
+    read: fn(&RtcMetricsSnapshot, RtcRouteControlOutcome) -> u64,
+) -> Vec<MetricSample> {
+    <RtcRouteControlOutcome as MetricStorageLabel>::VARIANTS
         .iter()
         .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
         .collect()

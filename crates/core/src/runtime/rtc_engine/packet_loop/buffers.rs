@@ -77,6 +77,8 @@ pub(super) struct PacketLoopBuffers {
     pub(super) relay_packets: Vec<Option<ForwardedPacket>>,
     /// Raw keyframe feedback emitted by consumer sessions before source lookup.
     pub(super) pending_keyframe_requests: Vec<(TransportSessionKey, PendingKeyframeRequest)>,
+    /// Sessions ready for polling after dirty and timeout scheduling is merged.
+    pub(super) ready_sessions: Vec<TransportSessionKey>,
     /// Source-keyed feedback after duplicate requests are merged.
     pub(super) coalesced_keyframe_requests: Vec<CoalescedKeyframeRequest>,
     /// Rooms whose source policy must be recomputed after packet observations.
@@ -98,6 +100,7 @@ impl PacketLoopBuffers {
             pending_packets: Vec::with_capacity(32),
             relay_packets: Vec::with_capacity(32),
             pending_keyframe_requests: Vec::with_capacity(8),
+            ready_sessions: Vec::with_capacity(32),
             coalesced_keyframe_requests: Vec::with_capacity(8),
             dirty_source_policy_channel_ids: Vec::with_capacity(8),
             forwards: Vec::with_capacity(64),
@@ -114,6 +117,7 @@ impl PacketLoopBuffers {
         self.pending_packets.clear();
         self.relay_packets.clear();
         self.pending_keyframe_requests.clear();
+        self.ready_sessions.clear();
         self.coalesced_keyframe_requests.clear();
         self.dirty_source_policy_channel_ids.clear();
         self.forwards.clear();

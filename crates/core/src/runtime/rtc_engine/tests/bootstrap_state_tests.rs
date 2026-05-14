@@ -1,6 +1,12 @@
 use super::fixtures::*;
 use crate::runtime::rtc_engine::state::RtcBootstrapState;
 
+fn collect_ready_sessions(state: &mut RtcBootstrapState, now: Instant) -> Vec<TransportSessionKey> {
+    let mut ready_sessions = Vec::new();
+    state.collect_ready_sessions(now, &mut ready_sessions);
+    ready_sessions
+}
+
 #[test]
 fn rtc_bootstrap_state_reassigns_remote_addr_between_sessions() {
     let mut bootstrap_state = RtcBootstrapState::default();
@@ -57,7 +63,7 @@ fn rtc_bootstrap_state_tracks_dirty_and_timed_out_sessions_separately() {
 
     assert_eq!(state.next_timeout_deadline(), Some(first_timeout));
 
-    let ready_sessions = state.take_ready_sessions(now + Duration::from_millis(25));
+    let ready_sessions = collect_ready_sessions(&mut state, now + Duration::from_millis(25));
     assert!(ready_sessions.contains(&first_session_key));
     assert!(ready_sessions.contains(&second_session_key));
     assert_eq!(ready_sessions.len(), 2);
@@ -77,8 +83,41 @@ fn rtc_bootstrap_state_prefers_latest_session_timeout_deadline() {
 
     assert_eq!(state.next_timeout_deadline(), Some(updated_timeout));
 
-    let ready_sessions = state.take_ready_sessions(now + Duration::from_millis(15));
+    let ready_sessions = collect_ready_sessions(&mut state, now + Duration::from_millis(15));
     assert_eq!(ready_sessions.len(), 1);
     assert!(ready_sessions.contains(&session_key));
     assert_eq!(state.next_timeout_deadline(), None);
+}
+
+#[test]
+fn rtc_bootstrap_state_deduplicates_repeated_dirty_session_marks_on_drain() {
+    let mut state = RtcBootstrapState::default();
+    let session_key = transport_key_on_worker(1, 0, 34, UserId::Integer(34));
+    let now = Instant::now();
+
+    state.mark_session_dirty(&session_key);
+    state.mark_session_dirty(&session_key);
+    state.update_session_timeout(&session_key, Some(now));
+
+    let ready_sessions = collect_ready_sessions(&mut state, now);
+
+    assert_eq!(ready_sessions, vec![session_key]);
+    assert!(!state.has_dirty_sessions());
+}
+
+#[test]
+fn rtc_bootstrap_state_clears_all_dirty_duplicates_for_removed_session() {
+    let mut state = RtcBootstrapState::default();
+    let removed_session_key = transport_key_on_worker(1, 0, 35, UserId::Integer(35));
+    let retained_session_key = transport_key_on_worker(1, 0, 36, UserId::Integer(36));
+    let now = Instant::now();
+
+    state.mark_session_dirty(&removed_session_key);
+    state.mark_session_dirty(&retained_session_key);
+    state.mark_session_dirty(&removed_session_key);
+    state.clear_session_schedule(&removed_session_key);
+
+    let ready_sessions = collect_ready_sessions(&mut state, now);
+
+    assert_eq!(ready_sessions, vec![retained_session_key]);
 }

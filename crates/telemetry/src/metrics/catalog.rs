@@ -23,6 +23,7 @@ use super::{
         WsBusClientFrameKind, WsBusDirection, WsBusFailureKind, WsConnectionStage,
         WsSessionLoopExitReason, WsStartupFailureKind,
     },
+    rtc::{RtcMetrics, RtcMetricsRecorder, RtcRouteControlMetrics},
     rtp::{RtpMetrics, RtpMetricsRecorder},
 };
 
@@ -60,6 +61,7 @@ pub struct RuntimeMetrics {
     pub(super) recording_captured_packets: Counter,
     pub(super) recording_captured_streams: Counter,
     pub(super) rtp_metrics: RtpMetrics,
+    pub(super) rtc_metrics: RtcMetrics,
     pub(super) rtp_relay_overload_drops: CounterFamily<RtpRelayDropKind>,
     pub(super) transport_health_transitions: CounterFamily<TransportHealthTransition>,
     pub(super) transport_ice_state_changes: CounterFamily<TransportIceState>,
@@ -70,11 +72,6 @@ pub struct RuntimeMetrics {
     pub(super) transport_cleanup_retries: Counter,
     pub(super) transport_cleanup_retry_successes: Counter,
     pub(super) transport_cleanup_failures: CounterFamily<TransportCleanupFailureKind>,
-    pub(super) rtc_datagram_routes: CounterFamily<RtcDatagramRoutePath>,
-    pub(super) rtc_datagram_drops: CounterFamily<RtcDatagramDropReason>,
-    pub(super) rtc_datagram_fallback_scans: Counter,
-    pub(super) rtc_datagram_scan_users: Counter,
-    pub(super) rtc_route_control: CounterFamily<RtcRouteControlOutcome>,
     pub(super) source_selection_updates: CounterFamily<SourceSelectionKind>,
     pub(super) budget_solver_outcomes: CounterFamily<BudgetSolverOutcome>,
 }
@@ -354,6 +351,15 @@ impl RuntimeMetrics {
         self.rtp_metrics.register_worker()
     }
 
+    /// Registers one worker-local recorder for RTC packet-loop metrics.
+    ///
+    /// The caller should keep the returned handle beside the packet loop and
+    /// reuse it for UDP datagram and route-control observations owned by that
+    /// worker.
+    pub fn register_rtc_worker(&self) -> Arc<RtcMetricsRecorder> {
+        self.rtc_metrics.register_worker()
+    }
+
     pub fn record_rtp_ingress(&self, payload_bytes: usize) {
         self.rtp_metrics.record_ingress(payload_bytes);
     }
@@ -418,20 +424,20 @@ impl RuntimeMetrics {
     }
 
     pub fn record_rtc_datagram_route(&self, path: RtcDatagramRoutePath) {
-        self.rtc_datagram_routes.increment(path);
+        self.rtc_metrics.record_datagram_route(path);
     }
 
     pub fn record_rtc_datagram_drop(&self, reason: RtcDatagramDropReason) {
-        self.rtc_datagram_drops.increment(reason);
+        self.rtc_metrics.record_datagram_drop(reason);
     }
 
     pub fn record_rtc_datagram_fallback_scan(&self, examined_sessions: usize) {
-        self.rtc_datagram_fallback_scans.increment();
-        self.rtc_datagram_scan_users.add(examined_sessions);
+        self.rtc_metrics
+            .record_datagram_fallback_scan(examined_sessions);
     }
 
     pub fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome) {
-        self.rtc_route_control.increment(outcome);
+        self.rtc_metrics.record_route_control(outcome);
     }
 
     pub fn record_source_selection_update(&self, selector: SourceSelectionKind) {
@@ -440,5 +446,11 @@ impl RuntimeMetrics {
 
     pub fn record_budget_solver_outcome(&self, outcome: BudgetSolverOutcome) {
         self.budget_solver_outcomes.increment(outcome);
+    }
+}
+
+impl RtcRouteControlMetrics for RuntimeMetrics {
+    fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome) {
+        self.rtc_metrics.record_route_control(outcome);
     }
 }

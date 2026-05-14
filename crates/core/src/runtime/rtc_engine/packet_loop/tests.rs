@@ -36,7 +36,7 @@ use crate::{
         RoomInstanceId, UserId,
         media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
         metrics::{
-            RtpForwardDestinationKind, RtpMetricsRecorder, RuntimeMetrics,
+            RtcRouteControlMetrics, RtpForwardDestinationKind, RtpMetricsRecorder, RuntimeMetrics,
             test_support::RuntimeMetricsSnapshotTestExt,
         },
         packet_sink_registry::{
@@ -87,7 +87,7 @@ impl MediaPacketSink for CountingSink {
 fn populate_forward_routes(
     state: &RtcBootstrapState,
     packet_sinks: &impl PacketSinkLookup,
-    metrics: &RuntimeMetrics,
+    metrics: &impl RtcRouteControlMetrics,
     pending_packets: &mut [super::super::forwarded_packet::ForwardedPacket],
     forwards: &mut Vec<super::super::forwarding_destination::PacketForward>,
 ) {
@@ -138,6 +138,7 @@ fn recent_miss_cache_skips_repeated_scans_for_the_same_source() {
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
     let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_001));
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_000));
     let packet = valid_rtp_packet(1, 11);
@@ -146,7 +147,7 @@ fn recent_miss_cache_skips_repeated_scans_for_the_same_source() {
         &mut bootstrap_state,
         &snapshot_state,
         &mut routing_state,
-        &metrics,
+        &rtc_metrics,
         source_addr,
         candidate_addr,
         &packet,
@@ -155,7 +156,7 @@ fn recent_miss_cache_skips_repeated_scans_for_the_same_source() {
         &mut bootstrap_state,
         &snapshot_state,
         &mut routing_state,
-        &metrics,
+        &rtc_metrics,
         source_addr,
         candidate_addr,
         &packet,
@@ -175,6 +176,7 @@ fn recent_miss_cache_clears_on_topology_change() {
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
     let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_011));
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_010));
     let packet = valid_rtp_packet(2, 22);
@@ -183,7 +185,7 @@ fn recent_miss_cache_clears_on_topology_change() {
         &mut bootstrap_state,
         &snapshot_state,
         &mut routing_state,
-        &metrics,
+        &rtc_metrics,
         source_addr,
         candidate_addr,
         &packet,
@@ -193,7 +195,7 @@ fn recent_miss_cache_clears_on_topology_change() {
         &mut bootstrap_state,
         &snapshot_state,
         &mut routing_state,
-        &metrics,
+        &rtc_metrics,
         source_addr,
         candidate_addr,
         &packet,
@@ -212,6 +214,7 @@ fn recent_miss_cache_does_not_skip_different_packets_from_the_same_source() {
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
     let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_021));
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_020));
 
@@ -219,7 +222,7 @@ fn recent_miss_cache_does_not_skip_different_packets_from_the_same_source() {
         &mut bootstrap_state,
         &snapshot_state,
         &mut routing_state,
-        &metrics,
+        &rtc_metrics,
         source_addr,
         candidate_addr,
         &valid_rtp_packet(3, 33),
@@ -228,7 +231,7 @@ fn recent_miss_cache_does_not_skip_different_packets_from_the_same_source() {
         &mut bootstrap_state,
         &snapshot_state,
         &mut routing_state,
-        &metrics,
+        &rtc_metrics,
         source_addr,
         candidate_addr,
         &valid_rtp_packet(4, 44),
@@ -248,6 +251,7 @@ fn source_rate_limiter_bounds_varied_unknown_source_misses() {
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
     let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_026));
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_025));
 
@@ -263,7 +267,7 @@ fn source_rate_limiter_bounds_varied_unknown_source_misses() {
             &mut bootstrap_state,
             &snapshot_state,
             &mut routing_state,
-            &metrics,
+            &rtc_metrics,
             source_addr,
             candidate_addr,
             &valid_rtp_packet(sequence, ssrc),
@@ -284,6 +288,7 @@ fn malformed_udp_datagram_counts_as_malformed_drop_without_scan_metrics() {
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
     let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_031));
     let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_030));
 
@@ -291,7 +296,7 @@ fn malformed_udp_datagram_counts_as_malformed_drop_without_scan_metrics() {
         &mut bootstrap_state,
         &snapshot_state,
         &mut routing_state,
-        &metrics,
+        &rtc_metrics,
         source_addr,
         candidate_addr,
         &[0x01, 0x02, 0x03],
@@ -313,6 +318,7 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
     let first_session = test_transport_session_key(51, 0, 52, UserId::Integer(53));
     let second_session = test_transport_session_key(51, 0, 54, UserId::Integer(55));
     let packet = [22, 0, 0, 0];
@@ -340,7 +346,7 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
         &mut bootstrap_state,
         &snapshot_state,
         &mut routing_state,
-        &metrics,
+        &rtc_metrics,
         unknown_source_addr,
         candidate_addr,
         &packet,
@@ -362,6 +368,7 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
 
     let created = bootstrap::ensure_session_rtc_state(
         &mut bootstrap_state.users,
@@ -412,7 +419,7 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
         &mut bootstrap_state,
         &snapshot_state,
         &mut routing_state,
-        &metrics,
+        &rtc_metrics,
         source_addr,
         candidate_addr,
         &packet,
@@ -454,6 +461,7 @@ fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static 
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
 
     assert!(
         bootstrap_state
@@ -475,7 +483,7 @@ fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static 
         &mut bootstrap_state,
         &snapshot_state,
         &mut routing_state,
-        &metrics,
+        &rtc_metrics,
         source_addr,
         candidate_addr,
         &valid_rtp_packet(11, 111),
@@ -518,6 +526,7 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
     let rtp_metrics = metrics.register_rtp_worker();
+    let rtc_packet_metrics = metrics.register_rtc_worker();
 
     packet_sink_registry.register_room(
         producer_session.room_instance_id(),
@@ -533,7 +542,7 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
     populate_forward_routes(
         &state,
         &packet_sink_registry,
-        &metrics,
+        &*rtc_packet_metrics,
         &mut buffers.pending_packets,
         &mut buffers.forwards,
     );
@@ -754,6 +763,7 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let rtp_metrics = metrics.register_rtp_worker();
+    let rtc_packet_metrics = metrics.register_rtc_worker();
     let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: producer_session.clone(),
         mid: Mid::from("aud-up"),
@@ -800,7 +810,7 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
     populate_forward_routes(
         &state,
         &packet_sink_registry,
-        &metrics,
+        &*rtc_packet_metrics,
         &mut buffers.pending_packets,
         &mut buffers.forwards,
     );
@@ -920,6 +930,7 @@ fn flush_pending_keyframe_requests_marks_local_source_sessions_dirty() {
     let mut state = RtcBootstrapState::default();
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
 
     assert!(
         bootstrap::ensure_session_rtc_state(
@@ -957,7 +968,7 @@ fn flush_pending_keyframe_requests_marks_local_source_sessions_dirty() {
         },
     ));
 
-    flush_pending_keyframe_requests(&mut state, &metrics, &mut buffers);
+    flush_pending_keyframe_requests(&mut state, &*rtc_metrics, &mut buffers);
 
     assert!(state.dirty_sessions.contains(&source_session));
     let snapshot = metrics.snapshot();
@@ -974,6 +985,7 @@ fn flush_pending_keyframe_requests_forwards_remote_sources_by_transport_media_id
     let mut state = RtcBootstrapState::default();
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
     let (control_tx, mut control_rx) = mpsc::channel(1);
 
     assert!(
@@ -1000,7 +1012,7 @@ fn flush_pending_keyframe_requests_forwards_remote_sources_by_transport_media_id
         },
     ));
 
-    flush_pending_keyframe_requests(&mut state, &metrics, &mut buffers);
+    flush_pending_keyframe_requests(&mut state, &*rtc_metrics, &mut buffers);
 
     let command = control_rx.try_recv().ok();
     assert!(matches!(
@@ -1028,6 +1040,7 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
     let mut state = RtcBootstrapState::default();
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
     let (control_tx, mut control_rx) = mpsc::channel(2);
 
     assert!(
@@ -1068,7 +1081,7 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
         },
     ));
 
-    flush_pending_keyframe_requests(&mut state, &metrics, &mut buffers);
+    flush_pending_keyframe_requests(&mut state, &*rtc_metrics, &mut buffers);
 
     let command = control_rx.try_recv().ok();
     assert!(matches!(
@@ -1099,6 +1112,7 @@ fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_f
     let mut state = RtcBootstrapState::default();
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
 
     assert!(
         bootstrap::ensure_session_rtc_state(
@@ -1150,7 +1164,7 @@ fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_f
         },
     ));
 
-    flush_pending_keyframe_requests(&mut state, &metrics, &mut buffers);
+    flush_pending_keyframe_requests(&mut state, &*rtc_metrics, &mut buffers);
 
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
