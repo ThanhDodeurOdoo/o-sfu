@@ -29,11 +29,9 @@ pub mod recording;
 pub mod room;
 pub(in crate::runtime) mod router_events;
 pub mod rtc_engine;
-pub mod session_types;
 pub mod source_model;
-pub mod telemetry;
 
-pub use session_types::{
+pub use o_sfu_model::{
     AvailableFeatures, JsonPayload, PeerSnapshot, RecordingOptions, RecordingState,
     RecordingStateUpdate, StopCode, UserId, UserInfo, UserPermissions, VideoLayoutIntent,
     WebSocketCloseCode,

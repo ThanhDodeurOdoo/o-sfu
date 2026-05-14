@@ -7,6 +7,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use o_sfu_telemetry::schema;
 use str0m::{Event, IceConnectionState, bwe::BweKind};
 use tracing::{debug, trace};
 
@@ -20,7 +21,6 @@ use crate::{
         },
         media_transport::{SourcePolicySignal, TransportSessionKey},
         metrics::{self, RuntimeMetrics, TransportIceState},
-        telemetry::schema,
     },
 };
 

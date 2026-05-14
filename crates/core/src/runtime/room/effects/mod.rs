@@ -17,6 +17,7 @@ use tracing::warn;
 use crate::{UnpublishOutcome, runtime::UserId};
 
 mod source_policy;
+use o_sfu_telemetry::schema::event as telemetry_event;
 pub(super) use source_policy::SourcePolicyEffectPlan;
 
 use super::{
@@ -33,7 +34,6 @@ use crate::{
         diagnostics::DiagnosticsEventData,
         media_transport::{ConsumerActivity, MediaPort, SessionPort, TransportMediaId},
         source_model::UserStreamId,
-        telemetry::schema::event as telemetry_event,
     },
     transport::{TransportRelayRouteAction, TransportRelayRouteEffect},
 };

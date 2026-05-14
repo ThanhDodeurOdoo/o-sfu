@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 
+use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 
 use super::{
@@ -27,7 +28,6 @@ use crate::{
         diagnostics::DiagnosticsEventData,
         media_transport::{MediaPort, ObservabilityPort, ProducerActivity, SessionPort},
         source_model::{SourceSubscriptionIntent, UserStreamId},
-        telemetry::schema::event as telemetry_event,
     },
 };
 

@@ -7,6 +7,7 @@
 
 use std::{collections::BTreeSet, future::Future, sync::Arc};
 
+use o_sfu_telemetry::schema::event as telemetry_event;
 use tokio::sync::RwLock;
 
 use super::{
@@ -21,7 +22,6 @@ use crate::runtime::{
     media_transport::{MediaPort, MediaTransport, ObservabilityPort},
     metrics::RuntimeMetrics,
     packet_sink_registry::RoomPacketSinkRegistry,
-    telemetry::schema::event as telemetry_event,
 };
 
 #[cfg(any(test, feature = "testing-transport"))]

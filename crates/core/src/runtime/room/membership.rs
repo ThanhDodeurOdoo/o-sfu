@@ -23,6 +23,7 @@
 use std::sync::{MutexGuard, PoisonError};
 
 use o_sfu_router::MediaCapabilities;
+use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 
 use super::{
@@ -48,7 +49,6 @@ use crate::{
             TransportMediaId, TransportPlacementPressureSnapshot,
         },
         metrics::TransportCleanupFailureKind,
-        telemetry::schema::event as telemetry_event,
     },
     transport::{TransportRelayRouteAction, TransportRelayRouteEffect},
 };

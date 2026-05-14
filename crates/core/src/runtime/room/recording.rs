@@ -1,7 +1,9 @@
+use o_sfu_telemetry::schema::event as telemetry_event;
+
 use super::{Room, RoomUserPermissions};
 use crate::runtime::{
     ConnectionId, RecordingOptions, RecordingState, StopCode, UserId,
-    diagnostics::DiagnosticsEventData, telemetry::schema::event as telemetry_event,
+    diagnostics::DiagnosticsEventData,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -31,6 +31,7 @@ use std::{
 };
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
+use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 
 use super::{
@@ -47,7 +48,6 @@ use crate::{
             SessionUploadEncoding, TransportAdapterError, TransportMediaId,
         },
         source_model::{SourcePublishIntent, UserStreamId},
-        telemetry::schema::event as telemetry_event,
     },
 };
 
