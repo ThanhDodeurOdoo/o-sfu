@@ -1,9 +1,10 @@
 //! Supported in-repository server integration paths.
 //!
 //! The crate root remains the stable media-core front door. This namespace is
-//! narrower than the transitional `runtime` tree and exposes the concrete
-//! pieces that the `o-sfu` server crate currently needs while the broad runtime
-//! modules are being retired from production imports.
+//! the curated bridge from the private core runtime tree to the `o-sfu` server
+//! crate. It exposes the concrete pieces that the server, diagnostics routes,
+//! metrics exporter and in-repository tests need without making RTC workers,
+//! room-state internals or packet-loop modules part of the public front door.
 
 pub mod diagnostics {
     //! Operator diagnostics storage and DTOs consumed by server HTTP routes.

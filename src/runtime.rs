@@ -1,15 +1,21 @@
-//! process-global orchestrator, wires subsystems together and manage server lifecycle
+//! process runtime shell that wires subsystems and owns server lifecycle
 //!
-//! runtime acts as the entry point for the server process, owning long-lived subsystems
-//! like configuration, room management, metrics, and media transport. it ensures that
-//! background tasks are synchronized with the control-plane server and provides guaranteed
-//! cleanup through structured task management.
+//! `Runtime` is the process boundary for the media server. It is not the Tokio
+//! executor and it is not the core media engine. It turns loaded configuration
+//! into long-lived services, builds the media core, starts HTTP and WebSocket
+//! serving, starts background policy work and makes shutdown cancel runtime-owned
+//! tasks in one place.
+//!
+//! This type is useful because request handlers should not know how the process
+//! was booted. They receive cheap clones through [`RuntimeState`] while the full
+//! [`Runtime`] keeps ownership of services that must live for the whole process:
+//! room management, diagnostics, metrics, media transport plus websocket
+//! admission state.
 //!
 //! ```text
 //! Runtime
 //! |- http_server          -> HTTP control-plane routes and server boot
 //! |- websocket_server     -> WebSocket upgrade, auth handshake, and steady-state socket loop
-//! |- core                 -> room engine, media transport, recording, metrics, and diagnostics
 //! `- telemetry            -> tracing setup, schemas, diagnostics, metrics, and exporters
 //! ```
 
@@ -58,9 +64,14 @@ use telemetry::{init_tracing, schema::event as telemetry_event};
 
 /// Process-global shell for the server process.
 ///
-/// `Runtime` owns the long-lived subsystems that every request shares: configuration,
-/// room allocation, metrics, and the media transport. Per-request entrypoints take
-/// cheap clones of these dependencies through [`RuntimeState`].
+/// `Runtime` owns boot-time configuration plus the long-lived services shared
+/// by every request. It exists to keep process lifecycle decisions together:
+/// service construction, listener serving, background task supervision and
+/// graceful shutdown.
+///
+/// Request handlers do not receive this full object. They receive
+/// [`RuntimeState`], which carries only the cheap service handles needed while a
+/// request or websocket connection is active.
 #[derive(Debug)]
 pub struct Runtime {
     config: RuntimeConfig,
@@ -73,9 +84,9 @@ pub struct Runtime {
 
 /// cheap-to-clone snapshot of runtime dependencies for per-request handlers
 ///
-/// this is the standard shared state passed to axum handlers and websocket loops,
-/// providing access to the room manager, diagnostics, and media core without
-/// exposing the full runtime lifecycle.
+/// this is the standard shared state passed to axum handlers and websocket
+/// loops. it provides access to room management, diagnostics, media transport
+/// plus media core operations without exposing the full process lifecycle.
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeState {
     config: RuntimeConfig,

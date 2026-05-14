@@ -1,15 +1,24 @@
-//! Transitional runtime integration namespace.
+//! Private media runtime implementation tree.
 //!
-//! This module remains public while the server crate and integration tests
-//! migrate to explicit supported paths. Its submodules expose runtime, room,
-//! recording, diagnostics, metrics, media transport, and RTC engine details
-//! that are not automatically part of the stable `o-sfu-core` front door. New
-//! public consumers should prefer crate-root re-exports or module paths
-//! documented in the API surface policy.
+//! This is the core crate's media engine internals. It is different from the
+//! server process `Runtime` in `o-sfu/src/runtime.rs`, which owns process boot,
+//! HTTP and WebSocket serving plus task lifetime. This tree owns the concrete
+//! room engine, media transport facade, RTC worker implementation, recording
+//! hooks, diagnostics projections, metrics bridge and source policy machinery
+//! used below the public `o-sfu-core` front door.
 //!
-//! A public item under this module is stable only when its owning module says
-//! so explicitly. Otherwise it is server-integration or transitional API and
-//! may move behind narrower re-exports during the cleanup sequence.
+//! The tree is useful because the media engine has to coordinate state that is
+//! too concrete for the pure router and too low level for the server shell:
+//! room membership, publish or subscribe transactions, transport cleanup,
+//! packet sinks, relay setup, packet-loop observations and room-owned media
+//! policy. Keeping those pieces together lets them share concrete runtime state
+//! without making the server crate import RTC workers or room-state internals.
+//!
+//! Callers outside the core crate should not import this module. Stable media
+//! operations go through [`crate::SfuCore`] and [`crate::MediaSession`]. Server
+//! integration goes through [`crate::server`]. Transport extension points go
+//! through [`crate::transport`]. A type defined here becomes public only when it
+//! is re-exported through one of those supported facades.
 
 pub mod diagnostics;
 mod hot_path;
