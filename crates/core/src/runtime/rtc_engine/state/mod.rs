@@ -29,8 +29,8 @@ use super::{
     demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux},
     local_send_rewrite::{ConsumerStream, ConsumerStreamKey},
     media_registry::{
-        ConsumerMidLookupKey, ProducerMidLookupKey, ProducerSsrcLookupKey, RegisteredMediaHandle,
-        RemoteSourceRegistration,
+        ConsumerMidLookupKey, DecoderRefreshCodec, ProducerMidLookupKey, ProducerSsrcLookupKey,
+        RegisteredMediaHandle, RemoteSourceRegistration,
     },
     relay_registry::RelaySourceRegistration,
     route_control::RouteControlState,
@@ -96,6 +96,7 @@ pub(super) struct RtcBootstrapState {
     pub(super) producer_ssrc_registry: BTreeMap<ProducerSsrcLookupKey, TransportMediaId>,
     pub(super) producer_ssrc_rid_registry: BTreeMap<ProducerSsrcLookupKey, Rid>,
     pub(super) producer_ssrcs_by_media: BTreeMap<TransportMediaId, Vec<Ssrc>>,
+    pub(super) source_decoder_refresh_codecs: BTreeMap<TransportMediaId, DecoderRefreshCodec>,
     /// Recently observed producer RIDs, keyed by source media id.
     ///
     /// This is packet-path liveness, not signaling truth. It decides when a
