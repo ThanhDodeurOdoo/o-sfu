@@ -34,6 +34,7 @@ const FAKE_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-fake-offer\r\n"
 pub enum FakeMediaTransportEvent {
     SessionClosed {
         user_id: UserId,
+        media_worker_id: usize,
     },
     PublishMediaRequested {
         user_id: UserId,
@@ -434,6 +435,7 @@ impl FakeMediaTransport {
             state.media_owners.retain(|_, owner| owner != session_key);
             state.events.push(FakeMediaTransportEvent::SessionClosed {
                 user_id: session_key.user_id().clone(),
+                media_worker_id: session_key.media_worker_id(),
             });
             false
         });

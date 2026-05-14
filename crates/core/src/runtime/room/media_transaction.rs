@@ -25,7 +25,10 @@
 //! lock is held only for lookup, insertion and draining. Commit and cleanup run
 //! after the registry lock is released.
 
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::{MutexGuard, PoisonError},
+};
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use tracing::warn;
@@ -253,22 +256,14 @@ impl PendingPublishTransaction {
     /// Creates a staged publish transaction from room validation and a
     /// transport media reservation.
     ///
-    /// The descriptor and reservation must describe the same owner. The
-    /// constructor derives reservation ownership from the descriptor so callers
-    /// cannot accidentally pair a media handle with a different connection.
     pub(super) fn new(
         descriptor: ValidatedPublishDescriptor,
         transport_media_id: TransportMediaId,
     ) -> Self {
-        let owner_user_id = descriptor.owner_user_id().clone();
-        let owner_connection_id = descriptor.owner_connection_id();
+        let reservation = StagedMediaReservation::for_descriptor(&descriptor, transport_media_id);
         Self {
             descriptor,
-            reservation: StagedMediaReservation::new(
-                owner_user_id,
-                owner_connection_id,
-                transport_media_id,
-            ),
+            reservation,
         }
     }
 
@@ -459,6 +454,17 @@ impl PendingPublishTransaction {
 }
 
 impl StagedMediaReservation {
+    fn for_descriptor(
+        descriptor: &ValidatedPublishDescriptor,
+        transport_media_id: TransportMediaId,
+    ) -> Self {
+        Self::new(
+            descriptor.owner_user_id().clone(),
+            descriptor.owner_connection_id(),
+            transport_media_id,
+        )
+    }
+
     /// Arms a reservation for transport media that is not yet live in room
     /// state.
     fn new(
@@ -556,6 +562,12 @@ impl CommittedPublish {
 }
 
 impl Room {
+    fn pending_publish_transactions(&self) -> MutexGuard<'_, PendingPublishTransactions> {
+        self.pending_publish_transactions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Records the live media gauge delta after a room state transition.
     ///
     /// Callers pass both snapshots because the state lock should already be
@@ -578,15 +590,14 @@ impl Room {
     /// This is a websocket idempotency helper. It is not an authority for
     /// future staging because another task may reserve and stage transport
     /// media after this snapshot.
-    pub async fn has_staged_publish(
+    #[must_use]
+    pub fn has_staged_publish(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
         stream_id: &UserStreamId,
     ) -> bool {
-        self.pending_publish_transactions
-            .lock()
-            .await
+        self.pending_publish_transactions()
             .contains(user_id, connection_id, stream_id)
     }
 
@@ -616,11 +627,10 @@ impl Room {
         };
         // Cheap duplicate rejection goes first so we avoid reserving transport
         // media when the same stream is already staged.
-        if self.pending_publish_transactions.lock().await.contains(
-            user_id,
-            connection_id,
-            intent.stream_id(),
-        ) {
+        if self
+            .pending_publish_transactions()
+            .contains(user_id, connection_id, intent.stream_id())
+        {
             return Ok(PublishStageOutcome::Duplicate);
         }
         let session_key = self.transport_user_key(user_id, connection_id);
@@ -644,18 +654,14 @@ impl Room {
                 return Err(error);
             }
         };
+        let transaction = PendingPublishTransaction::new(validated_descriptor, transport_media_id);
         // The transport await above leaves a race window where another publish
-        // intent can win first. We re-check under the registry lock and clean
-        // up immediately so no orphan staged media survives outside the
-        // transaction table
+        // intent can win first. The transaction owner is created before the
+        // synchronous registry lock so cancellation can no longer drop a raw
+        // transport media id between transport reservation and room ownership.
         let duplicate_stage = {
-            let mut pending_publish_transactions = self.pending_publish_transactions.lock().await;
-            pending_publish_transactions
-                .stage(PendingPublishTransaction::new(
-                    validated_descriptor,
-                    transport_media_id,
-                ))
-                .err()
+            let mut pending_publish_transactions = self.pending_publish_transactions();
+            pending_publish_transactions.stage(transaction).err()
         };
         if let Some(staged_publish) = duplicate_stage {
             let cleanup = staged_publish
@@ -685,9 +691,7 @@ impl Room {
         // Explicit unpublish before commit only needs transport cleanup because
         // the producer never became live in room state.
         let staged_publish =
-            self.pending_publish_transactions
-                .lock()
-                .await
+            self.pending_publish_transactions()
                 .take(user_id, connection_id, stream_id);
         let Some(staged_publish) = staged_publish else {
             return RollbackStagedPublishOutcome::NotStaged;
@@ -715,9 +719,7 @@ impl Room {
         media_port: &(impl MediaPort + SessionPort),
     ) {
         let staged_publishes = self
-            .pending_publish_transactions
-            .lock()
-            .await
+            .pending_publish_transactions()
             .take_for_connection(user_id, connection_id);
         for staged_publish in staged_publishes {
             staged_publish
@@ -747,9 +749,7 @@ impl Room {
         media_port: &(impl MediaPort + SessionPort),
     ) -> Vec<UserStreamId> {
         let staged_publishes = self
-            .pending_publish_transactions
-            .lock()
-            .await
+            .pending_publish_transactions()
             .take_for_connection(user_id, connection_id);
         let mut committed_stream_ids = Vec::new();
         for staged_publish in staged_publishes {

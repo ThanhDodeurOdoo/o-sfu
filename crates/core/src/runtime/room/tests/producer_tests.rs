@@ -2538,6 +2538,58 @@ async fn staged_negotiated_publish_duplicate_race_keeps_one_staged_entry_and_one
     ));
 }
 
+#[tokio::test]
+async fn cancelled_staged_publish_does_not_create_pending_owner() {
+    let scenario = StagedPublishScenario::new().await;
+    scenario
+        .fake
+        .set_publish_media_delay(Some(Duration::from_millis(200)));
+
+    let stage_task = tokio::spawn({
+        let room = Arc::clone(&scenario.room);
+        let adapter = scenario.adapter.clone();
+        let user_id = scenario.user_id.clone();
+        let connection_id = scenario.connection_id;
+        async move {
+            room.stage_negotiated_publish(
+                &user_id,
+                connection_id,
+                &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
+                &adapter,
+            )
+            .await
+        }
+    });
+
+    wait_for_fake_event(&scenario.fake, |event| {
+        matches!(
+            event,
+            FakeMediaTransportEvent::PublishMediaRequested {
+                user_id: UserId::Integer(1),
+                media_kind: MediaKind::Video,
+            }
+        )
+    })
+    .await;
+    stage_task.abort();
+    let join_error = stage_task
+        .await
+        .expect_err("aborted staged publish task should report cancellation");
+    assert!(join_error.is_cancelled());
+
+    assert_eq!(scenario.staged_count().await, 0);
+    assert_eq!(
+        scenario.publish_media_requested_count(),
+        1,
+        "the publish intent reached the transport boundary before cancellation"
+    );
+    assert_eq!(
+        scenario.removed_media_count(),
+        0,
+        "cancellation before transport returns must not invent cleanup work"
+    );
+}
+
 #[allow(
     clippy::panic,
     reason = "the RTC room test fixture uses a fixed valid configuration and should fail loudly if it stops being valid"

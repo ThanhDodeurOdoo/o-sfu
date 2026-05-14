@@ -294,22 +294,18 @@ async fn websocket_finish_rolls_back_staged_publish_before_room_cleanup() {
             &core_user_id,
             connection_id,
             &stream_id_for_stream_type(StreamType::Camera)
-        )
-        .await,
+        ),
         "publish should be staged before the user finishes"
     );
 
     assert!(websocket.close(None).await.is_ok());
     let cleanup = timeout(Duration::from_secs(1), async {
         loop {
-            if !room
-                .has_staged_publish(
-                    &core_user_id,
-                    connection_id,
-                    &stream_id_for_stream_type(StreamType::Camera),
-                )
-                .await
-            {
+            if !room.has_staged_publish(
+                &core_user_id,
+                connection_id,
+                &stream_id_for_stream_type(StreamType::Camera),
+            ) {
                 break;
             }
             sleep(Duration::from_millis(10)).await;
@@ -489,6 +485,7 @@ async fn websocket_closure_emits_fake_webrtc_user_closed_event() {
         events.last(),
         Some(&FakeMediaTransportEvent::SessionClosed {
             user_id: user_id.clone(),
+            media_worker_id: 0,
         })
     );
 }
@@ -530,6 +527,7 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
         events.last(),
         Some(&FakeMediaTransportEvent::SessionClosed {
             user_id: user_id.clone(),
+            media_worker_id: 0,
         })
     );
 
@@ -544,6 +542,7 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
         events.last(),
         Some(&FakeMediaTransportEvent::SessionClosed {
             user_id: user_id.clone(),
+            media_worker_id: 0,
         })
     );
 }
@@ -593,7 +592,8 @@ async fn disconnect_cleanup_still_closes_media_transport_user_state() {
     assert_eq!(
         events.last(),
         Some(&FakeMediaTransportEvent::SessionClosed {
-            user_id: UserId::Integer(1)
+            user_id: UserId::Integer(1),
+            media_worker_id: 0,
         })
     );
 }
@@ -641,7 +641,8 @@ async fn disconnect_cleanup_closes_transport_user_before_empty_room_removal() {
     assert_eq!(
         events.last(),
         Some(&FakeMediaTransportEvent::SessionClosed {
-            user_id: core_user_id
+            user_id: core_user_id,
+            media_worker_id: 0,
         })
     );
 }
@@ -677,8 +678,7 @@ async fn stage_camera_publish(
             user_id,
             connection_id,
             &stream_id_for_stream_type(StreamType::Camera)
-        )
-        .await,
+        ),
         "publish should be staged before the close path starts"
     );
     Some(connection_id)
@@ -691,14 +691,11 @@ async fn wait_for_staged_publish_cleanup(
 ) -> Option<()> {
     timeout(Duration::from_secs(1), async {
         loop {
-            if !room
-                .has_staged_publish(
-                    user_id,
-                    connection_id,
-                    &stream_id_for_stream_type(StreamType::Camera),
-                )
-                .await
-            {
+            if !room.has_staged_publish(
+                user_id,
+                connection_id,
+                &stream_id_for_stream_type(StreamType::Camera),
+            ) {
                 break;
             }
             sleep(Duration::from_millis(10)).await;

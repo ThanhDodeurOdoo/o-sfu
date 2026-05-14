@@ -1,3 +1,5 @@
+use std::sync::PoisonError;
+
 use super::{PendingPublishTransactions, Room};
 use crate::runtime::{
     ConnectionId, TestSourceKind, UserId, media_transport::TransportMediaId,
@@ -33,6 +35,10 @@ impl PendingPublishTransactions {
 }
 
 impl Room {
+    #[allow(
+        clippy::unused_async,
+        reason = "test facade stays async to match room inspection helpers used by existing scenarios"
+    )]
     pub(in crate::runtime::room) async fn staged_publish_count_for_connection(
         &self,
         user_id: &UserId,
@@ -40,10 +46,14 @@ impl Room {
     ) -> usize {
         self.pending_publish_transactions
             .lock()
-            .await
+            .unwrap_or_else(PoisonError::into_inner)
             .staged_count_for_connection(user_id, connection_id)
     }
 
+    #[allow(
+        clippy::unused_async,
+        reason = "test facade stays async to match room inspection helpers used by existing scenarios"
+    )]
     pub(in crate::runtime::room) async fn staged_publish_transport_media_id(
         &self,
         user_id: &UserId,
@@ -52,7 +62,7 @@ impl Room {
     ) -> Option<TransportMediaId> {
         self.pending_publish_transactions
             .lock()
-            .await
+            .unwrap_or_else(PoisonError::into_inner)
             .staged_transport_media_id(user_id, connection_id, stream_type)
     }
 }

@@ -61,9 +61,10 @@
 //! # Invariants
 //!
 //! Each pending operation is keyed by the runtime-local transport identity that
-//! the adapter understands. A media cleanup retry is keyed by user id,
-//! connection id and transport media id. A user close retry is keyed by user id
-//! and connection id. A relay release retry is keyed by route.
+//! the adapter understands. A media cleanup retry is keyed by the resolved
+//! transport session key plus transport media id. A user close retry is keyed
+//! by the resolved transport session key. A relay release retry is keyed by its
+//! resolved source session key plus route.
 //!
 //! The queue is bounded because cleanup recovery is a cold-path safety net, not
 //! an unbounded task system. If the queue fills, room orchestration must
@@ -75,7 +76,7 @@ use std::collections::{BTreeMap, btree_map::Entry};
 use super::state::RelayRouteKey;
 use crate::runtime::{
     ConnectionId, UserId,
-    media_transport::{TransportAdapterError, TransportMediaId},
+    media_transport::{TransportAdapterError, TransportMediaId, TransportSessionKey},
 };
 
 /// Maximum number of distinct cleanup operations one room may retain.
@@ -112,7 +113,7 @@ pub(super) enum TransportCleanupOperation {
     /// closing the owning transport user so the worker or shard can release
     /// anything still attached to that session.
     RemoveMedia {
-        user_id: UserId,
+        session_key: TransportSessionKey,
         connection_id: ConnectionId,
         transport_media_id: TransportMediaId,
     },
@@ -122,20 +123,23 @@ pub(super) enum TransportCleanupOperation {
     /// when the adapter is temporarily unavailable, then abandoned explicitly
     /// if the room itself is removed before recovery completes.
     CloseUser {
-        user_id: UserId,
+        session_key: TransportSessionKey,
         connection_id: ConnectionId,
     },
     ReleaseRelayRoute {
+        source_session_key: TransportSessionKey,
         route: RelayRouteKey,
     },
 }
 
 impl TransportCleanupOperation {
     #[must_use]
-    pub(super) const fn user_id(&self) -> &UserId {
+    pub(super) fn user_id(&self) -> &UserId {
         match self {
-            Self::RemoveMedia { user_id, .. } | Self::CloseUser { user_id, .. } => user_id,
-            Self::ReleaseRelayRoute { route } => &route.source_user,
+            Self::RemoveMedia { session_key, .. } | Self::CloseUser { session_key, .. } => {
+                session_key.user_id()
+            }
+            Self::ReleaseRelayRoute { route, .. } => &route.source_user,
         }
     }
 
@@ -157,6 +161,18 @@ impl TransportCleanupOperation {
             } => Some(*transport_media_id),
             Self::ReleaseRelayRoute { route, .. } => Some(route.source_media),
             Self::CloseUser { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub(super) const fn session_key(&self) -> &TransportSessionKey {
+        match self {
+            Self::RemoveMedia { session_key, .. }
+            | Self::CloseUser { session_key, .. }
+            | Self::ReleaseRelayRoute {
+                source_session_key: session_key,
+                ..
+            } => session_key,
         }
     }
 
@@ -335,6 +351,11 @@ impl CleanupReconciler {
         let abandoned = self.pending.len();
         self.pending.clear();
         abandoned
+    }
+
+    #[must_use]
+    pub(super) fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
