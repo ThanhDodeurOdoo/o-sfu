@@ -41,6 +41,7 @@ use super::{
     events::RoomEventMessage,
     lifecycle::UserCloseReason,
     media_transaction::PendingPublishTransactions,
+    placement::{RoomPlacementUsageSnapshot, RoomWorkerLoadContribution},
     state::{ConsumerRouteState, RemoteTrackBootstrap, RoomState},
 };
 use crate::{
@@ -234,10 +235,10 @@ pub struct RoomRuntimeContext {
     ///
     /// A recreated room with the same issuer still gets a fresh instance id.
     instance: RoomInstanceId,
-    /// Reserved local router and worker placements that this room may use.
+    /// Local router and worker placements already known for this room.
     ///
-    /// The placement bundle is non-empty by construction. Its first entry is
-    /// the primary placement and the rest are spillover candidates.
+    /// The placement bundle is non-empty by construction. Rooms start with the
+    /// primary router and add spillover placements when sessions are placed.
     local_routers: LocalRoomRouterPlacements,
 }
 
@@ -248,9 +249,8 @@ pub struct RoomRuntimeContext {
 /// routing state for a subset of users and which local media worker owns those
 /// users' transport sessions.
 ///
-/// The room factory reserves these placements before publishing the room. The
-/// topology can then attach or detach the router state for a placement without
-/// changing the room's immutable transport placement contract.
+/// The room factory creates the primary router. The room manager adds
+/// spillover placements when live load makes them necessary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalRouterRuntimeContext {
     /// Pure router id used inside the room topology.
@@ -259,7 +259,7 @@ pub struct LocalRouterRuntimeContext {
     pub media_worker: usize,
 }
 
-/// Non-empty router placement set reserved for one live room.
+/// Non-empty router placement set assigned to one live room.
 ///
 /// This is the shared placement contract consumed by both `RoomDefinition` and
 /// `RoomTopology`. Keeping the primary placement inside this validated value
@@ -303,6 +303,22 @@ impl LocalRoomRouterPlacements {
     #[must_use]
     pub const fn primary(&self) -> LocalRouterRuntimeContext {
         self.primary
+    }
+
+    pub(in crate::runtime::room) fn upsert(&mut self, placement: LocalRouterRuntimeContext) {
+        if self.primary.router == placement.router {
+            self.primary = placement;
+            return;
+        }
+        if let Some(existing) = self
+            .spillover
+            .iter_mut()
+            .find(|existing| existing.router == placement.router)
+        {
+            *existing = placement;
+            return;
+        }
+        self.spillover.push(placement);
     }
 
     #[must_use]
@@ -685,6 +701,40 @@ impl Room {
         self.definition.transport_user_key(user_id, connection_id)
     }
 
+    pub(in crate::runtime::room) async fn placement_usage_snapshot(
+        &self,
+    ) -> RoomPlacementUsageSnapshot {
+        self.state.read().await.placement_usage_snapshot()
+    }
+
+    pub(in crate::runtime::room) async fn worker_load_contribution(
+        &self,
+    ) -> RoomWorkerLoadContribution {
+        let (session_entries, consumer_entries) = {
+            let state = self.state.read().await;
+            (
+                state.transport_user_entries(),
+                state.transport_consumer_entries(),
+            )
+        };
+        RoomWorkerLoadContribution {
+            session_workers: session_entries
+                .into_iter()
+                .map(|(user_id, connection_id)| {
+                    self.transport_user_key(&user_id, connection_id)
+                        .media_worker_id()
+                })
+                .collect(),
+            consumer_workers: consumer_entries
+                .into_iter()
+                .map(|(user_id, connection_id)| {
+                    self.transport_user_key(&user_id, connection_id)
+                        .media_worker_id()
+                })
+                .collect(),
+        }
+    }
+
     /// Current route state for one consumer or producer pair
     ///
     /// This is mainly used by orchestration and diagnostics code that needs to
@@ -849,6 +899,10 @@ impl Room {
     /// to the correct worker shard.
     pub fn media_worker_id(&self) -> usize {
         self.definition.media_worker_id()
+    }
+
+    pub(in crate::runtime::room) fn room_sharding_policy(&self) -> RoomShardingPolicy {
+        self.definition.room_sharding_policy()
     }
 
     #[must_use]

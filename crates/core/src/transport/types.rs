@@ -204,6 +204,23 @@ impl TransportPlacementPressureSnapshot {
     }
 }
 
+/// Transport-observed pressure for one local media worker.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TransportWorkerPressureSnapshot {
+    pub media_worker_id: usize,
+    pub pressure: TransportPlacementPressureSnapshot,
+}
+
+impl TransportWorkerPressureSnapshot {
+    #[must_use]
+    pub const fn new(media_worker_id: usize, pressure: TransportPlacementPressureSnapshot) -> Self {
+        Self {
+            media_worker_id,
+            pressure,
+        }
+    }
+}
+
 /// Opaque identifier for a media line allocated by the media transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
 pub struct TransportMediaId(u64);

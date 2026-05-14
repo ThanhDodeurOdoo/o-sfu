@@ -84,4 +84,5 @@ pub use types::{
     SourcePacketGate, SourcePacketOperatingPoint, TransportAdapterError, TransportBitrateSnapshot,
     TransportMediaId, TransportPlacementPressureSnapshot, TransportRelayRouteAction,
     TransportRelayRouteEffect, TransportResult, TransportSessionHealth, TransportSessionKey,
+    TransportWorkerPressureSnapshot,
 };

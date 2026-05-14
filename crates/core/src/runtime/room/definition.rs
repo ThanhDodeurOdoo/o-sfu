@@ -1,4 +1,4 @@
-//! Immutable room identity and runtime placement.
+//! Room identity and dynamic runtime placement.
 //!
 //! A room has two identities:
 //!
@@ -9,8 +9,9 @@
 //!
 //! The first identity is visible at the HTTP and websocket edge. The second
 //! identity is process-local and drives transport ownership, diagnostics and
-//! room topology. Keeping them together in `RoomDefinition` gives the room
-//! facade one immutable source of truth after creation.
+//! room topology. The room is created before a media worker is selected, so
+//! `RoomDefinition` records the worker placement resolved for each committed
+//! connection.
 
 use std::{
     collections::BTreeMap,
@@ -19,7 +20,10 @@ use std::{
 
 use uuid::Uuid;
 
-use super::{LocalRoomRouterPlacements, RoomConfig, RoomRuntimeContext, RoomRuntimePolicy};
+use super::{
+    LocalRoomRouterPlacements, LocalRouterRuntimeContext, RoomConfig, RoomRuntimeContext,
+    RoomRuntimePolicy,
+};
 use crate::{
     RoomShardingPolicy, RuntimeFeatureFlags,
     runtime::{
@@ -60,18 +64,16 @@ pub(crate) struct RoomDefinition {
     /// Recreating a room for the same issuer allocates a fresh instance id so
     /// stale transport work cannot be confused with the new room lifetime.
     instance_id: RoomInstanceId,
-    /// Primary media worker selected for the room.
+    /// Media worker currently assigned to the primary router.
     ///
-    /// Strict single-router rooms use this for all transport sessions.
-    /// Spillover rooms use it as the fallback when a connection does not map
-    /// onto one of the reserved local placements.
-    media_worker_id: usize,
-    /// Immutable local router placements reserved for this room.
+    /// Empty rooms keep the creation placeholder. The first placed session
+    /// updates this value when it lands on the primary router.
+    media_worker_id: Arc<Mutex<usize>>,
+    /// Local router placements assigned to this room.
     ///
-    /// This vector is shared with `RoomTopology` through room construction.
-    /// `transport_user_key` uses the same placement order so transport worker
-    /// addressing and topology home-router placement cannot drift.
-    local_routers: LocalRoomRouterPlacements,
+    /// The room starts with only its primary router. Spillover placements are
+    /// inserted after the placement planner selects a worker for a session.
+    local_routers: Arc<Mutex<LocalRoomRouterPlacements>>,
     /// Policy used to interpret `local_routers` for transport placement.
     ///
     /// The policy is stored here because transport session keys are derived
@@ -95,8 +97,8 @@ impl RoomDefinition {
     ) -> Self {
         Self {
             instance_id: runtime_context.instance(),
-            media_worker_id: runtime_context.media_worker(),
-            local_routers: runtime_context.local_routers().clone(),
+            media_worker_id: Arc::new(Mutex::new(runtime_context.media_worker())),
+            local_routers: Arc::new(Mutex::new(runtime_context.local_routers().clone())),
             room_sharding_policy: runtime_policy.room_sharding_policy,
             transport_worker_by_connection: Arc::new(Mutex::new(BTreeMap::new())),
             identity: RoomIdentity::new(issuer, key),
@@ -145,15 +147,29 @@ impl RoomDefinition {
         )
     }
 
-    pub(crate) fn register_transport_worker(
+    pub(crate) fn register_transport_placement(
         &self,
         connection_id: ConnectionId,
-        media_worker_id: usize,
+        placement: LocalRouterRuntimeContext,
     ) {
+        let is_primary = {
+            let mut local_routers = self
+                .local_routers
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            local_routers.upsert(placement);
+            local_routers.primary().router == placement.router
+        };
+        if is_primary {
+            *self
+                .media_worker_id
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = placement.media_worker;
+        }
         self.transport_worker_by_connection
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(connection_id, media_worker_id);
+            .insert(connection_id, placement.media_worker);
     }
 
     pub(crate) fn unregister_transport_worker(&self, connection_id: ConnectionId) {
@@ -163,11 +179,12 @@ impl RoomDefinition {
             .remove(&connection_id);
     }
 
-    /// Resolve the media worker that owns one user's transport session.
+    /// Resolve the media worker that owns one committed connection.
     ///
-    /// This mirrors `RoomTopology` home-router placement for local spillover.
-    /// The input is the runtime connection id because reconnects should receive
-    /// a fresh deterministic placement even when the same Odoo user id rejoins.
+    /// Dynamic placement has no deterministic fallback from the connection id.
+    /// Live transport keys must therefore use the committed mapping recorded
+    /// during join finalization. If the mapping has already been removed, the
+    /// primary worker is returned only as a stale-key fallback.
     ///
     /// The method is cold-path control-plane work. It is called while building
     /// transport commands and diagnostics, not from packet forwarding loops.
@@ -181,14 +198,7 @@ impl RoomDefinition {
         {
             return media_worker_id;
         }
-        let placement_count = self
-            .room_sharding_policy
-            .allowed_local_router_count(self.local_routers.len());
-        let placement_index =
-            usize::try_from(connection_id.as_u64()).unwrap_or(0) % placement_count;
-        self.local_routers
-            .get(placement_index)
-            .map_or(self.media_worker_id, |placement| placement.media_worker)
+        self.media_worker_id()
     }
 
     #[must_use]
@@ -210,8 +220,15 @@ impl RoomDefinition {
     }
 
     #[must_use]
-    pub(crate) const fn media_worker_id(&self) -> usize {
-        self.media_worker_id
+    pub(crate) fn room_sharding_policy(&self) -> RoomShardingPolicy {
+        self.room_sharding_policy
+    }
+
+    pub(crate) fn media_worker_id(&self) -> usize {
+        *self
+            .media_worker_id
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     #[must_use]

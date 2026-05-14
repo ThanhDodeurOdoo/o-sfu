@@ -22,7 +22,7 @@ use crate::{
         ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
         SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
         TransportMediaId, TransportPlacementPressureSnapshot, TransportRelayRouteEffect,
-        TransportSessionHealth, TransportSessionKey,
+        TransportSessionHealth, TransportSessionKey, TransportWorkerPressureSnapshot,
     },
 };
 
@@ -341,6 +341,13 @@ pub trait ObservabilityPort {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportPlacementPressureSnapshot;
+
+    /// Returns transport-worker pressure for every worker the backend can rank.
+    ///
+    /// Placement uses this as best-effort process-local load input. Missing
+    /// workers are treated by callers as idle because transport snapshots can
+    /// race with worker startup and teardown.
+    fn worker_pressure_snapshots(&self) -> Vec<TransportWorkerPressureSnapshot>;
 
     /// Returns recent active-speaker sources observed by transport workers.
     async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource>;

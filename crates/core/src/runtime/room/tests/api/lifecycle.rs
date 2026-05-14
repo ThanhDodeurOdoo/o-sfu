@@ -1,5 +1,10 @@
-use super::super::super::{Room, RoomJoinError, UserCleanup, UserOutboundSender};
-use crate::runtime::{ConnectionId, UserId, UserPermissions, media_transport::MediaTransport};
+use super::super::super::{
+    JoinSessionIntent, Room, RoomJoinError, UserCleanup, UserOutboundSender,
+};
+use crate::runtime::{
+    ConnectionId, UserId, UserPermissions,
+    media_transport::{MediaTransport, ObservabilityPort},
+};
 
 #[derive(Clone, Copy)]
 pub struct RoomTestLifecycle<'a> {
@@ -20,14 +25,21 @@ impl RoomTestLifecycle<'_> {
         permissions: UserPermissions,
         sender: UserOutboundSender,
     ) -> Result<ConnectionId, RoomJoinError> {
+        let home_placement = self
+            .room
+            .local_join_placement_from_worker_pressure(Vec::new())
+            .await;
         self.room
             .join_session_with_cleanup(
-                user_id,
-                label,
-                permissions,
-                sender,
+                JoinSessionIntent {
+                    user_id,
+                    label,
+                    permissions,
+                    sender,
+                    emit_joined_fanout: false,
+                    home_placement,
+                },
                 UserCleanup::state_only(None),
-                false,
             )
             .await
     }
@@ -46,14 +58,21 @@ impl RoomTestLifecycle<'_> {
         sender: UserOutboundSender,
         media_transport: &MediaTransport,
     ) -> Result<ConnectionId, RoomJoinError> {
+        let home_placement = self
+            .room
+            .local_join_placement_from_worker_pressure(media_transport.worker_pressure_snapshots())
+            .await;
         self.room
             .join_session_with_cleanup(
-                user_id,
-                label,
-                permissions,
-                sender,
+                JoinSessionIntent {
+                    user_id,
+                    label,
+                    permissions,
+                    sender,
+                    emit_joined_fanout: false,
+                    home_placement,
+                },
                 UserCleanup::state_only(Some(media_transport)),
-                false,
             )
             .await
     }

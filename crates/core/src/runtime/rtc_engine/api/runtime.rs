@@ -50,7 +50,7 @@ use crate::{
         media_transport::{
             ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ReceiverBandwidthSnapshot,
             TransportAdapterError, TransportBitrateSnapshot, TransportPlacementPressureSnapshot,
-            TransportSessionKey,
+            TransportSessionKey, TransportWorkerPressureSnapshot,
         },
     },
 };
@@ -234,6 +234,14 @@ impl RtcTransportShard {
             .placement_pressure_snapshot(session_keys)
     }
 
+    pub fn worker_pressure_snapshot(
+        &self,
+        media_worker_id: usize,
+    ) -> TransportWorkerPressureSnapshot {
+        self.observability()
+            .worker_pressure_snapshot(media_worker_id)
+    }
+
     #[cfg(test)]
     pub fn session_transport_health(
         &self,
@@ -320,6 +328,41 @@ impl RtcTransportObservabilityFacade<'_> {
                 RELAY_MAILBOX_CAPACITY,
             ),
         }
+    }
+
+    pub fn worker_pressure_snapshot(
+        self,
+        media_worker_id: usize,
+    ) -> TransportWorkerPressureSnapshot {
+        let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
+            return TransportWorkerPressureSnapshot::new(
+                media_worker_id,
+                TransportPlacementPressureSnapshot::default(),
+            );
+        };
+        let now = Instant::now();
+        let egress_bitrate = match worker_handle.bitrate_registry.lock() {
+            Ok(bitrate_registry) => bitrate_registry.total_egress_bitrate_snapshot_at(now),
+            Err(_error) => Bitrate::zero(),
+        };
+        let packet_loop_lag_ms = worker_handle.packet_loop_lag.packet_loop_lag_ms_at(now);
+        let command_backlog_depth = sender_backlog_depth(&worker_handle.command_tx);
+        let relay_mailbox_depth = worker_handle.relay_mailbox.backlog_depth();
+        TransportWorkerPressureSnapshot::new(
+            media_worker_id,
+            TransportPlacementPressureSnapshot {
+                egress_bitrate,
+                packet_loop_lag_ms,
+                command_backlog_depth,
+                relay_mailbox_depth,
+                worker_pressure_score: worker_pressure_score(
+                    command_backlog_depth,
+                    worker_handle.command_tx.max_capacity(),
+                    relay_mailbox_depth,
+                    RELAY_MAILBOX_CAPACITY,
+                ),
+            },
+        )
     }
 
     pub fn session_transport_health(

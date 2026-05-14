@@ -110,6 +110,29 @@ async fn join_ready_users(
     users
 }
 
+async fn manager_join_user(
+    manager: &RoomManager,
+    room: &Arc<super::super::Room>,
+    raw_user_id: i64,
+    media_transport: &MediaTransport,
+) -> ConnectionId {
+    let (tx, _rx) = test_sender();
+    let (_room, connection_id) = manager
+        .join_user(
+            room.uuid(),
+            JoinUserRequest {
+                user_id: UserId::Integer(raw_user_id),
+                label: None,
+                permissions: UserPermissions::default(),
+                sender: tx,
+            },
+            media_transport,
+        )
+        .await
+        .expect("user should join through manager");
+    connection_id
+}
+
 async fn camera_media_id(room: &Arc<super::super::Room>, user_id: &UserId) -> TransportMediaId {
     let Some(connection_id) = room.test_api().inspect().user_connection_id(user_id).await else {
         panic!("user should have a connection");
@@ -270,8 +293,9 @@ async fn room_manager_concurrent_create_attempts_publish_one_live_room() {
 }
 
 #[tokio::test]
-async fn room_manager_assigns_media_workers_explicitly() {
+async fn room_manager_places_first_join_on_lowest_load_worker() {
     let manager = RoomManager::for_test_with_media_workers(2);
+    let media_transport = MediaTransport::fake_for_testing();
     let first = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
@@ -283,19 +307,45 @@ async fn room_manager_assigns_media_workers_explicitly() {
         .await;
 
     assert_eq!(first.test_api().inspect().media_worker_id(), 0);
-    assert_eq!(second.test_api().inspect().media_worker_id(), 1);
+    assert_eq!(second.test_api().inspect().media_worker_id(), 0);
     assert_eq!(third.test_api().inspect().media_worker_id(), 0);
+
+    let first_connection = manager_join_user(&manager, &first, 10, &media_transport).await;
+    let second_connection = manager_join_user(&manager, &second, 20, &media_transport).await;
+    let third_connection = manager_join_user(&manager, &third, 30, &media_transport).await;
+
+    assert_eq!(
+        first
+            .transport_user_key(&UserId::Integer(10), first_connection)
+            .media_worker_id(),
+        0
+    );
+    assert_eq!(
+        second
+            .transport_user_key(&UserId::Integer(20), second_connection)
+            .media_worker_id(),
+        1
+    );
+    assert_eq!(
+        third
+            .transport_user_key(&UserId::Integer(30), third_connection)
+            .media_worker_id(),
+        0
+    );
 }
 
 #[tokio::test]
 async fn room_spillover_policy_places_user_transport_on_local_workers() {
     let manager = spillover_room_manager(2);
+    let media_transport = MediaTransport::fake_for_testing();
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
 
-    let first_key = room.transport_user_key(&UserId::Integer(10), ConnectionId::from_raw(0));
-    let second_key = room.transport_user_key(&UserId::Integer(20), ConnectionId::from_raw(1));
+    let first_connection = manager_join_user(&manager, &room, 10, &media_transport).await;
+    let second_connection = manager_join_user(&manager, &room, 20, &media_transport).await;
+    let first_key = room.transport_user_key(&UserId::Integer(10), first_connection);
+    let second_key = room.transport_user_key(&UserId::Integer(20), second_connection);
 
     assert_eq!(first_key.media_worker_id(), 0);
     assert_eq!(second_key.media_worker_id(), 1);
@@ -443,35 +493,18 @@ async fn load_triggered_room_uses_transport_pressure_for_new_placement()
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
 
-    let (first_tx, _first_rx) = test_sender();
-    let first_join = room
-        .add_user(
-            UserId::Integer(10),
-            None,
-            UserPermissions::default(),
-            first_tx,
-            &media_transport,
-        )
-        .await;
-    assert!(first_join.is_ok());
+    manager_join_user(&manager, &room, 10, &media_transport).await;
     assert_user_placement(&room, &UserId::Integer(10), RouterId(0), 0).await;
 
-    fake.set_placement_pressure_snapshot(TransportPlacementPressureSnapshot {
-        egress_bitrate: Bitrate::from_bps(256),
-        ..Default::default()
-    });
+    fake.set_worker_pressure_snapshot(
+        0,
+        TransportPlacementPressureSnapshot {
+            egress_bitrate: Bitrate::from_bps(256),
+            ..Default::default()
+        },
+    );
 
-    let (second_tx, _second_rx) = test_sender();
-    let second_join = room
-        .add_user(
-            UserId::Integer(20),
-            None,
-            UserPermissions::default(),
-            second_tx,
-            &media_transport,
-        )
-        .await;
-    assert!(second_join.is_ok());
+    manager_join_user(&manager, &room, 20, &media_transport).await;
     assert_user_placement(&room, &UserId::Integer(20), RouterId(1), 1).await;
     Ok(())
 }
@@ -563,41 +596,24 @@ async fn cleanup_retry_keeps_resolved_spillover_worker_after_unregister()
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
 
-    let (first_tx, _first_rx) = test_sender();
     let first_user_id = UserId::Integer(10);
-    let first_connection = room
-        .add_user(
-            first_user_id.clone(),
-            None,
-            UserPermissions::default(),
-            first_tx,
-            &media_transport,
-        )
-        .await
-        .expect("first user should join");
+    let first_connection = manager_join_user(&manager, &room, 10, &media_transport).await;
     assert_eq!(
         room.transport_user_key(&first_user_id, first_connection)
             .media_worker_id(),
         0
     );
 
-    fake.set_placement_pressure_snapshot(TransportPlacementPressureSnapshot {
-        egress_bitrate: Bitrate::from_bps(256),
-        ..Default::default()
-    });
+    fake.set_worker_pressure_snapshot(
+        0,
+        TransportPlacementPressureSnapshot {
+            egress_bitrate: Bitrate::from_bps(256),
+            ..Default::default()
+        },
+    );
 
-    let (second_tx, _second_rx) = test_sender();
     let second_user_id = UserId::Integer(20);
-    let second_connection = room
-        .add_user(
-            second_user_id.clone(),
-            None,
-            UserPermissions::default(),
-            second_tx,
-            &media_transport,
-        )
-        .await
-        .expect("second user should join");
+    let second_connection = manager_join_user(&manager, &room, 20, &media_transport).await;
     let second_session_key = room.transport_user_key(&second_user_id, second_connection);
     assert_eq!(second_session_key.media_worker_id(), 1);
 

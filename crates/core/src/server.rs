@@ -108,7 +108,7 @@ pub mod transport {
             SourcePolicyDirtyState, SourcePolicyPort, SourcePolicySignal,
             SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
             TransportMediaId, TransportPlacementPressureSnapshot, TransportResult,
-            TransportSessionHealth, TransportSessionKey,
+            TransportSessionHealth, TransportSessionKey, TransportWorkerPressureSnapshot,
         },
     };
 }

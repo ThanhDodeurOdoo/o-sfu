@@ -207,6 +207,14 @@ impl BitrateRegistry {
                 total.saturating_add(bitrate.snapshot(now))
             })
     }
+
+    pub fn total_egress_bitrate_snapshot_at(&self, now: Instant) -> Bitrate {
+        self.egress_bitrates_by_session
+            .values()
+            .fold(Bitrate::zero(), |total, bitrate| {
+                total.saturating_add(bitrate.snapshot(now))
+            })
+    }
 }
 
 impl PacketLoopState {

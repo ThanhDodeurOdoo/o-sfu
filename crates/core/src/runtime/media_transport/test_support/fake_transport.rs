@@ -21,6 +21,7 @@ use crate::{
             ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerPacketGateUpdate,
             ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate, TransportAdapterError,
             TransportMediaId, TransportPlacementPressureSnapshot, TransportSessionKey,
+            TransportWorkerPressureSnapshot,
         },
     },
     transport::{SourcePolicySignal, TransportRelayRouteAction, TransportRelayRouteEffect},
@@ -96,6 +97,7 @@ struct FakeMediaTransportState {
     active_speaker_sources: Vec<ActiveSpeakerSource>,
     receiver_bandwidth_estimates: BTreeMap<UserId, Bitrate>,
     placement_pressure: TransportPlacementPressureSnapshot,
+    worker_pressure: BTreeMap<usize, TransportPlacementPressureSnapshot>,
     delays: FakeMediaTransportDelays,
 }
 
@@ -301,6 +303,17 @@ impl FakeMediaTransport {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
+    pub fn set_worker_pressure_snapshot(
+        &self,
+        media_worker_id: usize,
+        snapshot: TransportPlacementPressureSnapshot,
+    ) {
+        self.mutate_state(|state| {
+            state.worker_pressure.insert(media_worker_id, snapshot);
+        });
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
     pub fn mark_source_policy_dirty(&self, room_instance_id: RoomInstanceId) {
         self.source_policy_signal.mark_dirty(room_instance_id);
     }
@@ -360,6 +373,18 @@ impl FakeMediaTransport {
             return TransportPlacementPressureSnapshot::default();
         }
         self.inspect_state(|state| state.placement_pressure)
+    }
+
+    pub(crate) fn worker_pressure_snapshots(&self) -> Vec<TransportWorkerPressureSnapshot> {
+        self.inspect_state(|state| {
+            state
+                .worker_pressure
+                .iter()
+                .map(|(media_worker_id, pressure)| {
+                    TransportWorkerPressureSnapshot::new(*media_worker_id, *pressure)
+                })
+                .collect()
+        })
     }
 
     pub(crate) fn source_policy_signal(&self) -> Arc<SourcePolicySignal> {

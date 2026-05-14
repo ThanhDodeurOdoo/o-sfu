@@ -9,6 +9,7 @@ use super::{
     super::{
         RoomAdmissionPolicy, RoomUserPermissions,
         outbound::OutboundSender,
+        placement::RoomPlacementUsageSnapshot,
         topology::{RoomRouterStateFactory, RoomTopology, RoutedConsumerId, RoutedProducerId},
         user_negotiation::UserNegotiation,
     },
@@ -341,6 +342,30 @@ impl RoomState {
             .iter()
             .map(|(user_id, user)| (user_id.clone(), user.connection_id))
             .collect()
+    }
+
+    pub(in crate::runtime::room) fn transport_consumer_entries(
+        &self,
+    ) -> Vec<(UserId, ConnectionId)> {
+        let mut entries = self
+            .consumer_index
+            .iter()
+            .map(|(key, state)| (key.consumer_user_id.clone(), state.consumer_connection_id))
+            .collect::<Vec<_>>();
+        entries.extend(self.pending_consumer_bootstraps.iter().filter_map(|key| {
+            self.users
+                .get(&key.consumer_user_id)
+                .map(|user| (key.consumer_user_id.clone(), user.connection_id))
+        }));
+        entries
+    }
+
+    pub(in crate::runtime::room) fn placement_usage_snapshot(&self) -> RoomPlacementUsageSnapshot {
+        RoomPlacementUsageSnapshot::new(
+            self.topology.primary_router_id(),
+            self.topology.has_assigned_local_placements(),
+            self.topology.local_placements(),
+        )
     }
 
     pub(in crate::runtime::room) fn user_connection_id(

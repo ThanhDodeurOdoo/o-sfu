@@ -50,7 +50,7 @@ pub use crate::transport::{
     ReceiverBandwidthSnapshot, SessionOffer, SessionPort, SessionUploadEncoding, SessionUploadSlot,
     SourcePacketGate, SourcePacketOperatingPoint, SourcePolicySignal, TransportAdapterError,
     TransportBitrateSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
-    TransportResult, TransportSessionKey,
+    TransportResult, TransportSessionKey, TransportWorkerPressureSnapshot,
 };
 use crate::{
     CoreOptions,
@@ -622,6 +622,14 @@ impl ObservabilityPort for MediaTransport {
             Self::Rtc(transport) => transport.shards.placement_pressure_snapshot(session_keys),
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(transport) => transport.placement_pressure_snapshot(session_keys),
+        }
+    }
+
+    fn worker_pressure_snapshots(&self) -> Vec<TransportWorkerPressureSnapshot> {
+        match self {
+            Self::Rtc(transport) => transport.shards.worker_pressure_snapshots(),
+            #[cfg(any(test, feature = "testing-transport"))]
+            Self::Fake(transport) => transport.worker_pressure_snapshots(),
         }
     }
 

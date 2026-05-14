@@ -18,6 +18,7 @@ pub(in crate::runtime::room) struct TopologyPressureSnapshot {
     pub worker_pressure_score: u8,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct HomePlacementInput {
     pub connection_seed: u64,
@@ -32,11 +33,13 @@ pub(super) struct CleanupInput {
     pub pressure: TopologyPressureSnapshot,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct HomePlacementDecision {
     router_index: usize,
 }
 
+#[cfg(test)]
 impl HomePlacementDecision {
     #[must_use]
     pub const fn new(router_index: usize) -> Self {
@@ -68,6 +71,7 @@ impl PlacementPolicy {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn choose_home_router(
         &mut self,
         input: HomePlacementInput,

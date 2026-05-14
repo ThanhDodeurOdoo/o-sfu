@@ -30,7 +30,7 @@ use crate::{
         SourcePolicySignal, SourcePolicyUpdateSubscription, TransportAdapterError,
         TransportBitrateSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
         TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionHealth,
-        TransportSessionKey,
+        TransportSessionKey, TransportWorkerPressureSnapshot,
     },
 };
 
@@ -253,6 +253,17 @@ impl RtcTransportShardSet {
             snapshot = snapshot.merged_with(shard.placement_pressure_snapshot(&shard_session_keys));
         }
         snapshot
+    }
+
+    /// Builds best-effort pressure snapshots for every local RTC worker.
+    pub(super) fn worker_pressure_snapshots(&self) -> Vec<TransportWorkerPressureSnapshot> {
+        let mut snapshots = Vec::with_capacity(self.extra_shards.len().saturating_add(1));
+        snapshots.push(self.primary_shard.worker_pressure_snapshot(0));
+        for (index, shard) in self.extra_shards.iter().enumerate() {
+            let media_worker_id = index.saturating_add(1);
+            snapshots.push(shard.worker_pressure_snapshot(media_worker_id));
+        }
+        snapshots
     }
 
     /// Applies packet-gate updates in shard-local batches.

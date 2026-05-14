@@ -4,10 +4,10 @@ use tracing::{debug, error, warn};
 
 use super::{
     super::{
-        BroadcastPayload, BroadcastPayloadError, RoomEventMessage, RoomJoinError,
-        RoomUserPermissions, UserCloseReason,
+        BroadcastPayload, BroadcastPayloadError, LocalRouterRuntimeContext, RoomEventMessage,
+        RoomJoinError, RoomUserPermissions, UserCloseReason,
         outbound::{MessageFanout, OutboundSender},
-        topology::{RoomTopology, RoomTopologyError, TopologyPressureSnapshot},
+        topology::{RoomTopology, RoomTopologyError},
         user_negotiation::{UserNegotiation, UserNegotiationUpdate},
     },
     layout::UserLayout,
@@ -15,9 +15,7 @@ use super::{
     presence::UserPresence,
     shared::{ActiveUser, RoomState, TransportMediaRemoval},
 };
-use crate::runtime::{
-    ConnectionId, UserId, UserInfo, media_transport::TransportPlacementPressureSnapshot,
-};
+use crate::runtime::{ConnectionId, UserId, UserInfo};
 
 #[cfg(test)]
 mod test_support;
@@ -55,6 +53,7 @@ pub(in crate::runtime::room) struct JoinUserOutcome {
     pub(in crate::runtime::room) connection_id: ConnectionId,
     pub(in crate::runtime::room) effects: LifecycleEffects,
     pub(in crate::runtime::room) user_id: UserId,
+    pub(in crate::runtime::room) transport_home_placement: LocalRouterRuntimeContext,
     pub(in crate::runtime::room) transport_media_worker_id: usize,
     pub(in crate::runtime::room) transport_removals: Vec<TransportMediaRemoval>,
     pub(in crate::runtime::room) relay_effects: Vec<RelayRouteEffect>,
@@ -98,8 +97,8 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
         is_new: bool,
-        transport_pressure: TransportPlacementPressureSnapshot,
-    ) -> Result<usize, RoomJoinError> {
+        home_placement: LocalRouterRuntimeContext,
+    ) -> Result<LocalRouterRuntimeContext, RoomJoinError> {
         let mut topology = self.topology.clone();
         if !is_new && let Err(error) = self.reset_existing_session_routing(&mut topology, user_id) {
             error!(
@@ -109,11 +108,14 @@ impl RoomState {
             );
             return Err(RoomJoinError::RouterState);
         }
-        let pressure = self.topology_pressure_snapshot(is_new, transport_pressure);
         let topology_result = if is_new {
-            topology.apply_client_join_with_pressure(user_id, connection_id.as_u64(), pressure)
+            topology.apply_client_join_on_placement(user_id, connection_id.as_u64(), home_placement)
         } else {
-            topology.replace_client_session_with_pressure(user_id, connection_id.as_u64(), pressure)
+            topology.replace_client_session_on_placement(
+                user_id,
+                connection_id.as_u64(),
+                home_placement,
+            )
         };
         if let Err(error) = topology_result {
             error!(
@@ -130,34 +132,20 @@ impl RoomState {
             );
             return Err(RoomJoinError::RouterState);
         };
-        let media_worker_id = home_placement.media_worker;
         self.topology = topology;
-        Ok(media_worker_id)
+        Ok(home_placement)
     }
 
-    fn topology_pressure_snapshot(
-        &self,
-        is_new_join: bool,
-        transport_pressure: TransportPlacementPressureSnapshot,
-    ) -> TopologyPressureSnapshot {
-        let receiver_count = self.users.len().saturating_add(usize::from(is_new_join));
-        let max_source_fanout = self
-            .consumer_keys_by_source
-            .values()
-            .map(BTreeSet::len)
-            .max()
-            .unwrap_or_default();
-        TopologyPressureSnapshot {
-            receiver_count,
-            active_consumer_count: self.consumer_index.len(),
-            pending_consumer_count: self.pending_consumer_bootstraps.len(),
-            max_source_fanout,
-            egress_bitrate: transport_pressure.egress_bitrate,
-            packet_loop_lag_ms: transport_pressure.packet_loop_lag_ms,
-            command_backlog_depth: transport_pressure.command_backlog_depth,
-            relay_mailbox_depth: transport_pressure.relay_mailbox_depth,
-            worker_pressure_score: transport_pressure.worker_pressure_score,
-        }
+    #[cfg(test)]
+    fn fallback_join_placement(&self) -> LocalRouterRuntimeContext {
+        self.topology
+            .local_placements()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| LocalRouterRuntimeContext {
+                router: self.topology.primary_router_id(),
+                media_worker: 0,
+            })
     }
 
     fn join_transport_removals(
@@ -217,24 +205,24 @@ impl RoomState {
         sender: OutboundSender,
         emit_joined_fanout: bool,
     ) -> Result<JoinUserOutcome, RoomJoinError> {
-        self.apply_join_with_transport_pressure(
+        self.apply_join_on_placement(
             user_id,
             label,
             permissions,
             sender,
             emit_joined_fanout,
-            TransportPlacementPressureSnapshot::default(),
+            self.fallback_join_placement(),
         )
     }
 
-    pub(in crate::runtime::room) fn apply_join_with_transport_pressure(
+    pub(in crate::runtime::room) fn apply_join_on_placement(
         &mut self,
         user_id: &UserId,
         label: Option<String>,
         permissions: impl Into<RoomUserPermissions>,
         sender: OutboundSender,
         emit_joined_fanout: bool,
-        transport_pressure: TransportPlacementPressureSnapshot,
+        home_placement: LocalRouterRuntimeContext,
     ) -> Result<JoinUserOutcome, RoomJoinError> {
         let permissions = permissions.into();
         let is_new = !self.users.contains_key(user_id);
@@ -242,8 +230,9 @@ impl RoomState {
             return Err(RoomJoinError::RoomFull);
         }
         let connection_id = ConnectionId::allocate(&mut self.next_connection_id);
-        let transport_media_worker_id =
-            self.apply_join_topology(user_id, connection_id, is_new, transport_pressure)?;
+        let transport_home_placement =
+            self.apply_join_topology(user_id, connection_id, is_new, home_placement)?;
+        let transport_media_worker_id = transport_home_placement.media_worker;
         let transport_removals = self.join_transport_removals(user_id, is_new);
 
         let previous_sender =
@@ -289,6 +278,7 @@ impl RoomState {
             connection_id,
             effects,
             user_id: user_id.clone(),
+            transport_home_placement,
             transport_media_worker_id,
             transport_removals,
             relay_effects,

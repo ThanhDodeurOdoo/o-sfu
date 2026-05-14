@@ -1,4 +1,6 @@
-use super::{CleanupInput, HomePlacementDecision, HomePlacementInput, TopologyPressureSnapshot};
+use super::{CleanupInput, TopologyPressureSnapshot};
+#[cfg(test)]
+use super::{HomePlacementDecision, HomePlacementInput};
 use crate::{Bitrate, LocalSpilloverPolicy};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +36,7 @@ impl LoadTriggeredPlacementPolicy {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn choose_home_router(
         &mut self,
         input: HomePlacementInput,

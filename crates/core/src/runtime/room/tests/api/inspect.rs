@@ -166,7 +166,7 @@ impl RoomTestInspect<'_> {
     }
 
     #[must_use]
-    pub const fn media_worker_id(self) -> usize {
+    pub fn media_worker_id(self) -> usize {
         self.room.definition.media_worker_id()
     }
 }

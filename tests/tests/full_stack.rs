@@ -1179,7 +1179,7 @@ async fn assert_load_triggered_spillover_replacement_mute_flow(
         room,
         spillover_subscriber,
         &spillover_subscriber_user_id,
-        0,
+        1,
     )
     .await;
     assert!(replacement.is_some());

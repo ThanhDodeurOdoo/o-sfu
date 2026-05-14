@@ -31,6 +31,7 @@ mod media;
 mod media_transaction;
 mod membership;
 mod outbound;
+mod placement;
 mod recording;
 mod router_state;
 pub mod rtp_capabilities;
@@ -56,7 +57,7 @@ pub use manager::{
     RuntimeRoomStatsSnapshot,
 };
 #[cfg(any(test, feature = "testing-transport"))]
-pub(in crate::runtime::room) use membership::UserCleanup;
+pub(in crate::runtime::room) use membership::{JoinSessionIntent, UserCleanup};
 pub use outbound::{
     DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
     UserOutboundEvent, UserOutboundOverflow, UserOutboundOverflowKind, UserOutboundQueueLimits,

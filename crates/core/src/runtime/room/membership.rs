@@ -26,9 +26,11 @@ use o_sfu_router::MediaCapabilities;
 use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 
+#[cfg(any(test, feature = "testing-transport"))]
+use super::placement::{RoomPlacementDecision, RoomPlacementPlanner, WorkerPlacementLoadSet};
 use super::{
-    BroadcastPayloadError, Room, RoomJoinError, RoomUserPermissions, UserOutbound,
-    UserOutboundSender,
+    BroadcastPayloadError, LocalRouterRuntimeContext, Room, RoomJoinError, RoomUserPermissions,
+    UserOutbound, UserOutboundSender,
     cleanup::{
         CleanupFailureAction, CleanupReconciler, CleanupRetryAction, TransportCleanupOperation,
     },
@@ -39,6 +41,8 @@ use super::{
     },
     user_negotiation::UserNegotiationUpdate,
 };
+#[cfg(any(test, feature = "testing-transport"))]
+use crate::runtime::media_transport::TransportWorkerPressureSnapshot;
 use crate::{
     SessionNegotiationOutcome, TransportEffectOutcome, UserInfoRefresh,
     runtime::{
@@ -46,7 +50,7 @@ use crate::{
         diagnostics::DiagnosticsEventData,
         media_transport::{
             MediaPort, MediaTransport, ObservabilityPort, SessionPort, TransportAdapterError,
-            TransportMediaId, TransportPlacementPressureSnapshot,
+            TransportMediaId,
         },
         metrics::TransportCleanupFailureKind,
     },
@@ -119,6 +123,15 @@ impl<'a> UserCleanup<'a> {
     }
 }
 
+pub(in crate::runtime::room) struct JoinSessionIntent {
+    pub(in crate::runtime::room) user_id: UserId,
+    pub(in crate::runtime::room) label: Option<String>,
+    pub(in crate::runtime::room) permissions: UserPermissions,
+    pub(in crate::runtime::room) sender: UserOutboundSender,
+    pub(in crate::runtime::room) emit_joined_fanout: bool,
+    pub(in crate::runtime::room) home_placement: LocalRouterRuntimeContext,
+}
+
 /// Membership command applied under the `RoomState` lock.
 ///
 /// The enum is local to this module because callers should express intent
@@ -133,7 +146,7 @@ enum UserTransition<'a> {
         permissions: RoomUserPermissions,
         sender: UserOutboundSender,
         emit_joined_fanout: bool,
-        transport_pressure: TransportPlacementPressureSnapshot,
+        home_placement: LocalRouterRuntimeContext,
     },
     /// Close one runtime connection and clean up any matching transport owner.
     Close {
@@ -194,6 +207,7 @@ impl Room {
     /// `RoomFull` is an admission decision made by room state. `RouterState`
     /// means the join could not be mirrored into routing topology, so callers
     /// must treat the join as not committed.
+    #[cfg(test)]
     pub(crate) async fn add_user(
         &self,
         user_id: UserId,
@@ -202,13 +216,78 @@ impl Room {
         sender: UserOutboundSender,
         media_transport: &MediaTransport,
     ) -> Result<ConnectionId, RoomJoinError> {
-        self.join_session_with_cleanup(
+        let home_placement = self.local_join_placement(media_transport).await;
+        self.add_user_on_placement(
             user_id,
             label,
             permissions,
             sender,
+            media_transport,
+            home_placement,
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    async fn local_join_placement(
+        &self,
+        media_transport: &MediaTransport,
+    ) -> LocalRouterRuntimeContext {
+        self.local_join_placement_from_worker_pressure(media_transport.worker_pressure_snapshots())
+            .await
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub(in crate::runtime::room) async fn local_join_placement_from_worker_pressure(
+        &self,
+        pressure_snapshots: Vec<TransportWorkerPressureSnapshot>,
+    ) -> LocalRouterRuntimeContext {
+        let room_snapshot = self.placement_usage_snapshot().await;
+        let policy = self.room_sharding_policy();
+        let mut load_set =
+            WorkerPlacementLoadSet::new(policy.max_local_routers(), pressure_snapshots);
+        let contribution = self.worker_load_contribution().await;
+        for media_worker_id in contribution.session_workers {
+            load_set.record_session(media_worker_id);
+        }
+        for media_worker_id in contribution.consumer_workers {
+            load_set.record_consumer(media_worker_id);
+        }
+        let planner = RoomPlacementPlanner::new(policy.max_local_routers(), policy);
+        match planner.choose(&room_snapshot, &load_set.into_loads()) {
+            RoomPlacementDecision::AssignPrimary { media_worker_id } => LocalRouterRuntimeContext {
+                router: room_snapshot.primary_router(),
+                media_worker: media_worker_id,
+            },
+            RoomPlacementDecision::UseExisting(placement) => placement,
+            RoomPlacementDecision::AllocateSpillover { media_worker_id } => {
+                LocalRouterRuntimeContext {
+                    router: room_snapshot.next_local_router_id(),
+                    media_worker: media_worker_id,
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn add_user_on_placement(
+        &self,
+        user_id: UserId,
+        label: Option<String>,
+        permissions: UserPermissions,
+        sender: UserOutboundSender,
+        media_transport: &MediaTransport,
+        home_placement: LocalRouterRuntimeContext,
+    ) -> Result<ConnectionId, RoomJoinError> {
+        self.join_session_with_cleanup(
+            JoinSessionIntent {
+                user_id,
+                label,
+                permissions,
+                sender,
+                emit_joined_fanout: true,
+                home_placement,
+            },
             UserCleanup::runtime(media_transport),
-            true,
         )
         .await
     }
@@ -223,16 +302,17 @@ impl Room {
     /// been released.
     pub(in crate::runtime::room) async fn join_session_with_cleanup(
         &self,
-        user_id: UserId,
-        label: Option<String>,
-        permissions: UserPermissions,
-        sender: UserOutboundSender,
+        intent: JoinSessionIntent,
         cleanup: UserCleanup<'_>,
-        emit_joined_fanout: bool,
     ) -> Result<ConnectionId, RoomJoinError> {
-        let transport_pressure = self
-            .transport_placement_pressure_snapshot(cleanup.media_transport())
-            .await;
+        let JoinSessionIntent {
+            user_id,
+            label,
+            permissions,
+            sender,
+            emit_joined_fanout,
+            home_placement,
+        } = intent;
         let UserTransitionResult::Joined(connection_id) = self
             .run_session_transition(
                 UserTransition::Join {
@@ -241,7 +321,7 @@ impl Room {
                     permissions: permissions.into(),
                     sender,
                     emit_joined_fanout,
-                    transport_pressure,
+                    home_placement,
                 },
                 cleanup,
             )
@@ -250,24 +330,6 @@ impl Room {
             return Err(RoomJoinError::RouterState);
         };
         Ok(connection_id)
-    }
-
-    async fn transport_placement_pressure_snapshot(
-        &self,
-        media_transport: Option<&MediaTransport>,
-    ) -> TransportPlacementPressureSnapshot {
-        let Some(media_transport) = media_transport else {
-            return TransportPlacementPressureSnapshot::default();
-        };
-        let session_keys = {
-            let state = self.state.read().await;
-            state
-                .transport_user_entries()
-                .into_iter()
-                .map(|(user_id, connection_id)| self.transport_user_key(&user_id, connection_id))
-                .collect::<Vec<_>>()
-        };
-        media_transport.placement_pressure_snapshot(&session_keys)
     }
 
     /// Close one user connection through the production cleanup path.
@@ -820,17 +882,17 @@ impl Room {
                 permissions,
                 sender,
                 emit_joined_fanout,
-                transport_pressure,
+                home_placement,
             } => {
                 let outcome = {
                     let mut state = self.state.write().await;
-                    state.apply_join_with_transport_pressure(
+                    state.apply_join_on_placement(
                         user_id,
                         label,
                         permissions,
                         sender,
                         emit_joined_fanout,
-                        transport_pressure,
+                        home_placement,
                     )?
                 };
                 UserTransitionOutcome::Join(outcome)
@@ -901,7 +963,7 @@ impl Room {
     ) -> UserTransitionResult {
         let connection_id = outcome.connection_id;
         self.definition
-            .register_transport_worker(connection_id, outcome.transport_media_worker_id);
+            .register_transport_placement(connection_id, outcome.transport_home_placement);
         if let Some(media_transport) = cleanup.media_transport()
             && cleanup.cleans_transport_state()
         {
