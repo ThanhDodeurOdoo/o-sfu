@@ -29,7 +29,7 @@ use tracing::warn;
 use super::super::media_registry::RegisteredMediaHandle;
 use super::super::{
     simulcast,
-    state::{RtcBootstrapState, RtcSessionState},
+    state::{PacketLoopState, RtcSessionState},
 };
 #[cfg(test)]
 use crate::runtime::media_transport::{TransportAdapterError, TransportMediaId};
@@ -37,7 +37,7 @@ use crate::{Bitrate, runtime::media_transport::TransportSessionKey};
 
 #[cfg(test)]
 pub(super) fn respond_resolve_negotiated_producer_parameters(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
     response: oneshot::Sender<Result<RouterRtpParameters, TransportAdapterError>>,
@@ -50,7 +50,7 @@ pub(super) fn respond_resolve_negotiated_producer_parameters(
 }
 
 pub(super) fn refresh_negotiated_producer_parameters(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
     producer_mids: &[Mid],
     answer_sdp: &str,
@@ -198,7 +198,7 @@ fn apply_projected_recv_stream(
 /// projection has populated them for the owning user.
 #[cfg(test)]
 fn worker_resolve_negotiated_producer_parameters(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
 ) -> Result<RouterRtpParameters, TransportAdapterError> {

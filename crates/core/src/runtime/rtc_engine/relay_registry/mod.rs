@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use tokio::sync::mpsc;
 
-use super::{forwarded_packet::ForwardedPacket, state::RtcBootstrapState};
+use super::{forwarded_packet::ForwardedPacket, state::PacketLoopState};
 use crate::runtime::media_transport::TransportMediaId;
 
 #[cfg(any(test, feature = "testing-transport"))]
@@ -230,7 +230,7 @@ pub(super) type RelaySourceRegistration = RelayTargetRegistry<RelayTargetId, Rel
 /// sends from the same source media id:
 ///
 /// ```text
-/// W0 RtcBootstrapState
+/// W0 PacketLoopState
 ///
 ///   source_media_id A
 ///        |
@@ -243,7 +243,7 @@ pub(super) type RelaySourceRegistration = RelayTargetRegistry<RelayTargetId, Rel
 ///
 /// Relay sends use bounded `try_send`; overload drops are counted at the
 /// packet-loop forwarding boundary instead of blocking the source worker.
-impl RtcBootstrapState {
+impl PacketLoopState {
     pub(super) fn relay_targets_for_source(
         &self,
         source_transport_media_id: TransportMediaId,

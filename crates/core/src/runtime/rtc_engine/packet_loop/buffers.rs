@@ -7,7 +7,7 @@
 //! logical length while keeping capacity.
 //!
 //! The buffers do not own durable routing state. Durable state stays in
-//! `RtcBootstrapState`, `RtcSnapshotState`, worker-local relay target maps or
+//! `PacketLoopState`, `RtcSnapshotState`, worker-local relay target maps or
 //! packet sinks.
 //! Values stored here are staged work that must either be flushed during the
 //! current turn or dropped as part of clearing the turn.

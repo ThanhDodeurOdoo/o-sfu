@@ -4,7 +4,7 @@ use super::super::{
     demux::{MediaRouteDestination, MediaRouteEntry},
     media_registry::RegisteredMediaHandle,
     route_control::PacketLayerGate,
-    state::RtcBootstrapState,
+    state::PacketLoopState,
 };
 use crate::runtime::media_transport::{TransportMediaId, TransportSessionKey};
 
@@ -40,7 +40,7 @@ impl RouteSourceFixture {
 
     pub(in crate::runtime::rtc_engine) fn install(
         self,
-        state: &mut RtcBootstrapState,
+        state: &mut PacketLoopState,
     ) -> TransportMediaId {
         let Self {
             session_key,
@@ -102,7 +102,7 @@ impl RouteDestinationFixture {
 
     pub(in crate::runtime::rtc_engine) fn install(
         self,
-        state: &mut RtcBootstrapState,
+        state: &mut PacketLoopState,
         source_transport_media_id: TransportMediaId,
     ) -> TransportMediaId {
         let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Consumer {

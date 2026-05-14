@@ -24,7 +24,7 @@ use crate::runtime::{
         forwarding_destination::{ForwardingDestination, PacketForward},
         relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayTargetId},
         route_control::{PacketLayerGate, PacketOperatingPointGate},
-        state::RtcBootstrapState,
+        state::PacketLoopState,
         test_support::{
             RouteDestinationFixture, RouteSourceFixture, sample_forwarded_packet,
             sample_forwarded_packet_with_frame_mark, sample_forwarded_packet_with_rid,
@@ -58,7 +58,7 @@ impl MediaPacketSink for CountingSink {
 }
 
 fn populate_forward_routes(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     packet_sinks: &impl PacketSinkLookup,
     metrics: &RuntimeMetrics,
     pending_packets: &mut [ForwardedPacket],
@@ -90,7 +90,7 @@ fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() 
         ConnectionId::from_raw(13),
         UserId::Integer(15),
     );
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id =
@@ -126,7 +126,7 @@ fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() 
 fn populate_forward_routes_keeps_recording_and_local_rtc_destinations_together() {
     let producer_session = test_transport_session_key(21, 0, 22, UserId::Integer(23));
     let consumer_session = test_transport_session_key(21, 0, 22, UserId::Integer(24));
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let sink = Arc::new(CountingSink::new());
@@ -172,7 +172,7 @@ fn populate_forward_routes_reserves_dense_fanout_before_pushing_destinations() {
 
     let producer_session = test_transport_session_key(25, 0, 26, UserId::Integer(27));
     let consumer_session = test_transport_session_key(25, 0, 28, UserId::Integer(29));
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id =
@@ -204,7 +204,7 @@ fn populate_forward_routes_reserves_dense_fanout_before_pushing_destinations() {
 fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc_flush_order() {
     let producer_session = test_transport_session_key(31, 0, 32, UserId::Integer(33));
     let consumer_session = test_transport_session_key(31, 0, 32, UserId::Integer(34));
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let recording_sink = Arc::new(CountingSink::new());
@@ -270,7 +270,7 @@ fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc
 fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_relay_sinks() {
     let producer_session = test_transport_session_key(41, 0, 42, UserId::Integer(43));
     let consumer_session = test_transport_session_key(41, 1, 44, UserId::Integer(45));
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let recording_sink = Arc::new(CountingSink::new());
@@ -322,7 +322,7 @@ fn populate_forward_routes_only_relays_the_registered_source_media() {
     let first_producer_session = test_transport_session_key(52, 0, 53, UserId::Integer(54));
     let second_producer_session = test_transport_session_key(52, 0, 53, UserId::Integer(55));
     let remote_consumer_session = test_transport_session_key(52, 1, 56, UserId::Integer(57));
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
@@ -375,7 +375,7 @@ fn populate_forward_routes_only_relays_the_registered_source_media() {
 #[test]
 fn populate_forward_routes_plans_inter_node_relay_targets_without_new_packet_shape() {
     let producer_session = test_transport_session_key(58, 0, 59, UserId::Integer(60));
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let (inter_node_sender, _inter_node_rx) = InterNodeRelaySender::channel_for_test();
@@ -421,7 +421,7 @@ fn populate_forward_routes_enforces_per_consumer_rid_gates_after_aggregate_admit
     let producer_session = test_transport_session_key(81, 0, 82, UserId::Integer(83));
     let lo_consumer_session = test_transport_session_key(81, 0, 82, UserId::Integer(84));
     let hi_consumer_session = test_transport_session_key(81, 0, 82, UserId::Integer(85));
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id =
@@ -479,7 +479,7 @@ fn populate_forward_routes_enforces_per_consumer_temporal_ceilings_after_aggrega
     let producer_session = test_transport_session_key(86, 0, 87, UserId::Integer(88));
     let base_consumer_session = test_transport_session_key(86, 0, 87, UserId::Integer(89));
     let high_consumer_session = test_transport_session_key(86, 0, 87, UserId::Integer(90));
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id =
@@ -554,7 +554,7 @@ fn populate_forward_routes_enforces_per_consumer_temporal_ceilings_after_aggrega
 #[test]
 fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admits() {
     let producer_session = test_transport_session_key(91, 0, 92, UserId::Integer(93));
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let (intra_node_mailbox, _intra_node_rx) = RelayPacketMailbox::channel_for_test();
@@ -630,7 +630,7 @@ fn populate_forward_routes_gates_only_the_selected_source_media() {
     let open_producer_session = test_transport_session_key(61, 0, 62, UserId::Integer(64));
     let gated_consumer_session = test_transport_session_key(61, 0, 62, UserId::Integer(65));
     let open_consumer_session = test_transport_session_key(61, 0, 62, UserId::Integer(66));
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let recording_sink = Arc::new(CountingSink::new());
@@ -703,7 +703,7 @@ fn populate_forward_routes_gates_only_the_selected_source_media() {
 fn populate_forward_routes_applies_operating_point_packet_gates() {
     let producer_session = test_transport_session_key(71, 0, 72, UserId::Integer(73));
     let consumer_session = test_transport_session_key(71, 0, 72, UserId::Integer(74));
-    let mut state = RtcBootstrapState::default();
+    let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let source_transport_media_id =

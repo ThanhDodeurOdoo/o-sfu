@@ -7,12 +7,12 @@ use crate::runtime::{
         demux::MediaRouteEntry,
         relay_registry::{RelayTargetId, RelayTargetTransport},
         route_control::PacketLayerGate,
-        state::RtcBootstrapState,
+        state::PacketLoopState,
     },
 };
 
 pub(super) fn remove_relay_target(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_transport_media_id: TransportMediaId,
     target_id: RelayTargetId,
 ) {
@@ -20,7 +20,7 @@ pub(super) fn remove_relay_target(
 }
 
 pub(super) fn set_remote_source_packet_gate(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     target_id: RelayTargetId,
@@ -37,7 +37,7 @@ pub(super) fn set_remote_source_packet_gate(
 }
 
 pub(super) fn worker_add_relay_target(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     target_id: RelayTargetId,
@@ -49,7 +49,7 @@ pub(super) fn worker_add_relay_target(
 }
 
 pub(super) fn worker_set_relay_target_active(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     target_id: RelayTargetId,

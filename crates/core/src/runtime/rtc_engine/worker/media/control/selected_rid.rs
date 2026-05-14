@@ -19,7 +19,7 @@ use crate::runtime::{
         demux::{MediaRouteDestination, MediaRouteEntry},
         media_registry::RegisteredMediaHandle,
         route_control::{KeyframeRequestDecision, PacketLayerGate},
-        state::{RidReadinessScratch, RtcBootstrapState},
+        state::{PacketLoopState, RidReadinessScratch},
     },
 };
 
@@ -96,7 +96,7 @@ const SELECTED_RID_KEYFRAME_RETRY_DELAYS: [Duration; 5] = [
 /// keyframe refreshes. Room policy remains the owner of which RID is selected.
 #[cfg(test)]
 pub fn observe_source_rid_readiness(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
@@ -132,7 +132,7 @@ pub fn observe_source_rid_readiness(
 /// turn. That keeps route scans proportional to unique readiness changes rather
 /// than packet count while preserving per-packet liveness updates.
 pub(in crate::runtime::rtc_engine) fn apply_source_rid_readiness(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
@@ -209,11 +209,11 @@ pub(in crate::runtime::rtc_engine) fn apply_source_rid_readiness(
 
 /// Drain selected-RID keyframe retries whose packet-loop deadlines have passed.
 ///
-/// Retries live in `RtcBootstrapState` so they can fire even if the selected
+/// Retries live in `PacketLoopState` so they can fire even if the selected
 /// RID does not keep sending packets. Missing source ownership is expected
 /// after teardown and is handled as a dropped best-effort refresh.
 pub fn drain_due_rid_keyframe_refreshes(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     now: Instant,
 ) {
@@ -252,7 +252,7 @@ pub fn drain_due_rid_keyframe_refreshes(
 /// the target selected by room policy. Keeping both lets bootstrap forwarding
 /// stay decodable without losing the receiver's intended layer.
 pub(super) fn guarded_packet_gate(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_transport_media_id: TransportMediaId,
     packet_gate: PacketLayerGate,
     now: Instant,
@@ -284,7 +284,7 @@ pub(super) fn guarded_packet_gate(
 /// route pass makes the packet-loop cost proportional to the source fanout once
 /// per observed RID packet instead of once per sub-decision.
 fn update_rid_readiness_routes(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_transport_media_id: TransportMediaId,
     incoming_rid: Rid,
     is_keyframe: bool,
@@ -437,7 +437,7 @@ fn add_unique_rid(rids: &mut Vec<Rid>, rid: Rid) {
 }
 
 fn request_live_rid_keyframe(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
@@ -514,7 +514,7 @@ fn request_live_rid_keyframe(
 }
 
 fn schedule_live_rid_keyframe_retries(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_transport_media_id: TransportMediaId,
     rid: Rid,
     now: Instant,
@@ -531,7 +531,7 @@ fn schedule_live_rid_keyframe_retries(
 }
 
 fn drain_live_rid_keyframe_retries(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
@@ -559,7 +559,7 @@ fn drain_live_rid_keyframe_retries(
 }
 
 fn keyframe_refresh_source_session(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_transport_media_id: TransportMediaId,
 ) -> Option<TransportSessionKey> {
     match state.media_handle(source_transport_media_id) {

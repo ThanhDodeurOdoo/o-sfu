@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::state::RtcBootstrapState;
+use super::state::PacketLoopState;
 use crate::{
     Bitrate,
     runtime::media_transport::{TransportBitrateSnapshot, TransportMediaId, TransportSessionKey},
@@ -130,12 +130,12 @@ impl SessionIncomingBitrates {
 }
 
 #[derive(Debug, Default)]
-pub struct RtcBitrateState {
+pub struct BitrateRegistry {
     pub(super) incoming_bitrates_by_session: BTreeMap<TransportSessionKey, SessionIncomingBitrates>,
     pub(super) egress_bitrates_by_session: BTreeMap<TransportSessionKey, Arc<MediaBitrateCounter>>,
 }
 
-impl RtcBitrateState {
+impl BitrateRegistry {
     pub(super) fn register_incoming_media(
         &mut self,
         session_key: &TransportSessionKey,
@@ -209,7 +209,7 @@ impl RtcBitrateState {
     }
 }
 
-impl RtcBootstrapState {
+impl PacketLoopState {
     pub(super) fn register_incoming_bitrate_counter(
         &mut self,
         transport_media_id: TransportMediaId,
@@ -326,7 +326,7 @@ mod tests {
     fn egress_bitrate_snapshot_reports_recent_session_bits() {
         let now = Instant::now();
         let session_key = test_transport_session_key(0, 0, 0, UserId::Integer(7));
-        let mut state = RtcBitrateState::default();
+        let mut state = BitrateRegistry::default();
         let counter = state.register_session_egress(&session_key, now);
 
         assert!(counter.record(now, 125));
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn removing_session_hides_registered_counters_from_snapshots() {
-        let mut state = RtcBitrateState::default();
+        let mut state = BitrateRegistry::default();
         let now = Instant::now();
         let session_key = test_transport_session_key(1, 0, 2, UserId::Integer(3));
         let media_id = TransportMediaId::new(4);
@@ -395,20 +395,20 @@ mod tests {
 
     #[test]
     fn packet_loop_counter_write_does_not_need_the_snapshot_lock() {
-        let mut shared_state = RtcBitrateState::default();
-        let mut bootstrap_state = RtcBootstrapState::default();
+        let mut shared_registry = BitrateRegistry::default();
+        let mut packet_loop_state = PacketLoopState::default();
         let now = Instant::now();
         let session_key = test_transport_session_key(1, 0, 2, UserId::Integer(3));
         let media_id = TransportMediaId::new(4);
-        let counter = shared_state.register_incoming_media(&session_key, media_id, now);
-        bootstrap_state.register_incoming_bitrate_counter(media_id, counter);
-        let shared_state = Mutex::new(shared_state);
-        let Ok(_snapshot_guard) = shared_state.lock() else {
+        let counter = shared_registry.register_incoming_media(&session_key, media_id, now);
+        packet_loop_state.register_incoming_bitrate_counter(media_id, counter);
+        let shared_registry = Mutex::new(shared_registry);
+        let Ok(_snapshot_guard) = shared_registry.lock() else {
             return;
         };
 
         assert_eq!(
-            bootstrap_state.record_incoming_bitrate(media_id, now, 32),
+            packet_loop_state.record_incoming_bitrate(media_id, now, 32),
             Some(true)
         );
     }

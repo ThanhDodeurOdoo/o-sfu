@@ -3,7 +3,7 @@
 //! This module contain the async task that ties the RTC worker together. It is the
 //! only packet-loop file that awaits socket I/O or worker-channel input. The
 //! rest of the packet-loop modules are synchronous helpers that run while the
-//! worker owns mutable access to `RtcBootstrapState`.
+//! worker owns mutable access to `PacketLoopState`.
 //!
 //! The driver preserves the worker ordering contract:
 //!
@@ -30,11 +30,11 @@ use tracing::warn;
 
 use super::{
     super::{
-        bitrate::RtcBitrateState,
+        bitrate::BitrateRegistry,
         forwarded_packet::ForwardedPacket,
         forwarding_planner::populate_forward_routes_for_packet,
         routing_miss::PacketLoopRoutingState,
-        state::{RtcBootstrapState, RtcSnapshotState},
+        state::{PacketLoopState, RtcSnapshotState},
         worker::{WorkerCommandContext, drain_due_rid_keyframe_refreshes},
     },
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers, RECEIVE_BUFFER_LEN},
@@ -60,7 +60,7 @@ use crate::{
 /// The config is built by `RtcTransportShard` when the worker is booted. Values
 /// copied into session creation are immutable shard settings. `Arc` fields are
 /// shared services that the packet loop may update or query without exposing
-/// direct access to `RtcBootstrapState`.
+/// direct access to `PacketLoopState`.
 pub(in crate::runtime::rtc_engine) struct PacketLoopConfig {
     /// Public ICE-lite address advertised by sessions created on this shard.
     pub public_ip: IpAddr,
@@ -102,7 +102,7 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopConfig {
 /// Socket snapshot used for the wait phase of one packet-loop turn.
 ///
 /// The `Arc<UdpSocket>` is cloned before the loop awaits so no borrow of
-/// `RtcBootstrapState` crosses an await point. `next_timeout` is computed from
+/// `PacketLoopState` crosses an await point. `next_timeout` is computed from
 /// dirty sessions, `str0m` timeouts and delayed selected-RID keyframe refreshes.
 struct SnapshotInfo {
     socket: Arc<UdpSocket>,
@@ -134,8 +134,8 @@ struct PacketLoopTurnContext {
 }
 
 struct PacketLoopApplyContext<'a> {
-    bootstrap_state: &'a mut RtcBootstrapState,
-    bitrate_state: &'a Arc<Mutex<RtcBitrateState>>,
+    packet_loop_state: &'a mut PacketLoopState,
+    bitrate_registry: &'a Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
     config: &'a PacketLoopConfig,
     routing_state: &'a mut PacketLoopRoutingState,
@@ -168,7 +168,7 @@ const MAX_READY_NOW_INPUTS_BEFORE_YIELD: usize = 32;
 ///
 /// # Concurrency
 ///
-/// This task owns `RtcBootstrapState`, routing hints, the UDP receive buffer and
+/// This task owns `PacketLoopState`, routing hints, the UDP receive buffer and
 /// `PacketLoopBuffers`. Other tasks communicate with it through channels,
 /// shared read-side snapshots and cancellation. No `MutexGuard` is held across
 /// socket sends or receives.
@@ -181,13 +181,13 @@ const MAX_READY_NOW_INPUTS_BEFORE_YIELD: usize = 32;
 /// ingress indefinitely.
 pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
     config: PacketLoopConfig,
-    bitrate_state: Arc<Mutex<RtcBitrateState>>,
+    bitrate_registry: Arc<Mutex<BitrateRegistry>>,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     mut inputs: PacketLoopInputReceivers,
 ) {
-    let mut bootstrap_state = RtcBootstrapState {
+    let mut packet_loop_state = PacketLoopState {
         next_media_id: config.media_id_base,
-        ..RtcBootstrapState::default()
+        ..PacketLoopState::default()
     };
     let mut routing_state = PacketLoopRoutingState::new();
     let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
@@ -195,8 +195,8 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
 
     loop {
         if !drain_queued_control_inputs(
-            &mut bootstrap_state,
-            &bitrate_state,
+            &mut packet_loop_state,
+            &bitrate_registry,
             &snapshot_state,
             &config,
             &mut inputs,
@@ -206,7 +206,7 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
         }
 
         let snapshot = snapshot_and_pump(
-            &mut bootstrap_state,
+            &mut packet_loop_state,
             &snapshot_state,
             &config,
             inputs.relay_rx(),
@@ -238,8 +238,8 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
         }
 
         let mut apply_context = PacketLoopApplyContext {
-            bootstrap_state: &mut bootstrap_state,
-            bitrate_state: &bitrate_state,
+            packet_loop_state: &mut packet_loop_state,
+            bitrate_registry: &bitrate_registry,
             snapshot_state: &snapshot_state,
             config: &config,
             routing_state: &mut routing_state,
@@ -273,8 +273,8 @@ async fn flush_staged_transmits(socket: &UdpSocket, buffers: &PacketLoopBuffers)
 }
 
 fn drain_queued_control_inputs(
-    bootstrap_state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    packet_loop_state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: &PacketLoopConfig,
     inputs: &mut PacketLoopInputReceivers,
@@ -288,8 +288,8 @@ fn drain_queued_control_inputs(
             return true;
         };
         handle_control_input_and_clear_routing_cache(
-            bootstrap_state,
-            bitrate_state,
+            packet_loop_state,
+            bitrate_registry,
             snapshot_state,
             config,
             input,
@@ -316,8 +316,8 @@ fn apply_ingress_for_next_turn(
         NextLoopInput::ReadyNow => {}
         NextLoopInput::Control(command) => {
             handle_control_input_and_clear_routing_cache(
-                context.bootstrap_state,
-                context.bitrate_state,
+                context.packet_loop_state,
+                context.bitrate_registry,
                 context.snapshot_state,
                 context.config,
                 command,
@@ -347,7 +347,7 @@ fn route_received_datagram(
         return;
     };
     route_packet_to_matching_session(
-        context.bootstrap_state,
+        context.packet_loop_state,
         context.snapshot_state,
         context.routing_state,
         &context.config.rtc_metrics,
@@ -364,17 +364,17 @@ fn route_received_datagram(
 /// ingress routing state. This is conservative because control input can change
 /// which session owns a source tuple or ICE username fragment.
 fn handle_control_input_and_clear_routing_cache(
-    bootstrap_state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    packet_loop_state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: &PacketLoopConfig,
     command: PacketLoopControlInput,
     routing_state: &mut PacketLoopRoutingState,
 ) {
     command.dispatch(
-        bootstrap_state,
+        packet_loop_state,
         &WorkerCommandContext {
-            bitrate_state,
+            bitrate_registry,
             snapshot_state,
             now: Instant::now(),
             public_ip: config.public_ip,
@@ -400,7 +400,7 @@ fn handle_control_input_and_clear_routing_cache(
 /// opened a shared socket yet, the function clears staged buffers and returns
 /// without polling media.
 fn snapshot_and_pump(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: &PacketLoopConfig,
     relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
@@ -480,7 +480,7 @@ fn record_packet_loop_lag(
 /// Dirty sessions are always due immediately because a previous input or local
 /// send has queued more `str0m` output. Otherwise the deadline is the earlier of
 /// the next `str0m` timeout and the next delayed selected-RID keyframe refresh.
-pub(super) fn next_timeout_deadline(state: &mut RtcBootstrapState) -> Option<Instant> {
+pub(super) fn next_timeout_deadline(state: &mut PacketLoopState) -> Option<Instant> {
     if state.has_dirty_sessions() {
         return Some(Instant::now());
     }

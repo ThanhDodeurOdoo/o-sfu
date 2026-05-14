@@ -19,7 +19,7 @@ use crate::runtime::{
         media_registry::RegisteredMediaHandle,
         route_control::{PacketLayerGate, aggregate_packet_gates},
         simulcast,
-        state::RtcBootstrapState,
+        state::PacketLoopState,
     },
 };
 
@@ -45,7 +45,7 @@ pub(in crate::runtime::rtc_engine::worker::media) struct ConsumerRouteRegistrati
 }
 
 fn consumer_packet_gate_for_source(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_transport_media_id: TransportMediaId,
     consumer_rtp_parameters: &RouterRtpParameters,
     now: Instant,
@@ -64,7 +64,7 @@ fn consumer_packet_gate_for_source(
 /// are registered with relay control so later source-gate updates can be pushed
 /// back to the worker that owns the producer.
 pub(in crate::runtime::rtc_engine::worker::media) fn ensure_route_source_registered(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     route_owner_session_key: &TransportSessionKey,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
@@ -80,7 +80,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn ensure_route_source_registe
 }
 
 pub(in crate::runtime::rtc_engine::worker::media) fn ensure_existing_route_source(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     route_owner_session_key: &TransportSessionKey,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
@@ -107,7 +107,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn ensure_existing_route_sourc
 /// the room-selected target attached to the destination while the effective
 /// gate remains blocked or temporarily points at one decodable fallback RID.
 pub(in crate::runtime::rtc_engine::worker::media) fn register_consumer_route(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     registration: ConsumerRouteRegistration<'_>,
 ) {
     let ConsumerRouteRegistration {
@@ -160,7 +160,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn consumer_payload_type(
 }
 
 pub(in crate::runtime::rtc_engine::worker::media) fn remove_consumer_route(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     consumer_session_key: &TransportSessionKey,
     consumer_transport_media_id: TransportMediaId,
     source_transport_media_id: TransportMediaId,
@@ -192,7 +192,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn remove_consumer_route(
 /// Join resume, pause and removal all converge here so local forwarding and
 /// remote relay control immediately see the same effective route selection.
 pub(in crate::runtime::rtc_engine::worker) fn refresh_source_packet_gate(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_transport_media_id: TransportMediaId,
 ) {
     let route_entry = state.media_route_index.get(&source_transport_media_id);
@@ -214,7 +214,7 @@ pub(in crate::runtime::rtc_engine::worker) fn refresh_source_packet_gate(
 }
 
 pub(in crate::runtime::rtc_engine::worker::media) fn owned_local_producer_mid(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
 ) -> Option<Mid> {
@@ -222,7 +222,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn owned_local_producer_mid(
 }
 
 pub(super) fn worker_set_producer_active(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
     active: bool,
@@ -237,7 +237,7 @@ pub(super) fn worker_set_producer_active(
 }
 
 pub(super) fn worker_set_consumer_active(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     consumer_session_key: &TransportSessionKey,
     consumer_transport_media_id: TransportMediaId,
     source_session_key: &TransportSessionKey,
@@ -298,7 +298,7 @@ pub(super) fn worker_set_consumer_active(
 /// after user replacement or route cleanup. The source aggregate is refreshed
 /// only when the destination gate actually changed
 pub(super) fn worker_set_consumer_packet_gate(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     request: ConsumerPacketGateRequest<'_>,
     now: Instant,
 ) -> Result<(), TransportAdapterError> {
@@ -317,7 +317,7 @@ pub(super) fn worker_set_consumer_packet_gate(
 }
 
 pub(super) fn worker_set_consumer_packet_gates(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     updates: Vec<ConsumerPacketGateCommand>,
@@ -350,7 +350,7 @@ pub(super) fn worker_set_consumer_packet_gates(
 }
 
 fn update_consumer_packet_gate(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     consumer_session_key: &TransportSessionKey,
     consumer_transport_media_id: TransportMediaId,
     source_session_key: &TransportSessionKey,
@@ -422,7 +422,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn packet_gate_rid(
 }
 
 fn ensure_route_source(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     route_owner_session_key: &TransportSessionKey,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
@@ -457,7 +457,7 @@ fn ensure_route_source(
 }
 
 pub(super) fn ensure_owned_local_producer_mid(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
 ) -> Result<Mid, TransportAdapterError> {

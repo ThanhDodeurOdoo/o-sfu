@@ -11,7 +11,7 @@
 //!
 //! # Hot-path contract
 //!
-//! Planning runs inside the worker packet loop while the RTC bootstrap state is
+//! Planning runs inside the worker packet loop while the packet-loop state is
 //! borrowed. It must avoid async work, broad scans and steady-state allocation.
 //! `PacketLoopBuffers` keeps the destination list across iterations, so this
 //! module may reserve the known fanout bound but must not create detached
@@ -31,7 +31,7 @@ use super::{
     forwarding_destination::PacketForward,
     relay_registry::{ActiveRelayTarget, RelayTargetId, RelayTargetTransport},
     route_control::{PacketLayerMetadata, PacketRouteDecision},
-    state::RtcBootstrapState,
+    state::PacketLoopState,
 };
 use crate::runtime::{
     media_transport::TransportMediaId as RouteTransportMediaId,
@@ -49,7 +49,7 @@ use crate::runtime::{
 /// their source worker. Relayed packets already consumed those source-side
 /// effects and must not be sent back into second-hop relay sinks.
 pub(super) fn populate_forward_routes_for_packet(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     packet_sinks: &impl PacketSinkLookup,
     metrics: &impl RtcRouteControlMetrics,
     packet_idx: usize,
@@ -147,7 +147,7 @@ fn reserve_forward_capacity(
 /// selected-layer and server-owned source gates authoritative for every
 /// downstream destination.
 fn source_packet_gate_permits(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     source_transport_media_id: RouteTransportMediaId,
     metadata: PacketLayerMetadata,
@@ -174,7 +174,7 @@ fn source_packet_gate_permits(
 /// route control decides whether the current packet layer is allowed for each
 /// target.
 fn populate_relay_forwards(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     relay_targets: Option<&[ActiveRelayTarget<RelayTargetId, RelayTargetTransport>]>,
     packet_idx: usize,
     source_transport_media_id: RouteTransportMediaId,
@@ -293,7 +293,7 @@ fn destination_packet_gate_permits(
 /// the source-wide gate. This keeps newly activated relay targets open until
 /// room or transport policy installs a narrower packet gate.
 fn relay_target_gate_permits(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_transport_media_id: RouteTransportMediaId,
     target_id: RelayTargetId,
     metadata: PacketLayerMetadata,

@@ -8,7 +8,7 @@ use str0m::{
 
 use super::{
     local_forwarding::LocalForwardedRtp, media_registry::DecoderRefreshCodec,
-    route_control::PacketLayerMetadata, shared_payload::SharedPayload, state::RtcBootstrapState,
+    route_control::PacketLayerMetadata, shared_payload::SharedPayload, state::PacketLoopState,
 };
 use crate::runtime::media_transport::{TransportMediaId, TransportSessionKey};
 
@@ -75,7 +75,7 @@ impl ForwardedPacket {
 
     pub(super) fn resolve_route_control_layer_metadata(
         &mut self,
-        state: &RtcBootstrapState,
+        state: &PacketLoopState,
     ) -> PacketLayerMetadata {
         let extensions = self.route_control_extension_values();
         let extension_rid = extensions.rid.or(extensions.rid_repair);
@@ -97,7 +97,7 @@ impl ForwardedPacket {
 
     pub(super) fn route_control_decoder_refresh(
         &self,
-        state: &RtcBootstrapState,
+        state: &PacketLoopState,
         source_transport_media_id: TransportMediaId,
     ) -> bool {
         match state.source_decoder_refresh_codec(source_transport_media_id) {
@@ -159,7 +159,7 @@ impl ForwardedPacket {
 
     pub(super) fn resolve_source_transport_media_id(
         &mut self,
-        state: &RtcBootstrapState,
+        state: &PacketLoopState,
     ) -> Option<TransportMediaId> {
         if let Some(source_transport_media_id) = self.source_transport_media_id {
             return Some(source_transport_media_id);
@@ -214,7 +214,7 @@ impl ForwardedPacket {
         }
     }
 
-    fn route_control_rid_from_ssrc(&self, state: &RtcBootstrapState) -> Option<Rid> {
+    fn route_control_rid_from_ssrc(&self, state: &PacketLoopState) -> Option<Rid> {
         let source_ssrc = match &self.data {
             ForwardedPacketData::Str0mRtp(rtp_data) => rtp_data.rtp_packet.header.ssrc,
             ForwardedPacketData::RelayRtp(rtp_data) => rtp_data.header.ssrc,
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn forwarded_packet_resolves_transport_media_id_through_the_registry() {
         let session_key = test_transport_session_key(41, 0, 9, UserId::Integer(7));
-        let mut state = RtcBootstrapState::default();
+        let mut state = PacketLoopState::default();
         let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
             session_key: session_key.clone(),
             mid: Mid::from("aud-up"),
@@ -276,7 +276,7 @@ mod tests {
     fn forwarded_packet_detects_h264_idr_for_decoder_refresh() {
         let session_key = test_transport_session_key(48, 0, 16, UserId::Integer(14));
         let producer_mid = Mid::from("cam-up");
-        let mut state = RtcBootstrapState::default();
+        let mut state = PacketLoopState::default();
         let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 47_000));
         assert!(
             bootstrap::ensure_session_rtc_state(
@@ -318,7 +318,7 @@ mod tests {
     fn forwarded_packet_detects_relayed_h264_idr_from_cached_source_facts() {
         let session_key = test_transport_session_key(49, 0, 17, UserId::Integer(15));
         let source_transport_media_id = TransportMediaId::new(23);
-        let mut state = RtcBootstrapState::default();
+        let mut state = PacketLoopState::default();
         state.refresh_source_decoder_refresh_codec(
             source_transport_media_id,
             &RouterRtpParameters::new(
@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(relay_packet.source_session_key(), &session_key);
         assert_eq!(relay_packet.payload(), b"payload");
         assert_eq!(
-            relay_packet.resolve_source_transport_media_id(&RtcBootstrapState::default()),
+            relay_packet.resolve_source_transport_media_id(&PacketLoopState::default()),
             Some(TransportMediaId::new(18))
         );
     }
@@ -375,7 +375,7 @@ mod tests {
         );
 
         assert_eq!(
-            packet.resolve_route_control_layer_metadata(&RtcBootstrapState::default()),
+            packet.resolve_route_control_layer_metadata(&PacketLoopState::default()),
             PacketLayerMetadata::new(
                 Some(Rid::from("hi")),
                 Some(frame_marking::TEMPORAL_LAYER_ID_MAX)
@@ -388,7 +388,7 @@ mod tests {
         let session_key = test_transport_session_key(47, 0, 15, UserId::Integer(13));
         let producer_mid = Mid::from("cam-up");
         let producer_ssrc = 76_543_u32;
-        let mut state = RtcBootstrapState::default();
+        let mut state = PacketLoopState::default();
         state.register_media_handle(RegisteredMediaHandle::Producer {
             session_key: session_key.clone(),
             mid: producer_mid,
@@ -418,7 +418,7 @@ mod tests {
         let producer_mid = Mid::from("cam-up");
         let producer_ssrc = 76_543_u32;
         let source_transport_media_id = TransportMediaId::new(22);
-        let mut source_state = RtcBootstrapState::default();
+        let mut source_state = PacketLoopState::default();
         source_state.register_media_handle(RegisteredMediaHandle::Producer {
             session_key: session_key.clone(),
             mid: producer_mid,
@@ -443,7 +443,7 @@ mod tests {
         let mut relay_packet = packet.share_for_relay(source_transport_media_id);
 
         assert_eq!(
-            relay_packet.resolve_route_control_layer_metadata(&RtcBootstrapState::default()),
+            relay_packet.resolve_route_control_layer_metadata(&PacketLoopState::default()),
             PacketLayerMetadata::new(Some(Rid::from("hi")), None)
         );
     }
@@ -453,7 +453,7 @@ mod tests {
         let session_key = test_transport_session_key(44, 0, 12, UserId::Integer(10));
         let producer_mid = Mid::from("cam-up");
         let producer_ssrc = 65_432_u32;
-        let mut state = RtcBootstrapState::default();
+        let mut state = PacketLoopState::default();
         let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
             session_key: session_key.clone(),
             mid: producer_mid,
@@ -480,7 +480,7 @@ mod tests {
     #[test]
     fn forwarded_packet_caches_the_resolved_source_transport_media_id() {
         let session_key = test_transport_session_key(45, 0, 13, UserId::Integer(11));
-        let mut state = RtcBootstrapState::default();
+        let mut state = PacketLoopState::default();
         let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
             session_key: session_key.clone(),
             mid: Mid::from("aud-up"),

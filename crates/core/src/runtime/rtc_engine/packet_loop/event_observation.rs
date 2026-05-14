@@ -60,7 +60,7 @@ pub(super) fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
 /// Project selected `str0m` events into metrics, snapshots and diagnostics.
 ///
 /// Snapshot writes are best-effort. If the snapshot lock is unavailable, the
-/// packet loop keeps running because the worker-owned `RtcBootstrapState`
+/// packet loop keeps running because the worker-owned `PacketLoopState`
 /// remains authoritative for media behavior.
 pub(super) fn observe_rtc_event(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,

@@ -12,7 +12,7 @@ use tracing::debug;
 use super::{
     super::super::{
         demux::MediaRouteDestination, media_registry::RegisteredMediaHandle,
-        route_control::KeyframeRequestDecision, state::RtcBootstrapState,
+        route_control::KeyframeRequestDecision, state::PacketLoopState,
     },
     control::{ensure_existing_route_source, owned_local_producer_mid, packet_gate_rid},
     types::{RemoteKeyframeRequest, RouteSourceKind},
@@ -23,7 +23,7 @@ use crate::runtime::{
 };
 
 pub fn respond_request_remote_keyframe(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
     request: &RemoteKeyframeRequest<'_>,
 ) {
@@ -49,7 +49,7 @@ pub fn respond_request_remote_keyframe(
 /// source. The helper stays worker-local so the packet path does not need to
 /// know how producer ownership or per-source throttling are represented.
 pub fn request_keyframe_for_source(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
@@ -107,7 +107,7 @@ pub fn request_keyframe_for_source(
 /// local source is marked dirty or the remote keyframe request is forwarded with
 /// the normal coalescing rules.
 pub(in crate::runtime::rtc_engine::worker::media) fn worker_request_consumer_keyframe(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
     consumer_session_key: &TransportSessionKey,
     consumer_transport_media_id: TransportMediaId,
@@ -206,7 +206,7 @@ fn keyframe_request_rid(destination: &MediaRouteDestination) -> Option<Rid> {
 }
 
 fn local_keyframe_request_mid(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     rid: Option<Rid>,
@@ -227,7 +227,7 @@ fn local_keyframe_request_mid(
 }
 
 fn producer_keyframe_target_rids(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     mid: Mid,
@@ -268,7 +268,7 @@ fn producer_keyframe_target_rids(
 }
 
 fn producer_keyframe_candidate_rids(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_session_key: &TransportSessionKey,
     mid: Mid,
     rid: Option<Rid>,
@@ -311,7 +311,7 @@ fn push_unique_rid(rids: &mut Vec<Rid>, rid: Rid) {
 }
 
 fn should_absorb_keyframe_request(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     mid: Mid,
@@ -339,7 +339,7 @@ fn should_absorb_keyframe_request(
 }
 
 fn request_keyframe_from_producer(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,

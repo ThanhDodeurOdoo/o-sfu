@@ -35,7 +35,7 @@ use tracing::info;
 
 use super::{
     super::{
-        bitrate::RtcBitrateState,
+        bitrate::BitrateRegistry,
         commands::{RtcWorkerCommand, RtcWorkerResponse},
         packet_loop::{self, PacketLoopConfig},
         relay_registry::{RELAY_MAILBOX_CAPACITY, RelayPacketMailbox, sender_backlog_depth},
@@ -125,7 +125,7 @@ impl RtcTransportShard {
         #[cfg(any(test, feature = "testing-transport"))]
         let debug_channels = super::super::test_support::RtcWorkerDebugChannels::new();
         let (relay_tx, relay_rx) = mpsc::channel(RELAY_MAILBOX_CAPACITY);
-        let bitrate_state = Arc::new(Mutex::new(RtcBitrateState::default()));
+        let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
         let snapshot_state = Arc::new(Mutex::new(super::super::state::RtcSnapshotState::default()));
         let packet_loop_lag = Arc::new(packet_loop::PacketLoopLagSnapshot::new(Instant::now()));
         let shutdown_token = CancellationToken::new();
@@ -134,7 +134,7 @@ impl RtcTransportShard {
             #[cfg(any(test, feature = "testing-transport"))]
             debug_handle: debug_channels.handle(),
             relay_mailbox: RelayPacketMailbox::new(relay_tx),
-            bitrate_state: Arc::clone(&bitrate_state),
+            bitrate_registry: Arc::clone(&bitrate_registry),
             snapshot_state: Arc::clone(&snapshot_state),
             packet_loop_lag: Arc::clone(&packet_loop_lag),
             shutdown_token: shutdown_token.clone(),
@@ -172,7 +172,7 @@ impl RtcTransportShard {
                 rtc_metrics: Arc::clone(&self.rtc_metrics),
                 packet_loop_lag,
             },
-            bitrate_state,
+            bitrate_registry,
             snapshot_state,
             packet_loop_inputs,
         ));
@@ -274,10 +274,10 @@ impl RtcTransportObservabilityFacade<'_> {
         let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
             return TransportBitrateSnapshot::default();
         };
-        let Ok(bitrate_state) = worker_handle.bitrate_state.lock() else {
+        let Ok(bitrate_registry) = worker_handle.bitrate_registry.lock() else {
             return TransportBitrateSnapshot::default();
         };
-        bitrate_state.transport_bitrate_snapshot_at(session_keys, Instant::now())
+        bitrate_registry.transport_bitrate_snapshot_at(session_keys, Instant::now())
     }
 
     pub fn receiver_bandwidth_snapshot(
@@ -301,8 +301,8 @@ impl RtcTransportObservabilityFacade<'_> {
             return TransportPlacementPressureSnapshot::default();
         };
         let now = Instant::now();
-        let egress_bitrate = match worker_handle.bitrate_state.lock() {
-            Ok(bitrate_state) => bitrate_state.egress_bitrate_snapshot_at(session_keys, now),
+        let egress_bitrate = match worker_handle.bitrate_registry.lock() {
+            Ok(bitrate_registry) => bitrate_registry.egress_bitrate_snapshot_at(session_keys, now),
             Err(_error) => Bitrate::zero(),
         };
         let packet_loop_lag_ms = worker_handle.packet_loop_lag.packet_loop_lag_ms_at(now);
@@ -425,7 +425,7 @@ mod tests {
             command_tx,
             debug_handle: debug_channels.handle(),
             relay_mailbox: RelayPacketMailbox::new(relay_tx),
-            bitrate_state: Arc::new(Mutex::new(RtcBitrateState::default())),
+            bitrate_registry: Arc::new(Mutex::new(BitrateRegistry::default())),
             snapshot_state: Arc::new(Mutex::new(
                 super::super::super::state::RtcSnapshotState::default(),
             )),

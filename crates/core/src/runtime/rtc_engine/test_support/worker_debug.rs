@@ -13,22 +13,22 @@ use crate::Bitrate;
 use crate::runtime::{
     media_transport::{TransportMediaId, TransportSessionKey},
     rtc_engine::{
-        bitrate::RtcBitrateState,
+        bitrate::BitrateRegistry,
         route_control::PacketLayerGate,
-        state::{RtcBootstrapState, RtcSnapshotState},
+        state::{PacketLoopState, RtcSnapshotState},
         worker::WorkerCommandContext,
     },
 };
 
 #[cfg(test)]
 pub(in crate::runtime::rtc_engine) fn handle_debug_worker_command(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     context: &WorkerCommandContext<'_>,
     command: DebugRtcWorkerCommand,
 ) {
     handle_debug_command(
         state,
-        context.bitrate_state,
+        context.bitrate_registry,
         context.snapshot_state,
         command,
     );
@@ -36,13 +36,13 @@ pub(in crate::runtime::rtc_engine) fn handle_debug_worker_command(
 
 #[cfg(not(test))]
 pub(in crate::runtime::rtc_engine) fn handle_debug_worker_command(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     context: &WorkerCommandContext<'_>,
     command: DebugRtcWorkerCommand,
 ) {
     handle_debug_command(
         state,
-        context.bitrate_state,
+        context.bitrate_registry,
         context.snapshot_state,
         command,
     );
@@ -50,8 +50,8 @@ pub(in crate::runtime::rtc_engine) fn handle_debug_worker_command(
 
 #[cfg(test)]
 fn handle_debug_command(
-    state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     command: DebugRtcWorkerCommand,
 ) {
@@ -74,7 +74,7 @@ fn handle_debug_command(
             handle_debug_route_command(state, command);
         }
         DebugRtcWorkerCommand::RecordIncomingMedia { .. } => {
-            handle_debug_bitrate_command(state, bitrate_state, command);
+            handle_debug_bitrate_command(state, bitrate_registry, command);
         }
         DebugRtcWorkerCommand::ObserveAudioActivity { .. } => {
             handle_debug_route_control_command(state, command);
@@ -88,8 +88,8 @@ fn handle_debug_command(
 
 #[cfg(not(test))]
 fn handle_debug_command(
-    state: &RtcBootstrapState,
-    _bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    state: &PacketLoopState,
+    _bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     _snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     command: DebugRtcWorkerCommand,
 ) {
@@ -103,7 +103,7 @@ fn handle_debug_command(
 
 #[cfg(test)]
 fn handle_debug_demux_command(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     command: DebugRtcWorkerCommand,
 ) {
@@ -135,7 +135,7 @@ fn handle_debug_demux_command(
 }
 
 #[cfg(test)]
-fn handle_debug_session_command(state: &mut RtcBootstrapState, command: DebugRtcWorkerCommand) {
+fn handle_debug_session_command(state: &mut PacketLoopState, command: DebugRtcWorkerCommand) {
     match command {
         DebugRtcWorkerCommand::SessionStreamRxSsrc {
             session_key,
@@ -160,7 +160,7 @@ fn handle_debug_session_command(state: &mut RtcBootstrapState, command: DebugRtc
 }
 
 #[cfg(test)]
-fn handle_debug_route_command(state: &RtcBootstrapState, command: DebugRtcWorkerCommand) {
+fn handle_debug_route_command(state: &PacketLoopState, command: DebugRtcWorkerCommand) {
     match command {
         DebugRtcWorkerCommand::RouteEntry {
             source_session_key,
@@ -187,8 +187,8 @@ fn handle_debug_route_command(state: &RtcBootstrapState, command: DebugRtcWorker
 
 #[cfg(test)]
 fn handle_debug_bitrate_command(
-    state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     command: DebugRtcWorkerCommand,
 ) {
     if let DebugRtcWorkerCommand::RecordIncomingMedia {
@@ -201,7 +201,7 @@ fn handle_debug_bitrate_command(
     {
         respond_debug_record_incoming_media(
             state,
-            bitrate_state,
+            bitrate_registry,
             &session_key,
             transport_media_id,
             payload_bytes,
@@ -212,10 +212,7 @@ fn handle_debug_bitrate_command(
 }
 
 #[cfg(test)]
-fn handle_debug_route_control_command(
-    state: &mut RtcBootstrapState,
-    command: DebugRtcWorkerCommand,
-) {
+fn handle_debug_route_control_command(state: &mut PacketLoopState, command: DebugRtcWorkerCommand) {
     if let DebugRtcWorkerCommand::ObserveAudioActivity {
         transport_media_id,
         voice_activity,
@@ -236,7 +233,7 @@ fn handle_debug_route_control_command(
 }
 
 #[cfg(test)]
-fn handle_debug_relay_command(state: &RtcBootstrapState, command: DebugRtcWorkerCommand) {
+fn handle_debug_relay_command(state: &PacketLoopState, command: DebugRtcWorkerCommand) {
     match command {
         DebugRtcWorkerCommand::RelayTargetCount {
             source_transport_media_id,
@@ -252,7 +249,7 @@ fn handle_debug_relay_command(state: &RtcBootstrapState, command: DebugRtcWorker
 
 #[cfg(test)]
 fn respond_debug_resolve_mid(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     transport_media_id: TransportMediaId,
     response: oneshot::Sender<Option<Mid>>,
 ) {
@@ -261,7 +258,7 @@ fn respond_debug_resolve_mid(
 
 #[cfg(test)]
 fn respond_debug_relay_target_count(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_transport_media_id: TransportMediaId,
     response: oneshot::Sender<usize>,
 ) {
@@ -270,7 +267,7 @@ fn respond_debug_relay_target_count(
 
 #[cfg(test)]
 fn respond_debug_active_relay_target_count(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_transport_media_id: TransportMediaId,
     response: oneshot::Sender<usize>,
 ) {
@@ -306,7 +303,7 @@ fn respond_debug_has_any_remote_addr_session(
 
 #[cfg(test)]
 fn respond_debug_remember_remote_addr(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     source_addr: SocketAddr,
     session_key: &TransportSessionKey,
@@ -326,7 +323,7 @@ fn respond_debug_remember_remote_addr(
 
 #[cfg(test)]
 fn respond_debug_session_stream_rx_ssrc(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
     mid: Mid,
     response: oneshot::Sender<Option<u32>>,
@@ -342,7 +339,7 @@ fn respond_debug_session_stream_rx_ssrc(
 
 #[cfg(test)]
 fn respond_debug_session_stream_tx_ssrc(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
     mid: Mid,
     response: oneshot::Sender<Option<u32>>,
@@ -358,7 +355,7 @@ fn respond_debug_session_stream_tx_ssrc(
 
 #[cfg(test)]
 fn respond_debug_session_max_bitrate_in(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     session_key: &TransportSessionKey,
     response: oneshot::Sender<Option<Bitrate>>,
 ) {
@@ -371,7 +368,7 @@ fn respond_debug_session_max_bitrate_in(
 
 #[cfg(test)]
 fn respond_debug_session_max_bitrate_out(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     session_key: &TransportSessionKey,
     response: oneshot::Sender<Option<Bitrate>>,
 ) {
@@ -384,7 +381,7 @@ fn respond_debug_session_max_bitrate_out(
 
 #[cfg(test)]
 fn respond_debug_route_entry(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_mid: Mid,
     response: oneshot::Sender<Option<DebugRouteEntry>>,
@@ -398,7 +395,7 @@ fn respond_debug_route_entry(
 }
 
 fn respond_debug_route_entry_by_consumer_mid(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     consumer_session_key: &TransportSessionKey,
     consumer_mid: Mid,
     response: oneshot::Sender<Option<DebugRouteEntry>>,
@@ -413,7 +410,7 @@ fn respond_debug_route_entry_by_consumer_mid(
 
 #[cfg(test)]
 fn respond_debug_route_entry_by_media_id(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_transport_media_id: TransportMediaId,
     response: oneshot::Sender<Option<DebugRouteEntry>>,
 ) {
@@ -421,7 +418,7 @@ fn respond_debug_route_entry_by_media_id(
 }
 
 fn build_debug_route_entry(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_transport_media_id: TransportMediaId,
 ) -> Option<DebugRouteEntry> {
     state
@@ -462,8 +459,8 @@ fn into_debug_packet_gate(packet_gate: &PacketLayerGate) -> DebugPacketGate {
 
 #[cfg(test)]
 fn respond_debug_record_incoming_media(
-    state: &mut RtcBootstrapState,
-    bitrate_state: &Arc<Mutex<RtcBitrateState>>,
+    state: &mut PacketLoopState,
+    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
     payload_bytes: usize,
@@ -473,7 +470,7 @@ fn respond_debug_record_incoming_media(
     if state
         .record_incoming_bitrate(transport_media_id, now, payload_bytes)
         .is_none()
-        && let Ok(mut bitrate) = bitrate_state.lock()
+        && let Ok(mut bitrate) = bitrate_registry.lock()
     {
         let counter = bitrate.register_incoming_media(session_key, transport_media_id, now);
         counter.record(now, payload_bytes);
@@ -484,7 +481,7 @@ fn respond_debug_record_incoming_media(
 
 #[cfg(test)]
 fn respond_debug_observe_audio_activity(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     transport_media_id: TransportMediaId,
     voice_activity: Option<bool>,
     audio_level_dbov: Option<i8>,

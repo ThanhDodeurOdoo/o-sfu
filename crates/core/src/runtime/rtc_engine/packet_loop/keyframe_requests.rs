@@ -21,7 +21,7 @@ use super::{
         commands::RemoteSourceControl,
         media_registry::RegisteredMediaHandle,
         route_control::{KeyframeRequestDecision, coalesce_keyframe_kind},
-        state::RtcBootstrapState,
+        state::PacketLoopState,
         worker::request_keyframe_for_source,
     },
     buffers::PacketLoopBuffers,
@@ -106,7 +106,7 @@ impl CoalescedKeyframeRequest {
 /// request is dispatched. Missing source state means the route changed before
 /// the feedback was flushed and is treated as a benign stale request.
 pub(super) fn flush_pending_keyframe_requests(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     buffers: &mut PacketLoopBuffers,
 ) {
@@ -159,7 +159,7 @@ pub(super) fn flush_pending_keyframe_requests(
 /// Remote producers pass through route-control de-duplication before the request
 /// leaves the worker so repeated feedback does not flood another relay target.
 fn flush_coalesced_keyframe_request(
-    state: &mut RtcBootstrapState,
+    state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     coalesced_request: CoalescedKeyframeRequest,
     now: Instant,
@@ -233,7 +233,7 @@ fn flush_coalesced_keyframe_request(
 /// through the remote source registry populated by relay setup. Missing entries
 /// mean the route changed before the feedback was flushed.
 fn resolve_keyframe_route(
-    state: &RtcBootstrapState,
+    state: &PacketLoopState,
     source_transport_media_id: TransportMediaId,
 ) -> Option<ResolvedKeyframeRoute> {
     if let Some(RegisteredMediaHandle::Producer { session_key, .. }) =

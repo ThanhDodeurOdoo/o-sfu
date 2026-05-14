@@ -32,7 +32,7 @@ use std::{
 ///
 /// The limit is intentionally small and worker-local. A miss only helps with
 /// very recent repeated traffic, while durable routing truth lives in
-/// `RtcBootstrapState` and `RemoteAddrDemux`.
+/// `PacketLoopState` and `RemoteAddrDemux`.
 const RECENT_MISS_CACHE_LIMIT: usize = 256;
 
 /// Maximum unknown source addresses tracked for defensive probe throttling.
@@ -370,7 +370,7 @@ impl UnknownSourceRateLimiter {
 /// Packet-loop routing hints for UDP datagrams that miss the fast path.
 ///
 /// `PacketLoopRoutingState` is owned by the packet-loop task, next to
-/// `RtcBootstrapState`. It has no async work and no authority over routing. Its
+/// `PacketLoopState`. It has no async work and no authority over routing. Its
 /// only job is to help `ingress_routing` decide whether fallback recovery should
 /// run for an unknown source tuple.
 ///
