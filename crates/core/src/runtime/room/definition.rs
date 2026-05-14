@@ -25,7 +25,7 @@ use super::{
     RoomRuntimePolicy,
 };
 use crate::{
-    RoomShardingPolicy, RuntimeFeatureFlags,
+    RoomWorkerPolicy, RuntimeFeatureFlags,
     runtime::{
         AvailableFeatures, ConnectionId, RoomInstanceId, UserId,
         media_transport::TransportSessionKey,
@@ -79,7 +79,7 @@ pub(crate) struct RoomDefinition {
     /// The policy is stored here because transport session keys are derived
     /// outside the topology lock. The room definition can answer that cold-path
     /// routing question without borrowing mutable room state.
-    room_sharding_policy: RoomShardingPolicy,
+    room_worker_policy: RoomWorkerPolicy,
     transport_worker_by_connection: Arc<Mutex<BTreeMap<ConnectionId, usize>>>,
     identity: RoomIdentity,
     config: RoomConfig,
@@ -99,7 +99,7 @@ impl RoomDefinition {
             instance_id: runtime_context.instance(),
             media_worker_id: Arc::new(Mutex::new(runtime_context.media_worker())),
             local_routers: Arc::new(Mutex::new(runtime_context.local_routers().clone())),
-            room_sharding_policy: runtime_policy.room_sharding_policy,
+            room_worker_policy: runtime_policy.room_worker_policy,
             transport_worker_by_connection: Arc::new(Mutex::new(BTreeMap::new())),
             identity: RoomIdentity::new(issuer, key),
             config,
@@ -220,8 +220,8 @@ impl RoomDefinition {
     }
 
     #[must_use]
-    pub(crate) fn room_sharding_policy(&self) -> RoomShardingPolicy {
-        self.room_sharding_policy
+    pub(crate) fn room_worker_policy(&self) -> RoomWorkerPolicy {
+        self.room_worker_policy
     }
 
     pub(crate) fn media_worker_id(&self) -> usize {

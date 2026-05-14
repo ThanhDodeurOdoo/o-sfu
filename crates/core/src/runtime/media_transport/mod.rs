@@ -27,9 +27,9 @@
 
 mod config;
 mod rtc_transport;
-mod shard_set;
 #[cfg(any(test, feature = "testing-transport"))]
 pub mod test_support;
+mod worker_set;
 
 #[cfg(any(test, feature = "testing-transport"))]
 use std::sync::Arc;
@@ -38,10 +38,10 @@ use std::{collections::BTreeSet, time::Instant};
 pub use config::{MediaTransportDeps, RtcTransportConfig};
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
 pub use rtc_transport::{RtcTransport, RtcTransportBuildError, RtcTransportBuilder};
-use shard_set::RtcTransportShardSet;
 #[cfg(any(test, feature = "testing-transport"))]
 use test_support::FakeMediaTransport;
 use tracing::warn;
+use worker_set::RtcTransportWorkerSet;
 
 pub use crate::transport::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
@@ -124,7 +124,7 @@ impl NegotiationPort for MediaTransport {
         let result = match self {
             Self::Rtc(transport) => {
                 transport
-                    .shards
+                    .workers
                     .create_initial_session_offer(session_key)
                     .await
             }
@@ -148,7 +148,7 @@ impl NegotiationPort for MediaTransport {
         let result = match self {
             Self::Rtc(transport) => {
                 transport
-                    .shards
+                    .workers
                     .create_session_renegotiation_offer(session_key)
                     .await
             }
@@ -177,7 +177,7 @@ impl NegotiationPort for MediaTransport {
         let result = match self {
             Self::Rtc(transport) => {
                 transport
-                    .shards
+                    .workers
                     .apply_session_answer(session_key, answer_sdp)
                     .await
             }
@@ -205,7 +205,7 @@ impl NegotiationPort for MediaTransport {
         offered_router_capabilities: &MediaCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
         let result = match self {
-            Self::Rtc(_) => RtcTransportShardSet::negotiated_client_rtp_capabilities(
+            Self::Rtc(_) => RtcTransportWorkerSet::negotiated_client_rtp_capabilities(
                 answer_sdp,
                 offered_router_capabilities,
             ),
@@ -232,7 +232,7 @@ impl SessionPort for MediaTransport {
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
         let result = match self {
-            Self::Rtc(transport) => transport.shards.close_session(session_key).await,
+            Self::Rtc(transport) => transport.workers.close_session(session_key).await,
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(transport) => transport.close_session(session_key).await,
         };
@@ -252,7 +252,7 @@ impl MediaPort for MediaTransport {
         let result = match self {
             Self::Rtc(transport) => {
                 transport
-                    .shards
+                    .workers
                     .remove_media(session_key, transport_media_id)
                     .await
             }
@@ -283,7 +283,7 @@ impl MediaPort for MediaTransport {
         let result = match self {
             Self::Rtc(transport) => {
                 transport
-                    .shards
+                    .workers
                     .publish_media(session_key, media_kind, rtp_parameters)
                     .await
             }
@@ -317,7 +317,7 @@ impl MediaPort for MediaTransport {
         let result = match self {
             Self::Rtc(transport) => {
                 transport
-                    .shards
+                    .workers
                     .consume_media(
                         consumer_session_key,
                         media_kind,
@@ -359,7 +359,7 @@ impl MediaPort for MediaTransport {
         effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
         let result = match self {
-            Self::Rtc(transport) => transport.shards.apply_relay_route_effect(effect).await,
+            Self::Rtc(transport) => transport.workers.apply_relay_route_effect(effect).await,
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(transport) => transport.apply_relay_route_effect(effect).await,
         };
@@ -385,7 +385,7 @@ impl MediaPort for MediaTransport {
         let result = match self {
             Self::Rtc(transport) => {
                 transport
-                    .shards
+                    .workers
                     .set_producer_active(session_key, transport_media_id, activity.is_active())
                     .await
             }
@@ -419,7 +419,7 @@ impl MediaPort for MediaTransport {
         let result = match self {
             Self::Rtc(transport) => {
                 transport
-                    .shards
+                    .workers
                     .set_consumer_active(
                         consumer_session_key,
                         consumer_transport_media_id,
@@ -467,7 +467,7 @@ impl MediaPort for MediaTransport {
         let result = match self {
             Self::Rtc(transport) => {
                 transport
-                    .shards
+                    .workers
                     .set_consumer_packet_gate(
                         consumer_session_key,
                         consumer_transport_media_id,
@@ -509,7 +509,7 @@ impl MediaPort for MediaTransport {
         updates: &[ConsumerPacketGateUpdate],
     ) -> Vec<Result<(), TransportAdapterError>> {
         let results = match self {
-            Self::Rtc(transport) => transport.shards.set_consumer_packet_gates(updates).await,
+            Self::Rtc(transport) => transport.workers.set_consumer_packet_gates(updates).await,
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(transport) => transport.set_consumer_packet_gates(updates).await,
         };
@@ -539,7 +539,7 @@ impl MediaPort for MediaTransport {
         let result = match self {
             Self::Rtc(transport) => {
                 transport
-                    .shards
+                    .workers
                     .request_consumer_keyframe(
                         consumer_session_key,
                         consumer_transport_media_id,
@@ -581,7 +581,7 @@ impl MediaPort for MediaTransport {
         match self {
             Self::Rtc(transport) => {
                 transport
-                    .shards
+                    .workers
                     .transport_media_mid(session_key, transport_media_id)
                     .await
             }
@@ -597,7 +597,7 @@ impl ObservabilityPort for MediaTransport {
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
         match self {
-            Self::Rtc(transport) => transport.shards.transport_bitrate_snapshot(session_keys),
+            Self::Rtc(transport) => transport.workers.transport_bitrate_snapshot(session_keys),
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(_) => TransportBitrateSnapshot::default(),
         }
@@ -608,7 +608,7 @@ impl ObservabilityPort for MediaTransport {
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
         match self {
-            Self::Rtc(transport) => transport.shards.receiver_bandwidth_snapshot(session_keys),
+            Self::Rtc(transport) => transport.workers.receiver_bandwidth_snapshot(session_keys),
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(transport) => transport.receiver_bandwidth_snapshot(session_keys),
         }
@@ -619,7 +619,7 @@ impl ObservabilityPort for MediaTransport {
         session_keys: &[TransportSessionKey],
     ) -> TransportPlacementPressureSnapshot {
         match self {
-            Self::Rtc(transport) => transport.shards.placement_pressure_snapshot(session_keys),
+            Self::Rtc(transport) => transport.workers.placement_pressure_snapshot(session_keys),
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(transport) => transport.placement_pressure_snapshot(session_keys),
         }
@@ -627,7 +627,7 @@ impl ObservabilityPort for MediaTransport {
 
     fn worker_pressure_snapshots(&self) -> Vec<TransportWorkerPressureSnapshot> {
         match self {
-            Self::Rtc(transport) => transport.shards.worker_pressure_snapshots(),
+            Self::Rtc(transport) => transport.workers.worker_pressure_snapshots(),
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(transport) => transport.worker_pressure_snapshots(),
         }
@@ -635,7 +635,7 @@ impl ObservabilityPort for MediaTransport {
 
     async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         match self {
-            Self::Rtc(transport) => transport.shards.active_speaker_source_snapshot().await,
+            Self::Rtc(transport) => transport.workers.active_speaker_source_snapshot().await,
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(transport) => transport.active_speaker_source_snapshot().await,
         }
@@ -643,7 +643,7 @@ impl ObservabilityPort for MediaTransport {
 
     async fn active_speaker_diagnostic_snapshot(&self) -> Vec<ActiveSpeakerSourceDiagnostic> {
         match self {
-            Self::Rtc(transport) => transport.shards.active_speaker_diagnostic_snapshot().await,
+            Self::Rtc(transport) => transport.workers.active_speaker_diagnostic_snapshot().await,
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(transport) => transport.active_speaker_diagnostic_snapshot().await,
         }
@@ -651,7 +651,7 @@ impl ObservabilityPort for MediaTransport {
 
     async fn next_active_speaker_deadline(&self) -> Option<Instant> {
         match self {
-            Self::Rtc(transport) => transport.shards.next_active_speaker_deadline().await,
+            Self::Rtc(transport) => transport.workers.next_active_speaker_deadline().await,
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(_) => None,
         }
@@ -664,7 +664,7 @@ impl ObservabilityPort for MediaTransport {
         match self {
             Self::Rtc(transport) => {
                 transport
-                    .shards
+                    .workers
                     .expired_active_speaker_room_instance_ids(now)
                     .await
             }
@@ -678,7 +678,7 @@ impl ObservabilityPort for MediaTransport {
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
         match self {
-            Self::Rtc(transport) => transport.shards.session_transport_health(session_key),
+            Self::Rtc(transport) => transport.workers.session_transport_health(session_key),
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(_) => None,
         }
@@ -688,7 +688,7 @@ impl ObservabilityPort for MediaTransport {
 impl SourcePolicyPort for MediaTransport {
     fn source_policy_subscription(&self) -> SourcePolicyUpdateSubscription {
         match self {
-            Self::Rtc(transport) => transport.shards.source_policy_subscription(),
+            Self::Rtc(transport) => transport.workers.source_policy_subscription(),
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Fake(transport) => transport.source_policy_signal().subscribe(),
         }

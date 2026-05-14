@@ -1,7 +1,7 @@
 //! production RTC transport construction for the media transport boundary
 //!
 //! owns the concrete RTC transport handle, its builder and the startup
-//! validation that protects shard construction from invalid worker or
+//! validation that protects worker construction from invalid worker or
 //! port-range topology
 
 use std::sync::Arc;
@@ -9,32 +9,32 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use super::{
-    config::{MediaTransportDeps, RtcTransportConfig, RtcTransportShardSetConfig},
-    shard_set::RtcTransportShardSet,
+    config::{MediaTransportDeps, RtcTransportConfig, RtcTransportWorkerSetConfig},
+    worker_set::RtcTransportWorkerSet,
 };
 use crate::CoreOptions;
 
-/// Production media transport backed by the process-local RTC shard set.
+/// Production media transport backed by the process-local RTC worker set.
 ///
-/// `RtcTransport` owns the actual RTC shard collection. It is a core-owned
+/// `RtcTransport` owns the actual RTC worker collection. It is a core-owned
 /// implementation detail for production media, not the type the server runtime
 /// should name in orchestration code. Use [`super::MediaTransport::from_core_options`]
 /// at the runtime boundary unless a targeted transport test needs to construct
 /// a real RTC backend directly.
 ///
-/// Cloning this handle is cheap. Clones share the same shard set and therefore
+/// Cloning this handle is cheap. Clones share the same worker set and therefore
 /// the same packet loops, diagnostics state, source-policy signal and relay
 /// registrations.
 #[derive(Debug, Clone)]
 pub struct RtcTransport {
-    pub(super) shards: Arc<RtcTransportShardSet>,
+    pub(super) workers: Arc<RtcTransportWorkerSet>,
 }
 
 impl RtcTransport {
     /// Starts named RTC transport construction.
     ///
     /// The builder validates cold-path topology choices such as worker count
-    /// and UDP port splitting before the first shard is created.
+    /// and UDP port splitting before the first worker is created.
     #[must_use]
     pub const fn builder() -> RtcTransportBuilder {
         RtcTransportBuilder::new()
@@ -54,25 +54,25 @@ impl RtcTransport {
         builder.build()
     }
 
-    fn from_shard_set_config(
-        config: &RtcTransportShardSetConfig,
+    fn from_worker_set_config(
+        config: &RtcTransportWorkerSetConfig,
     ) -> Result<Self, RtcTransportBuildError> {
         validate_worker_split(
             config.transport_config().rtc_port_range(),
             config.worker_count(),
         )?;
-        Ok(Self::from_unchecked_shard_set_config(config))
+        Ok(Self::from_unchecked_worker_set_config(config))
     }
 
-    fn from_unchecked_shard_set_config(config: &RtcTransportShardSetConfig) -> Self {
+    fn from_unchecked_worker_set_config(config: &RtcTransportWorkerSetConfig) -> Self {
         Self {
-            shards: Arc::new(RtcTransportShardSet::new(config)),
+            workers: Arc::new(RtcTransportWorkerSet::new(config)),
         }
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(super) fn shards(&self) -> &Arc<RtcTransportShardSet> {
-        &self.shards
+    pub(super) fn workers(&self) -> &Arc<RtcTransportWorkerSet> {
+        &self.workers
     }
 }
 
@@ -80,8 +80,8 @@ impl RtcTransport {
 ///
 /// Building the RTC transport needs operator policy, process services and
 /// worker topology. The builder keeps those inputs named so the runtime does
-/// not have to assemble positional shard-set plumbing or know that one shared
-/// source-policy signal will be installed into every shard.
+/// not have to assemble positional worker-set plumbing or know that one shared
+/// source-policy signal will be installed into every worker.
 ///
 /// # Validation
 ///
@@ -96,7 +96,7 @@ pub struct RtcTransportBuilder {
     /// Process services needed by the transport while it emits diagnostics,
     /// metrics and packet-sink fanout.
     deps: Option<MediaTransportDeps>,
-    /// Number of RTC shard workers to construct.
+    /// Number of RTC workers to construct.
     worker_count: usize,
 }
 
@@ -140,14 +140,14 @@ impl RtcTransportBuilder {
         self
     }
 
-    /// Provides the shared process services used by every RTC shard.
+    /// Provides the shared process services used by every RTC worker.
     #[must_use]
     pub fn deps(mut self, deps: MediaTransportDeps) -> Self {
         self.deps = Some(deps);
         self
     }
 
-    /// Selects how many RTC worker shards the transport should create.
+    /// Selects how many RTC workers the transport should create.
     ///
     /// The value is validated by [`Self::build`]. Supplying zero or more
     /// workers than available UDP ports is a construction error.
@@ -159,8 +159,8 @@ impl RtcTransportBuilder {
 
     /// Creates the RTC transport and validates worker topology.
     ///
-    /// The method is cold-path only. It allocates shard state, creates one
-    /// shared source-policy signal for the shard set and does no packet-loop
+    /// The method is cold-path only. It allocates worker state, creates one
+    /// shared source-policy signal for the worker set and does no packet-loop
     /// work by itself.
     ///
     /// # Errors
@@ -172,7 +172,7 @@ impl RtcTransportBuilder {
             .transport
             .ok_or(RtcTransportBuildError::MissingTransportConfig)?;
         let deps = self.deps.ok_or(RtcTransportBuildError::MissingDeps)?;
-        RtcTransport::from_shard_set_config(&RtcTransportShardSetConfig::new(
+        RtcTransport::from_worker_set_config(&RtcTransportWorkerSetConfig::new(
             transport,
             deps,
             self.worker_count,
@@ -199,7 +199,7 @@ pub enum RtcTransportBuildError {
     /// packet-sink services needed by the transport.
     #[error("RTC transport dependencies are missing")]
     MissingDeps,
-    /// A transport cannot be built without at least one worker shard.
+    /// A transport cannot be built without at least one RTC worker.
     #[error("RTC transport worker count must be at least one")]
     InvalidWorkerCount,
     /// The configured UDP range cannot be split so every requested worker owns

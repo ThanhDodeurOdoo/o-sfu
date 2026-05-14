@@ -22,7 +22,7 @@ use super::super::{
 
 /// Receive-side input bundle owned by one packet-loop worker.
 ///
-/// `RtcTransportShard` builds this bundle when it lazily boots a worker. After
+/// `RtcTransportWorker` builds this bundle when it lazily boots a worker. After
 /// that point the packet loop is the only receiver owner, while facade methods,
 /// relay-control handles and test-support helpers retain sender-side handles.
 ///

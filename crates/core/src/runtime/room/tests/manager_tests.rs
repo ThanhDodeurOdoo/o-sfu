@@ -26,7 +26,7 @@ fn spillover_room_manager(local_router_count: usize) -> RoomManager {
                 crate::MediaCodecFlags::default(),
             ),
         )
-        .with_room_sharding_policy(crate::RoomShardingPolicy::bounded_local_spillover(
+        .with_room_worker_policy(crate::RoomWorkerPolicy::bounded_local_spillover(
             local_router_count,
         )),
     ))
@@ -45,9 +45,10 @@ fn load_spillover_room_manager(
                 crate::MediaCodecFlags::default(),
             ),
         )
-        .with_room_sharding_policy(
-            crate::RoomShardingPolicy::load_triggered_local_spillover(local_router_count, policy),
-        ),
+        .with_room_worker_policy(crate::RoomWorkerPolicy::load_triggered_local_spillover(
+            local_router_count,
+            policy,
+        )),
     ))
 }
 

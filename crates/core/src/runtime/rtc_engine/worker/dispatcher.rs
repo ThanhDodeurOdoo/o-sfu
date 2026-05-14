@@ -51,10 +51,10 @@ pub struct WorkerCommandContext<'a> {
     pub metrics: &'a RuntimeMetrics,
 }
 
-/// Dispatch one production worker command against the shard-local RTC state.
+/// Dispatch one production worker command against the worker-local RTC state.
 ///
 /// Callers must already serialize access to `state`, this function assumes it
-/// runs on the packet-loop task that owns the shard.
+/// runs on the packet-loop task that owns the worker.
 pub fn handle_worker_command(
     state: &mut PacketLoopState,
     context: &WorkerCommandContext<'_>,

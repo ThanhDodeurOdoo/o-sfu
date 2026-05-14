@@ -19,7 +19,7 @@ pub(super) use str0m::media::{MediaKind as Str0mMediaKind, Mid};
 pub(super) use tokio::time::sleep;
 
 pub(super) use super::super::{
-    RtcTransportShard,
+    RtcTransportWorker,
     shared_payload::SharedPayload,
     state::TransportSessionHealth,
     test_support::{DebugPacketGate, DebugRouteEntry, test_transport_session_key},
@@ -80,7 +80,7 @@ pub(super) fn sample_router_rtp_parameters_with_rid(
 pub(super) fn rtc_engine_with_bitrate_limits(
     max_bitrate_in: Bitrate,
     max_bitrate_out: Bitrate,
-) -> RtcTransportShard {
+) -> RtcTransportWorker {
     rtc_engine_for_test(
         max_bitrate_in,
         max_bitrate_out,
@@ -89,7 +89,7 @@ pub(super) fn rtc_engine_with_bitrate_limits(
     )
 }
 
-pub(super) fn rtc_engine_with_codec_flags(codec_flags: MediaCodecFlags) -> RtcTransportShard {
+pub(super) fn rtc_engine_with_codec_flags(codec_flags: MediaCodecFlags) -> RtcTransportWorker {
     rtc_engine_for_test(
         Bitrate::from_mbps(8),
         Bitrate::from_mbps(10),
@@ -101,7 +101,7 @@ pub(super) fn rtc_engine_with_codec_flags(codec_flags: MediaCodecFlags) -> RtcTr
 pub(super) fn rtc_engine_with_codec_policy(
     codec_flags: MediaCodecFlags,
     codec_preferences: CodecPreferences,
-) -> RtcTransportShard {
+) -> RtcTransportWorker {
     rtc_engine_for_test(
         Bitrate::from_mbps(8),
         Bitrate::from_mbps(10),
@@ -115,8 +115,8 @@ fn rtc_engine_for_test(
     max_bitrate_out: Bitrate,
     codec_flags: MediaCodecFlags,
     codec_preferences: CodecPreferences,
-) -> RtcTransportShard {
-    RtcTransportShard::new(
+) -> RtcTransportWorker {
+    RtcTransportWorker::new(
         &RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(max_bitrate_in, max_bitrate_out),
@@ -136,7 +136,7 @@ fn rtc_engine_for_test(
 }
 
 pub(super) async fn prepare_transport_session(
-    adapter: &RtcTransportShard,
+    adapter: &RtcTransportWorker,
     session_key: &TransportSessionKey,
 ) -> Result<SessionOffer, TransportAdapterError> {
     adapter
@@ -146,7 +146,7 @@ pub(super) async fn prepare_transport_session(
 }
 
 pub(super) fn set_transport_health(
-    adapter: &RtcTransportShard,
+    adapter: &RtcTransportWorker,
     session_key: &TransportSessionKey,
     health: TransportSessionHealth,
 ) {
@@ -154,7 +154,7 @@ pub(super) fn set_transport_health(
 }
 
 pub(super) async fn remember_remote_addr(
-    adapter: &RtcTransportShard,
+    adapter: &RtcTransportWorker,
     source_addr: SocketAddr,
     session_key: &TransportSessionKey,
 ) {
@@ -164,25 +164,25 @@ pub(super) async fn remember_remote_addr(
 }
 
 pub(super) async fn remote_addr_owner(
-    adapter: &RtcTransportShard,
+    adapter: &RtcTransportWorker,
     source_addr: SocketAddr,
 ) -> Option<TransportSessionKey> {
     adapter.debug_remote_addr_owner(source_addr).await
 }
 
-pub(super) async fn has_any_remote_addr_session(adapter: &RtcTransportShard) -> bool {
+pub(super) async fn has_any_remote_addr_session(adapter: &RtcTransportWorker) -> bool {
     adapter.debug_has_any_remote_addr_session().await
 }
 
 pub(super) async fn resolve_mid(
-    adapter: &RtcTransportShard,
+    adapter: &RtcTransportWorker,
     transport_media_id: TransportMediaId,
 ) -> Option<Mid> {
     adapter.debug_resolve_mid(transport_media_id).await
 }
 
 pub(super) async fn session_stream_rx_ssrc(
-    adapter: &RtcTransportShard,
+    adapter: &RtcTransportWorker,
     session_key: &TransportSessionKey,
     mid: Mid,
 ) -> Option<u32> {
@@ -190,7 +190,7 @@ pub(super) async fn session_stream_rx_ssrc(
 }
 
 pub(super) async fn session_stream_tx_ssrc(
-    adapter: &RtcTransportShard,
+    adapter: &RtcTransportWorker,
     session_key: &TransportSessionKey,
     mid: Mid,
 ) -> Option<u32> {
@@ -198,21 +198,21 @@ pub(super) async fn session_stream_tx_ssrc(
 }
 
 pub(super) async fn session_max_bitrate_in(
-    adapter: &RtcTransportShard,
+    adapter: &RtcTransportWorker,
     session_key: &TransportSessionKey,
 ) -> Option<Bitrate> {
     adapter.debug_session_max_bitrate_in(session_key).await
 }
 
 pub(super) async fn session_max_bitrate_out(
-    adapter: &RtcTransportShard,
+    adapter: &RtcTransportWorker,
     session_key: &TransportSessionKey,
 ) -> Option<Bitrate> {
     adapter.debug_session_max_bitrate_out(session_key).await
 }
 
 pub(super) async fn route_entry_by_media_id(
-    adapter: &RtcTransportShard,
+    adapter: &RtcTransportWorker,
     source_transport_media_id: TransportMediaId,
 ) -> Option<DebugRouteEntry> {
     adapter
@@ -221,7 +221,7 @@ pub(super) async fn route_entry_by_media_id(
 }
 
 pub(super) async fn record_incoming_media(
-    adapter: &RtcTransportShard,
+    adapter: &RtcTransportWorker,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
     payload_bytes: usize,
@@ -233,7 +233,7 @@ pub(super) async fn record_incoming_media(
 }
 
 pub(super) async fn observe_audio_activity(
-    adapter: &RtcTransportShard,
+    adapter: &RtcTransportWorker,
     transport_media_id: TransportMediaId,
     voice_activity: Option<bool>,
     audio_level_dbov: Option<i8>,
@@ -245,7 +245,7 @@ pub(super) async fn observe_audio_activity(
 }
 
 pub(super) async fn relay_target_count_for_source(
-    adapter: &RtcTransportShard,
+    adapter: &RtcTransportWorker,
     source_transport_media_id: TransportMediaId,
 ) -> usize {
     adapter
@@ -254,7 +254,7 @@ pub(super) async fn relay_target_count_for_source(
 }
 
 pub(super) async fn active_relay_target_count_for_source(
-    adapter: &RtcTransportShard,
+    adapter: &RtcTransportWorker,
     source_transport_media_id: TransportMediaId,
 ) -> usize {
     adapter

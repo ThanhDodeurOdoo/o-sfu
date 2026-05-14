@@ -379,7 +379,7 @@ fn build_room_runtime_policy(
             options.core.codecs.preferences,
         ),
     )
-    .with_room_sharding_policy(options.core.routing.room_sharding_policy)
+    .with_room_worker_policy(options.core.routing.room_worker_policy)
 }
 
 fn build_room_manager(
@@ -430,7 +430,7 @@ mod tests {
     use crate::{
         config::{
             AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig,
-            HttpConfig, MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags,
+            HttpConfig, MediaCodecFlags, RoomWorkerPolicy, RtcPortRange, RuntimeFeatureFlags,
             TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
         },
         core::server::room::{
@@ -504,7 +504,7 @@ mod tests {
                 video_bitrate_limits: VideoBitrateLimits::default(),
                 rtc_port_range: RtcPortRange::new(41_000, 41_009),
                 rtc_media_worker_count: 1,
-                room_sharding_policy: RoomShardingPolicy::strict_single_router(),
+                room_worker_policy: RoomWorkerPolicy::strict_single_router(),
             },
             codecs: CodecConfig {
                 flags: MediaCodecFlags::default(),

@@ -1,7 +1,7 @@
 //! Production RTC user and socket bootstrap primitives.
 //!
 //! This module contain the real cold-path setup that production worker logic
-//! reuses: bind the shard-local UDP socket, construct `str0m::Rtc`, seed local
+//! reuses: bind the worker-local UDP socket, construct `str0m::Rtc`, seed local
 //! candidates, and create the worker-owned user state.
 
 use std::{

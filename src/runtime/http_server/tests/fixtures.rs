@@ -14,7 +14,7 @@ pub(super) use serde::de::DeserializeOwned;
 pub(super) use tower::util::ServiceExt;
 
 pub(super) use super::super::app;
-use crate::config::RoomShardingPolicy;
+use crate::config::RoomWorkerPolicy;
 pub(super) use crate::{
     config::{
         AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
@@ -244,7 +244,7 @@ pub(super) fn test_config() -> Config {
             max_bitrate_out: Bitrate::from_mbps(10),
             video_bitrate_limits: VideoBitrateLimits::default(),
             rtc_media_worker_count: 1,
-            room_sharding_policy: RoomShardingPolicy::strict_single_router(),
+            room_worker_policy: RoomWorkerPolicy::strict_single_router(),
         },
         codecs: CodecConfig {
             flags: MediaCodecFlags::default(),
@@ -275,7 +275,7 @@ pub(super) fn test_state_with_handles() -> TestRuntimeState {
                     config.codecs.preferences,
                 ),
             )
-            .with_room_sharding_policy(config.transport.room_sharding_policy),
+            .with_room_worker_policy(config.transport.room_worker_policy),
         ),
         RoomManagerDeps {
             packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),

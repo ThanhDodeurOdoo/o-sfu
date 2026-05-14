@@ -68,7 +68,7 @@
 //!
 //! The queue is bounded because cleanup recovery is a cold-path safety net, not
 //! an unbounded task system. If the queue fills, room orchestration must
-//! escalate through metrics and worker or shard level cleanup instead of
+//! escalate through metrics and worker or worker level cleanup instead of
 //! retaining more state here.
 
 use std::collections::{BTreeMap, btree_map::Entry};
@@ -110,7 +110,7 @@ pub(super) enum TransportCleanupOperation {
     ///
     /// This is used after room media state has forgotten the publication or
     /// subscription. If it cannot be recovered, room orchestration escalates by
-    /// closing the owning transport user so the worker or shard can release
+    /// closing the owning transport user so the worker or worker can release
     /// anything still attached to that session.
     RemoveMedia {
         session_key: TransportSessionKey,
@@ -260,7 +260,7 @@ impl CleanupReconciler {
     /// failure is recoverable.
     ///
     /// `TransportUnavailable` is treated as recoverable because it can mean the
-    /// adapter, worker or shard boundary is temporarily not ready. Invalid input
+    /// adapter, worker or worker boundary is temporarily not ready. Invalid input
     /// and unsupported feature errors are terminal because they mean room
     /// orchestration asked for an operation the transport boundary cannot
     /// perform.

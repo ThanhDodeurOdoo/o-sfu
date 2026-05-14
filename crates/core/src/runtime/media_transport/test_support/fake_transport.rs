@@ -117,7 +117,7 @@ struct FakeMediaTransportDelays {
 
 #[allow(
     clippy::unused_async,
-    reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+    reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
 )]
 impl FakeMediaTransport {
     fn inspect_state<T>(&self, inspect: impl FnOnce(&FakeMediaTransportState) -> T) -> T {
@@ -322,7 +322,7 @@ impl FakeMediaTransport {
 impl FakeMediaTransport {
     #[allow(
         clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
     )]
     pub(crate) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         self.inspect_state(|state| state.active_speaker_sources.clone())
@@ -403,7 +403,7 @@ impl FakeMediaTransport {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
     )]
     pub(crate) async fn create_initial_session_offer(
         &self,
@@ -416,7 +416,7 @@ impl FakeMediaTransport {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
     )]
     pub(crate) async fn create_session_renegotiation_offer(
         &self,
@@ -429,7 +429,7 @@ impl FakeMediaTransport {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
     )]
     pub(crate) async fn apply_session_answer(
         &self,
@@ -445,7 +445,7 @@ impl FakeMediaTransport {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
     )]
     pub(crate) async fn close_session(
         &self,
@@ -472,7 +472,7 @@ impl FakeMediaTransport {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
     )]
     pub(crate) async fn remove_media(
         &self,
@@ -505,7 +505,7 @@ impl FakeMediaTransport {
     #[cfg(test)]
     #[allow(
         clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
     )]
     pub(crate) async fn negotiated_producer_parameters(
         &self,
@@ -523,7 +523,7 @@ impl FakeMediaTransport {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
     )]
     pub(crate) async fn publish_media(
         &self,
@@ -556,7 +556,7 @@ impl FakeMediaTransport {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
     )]
     pub(crate) async fn consume_media(
         &self,
@@ -583,7 +583,7 @@ impl FakeMediaTransport {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
     )]
     pub(crate) async fn apply_relay_route_effect(
         &self,
@@ -612,7 +612,7 @@ impl FakeMediaTransport {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
     )]
     pub(crate) async fn set_producer_active(
         &self,
@@ -632,7 +632,7 @@ impl FakeMediaTransport {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
     )]
     pub(crate) async fn set_consumer_active(
         &self,
@@ -652,7 +652,7 @@ impl FakeMediaTransport {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
     )]
     pub(crate) async fn set_consumer_packet_gate(
         &self,
@@ -692,7 +692,7 @@ impl FakeMediaTransport {
 
     #[allow(
         clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC shard and runtime call sites"
+        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
     )]
     pub(crate) async fn request_consumer_keyframe(
         &self,

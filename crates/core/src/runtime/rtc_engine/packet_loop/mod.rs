@@ -1,9 +1,9 @@
-//! Shard-local media packet loop.
+//! Worker-local media packet loop.
 //!
 //! The packet loop is the RTC engine's transport hot path. Each
-//! `RtcTransportShard` starts one Tokio task that owns one mutable
-//! `PacketLoopState`, drives all `str0m::Rtc` instances for that shard and
-//! performs the UDP reads and writes for the shared shard socket.
+//! `RtcTransportWorker` starts one Tokio task that owns one mutable
+//! `PacketLoopState`, drives all `str0m::Rtc` instances for that worker and
+//! performs the UDP reads and writes for the shared worker socket.
 //!
 //! The loop is below room policy and above raw `str0m` I/O. Room
 //! and router code project intent into transport state before packets arrive
@@ -71,7 +71,7 @@
 //! # Submodules
 //!
 //! - [`loop_driver`] owns worker lifecycle, turn ordering, socket waits and the
-//!   shared configuration passed in by the shard.
+//!   shared configuration passed in by the worker.
 //! - [`ingress_routing`] maps inbound UDP datagrams to a session with
 //!   source-address pins, bounded recovery and `Rtc::accepts()` as the final
 //!   authority.

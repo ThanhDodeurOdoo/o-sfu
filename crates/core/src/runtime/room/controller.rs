@@ -45,7 +45,7 @@ use super::{
     state::{ConsumerRouteState, RemoteTrackBootstrap, RoomState},
 };
 use crate::{
-    RoomShardingPolicy, RuntimeFeatureFlags,
+    RoomWorkerPolicy, RuntimeFeatureFlags,
     runtime::{
         AvailableFeatures, ConnectionId, PeerSnapshot, RecordingState, RoomInstanceId, UserId,
         diagnostics::{
@@ -424,13 +424,13 @@ pub struct RoomRuntimePolicy {
     /// The room consumes router-native capabilities here so signaling code
     /// does not have to leak wire-shaped capability bags into room state.
     pub router_rtp_capabilities: o_sfu_router::MediaCapabilities,
-    /// Same-room local sharding policy selected at runtime boot.
+    /// Same-room local worker-placement policy selected at runtime boot.
     ///
     /// The policy is copied into each room so topology decisions stay stable
     /// for the room lifetime even if a future runtime reload changes process
     /// defaults. It is a cold-path room-placement policy, not a packet-loop
     /// routing rule.
-    pub room_sharding_policy: RoomShardingPolicy,
+    pub room_worker_policy: RoomWorkerPolicy,
 }
 
 impl RoomRuntimePolicy {
@@ -444,18 +444,18 @@ impl RoomRuntimePolicy {
             admission_policy,
             feature_flags,
             router_rtp_capabilities,
-            room_sharding_policy: RoomShardingPolicy::strict_single_router(),
+            room_worker_policy: RoomWorkerPolicy::strict_single_router(),
         }
     }
 
-    /// Return a room policy that uses the provided same-room sharding policy.
+    /// Return a room policy that uses the provided same-room worker policy.
     ///
     /// This is used by server startup after config validation. Tests can also
     /// use it to build a room with explicit spillover behavior while keeping
     /// admission, features and RTP capabilities unchanged.
     #[must_use]
-    pub fn with_room_sharding_policy(mut self, room_sharding_policy: RoomShardingPolicy) -> Self {
-        self.room_sharding_policy = room_sharding_policy;
+    pub fn with_room_worker_policy(mut self, room_worker_policy: RoomWorkerPolicy) -> Self {
+        self.room_worker_policy = room_worker_policy;
         self
     }
 }
@@ -668,7 +668,7 @@ impl Room {
                 runtime_context,
                 runtime_policy.admission_policy,
                 runtime_policy.router_rtp_capabilities,
-                runtime_policy.room_sharding_policy,
+                runtime_policy.room_worker_policy,
                 router_event_sink,
             )),
         }
@@ -896,13 +896,13 @@ impl Room {
     /// Media worker that owns this room's transport users.
     ///
     /// Runtime diagnostics and transport command paths use this to route work
-    /// to the correct worker shard.
+    /// to the correct RTC worker.
     pub fn media_worker_id(&self) -> usize {
         self.definition.media_worker_id()
     }
 
-    pub(in crate::runtime::room) fn room_sharding_policy(&self) -> RoomShardingPolicy {
-        self.definition.room_sharding_policy()
+    pub(in crate::runtime::room) fn room_worker_policy(&self) -> RoomWorkerPolicy {
+        self.definition.room_worker_policy()
     }
 
     #[must_use]

@@ -3,7 +3,7 @@ use std::{net::IpAddr, num::NonZeroUsize};
 use anyhow::{Context, Result, anyhow, ensure};
 use o_sfu_core::{
     Bitrate, LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts,
-    RoomShardingPolicy, RtcPortRange, VideoBitrateLimits,
+    RoomWorkerPolicy, RtcPortRange, VideoBitrateLimits,
 };
 
 use super::{TransportConfig, parsing::parse_env_or_default};
@@ -50,7 +50,7 @@ pub(super) fn load_transport_config(
         max_video_bitrate_bps,
         rtc_port_range,
     })?;
-    let room_sharding_policy = room_sharding_policy(
+    let room_worker_policy = room_worker_policy(
         room_max_local_routers,
         room_spillover_mode.as_deref(),
         local_spillover_policy,
@@ -62,7 +62,7 @@ pub(super) fn load_transport_config(
         video_bitrate_limits: VideoBitrateLimits::new(Bitrate::from_bps(max_video_bitrate_bps)),
         rtc_port_range,
         rtc_media_worker_count,
-        room_sharding_policy,
+        room_worker_policy,
     })
 }
 
@@ -72,20 +72,20 @@ pub(super) fn load_transport_config(
 /// value uses the load-triggered production policy unless
 /// `ROOM_SPILLOVER_MODE=bounded` explicitly requests the deterministic topology
 /// exercise mode.
-fn room_sharding_policy(
+fn room_worker_policy(
     room_max_local_routers: usize,
     mode: Option<&str>,
     local_spillover_policy: LocalSpilloverPolicy,
-) -> Result<RoomShardingPolicy> {
+) -> Result<RoomWorkerPolicy> {
     if room_max_local_routers == 1 || mode == Some("strict") {
-        return Ok(RoomShardingPolicy::strict_single_router());
+        return Ok(RoomWorkerPolicy::strict_single_router());
     }
     match mode.unwrap_or("load") {
-        "load" | "load-triggered" => Ok(RoomShardingPolicy::load_triggered_local_spillover(
+        "load" | "load-triggered" => Ok(RoomWorkerPolicy::load_triggered_local_spillover(
             room_max_local_routers,
             local_spillover_policy,
         )),
-        "bounded" => Ok(RoomShardingPolicy::bounded_local_spillover(
+        "bounded" => Ok(RoomWorkerPolicy::bounded_local_spillover(
             room_max_local_routers,
         )),
         other => Err(anyhow!(
@@ -252,7 +252,7 @@ mod tests {
     use o_sfu_core::{LocalSpilloverPolicy, RoomSpilloverMode};
 
     use super::{
-        Bitrate, RoomShardingPolicy, RtcPortRange, TransportConfig, VideoBitrateLimits,
+        Bitrate, RoomWorkerPolicy, RtcPortRange, TransportConfig, VideoBitrateLimits,
         load_transport_config,
     };
 
@@ -283,7 +283,7 @@ mod tests {
                 video_bitrate_limits: VideoBitrateLimits::default(),
                 rtc_port_range: RtcPortRange::new(40_000, 49_999),
                 rtc_media_worker_count: 1,
-                room_sharding_policy: RoomShardingPolicy::strict_single_router(),
+                room_worker_policy: RoomWorkerPolicy::strict_single_router(),
             })
         );
     }
@@ -338,8 +338,8 @@ mod tests {
         let Some(config) = config.ok() else {
             return;
         };
-        assert_eq!(config.room_sharding_policy.max_local_routers(), 2);
-        let spillover = config.room_sharding_policy.spillover();
+        assert_eq!(config.room_worker_policy.max_local_routers(), 2);
+        let spillover = config.room_worker_policy.spillover();
         assert!(matches!(
             spillover,
             RoomSpilloverMode::LoadTriggeredLocalSpillover(_)
@@ -374,7 +374,7 @@ mod tests {
             return;
         };
         assert_eq!(
-            config.room_sharding_policy.spillover(),
+            config.room_worker_policy.spillover(),
             RoomSpilloverMode::BoundedLocalSpillover
         );
     }
@@ -391,7 +391,7 @@ mod tests {
         let Some(config) = config.ok() else {
             return;
         };
-        let spillover = config.room_sharding_policy.spillover();
+        let spillover = config.room_worker_policy.spillover();
         assert!(matches!(
             spillover,
             RoomSpilloverMode::LoadTriggeredLocalSpillover(_)
@@ -416,8 +416,8 @@ mod tests {
             return;
         };
         assert_eq!(
-            config.room_sharding_policy,
-            RoomShardingPolicy::strict_single_router()
+            config.room_worker_policy,
+            RoomWorkerPolicy::strict_single_router()
         );
     }
 

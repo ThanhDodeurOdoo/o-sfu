@@ -43,7 +43,7 @@ pub struct RoutingOptions {
     /// router placements a room may use. It does not participate in packet
     /// forwarding and it does not change the transport worker count after
     /// startup.
-    pub room_sharding_policy: RoomShardingPolicy,
+    pub room_worker_policy: RoomWorkerPolicy,
 }
 
 /// Same-room placement policy for local router spillover.
@@ -53,7 +53,7 @@ pub struct RoutingOptions {
 /// describes how many process-local router placements a room may use and which
 /// spillover mode should interpret that limit.
 ///
-/// `RoomShardingPolicy` belongs to room orchestration, not to the RTP packet
+/// `RoomWorkerPolicy` belongs to room orchestration, not to the RTP packet
 /// loop. The room manager reads it at join time to decide whether a user
 /// connection can be placed on a spillover router.
 ///
@@ -63,7 +63,7 @@ pub struct RoutingOptions {
 /// validates operator-facing worker limits because those depend on process
 /// topology.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RoomShardingPolicy {
+pub struct RoomWorkerPolicy {
     max_local_routers: usize,
     spillover: RoomSpilloverMode,
 }
@@ -151,12 +151,12 @@ impl RoutingOptions {
     pub const fn new(media_worker_count: usize) -> Self {
         Self {
             media_worker_count,
-            room_sharding_policy: RoomShardingPolicy::strict_single_router(),
+            room_worker_policy: RoomWorkerPolicy::strict_single_router(),
         }
     }
 }
 
-impl RoomShardingPolicy {
+impl RoomWorkerPolicy {
     /// Build the default policy that keeps every room on one local router.
     ///
     /// Use this unless the runtime has explicitly opted into same-room
@@ -243,7 +243,7 @@ impl RoomShardingPolicy {
     }
 }
 
-impl Default for RoomShardingPolicy {
+impl Default for RoomWorkerPolicy {
     fn default() -> Self {
         Self::strict_single_router()
     }

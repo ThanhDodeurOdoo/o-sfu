@@ -28,7 +28,7 @@ use crate::runtime::{
 pub(super) const RECEIVE_BUFFER_LEN: usize = 2000;
 pub(super) const MAX_RELAY_PACKETS_PER_ITERATION: usize = 64;
 
-/// One queued UDP datagram ready to be written to the shard socket.
+/// One queued UDP datagram ready to be written to the worker socket.
 ///
 /// The payload buffer is reused across turns. A slot can remain allocated after
 /// it leaves the logical transmit list, so readers must access transmits

@@ -43,7 +43,7 @@ pub fn respond_request_remote_keyframe(
 }
 
 /// Forward a keyframe request to a locally owned producer when route-control
-/// policy says the request should escape the shard.
+/// policy says the request should escape the worker.
 ///
 /// This is reused by the packet loop after it resolves feedback back to a local
 /// source. The helper stays worker-local so the packet path does not need to

@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 
 use o_sfu::{
-    config::{Config, MediaCodecFlags, RoomShardingPolicy},
+    config::{Config, MediaCodecFlags, RoomWorkerPolicy},
     core::{LocalSpilloverPolicy, LocalSpilloverPolicyParts},
     http::IncomingBitRateStatsResponse,
 };
@@ -2145,7 +2145,7 @@ async fn connect_audio_media_flow_peers(
 fn cross_worker_test_config() -> Config {
     let mut config = test_config(1_000, 10);
     config.transport.rtc_media_worker_count = 2;
-    config.transport.room_sharding_policy = RoomShardingPolicy::bounded_local_spillover(2);
+    config.transport.room_worker_policy = RoomWorkerPolicy::bounded_local_spillover(2);
     config
 }
 
@@ -2160,8 +2160,8 @@ fn load_triggered_spillover_test_config() -> Config {
         Err(error) => panic!("load-triggered spillover test policy should be valid: {error}"),
     };
     config.transport.rtc_media_worker_count = 2;
-    config.transport.room_sharding_policy =
-        RoomShardingPolicy::load_triggered_local_spillover(2, policy);
+    config.transport.room_worker_policy =
+        RoomWorkerPolicy::load_triggered_local_spillover(2, policy);
     config
 }
 

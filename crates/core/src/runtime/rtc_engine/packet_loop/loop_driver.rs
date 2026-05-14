@@ -57,12 +57,12 @@ use crate::{
 
 /// Immutable configuration and shared side channels for one packet-loop worker.
 ///
-/// The config is built by `RtcTransportShard` when the worker is booted. Values
-/// copied into session creation are immutable shard settings. `Arc` fields are
+/// The config is built by `RtcTransportWorker` when the worker is booted. Values
+/// copied into session creation are immutable worker settings. `Arc` fields are
 /// shared services that the packet loop may update or query without exposing
 /// direct access to `PacketLoopState`.
 pub(in crate::runtime::rtc_engine) struct PacketLoopConfig {
-    /// Public ICE-lite address advertised by sessions created on this shard.
+    /// Public ICE-lite address advertised by sessions created on this worker.
     pub public_ip: IpAddr,
     /// Maximum inbound bitrate applied when new RTC engine sessions are created.
     pub max_bitrate_in: Bitrate,
@@ -70,7 +70,7 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopConfig {
     pub max_bitrate_out: Bitrate,
     /// Video bitrate policy projected into session and route-control decisions.
     pub video_bitrate_limits: VideoBitrateLimits,
-    /// UDP port range used when the worker opens or reuses its shard socket.
+    /// UDP port range used when the worker opens or reuses its worker socket.
     pub rtc_port_range: RtcPortRange,
     /// Codec feature flags used while constructing session offers.
     pub codec_flags: MediaCodecFlags,
@@ -80,7 +80,7 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopConfig {
     ///
     /// Media ids are worker-local counters once the loop is running, but the
     /// values must be unique across workers because cross-worker relay state is
-    /// keyed by the producing media id. The shard set assigns disjoint ranges
+    /// keyed by the producing media id. The worker set assigns disjoint ranges
     /// before boot so per-packet routing does not need to carry a wider key.
     pub media_id_base: u64,
     /// Cold-path diagnostics sink for transport health changes.
@@ -164,7 +164,7 @@ const MAX_CONTROL_INPUTS_PER_TURN: usize = 64;
 const MAX_UDP_DATAGRAMS_PER_TURN: usize = 16;
 const MAX_READY_NOW_INPUTS_BEFORE_YIELD: usize = 32;
 
-/// Run the shard-local media packet loop until shutdown or worker-channel close.
+/// Run the worker-local media packet loop until shutdown or worker-channel close.
 ///
 /// # Concurrency
 ///
@@ -360,7 +360,7 @@ fn route_received_datagram(
 /// Execute one control input against authoritative worker state.
 ///
 /// The input handler owns all control-plane mutation for the RTC engine. The
-/// packet-loop driver only supplies the shard context and then clears cached
+/// packet-loop driver only supplies the worker context and then clears cached
 /// ingress routing state. This is conservative because control input can change
 /// which session owns a source tuple or ICE username fragment.
 fn handle_control_input_and_clear_routing_cache(

@@ -1,8 +1,8 @@
-//! Facades for the RTC transport shard.
+//! Facades for the RTC transport worker.
 //!
 //! ### Key Structures
 //!
-//! * [`RtcTransportShard`]: The central handle for an RTC worker shard. It owns
+//! * [`RtcTransportWorker`]: The central handle for an RTC worker. It owns
 //!   the handle to the background worker loop.
 //! * [`RtcTransportNegotiationFacade`]: Handles SDP-related operations like creating
 //!   offers and applying answers.
@@ -76,21 +76,21 @@ impl fmt::Debug for RtcWorkerHandle {
     }
 }
 
-/// Shard-local RTC transport facade.
+/// Worker-local RTC transport facade.
 ///
-/// A shard owns one packet loop and the process-local services that feed it.
-/// The surrounding shard set decides which transport sessions live here, while
+/// A worker owns one packet loop and the process-local services that feed it.
+/// The surrounding worker set decides which transport sessions live here, while
 /// this type keeps the worker state hidden behind negotiation, media, session
 /// and observability facades.
 ///
-/// `TransportMediaId` values allocated by a shard must be process-wide
+/// `TransportMediaId` values allocated by a worker must be process-wide
 /// distinct because worker-local relay target maps, route-control maps and
-/// packet gates use them as source keys across workers. The shard set assigns `media_id_base`
+/// packet gates use them as source keys across workers. The worker set assigns `media_id_base`
 /// before the packet loop starts so the hot path can keep using the compact
 /// media id key without adding a composite worker key to every packet lookup.
-pub struct RtcTransportShard {
+pub struct RtcTransportWorker {
     pub(super) relay_target_id: RelayTargetId,
-    /// First transport media id reserved for this shard's packet loop.
+    /// First transport media id reserved for this worker's packet loop.
     pub(super) media_id_base: u64,
     pub(super) public_ip: IpAddr,
     pub(super) max_bitrate_in: Bitrate,
@@ -110,25 +110,25 @@ pub struct RtcTransportShard {
 
 #[derive(Clone, Copy)]
 pub struct RtcTransportNegotiationFacade<'a> {
-    adapter: &'a RtcTransportShard,
+    adapter: &'a RtcTransportWorker,
 }
 
 #[derive(Clone, Copy)]
 pub struct RtcTransportMediaFacade<'a> {
-    adapter: &'a RtcTransportShard,
+    adapter: &'a RtcTransportWorker,
 }
 
 #[derive(Clone, Copy)]
 pub struct RtcTransportSessionFacade<'a> {
-    adapter: &'a RtcTransportShard,
+    adapter: &'a RtcTransportWorker,
 }
 
 #[derive(Clone, Copy)]
 pub struct RtcTransportObservabilityFacade<'a> {
-    pub(super) adapter: &'a RtcTransportShard,
+    pub(super) adapter: &'a RtcTransportWorker,
 }
 
-impl RtcTransportShard {
+impl RtcTransportWorker {
     pub fn new(
         config: &RtcTransportConfig,
         deps: &MediaTransportDeps,
@@ -431,7 +431,7 @@ impl RtcTransportMediaFacade<'_> {
 
     pub fn remote_source_control(
         self,
-        target: &RtcTransportShard,
+        target: &RtcTransportWorker,
     ) -> Result<RemoteSourceControl, TransportAdapterError> {
         let worker_handle = self.adapter.ensure_packet_loop_started()?;
         Ok(RemoteSourceControl::new(
@@ -444,7 +444,7 @@ impl RtcTransportMediaFacade<'_> {
         self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        target: &RtcTransportShard,
+        target: &RtcTransportWorker,
     ) -> Result<(), TransportAdapterError> {
         let mailbox = target.ensure_packet_loop_started()?.relay_mailbox;
         self.adapter
@@ -461,7 +461,7 @@ impl RtcTransportMediaFacade<'_> {
     pub async fn deactivate_relay_route(
         self,
         source_transport_media_id: TransportMediaId,
-        target: &RtcTransportShard,
+        target: &RtcTransportWorker,
     ) -> Result<(), TransportAdapterError> {
         self.adapter
             .request_worker(|response| RtcWorkerCommand::RemoveRelayTarget {
@@ -476,7 +476,7 @@ impl RtcTransportMediaFacade<'_> {
         self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        target: &RtcTransportShard,
+        target: &RtcTransportWorker,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         self.adapter
@@ -510,10 +510,10 @@ fn packet_layer_gate(
     }
 }
 
-impl fmt::Debug for RtcTransportShard {
+impl fmt::Debug for RtcTransportWorker {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RtcTransportShard")
+            .debug_struct("RtcTransportWorker")
             .field("public_ip", &self.public_ip)
             .field("rtc_port_range", &self.rtc_port_range)
             .finish_non_exhaustive()

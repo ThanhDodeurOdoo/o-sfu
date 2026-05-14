@@ -1,11 +1,11 @@
-//! Lifecycle and communication runtime for the RTC transport shard.
+//! Lifecycle and communication runtime for the RTC transport worker.
 //!
 //! This module implements the internal machinery for managing the life of a
 //! background packet loop worker and dispatching commands to it.
 //!
 //! ### Worker Bootstrapping
 //!
-//! Workers are started lazily via [`RtcTransportShard::ensure_packet_loop_started`].
+//! Workers are started lazily via [`RtcTransportWorker::ensure_packet_loop_started`].
 //! The first call to any facade method that requires worker interaction will
 //! trigger the spawning of the background tokio task that runs the packet loop.
 //!
@@ -41,7 +41,7 @@ use super::{
         relay_registry::{RELAY_MAILBOX_CAPACITY, RelayPacketMailbox, sender_backlog_depth},
         state::TransportSessionHealth,
     },
-    facade::{RtcTransportObservabilityFacade, RtcTransportShard, RtcWorkerHandle},
+    facade::{RtcTransportObservabilityFacade, RtcTransportWorker, RtcWorkerHandle},
 };
 use crate::{
     Bitrate,
@@ -57,7 +57,7 @@ use crate::{
 
 /// Publication slot for the lazily booted packet-loop handle.
 ///
-/// The RTC shard publishes a fully constructed worker handle into this slot
+/// The RTC worker publishes a fully constructed worker handle into this slot
 /// before any caller can start sending commands. Loom reuses the same slot logic
 /// with modeled synchronization primitives to check the publication contract.
 #[derive(Debug, Clone)]
@@ -91,7 +91,7 @@ impl<T: Clone> WorkerHandleSlot<T> {
     }
 }
 
-impl RtcTransportShard {
+impl RtcTransportWorker {
     pub fn worker_handle(&self) -> Result<Option<RtcWorkerHandle>, TransportAdapterError> {
         let Ok(worker_handle) = self.worker_handle.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
@@ -107,7 +107,7 @@ impl RtcTransportShard {
         worker_handle.is_started()
     }
 
-    /// Lazily boot the shard-local packet loop and return the handle that all
+    /// Lazily boot the worker-local packet loop and return the handle that all
     /// facade operations use to talk to the worker.
     pub(super) fn ensure_packet_loop_started(
         &self,
@@ -152,7 +152,7 @@ impl RtcTransportShard {
             max_bitrate_out_bps = self.max_bitrate_out.as_bps(),
             rtc_port_range_min = self.rtc_port_range.min(),
             rtc_port_range_max = self.rtc_port_range.max(),
-            "booted rtc packet loop shard"
+            "booted rtc packet loop worker"
         );
         current_runtime.spawn(packet_loop::run_packet_loop(
             PacketLoopConfig {
@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn placement_pressure_reads_packet_loop_lag_from_atomic_snapshot() -> Result<(), &'static str> {
-        let adapter = RtcTransportShard::default();
+        let adapter = RtcTransportWorker::default();
         let now = Instant::now();
         let started_at = now.checked_sub(Duration::from_millis(200)).unwrap_or(now);
         let packet_loop_lag = Arc::new(packet_loop::PacketLoopLagSnapshot::new(started_at));

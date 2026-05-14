@@ -13,7 +13,7 @@ use super::{
         state::TransportSessionHealth,
         test_support::{DebugRouteEntry, DebugRtcWorkerCommand},
     },
-    facade::RtcTransportShard,
+    facade::RtcTransportWorker,
 };
 #[cfg(test)]
 use crate::runtime::media_transport::TransportMediaId;
@@ -29,7 +29,7 @@ use crate::{
     },
 };
 
-impl RtcTransportShard {
+impl RtcTransportWorker {
     pub fn debug_set_session_transport_health(
         &self,
         session_key: &TransportSessionKey,
@@ -266,7 +266,7 @@ impl RtcTransportShard {
     }
 }
 
-impl Default for RtcTransportShard {
+impl Default for RtcTransportWorker {
     fn default() -> Self {
         Self::new(
             &RtcTransportConfig {

@@ -65,7 +65,7 @@ fn test_state() -> RoomState {
         &runtime_context,
         RoomAdmissionPolicy::new(4),
         router_rtp_capabilities(MediaCodecFlags::default()),
-        crate::RoomShardingPolicy::strict_single_router(),
+        crate::RoomWorkerPolicy::strict_single_router(),
         Arc::new(RecordingService::new(
             RoomInstanceId::from_raw(0),
             packet_sink_registry,

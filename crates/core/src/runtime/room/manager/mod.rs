@@ -332,8 +332,7 @@ impl RoomManager {
     ) -> LocalRouterRuntimeContext {
         let room_snapshot = room.placement_usage_snapshot().await;
         let worker_loads = self.worker_placement_loads(media_transport).await;
-        let planner =
-            RoomPlacementPlanner::new(self.media_worker_count, room.room_sharding_policy());
+        let planner = RoomPlacementPlanner::new(self.media_worker_count, room.room_worker_policy());
         self.resolve_placement_decision(
             &room_snapshot,
             planner.choose(&room_snapshot, &worker_loads),

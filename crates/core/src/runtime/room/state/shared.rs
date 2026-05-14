@@ -19,7 +19,7 @@ use super::{
     presence::UserPresence,
 };
 use crate::{
-    RoomShardingPolicy,
+    RoomWorkerPolicy,
     runtime::{
         ConnectionId, RecordingState, UserId,
         media_transport::TransportMediaId,
@@ -180,7 +180,7 @@ impl RoomState {
         runtime_context: &super::super::RoomRuntimeContext,
         admission_policy: RoomAdmissionPolicy,
         router_rtp_capabilities: MediaCapabilities,
-        room_sharding_policy: RoomShardingPolicy,
+        room_worker_policy: RoomWorkerPolicy,
         router_event_sink: Arc<dyn RoomRouterEventSink>,
     ) -> Self {
         Self {
@@ -212,7 +212,7 @@ impl RoomState {
             relay_routes: RoomRelayRoutes::default(),
             topology: RoomTopology::new_with_router_state_factory(
                 runtime_context.local_routers().clone(),
-                room_sharding_policy,
+                room_worker_policy,
                 router_rtp_capabilities,
                 &RoomRouterStateFactory::new(router_event_sink),
             ),

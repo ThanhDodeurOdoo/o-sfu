@@ -34,7 +34,7 @@ impl RuntimeOptions {
                 },
                 RoutingOptions {
                     media_worker_count: config.transport.rtc_media_worker_count,
-                    room_sharding_policy: config.transport.room_sharding_policy,
+                    room_worker_policy: config.transport.room_worker_policy,
                 },
                 CodecOptions {
                     flags: config.codecs.flags,
@@ -84,7 +84,7 @@ mod tests {
     use crate::{
         config::{
             AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig,
-            HttpConfig, MediaCodecFlags, RoomShardingPolicy, RtcPortRange, RuntimeFeatureFlags,
+            HttpConfig, MediaCodecFlags, RoomWorkerPolicy, RtcPortRange, RuntimeFeatureFlags,
             TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
         },
         core::server::room::{
@@ -118,7 +118,7 @@ mod tests {
                 video_bitrate_limits: VideoBitrateLimits::new(Bitrate::from_kbps(4_321)),
                 rtc_port_range: RtcPortRange::new(50_000, 50_099),
                 rtc_media_worker_count: 4,
-                room_sharding_policy: RoomShardingPolicy::bounded_local_spillover(2),
+                room_worker_policy: RoomWorkerPolicy::bounded_local_spillover(2),
             },
             codecs: CodecConfig {
                 flags: MediaCodecFlags::default().with_h264(true),
@@ -157,11 +157,7 @@ mod tests {
         );
         assert_eq!(options.core.routing.media_worker_count, 4);
         assert_eq!(
-            options
-                .core
-                .routing
-                .room_sharding_policy
-                .max_local_routers(),
+            options.core.routing.room_worker_policy.max_local_routers(),
             2
         );
         assert_eq!(options.core.codecs.flags, config.codecs.flags);

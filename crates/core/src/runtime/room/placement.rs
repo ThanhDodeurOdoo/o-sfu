@@ -17,7 +17,7 @@ use o_sfu_router::RouterId;
 
 use super::LocalRouterRuntimeContext;
 use crate::{
-    LocalSpilloverPolicy, RoomShardingPolicy, RoomSpilloverMode,
+    LocalSpilloverPolicy, RoomSpilloverMode, RoomWorkerPolicy,
     runtime::media_transport::{
         TransportPlacementPressureSnapshot, TransportWorkerPressureSnapshot,
     },
@@ -280,13 +280,13 @@ impl WorkerPlacementLoadSet {
 #[derive(Debug, Clone)]
 pub(super) struct RoomPlacementPlanner {
     media_worker_count: usize,
-    policy: RoomShardingPolicy,
+    policy: RoomWorkerPolicy,
 }
 
 impl RoomPlacementPlanner {
     /// create a planner for the configured local worker set and room policy
     #[must_use]
-    pub(super) fn new(media_worker_count: usize, policy: RoomShardingPolicy) -> Self {
+    pub(super) fn new(media_worker_count: usize, policy: RoomWorkerPolicy) -> Self {
         Self {
             media_worker_count: media_worker_count.max(1),
             policy,
@@ -441,7 +441,7 @@ impl WorkerLoadIndex {
     }
 }
 
-fn score_policy(policy: RoomShardingPolicy) -> LocalSpilloverPolicy {
+fn score_policy(policy: RoomWorkerPolicy) -> LocalSpilloverPolicy {
     match policy.spillover() {
         RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) => policy,
         RoomSpilloverMode::StrictSingleRouter | RoomSpilloverMode::BoundedLocalSpillover => {
@@ -468,7 +468,7 @@ mod tests {
     fn first_join_uses_lowest_load_worker() {
         let mut loads = WorkerPlacementLoadSet::new(2, Vec::new());
         loads.record_session(0);
-        let planner = RoomPlacementPlanner::new(2, RoomShardingPolicy::strict_single_router());
+        let planner = RoomPlacementPlanner::new(2, RoomWorkerPolicy::strict_single_router());
         let room = RoomPlacementUsageSnapshot::new(RouterId(7), false, Vec::new());
 
         assert_eq!(
@@ -481,7 +481,7 @@ mod tests {
     fn bounded_spillover_allocates_unused_worker_until_cap() {
         let mut loads = WorkerPlacementLoadSet::new(3, Vec::new());
         loads.record_session(0);
-        let planner = RoomPlacementPlanner::new(3, RoomShardingPolicy::bounded_local_spillover(2));
+        let planner = RoomPlacementPlanner::new(3, RoomWorkerPolicy::bounded_local_spillover(2));
         let room = RoomPlacementUsageSnapshot::new(
             RouterId(7),
             true,
@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn strict_room_reuses_assigned_worker_after_it_becomes_empty() {
-        let planner = RoomPlacementPlanner::new(3, RoomShardingPolicy::strict_single_router());
+        let planner = RoomPlacementPlanner::new(3, RoomWorkerPolicy::strict_single_router());
         let room = RoomPlacementUsageSnapshot::new(
             RouterId(7),
             true,
@@ -532,7 +532,7 @@ mod tests {
         })?;
         let planner = RoomPlacementPlanner::new(
             2,
-            RoomShardingPolicy::load_triggered_local_spillover(2, policy),
+            RoomWorkerPolicy::load_triggered_local_spillover(2, policy),
         );
         let placement = LocalRouterRuntimeContext {
             router: RouterId(7),
@@ -568,7 +568,7 @@ mod tests {
         })?;
         let planner = RoomPlacementPlanner::new(
             2,
-            RoomShardingPolicy::load_triggered_local_spillover(2, policy),
+            RoomWorkerPolicy::load_triggered_local_spillover(2, policy),
         );
         let room = RoomPlacementUsageSnapshot::new(
             RouterId(7),

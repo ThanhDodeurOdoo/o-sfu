@@ -10,7 +10,7 @@ const RTP_FORWARD_DESTINATION_COUNT: usize = <RtpForwardDestinationKind as Metri
 
 /// Worker-owned RTP packet metric recorder.
 ///
-/// Packet loops keep one recorder for their full shard lifetime. Updates touch
+/// Packet loops keep one recorder for their full worker lifetime. Updates touch
 /// only this worker's padded atomics while `RuntimeMetrics` aggregates all
 /// registered recorders during snapshot export.
 #[derive(Debug, Default)]

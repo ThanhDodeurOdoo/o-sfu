@@ -1,4 +1,4 @@
-//! Pure state types and user scheduling for the RTC transport shard.
+//! Pure state types and user scheduling for the RTC transport worker.
 //!
 //! `test_support` owns the transport lifecycle bookkeeping and state mutators
 //! that exist only for deterministic adapter tests.

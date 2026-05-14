@@ -243,7 +243,7 @@ impl Room {
         pressure_snapshots: Vec<TransportWorkerPressureSnapshot>,
     ) -> LocalRouterRuntimeContext {
         let room_snapshot = self.placement_usage_snapshot().await;
-        let policy = self.room_sharding_policy();
+        let policy = self.room_worker_policy();
         let mut load_set =
             WorkerPlacementLoadSet::new(policy.max_local_routers(), pressure_snapshots);
         let contribution = self.worker_load_contribution().await;
@@ -785,7 +785,7 @@ impl Room {
     /// failures because closing a user cleanup operation cannot be made stronger
     /// by closing the same user again. The room records the escalation even when
     /// the adapter refuses the close so operators can correlate unrecovered
-    /// cleanup with worker or shard level state.
+    /// cleanup with worker or worker level state.
     async fn force_transport_cleanup_owner_drop(
         &self,
         operation: &TransportCleanupOperation,
@@ -799,7 +799,7 @@ impl Room {
             user_id = ?operation.user_id(),
             connection_id = ?operation.connection_id(),
             transport_media_id = ?operation.transport_media_id(),
-            "transport cleanup requires owning worker or shard resource drop"
+            "transport cleanup requires owning worker or worker resource drop"
         );
         if close_result.is_err() {
             warn!(

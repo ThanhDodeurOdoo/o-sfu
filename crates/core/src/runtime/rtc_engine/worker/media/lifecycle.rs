@@ -1,4 +1,4 @@
-//! Worker-local media lifecycle for one RTC shard.
+//! Worker-local media lifecycle for one RTC worker.
 //!
 //! This module contain producer and consumer media declaration plus transport-handle
 //! teardown inside `PacketLoopState`. Route ownership and relay tracking
@@ -310,7 +310,7 @@ fn session_has_other_mid_user(
     })
 }
 
-/// Returns whether the shard already handed out a local offer and is still
+/// Returns whether the worker already handed out a local offer and is still
 /// waiting for the matching answer. That state accepts queued removals, but it
 /// must reject new additions that would need a second concurrent offer
 fn offer_is_awaiting_answer(session_state: &RtcSessionState) -> bool {

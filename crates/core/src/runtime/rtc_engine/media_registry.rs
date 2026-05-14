@@ -1,4 +1,4 @@
-//! Media handle tracking for the RTC transport shard.
+//! Media handle tracking for the RTC transport worker.
 //!
 //! Owns the transport-media registry and the negotiation-facing producer
 //! `(session_key, mid)` reverse lookup within `PacketLoopState`, plus the

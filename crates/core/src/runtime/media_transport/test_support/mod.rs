@@ -11,7 +11,7 @@ use str0m::media::Mid;
 
 use super::MediaTransport;
 #[cfg(any(test, feature = "testing-transport"))]
-use super::shard_set::RtcTransportShardSet;
+use super::worker_set::RtcTransportWorkerSet;
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::rtc_engine::test_support::DebugRouteEntry;
 #[cfg(test)]
@@ -62,8 +62,8 @@ impl MediaTransport {
         match self {
             Self::Rtc(transport) => {
                 transport
-                    .shards()
-                    .shard_for_user(session_key)
+                    .workers()
+                    .worker_for_user(session_key)
                     .media()
                     .negotiated_producer_parameters(session_key, transport_media_id)
                     .await
@@ -77,9 +77,9 @@ impl MediaTransport {
     }
 
     #[cfg(test)]
-    pub(super) fn as_rtc_shard_set(&self) -> Option<&Arc<RtcTransportShardSet>> {
+    pub(super) fn as_rtc_worker_set(&self) -> Option<&Arc<RtcTransportWorkerSet>> {
         match self {
-            Self::Rtc(transport) => Some(transport.shards()),
+            Self::Rtc(transport) => Some(transport.workers()),
             Self::Fake(_) => None,
         }
     }
@@ -92,8 +92,8 @@ impl MediaTransport {
     ) {
         if let Self::Rtc(adapter) = self {
             adapter
-                .shards()
-                .shard_for_user(session_key)
+                .workers()
+                .worker_for_user(session_key)
                 .debug_set_session_transport_health(session_key, health);
         }
     }
@@ -108,7 +108,7 @@ impl MediaTransport {
             Self::Fake(_) => None,
             Self::Rtc(adapter) => {
                 adapter
-                    .shards()
+                    .workers()
                     .debug_route_entry(source_session_key, source_mid)
                     .await
             }
@@ -125,7 +125,7 @@ impl MediaTransport {
             Self::Fake(_) => None,
             Self::Rtc(adapter) => {
                 adapter
-                    .shards()
+                    .workers()
                     .debug_route_entry_by_consumer_mid(consumer_session_key, consumer_mid)
                     .await
             }
@@ -141,7 +141,7 @@ impl MediaTransport {
             Self::Fake(_) => None,
             Self::Rtc(adapter) => {
                 adapter
-                    .shards()
+                    .workers()
                     .debug_route_entry_by_media_id(source_transport_media_id)
                     .await
             }
@@ -150,14 +150,14 @@ impl MediaTransport {
 }
 
 #[cfg(any(test, feature = "testing-transport"))]
-impl RtcTransportShardSet {
+impl RtcTransportWorkerSet {
     #[cfg(test)]
     pub(super) async fn debug_route_entry(
         &self,
         source_session_key: &TransportSessionKey,
         source_mid: Mid,
     ) -> Option<DebugRouteEntry> {
-        self.shard_for_user(source_session_key)
+        self.worker_for_user(source_session_key)
             .debug_route_entry(source_session_key, source_mid)
             .await
     }
@@ -167,8 +167,8 @@ impl RtcTransportShardSet {
         consumer_session_key: &TransportSessionKey,
         consumer_mid: Mid,
     ) -> Option<DebugRouteEntry> {
-        for shard in self.all_shards() {
-            if let Some(entry) = shard
+        for worker in self.all_workers() {
+            if let Some(entry) = worker
                 .debug_route_entry_by_consumer_mid(consumer_session_key, consumer_mid)
                 .await
             {
@@ -183,8 +183,8 @@ impl RtcTransportShardSet {
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> Option<DebugRouteEntry> {
-        for shard in self.all_shards() {
-            if let Some(entry) = shard
+        for worker in self.all_workers() {
+            if let Some(entry) = worker
                 .debug_route_entry_by_media_id(source_transport_media_id)
                 .await
             {

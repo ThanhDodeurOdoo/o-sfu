@@ -50,7 +50,7 @@ Proof notes:
 - router Kani harnesses call the production `o_sfu_router::Router`
 - Kani builds use router bounded proof storage
 - normal builds use `std::collections::BTreeMap` plus `BTreeSet`
-- scheduled formal verification runs one router proof per one-hour shard
+- scheduled formal verification runs one router proof per one-hour worker
 
 ## Dependency check
 

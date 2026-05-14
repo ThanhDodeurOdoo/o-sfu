@@ -14,7 +14,7 @@ fn first_candidate_port(offer_sdp: &str) -> Option<u16> {
 
 #[tokio::test]
 async fn rtc_initial_session_offer_starts_packet_loop() {
-    let adapter = RtcTransportShard::default();
+    let adapter = RtcTransportWorker::default();
     let session_key = transport_key(1, 15, UserId::Integer(15));
 
     assert!(!adapter.packet_loop_started());
@@ -29,7 +29,7 @@ async fn rtc_initial_session_offer_starts_packet_loop() {
 
 #[tokio::test]
 async fn rtc_initial_session_offer_contains_real_ice_and_dtls_parameters() {
-    let adapter = RtcTransportShard::default();
+    let adapter = RtcTransportWorker::default();
     let session_key = transport_key(1, 13, UserId::Integer(13));
 
     let offer_sdp = prepare_transport_session(&adapter, &session_key)
@@ -102,7 +102,7 @@ fn rtc_transport_ice_state_metric_maps_all_supported_states() {
 
 #[tokio::test]
 async fn rtc_transport_close_session_allows_recreating_the_initial_offer() {
-    let adapter = RtcTransportShard::default();
+    let adapter = RtcTransportWorker::default();
     let session_key = transport_key(1, 14, UserId::Integer(14));
 
     assert!(
@@ -126,7 +126,7 @@ async fn rtc_transport_close_session_allows_recreating_the_initial_offer() {
 
 #[tokio::test]
 async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
-    let adapter = RtcTransportShard::default();
+    let adapter = RtcTransportWorker::default();
     let session_key = transport_key(1, 143, UserId::Integer(143));
     assert!(
         prepare_transport_session(&adapter, &session_key)
@@ -162,7 +162,7 @@ async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
 
 #[tokio::test]
 async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
-    let adapter = RtcTransportShard::default();
+    let adapter = RtcTransportWorker::default();
     let session_key = transport_key(1, 140, UserId::Integer(140));
     assert!(
         prepare_transport_session(&adapter, &session_key)
@@ -191,7 +191,7 @@ async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
 
 #[tokio::test]
 async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
-    let adapter = RtcTransportShard::default();
+    let adapter = RtcTransportWorker::default();
     let first_session_key = transport_key(1, 141, UserId::Integer(141));
     assert!(
         prepare_transport_session(&adapter, &first_session_key)
@@ -223,7 +223,7 @@ async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
 
 #[tokio::test]
 async fn rtc_transport_distinguishes_same_session_id_across_channels() {
-    let adapter = RtcTransportShard::default();
+    let adapter = RtcTransportWorker::default();
     let first_session_key = transport_key_on_worker(1, 0, 30, UserId::Integer(30));
     let second_session_key = transport_key_on_worker(2, 1, 30, UserId::Integer(30));
 
@@ -259,7 +259,7 @@ async fn rtc_transport_distinguishes_same_session_id_across_channels() {
 
 #[tokio::test]
 async fn rtc_transport_concurrent_initial_offers_deliver_all_worker_responses() {
-    let adapter = Arc::new(RtcTransportShard::default());
+    let adapter = Arc::new(RtcTransportWorker::default());
     let session_keys: Vec<_> = (0_u32..8)
         .map(|offset| {
             transport_key(
@@ -298,7 +298,7 @@ async fn rtc_transport_concurrent_initial_offers_deliver_all_worker_responses() 
 
 #[tokio::test]
 async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() {
-    let adapter = Arc::new(RtcTransportShard::default());
+    let adapter = Arc::new(RtcTransportWorker::default());
     let first_session_key = transport_key(4, 301, UserId::Integer(301));
     let second_session_key = transport_key(4, 302, UserId::Integer(302));
 

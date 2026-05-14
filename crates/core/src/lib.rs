@@ -85,7 +85,7 @@ pub use ids::{ConnectionId, RoomInstanceId};
 pub use options::{
     AudioCodecPreference, CodecOptions, CodecPreferences, CoreOptions, LocalSpilloverPolicy,
     LocalSpilloverPolicyError, LocalSpilloverPolicyParts, MediaCodecFlags, MediaOptions,
-    ObservabilityOptions, RoomShardingPolicy, RoomSpilloverMode, RoutingOptions, RtcPortRange,
+    ObservabilityOptions, RoomSpilloverMode, RoomWorkerPolicy, RoutingOptions, RtcPortRange,
     RuntimeFeatureFlags, SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
 };
 pub use room::{

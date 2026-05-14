@@ -1,6 +1,6 @@
 //! UDP ingress routing for RTC sessions.
 //!
-//! The shared UDP socket receives datagrams for every session on a shard. This
+//! The shared UDP socket receives datagrams for every session on a worker. This
 //! module decides which `str0m::Rtc` should see one datagram. Its indexes and
 //! caches are performance hints only. `Rtc::accepts()` remains the authoritative
 //! ownership check before any packet is trusted.
@@ -500,7 +500,7 @@ fn route_packet_to_session(
     true
 }
 
-/// Route an unknown-source datagram when the shard has only one live session.
+/// Route an unknown-source datagram when the worker has only one live session.
 ///
 /// The single-session case still calls `Rtc::accepts()` and records misses.
 /// It only avoids the recovery-index probe because there is no candidate set to

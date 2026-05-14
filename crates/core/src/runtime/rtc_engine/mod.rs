@@ -6,16 +6,16 @@
 //! module to create offers, publish media, or inspect transport state unless
 //! they are writing focused RTC-engine tests or backend integration code.
 //!
-//! The engine is worker-oriented. Each [`RtcTransportShard`] owns one lazy
+//! The engine is worker-oriented. Each [`RtcTransportWorker`] owns one lazy
 //! packet loop, command and relay mailboxes, worker-local relay target state,
 //! diagnostics hooks, packet-sink fanout, bitrate snapshots, and the state machines
-//! needed to drive Str0m. The surrounding media transport shard set decides
+//! needed to drive Str0m. The surrounding media transport worker set decides
 //! which session belongs to which worker and hides cross-worker relay setup
 //! from room orchestration.
 //!
 //! Internal ownership is split by the kind of RTC work being performed:
 //!
-//! - `api`: shard facade, lazy worker lifecycle, command dispatch, and
+//! - `api`: worker facade, lazy worker lifecycle, command dispatch, and
 //!   production/test support entry points;
 //! - `bootstrap`, `commands`, `worker`, and `state`: offer/answer bootstrap,
 //!   mailbox contracts, worker-local mutations, and pure RTC session state;
@@ -55,7 +55,7 @@ pub mod test_support;
 mod tests;
 mod worker;
 
-pub use api::RtcTransportShard;
+pub use api::RtcTransportWorker;
 #[cfg(any(test, feature = "testing-transport"))]
 pub use forwarded_packet::ForwardedPacket;
 pub use negotiated_capabilities::client_rtp_capabilities_from_answer;

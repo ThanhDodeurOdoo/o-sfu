@@ -25,7 +25,7 @@ use crate::{
         },
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
-        rtc_engine::RtcTransportShard,
+        rtc_engine::RtcTransportWorker,
     },
     transport::{
         NegotiationPort, SourcePolicyPort, TransportRelayRouteAction, TransportRelayRouteEffect,
@@ -164,7 +164,7 @@ async fn remove_consumer_media(
 
 async fn apply_release_effect_and_assert_counts(
     adapter: &MediaTransport,
-    source_shard: &RtcTransportShard,
+    source_worker: &RtcTransportWorker,
     source_session_key: &TransportSessionKey,
     source_media_id: TransportMediaId,
     target_session_key: &TransportSessionKey,
@@ -179,7 +179,7 @@ async fn apply_release_effect_and_assert_counts(
         TransportRelayRouteAction::Release,
     )
     .await;
-    assert_relay_target_counts(source_shard, source_media_id, total, active).await;
+    assert_relay_target_counts(source_worker, source_media_id, total, active).await;
 }
 
 async fn set_remote_relay_and_consumer_active(
@@ -213,19 +213,19 @@ async fn set_remote_relay_and_consumer_active(
 }
 
 async fn assert_relay_target_counts(
-    source_shard: &RtcTransportShard,
+    source_worker: &RtcTransportWorker,
     source_media_id: TransportMediaId,
     total: usize,
     active: usize,
 ) {
     assert_eq!(
-        source_shard
+        source_worker
             .debug_relay_target_count_for_source(source_media_id)
             .await,
         total
     );
     assert_eq!(
-        source_shard
+        source_worker
             .debug_active_relay_target_count_for_source(source_media_id)
             .await,
         active
@@ -233,12 +233,12 @@ async fn assert_relay_target_counts(
 }
 
 async fn assert_local_route_active(
-    source_shard: &RtcTransportShard,
+    source_worker: &RtcTransportWorker,
     source_session: &TransportSessionKey,
     local_consumer_session: &TransportSessionKey,
     local_consumer_media_id: TransportMediaId,
 ) {
-    let local_route_entry = source_shard
+    let local_route_entry = source_worker
         .debug_route_entry(source_session, Mid::from("aud-up"))
         .await;
     assert!(local_route_entry.is_some());
@@ -253,13 +253,13 @@ async fn assert_local_route_active(
 }
 
 async fn assert_remote_route_activity(
-    consumer_shard: &RtcTransportShard,
+    consumer_worker: &RtcTransportWorker,
     source_media_id: TransportMediaId,
     remote_consumer_session: &TransportSessionKey,
     remote_consumer_media_id: TransportMediaId,
     active: bool,
 ) {
-    let remote_route_entry = consumer_shard
+    let remote_route_entry = consumer_worker
         .debug_route_entry_by_media_id(source_media_id)
         .await;
     assert!(remote_route_entry.is_some());
@@ -448,13 +448,13 @@ async fn fake_backend_failures_surface_through_media_transport_ports() {
 }
 
 async fn assert_remote_route_inactive(
-    remote_consumer_shard: &RtcTransportShard,
+    remote_consumer_worker: &RtcTransportWorker,
     source_media_id: TransportMediaId,
     remote_consumer_session: &TransportSessionKey,
     remote_consumer_media_id: TransportMediaId,
 ) {
     assert_remote_route_activity(
-        remote_consumer_shard,
+        remote_consumer_worker,
         source_media_id,
         remote_consumer_session,
         remote_consumer_media_id,
@@ -464,22 +464,22 @@ async fn assert_remote_route_inactive(
 }
 
 async fn assert_local_active_and_remote_inactive(
-    source_shard: &RtcTransportShard,
-    remote_consumer_shard: &RtcTransportShard,
+    source_worker: &RtcTransportWorker,
+    remote_consumer_worker: &RtcTransportWorker,
     source_session: &TransportSessionKey,
     source_media_id: TransportMediaId,
     local_consumer: (&TransportSessionKey, TransportMediaId),
     remote_consumer: (&TransportSessionKey, TransportMediaId),
 ) {
     assert_local_route_active(
-        source_shard,
+        source_worker,
         source_session,
         local_consumer.0,
         local_consumer.1,
     )
     .await;
     assert_remote_route_inactive(
-        remote_consumer_shard,
+        remote_consumer_worker,
         source_media_id,
         remote_consumer.0,
         remote_consumer.1,
@@ -500,11 +500,11 @@ fn rtc_engine_rejects_answers_without_projectable_client_capabilities() {
 }
 
 #[tokio::test]
-async fn rtc_engine_shards_room_bootstrap_by_explicit_media_worker() {
+async fn rtc_engine_workers_room_bootstrap_by_explicit_media_worker() {
     let adapter = test_rtc_engine(2, RtcPortRange::new(46_000, 46_003));
     let first_room_session = test_session_key(10, 0, 1, UserId::Integer(1));
     let second_room_session = test_session_key(11, 1, 1, UserId::Integer(2));
-    let same_shard_session = test_session_key(12, 0, 1, UserId::Integer(3));
+    let same_worker_session = test_session_key(12, 0, 1, UserId::Integer(3));
 
     let first_offer = adapter
         .create_initial_session_offer(&first_room_session)
@@ -512,19 +512,19 @@ async fn rtc_engine_shards_room_bootstrap_by_explicit_media_worker() {
     let second_offer = adapter
         .create_initial_session_offer(&second_room_session)
         .await;
-    let same_shard_offer = adapter
-        .create_initial_session_offer(&same_shard_session)
+    let same_worker_offer = adapter
+        .create_initial_session_offer(&same_worker_session)
         .await;
     assert!(first_offer.is_ok());
     assert!(second_offer.is_ok());
-    assert!(same_shard_offer.is_ok());
+    assert!(same_worker_offer.is_ok());
     let Some(first_offer) = first_offer.ok() else {
         return;
     };
     let Some(second_offer) = second_offer.ok() else {
         return;
     };
-    let Some(same_shard_offer) = same_shard_offer.ok() else {
+    let Some(same_worker_offer) = same_worker_offer.ok() else {
         return;
     };
 
@@ -534,13 +534,13 @@ async fn rtc_engine_shards_room_bootstrap_by_explicit_media_worker() {
     let Some(second_port) = first_candidate_port(&second_offer.into_sdp()) else {
         return;
     };
-    let Some(same_shard_port) = first_candidate_port(&same_shard_offer.into_sdp()) else {
+    let Some(same_worker_port) = first_candidate_port(&same_worker_offer.into_sdp()) else {
         return;
     };
 
     assert!((46_000..=46_001).contains(&first_port));
     assert!((46_002..=46_003).contains(&second_port));
-    assert_eq!(same_shard_port, first_port);
+    assert_eq!(same_worker_port, first_port);
 }
 
 #[tokio::test]
@@ -693,13 +693,13 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
         return;
     };
 
-    let Some(shards) = adapter.as_rtc_shard_set() else {
+    let Some(workers) = adapter.as_rtc_worker_set() else {
         return;
     };
-    let source_shard = shards.shard_for_user(&source_session);
-    let remote_consumer_shard = shards.shard_for_user(&remote_consumer_session);
+    let source_worker = workers.worker_for_user(&source_session);
+    let remote_consumer_worker = workers.worker_for_user(&remote_consumer_session);
 
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 1).await;
+    assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 1).await;
 
     set_remote_relay_and_consumer_active(
         &adapter,
@@ -711,10 +711,10 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
     )
     .await;
 
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 0).await;
+    assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 0).await;
     assert_local_active_and_remote_inactive(
-        source_shard.as_ref(),
-        remote_consumer_shard.as_ref(),
+        source_worker.as_ref(),
+        remote_consumer_worker.as_ref(),
         &source_session,
         source_media_id,
         (&local_consumer_session, local_consumer_media_id),
@@ -731,13 +731,13 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
         true,
     )
     .await;
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 1).await;
+    assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 1).await;
 
     remove_consumer_media(&adapter, &remote_consumer_session, remote_consumer_media_id).await;
-    assert_relay_target_counts(source_shard.as_ref(), source_media_id, 1, 1).await;
+    assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 1).await;
     apply_release_effect_and_assert_counts(
         &adapter,
-        source_shard.as_ref(),
+        source_worker.as_ref(),
         &source_session,
         source_media_id,
         &remote_consumer_session,

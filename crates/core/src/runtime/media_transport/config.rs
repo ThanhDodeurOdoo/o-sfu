@@ -17,7 +17,7 @@ use crate::{
     },
 };
 
-/// Operator-facing RTC transport policy used to build each worker shard.
+/// Operator-facing RTC transport policy used to build each RTC worker.
 ///
 /// This is still RTC-specific because it describes the concrete server-side
 /// WebRTC transport. The orchestration layer should normally pass
@@ -25,7 +25,7 @@ use crate::{
 /// [`MediaTransport`](super::MediaTransport) construction instead of
 /// assembling this type directly.
 ///
-/// Values are immutable after construction. Per-shard port splitting derives
+/// Values are immutable after construction. Per-worker port splitting derives
 /// smaller configs from this one without changing bitrate, codec or public IP
 /// policy.
 #[derive(Debug, Clone)]
@@ -41,7 +41,7 @@ pub struct RtcTransportConfig {
     pub video_bitrate_limits: VideoBitrateLimits,
     /// UDP port range available to this transport config.
     ///
-    /// The top-level config covers the whole process. Shard configs carry only
+    /// The top-level config covers the whole process. Worker configs carry only
     /// the sub-range assigned to one media worker.
     pub rtc_port_range: RtcPortRange,
     /// Enabled codec set for offer generation and capability projection.
@@ -53,7 +53,7 @@ pub struct RtcTransportConfig {
 impl RtcTransportConfig {
     /// Returns a copy scoped to one worker-owned UDP port range.
     ///
-    /// This is used only by shard-set construction. Callers outside the shard
+    /// This is used only by worker-set construction. Callers outside the worker
     /// set should validate the original range once through the media transport
     /// builder instead of slicing it themselves.
     #[must_use]
@@ -142,26 +142,26 @@ impl MediaTransportDeps {
     }
 }
 
-/// Internal shard-set construction input.
+/// Internal worker-set construction input.
 ///
 /// # Design note
 ///
 /// Public runtime construction goes through `MediaTransport::from_core_options`
 /// or `RtcTransport::builder()`, which validate worker and port policy before
 /// creating transport state. This struct remains as the narrow handoff from the
-/// builder to the shard set, where worker-local RTC shards are actually
+/// builder to the worker set, where worker-local RTC workers are actually
 /// created.
 #[derive(Debug, Clone)]
-pub(in crate::runtime::media_transport) struct RtcTransportShardSetConfig {
-    /// Number of media workers that should receive transport shards.
+pub(in crate::runtime::media_transport) struct RtcTransportWorkerSetConfig {
+    /// Number of media workers that should receive transport workers.
     worker_count: usize,
-    /// Shared operator policy before shard-local port splitting.
+    /// Shared operator policy before worker-local port splitting.
     transport: RtcTransportConfig,
-    /// Shared process services cloned into each shard.
+    /// Shared process services cloned into each worker.
     deps: MediaTransportDeps,
 }
 
-impl RtcTransportShardSetConfig {
+impl RtcTransportWorkerSetConfig {
     #[must_use]
     pub(in crate::runtime::media_transport) fn new(
         transport: RtcTransportConfig,
@@ -191,7 +191,7 @@ impl RtcTransportShardSetConfig {
     }
 
     #[must_use]
-    pub(in crate::runtime::media_transport) fn shard_config_with_port_range(
+    pub(in crate::runtime::media_transport) fn worker_config_with_port_range(
         &self,
         rtc_port_range: RtcPortRange,
     ) -> RtcTransportConfig {

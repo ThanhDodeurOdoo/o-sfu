@@ -60,7 +60,7 @@ use super::{
     router_state::{RoomRouterState, RoomRouterStateError},
 };
 use crate::{
-    RoomShardingPolicy,
+    RoomWorkerPolicy,
     runtime::{UserId, router_events::RoomRouterEventSink},
 };
 
@@ -235,7 +235,7 @@ impl RoutedConsumerId {
 ///   A RTP -> W0 packet loop -> W1 relay mailbox -> W1 packet loop -> B RTP
 /// ```
 ///
-/// `RoomTopology` owns the first graph. The transport shard set owns the
+/// `RoomTopology` owns the first graph. The transport worker set owns the
 /// second graph.
 #[derive(Debug, Clone)]
 pub(super) struct RoomTopology {
@@ -345,7 +345,7 @@ impl RoomTopology {
     /// and it does not allocate transport sessions.
     pub(super) fn new_with_router_state_factory(
         local_routers: LocalRoomRouterPlacements,
-        room_sharding_policy: RoomShardingPolicy,
+        room_worker_policy: RoomWorkerPolicy,
         router_rtp_capabilities: MediaCapabilities,
         router_state_factory: &RoomRouterStateFactory,
     ) -> Self {
@@ -359,7 +359,7 @@ impl RoomTopology {
         router_memberships.insert(primary_router_id, RouterMembershipState::Primary);
         Self {
             primary_router: primary_router_id,
-            placement_policy: PlacementPolicy::new(room_sharding_policy),
+            placement_policy: PlacementPolicy::new(room_worker_policy),
             local_routers,
             router_state_factory: router_state_factory.clone(),
             routers,

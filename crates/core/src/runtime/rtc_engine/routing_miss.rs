@@ -65,7 +65,7 @@ const UNKNOWN_SOURCE_RATE_LIMIT_COOLDOWN: Duration = Duration::from_millis(200);
 pub(super) struct PacketLoopRoutingMissKey {
     /// Remote UDP tuple that produced the packet.
     source_addr: SocketAddr,
-    /// Local shard candidate address that received the packet.
+    /// Local worker candidate address that received the packet.
     candidate_addr: SocketAddr,
     /// Packet length, kept outside the fingerprint so different sized packets
     /// never share a miss key accidentally.

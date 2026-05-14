@@ -25,7 +25,7 @@ pub(super) use tokio_tungstenite::{
     },
 };
 
-use crate::config::RoomShardingPolicy;
+use crate::config::RoomWorkerPolicy;
 pub(super) use crate::{
     application::stream_catalog::{
         source_publish_intent_for_stream_type, stream_id_for_stream_type,
@@ -185,7 +185,7 @@ pub(super) fn test_config(
             max_bitrate_out: Bitrate::from_mbps(10),
             video_bitrate_limits: VideoBitrateLimits::default(),
             rtc_media_worker_count: 1,
-            room_sharding_policy: RoomShardingPolicy::strict_single_router(),
+            room_worker_policy: RoomWorkerPolicy::strict_single_router(),
         },
         codecs: CodecConfig {
             flags: MediaCodecFlags::default(),
@@ -261,7 +261,7 @@ async fn spawn_test_server_from_config(
                 config.features,
                 rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
             )
-            .with_room_sharding_policy(config.transport.room_sharding_policy),
+            .with_room_worker_policy(config.transport.room_worker_policy),
         ),
         RoomManagerDeps {
             packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),

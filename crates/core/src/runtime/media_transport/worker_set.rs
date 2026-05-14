@@ -1,6 +1,6 @@
-//! RTC worker sharding below the media transport boundary.
+//! RTC worker placement below the media transport boundary.
 //!
-//! `MediaTransport` hides this module from server orchestration. The shard set
+//! `MediaTransport` hides this module from server orchestration. The worker set
 //! owns the process-local RTC worker topology, maps each transport session to
 //! the worker selected by its media-worker id and coordinates cross-worker
 //! relay cleanup. It is still cold-path orchestration around worker services.
@@ -21,8 +21,8 @@ use str0m::media::MediaKind as Str0mMediaKind;
 use crate::{
     runtime::{
         RoomInstanceId,
-        media_transport::config::RtcTransportShardSetConfig,
-        rtc_engine::{RtcTransportShard, client_rtp_capabilities_from_answer},
+        media_transport::config::RtcTransportWorkerSetConfig,
+        rtc_engine::{RtcTransportWorker, client_rtp_capabilities_from_answer},
     },
     transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
@@ -34,7 +34,7 @@ use crate::{
     },
 };
 
-/// Distance between two shard media-id allocation ranges.
+/// Distance between two worker media-id allocation ranges.
 ///
 /// The value only needs to be large enough that one worker cannot exhaust its
 /// range during a process lifetime under realistic load. Keeping the gap fixed
@@ -42,21 +42,21 @@ use crate::{
 /// key while still avoiding collisions between spillover workers.
 const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
 
-/// Process-local collection of RTC transport shards keyed by media-worker id.
+/// Process-local collection of RTC transport workers keyed by media-worker id.
 ///
-/// The shard set is the last transport layer that knows about worker
+/// The worker set is the last transport layer that knows about worker
 /// distribution. Above it, callers express media intent through transport
-/// ports. Below it, each [`RtcTransportShard`] owns one worker-local RTC
+/// ports. Below it, each [`RtcTransportWorker`] owns one worker-local RTC
 /// state machine and packet loop.
 ///
 /// # Concurrency
 ///
-/// Cloning shard handles is cheap because each shard is stored in an `Arc`.
-/// Operations route to the selected shard and await the shard-owned async work.
-/// The shard set does not hold a global lock across those awaits.
+/// Cloning worker handles is cheap because each worker is stored in an `Arc`.
+/// Operations route to the selected worker and await the worker-owned async work.
+/// The worker set does not hold a global lock across those awaits.
 ///
 /// Cross-worker subscriptions use source-to-consumer relay. The pure room
-/// router decides that a consumer route exists; this shard set installs the
+/// router decides that a consumer route exists; this worker set installs the
 /// worker-local packet bridge that makes the route deliver media:
 ///
 /// ```text
@@ -78,71 +78,70 @@ const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
 ///          +---------------------------> W1 packet loop -> consumer session W1
 /// ```
 #[derive(Debug)]
-pub struct RtcTransportShardSet {
-    /// Worker used when there is only one shard or when a media-worker id maps
+pub struct RtcTransportWorkerSet {
+    /// Worker used when there is only one worker or when a media-worker id maps
     /// to index zero.
-    primary_shard: Arc<RtcTransportShard>,
-    /// Additional worker shards addressed by media-worker id modulo shard
-    /// count.
-    extra_shards: Vec<Arc<RtcTransportShard>>,
-    /// Shared wakeup signal used by every shard to notify room-level source
+    primary_worker: Arc<RtcTransportWorker>,
+    /// Additional RTC workers addressed by media-worker id modulo worker count.
+    extra_workers: Vec<Arc<RtcTransportWorker>>,
+    /// Shared wakeup signal used by every worker to notify room-level source
     /// policy tasks about transport-observed changes.
     source_policy_signal: Arc<SourcePolicySignal>,
 }
 
-impl RtcTransportShardSet {
-    /// Builds RTC shards and installs one shared source-policy signal.
+impl RtcTransportWorkerSet {
+    /// Builds RTC workers and installs one shared source-policy signal.
     ///
     /// Invalid worker or port-range combinations should already be rejected by
     /// `RtcTransportBuilder`. If a transitional caller bypasses that builder
-    /// this constructor falls back to a single shard, preserving availability
+    /// this constructor falls back to a single worker, preserving availability
     /// rather than panicking during startup.
-    pub(super) fn new(config: &RtcTransportShardSetConfig) -> Self {
+    pub(super) fn new(config: &RtcTransportWorkerSetConfig) -> Self {
         let source_policy_signal = Arc::new(SourcePolicySignal::default());
-        let Some(shard_ranges) = config
+        let Some(worker_ranges) = config
             .transport_config()
             .rtc_port_range()
             .split_for_workers(config.worker_count())
         else {
             return Self {
-                primary_shard: Arc::new(RtcTransportShard::new(
+                primary_worker: Arc::new(RtcTransportWorker::new(
                     config.transport_config(),
                     config.transport_deps(),
                     Arc::clone(&source_policy_signal),
-                    media_id_base_for_shard_index(0),
+                    media_id_base_for_worker_index(0),
                 )),
-                extra_shards: Vec::new(),
+                extra_workers: Vec::new(),
                 source_policy_signal,
             };
         };
-        let mut shard_ranges = shard_ranges.into_iter();
-        let Some(primary_range) = shard_ranges.next() else {
+        let mut worker_ranges = worker_ranges.into_iter();
+        let Some(primary_range) = worker_ranges.next() else {
             return Self {
-                primary_shard: Arc::new(RtcTransportShard::new(
+                primary_worker: Arc::new(RtcTransportWorker::new(
                     config.transport_config(),
                     config.transport_deps(),
                     Arc::clone(&source_policy_signal),
-                    media_id_base_for_shard_index(0),
+                    media_id_base_for_worker_index(0),
                 )),
-                extra_shards: Vec::new(),
+                extra_workers: Vec::new(),
                 source_policy_signal,
             };
         };
         Self {
-            primary_shard: Arc::new(RtcTransportShard::new(
-                &config.shard_config_with_port_range(primary_range),
+            primary_worker: Arc::new(RtcTransportWorker::new(
+                &config.worker_config_with_port_range(primary_range),
                 config.transport_deps(),
                 Arc::clone(&source_policy_signal),
-                media_id_base_for_shard_index(0),
+                media_id_base_for_worker_index(0),
             )),
-            extra_shards: shard_ranges
+            extra_workers: worker_ranges
                 .enumerate()
                 .map(|(index, range)| {
-                    Arc::new(RtcTransportShard::new(
-                        &config.shard_config_with_port_range(range),
+                    Arc::new(RtcTransportWorker::new(
+                        &config.worker_config_with_port_range(range),
                         config.transport_deps(),
                         Arc::clone(&source_policy_signal),
-                        media_id_base_for_shard_index(index + 1),
+                        media_id_base_for_worker_index(index + 1),
                     ))
                 })
                 .collect(),
@@ -150,38 +149,38 @@ impl RtcTransportShardSet {
         }
     }
 
-    /// Selects the shard that owns a transport session.
+    /// Selects the worker that owns a transport session.
     ///
     /// The mapping is deterministic and depends only on the runtime-assigned
     /// media-worker id in the session key. Room and signaling code must not
     /// infer topology from user identity.
-    pub(super) fn shard_for_user(
+    pub(super) fn worker_for_user(
         &self,
         session_key: &TransportSessionKey,
-    ) -> Arc<RtcTransportShard> {
-        self.shard_for_media_worker_id(session_key.media_worker_id())
+    ) -> Arc<RtcTransportWorker> {
+        self.worker_for_media_worker_id(session_key.media_worker_id())
     }
 
-    /// Returns the source and consumer shards needed for cross-worker relay.
+    /// Returns the source and consumer workers needed for cross-worker relay.
     ///
     /// `None` means both sessions are on the same worker and local routing is
-    /// enough. A returned pair means the source shard must activate relay
-    /// forwarding toward the consumer shard before the consumer route can be
+    /// enough. A returned pair means the source worker must activate relay
+    /// forwarding toward the consumer worker before the consumer route can be
     /// fully installed.
-    pub(super) fn relay_registration_shards(
+    pub(super) fn relay_registration_workers(
         &self,
         consumer_session_key: &TransportSessionKey,
         source_session_key: &TransportSessionKey,
-    ) -> Option<(Arc<RtcTransportShard>, Arc<RtcTransportShard>)> {
-        let consumer_shard = self.shard_for_user(consumer_session_key);
-        let source_shard = self.shard_for_user(source_session_key);
-        if Arc::ptr_eq(&consumer_shard, &source_shard) {
+    ) -> Option<(Arc<RtcTransportWorker>, Arc<RtcTransportWorker>)> {
+        let consumer_worker = self.worker_for_user(consumer_session_key);
+        let source_worker = self.worker_for_user(source_session_key);
+        if Arc::ptr_eq(&consumer_worker, &source_worker) {
             return None;
         }
-        Some((source_shard, consumer_shard))
+        Some((source_worker, consumer_worker))
     }
 
-    /// Builds a best-effort bitrate snapshot across the shards that own the
+    /// Builds a best-effort bitrate snapshot across the workers that own the
     /// requested sessions.
     ///
     /// The snapshot is observability data, not authoritative room state. It may
@@ -190,24 +189,24 @@ impl RtcTransportShardSet {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
-        let mut keys_by_shard = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
+        let mut keys_by_worker = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
         for session_key in session_keys {
-            keys_by_shard
-                .entry(self.shard_index_for_user(session_key))
+            keys_by_worker
+                .entry(self.worker_index_for_user(session_key))
                 .or_default()
                 .push(session_key.clone());
         }
         let mut snapshot = TransportBitrateSnapshot::default();
-        for (shard_index, shard_session_keys) in keys_by_shard {
-            let shard = self.shard_for_index(shard_index);
-            let shard_snapshot = shard.transport_bitrate_snapshot(&shard_session_keys);
-            snapshot.total = snapshot.total.saturating_add(shard_snapshot.total);
-            snapshot.per_media.extend(shard_snapshot.per_media);
+        for (worker_index, worker_session_keys) in keys_by_worker {
+            let worker = self.worker_for_index(worker_index);
+            let worker_snapshot = worker.transport_bitrate_snapshot(&worker_session_keys);
+            snapshot.total = snapshot.total.saturating_add(worker_snapshot.total);
+            snapshot.per_media.extend(worker_snapshot.per_media);
         }
         snapshot
     }
 
-    /// Builds a best-effort receiver bandwidth snapshot across worker shards.
+    /// Builds a best-effort receiver bandwidth snapshot across RTC workers.
     ///
     /// Room policy uses this as an input to source selection. Missing entries
     /// mean the transport has no current estimate for that session.
@@ -215,23 +214,23 @@ impl RtcTransportShardSet {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
-        let mut keys_by_shard = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
+        let mut keys_by_worker = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
         for session_key in session_keys {
-            keys_by_shard
-                .entry(self.shard_index_for_user(session_key))
+            keys_by_worker
+                .entry(self.worker_index_for_user(session_key))
                 .or_default()
                 .push(session_key.clone());
         }
         let mut snapshot = ReceiverBandwidthSnapshot::default();
-        for (shard_index, shard_session_keys) in keys_by_shard {
-            let shard = self.shard_for_index(shard_index);
-            let shard_snapshot = shard.receiver_bandwidth_snapshot(&shard_session_keys);
-            snapshot.per_session.extend(shard_snapshot.per_session);
+        for (worker_index, worker_session_keys) in keys_by_worker {
+            let worker = self.worker_for_index(worker_index);
+            let worker_snapshot = worker.receiver_bandwidth_snapshot(&worker_session_keys);
+            snapshot.per_session.extend(worker_snapshot.per_session);
         }
         snapshot
     }
 
-    /// Builds a best-effort placement-pressure snapshot across worker shards.
+    /// Builds a best-effort placement-pressure snapshot across RTC workers.
     ///
     /// Egress bitrate is additive across selected sessions. Saturation signals
     /// use the hottest owning worker so one overloaded worker can activate
@@ -240,33 +239,34 @@ impl RtcTransportShardSet {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportPlacementPressureSnapshot {
-        let mut keys_by_shard = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
+        let mut keys_by_worker = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
         for session_key in session_keys {
-            keys_by_shard
-                .entry(self.shard_index_for_user(session_key))
+            keys_by_worker
+                .entry(self.worker_index_for_user(session_key))
                 .or_default()
                 .push(session_key.clone());
         }
         let mut snapshot = TransportPlacementPressureSnapshot::default();
-        for (shard_index, shard_session_keys) in keys_by_shard {
-            let shard = self.shard_for_index(shard_index);
-            snapshot = snapshot.merged_with(shard.placement_pressure_snapshot(&shard_session_keys));
+        for (worker_index, worker_session_keys) in keys_by_worker {
+            let worker = self.worker_for_index(worker_index);
+            snapshot =
+                snapshot.merged_with(worker.placement_pressure_snapshot(&worker_session_keys));
         }
         snapshot
     }
 
     /// Builds best-effort pressure snapshots for every local RTC worker.
     pub(super) fn worker_pressure_snapshots(&self) -> Vec<TransportWorkerPressureSnapshot> {
-        let mut snapshots = Vec::with_capacity(self.extra_shards.len().saturating_add(1));
-        snapshots.push(self.primary_shard.worker_pressure_snapshot(0));
-        for (index, shard) in self.extra_shards.iter().enumerate() {
+        let mut snapshots = Vec::with_capacity(self.extra_workers.len().saturating_add(1));
+        snapshots.push(self.primary_worker.worker_pressure_snapshot(0));
+        for (index, worker) in self.extra_workers.iter().enumerate() {
             let media_worker_id = index.saturating_add(1);
-            snapshots.push(shard.worker_pressure_snapshot(media_worker_id));
+            snapshots.push(worker.worker_pressure_snapshot(media_worker_id));
         }
         snapshots
     }
 
-    /// Applies packet-gate updates in shard-local batches.
+    /// Applies packet-gate updates in worker-local batches.
     ///
     /// The result vector preserves the input order so callers can correlate
     /// failures with planned policy updates. Cross-room updates are rejected
@@ -288,16 +288,16 @@ impl RtcTransportShardSet {
                 continue;
             }
             let key = ConsumerPacketGateBatchKey {
-                shard_index: self.shard_index_for_user(update.consumer_session_key()),
+                worker_index: self.worker_index_for_user(update.consumer_session_key()),
                 source_session_key: update.source_session_key().clone(),
                 source_transport_media_id: update.source_transport_media_id(),
             };
             batches.entry(key).or_default().push(index);
         }
         for (key, batch) in batches {
-            let shard = self.shard_for_index(key.shard_index);
+            let worker = self.worker_for_index(key.worker_index);
             let update_count = batch.len();
-            let batch_results = shard
+            let batch_results = worker
                 .media()
                 .set_consumer_packet_gates(
                     &key.source_session_key,
@@ -315,15 +315,15 @@ impl RtcTransportShardSet {
         results
     }
 
-    /// Returns the latest active-speaker observations across all shards.
+    /// Returns the latest active-speaker observations across all workers.
     ///
     /// This is a transport-observed snapshot. It is sorted newest first and
     /// deduplicated by transport media id so room policy can consume it without
     /// learning which worker observed the packet.
     pub(super) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
-        let mut snapshot = self.primary_shard.active_speaker_source_snapshot().await;
-        for shard in &self.extra_shards {
-            snapshot.extend(shard.active_speaker_source_snapshot().await);
+        let mut snapshot = self.primary_worker.active_speaker_source_snapshot().await;
+        for worker in &self.extra_workers {
+            snapshot.extend(worker.active_speaker_source_snapshot().await);
         }
         snapshot.sort_by_key(|source| {
             (
@@ -335,7 +335,7 @@ impl RtcTransportShardSet {
         snapshot
     }
 
-    /// Returns diagnostic active-speaker state across all shards.
+    /// Returns diagnostic active-speaker state across all workers.
     ///
     /// The ordering is stable for operator output. Like other diagnostics this
     /// is best-effort and can race with packet processing.
@@ -343,26 +343,26 @@ impl RtcTransportShardSet {
         &self,
     ) -> Vec<ActiveSpeakerSourceDiagnostic> {
         let mut snapshot = self
-            .primary_shard
+            .primary_worker
             .active_speaker_diagnostic_snapshot()
             .await;
-        for shard in &self.extra_shards {
-            snapshot.extend(shard.active_speaker_diagnostic_snapshot().await);
+        for worker in &self.extra_workers {
+            snapshot.extend(worker.active_speaker_diagnostic_snapshot().await);
         }
         snapshot.sort_by_key(|source| source.transport_media_id().as_u64());
         snapshot.dedup_by_key(|source| source.transport_media_id());
         snapshot
     }
 
-    /// Returns the next active-speaker expiry deadline known by any shard.
+    /// Returns the next active-speaker expiry deadline known by any worker.
     ///
     /// The runtime uses this to wake room source-policy sync without polling
     /// every room on a fixed interval.
     pub(super) async fn next_active_speaker_deadline(&self) -> Option<Instant> {
-        let mut next_deadline = self.primary_shard.next_active_speaker_deadline().await;
-        for shard in &self.extra_shards {
-            let shard_deadline = shard.next_active_speaker_deadline().await;
-            next_deadline = match (next_deadline, shard_deadline) {
+        let mut next_deadline = self.primary_worker.next_active_speaker_deadline().await;
+        for worker in &self.extra_workers {
+            let worker_deadline = worker.next_active_speaker_deadline().await;
+            next_deadline = match (next_deadline, worker_deadline) {
                 (Some(current), Some(candidate)) => Some(current.min(candidate)),
                 (Some(current), None) => Some(current),
                 (None, Some(candidate)) => Some(candidate),
@@ -382,11 +382,11 @@ impl RtcTransportShardSet {
         now: Instant,
     ) -> BTreeSet<RoomInstanceId> {
         let mut room_instance_ids = self
-            .primary_shard
+            .primary_worker
             .expired_active_speaker_room_instance_ids(now)
             .await;
-        for shard in &self.extra_shards {
-            room_instance_ids.extend(shard.expired_active_speaker_room_instance_ids(now).await);
+        for worker in &self.extra_workers {
+            room_instance_ids.extend(worker.expired_active_speaker_room_instance_ids(now).await);
         }
         room_instance_ids
     }
@@ -395,21 +395,21 @@ impl RtcTransportShardSet {
         self.source_policy_signal.subscribe()
     }
 
-    /// Creates the first offer on the shard that owns the session.
+    /// Creates the first offer on the worker that owns the session.
     ///
-    /// Offer state remains worker-local. The shard set only applies the
+    /// Offer state remains worker-local. The worker set only applies the
     /// deterministic session-to-worker mapping.
     pub(super) async fn create_initial_session_offer(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        self.shard_for_user(session_key)
+        self.worker_for_user(session_key)
             .negotiation()
             .create_initial_session_offer(session_key)
             .await
     }
 
-    /// Creates a renegotiation offer on the session's owning shard.
+    /// Creates a renegotiation offer on the session's owning worker.
     ///
     /// The worker enforces whether renegotiation is legal for the current RTC
     /// state.
@@ -417,13 +417,13 @@ impl RtcTransportShardSet {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        self.shard_for_user(session_key)
+        self.worker_for_user(session_key)
             .negotiation()
             .create_session_renegotiation_offer(session_key)
             .await
     }
 
-    /// Applies an SDP answer on the session's owning shard.
+    /// Applies an SDP answer on the session's owning worker.
     ///
     /// The returned producer parameters are transport-derived facts used by the
     /// room to commit staged publications.
@@ -432,7 +432,7 @@ impl RtcTransportShardSet {
         session_key: &TransportSessionKey,
         answer_sdp: &str,
     ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-        self.shard_for_user(session_key)
+        self.worker_for_user(session_key)
             .negotiation()
             .apply_session_answer(session_key, answer_sdp)
             .await
@@ -449,36 +449,36 @@ impl RtcTransportShardSet {
         client_rtp_capabilities_from_answer(answer_sdp).ok_or(TransportAdapterError::InvalidInput)
     }
 
-    /// Closes all transport state for a session and releases cross-shard relay
+    /// Closes all transport state for a session and releases cross-worker relay
     /// registrations.
     ///
-    /// Session cleanup starts on the owning shard. Any relay cleanup emitted by
-    /// that shard is then replayed on source shards so no remote worker keeps
+    /// Session cleanup starts on the owning worker. Any relay cleanup emitted by
+    /// that worker is then replayed on source workers so no remote worker keeps
     /// forwarding to a closed target.
     pub(super) async fn close_session(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
-        self.shard_for_user(session_key)
+        self.worker_for_user(session_key)
             .users()
             .close_session_with_outcome(session_key)
             .await
             .map(|_outcome| ())
     }
 
-    /// Removes one transport media handle from the owning shard.
+    /// Removes one transport media handle from the owning worker.
     pub(super) async fn remove_media(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        self.shard_for_user(session_key)
+        self.worker_for_user(session_key)
             .media()
             .remove_media(session_key, transport_media_id)
             .await
     }
 
-    /// Declares published media on the shard that owns the publishing session.
+    /// Declares published media on the worker that owns the publishing session.
     ///
     /// The transport media id returned here is a local transport realization.
     /// Room state remains responsible for mapping it back to a published source.
@@ -488,7 +488,7 @@ impl RtcTransportShardSet {
         media_kind: MediaKind,
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        self.shard_for_user(session_key)
+        self.worker_for_user(session_key)
             .media()
             .add_recv_media(
                 session_key,
@@ -499,19 +499,19 @@ impl RtcTransportShardSet {
     }
 
     /// Declares consumed media and installs cross-worker relay state when
-    /// publisher and consumer live on different shards.
+    /// publisher and consumer live on different workers.
     ///
-    /// Relay activation is staged on the source shard before the consumer media
+    /// Relay activation is staged on the source worker before the consumer media
     /// is created. If consumer creation fails, the source-side relay
     /// registration is removed before the error is returned.
     ///
     /// The setup order mirrors the packet path:
     ///
     /// ```text
-    /// source shard W0:
+    /// source worker W0:
     ///   source_media_id -> target W1 relay mailbox
     ///
-    /// consumer shard W1:
+    /// consumer worker W1:
     ///   source_media_id -> remote source control for W0
     ///   consumer media  -> local WebRTC send stream
     /// ```
@@ -524,17 +524,17 @@ impl RtcTransportShardSet {
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         ensure_same_room_instance(consumer_session_key, source_session_key)?;
-        let relay_route = self.relay_registration_shards(consumer_session_key, source_session_key);
+        let relay_route = self.relay_registration_workers(consumer_session_key, source_session_key);
         let remote_source_control = relay_route
             .as_ref()
-            .map(|(source_shard, consumer_shard)| {
-                source_shard
+            .map(|(source_worker, consumer_worker)| {
+                source_worker
                     .media()
-                    .remote_source_control(consumer_shard.as_ref())
+                    .remote_source_control(consumer_worker.as_ref())
             })
             .transpose()?;
-        let consumer_shard = self.shard_for_user(consumer_session_key);
-        consumer_shard
+        let consumer_worker = self.worker_for_user(consumer_session_key);
+        consumer_worker
             .media()
             .add_send_media(
                 consumer_session_key,
@@ -552,35 +552,38 @@ impl RtcTransportShardSet {
         &self,
         effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
-        let source_shard = self.shard_for_user(&effect.source_session_key);
-        let target_shard = self.shard_for_media_worker_id(effect.target_media_worker_id);
-        if Arc::ptr_eq(&source_shard, &target_shard) {
+        let source_worker = self.worker_for_user(&effect.source_session_key);
+        let target_worker = self.worker_for_media_worker_id(effect.target_media_worker_id);
+        if Arc::ptr_eq(&source_worker, &target_worker) {
             return Ok(());
         }
         match effect.action {
             TransportRelayRouteAction::Install => {
-                source_shard
+                source_worker
                     .media()
                     .activate_relay_route(
                         &effect.source_session_key,
                         effect.source_transport_media_id,
-                        target_shard.as_ref(),
+                        target_worker.as_ref(),
                     )
                     .await
             }
             TransportRelayRouteAction::Release => {
-                source_shard
+                source_worker
                     .media()
-                    .deactivate_relay_route(effect.source_transport_media_id, target_shard.as_ref())
+                    .deactivate_relay_route(
+                        effect.source_transport_media_id,
+                        target_worker.as_ref(),
+                    )
                     .await
             }
             TransportRelayRouteAction::SetActive(active) => {
-                source_shard
+                source_worker
                     .media()
                     .apply_relay_target_activity(
                         &effect.source_session_key,
                         effect.source_transport_media_id,
-                        target_shard.as_ref(),
+                        target_worker.as_ref(),
                         active,
                     )
                     .await
@@ -588,22 +591,22 @@ impl RtcTransportShardSet {
         }
     }
 
-    /// Updates producer route activity on the producer's owning shard.
+    /// Updates producer route activity on the producer's owning worker.
     pub(super) async fn set_producer_active(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        self.shard_for_user(session_key)
+        self.worker_for_user(session_key)
             .media()
             .set_producer_active(session_key, transport_media_id, active)
             .await
     }
 
-    /// Updates consumer route activity on the consumer's owning shard.
+    /// Updates consumer route activity on the consumer's owning worker.
     ///
-    /// The source and consumer must belong to the same room instance. The shard
+    /// The source and consumer must belong to the same room instance. The worker
     /// set validates that room boundary before mutating worker state.
     pub(super) async fn set_consumer_active(
         &self,
@@ -614,7 +617,7 @@ impl RtcTransportShardSet {
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         ensure_same_room_instance(consumer_session_key, source_session_key)?;
-        self.shard_for_user(consumer_session_key)
+        self.worker_for_user(consumer_session_key)
             .media()
             .set_consumer_active(
                 consumer_session_key,
@@ -640,7 +643,7 @@ impl RtcTransportShardSet {
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
         ensure_same_room_instance(consumer_session_key, source_session_key)?;
-        self.shard_for_user(consumer_session_key)
+        self.worker_for_user(consumer_session_key)
             .media()
             .set_consumer_packet_gate(
                 consumer_session_key,
@@ -652,10 +655,10 @@ impl RtcTransportShardSet {
             .await
     }
 
-    /// Requests a keyframe for a consumer route through the consumer's shard.
+    /// Requests a keyframe for a consumer route through the consumer's worker.
     ///
     /// Cross-room requests are rejected. Cross-worker requests are legal because
-    /// the consumer shard knows how to forward feedback to the source shard.
+    /// the consumer worker knows how to forward feedback to the source worker.
     pub(super) async fn request_consumer_keyframe(
         &self,
         consumer_session_key: &TransportSessionKey,
@@ -664,7 +667,7 @@ impl RtcTransportShardSet {
         source_transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
         ensure_same_room_instance(consumer_session_key, source_session_key)?;
-        self.shard_for_user(consumer_session_key)
+        self.worker_for_user(consumer_session_key)
             .media()
             .request_consumer_keyframe(
                 consumer_session_key,
@@ -685,7 +688,7 @@ impl RtcTransportShardSet {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Option<String> {
-        self.shard_for_user(session_key)
+        self.worker_for_user(session_key)
             .media()
             .transport_media_mid(transport_media_id)
             .await
@@ -702,37 +705,37 @@ impl RtcTransportShardSet {
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
-        self.shard_for_user(session_key)
+        self.worker_for_user(session_key)
             .observability()
             .session_transport_health(session_key)
     }
 
-    fn shard_index_for_user(&self, session_key: &TransportSessionKey) -> usize {
-        self.shard_index_for_media_worker_id(session_key.media_worker_id())
+    fn worker_index_for_user(&self, session_key: &TransportSessionKey) -> usize {
+        self.worker_index_for_media_worker_id(session_key.media_worker_id())
     }
 
-    fn shard_for_media_worker_id(&self, media_worker_id: usize) -> Arc<RtcTransportShard> {
-        self.shard_for_index(self.shard_index_for_media_worker_id(media_worker_id))
+    fn worker_for_media_worker_id(&self, media_worker_id: usize) -> Arc<RtcTransportWorker> {
+        self.worker_for_index(self.worker_index_for_media_worker_id(media_worker_id))
     }
 
-    fn shard_index_for_media_worker_id(&self, media_worker_id: usize) -> usize {
-        let shard_count = self.extra_shards.len().saturating_add(1);
-        media_worker_id % shard_count
+    fn worker_index_for_media_worker_id(&self, media_worker_id: usize) -> usize {
+        let worker_count = self.extra_workers.len().saturating_add(1);
+        media_worker_id % worker_count
     }
 
-    fn shard_for_index(&self, shard_index: usize) -> Arc<RtcTransportShard> {
-        if shard_index == 0 {
-            return Arc::clone(&self.primary_shard);
+    fn worker_for_index(&self, worker_index: usize) -> Arc<RtcTransportWorker> {
+        if worker_index == 0 {
+            return Arc::clone(&self.primary_worker);
         }
-        self.extra_shards
-            .get(shard_index.saturating_sub(1))
+        self.extra_workers
+            .get(worker_index.saturating_sub(1))
             .cloned()
-            .unwrap_or_else(|| Arc::clone(&self.primary_shard))
+            .unwrap_or_else(|| Arc::clone(&self.primary_worker))
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(super) fn all_shards(&self) -> impl Iterator<Item = &Arc<RtcTransportShard>> {
-        iter::once(&self.primary_shard).chain(self.extra_shards.iter())
+    pub(super) fn all_workers(&self) -> impl Iterator<Item = &Arc<RtcTransportWorker>> {
+        iter::once(&self.primary_worker).chain(self.extra_workers.iter())
     }
 }
 
@@ -746,14 +749,14 @@ fn ensure_same_room_instance(
     Err(TransportAdapterError::InvalidInput)
 }
 
-/// Returns the first media id reserved for one shard index.
+/// Returns the first media id reserved for one worker index.
 ///
 /// The fallback clamps extreme indexes to the highest representable stride
 /// base. Normal startup validates worker counts long before this point, so the
 /// saturating behavior is only a defensive guard for transitional callers that
 /// bypass the builder.
-fn media_id_base_for_shard_index(shard_index: usize) -> u64 {
-    u64::try_from(shard_index)
+fn media_id_base_for_worker_index(worker_index: usize) -> u64 {
+    u64::try_from(worker_index)
         .unwrap_or(u64::MAX / MEDIA_ID_STRIDE)
         .saturating_mul(MEDIA_ID_STRIDE)
 }
@@ -767,7 +770,7 @@ fn signaling_to_str0m_media_kind(kind: MediaKind) -> Str0mMediaKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ConsumerPacketGateBatchKey {
-    shard_index: usize,
+    worker_index: usize,
     source_session_key: TransportSessionKey,
     source_transport_media_id: TransportMediaId,
 }

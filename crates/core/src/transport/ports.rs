@@ -259,7 +259,7 @@ pub trait MediaPort {
     /// the returned results.
     ///
     /// The default implementation is sequential. Backends with
-    /// shard-local batching can override it while keeping the same result
+    /// worker-local batching can override it while keeping the same result
     /// contract for room policy.
     async fn set_consumer_packet_gates(
         &self,

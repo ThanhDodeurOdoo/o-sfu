@@ -1,4 +1,4 @@
-//! External API and orchestration layer for the RTC transport shard.
+//! External API and orchestration layer for the RTC transport worker.
 //!
 //! This module provides the interface through which the rest of the SFU interacts
 //! with the WebRTC backend. It acts as the bridge between the high-level
@@ -20,7 +20,7 @@
 //!
 //! ### Sub-Modules
 //!
-//! * [`facade`]: Defines the public `RtcTransportShard` struct plus the
+//! * [`facade`]: Defines the public `RtcTransportWorker` struct plus the
 //!   concern-scoped backend methods that sit directly above the worker mailbox.
 //! * [`runtime`]: Implement the worker communication logic, lazy-boot orchestration,
 //!   and command-dispatching helpers.
@@ -32,4 +32,4 @@ mod runtime;
 #[cfg(any(test, feature = "testing-transport"))]
 mod test_support;
 
-pub use facade::RtcTransportShard;
+pub use facade::RtcTransportWorker;

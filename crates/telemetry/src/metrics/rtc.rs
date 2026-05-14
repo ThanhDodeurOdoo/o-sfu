@@ -15,7 +15,7 @@ pub trait RtcRouteControlMetrics {
 
 /// Worker-owned RTC packet-loop metric recorder.
 ///
-/// Packet loops keep one recorder for their full shard lifetime. Datagram and
+/// Packet loops keep one recorder for their full worker lifetime. Datagram and
 /// route-control updates touch only this worker's padded atomics while
 /// `RuntimeMetrics` aggregates all registered recorders during snapshot export.
 #[derive(Debug, Default)]

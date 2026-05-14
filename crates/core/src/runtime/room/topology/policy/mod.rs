@@ -3,7 +3,7 @@ mod load;
 #[cfg(test)]
 pub(in crate::runtime::room) use load::LoadPressureReason;
 
-use crate::{Bitrate, RoomShardingPolicy, RoomSpilloverMode};
+use crate::{Bitrate, RoomSpilloverMode, RoomWorkerPolicy};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(in crate::runtime::room) struct TopologyPressureSnapshot {
@@ -61,7 +61,7 @@ pub(super) enum PlacementPolicy {
 
 impl PlacementPolicy {
     #[must_use]
-    pub(super) fn new(policy: RoomShardingPolicy) -> Self {
+    pub(super) fn new(policy: RoomWorkerPolicy) -> Self {
         match policy.spillover() {
             RoomSpilloverMode::StrictSingleRouter => Self::Strict,
             RoomSpilloverMode::BoundedLocalSpillover => Self::Bounded,

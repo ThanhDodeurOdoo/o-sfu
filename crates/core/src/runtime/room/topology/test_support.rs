@@ -9,7 +9,7 @@ use super::RoomTopology;
 use crate::runtime::UserId;
 #[cfg(test)]
 use crate::{
-    MediaCodecFlags, RoomShardingPolicy,
+    MediaCodecFlags, RoomWorkerPolicy,
     runtime::{
         RoomInstanceId,
         metrics::RuntimeMetrics,
@@ -27,7 +27,7 @@ impl RoomTopology {
     pub(in crate::runtime::room) fn new(primary_router_id: RouterId) -> Self {
         Self::new_with_policy(
             primary_router_id,
-            RoomShardingPolicy::strict_single_router(),
+            RoomWorkerPolicy::strict_single_router(),
             1,
         )
     }
@@ -35,7 +35,7 @@ impl RoomTopology {
     #[cfg(test)]
     pub(in crate::runtime::room) fn new_with_policy(
         primary_router_id: RouterId,
-        room_sharding_policy: RoomShardingPolicy,
+        room_worker_policy: RoomWorkerPolicy,
         local_router_count: usize,
     ) -> Self {
         let packet_sink_registry = Arc::new(RoomPacketSinkRegistry::default());
@@ -60,7 +60,7 @@ impl RoomTopology {
             .collect::<Vec<_>>();
         Self::new_with_router_state_factory(
             LocalRoomRouterPlacements::new(primary, spillover),
-            room_sharding_policy,
+            room_worker_policy,
             router_rtp_capabilities(MediaCodecFlags::default()),
             &RoomRouterStateFactory::new(event_sink),
         )
@@ -73,7 +73,7 @@ impl RoomTopology {
     ) -> Self {
         Self::new_with_policy(
             primary_router_id,
-            RoomShardingPolicy::bounded_local_spillover(local_router_count),
+            RoomWorkerPolicy::bounded_local_spillover(local_router_count),
             local_router_count,
         )
     }
@@ -86,7 +86,7 @@ impl RoomTopology {
     ) -> Self {
         Self::new_with_policy(
             primary_router_id,
-            RoomShardingPolicy::load_triggered_local_spillover(local_router_count, policy),
+            RoomWorkerPolicy::load_triggered_local_spillover(local_router_count, policy),
             local_router_count,
         )
     }
