@@ -545,6 +545,100 @@ async fn load_triggered_room_places_new_receivers_on_spillover_worker_after_pres
 }
 
 #[tokio::test]
+async fn cleanup_retry_keeps_resolved_spillover_worker_after_unregister()
+-> Result<(), LocalSpilloverPolicyError> {
+    let manager = load_spillover_room_manager(
+        2,
+        LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+            min_receiver_count: 99,
+            max_active_consumers_per_router: 99,
+            max_fanout_per_source: 99,
+            egress_bitrate_threshold: Bitrate::from_bps(128),
+            activation_window: 1,
+            ..LocalSpilloverPolicyParts::conservative()
+        })?,
+    );
+    let (media_transport, fake) = fake_adapter();
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+
+    let (first_tx, _first_rx) = test_sender();
+    let first_user_id = UserId::Integer(10);
+    let first_connection = room
+        .add_user(
+            first_user_id.clone(),
+            None,
+            UserPermissions::default(),
+            first_tx,
+            &media_transport,
+        )
+        .await
+        .expect("first user should join");
+    assert_eq!(
+        room.transport_user_key(&first_user_id, first_connection)
+            .media_worker_id(),
+        0
+    );
+
+    fake.set_placement_pressure_snapshot(TransportPlacementPressureSnapshot {
+        egress_bitrate: Bitrate::from_bps(256),
+        ..Default::default()
+    });
+
+    let (second_tx, _second_rx) = test_sender();
+    let second_user_id = UserId::Integer(20);
+    let second_connection = room
+        .add_user(
+            second_user_id.clone(),
+            None,
+            UserPermissions::default(),
+            second_tx,
+            &media_transport,
+        )
+        .await
+        .expect("second user should join");
+    let second_session_key = room.transport_user_key(&second_user_id, second_connection);
+    assert_eq!(second_session_key.media_worker_id(), 1);
+
+    fake.fail_close_session_until_allowed(second_session_key.clone());
+    assert!(
+        manager
+            .close_session(
+                room.uuid(),
+                &second_user_id,
+                second_connection,
+                &media_transport,
+            )
+            .await
+    );
+    assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 1);
+
+    fake.allow_close_session(&second_session_key);
+    room.test_api()
+        .lifecycle()
+        .force_cleanup_retry_cycle(&media_transport)
+        .await;
+
+    let events = fake.snapshot_events();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        FakeMediaTransportEvent::SessionClosed {
+            user_id,
+            media_worker_id: 1,
+        } if *user_id == second_user_id
+    )));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        FakeMediaTransportEvent::SessionClosed {
+            user_id,
+            media_worker_id: 0,
+        } if *user_id == second_user_id
+    )));
+    Ok(())
+}
+
+#[tokio::test]
 async fn room_replacement_join_rehomes_topology_and_transport_together() {
     let manager = spillover_room_manager(2);
     let room = manager

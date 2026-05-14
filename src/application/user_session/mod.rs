@@ -410,7 +410,7 @@ impl User {
         let has_queued_publish = self.state.negotiation_state.has_queued_publish(stream_type);
         {
             let media = self.media();
-            if has_queued_publish || media.has_staged_publish(&stream_id).await {
+            if has_queued_publish || media.has_staged_publish(&stream_id) {
                 return Ok(UserOutput::new());
             }
             if media.is_stream_published(&stream_id).await {

@@ -386,14 +386,13 @@ impl MediaSession<'_> {
     /// This is an idempotency hint for websocket orchestration. It is not an
     /// authority to commit media because another task could win or clean up
     /// the staged transaction before the answer arrives.
-    pub async fn has_staged_publish(&self, stream_id: &UserStreamId) -> bool {
-        self.room
-            .has_staged_publish(
-                self.context.user_id(),
-                self.context.connection_id(),
-                stream_id,
-            )
-            .await
+    #[must_use]
+    pub fn has_staged_publish(&self, stream_id: &UserStreamId) -> bool {
+        self.room.has_staged_publish(
+            self.context.user_id(),
+            self.context.connection_id(),
+            stream_id,
+        )
     }
 
     /// Check whether the room currently has a live publication for this user.

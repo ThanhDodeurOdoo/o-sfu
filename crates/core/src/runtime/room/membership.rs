@@ -443,9 +443,10 @@ impl Room {
     ) -> TransportEffectOutcome {
         let mut cleanup = TransportEffectOutcome::Applied;
         for removal in removals {
+            let connection_id = removal.connection();
             let operation = TransportCleanupOperation::RemoveMedia {
-                user_id: removal.user().clone(),
-                connection_id: removal.connection(),
+                session_key: self.transport_user_key(removal.user(), connection_id),
+                connection_id,
                 transport_media_id: removal.transport_media(),
             };
             if let Err(error) = self
@@ -476,7 +477,7 @@ impl Room {
         failure_message: &str,
     ) -> TransportEffectOutcome {
         let operation = TransportCleanupOperation::RemoveMedia {
-            user_id: user_id.clone(),
+            session_key: self.transport_user_key(user_id, connection_id),
             connection_id,
             transport_media_id,
         };
@@ -522,7 +523,7 @@ impl Room {
             return;
         }
         let operation = TransportCleanupOperation::CloseUser {
-            user_id: user_id.clone(),
+            session_key: self.transport_user_key(user_id, connection_id),
             connection_id,
         };
         if let Err(error) = self
@@ -549,29 +550,23 @@ impl Room {
     ) -> Result<(), TransportAdapterError> {
         match operation {
             TransportCleanupOperation::RemoveMedia {
-                user_id,
-                connection_id,
+                session_key,
                 transport_media_id,
+                ..
             } => {
                 media_transport
-                    .remove_media(
-                        &self.transport_user_key(user_id, *connection_id),
-                        *transport_media_id,
-                    )
+                    .remove_media(session_key, *transport_media_id)
                     .await
             }
-            TransportCleanupOperation::CloseUser {
-                user_id,
-                connection_id,
+            TransportCleanupOperation::CloseUser { session_key, .. } => {
+                media_transport.close_session(session_key).await
+            }
+            TransportCleanupOperation::ReleaseRelayRoute {
+                source_session_key,
+                route,
             } => {
-                media_transport
-                    .close_session(&self.transport_user_key(user_id, *connection_id))
-                    .await
-            }
-            TransportCleanupOperation::ReleaseRelayRoute { route } => {
                 let effect = TransportRelayRouteEffect {
-                    source_session_key: self
-                        .transport_user_key(&route.source_user, route.source_connection),
+                    source_session_key: source_session_key.clone(),
                     source_transport_media_id: route.source_media,
                     target_media_worker_id: route.target_worker,
                     action: TransportRelayRouteAction::Release,
@@ -589,6 +584,8 @@ impl Room {
         failure_message: &str,
     ) -> TransportEffectOutcome {
         let operation = TransportCleanupOperation::ReleaseRelayRoute {
+            source_session_key: self
+                .transport_user_key(&effect.route.source_user, effect.route.source_connection),
             route: effect.route.clone(),
         };
         warn!(?effect, "{failure_message}");
@@ -735,9 +732,7 @@ impl Room {
         if !operation.needs_owner_drop() {
             return;
         }
-        let close_result = media_transport
-            .close_session(&self.transport_user_key(operation.user_id(), operation.connection_id()))
-            .await;
+        let close_result = media_transport.close_session(operation.session_key()).await;
         warn!(
             user_id = ?operation.user_id(),
             connection_id = ?operation.connection_id(),
@@ -766,6 +761,10 @@ impl Room {
             self.metrics
                 .record_transport_cleanup_failure(TransportCleanupFailureKind::Shutdown);
         }
+    }
+
+    pub(in crate::runtime::room) fn has_pending_cleanup_retries(&self) -> bool {
+        self.cleanup_reconciler().has_pending()
     }
 
     #[cfg(any(test, feature = "testing-transport"))]

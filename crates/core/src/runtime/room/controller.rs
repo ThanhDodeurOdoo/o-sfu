@@ -33,7 +33,7 @@ use std::{
 };
 
 use o_sfu_router::RouterId;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 use super::{
     cleanup::CleanupReconciler,
@@ -596,7 +596,7 @@ pub struct Room {
     /// This stays outside `RoomState` because it tracks async transport work
     /// that has not become live room state yet. A publish only becomes real
     /// room state after the later commit path succeeds.
-    pub(super) pending_publish_transactions: Mutex<PendingPublishTransactions>,
+    pub(super) pending_publish_transactions: StdMutex<PendingPublishTransactions>,
     /// Pure room state plus room-owned indexes.
     ///
     /// Callers must snapshot what they need and drop this lock before async
@@ -647,7 +647,7 @@ impl Room {
             recording_service: Arc::clone(&recording_service),
             metrics,
             cleanup_reconciler: StdMutex::new(CleanupReconciler::default()),
-            pending_publish_transactions: Mutex::new(PendingPublishTransactions::default()),
+            pending_publish_transactions: StdMutex::new(PendingPublishTransactions::default()),
             state: RwLock::new(RoomState::new(
                 runtime_context,
                 runtime_policy.admission_policy,

@@ -570,6 +570,7 @@ async fn user_close_failure_retries_until_success() {
         event,
         FakeMediaTransportEvent::SessionClosed {
             user_id: closed_user_id,
+            ..
         } if *closed_user_id == user_id
     )));
 }
@@ -634,7 +635,7 @@ async fn cleanup_retry_exhaustion_drops_pending_retry() {
 }
 
 #[tokio::test]
-async fn manager_shutdown_abandons_pending_cleanup_retry_for_removed_room() {
+async fn manager_keeps_empty_room_until_cleanup_retry_finishes() {
     let metrics = Arc::new(RuntimeMetrics::default());
     let manager = RoomManager::new(
         RoomManagerConfig::new(
@@ -668,7 +669,7 @@ async fn manager_shutdown_abandons_pending_cleanup_retry_for_removed_room() {
         .await
         .expect("user should join");
     let session_key = room.transport_user_key(&user_id, connection_id);
-    fake.fail_close_session_until_allowed(session_key);
+    fake.fail_close_session_until_allowed(session_key.clone());
 
     assert!(
         manager
@@ -677,8 +678,22 @@ async fn manager_shutdown_abandons_pending_cleanup_retry_for_removed_room() {
     );
 
     let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.active_rooms(), 1);
+    assert_eq!(snapshot.transport_cleanup_failures_shutdown(), 0);
+    assert!(manager.get_by_uuid(room.uuid()).await.is_some());
+
+    fake.allow_close_session(&session_key);
+    room.test_api()
+        .lifecycle()
+        .force_cleanup_retry_cycle(&media_transport)
+        .await;
+    manager
+        .disconnect_users(room.uuid(), &[], &media_transport)
+        .await;
+
+    let snapshot = metrics.snapshot();
     assert_eq!(snapshot.active_rooms(), 0);
-    assert_eq!(snapshot.transport_cleanup_failures_shutdown(), 1);
+    assert!(manager.get_by_uuid(room.uuid()).await.is_none());
 }
 
 #[tokio::test]

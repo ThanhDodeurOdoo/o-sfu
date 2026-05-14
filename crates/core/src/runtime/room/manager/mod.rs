@@ -432,7 +432,7 @@ impl RoomManager {
             room.user_count().await,
             room.media_counts().await,
         );
-        if remove_if_empty && room.is_empty().await {
+        if remove_if_empty && room.is_empty().await && !room.has_pending_cleanup_retries() {
             self.remove_entry_if_current(room_id, room).await;
         }
     }
