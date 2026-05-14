@@ -9,19 +9,17 @@ use super::{
     super::types::{ConsumerPacketGateRequest, RouteSourceKind},
     remote_source, selected_rid,
 };
-use crate::{
-    Bitrate,
-    runtime::{
-        media_transport::{
-            TransportAdapterError, TransportMediaId, TransportResult, TransportSessionKey,
-        },
-        rtc_engine::{
-            commands::{ConsumerPacketGateCommand, RemoteSourceControl},
-            demux::{MediaRouteDestination, MediaRouteEntry},
-            media_registry::RegisteredMediaHandle,
-            route_control::{PacketLayerGate, aggregate_packet_gates},
-            state::RtcBootstrapState,
-        },
+use crate::runtime::{
+    media_transport::{
+        TransportAdapterError, TransportMediaId, TransportResult, TransportSessionKey,
+    },
+    rtc_engine::{
+        commands::{ConsumerPacketGateCommand, RemoteSourceControl},
+        demux::{MediaRouteDestination, MediaRouteEntry},
+        media_registry::RegisteredMediaHandle,
+        route_control::{PacketLayerGate, aggregate_packet_gates},
+        simulcast,
+        state::RtcBootstrapState,
     },
 };
 
@@ -46,49 +44,6 @@ pub(in crate::runtime::rtc_engine::worker::media) struct ConsumerRouteRegistrati
     pub(in crate::runtime::rtc_engine::worker::media) now: Instant,
 }
 
-/// Reduces negotiated consumer RTP parameters into the route-level packet gate.
-///
-/// A selected RID means this route should forward only that simulcast layer.
-///
-/// Simulcast sources are declared as one rid-less downstream browser stream,
-/// so the initial transport route must not open every publisher RID while room
-/// policy catches up. When several RID encodings are present, the route starts
-/// on the lowest advertised bitrate, falling back to declaration order when the
-/// browser did not preserve bitrate metadata. Mixed or RID-less encodings stay
-/// open so non-simulcast streams and broader compatibility cases keep the
-/// previous behavior.
-pub(in crate::runtime::rtc_engine::worker::media) fn consumer_packet_gate(
-    consumer_rtp_parameters: &RouterRtpParameters,
-) -> PacketLayerGate {
-    let mut first_rid: Option<Rid> = None;
-    let mut lowest_bitrate_rid: Option<(Rid, Bitrate)> = None;
-    let mut all_encodings_have_bitrate = true;
-    for encoding in consumer_rtp_parameters.encodings() {
-        let Some(rid) = encoding.rid().map(Rid::from) else {
-            return PacketLayerGate::Open;
-        };
-        if first_rid.is_none() {
-            first_rid = Some(rid);
-        }
-        let bitrate = encoding.max_bitrate().map(Bitrate::from_bps);
-        all_encodings_have_bitrate &= bitrate.is_some();
-        if let Some(bitrate) = bitrate {
-            match lowest_bitrate_rid.as_mut() {
-                Some((selected_rid, selected_bitrate)) if bitrate < *selected_bitrate => {
-                    *selected_rid = rid;
-                    *selected_bitrate = bitrate;
-                }
-                Some(_) => {}
-                None => lowest_bitrate_rid = Some((rid, bitrate)),
-            }
-        }
-    }
-    if all_encodings_have_bitrate && let Some((rid, _bitrate)) = lowest_bitrate_rid {
-        return PacketLayerGate::Rid(rid);
-    }
-    first_rid.map_or(PacketLayerGate::Open, PacketLayerGate::Rid)
-}
-
 fn consumer_packet_gate_for_source(
     state: &RtcBootstrapState,
     source_transport_media_id: TransportMediaId,
@@ -98,7 +53,7 @@ fn consumer_packet_gate_for_source(
     selected_rid::guarded_packet_gate(
         state,
         source_transport_media_id,
-        consumer_packet_gate(consumer_rtp_parameters),
+        simulcast::initial_consumer_packet_gate(consumer_rtp_parameters),
         now,
     )
 }

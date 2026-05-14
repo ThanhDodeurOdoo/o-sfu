@@ -1,9 +1,11 @@
 //! Codec-profile facade for RTC-edge simulcast negotiation.
 //!
-//! The room source graph and video policy stay codec-neutral. This module contain
-//! the narrow SDP and upload-layer decisions that differ between codec paths.
+//! The room source graph and video policy stay codec-neutral. This module contains
+//! the narrow SDP, upload-layer and initial route-gate decisions that differ
+//! between simulcast paths.
 
 mod common;
+mod consumer;
 mod h264;
 mod vp8;
 
@@ -11,7 +13,10 @@ pub(in crate::runtime::rtc_engine) use common::NegotiatedRid;
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{MediaKind, Mid, Simulcast as Str0mSimulcast};
 
-use crate::{MediaCodecFlags, VideoBitrateLimits, runtime::media_transport::SessionUploadEncoding};
+use crate::{
+    MediaCodecFlags, VideoBitrateLimits,
+    runtime::{media_transport::SessionUploadEncoding, rtc_engine::route_control::PacketLayerGate},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SimulcastCodecProfile {
@@ -177,6 +182,12 @@ pub(super) fn publish_upload_encodings_or_default(
 
 pub(super) fn send_rids_for_mid(answer_sdp: &str, mid: Mid) -> Vec<NegotiatedRid> {
     common::send_rids_for_mid(answer_sdp, mid)
+}
+
+pub(super) fn initial_consumer_packet_gate(
+    consumer_rtp_parameters: &RouterRtpParameters,
+) -> PacketLayerGate {
+    consumer::initial_packet_gate(consumer_rtp_parameters)
 }
 
 fn publish_uses_default_profile(rtp_parameters: &RouterRtpParameters) -> bool {
