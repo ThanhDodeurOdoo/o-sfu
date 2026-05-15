@@ -20,8 +20,7 @@
 //! - [`MediaTransport`] as the runtime media transport facade, with
 //!   [`RtcTransport`] and [`RtcTransportBuilder`] kept as RTC construction
 //!   handles below that facade.
-//! - the transport concern traits in [`transport`]. Use the narrow port trait
-//!   for the concern a caller needs.
+//! - the transport DTOs, ids, snapshots and errors in [`transport`].
 //! - server-integration DTOs and facades under [`server`], including
 //!   diagnostics, metrics, room orchestration, recording taps, source
 //!   descriptors, and current transport construction seams.

@@ -1,7 +1,7 @@
-//! backend-neutral media transport contract
+//! backend-neutral media transport vocabulary
 //!
-//! in this crate, "transport" means the boundary that turns room-owned media
-//! intent into work performed by a concrete media backend
+//! in this crate, "transport" names the ids, DTOs, outcomes and wakeup signals
+//! that cross the media backend boundary
 //!
 //! the room layer decides who is in a room, who published a source, who
 //! subscribed to it, which source layers are allowed by policy and when a
@@ -9,49 +9,37 @@
 //! should not depend on whether media is executed by the real RTC engine, a
 //! deterministic test transport or a later backend
 //!
-//! the transport layer owns the execution vocabulary below that room state. it
-//! creates and applies offers, allocates backend media ids, connects producer
-//! and consumer routes, toggles packet delivery, exposes best-effort transport
-//! observations and releases backend resources. those operations are not room
-//! policy. they are the controlled side effects needed to make room policy real
-//! on a media backend
+//! [`crate::runtime::media_transport::MediaTransport`] owns the side-effecting
+//! operations that make that room policy real on a backend. this module owns the
+//! stable values those operations exchange with room, server, diagnostics and
+//! RTC code
 //!
-//! this directory exists as its own boundary because those contracts are shared
+//! this directory exists as its own boundary because this vocabulary is shared
 //! by both sides:
 //!
-//! - room and server code use these traits and values to ask for media work
-//! - runtime backends implement these traits to perform that work
+//! - room and server code use these values to describe media work
+//! - runtime backends use the same values while performing that work
 //! - deterministic tests use the same contracts without importing RTC worker
 //!   internals
 //!
-//! keeping this vocabulary outside `runtime/media_transport` matters because
-//! `runtime/media_transport` is the backend selection and adapter layer. it is
+//! keeping this vocabulary outside `runtime/media_transport` matters because the
+//! runtime media transport is the backend selection and adapter layer. it is
 //! allowed to know about the active backend. this module is not. it names the
-//! stable contract that survives backend swaps
+//! stable data contract that survives backend swaps
 //!
 //! ```text
 //! room or server intent
 //!        |
 //!        v
-//! crate::transport ports and dto values
+//! crate::transport dto values
 //!        |
 //!        v
-//! runtime::media_transport backend adapter
+//! runtime::media_transport::MediaTransport
 //!        |
 //!        +--> real RTC workers
 //!        |
 //!        +--> deterministic test transport
 //! ```
-//!
-//! the split also keeps call sites honest. a function that only closes a user
-//! should depend on [`SessionPort`], not on a full media transport handle. a
-//! function that only needs live bitrate or active-speaker snapshots should
-//! depend on [`ObservabilityPort`]. this keeps orchestration code explicit about
-//! which side effects it is allowed to perform
-//!
-//! `ports` owns the concern-oriented traits such as [`NegotiationPort`],
-//! [`MediaPort`], [`SessionPort`], [`ObservabilityPort`] and
-//! [`SourcePolicyPort`]
 //!
 //! `types` owns the ids, snapshots, outcomes and error values that cross the
 //! boundary. a [`TransportMediaId`] is backend-local execution state, not a room
@@ -66,23 +54,18 @@
 //! this root re-exports the boundary so callers can import one
 //! `crate::transport` vocabulary instead of depending on the private file split
 
-mod ports;
 mod source_policy;
 mod types;
 
-pub use ports::{
-    ConsumerActivity, MediaPort, NegotiationPort, ObservabilityPort, ProducerActivity, SessionPort,
-    SourcePolicyPort,
-};
 pub use source_policy::{
     SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
 };
 pub use types::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
-    ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerPacketGateUpdate,
-    ReceiverBandwidthSnapshot, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
-    SourcePacketGate, SourcePacketOperatingPoint, TransportAdapterError, TransportBitrateSnapshot,
-    TransportMediaId, TransportPlacementPressureSnapshot, TransportRelayRouteAction,
-    TransportRelayRouteEffect, TransportResult, TransportSessionHealth, TransportSessionKey,
-    TransportWorkerPressureSnapshot,
+    ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,
+    ConsumerPacketGateUpdate, ProducerActivity, ReceiverBandwidthSnapshot, SessionOffer,
+    SessionUploadEncoding, SessionUploadSlot, SourcePacketGate, SourcePacketOperatingPoint,
+    TransportAdapterError, TransportBitrateSnapshot, TransportMediaId,
+    TransportPlacementPressureSnapshot, TransportRelayRouteAction, TransportRelayRouteEffect,
+    TransportResult, TransportSessionHealth, TransportSessionKey, TransportWorkerPressureSnapshot,
 };

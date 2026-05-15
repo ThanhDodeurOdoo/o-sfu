@@ -9,8 +9,8 @@
 //!   room-uuid mapping used by transport-side event observation.
 //! - `types` defines the serialzied views returned to operators and the small
 //!   transport-health conversion helpers shared by diagnostics emitters.
-//! - `queries` allow live responses from `RoomManager`,
-//!   `ObservabilityPort`, and `DiagnosticsStore`.
+//! - `queries` allow live responses from `RoomManager`, `MediaTransport`
+//!   and `DiagnosticsStore`.
 //!
 //! Callers generally use this boundary in two ways:
 //! - runtime and transport code record notable lifecycle events into

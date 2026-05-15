@@ -16,7 +16,7 @@ use super::super::{
 };
 use crate::runtime::{
     media_transport::{
-        ActiveSpeakerSource, ConsumerActivity, ConsumerPacketGateUpdate, MediaPort,
+        ActiveSpeakerSource, ConsumerActivity, ConsumerPacketGateUpdate, MediaTransport,
         ReceiverBandwidthSnapshot,
     },
     metrics::{self, BudgetSolverOutcome},
@@ -64,7 +64,7 @@ impl SourcePolicyEffectPlan {
     /// Only updates accepted by the transport are committed back into
     /// `RoomState`; rejected or stale updates are left for the next policy
     /// refresh.
-    pub async fn execute(self, room: &Room, media_port: &impl MediaPort) {
+    pub async fn execute(self, room: &Room, media_port: &MediaTransport) {
         let applied_consumer_packet_updates =
             Self::apply_consumer_packet_updates(room, media_port, self.consumer_packets).await;
         if applied_consumer_packet_updates.is_empty() && self.featured_sessions.is_empty() {
@@ -111,7 +111,7 @@ impl SourcePolicyEffectPlan {
 
     async fn apply_consumer_packet_updates(
         room: &Room,
-        media_port: &impl MediaPort,
+        media_port: &MediaTransport,
         updates: Vec<ConsumerPacketSelectionUpdate>,
     ) -> Vec<ConsumerPacketSelectionUpdate> {
         let packet_gate_plan = Self::packet_gate_update_plan(room, &updates);
@@ -161,7 +161,7 @@ impl SourcePolicyEffectPlan {
 
     async fn accepted_packet_update(
         room: &Room,
-        media_port: &impl MediaPort,
+        media_port: &MediaTransport,
         update: ConsumerPacketSelectionUpdate,
     ) -> Option<ConsumerPacketSelectionUpdate> {
         Self::log_accepted_packet_update(&update);
@@ -191,7 +191,7 @@ impl SourcePolicyEffectPlan {
 
     async fn apply_route_activity_update(
         room: &Room,
-        media_port: &impl MediaPort,
+        media_port: &MediaTransport,
         update: &ConsumerPacketSelectionUpdate,
     ) -> bool {
         if !update.route_activity_update() {
@@ -211,7 +211,7 @@ impl SourcePolicyEffectPlan {
     }
 
     async fn rejected_packet_gate_updates(
-        media_port: &impl MediaPort,
+        media_port: &MediaTransport,
         packet_gate_updates: &[ConsumerPacketGateUpdate],
     ) -> BTreeSet<usize> {
         let mut rejected_updates = BTreeSet::new();
@@ -228,7 +228,7 @@ impl SourcePolicyEffectPlan {
 
     async fn request_adaptation_keyframe(
         room: &Room,
-        media_port: &impl MediaPort,
+        media_port: &MediaTransport,
         update: &ConsumerPacketSelectionUpdate,
     ) -> bool {
         if !update.request_keyframe() {

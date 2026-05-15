@@ -18,15 +18,13 @@ use crate::{
             DiagnosticsVideoRoutePriority,
         },
         media_transport::{
-            MediaPort, MediaTransportDeps, RtcTransport, RtcTransportConfig, SessionOffer,
-            SessionPort, TransportMediaId, TransportSessionKey,
-            test_support::FakeMediaTransportEvent,
+            MediaTransportDeps, RtcTransport, RtcTransportConfig, SessionOffer, TransportMediaId,
+            TransportSessionKey, test_support::FakeMediaTransportEvent,
         },
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
         room::Room,
     },
-    transport::NegotiationPort,
 };
 
 fn assert_track_binding_activity_update(

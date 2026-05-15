@@ -1,10 +1,7 @@
 use super::super::super::{
     JoinSessionIntent, Room, RoomJoinError, UserCleanup, UserOutboundSender,
 };
-use crate::runtime::{
-    ConnectionId, UserId, UserPermissions,
-    media_transport::{MediaTransport, ObservabilityPort},
-};
+use crate::runtime::{ConnectionId, UserId, UserPermissions, media_transport::MediaTransport};
 
 #[derive(Clone, Copy)]
 pub struct RoomTestLifecycle<'a> {

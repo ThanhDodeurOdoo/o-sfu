@@ -23,7 +23,7 @@ use super::{
 use crate::runtime::{
     ConnectionId, RoomInstanceId, UserId, UserPermissions,
     diagnostics::{self, DiagnosticsEventData, DiagnosticsStore},
-    media_transport::{MediaPort, MediaTransport, ObservabilityPort},
+    media_transport::MediaTransport,
     metrics::RuntimeMetrics,
     packet_sink_registry::RoomPacketSinkRegistry,
 };
@@ -60,7 +60,7 @@ pub struct RoomManagerDeps {
 /// Observability view for one live room
 ///
 /// This merge immutable directory metadata with the current per-room
-/// user stats gathered from the observability port.
+/// user stats gathered from `MediaTransport`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeRoomStatsSnapshot {
     pub create_date: String,
@@ -197,7 +197,7 @@ impl RoomManager {
     /// result is best-effort, not like one atomic process-wide instant.
     pub async fn stats_snapshots(
         &self,
-        observability_port: &impl ObservabilityPort,
+        observability_port: &MediaTransport,
     ) -> Vec<RuntimeRoomStatsSnapshot> {
         let entries = self.directory_entries().await;
         let mut snapshots = Vec::with_capacity(entries.len());
@@ -263,8 +263,8 @@ impl RoomManager {
     pub async fn sync_source_packet_selection_policies_for_runtime_ids(
         &self,
         room_instance_ids: &BTreeSet<RoomInstanceId>,
-        observability_port: &impl ObservabilityPort,
-        media_port: &impl MediaPort,
+        observability_port: &MediaTransport,
+        media_port: &MediaTransport,
     ) {
         if room_instance_ids.is_empty() {
             return;
@@ -527,7 +527,7 @@ impl RoomManager {
     async fn entry_stats_snapshot(
         &self,
         entry: RoomDirectoryEntry,
-        observability_port: &impl ObservabilityPort,
+        observability_port: &MediaTransport,
     ) -> RuntimeRoomStatsSnapshot {
         let room = entry.room();
         let users_stats = room.session_stats_snapshot(observability_port).await;

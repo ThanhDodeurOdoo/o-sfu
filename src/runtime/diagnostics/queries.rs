@@ -2,9 +2,8 @@
 //!
 //! This module turns live room state plus bounded event history into the
 //! summary, room, and user views served by `/internal/diagnostics/...`.
-//! It depend on `ObservabilityPort` rather than the full media transport so
-//!  diagnostics stays a consumer of transport snapshots,
-//! not a peer that can mutate transport state.
+//! It consumes read-only transport snapshots from `MediaTransport` so
+//! diagnostics does not mutate transport state.
 //!
 //! The functions here are cold-path (no diagnostics for the hot routing loop) helpers used by the HTTP.
 //! They gather room snapshots, merge in transport health and bitrate
@@ -12,7 +11,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use o_sfu_core::server::{session::UserId, transport::TransportPlacementPressureSnapshot};
+use o_sfu_core::server::{
+    session::UserId,
+    transport::{MediaTransport, TransportPlacementPressureSnapshot},
+};
 
 use super::{
     DiagnosticsStore,
@@ -28,10 +30,7 @@ use crate::{
         AUDIO_STREAM_LABEL, CAMERA_STREAM_LABEL, SCREEN_STREAM_LABEL,
         diagnostics_bitrate_for_stream_id,
     },
-    runtime::{
-        media_transport::ObservabilityPort,
-        room::{RoomManager, RuntimeRoomDirectorySnapshot},
-    },
+    runtime::room::{RoomManager, RuntimeRoomDirectorySnapshot},
 };
 
 #[derive(Debug, Clone)]
@@ -115,14 +114,14 @@ impl DiagnosticsWorkerAccumulator {
 /// aggregate all live room snapshots into one process-wide view for
 /// operators.:
 /// - per-room counts derived from live room/user state
-/// - transport health totals derived from `ObservabilityPort`
+/// - transport health totals derived from `MediaTransport`
 /// - bounded recent global events from `DiagnosticsStore`
 ///
 /// Callers should use this when they need an overview of current runtime activity.
 /// The function is cold-path only and recomputes the response from current snapshots.
 pub(crate) async fn summary_response(
     rooms: &RoomManager,
-    observability_port: &impl ObservabilityPort,
+    observability_port: &MediaTransport,
     diagnostics: &DiagnosticsStore,
 ) -> DiagnosticsSummaryResponse {
     let room_snapshots = room_snapshots(rooms, observability_port, diagnostics).await;
@@ -162,7 +161,7 @@ pub(crate) async fn summary_response(
 /// Each item is a summary for one live room
 pub(crate) async fn rooms_response(
     rooms: &RoomManager,
-    observability_port: &impl ObservabilityPort,
+    observability_port: &MediaTransport,
     diagnostics: &DiagnosticsStore,
 ) -> Vec<DiagnosticsRoomSummary> {
     room_snapshots(rooms, observability_port, diagnostics)
@@ -174,7 +173,7 @@ pub(crate) async fn rooms_response(
 
 pub(crate) async fn room_detail_response(
     rooms: &RoomManager,
-    observability_port: &impl ObservabilityPort,
+    observability_port: &MediaTransport,
     diagnostics: &DiagnosticsStore,
     room_id: &str,
 ) -> Option<DiagnosticsRoomDetail> {
@@ -188,7 +187,7 @@ pub(crate) async fn room_detail_response(
 
 pub(crate) async fn room_users_response(
     rooms: &RoomManager,
-    observability_port: &impl ObservabilityPort,
+    observability_port: &MediaTransport,
     diagnostics: &DiagnosticsStore,
     room_id: &str,
 ) -> Option<Vec<DiagnosticsUserSummary>> {
@@ -199,7 +198,7 @@ pub(crate) async fn room_users_response(
 
 pub(crate) async fn workers_response(
     rooms: &RoomManager,
-    observability_port: &impl ObservabilityPort,
+    observability_port: &MediaTransport,
 ) -> Vec<DiagnosticsWorkerSummary> {
     let mut workers = (0..rooms.media_worker_count())
         .map(|media_worker_id| {
@@ -255,7 +254,7 @@ pub(crate) async fn workers_response(
 /// `(room_id, user_id)` scope.
 pub(crate) async fn user_detail_response(
     rooms: &RoomManager,
-    observability_port: &impl ObservabilityPort,
+    observability_port: &MediaTransport,
     diagnostics: &DiagnosticsStore,
     requested_user_id: &str,
 ) -> DiagnosticsUserLookup {
@@ -291,7 +290,7 @@ pub(crate) async fn user_detail_response(
 
 async fn room_snapshots(
     rooms: &RoomManager,
-    observability_port: &impl ObservabilityPort,
+    observability_port: &MediaTransport,
     diagnostics: &DiagnosticsStore,
 ) -> Vec<DiagnosticsRoomSnapshot> {
     let entries = rooms.directory_snapshots().await;
@@ -304,7 +303,7 @@ async fn room_snapshots(
 
 async fn room_snapshot(
     entry: &RuntimeRoomDirectorySnapshot,
-    observability_port: &impl ObservabilityPort,
+    observability_port: &MediaTransport,
     diagnostics: &DiagnosticsStore,
 ) -> DiagnosticsRoomSnapshot {
     let users = entry

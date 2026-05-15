@@ -44,8 +44,8 @@ use crate::{
         ConnectionId, UserId,
         diagnostics::DiagnosticsEventData,
         media_transport::{
-            AppliedSessionAnswer, ConsumerActivity, MediaPort, ObservabilityPort, SessionPort,
-            SessionUploadEncoding, TransportAdapterError, TransportMediaId,
+            AppliedSessionAnswer, ConsumerActivity, MediaTransport, SessionUploadEncoding,
+            TransportAdapterError, TransportMediaId,
         },
         source_model::{SourcePublishIntent, UserStreamId},
     },
@@ -294,8 +294,8 @@ impl PendingPublishTransaction {
         self,
         room: &Room,
         applied_answer: &AppliedSessionAnswer,
-        observability_port: &impl ObservabilityPort,
-        media_port: &(impl MediaPort + SessionPort),
+        observability_port: &MediaTransport,
+        media_port: &MediaTransport,
     ) -> Option<UserStreamId> {
         let owner_user_id = self.descriptor.owner_user_id().clone();
         let owner_connection_id = self.descriptor.owner_connection_id();
@@ -347,8 +347,8 @@ impl PendingPublishTransaction {
     pub(super) async fn commit_with_parameters(
         self,
         room: &Room,
-        observability_port: &impl ObservabilityPort,
-        media_port: &(impl MediaPort + SessionPort),
+        observability_port: &MediaTransport,
+        media_port: &MediaTransport,
         consumable_rtp_parameters: RouterRtpParameters,
     ) -> Option<UserStreamId> {
         self.commit_with_parameters_and_upload_encodings(
@@ -364,8 +364,8 @@ impl PendingPublishTransaction {
     async fn commit_with_parameters_and_upload_encodings(
         self,
         room: &Room,
-        observability_port: &impl ObservabilityPort,
-        media_port: &(impl MediaPort + SessionPort),
+        observability_port: &MediaTransport,
+        media_port: &MediaTransport,
         consumable_rtp_parameters: RouterRtpParameters,
         upload_encodings: Vec<SessionUploadEncoding>,
     ) -> Option<UserStreamId> {
@@ -444,7 +444,7 @@ impl PendingPublishTransaction {
     async fn cleanup_reserved_media(
         self,
         room: &Room,
-        media_port: &(impl MediaPort + SessionPort),
+        media_port: &MediaTransport,
         failure_message: &str,
     ) -> TransportEffectOutcome {
         self.reservation
@@ -493,7 +493,7 @@ impl StagedMediaReservation {
     async fn cleanup(
         mut self,
         room: &Room,
-        media_port: &(impl MediaPort + SessionPort),
+        media_port: &MediaTransport,
         failure_message: &str,
     ) -> TransportEffectOutcome {
         let outcome = room
@@ -545,8 +545,8 @@ impl CommittedPublish {
     async fn finish(
         self,
         room: &Room,
-        observability_port: &impl ObservabilityPort,
-        media_port: &(impl MediaPort + SessionPort),
+        observability_port: &MediaTransport,
+        media_port: &MediaTransport,
     ) {
         room.record_media_count_delta(self.media_counts_before, self.media_counts_after);
         room.bootstrap_consumer_targets(
@@ -616,7 +616,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         intent: &SourcePublishIntent,
-        media_port: &(impl MediaPort + SessionPort),
+        media_port: &MediaTransport,
     ) -> Result<PublishStageOutcome, TransportAdapterError> {
         let validated_descriptor = {
             let state = self.state.read().await;
@@ -686,7 +686,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         stream_id: &UserStreamId,
-        media_port: &(impl MediaPort + SessionPort),
+        media_port: &MediaTransport,
     ) -> RollbackStagedPublishOutcome {
         // Explicit unpublish before commit only needs transport cleanup because
         // the producer never became live in room state.
@@ -716,7 +716,7 @@ impl Room {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        media_port: &(impl MediaPort + SessionPort),
+        media_port: &MediaTransport,
     ) {
         let staged_publishes = self
             .pending_publish_transactions()
@@ -745,8 +745,8 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         applied_answer: &AppliedSessionAnswer,
-        observability_port: &impl ObservabilityPort,
-        media_port: &(impl MediaPort + SessionPort),
+        observability_port: &MediaTransport,
+        media_port: &MediaTransport,
     ) -> Vec<UserStreamId> {
         let staged_publishes = self
             .pending_publish_transactions()
@@ -771,7 +771,7 @@ impl Room {
     pub(super) async fn release_pending_consumer_bootstrap(
         &self,
         target: &PendingConsumerBootstrapTarget,
-        media_port: &(impl MediaPort + SessionPort),
+        media_port: &MediaTransport,
     ) {
         let (media_counts_before, media_counts_after, relay_effects) = {
             let mut state = self.state.write().await;
@@ -796,7 +796,7 @@ impl Room {
         target: &PendingConsumerBootstrapTarget,
         consumer_transport_media_id: TransportMediaId,
         consumer_active: bool,
-        media_port: &impl MediaPort,
+        media_port: &MediaTransport,
         origin: ConsumerBootstrapOrigin,
     ) {
         if consumer_active {

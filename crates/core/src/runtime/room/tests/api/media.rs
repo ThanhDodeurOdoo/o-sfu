@@ -6,7 +6,7 @@ use tracing::warn;
 use super::super::super::{Room, media_transaction::PendingPublishTransaction};
 use crate::runtime::{
     ConnectionId, TestSourceKind, UserId,
-    media_transport::{MediaPort, MediaTransport, TransportMediaId},
+    media_transport::{MediaTransport, TransportMediaId},
     source_model::{
         SourcePublishIntent, UserStreamId, test_support::source_publish_intent_for_source,
     },

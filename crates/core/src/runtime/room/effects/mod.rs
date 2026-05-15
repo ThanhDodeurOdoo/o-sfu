@@ -32,7 +32,7 @@ use crate::{
     runtime::{
         ConnectionId,
         diagnostics::DiagnosticsEventData,
-        media_transport::{ConsumerActivity, MediaPort, SessionPort, TransportMediaId},
+        media_transport::{ConsumerActivity, MediaTransport, TransportMediaId},
         source_model::UserStreamId,
     },
     transport::{TransportRelayRouteAction, TransportRelayRouteEffect},
@@ -40,7 +40,7 @@ use crate::{
 
 pub(super) async fn execute_relay_route_effects(
     room: &Room,
-    media_port: &(impl MediaPort + SessionPort),
+    media_port: &MediaTransport,
     effects: &[RelayRouteEffect],
 ) -> bool {
     let mut applied = true;
@@ -235,7 +235,7 @@ impl SubscriptionEffectPlan {
     /// long pause the receiver may need a fresh decodable frame before it can
     /// render again, so successful video resumes trigger an immediate keyframe
     /// request on the underlying consumer route.
-    pub(super) async fn execute(self, room: &Room, media_port: &(impl MediaPort + SessionPort)) {
+    pub(super) async fn execute(self, room: &Room, media_port: &MediaTransport) {
         if let Some(media_count_delta) = self.media_count_delta {
             media_count_delta.record(room);
         }
@@ -313,7 +313,7 @@ impl ConsumerBootstrapOp {
         }
     }
 
-    async fn execute(self, room: &Room, media_port: &(impl MediaPort + SessionPort)) {
+    async fn execute(self, room: &Room, media_port: &MediaTransport) {
         let Self {
             target,
             prepared,
@@ -375,7 +375,7 @@ impl ConsumerBootstrapOp {
         prepared: &PreparedConsumerBootstrap,
         origin: ConsumerBootstrapOrigin,
         room: &Room,
-        media_port: &(impl MediaPort + SessionPort),
+        media_port: &MediaTransport,
     ) -> Option<(TransportMediaId, Option<String>)> {
         let consumer_session_key =
             room.transport_user_key(target.consumer_user_id(), target.consumer_connection_id());
@@ -422,7 +422,7 @@ impl ConsumerBootstrapOp {
     /// callbacks.
     async fn finish(
         room: &Room,
-        media_port: &(impl MediaPort + SessionPort),
+        media_port: &MediaTransport,
         target: &PendingConsumerBootstrapTarget,
         origin: ConsumerBootstrapOrigin,
         consumer_transport_media_id: TransportMediaId,
@@ -506,7 +506,7 @@ impl UnpublishEffectPlan {
     pub(super) async fn execute(
         self,
         room: &Room,
-        media_port: &(impl MediaPort + SessionPort),
+        media_port: &MediaTransport,
     ) -> UnpublishOutcome {
         let (media_counts_before, outcome, media_counts_after) = {
             let mut state = room.state.write().await;

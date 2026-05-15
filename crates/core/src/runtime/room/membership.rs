@@ -48,10 +48,7 @@ use crate::{
     runtime::{
         ConnectionId, UserId, UserInfo, UserPermissions,
         diagnostics::DiagnosticsEventData,
-        media_transport::{
-            MediaPort, MediaTransport, ObservabilityPort, SessionPort, TransportAdapterError,
-            TransportMediaId,
-        },
+        media_transport::{MediaTransport, TransportAdapterError, TransportMediaId},
         metrics::TransportCleanupFailureKind,
     },
     transport::{TransportRelayRouteAction, TransportRelayRouteEffect},
@@ -421,7 +418,7 @@ impl Room {
         connection_id: ConnectionId,
         info: UserInfo,
         refresh: UserInfoRefresh,
-        media_transport: &(impl MediaPort + ObservabilityPort),
+        media_transport: &MediaTransport,
     ) {
         let need_refresh = refresh.is_needed();
         let outcome = {
@@ -498,7 +495,7 @@ impl Room {
 
     pub(in crate::runtime::room) async fn cleanup_transport_removals_with_retry(
         &self,
-        media_transport: &(impl MediaPort + SessionPort),
+        media_transport: &MediaTransport,
         removals: &[TransportMediaRemoval],
     ) -> TransportEffectOutcome {
         let mut cleanup = TransportEffectOutcome::Applied;
@@ -533,7 +530,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         transport_media_id: TransportMediaId,
-        media_transport: &(impl MediaPort + SessionPort),
+        media_transport: &MediaTransport,
         failure_message: &str,
     ) -> TransportEffectOutcome {
         let operation = TransportCleanupOperation::RemoveMedia {
@@ -606,7 +603,7 @@ impl Room {
     async fn execute_transport_cleanup_operation(
         &self,
         operation: &TransportCleanupOperation,
-        media_transport: &(impl MediaPort + SessionPort),
+        media_transport: &MediaTransport,
     ) -> Result<(), TransportAdapterError> {
         match operation {
             TransportCleanupOperation::RemoveMedia {
@@ -640,7 +637,7 @@ impl Room {
         &self,
         effect: &RelayRouteEffect,
         error: TransportAdapterError,
-        media_transport: &(impl MediaPort + SessionPort),
+        media_transport: &MediaTransport,
         failure_message: &str,
     ) -> TransportEffectOutcome {
         let operation = TransportCleanupOperation::ReleaseRelayRoute {
@@ -668,7 +665,7 @@ impl Room {
         &self,
         operation: &TransportCleanupOperation,
         error: TransportAdapterError,
-        media_transport: &(impl MediaPort + SessionPort),
+        media_transport: &MediaTransport,
     ) {
         let action = self
             .cleanup_reconciler()
@@ -711,10 +708,7 @@ impl Room {
     /// retry result. Transport adapter calls happen between those bookkeeping
     /// steps, which prevents adapter latency from blocking other room cleanup
     /// decisions.
-    async fn reconcile_transport_cleanup_retries(
-        &self,
-        media_transport: &(impl MediaPort + SessionPort),
-    ) {
+    async fn reconcile_transport_cleanup_retries(&self, media_transport: &MediaTransport) {
         loop {
             let retries = self.cleanup_reconciler().due_retries();
             if retries.is_empty() {
@@ -743,7 +737,7 @@ impl Room {
         &self,
         operation: &TransportCleanupOperation,
         action: CleanupRetryAction,
-        media_transport: &(impl MediaPort + SessionPort),
+        media_transport: &MediaTransport,
     ) {
         match action {
             CleanupRetryAction::Succeeded => {
@@ -787,7 +781,7 @@ impl Room {
     async fn force_transport_cleanup_owner_drop(
         &self,
         operation: &TransportCleanupOperation,
-        media_transport: &(impl MediaPort + SessionPort),
+        media_transport: &MediaTransport,
     ) {
         if !operation.needs_owner_drop() {
             return;
@@ -1136,7 +1130,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         capabilities: MediaCapabilities,
-        media_port: &(impl MediaPort + SessionPort),
+        media_port: &MediaTransport,
     ) -> SessionNegotiationOutcome {
         let update = {
             let mut state = self.state.write().await;
@@ -1156,7 +1150,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         update: UserNegotiationUpdate,
-        media_port: &(impl MediaPort + SessionPort),
+        media_port: &MediaTransport,
     ) -> SessionNegotiationOutcome {
         if !update.session_present {
             return SessionNegotiationOutcome::StaleConnection;
@@ -1184,7 +1178,7 @@ impl Room {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        media_port: &(impl MediaPort + SessionPort),
+        media_port: &MediaTransport,
     ) -> SessionNegotiationOutcome {
         if !self
             .request_active_video_consumer_keyframes(user_id, connection_id, media_port)
@@ -1210,7 +1204,7 @@ impl Room {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        media_port: &impl MediaPort,
+        media_port: &MediaTransport,
     ) -> bool {
         let Some(keyframe_refresh_targets) = ({
             let state = self.state.read().await;

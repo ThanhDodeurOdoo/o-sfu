@@ -19,17 +19,14 @@ use crate::{
         ConnectionId, RoomInstanceId, UserId,
         diagnostics::DiagnosticsStore,
         media_transport::{
-            ConsumerActivity, MediaPort, MediaTransportDeps, RtcTransportConfig, SessionPort,
-            TransportAdapterError, TransportMediaId, TransportSessionKey,
-            test_support::FakeMediaTransport,
+            ConsumerActivity, MediaTransportDeps, RtcTransportConfig, TransportAdapterError,
+            TransportMediaId, TransportSessionKey, test_support::FakeMediaTransport,
         },
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
         rtc_engine::RtcTransportWorker,
     },
-    transport::{
-        NegotiationPort, SourcePolicyPort, TransportRelayRouteAction, TransportRelayRouteEffect,
-    },
+    transport::{TransportRelayRouteAction, TransportRelayRouteEffect},
 };
 
 fn test_session_key(

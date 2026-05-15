@@ -45,8 +45,7 @@ pub(crate) mod websocket_server;
 
 pub(crate) use diagnostics::DiagnosticsStore;
 use http_server::{serve_http, serve_http_on};
-use media_transport::SourcePolicyPort;
-pub(crate) use media_transport::{MediaTransport, MediaTransportDeps, ObservabilityPort};
+pub(crate) use media_transport::{MediaTransport, MediaTransportDeps};
 pub(crate) use metrics::RuntimeMetrics;
 pub(crate) use o_sfu_core::{
     ConnectionId, SessionBitrateLimits,

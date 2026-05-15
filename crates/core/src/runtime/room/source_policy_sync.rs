@@ -18,7 +18,7 @@
 //! selector state is stored.
 
 use super::{Room, effects::SourcePolicyEffectPlan};
-use crate::runtime::media_transport::{ActiveSpeakerSource, MediaPort, ObservabilityPort};
+use crate::runtime::media_transport::{ActiveSpeakerSource, MediaTransport};
 
 impl Room {
     /// Refreshes source packet policy from live transport observability.
@@ -29,8 +29,8 @@ impl Room {
     /// signal to consume, so the refresh is intentionally a no-op.
     pub(super) async fn sync_source_packet_selection_policy(
         &self,
-        observability_port: Option<&impl ObservabilityPort>,
-        media_port: &impl MediaPort,
+        observability_port: Option<&MediaTransport>,
+        media_port: &MediaTransport,
     ) {
         let Some(observability_port) = observability_port else {
             return;
@@ -48,8 +48,8 @@ impl Room {
     ///
     /// This variant exists so manager-level fanout and tests can reuse the same
     /// policy path after they already have an active-speaker observation. The
-    /// method still asks the observability port for receiver bandwidth using
-    /// the current transport users, because bandwidth estimates must be
+    /// method still asks `MediaTransport` for receiver bandwidth using the
+    /// current transport users, because bandwidth estimates must be
     /// scoped to the users that are still attached to this room
     ///
     /// The state is read twice on purpose. The first read gathers transport
@@ -60,8 +60,8 @@ impl Room {
     pub(super) async fn sync_source_packet_selection_policy_from_observations(
         &self,
         active_speaker_sources: &[ActiveSpeakerSource],
-        observability_port: &impl ObservabilityPort,
-        media_port: &impl MediaPort,
+        observability_port: &MediaTransport,
+        media_port: &MediaTransport,
     ) {
         let session_keys = {
             let state = self.state.read().await;

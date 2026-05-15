@@ -53,7 +53,7 @@ use crate::{
             DiagnosticsUserTransport, DiagnosticsUserView,
         },
         media_transport::{
-            ActiveSpeakerSourceDiagnostic, ObservabilityPort, TransportMediaId, TransportSessionKey,
+            ActiveSpeakerSourceDiagnostic, MediaTransport, TransportMediaId, TransportSessionKey,
         },
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -833,7 +833,7 @@ impl Room {
     /// rather than one global atomic instant.
     pub(crate) async fn session_stats_snapshot(
         &self,
-        observability_port: &impl ObservabilityPort,
+        observability_port: &MediaTransport,
     ) -> RoomUserStatsSnapshot {
         let state = self.state.read().await;
         let session_keys = state
@@ -930,7 +930,7 @@ impl Room {
     /// per-user view with transport health and current incoming bitrate.
     pub async fn diagnostics_user_views(
         &self,
-        observability_port: &impl ObservabilityPort,
+        observability_port: &MediaTransport,
     ) -> Vec<DiagnosticsUserView> {
         let state = self.state.read().await;
         let session_entries = state.transport_user_entries();
@@ -968,12 +968,12 @@ impl Room {
     /// Builds the live source inventory for operator diagnostics.
     ///
     /// Source descriptors are room-domain objects, while bitrate samples come
-    /// from the transport observability port. This method keeps the merge at
+    /// from `MediaTransport`. This method keeps the merge at
     /// the room boundary so diagnostics routes do not inspect room state
     /// or transport internals directly.
     pub async fn diagnostics_sources(
         &self,
-        observability_port: &impl ObservabilityPort,
+        observability_port: &MediaTransport,
     ) -> Vec<DiagnosticsSource> {
         let active_speaker_diagnostics = active_speaker_diagnostics_by_media(
             observability_port
@@ -999,7 +999,7 @@ impl Room {
     pub async fn diagnostics_matching_user(
         &self,
         requested_user_id: &str,
-        observability_port: &impl ObservabilityPort,
+        observability_port: &MediaTransport,
     ) -> Option<(DiagnosticsUserView, UserId)> {
         self.diagnostics_user_views(observability_port)
             .await

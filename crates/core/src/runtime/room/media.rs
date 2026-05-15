@@ -26,7 +26,7 @@ use crate::{
     runtime::{
         ConnectionId, UserId,
         diagnostics::DiagnosticsEventData,
-        media_transport::{MediaPort, ObservabilityPort, ProducerActivity, SessionPort},
+        media_transport::{MediaTransport, ProducerActivity},
         source_model::{SourceSubscriptionIntent, UserStreamId},
     },
 };
@@ -36,7 +36,7 @@ impl Room {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        media_port: &(impl MediaPort + SessionPort),
+        media_port: &MediaTransport,
     ) -> bool {
         let mut state = self.state.write().await;
         let media_counts_before = RoomMediaCounts {
@@ -65,7 +65,7 @@ impl Room {
 
     pub(super) async fn bootstrap_consumer_targets(
         &self,
-        media_port: &(impl MediaPort + SessionPort),
+        media_port: &MediaTransport,
         origin: ConsumerBootstrapOrigin,
         targets: Vec<super::state::PendingConsumerBootstrapTarget>,
     ) {
@@ -101,7 +101,7 @@ impl Room {
         connection_id: ConnectionId,
         stream_id: &UserStreamId,
         activity: PublicationActivity,
-        media_port: &impl MediaPort,
+        media_port: &MediaTransport,
     ) -> PublicationActivityOutcome {
         let active = activity.is_active();
         let Some(producer_target) = ({
@@ -161,7 +161,7 @@ impl Room {
         connection_id: ConnectionId,
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
-        media_port: &(impl MediaPort + ObservabilityPort + SessionPort),
+        media_port: &MediaTransport,
     ) -> SubscriptionUpdateOutcome {
         let effect_plan = {
             let mut state = self.state.write().await;
@@ -211,7 +211,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         stream_id: &UserStreamId,
-        media_port: &(impl MediaPort + SessionPort),
+        media_port: &MediaTransport,
     ) -> UnpublishOutcome {
         let effect_plan =
             UnpublishEffectPlan::new(user_id.clone(), connection_id, stream_id.clone());

@@ -9,9 +9,9 @@ use o_sfu_router::MediaStream as RouterRtpParameters;
 #[cfg(any(test, feature = "testing-transport"))]
 use str0m::media::Mid;
 
-use super::MediaTransport;
 #[cfg(any(test, feature = "testing-transport"))]
 use super::worker_manager::RtcWorkerManager;
+use super::{Backend, MediaTransport};
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::rtc_engine::test_support::DebugRouteEntry;
 #[cfg(test)]
@@ -41,15 +41,17 @@ impl MediaTransport {
     )]
     #[must_use]
     pub fn from_fake_transport(transport: Arc<FakeMediaTransport>) -> Self {
-        Self::Fake(transport)
+        Self {
+            backend: Backend::Fake(transport),
+        }
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     #[must_use]
     pub const fn as_fake_transport(&self) -> Option<&Arc<FakeMediaTransport>> {
-        match self {
-            Self::Rtc(_) => None,
-            Self::Fake(transport) => Some(transport),
+        match &self.backend {
+            Backend::Rtc(_) => None,
+            Backend::Fake(transport) => Some(transport),
         }
     }
 
@@ -59,8 +61,8 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<RouterRtpParameters, TransportAdapterError> {
-        match self {
-            Self::Rtc(transport) => {
+        match &self.backend {
+            Backend::Rtc(transport) => {
                 transport
                     .worker_manager()
                     .worker_for_user(session_key)
@@ -69,7 +71,7 @@ impl MediaTransport {
                     .negotiated_producer_parameters(session_key, transport_media_id)
                     .await
             }
-            Self::Fake(transport) => {
+            Backend::Fake(transport) => {
                 transport
                     .negotiated_producer_parameters(session_key, transport_media_id)
                     .await
@@ -79,9 +81,9 @@ impl MediaTransport {
 
     #[cfg(test)]
     pub(super) fn as_rtc_worker_manager(&self) -> Option<&Arc<RtcWorkerManager>> {
-        match self {
-            Self::Rtc(transport) => Some(transport.worker_manager()),
-            Self::Fake(_) => None,
+        match &self.backend {
+            Backend::Rtc(transport) => Some(transport.worker_manager()),
+            Backend::Fake(_) => None,
         }
     }
 
@@ -91,7 +93,7 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         health: TransportSessionHealth,
     ) {
-        if let Self::Rtc(adapter) = self
+        if let Backend::Rtc(adapter) = &self.backend
             && let Some(worker) = adapter.worker_manager().worker_for_user(session_key)
         {
             worker.debug_set_session_transport_health(session_key, health);
@@ -104,9 +106,9 @@ impl MediaTransport {
         source_session_key: &TransportSessionKey,
         source_mid: Mid,
     ) -> Option<DebugRouteEntry> {
-        match self {
-            Self::Fake(_) => None,
-            Self::Rtc(adapter) => {
+        match &self.backend {
+            Backend::Fake(_) => None,
+            Backend::Rtc(adapter) => {
                 adapter
                     .worker_manager()
                     .debug_route_entry(source_session_key, source_mid)
@@ -121,9 +123,9 @@ impl MediaTransport {
         consumer_session_key: &TransportSessionKey,
         consumer_mid: Mid,
     ) -> Option<DebugRouteEntry> {
-        match self {
-            Self::Fake(_) => None,
-            Self::Rtc(adapter) => {
+        match &self.backend {
+            Backend::Fake(_) => None,
+            Backend::Rtc(adapter) => {
                 adapter
                     .worker_manager()
                     .debug_route_entry_by_consumer_mid(consumer_session_key, consumer_mid)
@@ -137,9 +139,9 @@ impl MediaTransport {
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> Option<DebugRouteEntry> {
-        match self {
-            Self::Fake(_) => None,
-            Self::Rtc(adapter) => {
+        match &self.backend {
+            Backend::Fake(_) => None,
+            Backend::Rtc(adapter) => {
                 adapter
                     .worker_manager()
                     .debug_route_entry_by_media_id(source_transport_media_id)

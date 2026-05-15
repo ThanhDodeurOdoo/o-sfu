@@ -30,8 +30,8 @@ use crate::{
         source_model::{SourcePublishIntent, SourceSubscriptionIntent, UserStreamId},
     },
     transport::{
-        AppliedSessionAnswer, NegotiationPort, ObservabilityPort, SessionOffer,
-        SessionUploadEncoding, SessionUploadSlot, TransportAdapterError, TransportSessionHealth,
+        AppliedSessionAnswer, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
+        TransportAdapterError, TransportSessionHealth,
     },
 };
 

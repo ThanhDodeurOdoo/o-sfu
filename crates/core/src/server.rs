@@ -75,7 +75,7 @@ pub mod transport {
     //! Curated media transport construction and extension boundary.
     //!
     //! Production server code gets the opaque media transport handle, named RTC
-    //! construction inputs plus concern-oriented transport ports from here. RTC
+    //! construction inputs and transport DTOs from here. RTC
     //! worker internals stay below the media transport boundary.
 
     #[cfg(any(test, feature = "testing-transport"))]
@@ -102,13 +102,12 @@ pub mod transport {
         transport::{
             ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
             ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,
-            ConsumerPacketGateUpdate, MediaPort, NegotiationPort, ObservabilityPort,
-            ProducerActivity, ReceiverBandwidthSnapshot, SessionOffer, SessionPort,
+            ConsumerPacketGateUpdate, ProducerActivity, ReceiverBandwidthSnapshot, SessionOffer,
             SessionUploadEncoding, SessionUploadSlot, SourcePacketGate, SourcePacketOperatingPoint,
-            SourcePolicyDirtyState, SourcePolicyPort, SourcePolicySignal,
-            SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
-            TransportMediaId, TransportPlacementPressureSnapshot, TransportResult,
-            TransportSessionHealth, TransportSessionKey, TransportWorkerPressureSnapshot,
+            SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
+            TransportAdapterError, TransportBitrateSnapshot, TransportMediaId,
+            TransportPlacementPressureSnapshot, TransportResult, TransportSessionHealth,
+            TransportSessionKey, TransportWorkerPressureSnapshot,
         },
     };
 }
