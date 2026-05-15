@@ -118,11 +118,11 @@ impl RoomTopologyRepairReport {
         self.errors.push(error);
     }
 
-    pub(in crate::runtime::room) fn errors(&self) -> &[RoomTopologyError] {
+    pub fn errors(&self) -> &[RoomTopologyError] {
         &self.errors
     }
 
-    pub(in crate::runtime::room) fn is_clean(&self) -> bool {
+    pub fn is_clean(&self) -> bool {
         self.errors.is_empty()
     }
 }

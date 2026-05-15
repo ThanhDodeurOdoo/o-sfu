@@ -19,7 +19,7 @@ impl fmt::Debug for RtcWorkerDebugHandle {
 }
 
 impl RtcWorkerDebugHandle {
-    pub(in crate::runtime::rtc_engine) async fn request<T, F>(&self, build_command: F) -> Option<T>
+    pub async fn request<T, F>(&self, build_command: F) -> Option<T>
     where
         F: FnOnce(oneshot::Sender<T>) -> DebugRtcWorkerCommand,
     {
@@ -35,7 +35,7 @@ pub(in crate::runtime::rtc_engine) struct RtcWorkerDebugChannels {
 }
 
 impl RtcWorkerDebugChannels {
-    pub(in crate::runtime::rtc_engine) fn new() -> Self {
+    pub fn new() -> Self {
         let (tx, rx) = mpsc::channel(DEBUG_COMMAND_CHANNEL_CAPACITY);
         Self {
             handle: RtcWorkerDebugHandle { tx },
@@ -43,14 +43,11 @@ impl RtcWorkerDebugChannels {
         }
     }
 
-    pub(in crate::runtime::rtc_engine) fn handle(&self) -> RtcWorkerDebugHandle {
+    pub fn handle(&self) -> RtcWorkerDebugHandle {
         self.handle.clone()
     }
 
-    pub(in crate::runtime::rtc_engine) fn install(
-        self,
-        inputs: PacketLoopInputReceivers,
-    ) -> PacketLoopInputReceivers {
+    pub fn install(self, inputs: PacketLoopInputReceivers) -> PacketLoopInputReceivers {
         inputs.with_debug_receiver(self.rx)
     }
 }

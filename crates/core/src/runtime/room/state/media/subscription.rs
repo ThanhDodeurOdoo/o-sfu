@@ -145,7 +145,7 @@ pub(in crate::runtime::room) enum ConsumerBootstrapOrigin {
 }
 
 impl RoomState {
-    pub(in crate::runtime::room) fn plan_subscription_change(
+    pub fn plan_subscription_change(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -193,7 +193,7 @@ impl RoomState {
         }
     }
 
-    pub(in crate::runtime::room) fn plan_missing_consumer_bootstraps_for_connection(
+    pub fn plan_missing_consumer_bootstraps_for_connection(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -210,7 +210,7 @@ impl RoomState {
         ))
     }
 
-    pub(in crate::runtime::room) fn plan_consumer_bootstraps_for_targets(
+    pub fn plan_consumer_bootstraps_for_targets(
         &mut self,
         targets: Vec<PendingConsumerBootstrapTarget>,
     ) -> Vec<PlannedConsumerBootstrap> {
@@ -506,7 +506,7 @@ impl RoomState {
             })
     }
 
-    pub(in crate::runtime::room) fn commit_consumer_bootstrap(
+    pub fn commit_consumer_bootstrap(
         &mut self,
         target: &PendingConsumerBootstrapTarget,
         mut pending: PendingConsumerBootstrap,
@@ -572,7 +572,7 @@ impl RoomState {
         Some((pending.sender, pending.bootstrap, pending.consumer_active))
     }
 
-    pub(in crate::runtime::room) fn release_pending_consumer_bootstrap(
+    pub fn release_pending_consumer_bootstrap(
         &mut self,
         target: &PendingConsumerBootstrapTarget,
     ) -> Vec<RelayRouteEffect> {
@@ -582,7 +582,7 @@ impl RoomState {
         self.relay_routes.release_target(target)
     }
 
-    pub(in crate::runtime::room) fn desired_source_subscription_active(
+    pub fn desired_source_subscription_active(
         &self,
         user_id: &UserId,
         target_user_id: &UserId,
@@ -603,7 +603,7 @@ impl RoomState {
     /// activity with the receiver-local source selection. Missing users return
     /// `None`, while missing routes for an existing user return
     /// [`ConsumerRouteState::Absent`].
-    pub(in crate::runtime::room) fn consumer_route_state(
+    pub fn consumer_route_state(
         &self,
         consumer_user_id: &UserId,
         producer_user_id: &UserId,
@@ -644,7 +644,7 @@ impl RoomState {
         })
     }
 
-    pub(in crate::runtime::room) fn active_video_consumer_keyframe_refresh_targets(
+    pub fn active_video_consumer_keyframe_refresh_targets(
         &self,
         consumer_user_id: &UserId,
         consumer_connection_id: ConnectionId,
@@ -686,17 +686,14 @@ impl RoomState {
         )
     }
 
-    pub(in crate::runtime::room) fn consumer_bootstrap_exists(
-        &self,
-        consumer_key: &ConsumerKey,
-    ) -> bool {
+    pub fn consumer_bootstrap_exists(&self, consumer_key: &ConsumerKey) -> bool {
         self.consumer_index.contains_key(consumer_key)
             || self.pending_consumer_bootstraps.contains(consumer_key)
     }
 }
 
 impl PlannedSubscriptionChange {
-    pub(in crate::runtime::room) fn into_parts(
+    pub fn into_parts(
         self,
     ) -> (
         Vec<ConsumerRouteUpdate>,
@@ -708,41 +705,41 @@ impl PlannedSubscriptionChange {
 }
 
 impl ConsumerRouteUpdate {
-    pub(in crate::runtime::room) const fn consumer_connection_id(&self) -> ConnectionId {
+    pub const fn consumer_connection_id(&self) -> ConnectionId {
         self.consumer_state.consumer_connection_id
     }
 
-    pub(in crate::runtime::room) const fn consumer_media(&self) -> TransportMediaId {
+    pub const fn consumer_media(&self) -> TransportMediaId {
         self.consumer_state.consumer_media
     }
 
-    pub(in crate::runtime::room) const fn source_connection_id(&self) -> ConnectionId {
+    pub const fn source_connection_id(&self) -> ConnectionId {
         self.consumer_state.source_connection_id
     }
 
-    pub(in crate::runtime::room) fn producer_user_id(&self) -> &UserId {
+    pub fn producer_user_id(&self) -> &UserId {
         &self.producer_user_id
     }
 
-    pub(in crate::runtime::room) const fn source_media(&self) -> TransportMediaId {
+    pub const fn source_media(&self) -> TransportMediaId {
         self.consumer_state.source_media
     }
 
-    pub(in crate::runtime::room) fn stream_id(&self) -> &UserStreamId {
+    pub fn stream_id(&self) -> &UserStreamId {
         &self.stream_id
     }
 
-    pub(in crate::runtime::room) const fn media_kind(&self) -> RouterMediaKind {
+    pub const fn media_kind(&self) -> RouterMediaKind {
         self.media_kind
     }
 
-    pub(in crate::runtime::room) const fn active(&self) -> bool {
+    pub const fn active(&self) -> bool {
         self.active
     }
 }
 
 impl PendingConsumerBootstrapTarget {
-    pub(in crate::runtime::room) fn new(
+    pub fn new(
         consumer_user_id: UserId,
         consumer_connection_id: ConnectionId,
         producer: ConsumerBootstrapProducerSnapshot,
@@ -754,47 +751,47 @@ impl PendingConsumerBootstrapTarget {
         }
     }
 
-    pub(in crate::runtime::room) const fn consumer_connection_id(&self) -> ConnectionId {
+    pub const fn consumer_connection_id(&self) -> ConnectionId {
         self.consumer_connection_id
     }
 
-    pub(in crate::runtime::room) fn consumer_user_id(&self) -> &UserId {
+    pub fn consumer_user_id(&self) -> &UserId {
         &self.consumer_user_id
     }
 
-    pub(in crate::runtime::room) const fn source_id(&self) -> PublishedSourceId {
+    pub const fn source_id(&self) -> PublishedSourceId {
         self.producer.source_id
     }
 
-    pub(in crate::runtime::room) const fn media_kind(&self) -> RouterMediaKind {
+    pub const fn media_kind(&self) -> RouterMediaKind {
         self.producer.media_kind
     }
 
-    pub(in crate::runtime::room) const fn producer_connection_id(&self) -> ConnectionId {
+    pub const fn producer_connection_id(&self) -> ConnectionId {
         self.producer.owner_connection_id
     }
 
-    pub(in crate::runtime::room) fn producer_user_id(&self) -> &UserId {
+    pub fn producer_user_id(&self) -> &UserId {
         &self.producer.owner_user_id
     }
 
-    pub(in crate::runtime::room) const fn transport_media_id(&self) -> TransportMediaId {
+    pub const fn transport_media_id(&self) -> TransportMediaId {
         self.producer.transport_media_id
     }
 
-    pub(in crate::runtime::room) fn stream_id(&self) -> &UserStreamId {
+    pub fn stream_id(&self) -> &UserStreamId {
         &self.producer.stream_id
     }
 }
 
 impl PreparedConsumerBootstrap {
-    pub(in crate::runtime::room) fn consumer_rtp_parameters(&self) -> &RouterRtpParameters {
+    pub fn consumer_rtp_parameters(&self) -> &RouterRtpParameters {
         &self.consumer_rtp_parameters
     }
 }
 
 impl PlannedConsumerBootstrap {
-    pub(in crate::runtime::room) fn into_parts(
+    pub fn into_parts(
         self,
     ) -> (
         PendingConsumerBootstrapTarget,
@@ -812,7 +809,7 @@ impl PlannedConsumerBootstrap {
 }
 
 impl ConsumerBootstrapProducerSnapshot {
-    pub(in crate::runtime::room) fn pending(
+    pub fn pending(
         source_id: PublishedSourceId,
         owner_user_id: UserId,
         owner_connection_id: ConnectionId,
@@ -834,11 +831,11 @@ impl ConsumerBootstrapProducerSnapshot {
         }
     }
 
-    pub(in crate::runtime::room) const fn source_id(&self) -> PublishedSourceId {
+    pub const fn source_id(&self) -> PublishedSourceId {
         self.source_id
     }
 
-    pub(in crate::runtime::room) fn owner_user_id(&self) -> &UserId {
+    pub fn owner_user_id(&self) -> &UserId {
         &self.owner_user_id
     }
 
@@ -916,19 +913,19 @@ impl RemoteTrackBootstrap {
 }
 
 impl ConsumerKeyframeRefreshTarget {
-    pub(in crate::runtime::room) const fn consumer_media(&self) -> TransportMediaId {
+    pub const fn consumer_media(&self) -> TransportMediaId {
         self.consumer_media
     }
 
-    pub(in crate::runtime::room) fn producer_user_id(&self) -> &UserId {
+    pub fn producer_user_id(&self) -> &UserId {
         &self.producer_user_id
     }
 
-    pub(in crate::runtime::room) const fn producer_connection_id(&self) -> ConnectionId {
+    pub const fn producer_connection_id(&self) -> ConnectionId {
         self.producer_connection_id
     }
 
-    pub(in crate::runtime::room) const fn source_media(&self) -> TransportMediaId {
+    pub const fn source_media(&self) -> TransportMediaId {
         self.source_media
     }
 }

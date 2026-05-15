@@ -12,7 +12,7 @@ pub(in crate::runtime) struct RoomRouterObserver {
 }
 
 impl RoomRouterObserver {
-    pub(in crate::runtime) fn new(sink: Arc<dyn RoomRouterEventSink>) -> Self {
+    pub fn new(sink: Arc<dyn RoomRouterEventSink>) -> Self {
         Self { sink }
     }
 }

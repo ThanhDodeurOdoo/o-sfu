@@ -11,12 +11,11 @@ use crate::runtime::media_transport::TransportMediaId;
 
 #[cfg(test)]
 impl RelayPacketMailbox {
-    pub(in crate::runtime::rtc_engine) fn channel_for_test()
-    -> (Self, mpsc::Receiver<ForwardedPacket>) {
+    pub fn channel_for_test() -> (Self, mpsc::Receiver<ForwardedPacket>) {
         Self::channel_for_test_with_capacity(RELAY_MAILBOX_CAPACITY)
     }
 
-    pub(in crate::runtime::rtc_engine) fn channel_for_test_with_capacity(
+    pub fn channel_for_test_with_capacity(
         capacity: usize,
     ) -> (Self, mpsc::Receiver<ForwardedPacket>) {
         let (tx, rx) = mpsc::channel(capacity);
@@ -26,12 +25,11 @@ impl RelayPacketMailbox {
 
 #[cfg(test)]
 impl InterNodeRelaySender {
-    pub(in crate::runtime::rtc_engine) fn channel_for_test()
-    -> (Self, mpsc::Receiver<ForwardedPacket>) {
+    pub fn channel_for_test() -> (Self, mpsc::Receiver<ForwardedPacket>) {
         Self::channel_for_test_with_capacity(RELAY_MAILBOX_CAPACITY)
     }
 
-    pub(in crate::runtime::rtc_engine) fn channel_for_test_with_capacity(
+    pub fn channel_for_test_with_capacity(
         capacity: usize,
     ) -> (Self, mpsc::Receiver<ForwardedPacket>) {
         let (tx, rx) = mpsc::channel(capacity);
@@ -41,7 +39,7 @@ impl InterNodeRelaySender {
 
 #[cfg(test)]
 impl RelayTargetTransport {
-    pub(in crate::runtime::rtc_engine) fn forward_packet(
+    pub fn forward_packet(
         &self,
         packet: &ForwardedPacket,
         source_transport_media_id: TransportMediaId,
@@ -59,7 +57,7 @@ impl RelayTargetTransport {
 
 #[cfg(test)]
 impl ActiveRelayTarget<RelayTargetId, RelayTargetTransport> {
-    pub(in crate::runtime::rtc_engine) fn forward_packet(
+    pub fn forward_packet(
         &self,
         packet: &ForwardedPacket,
         source_transport_media_id: TransportMediaId,

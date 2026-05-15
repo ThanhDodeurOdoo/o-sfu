@@ -12,18 +12,18 @@ pub(in crate::runtime::room) struct RecordingRequestContext {
 
 impl RecordingRequestContext {
     #[must_use]
-    pub(in crate::runtime::room) const fn permissions(&self) -> RoomUserPermissions {
+    pub const fn permissions(&self) -> RoomUserPermissions {
         self.permissions
     }
 
     #[must_use]
-    pub(in crate::runtime::room) const fn recording_state(&self) -> &RecordingState {
+    pub const fn recording_state(&self) -> &RecordingState {
         &self.recording_state
     }
 }
 
 impl RoomState {
-    pub(in crate::runtime::room) fn recording_request_context(
+    pub fn recording_request_context(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -35,7 +35,7 @@ impl RoomState {
         })
     }
 
-    pub(in crate::runtime::room) fn apply_recording_state_update(
+    pub fn apply_recording_state_update(
         &mut self,
         state: RecordingState,
         stop_code: Option<StopCode>,

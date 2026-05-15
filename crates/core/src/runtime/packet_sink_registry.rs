@@ -103,7 +103,7 @@ pub(in crate::runtime) struct PacketSinkRouteCache {
 }
 
 impl PacketSinkRouteCache {
-    pub(in crate::runtime) fn refresh_from(&mut self, registry: &RoomPacketSinkRegistry) {
+    pub fn refresh_from(&mut self, registry: &RoomPacketSinkRegistry) {
         let generation = registry.generation();
         if self.generation == generation {
             return;

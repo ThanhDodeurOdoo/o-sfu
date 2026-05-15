@@ -88,7 +88,7 @@ impl RoomRelayRoutes {
         self.release_owner(&RelayOwnerKey::from_target(target))
     }
 
-    pub(in crate::runtime::room::state) fn release_consumer_key(
+    pub fn release_consumer_key(
         &mut self,
         consumer_user_id: &UserId,
         source_id: PublishedSourceId,

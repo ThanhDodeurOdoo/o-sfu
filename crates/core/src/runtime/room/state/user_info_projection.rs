@@ -20,10 +20,7 @@ pub(in crate::runtime::room) fn project_user_info(
 }
 
 impl RoomState {
-    pub(in crate::runtime::room) fn user_snapshots_except(
-        &self,
-        excluded_user_id: &UserId,
-    ) -> Vec<PeerSnapshot> {
+    pub fn user_snapshots_except(&self, excluded_user_id: &UserId) -> Vec<PeerSnapshot> {
         self.users
             .iter()
             .filter(|(user_id, _session)| *user_id != excluded_user_id)
@@ -34,7 +31,7 @@ impl RoomState {
             .collect()
     }
 
-    pub(in crate::runtime::room) fn user_stats_counts(&self) -> (u64, BTreeMap<UserStreamId, u64>) {
+    pub fn user_stats_counts(&self) -> (u64, BTreeMap<UserStreamId, u64>) {
         let mut active_users_by_stream: BTreeMap<UserStreamId, BTreeSet<UserId>> = BTreeMap::new();
         for producer in self.producers.values().filter(|producer| producer.active) {
             active_users_by_stream
@@ -52,15 +49,12 @@ impl RoomState {
         )
     }
 
-    pub(in crate::runtime::room) fn user_info_snapshot(
-        &self,
-        user_id: &UserId,
-    ) -> Option<(UserId, UserInfo)> {
+    pub fn user_info_snapshot(&self, user_id: &UserId) -> Option<(UserId, UserInfo)> {
         let user = self.users.get(user_id)?;
         Some((user_id.clone(), Self::user_info(user)))
     }
 
-    pub(in crate::runtime::room) fn user_info_snapshot_all(&self) -> BTreeMap<UserId, UserInfo> {
+    pub fn user_info_snapshot_all(&self) -> BTreeMap<UserId, UserInfo> {
         self.users
             .iter()
             .map(|(user_id, user)| (user_id.clone(), Self::user_info(user)))

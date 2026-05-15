@@ -93,7 +93,7 @@ impl<'a> UserCleanup<'a> {
     ///
     /// The room will close stale transport users and remove detached media
     /// after the corresponding `RoomState` transition has committed.
-    pub(in crate::runtime::room) const fn runtime(media_transport: &'a MediaTransport) -> Self {
+    pub const fn runtime(media_transport: &'a MediaTransport) -> Self {
         Self {
             media_transport: Some(media_transport),
             clean_transport_state: true,
@@ -105,16 +105,14 @@ impl<'a> UserCleanup<'a> {
     /// This keeps tests focused on room-state lifecycle decisions while still
     /// allowing optional transport-backed observations after the transition.
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(in crate::runtime::room) const fn state_only(
-        media_transport: Option<&'a MediaTransport>,
-    ) -> Self {
+    pub const fn state_only(media_transport: Option<&'a MediaTransport>) -> Self {
         Self {
             media_transport,
             clean_transport_state: false,
         }
     }
 
-    pub(in crate::runtime::room) const fn media_transport(self) -> Option<&'a MediaTransport> {
+    pub const fn media_transport(self) -> Option<&'a MediaTransport> {
         self.media_transport
     }
 
@@ -124,12 +122,12 @@ impl<'a> UserCleanup<'a> {
 }
 
 pub(in crate::runtime::room) struct JoinSessionIntent {
-    pub(in crate::runtime::room) user_id: UserId,
-    pub(in crate::runtime::room) label: Option<String>,
-    pub(in crate::runtime::room) permissions: UserPermissions,
-    pub(in crate::runtime::room) sender: UserOutboundSender,
-    pub(in crate::runtime::room) emit_joined_fanout: bool,
-    pub(in crate::runtime::room) home_placement: LocalRouterRuntimeContext,
+    pub user_id: UserId,
+    pub label: Option<String>,
+    pub permissions: UserPermissions,
+    pub sender: UserOutboundSender,
+    pub emit_joined_fanout: bool,
+    pub home_placement: LocalRouterRuntimeContext,
 }
 
 /// Membership command applied under the `RoomState` lock.

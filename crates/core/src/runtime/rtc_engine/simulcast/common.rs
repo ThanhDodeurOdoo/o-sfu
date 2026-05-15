@@ -14,8 +14,8 @@ pub(super) const DEFAULT_LOW_MAX_BITRATE: Bitrate = Bitrate::from_kbps(150);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::rtc_engine) struct NegotiatedRid {
-    pub(in crate::runtime::rtc_engine) rid: Str0mRid,
-    pub(in crate::runtime::rtc_engine) max_bitrate: Option<Bitrate>,
+    pub rid: Str0mRid,
+    pub max_bitrate: Option<Bitrate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

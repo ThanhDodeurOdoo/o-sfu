@@ -10,10 +10,7 @@ pub(in crate::runtime::room) struct PublishPrerequisites {
 }
 
 impl RoomState {
-    pub(in crate::runtime::room) fn publish_prerequisites(
-        &self,
-        user_id: &UserId,
-    ) -> Option<PublishPrerequisites> {
+    pub fn publish_prerequisites(&self, user_id: &UserId) -> Option<PublishPrerequisites> {
         let user = self.users.get(user_id)?;
         if !user.negotiation.can_publish() {
             return None;
@@ -26,11 +23,11 @@ impl RoomState {
 }
 
 impl PublishPrerequisites {
-    pub(in crate::runtime::room) const fn connection_id(&self) -> ConnectionId {
+    pub const fn connection_id(&self) -> ConnectionId {
         self.connection_id
     }
 
-    pub(in crate::runtime::room) fn router_capabilities(&self) -> MediaCapabilities {
+    pub fn router_capabilities(&self) -> MediaCapabilities {
         self.router_capabilities.clone()
     }
 }

@@ -5,11 +5,11 @@ pub(in crate::runtime::room) struct UserLayout {
 
 impl UserLayout {
     #[must_use]
-    pub(in crate::runtime::room) const fn featured(&self) -> Option<bool> {
+    pub const fn featured(&self) -> Option<bool> {
         self.featured
     }
 
-    pub(in crate::runtime::room) fn set_featured(&mut self, featured: Option<bool>) {
+    pub fn set_featured(&mut self, featured: Option<bool>) {
         self.featured = featured;
     }
 }

@@ -24,7 +24,7 @@ use crate::{
 
 impl RoomTopology {
     #[cfg(test)]
-    pub(in crate::runtime::room) fn new(primary_router_id: RouterId) -> Self {
+    pub fn new(primary_router_id: RouterId) -> Self {
         Self::new_with_policy(
             primary_router_id,
             RoomWorkerPolicy::strict_single_router(),
@@ -33,7 +33,7 @@ impl RoomTopology {
     }
 
     #[cfg(test)]
-    pub(in crate::runtime::room) fn new_with_policy(
+    pub fn new_with_policy(
         primary_router_id: RouterId,
         room_worker_policy: RoomWorkerPolicy,
         local_router_count: usize,
@@ -67,7 +67,7 @@ impl RoomTopology {
     }
 
     #[cfg(test)]
-    pub(in crate::runtime::room) fn new_with_bounded_spillover(
+    pub fn new_with_bounded_spillover(
         primary_router_id: RouterId,
         local_router_count: usize,
     ) -> Self {
@@ -79,7 +79,7 @@ impl RoomTopology {
     }
 
     #[cfg(test)]
-    pub(in crate::runtime::room) fn new_with_load_spillover(
+    pub fn new_with_load_spillover(
         primary_router_id: RouterId,
         local_router_count: usize,
         policy: crate::LocalSpilloverPolicy,
@@ -92,50 +92,42 @@ impl RoomTopology {
     }
 
     #[cfg(test)]
-    pub(in crate::runtime::room) fn user_count(&self) -> u64 {
+    pub fn user_count(&self) -> u64 {
         u64::try_from(self.session_home_router.len()).unwrap_or(u64::MAX)
     }
 
-    pub(in crate::runtime::room) fn router_count(&self) -> usize {
+    pub fn router_count(&self) -> usize {
         self.routers.len()
     }
 
     #[cfg(test)]
-    pub(in crate::runtime::room) fn mapped_session_count_for_router(
-        &self,
-        router_id: RouterId,
-    ) -> Option<usize> {
+    pub fn mapped_session_count_for_router(&self, router_id: RouterId) -> Option<usize> {
         self.routers
             .get(&router_id)
             .map(super::RoomRouterState::mapped_session_count_for_test)
     }
 
-    pub(in crate::runtime::room) fn home_router_id_for_user(
-        &self,
-        user_id: &UserId,
-    ) -> Option<RouterId> {
+    pub fn home_router_id_for_user(&self, user_id: &UserId) -> Option<RouterId> {
         self.session_home_router.get(user_id).copied()
     }
 
     #[cfg(test)]
-    pub(in crate::runtime::room) fn active_load_router_count_for_test(&self) -> usize {
+    pub fn active_load_router_count_for_test(&self) -> usize {
         self.placement_policy.active_router_count_for_test()
     }
 
     #[cfg(test)]
-    pub(in crate::runtime::room) fn last_load_pressure_reason_for_test(
-        &self,
-    ) -> Option<super::LoadPressureReason> {
+    pub fn last_load_pressure_reason_for_test(&self) -> Option<super::LoadPressureReason> {
         self.placement_policy.last_load_pressure_reason_for_test()
     }
 
     #[cfg(test)]
-    pub(in crate::runtime::room) fn remove_router_for_test(&mut self, router_id: RouterId) {
+    pub fn remove_router_for_test(&mut self, router_id: RouterId) {
         self.routers.remove(&router_id);
     }
 
     #[cfg(test)]
-    pub(in crate::runtime::room) fn remove_session_mapping_for_test(&mut self, user_id: &UserId) {
+    pub fn remove_session_mapping_for_test(&mut self, user_id: &UserId) {
         let Some(router_id) = self.session_home_router.get(user_id).copied() else {
             return;
         };
@@ -146,7 +138,7 @@ impl RoomTopology {
     }
 
     #[cfg(test)]
-    pub(in crate::runtime::room) fn remove_transport_mapping_for_test(&mut self, user_id: &UserId) {
+    pub fn remove_transport_mapping_for_test(&mut self, user_id: &UserId) {
         let Some(router_id) = self.session_home_router.get(user_id).copied() else {
             return;
         };

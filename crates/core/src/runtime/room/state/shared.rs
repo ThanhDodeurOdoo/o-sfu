@@ -101,10 +101,7 @@ pub(in crate::runtime::room) struct ConsumerKey {
 }
 
 impl ConsumerKey {
-    pub(in crate::runtime::room) fn new(
-        consumer_user_id: &UserId,
-        source_id: PublishedSourceId,
-    ) -> Self {
+    pub fn new(consumer_user_id: &UserId, source_id: PublishedSourceId) -> Self {
         Self {
             consumer_user_id: consumer_user_id.clone(),
             source_id,
@@ -170,13 +167,13 @@ pub(in crate::runtime::room) struct ConsumerState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::room) struct TransportMediaRemoval {
-    pub(in crate::runtime::room) user: UserId,
-    pub(in crate::runtime::room) connection: ConnectionId,
-    pub(in crate::runtime::room) transport_media: TransportMediaId,
+    pub user: UserId,
+    pub connection: ConnectionId,
+    pub transport_media: TransportMediaId,
 }
 
 impl RoomState {
-    pub(in crate::runtime::room) fn new(
+    pub fn new(
         runtime_context: &super::super::RoomRuntimeContext,
         admission_policy: RoomAdmissionPolicy,
         router_rtp_capabilities: MediaCapabilities,
@@ -219,7 +216,7 @@ impl RoomState {
         }
     }
 
-    pub(in crate::runtime::room) fn collect_consumer_transport_removals(
+    pub fn collect_consumer_transport_removals(
         &self,
         departing_user_ids: &BTreeSet<UserId>,
     ) -> Vec<TransportMediaRemoval> {
@@ -248,7 +245,7 @@ impl RoomState {
             .collect()
     }
 
-    pub(in crate::runtime::room) fn collect_producer_transport_removals(
+    pub fn collect_producer_transport_removals(
         &self,
         departing_user_ids: &BTreeSet<UserId>,
     ) -> Vec<TransportMediaRemoval> {
@@ -268,7 +265,7 @@ impl RoomState {
             .collect()
     }
 
-    pub(in crate::runtime::room) fn collect_user_transport_removals(
+    pub fn collect_user_transport_removals(
         &self,
         departing_user_ids: &BTreeSet<UserId>,
     ) -> Vec<TransportMediaRemoval> {
@@ -277,10 +274,7 @@ impl RoomState {
         removals
     }
 
-    pub(in crate::runtime::room) fn purge_user_media_state(
-        &mut self,
-        user_id: &UserId,
-    ) -> Vec<RelayRouteEffect> {
+    pub fn purge_user_media_state(&mut self, user_id: &UserId) -> Vec<RelayRouteEffect> {
         let mut relay_effects = Vec::new();
         let source_ids = self
             .source_ids_by_owner
@@ -305,7 +299,7 @@ impl RoomState {
         relay_effects
     }
 
-    pub(in crate::runtime::room) fn user_for_connection(
+    pub fn user_for_connection(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -317,7 +311,7 @@ impl RoomState {
         Some(user)
     }
 
-    pub(in crate::runtime::room) fn user_mut_for_connection(
+    pub fn user_mut_for_connection(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -329,24 +323,22 @@ impl RoomState {
         Some(user)
     }
 
-    pub(in crate::runtime::room) fn recording_state(&self) -> RecordingState {
+    pub fn recording_state(&self) -> RecordingState {
         self.recording_state.clone()
     }
 
-    pub(in crate::runtime::room) fn router_rtp_capabilities(&self) -> MediaCapabilities {
+    pub fn router_rtp_capabilities(&self) -> MediaCapabilities {
         self.topology.rtp_capabilities().clone()
     }
 
-    pub(in crate::runtime::room) fn transport_user_entries(&self) -> Vec<(UserId, ConnectionId)> {
+    pub fn transport_user_entries(&self) -> Vec<(UserId, ConnectionId)> {
         self.users
             .iter()
             .map(|(user_id, user)| (user_id.clone(), user.connection_id))
             .collect()
     }
 
-    pub(in crate::runtime::room) fn transport_consumer_entries(
-        &self,
-    ) -> Vec<(UserId, ConnectionId)> {
+    pub fn transport_consumer_entries(&self) -> Vec<(UserId, ConnectionId)> {
         let mut entries = self
             .consumer_index
             .iter()
@@ -360,7 +352,7 @@ impl RoomState {
         entries
     }
 
-    pub(in crate::runtime::room) fn placement_usage_snapshot(&self) -> RoomPlacementUsageSnapshot {
+    pub fn placement_usage_snapshot(&self) -> RoomPlacementUsageSnapshot {
         RoomPlacementUsageSnapshot::new(
             self.topology.primary_router_id(),
             self.topology.has_assigned_local_placements(),
@@ -368,42 +360,39 @@ impl RoomState {
         )
     }
 
-    pub(in crate::runtime::room) fn user_connection_id(
-        &self,
-        user_id: &UserId,
-    ) -> Option<ConnectionId> {
+    pub fn user_connection_id(&self, user_id: &UserId) -> Option<ConnectionId> {
         self.users.get(user_id).map(|user| user.connection_id)
     }
 
-    pub(in crate::runtime::room) fn user_count(&self) -> usize {
+    pub fn user_count(&self) -> usize {
         self.users.len()
     }
 
-    pub(in crate::runtime::room) fn publication_count(&self) -> usize {
+    pub fn publication_count(&self) -> usize {
         self.sources.len()
     }
 
-    pub(in crate::runtime::room) fn subscription_count(&self) -> usize {
+    pub fn subscription_count(&self) -> usize {
         self.consumer_index
             .len()
             .saturating_add(self.pending_consumer_bootstraps.len())
     }
 
-    pub(in crate::runtime::room) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.users.is_empty()
     }
 }
 
 impl TransportMediaRemoval {
-    pub(in crate::runtime::room) fn user(&self) -> &UserId {
+    pub fn user(&self) -> &UserId {
         &self.user
     }
 
-    pub(in crate::runtime::room) const fn connection(&self) -> ConnectionId {
+    pub const fn connection(&self) -> ConnectionId {
         self.connection
     }
 
-    pub(in crate::runtime::room) const fn transport_media(&self) -> TransportMediaId {
+    pub const fn transport_media(&self) -> TransportMediaId {
         self.transport_media
     }
 }

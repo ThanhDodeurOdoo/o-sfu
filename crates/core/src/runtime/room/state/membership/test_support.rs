@@ -7,7 +7,7 @@ use super::super::{
 use crate::runtime::{ConnectionId, UserId};
 
 impl RoomState {
-    pub(in crate::runtime::room) fn set_client_rtp_capabilities_for_test(
+    pub fn set_client_rtp_capabilities_for_test(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -20,7 +20,7 @@ impl RoomState {
         user.negotiation.set_client_rtp_capabilities_for_test()
     }
 
-    pub(in crate::runtime::room) fn set_transport_ready_for_test(
+    pub fn set_transport_ready_for_test(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,

@@ -13,7 +13,7 @@ use crate::{
 };
 
 impl RoomRouterState {
-    pub(in crate::runtime::room) fn new_for_test(router_id: RouterId) -> Self {
+    pub fn new_for_test(router_id: RouterId) -> Self {
         let packet_sink_registry = Arc::new(RoomPacketSinkRegistry::default());
         let event_sink = Arc::new(RecordingService::new(
             RoomInstanceId::from_raw(0),
@@ -27,15 +27,15 @@ impl RoomRouterState {
         )
     }
 
-    pub(in crate::runtime::room) fn remove_session_mapping_for_test(&mut self, user_id: &UserId) {
+    pub fn remove_session_mapping_for_test(&mut self, user_id: &UserId) {
         self.router_user_ids_by_user_id.remove(user_id);
     }
 
-    pub(in crate::runtime::room) fn remove_transport_mapping_for_test(&mut self, user_id: &UserId) {
+    pub fn remove_transport_mapping_for_test(&mut self, user_id: &UserId) {
         self.transport_ids_by_user_id.remove(user_id);
     }
 
-    pub(in crate::runtime::room) fn mapped_session_count_for_test(&self) -> usize {
+    pub fn mapped_session_count_for_test(&self) -> usize {
         self.router_user_ids_by_user_id.len()
     }
 }

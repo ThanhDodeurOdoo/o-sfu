@@ -84,7 +84,7 @@ impl PacketLoopInputReceivers {
     /// The returned bundle has no debug receiver. Test-support construction
     /// should attach one with [`Self::with_debug_receiver`] before passing the
     /// bundle to the loop.
-    pub(in crate::runtime::rtc_engine) fn new(
+    pub fn new(
         command_rx: mpsc::Receiver<RtcWorkerCommand>,
         relay_rx: mpsc::Receiver<ForwardedPacket>,
         shutdown_token: CancellationToken,
@@ -105,10 +105,7 @@ impl PacketLoopInputReceivers {
     /// plane. The debug receiver is consumed into the same bundle so the loop
     /// driver does not need a separate debug wait or drain branch.
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(in crate::runtime::rtc_engine) fn with_debug_receiver(
-        mut self,
-        debug_rx: mpsc::Receiver<DebugRtcWorkerCommand>,
-    ) -> Self {
+    pub fn with_debug_receiver(mut self, debug_rx: mpsc::Receiver<DebugRtcWorkerCommand>) -> Self {
         self.debug_rx = Some(debug_rx);
         self
     }

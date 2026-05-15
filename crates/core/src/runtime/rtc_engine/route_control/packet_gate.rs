@@ -63,10 +63,7 @@ impl PacketOperatingPointGate {
     ///
     /// callers are expected to validate that the temporal layer exists on the
     /// advertised source before this value reaches rtc route control
-    pub(in crate::runtime::rtc_engine) const fn new(
-        rid: Option<Rid>,
-        max_temporal_layer_id: u8,
-    ) -> Self {
+    pub const fn new(rid: Option<Rid>, max_temporal_layer_id: u8) -> Self {
         Self {
             rid,
             max_temporal_layer_id,
@@ -74,12 +71,12 @@ impl PacketOperatingPointGate {
     }
 
     /// returns the selected rid restriction when this operating point is rid-bound
-    pub(in crate::runtime::rtc_engine) const fn rid(self) -> Option<Rid> {
+    pub const fn rid(self) -> Option<Rid> {
         self.rid
     }
 
     /// returns the inclusive temporal-layer ceiling for this operating point
-    pub(in crate::runtime::rtc_engine) const fn max_temporal_layer_id(self) -> u8 {
+    pub const fn max_temporal_layer_id(self) -> u8 {
         self.max_temporal_layer_id
     }
 
@@ -115,7 +112,7 @@ impl PacketLayerGate {
     ///
     /// the packet loop calls this on the forwarding hot path
     /// it must remain a pure metadata predicate with no source-state mutation
-    pub(in crate::runtime::rtc_engine) fn permits(&self, metadata: PacketLayerMetadata) -> bool {
+    pub fn permits(&self, metadata: PacketLayerMetadata) -> bool {
         match self {
             Self::Open => true,
             Self::Block => false,
@@ -141,10 +138,7 @@ pub(in crate::runtime::rtc_engine) struct PacketLayerMetadata {
 
 impl PacketLayerMetadata {
     /// creates metadata for one packet after route-control extraction
-    pub(in crate::runtime::rtc_engine) const fn new(
-        rid: Option<Rid>,
-        temporal_layer_id: Option<u8>,
-    ) -> Self {
+    pub const fn new(rid: Option<Rid>, temporal_layer_id: Option<u8>) -> Self {
         Self {
             rid,
             temporal_layer_id,
@@ -152,7 +146,7 @@ impl PacketLayerMetadata {
     }
 
     /// returns the resolved rid that gate evaluation can compare
-    pub(in crate::runtime::rtc_engine) const fn rid(self) -> Option<Rid> {
+    pub const fn rid(self) -> Option<Rid> {
         self.rid
     }
 

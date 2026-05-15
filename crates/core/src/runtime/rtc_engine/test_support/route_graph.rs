@@ -16,7 +16,7 @@ pub(in crate::runtime::rtc_engine) struct RouteSourceFixture {
 }
 
 impl RouteSourceFixture {
-    pub(in crate::runtime::rtc_engine) fn new(session_key: TransportSessionKey, mid: Mid) -> Self {
+    pub fn new(session_key: TransportSessionKey, mid: Mid) -> Self {
         Self {
             session_key,
             mid,
@@ -25,7 +25,7 @@ impl RouteSourceFixture {
         }
     }
 
-    pub(in crate::runtime::rtc_engine) fn existing(
+    pub fn existing(
         session_key: TransportSessionKey,
         mid: Mid,
         transport_media_id: TransportMediaId,
@@ -38,10 +38,7 @@ impl RouteSourceFixture {
         }
     }
 
-    pub(in crate::runtime::rtc_engine) fn install(
-        self,
-        state: &mut PacketLoopState,
-    ) -> TransportMediaId {
+    pub fn install(self, state: &mut PacketLoopState) -> TransportMediaId {
         let Self {
             session_key,
             mid,
@@ -73,7 +70,7 @@ pub(in crate::runtime::rtc_engine) struct RouteDestinationFixture {
 }
 
 impl RouteDestinationFixture {
-    pub(in crate::runtime::rtc_engine) fn new(session_key: TransportSessionKey, mid: Mid) -> Self {
+    pub fn new(session_key: TransportSessionKey, mid: Mid) -> Self {
         Self {
             session_key,
             mid,
@@ -84,23 +81,17 @@ impl RouteDestinationFixture {
         }
     }
 
-    pub(in crate::runtime::rtc_engine) fn packet_gate(
-        mut self,
-        packet_gate: PacketLayerGate,
-    ) -> Self {
+    pub fn packet_gate(mut self, packet_gate: PacketLayerGate) -> Self {
         self.packet_gate = packet_gate;
         self
     }
 
-    pub(in crate::runtime::rtc_engine) fn pending_packet_gate(
-        mut self,
-        packet_gate: PacketLayerGate,
-    ) -> Self {
+    pub fn pending_packet_gate(mut self, packet_gate: PacketLayerGate) -> Self {
         self.pending_packet_gate = Some(packet_gate);
         self
     }
 
-    pub(in crate::runtime::rtc_engine) fn install(
+    pub fn install(
         self,
         state: &mut PacketLoopState,
         source_transport_media_id: TransportMediaId,

@@ -1,4 +1,30 @@
-//! Consumer-route registration, source validation and packet-gate mutation.
+//! worker-local consumer-route control for media fanout
+//!
+//! this file is the mutation boundary for `media_route_index`
+//! lifecycle code creates and removes browser media handles, command adapters
+//! deliver room effects and selected-rid readiness turns packet observations
+//! into effective gates
+//! this module keeps those paths on the same ownership checks before the packet
+//! loop can observe a route
+//!
+//! route ownership has two valid shapes:
+//!
+//! ```text
+//! same media worker
+//!   source id -> RegisteredMediaHandle::Producer
+//!
+//! different media worker
+//!   source id -> RemoteSourceRegistration
+//! ```
+//!
+//! only consumer-route registration may create a remote-source entry
+//! later active state, packet-gate and keyframe paths must find the existing
+//! registration so stale room effects cannot recreate a removed remote source
+//!
+//! destination gates live on the route entry
+//! [`refresh_source_packet_gate`] projects active destination gates into
+//! source-local route control and mirrors the remote-source aggregate back to
+//! the worker that owns the producer when the source is remote
 
 use std::time::Instant;
 
@@ -23,27 +49,50 @@ use crate::runtime::{
     },
 };
 
-/// Controls whether route-source lookup may create a remote-source entry.
+/// access mode for source validation
 ///
-/// Registering a consumer route is the only path allowed to install remote
-/// source control. Later active, gate and keyframe changes must find an existing
-/// registration so stale commands cannot recreate a removed remote route.
+/// `Register` is restricted to route creation because it may install the
+/// command path used to relay gates and keyframe requests back to the producer
+/// worker
+/// `Existing` is used by later mutations so they cannot recreate deleted remote
+/// source state
 enum RouteSourceAccess {
+    /// require that local or remote source state already exists
     Existing,
+    /// allow remote-source registration while the consumer route is created
+    ///
+    /// local sources ignore the control handle and are validated through media
+    /// ownership
     Register(Option<RemoteSourceControl>),
 }
 
+/// route data captured after consumer media declaration
+///
+/// lifecycle builds this only after the source has been validated and the
+/// consumer media handle has been registered
+/// the values stay borrowed so route setup cannot outlive the command state or
+/// copy negotiated RTP parameters just to pass them across this boundary
 #[derive(Clone, Copy)]
 pub(in crate::runtime::rtc_engine::worker::media) struct ConsumerRouteRegistration<'a> {
-    pub(in crate::runtime::rtc_engine::worker::media) consumer_session_key: &'a TransportSessionKey,
-    pub(in crate::runtime::rtc_engine::worker::media) consumer_transport_media_id: TransportMediaId,
-    pub(in crate::runtime::rtc_engine::worker::media) consumer_mid: Mid,
-    pub(in crate::runtime::rtc_engine::worker::media) source_transport_media_id: TransportMediaId,
-    pub(in crate::runtime::rtc_engine::worker::media) consumer_rtp_parameters:
-        &'a RouterRtpParameters,
-    pub(in crate::runtime::rtc_engine::worker::media) now: Instant,
+    /// session that owns the destination `Rtc`
+    pub consumer_session_key: &'a TransportSessionKey,
+    /// registered consumer media handle that receives forwarded packets
+    pub consumer_transport_media_id: TransportMediaId,
+    /// consumer MID used when packets are rewritten for local egress
+    pub consumer_mid: Mid,
+    /// producer or remote-source media id that feeds this destination
+    pub source_transport_media_id: TransportMediaId,
+    /// router-negotiated consumer stream used for payload rewriting and the
+    /// initial packet gate
+    pub consumer_rtp_parameters: &'a RouterRtpParameters,
+    /// packet-loop clock sample used for selected-rid freshness checks
+    pub now: Instant,
 }
 
+/// projects consumer RTP parameters into the gate installed on a new route
+///
+/// strict selected-rid gates may stay pending until packet-path liveness proves
+/// that the selected rid can be decoded
 fn consumer_packet_gate_for_source(
     state: &PacketLoopState,
     source_transport_media_id: TransportMediaId,
@@ -58,11 +107,18 @@ fn consumer_packet_gate_for_source(
     )
 }
 
-/// Ensure the source side of a route is valid before adding a destination.
+/// validates source ownership for a route that is about to be created
 ///
-/// Local sources must still be owned by the requesting session. Remote sources
-/// are registered with relay control so later source-gate updates can be pushed
-/// back to the worker that owns the producer.
+/// local sources must still be producer handles owned by the declared source
+/// session
+/// remote sources require `remote_source_control` because later route refreshes
+/// need a command path back to the producer worker
+///
+/// # errors
+///
+/// returns `InvalidInput` when a source id belongs to another owner, when the
+/// media id names a consumer or when a remote source is missing its control path
+/// returns `TransportUnavailable` when the local source media id does not exist
 pub(in crate::runtime::rtc_engine::worker::media) fn ensure_route_source_registered(
     state: &mut PacketLoopState,
     route_owner_session_key: &TransportSessionKey,
@@ -79,6 +135,18 @@ pub(in crate::runtime::rtc_engine::worker::media) fn ensure_route_source_registe
     )
 }
 
+/// validates source ownership for a mutation on an existing route
+///
+/// this is used by active-state, packet-gate and keyframe paths
+/// it never creates remote-source state, so cleanup cannot be undone by a late
+/// command that still carries an old source id
+///
+/// # errors
+///
+/// returns `InvalidInput` when the media id exists but belongs to a different
+/// source owner or is not a producer source for a local route
+/// returns `TransportUnavailable` when the expected local producer or remote
+/// source registration is gone
 pub(in crate::runtime::rtc_engine::worker::media) fn ensure_existing_route_source(
     state: &mut PacketLoopState,
     route_owner_session_key: &TransportSessionKey,
@@ -94,18 +162,22 @@ pub(in crate::runtime::rtc_engine::worker::media) fn ensure_existing_route_sourc
     )
 }
 
-/// Register one consumer route in the worker-local forwarding index.
+/// registers one consumer route in the worker-local forwarding index
 ///
-/// This binds the consumer transport media to its source route, installs the
+/// this binds the consumer transport media to its source route, installs the
 /// negotiated packet gate that drives the initial RID selection and updates any
-/// remote-source relay activity that depends on this route existing. Room policy
-/// may later replace the gate for this one consumer without changing other
-/// destinations on the same source.
+/// remote-source relay activity that depends on the route existing
+/// room policy may later replace the gate for this one consumer without
+/// changing other destinations on the same source
 ///
-/// A strict selected-RID route is not made effective until packet-path
-/// liveness proves that RID exists for this producer. The pending gate keeps
-/// the room-selected target attached to the destination while the effective
-/// gate remains blocked or temporarily points at one decodable fallback RID.
+/// a strict selected-rid route is not made effective until packet-path liveness
+/// proves that the rid exists for this producer
+/// the pending gate keeps the room-selected target attached to the destination
+/// while the effective gate remains blocked or temporarily points at one
+/// decodable fallback rid
+///
+/// callers must validate the source with [`ensure_route_source_registered`] and
+/// register the consumer media handle before calling this function
 pub(in crate::runtime::rtc_engine::worker::media) fn register_consumer_route(
     state: &mut PacketLoopState,
     registration: ConsumerRouteRegistration<'_>,
@@ -145,6 +217,12 @@ pub(in crate::runtime::rtc_engine::worker::media) fn register_consumer_route(
     refresh_source_packet_gate(state, source_transport_media_id);
 }
 
+/// returns the payload type to write on packets sent to a consumer
+///
+/// encoding-level payload types are preferred because they are the most
+/// specific negotiated value
+/// when encodings do not carry one, the first primary codec supplies the
+/// rewrite target
 pub(in crate::runtime::rtc_engine::worker::media) fn consumer_payload_type(
     consumer_rtp_parameters: &RouterRtpParameters,
 ) -> Option<Pt> {
@@ -159,6 +237,12 @@ pub(in crate::runtime::rtc_engine::worker::media) fn consumer_payload_type(
         })
 }
 
+/// removes one consumer destination from a source route
+///
+/// teardown may call this after partial cleanup, so missing route state is
+/// treated as already removed
+/// when the last destination disappears, remote-source placeholders and their
+/// packet-loop side tables are pruned with the route
 pub(in crate::runtime::rtc_engine::worker::media) fn remove_consumer_route(
     state: &mut PacketLoopState,
     consumer_session_key: &TransportSessionKey,
@@ -186,11 +270,13 @@ pub(in crate::runtime::rtc_engine::worker::media) fn remove_consumer_route(
     state.prune_remote_source_if_unrouted(source_transport_media_id);
 }
 
-/// Recompute the effective packet gate for one source after consumer-route
-/// changes.
+/// recomputes the effective packet gate for one source after route changes
 ///
-/// Join resume, pause and removal all converge here so local forwarding and
-/// remote relay control immediately see the same effective route selection.
+/// route creation, resume, pause, selected-rid activation and removal all
+/// converge here so local forwarding and remote relay control observe the same
+/// route selection
+/// the local route-control gate is the union of active destination gates
+/// remote sources receive the producer-worker gate derived from that union
 pub(in crate::runtime::rtc_engine::worker) fn refresh_source_packet_gate(
     state: &mut PacketLoopState,
     source_transport_media_id: TransportMediaId,
@@ -213,6 +299,11 @@ pub(in crate::runtime::rtc_engine::worker) fn refresh_source_packet_gate(
     }
 }
 
+/// returns the MID for a local producer when ownership still matches
+///
+/// this is the best-effort form of [`ensure_owned_local_producer_mid`]
+/// callers use it when teardown or feedback should ignore a source that already
+/// disappeared
 pub(in crate::runtime::rtc_engine::worker::media) fn owned_local_producer_mid(
     state: &PacketLoopState,
     source_session_key: &TransportSessionKey,
@@ -221,6 +312,18 @@ pub(in crate::runtime::rtc_engine::worker::media) fn owned_local_producer_mid(
     ensure_owned_local_producer_mid(state, source_session_key, source_transport_media_id).ok()
 }
 
+/// updates the source-wide activity gate for one local producer route
+///
+/// source activity is enforced by the forwarding planner through
+/// `MediaRouteEntry::source_active`
+/// it is intentionally separate from packet-layer gates because producer
+/// activity is a route-lifecycle fact, not a layer-selection predicate
+///
+/// # errors
+///
+/// returns `InvalidInput` when the media id does not name a producer owned by
+/// `session_key`
+/// returns `TransportUnavailable` when the producer or route entry is gone
 pub(super) fn worker_set_producer_active(
     state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
@@ -236,6 +339,19 @@ pub(super) fn worker_set_producer_active(
     Ok(())
 }
 
+/// updates the destination activity gate for one existing consumer route
+///
+/// consumer activity changes the route aggregate only when the visible active
+/// state changes
+/// the source is revalidated before mutation so stale room effects cannot touch
+/// a route after replacement or teardown
+///
+/// # errors
+///
+/// returns `InvalidInput` when the source or consumer media id belongs to a
+/// different owner
+/// returns `TransportUnavailable` when the source, consumer handle or route
+/// destination is gone
 pub(super) fn worker_set_consumer_active(
     state: &mut PacketLoopState,
     consumer_session_key: &TransportSessionKey,
@@ -292,11 +408,19 @@ pub(super) fn worker_set_consumer_active(
     Ok(())
 }
 
-/// Replaces the packet gate for exactly one consumer route.
+/// replaces the packet gate for exactly one consumer route
 ///
-/// Source ownership is checked first because a stale room effect may arrive
-/// after user replacement or route cleanup. The source aggregate is refreshed
-/// only when the destination gate actually changed
+/// source ownership is checked first because a stale room effect may arrive
+/// after user replacement or route cleanup
+/// the source aggregate is refreshed only when the effective or pending
+/// destination gate actually changed
+///
+/// # errors
+///
+/// returns `InvalidInput` when the source or consumer media id belongs to a
+/// different owner
+/// returns `TransportUnavailable` when the source, consumer handle or route
+/// destination is gone
 pub(super) fn worker_set_consumer_packet_gate(
     state: &mut PacketLoopState,
     request: ConsumerPacketGateRequest<'_>,
@@ -316,6 +440,12 @@ pub(super) fn worker_set_consumer_packet_gate(
     Ok(())
 }
 
+/// applies a batch of packet-gate updates for one source route
+///
+/// each update is validated independently so callers receive one result per
+/// requested consumer route
+/// the source aggregate is refreshed once after the batch when at least one
+/// destination gate changed
 pub(super) fn worker_set_consumer_packet_gates(
     state: &mut PacketLoopState,
     source_session_key: &TransportSessionKey,
@@ -349,6 +479,19 @@ pub(super) fn worker_set_consumer_packet_gates(
     results
 }
 
+/// mutates one destination packet gate and reports whether the route changed
+///
+/// selected-rid gates pass through readiness guarding before they are written
+/// to the destination
+/// this keeps room policy attached to the route as `pending_packet_gate` until
+/// the packet loop observes a decodable rid
+///
+/// # errors
+///
+/// returns `InvalidInput` when the source or consumer media id belongs to a
+/// different owner
+/// returns `TransportUnavailable` when the source, consumer handle or route
+/// destination is gone
 fn update_consumer_packet_gate(
     state: &mut PacketLoopState,
     consumer_session_key: &TransportSessionKey,
@@ -387,11 +530,11 @@ fn update_consumer_packet_gate(
             .media_route_index
             .get_mut(&source_transport_media_id)
             .ok_or(TransportAdapterError::TransportUnavailable)?;
-        // PERFORMANCE: The linear scan is intentionally kept for now. Benchmarks showed
-        // that a destination side index only wins clearly in larger rooms, about 4.15x at
-        // 128 consumers and 12.91x at 512 consumers, while tiny rooms do not justify the
-        // extra route maintenance cost. Add the index when dense-room packet-gate batches
-        // become a production priority.
+        // linear scan stays until dense-room packet-gate batches become a
+        // production priority
+        // benchmarks showed a destination-side index wins clearly only in
+        // larger rooms, about 4.15x at 128 consumers and 12.91x at 512 consumers
+        // tiny rooms do not justify the extra route-maintenance cost
         let destination = route_entry
             .destinations
             .iter_mut()
@@ -411,6 +554,10 @@ fn update_consumer_packet_gate(
     Ok(false)
 }
 
+/// extracts the rid restriction carried by a packet-layer gate
+///
+/// keyframe routing and selected-rid readiness use this to map destination
+/// policy back to producer-side refresh targets
 pub(in crate::runtime::rtc_engine::worker::media) fn packet_gate_rid(
     packet_gate: &PacketLayerGate,
 ) -> Option<Rid> {
@@ -421,6 +568,18 @@ pub(in crate::runtime::rtc_engine::worker::media) fn packet_gate_rid(
     }
 }
 
+/// validates the source side of a route and optionally registers remote state
+///
+/// local sources are resolved through worker media handles because they must be
+/// producer media owned by the source session
+/// remote sources are resolved through `remote_source_registry` because this
+/// worker only owns a command path back to the producer worker
+///
+/// # errors
+///
+/// returns `InvalidInput` for owner mismatches, consumer media ids used as
+/// sources or remote registration without a control handle
+/// returns `TransportUnavailable` when the expected source state is absent
 fn ensure_route_source(
     state: &mut PacketLoopState,
     route_owner_session_key: &TransportSessionKey,
@@ -456,6 +615,16 @@ fn ensure_route_source(
     }
 }
 
+/// returns the MID for a local producer after enforcing source ownership
+///
+/// this is the strict form used by command paths that must reject stale or
+/// misaddressed producer effects
+///
+/// # errors
+///
+/// returns `InvalidInput` when the media id exists but is not owned by
+/// `source_session_key` as a producer
+/// returns `TransportUnavailable` when the media id is not registered
 pub(super) fn ensure_owned_local_producer_mid(
     state: &PacketLoopState,
     source_session_key: &TransportSessionKey,
@@ -474,6 +643,10 @@ pub(super) fn ensure_owned_local_producer_mid(
     }
 }
 
+/// computes the source-local packet gate required by active destinations
+///
+/// `source_active` is not part of this aggregate because the forwarding planner
+/// applies that route-lifecycle gate before destination fanout
 fn local_source_packet_gate(route_entry: &MediaRouteEntry) -> Option<PacketLayerGate> {
     aggregate_packet_gates(
         route_entry

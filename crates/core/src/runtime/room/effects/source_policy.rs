@@ -40,7 +40,7 @@ impl SourcePolicyEffectPlan {
     ///
     /// The caller has already released any long-lived transport work. This
     /// constructor only reads room state and does not mutate transport state.
-    pub(in crate::runtime::room) fn from_state(
+    pub fn from_state(
         state: &RoomState,
         active_speaker_sources: &[ActiveSpeakerSource],
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
@@ -54,7 +54,7 @@ impl SourcePolicyEffectPlan {
         }
     }
 
-    pub(in crate::runtime::room) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.consumer_packets.is_empty() && self.featured_sessions.is_empty()
     }
 
@@ -64,7 +64,7 @@ impl SourcePolicyEffectPlan {
     /// Only updates accepted by the transport are committed back into
     /// `RoomState`; rejected or stale updates are left for the next policy
     /// refresh.
-    pub(in crate::runtime::room) async fn execute(self, room: &Room, media_port: &impl MediaPort) {
+    pub async fn execute(self, room: &Room, media_port: &impl MediaPort) {
         let applied_consumer_packet_updates =
             Self::apply_consumer_packet_updates(room, media_port, self.consumer_packets).await;
         if applied_consumer_packet_updates.is_empty() && self.featured_sessions.is_empty() {

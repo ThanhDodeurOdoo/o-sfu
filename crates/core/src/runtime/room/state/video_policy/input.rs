@@ -80,7 +80,7 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
     /// the returned snapshot borrows source descriptors from `state`
     /// callers must consume it before mutating the room graph again
     #[must_use]
-    pub(in crate::runtime::room) fn from_state(
+    pub fn from_state(
         state: &'a RoomState,
         active_speaker_sources: &[ActiveSpeakerSource],
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
@@ -146,7 +146,7 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
     ///
     /// routes are grouped by receiver because they preserve `consumer_index`
     /// ordering from the room state
-    pub(in crate::runtime::room) fn routes(&self) -> &[ReceiverVideoRouteInput<'a>] {
+    pub fn routes(&self) -> &[ReceiverVideoRouteInput<'a>] {
         &self.routes
     }
 }
@@ -194,35 +194,35 @@ pub(in crate::runtime::room) struct ReceiverVideoRouteInput<'a> {
 #[derive(Debug, Clone, Copy)]
 pub(in crate::runtime::room) struct ReceiverVideoRouteInputParts<'a> {
     /// live user count at snapshot time
-    pub(in crate::runtime::room) user_count: usize,
+    pub user_count: usize,
     /// committed source descriptor for the route
-    pub(in crate::runtime::room) source: &'a PublishedSourceDescriptor,
+    pub source: &'a PublishedSourceDescriptor,
     /// receiver user that owns the consumer media route
-    pub(in crate::runtime::room) consumer_user_id: &'a UserId,
+    pub consumer_user_id: &'a UserId,
     /// connection that owns the consumer media route
-    pub(in crate::runtime::room) consumer_connection_id: ConnectionId,
+    pub consumer_connection_id: ConnectionId,
     /// user that owns the producer source
-    pub(in crate::runtime::room) source_user_id: &'a UserId,
+    pub source_user_id: &'a UserId,
     /// connection that owns the producer source
-    pub(in crate::runtime::room) source_connection_id: ConnectionId,
+    pub source_connection_id: ConnectionId,
     /// source-side transport media id
-    pub(in crate::runtime::room) source_transport_media_id: TransportMediaId,
+    pub source_transport_media_id: TransportMediaId,
     /// consumer-side transport media id
-    pub(in crate::runtime::room) consumer_transport_media_id: TransportMediaId,
+    pub consumer_transport_media_id: TransportMediaId,
     /// current committed transport selection for this route
-    pub(in crate::runtime::room) current_selection: ConsumerSourceSelection,
+    pub current_selection: ConsumerSourceSelection,
     /// layout importance resolved for this receiver/source pair
-    pub(in crate::runtime::room) layout_intent: ReceiverVideoLayoutIntent,
+    pub layout_intent: ReceiverVideoLayoutIntent,
     /// visible scalable route count for this receiver
-    pub(in crate::runtime::room) visible_scalable_route_count: usize,
+    pub visible_scalable_route_count: usize,
     /// latest receiver bandwidth estimate, if known
-    pub(in crate::runtime::room) receiver_bandwidth: Option<Bitrate>,
+    pub receiver_bandwidth: Option<Bitrate>,
 }
 
 impl<'a> ReceiverVideoRouteInput<'a> {
     /// builds one route input from explicit snapshot facts
     #[must_use]
-    pub(in crate::runtime::room) fn new(parts: ReceiverVideoRouteInputParts<'a>) -> Self {
+    pub fn new(parts: ReceiverVideoRouteInputParts<'a>) -> Self {
         Self {
             user_count: parts.user_count,
             source: parts.source,
@@ -240,62 +240,62 @@ impl<'a> ReceiverVideoRouteInput<'a> {
     }
 
     /// returns the committed source descriptor for policy and encoding lookup
-    pub(in crate::runtime::room) fn source(&self) -> &'a PublishedSourceDescriptor {
+    pub fn source(&self) -> &'a PublishedSourceDescriptor {
         self.source
     }
 
     /// returns the stable source id for stale-update checks
-    pub(in crate::runtime::room) const fn source_id(&self) -> PublishedSourceId {
+    pub const fn source_id(&self) -> PublishedSourceId {
         self.source.source_id()
     }
 
     /// returns the source adaptation policy consumed by the budget planner
-    pub(in crate::runtime::room) const fn adaptation_policy(&self) -> SourceAdaptationPolicy {
+    pub const fn adaptation_policy(&self) -> SourceAdaptationPolicy {
         self.source.policy().adaptation()
     }
 
     /// returns the receiver user id for grouping and effect routing
-    pub(in crate::runtime::room) fn consumer_user_id(&self) -> &'a UserId {
+    pub fn consumer_user_id(&self) -> &'a UserId {
         self.consumer_user_id
     }
 
     /// returns the receiver connection that owned the route at snapshot time
-    pub(in crate::runtime::room) const fn consumer_connection_id(&self) -> ConnectionId {
+    pub const fn consumer_connection_id(&self) -> ConnectionId {
         self.consumer_connection_id
     }
 
     /// returns the user that owns the source at snapshot time
-    pub(in crate::runtime::room) fn source_user_id(&self) -> &'a UserId {
+    pub fn source_user_id(&self) -> &'a UserId {
         self.source_user_id
     }
 
     /// returns the source connection that owned the route at snapshot time
-    pub(in crate::runtime::room) const fn source_connection_id(&self) -> ConnectionId {
+    pub const fn source_connection_id(&self) -> ConnectionId {
         self.source_connection_id
     }
 
     /// returns the source-side transport media id used by packet-gate effects
-    pub(in crate::runtime::room) const fn source_transport_media_id(&self) -> TransportMediaId {
+    pub const fn source_transport_media_id(&self) -> TransportMediaId {
         self.source_transport_media_id
     }
 
     /// returns the consumer-side transport media id used by packet-gate effects
-    pub(in crate::runtime::room) const fn consumer_transport_media_id(&self) -> TransportMediaId {
+    pub const fn consumer_transport_media_id(&self) -> TransportMediaId {
         self.consumer_transport_media_id
     }
 
     /// returns the selection currently committed for this consumer route
-    pub(in crate::runtime::room) const fn current_selection(&self) -> ConsumerSourceSelection {
+    pub const fn current_selection(&self) -> ConsumerSourceSelection {
         self.current_selection
     }
 
     /// returns the receiver-specific layout role for this source
-    pub(in crate::runtime::room) const fn layout_intent(&self) -> ReceiverVideoLayoutIntent {
+    pub const fn layout_intent(&self) -> ReceiverVideoLayoutIntent {
         self.layout_intent
     }
 
     /// returns the live user count captured for this policy refresh
-    pub(in crate::runtime::room) const fn user_count(&self) -> usize {
+    pub const fn user_count(&self) -> usize {
         self.user_count
     }
 
@@ -303,7 +303,7 @@ impl<'a> ReceiverVideoRouteInput<'a> {
     ///
     /// hidden or overflow routes do not count toward this divisor because they
     /// should not force visible thumbnails to downscale
-    pub(in crate::runtime::room) const fn visible_scalable_route_count(&self) -> usize {
+    pub const fn visible_scalable_route_count(&self) -> usize {
         self.visible_scalable_route_count
     }
 
@@ -311,12 +311,12 @@ impl<'a> ReceiverVideoRouteInput<'a> {
     ///
     /// absence is treated as "no transport observation yet" by the planner
     /// it is not a zero-bandwidth signal
-    pub(in crate::runtime::room) const fn receiver_bandwidth(&self) -> Option<Bitrate> {
+    pub const fn receiver_bandwidth(&self) -> Option<Bitrate> {
         self.receiver_bandwidth
     }
 
     /// returns selectable encodings in the descriptor-owned policy order
-    pub(in crate::runtime::room) fn encodings(&self) -> SelectableRouteEncodings<'a> {
+    pub fn encodings(&self) -> SelectableRouteEncodings<'a> {
         SelectableRouteEncodings::new(self.source)
     }
 }
@@ -342,20 +342,18 @@ impl<'a> SelectableRouteEncodings<'a> {
 
     /// returns the number of selectable encodings exposed to policy
     #[must_use]
-    pub(in crate::runtime::room) fn len(self) -> usize {
+    pub fn len(self) -> usize {
         self.source.selectable_encoding_count()
     }
 
     /// returns one selectable encoding by policy rank
     #[must_use]
-    pub(in crate::runtime::room) fn get(self, rank: usize) -> Option<&'a SourceEncodingDescriptor> {
+    pub fn get(self, rank: usize) -> Option<&'a SourceEncodingDescriptor> {
         self.source.selectable_encoding_by_rank(rank)
     }
 
     /// iterates selectable encodings in policy rank order
-    pub(in crate::runtime::room) fn iter(
-        self,
-    ) -> impl Iterator<Item = &'a SourceEncodingDescriptor> {
+    pub fn iter(self) -> impl Iterator<Item = &'a SourceEncodingDescriptor> {
         self.source.selectable_encodings()
     }
 }

@@ -31,32 +31,32 @@ pub(in crate::runtime::room) struct ReceiverVideoLayoutIntent {
 
 impl ReceiverVideoLayoutIntent {
     #[must_use]
-    pub(in crate::runtime::room) const fn new(role: SourceRoomPolicySelector) -> Self {
+    pub const fn new(role: SourceRoomPolicySelector) -> Self {
         Self { role }
     }
 
     #[must_use]
-    pub(in crate::runtime::room) const fn role(self) -> SourceRoomPolicySelector {
+    pub const fn role(self) -> SourceRoomPolicySelector {
         self.role
     }
 
     #[must_use]
-    pub(in crate::runtime::room) const fn priority(self) -> SourceRoutePriority {
+    pub const fn priority(self) -> SourceRoutePriority {
         self.role.priority()
     }
 
     #[must_use]
-    pub(in crate::runtime::room) const fn uses_featured_quality(self) -> bool {
+    pub const fn uses_featured_quality(self) -> bool {
         self.role.uses_featured_quality()
     }
 
     #[must_use]
-    pub(in crate::runtime::room) const fn counts_toward_visible_budget(self) -> bool {
+    pub const fn counts_toward_visible_budget(self) -> bool {
         self.role.counts_toward_visible_budget()
     }
 
     #[must_use]
-    pub(in crate::runtime::room) fn resolve(
+    pub fn resolve(
         source: &PublishedSourceDescriptor,
         preference: Option<VideoLayoutIntent>,
         active_speaker: bool,
@@ -84,7 +84,7 @@ pub(in crate::runtime::room) fn featured_source_user_ids_for_active_speakers(
 
 impl RoomState {
     #[must_use]
-    pub(in crate::runtime::room) fn receiver_video_layout_intent(
+    pub fn receiver_video_layout_intent(
         &self,
         consumer_user_id: &UserId,
         source: &PublishedSourceDescriptor,
@@ -107,7 +107,7 @@ impl RoomState {
     }
 
     #[must_use]
-    pub(in crate::runtime::room) fn diagnostics_video_layout_intent(
+    pub fn diagnostics_video_layout_intent(
         &self,
         consumer_user_id: &UserId,
         source: &PublishedSourceDescriptor,
@@ -133,7 +133,7 @@ impl RoomState {
     /// from the same observation. If there is no current active speaker, the
     /// method only emits clears when some user still has server-derived
     /// featured state.
-    pub(in crate::runtime::room) fn featured_session_updates(
+    pub fn featured_session_updates(
         &self,
         active_speaker_sources: &[ActiveSpeakerSource],
     ) -> Vec<FeaturedUserUpdate> {

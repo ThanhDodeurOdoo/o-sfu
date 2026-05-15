@@ -8,11 +8,11 @@ use super::{
 use crate::runtime::UserId;
 
 impl RoomState {
-    pub(in crate::runtime::room) fn fanout_all(&self, message: &RoomEventMessage) -> MessageFanout {
+    pub fn fanout_all(&self, message: &RoomEventMessage) -> MessageFanout {
         fanout_all(self.users.values().map(|user| user.sender.clone()), message)
     }
 
-    pub(in crate::runtime::room) fn fanout_all_except(
+    pub fn fanout_all_except(
         &self,
         message: &RoomEventMessage,
         excluded_user_id: Option<&UserId>,

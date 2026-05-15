@@ -15,7 +15,7 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopLagSnapshot {
 }
 
 impl PacketLoopLagSnapshot {
-    pub(in crate::runtime::rtc_engine) fn new(started_at: Instant) -> Self {
+    pub fn new(started_at: Instant) -> Self {
         Self {
             started_at,
             lag_ms: AtomicU64::new(0),
@@ -30,15 +30,11 @@ impl PacketLoopLagSnapshot {
     }
 
     #[cfg(test)]
-    pub(in crate::runtime::rtc_engine) fn publish_for_test(
-        &self,
-        lag_ms: u64,
-        observed_at: Instant,
-    ) {
+    pub fn publish_for_test(&self, lag_ms: u64, observed_at: Instant) {
         self.publish(lag_ms, observed_at);
     }
 
-    pub(in crate::runtime::rtc_engine) fn packet_loop_lag_ms_at(&self, now: Instant) -> u64 {
+    pub fn packet_loop_lag_ms_at(&self, now: Instant) -> u64 {
         let observed_elapsed_ms = self.observed_elapsed_ms.load(Ordering::Acquire);
         if observed_elapsed_ms == NO_PACKET_LOOP_LAG_SAMPLE {
             return 0;

@@ -4,7 +4,7 @@ use std::fmt::{self, Display, Formatter};
 pub(in crate::runtime::room) struct ProducerRuntimeId(u64);
 
 impl ProducerRuntimeId {
-    pub(in crate::runtime::room) fn allocate(next_producer_id: &mut u64) -> Self {
+    pub fn allocate(next_producer_id: &mut u64) -> Self {
         let current = *next_producer_id;
         *next_producer_id = next_producer_id.saturating_add(1);
         Self(current)
@@ -21,13 +21,13 @@ impl Display for ProducerRuntimeId {
 pub(in crate::runtime::room) struct ConsumerRuntimeId(u64);
 
 impl ConsumerRuntimeId {
-    pub(in crate::runtime::room) fn allocate(next_consumer_id: &mut u64) -> Self {
+    pub fn allocate(next_consumer_id: &mut u64) -> Self {
         let current = *next_consumer_id;
         *next_consumer_id = next_consumer_id.saturating_add(1);
         Self(current)
     }
 
-    pub(in crate::runtime::room) fn into_wire_id(self) -> String {
+    pub fn into_wire_id(self) -> String {
         self.to_string()
     }
 }

@@ -53,7 +53,7 @@ pub(in crate::runtime::room) struct ReceiverVideoBudgetPlan<'a> {
 
 impl<'a> ReceiverVideoBudgetPlan<'a> {
     #[must_use]
-    pub(in crate::runtime::room) fn from_input(input: &'a ReceiverVideoPolicyInput<'a>) -> Self {
+    pub fn from_input(input: &'a ReceiverVideoPolicyInput<'a>) -> Self {
         let routes = input.routes();
         let mut route_actions = Vec::with_capacity(routes.len());
         let mut remaining_routes = routes;
@@ -74,9 +74,7 @@ impl<'a> ReceiverVideoBudgetPlan<'a> {
     }
 
     #[must_use]
-    pub(in crate::runtime::room) fn into_selection_updates(
-        self,
-    ) -> Vec<ConsumerPacketSelectionUpdate> {
+    pub fn into_selection_updates(self) -> Vec<ConsumerPacketSelectionUpdate> {
         self.route_actions
             .into_iter()
             .filter_map(ReceiverVideoRouteAction::into_selection_update)
@@ -109,7 +107,7 @@ impl super::super::shared::RoomState {
     /// change room authority on their own. This method combines them with
     /// committed source descriptors, subscription state and active-speaker
     /// layout state to build staged updates for the effect executor.
-    pub(in crate::runtime::room) fn consumer_packet_selection_updates(
+    pub fn consumer_packet_selection_updates(
         &self,
         active_speaker_sources: &[ActiveSpeakerSource],
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,

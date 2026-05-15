@@ -36,7 +36,7 @@ pub(in crate::runtime::room) struct ReceiverVideoRouteAction<'a> {
 
 impl<'a> ReceiverVideoRouteAction<'a> {
     #[must_use]
-    pub(in crate::runtime::room) fn new(
+    pub fn new(
         route: &'a ReceiverVideoRouteInput<'a>,
         action: VideoRouteAction,
         budget: ReceiverVideoBudgetDiagnostics,
@@ -56,9 +56,7 @@ impl<'a> ReceiverVideoRouteAction<'a> {
         }
     }
 
-    pub(in crate::runtime::room) fn into_selection_update(
-        self,
-    ) -> Option<ConsumerPacketSelectionUpdate> {
+    pub fn into_selection_update(self) -> Option<ConsumerPacketSelectionUpdate> {
         let current_selection = self.route.current_selection();
         let (selector, policy_pause_reason, request_keyframe) = match self.action {
             VideoRouteAction::Send(selector) => (
@@ -114,40 +112,40 @@ impl BudgetSolverOutcomes {
     const RESUMED: u8 = 1 << 2;
     const PROTECTED_OVER_BUDGET: u8 = 1 << 3;
 
-    pub(in crate::runtime::room) const fn degraded() -> Self {
+    pub const fn degraded() -> Self {
         Self {
             bits: Self::DEGRADED,
         }
     }
 
-    pub(in crate::runtime::room) const fn paused() -> Self {
+    pub const fn paused() -> Self {
         Self { bits: Self::PAUSED }
     }
 
-    pub(in crate::runtime::room) const fn resumed() -> Self {
+    pub const fn resumed() -> Self {
         Self {
             bits: Self::RESUMED,
         }
     }
 
-    pub(in crate::runtime::room) const fn with_protected_over_budget(mut self) -> Self {
+    pub const fn with_protected_over_budget(mut self) -> Self {
         self.bits |= Self::PROTECTED_OVER_BUDGET;
         self
     }
 
-    pub(in crate::runtime::room) const fn is_degraded(self) -> bool {
+    pub const fn is_degraded(self) -> bool {
         self.bits & Self::DEGRADED != 0
     }
 
-    pub(in crate::runtime::room) const fn is_paused(self) -> bool {
+    pub const fn is_paused(self) -> bool {
         self.bits & Self::PAUSED != 0
     }
 
-    pub(in crate::runtime::room) const fn is_resumed(self) -> bool {
+    pub const fn is_resumed(self) -> bool {
         self.bits & Self::RESUMED != 0
     }
 
-    pub(in crate::runtime::room) const fn is_protected_over_budget(self) -> bool {
+    pub const fn is_protected_over_budget(self) -> bool {
         self.bits & Self::PROTECTED_OVER_BUDGET != 0
     }
 }
@@ -178,71 +176,71 @@ pub(in crate::runtime::room) struct ConsumerPacketSelectionUpdate {
 }
 
 impl ConsumerPacketSelectionUpdate {
-    pub(in crate::runtime::room) fn consumer_user_id(&self) -> &UserId {
+    pub fn consumer_user_id(&self) -> &UserId {
         &self.consumer_user_id
     }
 
-    pub(in crate::runtime::room) const fn consumer_connection_id(&self) -> ConnectionId {
+    pub const fn consumer_connection_id(&self) -> ConnectionId {
         self.consumer_connection_id
     }
 
-    pub(in crate::runtime::room) fn source_user_id(&self) -> &UserId {
+    pub fn source_user_id(&self) -> &UserId {
         &self.source_user_id
     }
 
-    pub(in crate::runtime::room) const fn source_connection_id(&self) -> ConnectionId {
+    pub const fn source_connection_id(&self) -> ConnectionId {
         self.source_connection_id
     }
 
-    pub(in crate::runtime::room) const fn source_transport_media_id(&self) -> TransportMediaId {
+    pub const fn source_transport_media_id(&self) -> TransportMediaId {
         self.source_transport_media_id
     }
 
-    pub(in crate::runtime::room) const fn consumer_transport_media_id(&self) -> TransportMediaId {
+    pub const fn consumer_transport_media_id(&self) -> TransportMediaId {
         self.consumer_transport_media_id
     }
 
-    pub(in crate::runtime::room) const fn source_id(&self) -> PublishedSourceId {
+    pub const fn source_id(&self) -> PublishedSourceId {
         self.source_id
     }
 
-    pub(in crate::runtime::room) const fn selector(&self) -> SourceSelector {
+    pub const fn selector(&self) -> SourceSelector {
         self.selector
     }
 
-    pub(in crate::runtime::room) const fn policy_pause_reason(&self) -> Option<PolicyPauseReason> {
+    pub const fn policy_pause_reason(&self) -> Option<PolicyPauseReason> {
         self.policy_pause_reason
     }
 
-    pub(in crate::runtime::room) const fn route_active(&self) -> bool {
+    pub const fn route_active(&self) -> bool {
         self.policy_pause_reason.is_none()
     }
 
-    pub(in crate::runtime::room) const fn budget(&self) -> ReceiverVideoBudgetDiagnostics {
+    pub const fn budget(&self) -> ReceiverVideoBudgetDiagnostics {
         self.budget
     }
 
-    pub(in crate::runtime::room) const fn outcomes(&self) -> BudgetSolverOutcomes {
+    pub const fn outcomes(&self) -> BudgetSolverOutcomes {
         self.outcomes
     }
 
-    pub(in crate::runtime::room) const fn pressure_observations(&self) -> u8 {
+    pub const fn pressure_observations(&self) -> u8 {
         self.pressure_observations
     }
 
-    pub(in crate::runtime::room) const fn upgrade_observations(&self) -> u8 {
+    pub const fn upgrade_observations(&self) -> u8 {
         self.upgrade_observations
     }
 
-    pub(in crate::runtime::room) fn packet_gate(&self) -> Option<&SourcePacketGate> {
+    pub fn packet_gate(&self) -> Option<&SourcePacketGate> {
         self.packet_gate.as_ref()
     }
 
-    pub(in crate::runtime::room) const fn route_activity_update(&self) -> bool {
+    pub const fn route_activity_update(&self) -> bool {
         self.route_activity_update
     }
 
-    pub(in crate::runtime::room) const fn request_keyframe(&self) -> bool {
+    pub const fn request_keyframe(&self) -> bool {
         self.request_keyframe
     }
 }
@@ -260,15 +258,15 @@ pub(in crate::runtime::room) struct FeaturedUserUpdate {
 
 impl FeaturedUserUpdate {
     #[must_use]
-    pub(in crate::runtime::room) fn new(user_id: UserId, featured: Option<bool>) -> Self {
+    pub fn new(user_id: UserId, featured: Option<bool>) -> Self {
         Self { user_id, featured }
     }
 
-    pub(in crate::runtime::room) fn user_id(&self) -> &UserId {
+    pub fn user_id(&self) -> &UserId {
         &self.user_id
     }
 
-    pub(in crate::runtime::room) const fn featured(&self) -> Option<bool> {
+    pub const fn featured(&self) -> Option<bool> {
         self.featured
     }
 }

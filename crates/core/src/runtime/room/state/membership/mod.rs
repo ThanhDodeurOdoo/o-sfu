@@ -24,8 +24,8 @@ mod tests;
 
 #[derive(Debug)]
 pub(in crate::runtime::room) struct LifecycleEffects {
-    pub(in crate::runtime::room) close_requests: Vec<UserCloseRequest>,
-    pub(in crate::runtime::room) fanouts: Vec<MessageFanout>,
+    pub close_requests: Vec<UserCloseRequest>,
+    pub fanouts: Vec<MessageFanout>,
 }
 
 impl LifecycleEffects {
@@ -44,26 +44,26 @@ impl LifecycleEffects {
 
 #[derive(Debug)]
 pub(in crate::runtime::room) struct UserCloseRequest {
-    pub(in crate::runtime::room) sender: OutboundSender,
-    pub(in crate::runtime::room) reason: UserCloseReason,
+    pub sender: OutboundSender,
+    pub reason: UserCloseReason,
 }
 
 #[derive(Debug)]
 pub(in crate::runtime::room) struct JoinUserOutcome {
-    pub(in crate::runtime::room) connection_id: ConnectionId,
-    pub(in crate::runtime::room) effects: LifecycleEffects,
-    pub(in crate::runtime::room) user_id: UserId,
-    pub(in crate::runtime::room) transport_home_placement: LocalRouterRuntimeContext,
-    pub(in crate::runtime::room) transport_media_worker_id: usize,
-    pub(in crate::runtime::room) transport_removals: Vec<TransportMediaRemoval>,
-    pub(in crate::runtime::room) relay_effects: Vec<RelayRouteEffect>,
+    pub connection_id: ConnectionId,
+    pub effects: LifecycleEffects,
+    pub user_id: UserId,
+    pub transport_home_placement: LocalRouterRuntimeContext,
+    pub transport_media_worker_id: usize,
+    pub transport_removals: Vec<TransportMediaRemoval>,
+    pub relay_effects: Vec<RelayRouteEffect>,
 }
 
 #[derive(Debug)]
 pub(in crate::runtime::room) struct LeaveUserOutcome {
-    pub(in crate::runtime::room) effects: LifecycleEffects,
-    pub(in crate::runtime::room) transport_removals: Vec<TransportMediaRemoval>,
-    pub(in crate::runtime::room) relay_effects: Vec<RelayRouteEffect>,
+    pub effects: LifecycleEffects,
+    pub transport_removals: Vec<TransportMediaRemoval>,
+    pub relay_effects: Vec<RelayRouteEffect>,
 }
 
 #[derive(Debug)]
@@ -72,23 +72,23 @@ pub(in crate::runtime::room) struct UserInfoUpdateOutcome {
 }
 
 impl UserInfoUpdateOutcome {
-    pub(in crate::runtime::room) fn emit(self) {
+    pub fn emit(self) {
         self.fanout.emit();
     }
 }
 
 #[derive(Debug)]
 pub(in crate::runtime::room) struct DisconnectedUser {
-    pub(in crate::runtime::room) user_id: UserId,
-    pub(in crate::runtime::room) connection_id: ConnectionId,
+    pub user_id: UserId,
+    pub connection_id: ConnectionId,
 }
 
 #[derive(Debug)]
 pub(in crate::runtime::room) struct DisconnectUsersOutcome {
-    pub(in crate::runtime::room) disconnected_users: Vec<DisconnectedUser>,
-    pub(in crate::runtime::room) effects: LifecycleEffects,
-    pub(in crate::runtime::room) transport_removals: Vec<TransportMediaRemoval>,
-    pub(in crate::runtime::room) relay_effects: Vec<RelayRouteEffect>,
+    pub disconnected_users: Vec<DisconnectedUser>,
+    pub effects: LifecycleEffects,
+    pub transport_removals: Vec<TransportMediaRemoval>,
+    pub relay_effects: Vec<RelayRouteEffect>,
 }
 
 impl RoomState {
@@ -197,7 +197,7 @@ impl RoomState {
     }
 
     #[cfg(test)]
-    pub(in crate::runtime::room) fn apply_join(
+    pub fn apply_join(
         &mut self,
         user_id: &UserId,
         label: Option<String>,
@@ -215,7 +215,7 @@ impl RoomState {
         )
     }
 
-    pub(in crate::runtime::room) fn apply_join_on_placement(
+    pub fn apply_join_on_placement(
         &mut self,
         user_id: &UserId,
         label: Option<String>,
@@ -312,7 +312,7 @@ impl RoomState {
         Ok(())
     }
 
-    pub(in crate::runtime::room) fn apply_leave(
+    pub fn apply_leave(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -351,7 +351,7 @@ impl RoomState {
         })
     }
 
-    pub(in crate::runtime::room) fn apply_presence_update(
+    pub fn apply_presence_update(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -401,7 +401,7 @@ impl RoomState {
         })
     }
 
-    pub(in crate::runtime::room) fn set_user_negotiated(
+    pub fn set_user_negotiated(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -414,10 +414,7 @@ impl RoomState {
         user.negotiation.set_user_negotiated()
     }
 
-    pub(in crate::runtime::room) fn apply_disconnect_users(
-        &mut self,
-        user_ids: &[UserId],
-    ) -> DisconnectUsersOutcome {
+    pub fn apply_disconnect_users(&mut self, user_ids: &[UserId]) -> DisconnectUsersOutcome {
         let mut transport_removals = Vec::new();
         let mut close_requests = Vec::new();
         let mut disconnected_users = Vec::new();
@@ -464,7 +461,7 @@ impl RoomState {
         }
     }
 
-    pub(in crate::runtime::room) fn broadcast_fanout(
+    pub fn broadcast_fanout(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,

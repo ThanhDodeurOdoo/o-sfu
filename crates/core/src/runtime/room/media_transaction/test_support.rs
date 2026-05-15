@@ -7,7 +7,7 @@ use crate::runtime::{
 };
 
 impl PendingPublishTransactions {
-    pub(in crate::runtime::room) fn staged_count_for_connection(
+    pub fn staged_count_for_connection(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -18,7 +18,7 @@ impl PendingPublishTransactions {
             .count()
     }
 
-    pub(in crate::runtime::room) fn staged_transport_media_id(
+    pub fn staged_transport_media_id(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,

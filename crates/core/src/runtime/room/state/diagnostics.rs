@@ -33,7 +33,7 @@ use crate::{
 };
 
 impl RoomState {
-    pub(in crate::runtime) fn diagnostics_incoming_bitrate_by_session(
+    pub fn diagnostics_incoming_bitrate_by_session(
         &self,
         per_media: &[(TransportMediaId, Bitrate)],
     ) -> BTreeMap<UserId, DiagnosticsIncomingBitrate> {
@@ -55,7 +55,7 @@ impl RoomState {
         incoming_bitrate
     }
 
-    pub(in crate::runtime) fn diagnostics_incoming_bitrate_by_source(
+    pub fn diagnostics_incoming_bitrate_by_source(
         &self,
         per_media: &[(TransportMediaId, Bitrate)],
     ) -> BTreeMap<PublishedSourceId, u64> {
@@ -70,7 +70,7 @@ impl RoomState {
         incoming_bitrate
     }
 
-    pub(in crate::runtime) fn diagnostics_sources(
+    pub fn diagnostics_sources(
         &self,
         incoming_bitrate_by_source: &BTreeMap<PublishedSourceId, u64>,
         active_speaker_diagnostics_by_media: &BTreeMap<
@@ -113,7 +113,7 @@ impl RoomState {
             .collect()
     }
 
-    pub(in crate::runtime) fn diagnostics_user_views(
+    pub fn diagnostics_user_views(
         &self,
         media_worker_id: usize,
         transport_by_session: &BTreeMap<UserId, DiagnosticsUserTransport>,

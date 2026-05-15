@@ -6,12 +6,12 @@ pub(in crate::runtime::room) struct UserPresence {
 }
 
 impl UserPresence {
-    pub(in crate::runtime::room) fn apply_update(&mut self, info: &UserInfo) {
+    pub fn apply_update(&mut self, info: &UserInfo) {
         self.info.apply_partial_update(info);
     }
 
     #[must_use]
-    pub(in crate::runtime::room) fn info(&self) -> &UserInfo {
+    pub fn info(&self) -> &UserInfo {
         &self.info
     }
 }

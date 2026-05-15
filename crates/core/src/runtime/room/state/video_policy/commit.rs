@@ -20,7 +20,7 @@ impl RoomState {
     /// Accepted updates store both the selected source-domain intent and the
     /// hysteresis counters that make later refreshes deterministic. Stale
     /// updates from a replaced socket or removed route become no-ops.
-    pub(in crate::runtime::room) fn commit_consumer_packet_selection_updates(
+    pub fn commit_consumer_packet_selection_updates(
         &mut self,
         updates: &[ConsumerPacketSelectionUpdate],
     ) {
@@ -55,7 +55,7 @@ impl RoomState {
     /// The returned fanout is emitted after the caller releases the room
     /// write lock. That keeps layout projection consistent with room state
     /// while preserving the no-I/O-under-lock rule used by the effect layer.
-    pub(in crate::runtime::room) fn commit_featured_user_updates(
+    pub fn commit_featured_user_updates(
         &mut self,
         updates: &[FeaturedUserUpdate],
     ) -> Option<MessageFanout> {

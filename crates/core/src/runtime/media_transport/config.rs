@@ -163,7 +163,7 @@ pub(in crate::runtime::media_transport) struct RtcWorkerManagerConfig {
 
 impl RtcWorkerManagerConfig {
     #[must_use]
-    pub(in crate::runtime::media_transport) fn new(
+    pub fn new(
         transport: RtcTransportConfig,
         deps: MediaTransportDeps,
         worker_count: usize,
@@ -176,22 +176,22 @@ impl RtcWorkerManagerConfig {
     }
 
     #[must_use]
-    pub(in crate::runtime::media_transport) fn worker_count(&self) -> usize {
+    pub fn worker_count(&self) -> usize {
         self.worker_count
     }
 
     #[must_use]
-    pub(in crate::runtime::media_transport) fn transport_config(&self) -> &RtcTransportConfig {
+    pub fn transport_config(&self) -> &RtcTransportConfig {
         &self.transport
     }
 
     #[must_use]
-    pub(in crate::runtime::media_transport) fn transport_deps(&self) -> &MediaTransportDeps {
+    pub fn transport_deps(&self) -> &MediaTransportDeps {
         &self.deps
     }
 
     #[must_use]
-    pub(in crate::runtime::media_transport) fn worker_config_with_port_range(
+    pub fn worker_config_with_port_range(
         &self,
         rtc_port_range: RtcPortRange,
     ) -> RtcTransportConfig {

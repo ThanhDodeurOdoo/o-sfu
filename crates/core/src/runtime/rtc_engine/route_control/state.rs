@@ -55,7 +55,7 @@ pub(in crate::runtime::rtc_engine) struct RouteControlState {
 impl RouteControlState {
     /// test helper for source-wide keyframe request coalescing
     #[cfg(test)]
-    pub(in crate::runtime::rtc_engine) fn decide_keyframe_request(
+    pub fn decide_keyframe_request(
         &mut self,
         source_transport_media_id: TransportMediaId,
         now: Instant,
@@ -68,7 +68,7 @@ impl RouteControlState {
     /// the first request in a coalescing window forwards and records the window
     /// later requests for the same rid are absorbed until the window reopens
     /// `None` is used for source-wide refreshes that are not bound to a rid
-    pub(in crate::runtime::rtc_engine) fn decide_keyframe_request_for_rid(
+    pub fn decide_keyframe_request_for_rid(
         &mut self,
         source_transport_media_id: TransportMediaId,
         rid: Option<Rid>,
@@ -83,7 +83,7 @@ impl RouteControlState {
     /// missing source state means no route-control restriction is installed
     /// the packet is then forwarded to downstream planning where relay and local
     /// destination gates still get their own checks
-    pub(in crate::runtime::rtc_engine) fn decide_packet_route(
+    pub fn decide_packet_route(
         &self,
         source_transport_media_id: TransportMediaId,
         metadata: PacketLayerMetadata,
@@ -107,7 +107,7 @@ impl RouteControlState {
     /// source-level deny
     /// callers refresh this value after local route destinations are added,
     /// removed or retargeted
-    pub(in crate::runtime::rtc_engine) fn set_local_packet_gate(
+    pub fn set_local_packet_gate(
         &mut self,
         source_transport_media_id: TransportMediaId,
         packet_gate: Option<PacketLayerGate>,
@@ -151,7 +151,7 @@ impl RouteControlState {
     /// state may have changed and needs a policy refresh
     /// unknown sources without audio metadata are ignored so empty control
     /// entries are not created for ordinary packets
-    pub(in crate::runtime::rtc_engine) fn observe_audio_activity(
+    pub fn observe_audio_activity(
         &mut self,
         source_transport_media_id: TransportMediaId,
         voice_activity: Option<bool>,
@@ -191,7 +191,7 @@ impl RouteControlState {
     /// keeps packets that at least one remote target still needs
     /// the forwarding planner also checks the same target gate later before
     /// enqueueing that relay destination
-    pub(in crate::runtime::rtc_engine) fn set_relay_packet_gate(
+    pub fn set_relay_packet_gate(
         &mut self,
         source_transport_media_id: TransportMediaId,
         target_id: RelayTargetId,
@@ -208,7 +208,7 @@ impl RouteControlState {
     ///
     /// `None` means the relay target has no extra layer restriction beyond the
     /// source-wide gate
-    pub(in crate::runtime::rtc_engine) fn relay_packet_gate(
+    pub fn relay_packet_gate(
         &self,
         source_transport_media_id: TransportMediaId,
         target_id: RelayTargetId,
@@ -222,7 +222,7 @@ impl RouteControlState {
     ///
     /// relay cleanup uses this when a target is released while the source itself
     /// may still have local routes, audio policy or keyframe windows
-    pub(in crate::runtime::rtc_engine) fn forget_relay_packet_gate(
+    pub fn forget_relay_packet_gate(
         &mut self,
         source_transport_media_id: TransportMediaId,
         target_id: RelayTargetId,
@@ -241,10 +241,7 @@ impl RouteControlState {
     /// source teardown must use this instead of clearing individual gates so
     /// keyframe windows and audio policy do not outlive the media handle they
     /// describe
-    pub(in crate::runtime::rtc_engine) fn forget_source(
-        &mut self,
-        source_transport_media_id: TransportMediaId,
-    ) {
+    pub fn forget_source(&mut self, source_transport_media_id: TransportMediaId) {
         self.sources.remove(&source_transport_media_id);
     }
 
@@ -252,7 +249,7 @@ impl RouteControlState {
     ///
     /// this is used by media-registry reconciliation to discard control state
     /// for sources that no longer have live media ownership
-    pub(in crate::runtime::rtc_engine) fn retain_sources<F>(&mut self, mut keep: F)
+    pub fn retain_sources<F>(&mut self, mut keep: F)
     where
         F: FnMut(&TransportMediaId) -> bool,
     {
@@ -265,10 +262,7 @@ impl RouteControlState {
     /// results are ordered by most recent speech observation first
     /// transport media id is used as a deterministic tie-breaker so room policy
     /// sees stable ordering when packets share the same timestamp
-    pub(in crate::runtime::rtc_engine) fn active_speaker_sources(
-        &self,
-        now: Instant,
-    ) -> Vec<ActiveSpeakerSource> {
+    pub fn active_speaker_sources(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
         let mut sources = self
             .sources
             .iter()
@@ -289,10 +283,7 @@ impl RouteControlState {
     ///
     /// diagnostics include blocked and recently expired states because those are
     /// useful for debugging why audio did not affect active-speaker policy
-    pub(in crate::runtime::rtc_engine) fn active_speaker_diagnostics(
-        &self,
-        now: Instant,
-    ) -> Vec<ActiveSpeakerSourceDiagnostic> {
+    pub fn active_speaker_diagnostics(&self, now: Instant) -> Vec<ActiveSpeakerSourceDiagnostic> {
         self.sources
             .iter()
             .filter_map(|(source_transport_media_id, source_control)| {
@@ -305,10 +296,7 @@ impl RouteControlState {
     ///
     /// the runtime uses this as a timer hint
     /// returning `None` means there is no active audio hold window to wake for
-    pub(in crate::runtime::rtc_engine) fn next_active_speaker_deadline(
-        &self,
-        now: Instant,
-    ) -> Option<Instant> {
+    pub fn next_active_speaker_deadline(&self, now: Instant) -> Option<Instant> {
         self.sources
             .values()
             .filter_map(|source_control| {
@@ -325,10 +313,7 @@ impl RouteControlState {
     /// callers use these ids to trigger room policy refresh after timer wakeup
     /// the audio diagnostic state is kept so later diagnostics can still explain
     /// why the source became inactive
-    pub(in crate::runtime::rtc_engine) fn expired_active_speaker_source_ids(
-        &self,
-        now: Instant,
-    ) -> Vec<TransportMediaId> {
+    pub fn expired_active_speaker_source_ids(&self, now: Instant) -> Vec<TransportMediaId> {
         self.sources
             .iter()
             .filter_map(|(source_transport_media_id, source_control)| {
@@ -343,7 +328,7 @@ impl RouteControlState {
 
     /// test helper that installs a local packet gate directly
     #[cfg(test)]
-    pub(in crate::runtime::rtc_engine) fn set_packet_gate(
+    pub fn set_packet_gate(
         &mut self,
         source_transport_media_id: TransportMediaId,
         packet_gate: PacketLayerGate,
@@ -356,7 +341,7 @@ impl RouteControlState {
     /// `None` means no gate is installed
     /// [`PacketLayerGate::Open`] means an explicit allow-all gate exists
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(in crate::runtime::rtc_engine) fn effective_packet_gate(
+    pub fn effective_packet_gate(
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> Option<PacketLayerGate> {

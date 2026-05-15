@@ -113,8 +113,8 @@ struct PublishedSourceInstall {
 /// router state instead of reporting a producer activity change that never
 /// stuck.
 pub(in crate::runtime::room) struct ProducerActivityOutcome {
-    pub(in crate::runtime::room) transport_media_id: TransportMediaId,
-    pub(in crate::runtime::room) active: bool,
+    pub transport_media_id: TransportMediaId,
+    pub active: bool,
     recipients: Vec<OutboundSender>,
     update: TrackBindingUpdate,
 }
@@ -138,7 +138,7 @@ impl RoomState {
     /// caller may use the returned descriptor to drive transport work, but it
     /// must still commit through `commit_published_track` because replacement,
     /// disconnect or negotiation rollback can make the descriptor stale.
-    pub(in crate::runtime::room) fn validate_publish_descriptor(
+    pub fn validate_publish_descriptor(
         &self,
         user_id: &UserId,
         publisher_connection_id: ConnectionId,
@@ -188,7 +188,7 @@ impl RoomState {
     /// during replacement or disconnect. On success this install every
     /// producer-facing index in one place, including the `TransportMediaId`
     /// ownership index used by room policy and diagnostics.
-    pub(in crate::runtime::room) fn commit_published_track(
+    pub fn commit_published_track(
         &mut self,
         pending: PreparedPublishedTrack,
         transport_media_id: TransportMediaId,
@@ -397,7 +397,7 @@ impl RoomState {
     /// This only computes the next transport-facing work. It does not mutate
     /// consumer state yet, so callers can still stop out cleanly if the later
     /// transport bootstrap fails.
-    pub(in crate::runtime::room) fn publish_consumer_targets(
+    pub fn publish_consumer_targets(
         &self,
         producer: &ConsumerBootstrapProducerSnapshot,
     ) -> Vec<PendingConsumerBootstrapTarget> {
@@ -425,7 +425,7 @@ impl RoomState {
     }
 
     #[must_use]
-    pub(in crate::runtime::room) fn producer_stream_id_for_transport_media_id(
+    pub fn producer_stream_id_for_transport_media_id(
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<UserStreamId> {
@@ -435,7 +435,7 @@ impl RoomState {
     }
 
     #[must_use]
-    pub(in crate::runtime::room) fn source_transport_media_entry(
+    pub fn source_transport_media_entry(
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<&SourceTransportMediaIndexEntry> {
@@ -443,7 +443,7 @@ impl RoomState {
     }
 
     #[must_use]
-    pub(in crate::runtime::room) fn producer_route_target(
+    pub fn producer_route_target(
         &self,
         owner_user_id: &UserId,
         owner_connection_id: ConnectionId,
@@ -465,7 +465,7 @@ impl RoomState {
         })
     }
 
-    pub(in crate::runtime::room) fn producer_route_target_for_user(
+    pub fn producer_route_target_for_user(
         &self,
         user_id: &UserId,
         stream_id: &UserStreamId,
@@ -480,7 +480,7 @@ impl RoomState {
     /// the same source stream. Callers use this before mutating state so
     /// cleanup can still target the live transport ids that matched the
     /// current producer ownership.
-    pub(in crate::runtime::room) fn unpublish_transport_removals(
+    pub fn unpublish_transport_removals(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -514,7 +514,7 @@ impl RoomState {
     /// stream and clears the `TransportMediaId` ownership entry in the same
     /// step so later diagnostics or room policy updates cannot resolve stale
     /// ownership.
-    pub(in crate::runtime::room) fn unpublish_track(
+    pub fn unpublish_track(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -557,7 +557,7 @@ impl RoomState {
     /// The pure router is updated before the room-level producer flag so a
     /// failed router mutation cannot leave outbound user-info fanout ahead of
     /// authoritative route state.
-    pub(in crate::runtime::room) fn apply_producer_activity(
+    pub fn apply_producer_activity(
         &mut self,
         user_id: &UserId,
         producer_target: &ProducerRouteTarget,
@@ -616,15 +616,15 @@ impl RoomState {
 }
 
 impl ValidatedPublishDescriptor {
-    pub(in crate::runtime::room) const fn owner_connection_id(&self) -> ConnectionId {
+    pub const fn owner_connection_id(&self) -> ConnectionId {
         self.owner_connection_id
     }
 
-    pub(in crate::runtime::room) const fn stream_id(&self) -> &UserStreamId {
+    pub const fn stream_id(&self) -> &UserStreamId {
         &self.stream_id
     }
 
-    pub(in crate::runtime::room) fn owner_user_id(&self) -> &UserId {
+    pub fn owner_user_id(&self) -> &UserId {
         &self.owner_user_id
     }
 
@@ -633,14 +633,14 @@ impl ValidatedPublishDescriptor {
         dead_code,
         reason = "room state tests use this helper when upload-profile metadata is irrelevant"
     )]
-    pub(in crate::runtime::room) fn into_prepared_track(
+    pub fn into_prepared_track(
         self,
         consumable_rtp_parameters: RouterRtpParameters,
     ) -> PreparedPublishedTrack {
         self.into_prepared_track_with_upload_encodings(consumable_rtp_parameters, Vec::new())
     }
 
-    pub(in crate::runtime::room) fn into_prepared_track_with_upload_encodings(
+    pub fn into_prepared_track_with_upload_encodings(
         self,
         consumable_rtp_parameters: RouterRtpParameters,
         upload_encodings: Vec<SessionUploadEncoding>,
@@ -658,13 +658,13 @@ impl ValidatedPublishDescriptor {
 }
 
 impl ProducerRouteTarget {
-    pub(in crate::runtime::room) const fn owner_connection_id(&self) -> ConnectionId {
+    pub const fn owner_connection_id(&self) -> ConnectionId {
         self.owner_connection_id
     }
 }
 
 impl ProducerActivityOutcome {
-    pub(in crate::runtime::room) fn emit(self) {
+    pub fn emit(self) {
         for recipient in self.recipients {
             let _ = recipient.send(UserOutbound::TrackBindingUpdate(self.update.clone()));
         }
@@ -672,18 +672,18 @@ impl ProducerActivityOutcome {
 }
 
 impl UnpublishTrackOutcome {
-    pub(in crate::runtime::room) fn relay_effects(&self) -> &[RelayRouteEffect] {
+    pub fn relay_effects(&self) -> &[RelayRouteEffect] {
         &self.relay_effects
     }
 
-    pub(in crate::runtime::room) fn transport_removals(&self) -> &[TransportMediaRemoval] {
+    pub fn transport_removals(&self) -> &[TransportMediaRemoval] {
         &self.transport_removals
     }
 
     /// Emits the unpublish side effects after state cleanup already landed
     ///
     /// Recipients always get the track binding removal.
-    pub(in crate::runtime::room) fn emit(self, user_id: &UserId, stream_id: &UserStreamId) {
+    pub fn emit(self, user_id: &UserId, stream_id: &UserStreamId) {
         let track_update = UserOutbound::TrackBindingUpdate(TrackBindingUpdate {
             user_id: user_id.clone(),
             stream_id: stream_id.clone(),
