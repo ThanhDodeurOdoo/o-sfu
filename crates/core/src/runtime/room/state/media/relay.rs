@@ -1,11 +1,10 @@
 use std::collections::BTreeMap;
 
 use super::subscription::PendingConsumerBootstrapTarget;
-use crate::{
-    runtime::{
-        ConnectionId, UserId, media_transport::TransportMediaId, source_model::PublishedSourceId,
-    },
-    transport::TransportRelayRouteAction,
+use crate::runtime::{
+    ConnectionId, UserId,
+    media_transport::{TransportMediaId, TransportRelayRouteAction},
+    source_model::PublishedSourceId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

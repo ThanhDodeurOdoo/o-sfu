@@ -16,9 +16,9 @@
 //!
 //! Callers outside the core crate should not import this module. Stable media
 //! operations go through [`crate::SfuCore`] and [`crate::MediaSession`]. Server
-//! integration goes through [`crate::server`]. Transport extension points go
-//! through [`crate::transport`]. A type defined here becomes public only when it
-//! is re-exported through one of those supported facades.
+//! integration and transport extension points go through [`crate::server`]. A
+//! type defined here becomes public only when it is re-exported through one of
+//! those supported facades.
 
 pub mod diagnostics;
 mod hot_path;

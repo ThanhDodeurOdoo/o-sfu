@@ -48,10 +48,12 @@ use crate::{
     runtime::{
         ConnectionId, UserId, UserInfo, UserPermissions,
         diagnostics::DiagnosticsEventData,
-        media_transport::{MediaTransport, TransportAdapterError, TransportMediaId},
+        media_transport::{
+            MediaTransport, TransportAdapterError, TransportMediaId, TransportRelayRouteAction,
+            TransportRelayRouteEffect,
+        },
         metrics::TransportCleanupFailureKind,
     },
-    transport::{TransportRelayRouteAction, TransportRelayRouteEffect},
 };
 
 fn warn_transport_cleanup_failure(operation: &TransportCleanupOperation, message: &'static str) {

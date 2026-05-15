@@ -28,14 +28,14 @@ use super::{
         PreparedConsumerBootstrap, RelayRouteEffect,
     },
 };
-use crate::{
-    runtime::{
-        ConnectionId,
-        diagnostics::DiagnosticsEventData,
-        media_transport::{ConsumerActivity, MediaTransport, TransportMediaId},
-        source_model::UserStreamId,
+use crate::runtime::{
+    ConnectionId,
+    diagnostics::DiagnosticsEventData,
+    media_transport::{
+        ConsumerActivity, MediaTransport, TransportMediaId, TransportRelayRouteAction,
+        TransportRelayRouteEffect,
     },
-    transport::{TransportRelayRouteAction, TransportRelayRouteEffect},
+    source_model::UserStreamId,
 };
 
 pub(super) async fn execute_relay_route_effects(

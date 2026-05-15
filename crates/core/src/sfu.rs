@@ -25,13 +25,12 @@ use crate::{
     SessionNegotiationOutcome, SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
     runtime::{
         UserId, UserInfo,
-        media_transport::MediaTransport,
+        media_transport::{
+            AppliedSessionAnswer, MediaTransport, SessionOffer, SessionUploadEncoding,
+            SessionUploadSlot, TransportAdapterError, TransportSessionHealth,
+        },
         room::Room,
         source_model::{SourcePublishIntent, SourceSubscriptionIntent, UserStreamId},
-    },
-    transport::{
-        AppliedSessionAnswer, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
-        TransportAdapterError, TransportSessionHealth,
     },
 };
 

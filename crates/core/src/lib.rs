@@ -20,7 +20,6 @@
 //! - [`MediaTransport`] as the runtime media transport facade, with
 //!   [`RtcTransport`] and [`RtcTransportBuilder`] kept as RTC construction
 //!   handles below that facade.
-//! - the transport DTOs, ids, snapshots and errors in [`transport`].
 //! - server-integration DTOs and facades under [`server`], including
 //!   diagnostics, metrics, room orchestration, recording taps, source
 //!   descriptors, and current transport construction seams.
@@ -77,7 +76,6 @@ mod room;
 mod runtime;
 pub mod server;
 mod sfu;
-pub mod transport;
 
 pub use options::{
     AudioCodecPreference, CodecOptions, CodecPreferences, CoreOptions, LocalSpilloverPolicy,

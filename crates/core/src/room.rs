@@ -11,7 +11,10 @@
 //! outcomes. A failed transport allocation stays an error because the caller
 //! cannot safely continue the publish flow without a reserved media line.
 
-use crate::{ConnectionId, runtime::UserId, transport::TransportSessionKey};
+use crate::{
+    ConnectionId,
+    runtime::{UserId, media_transport::TransportSessionKey},
+};
 
 #[derive(Debug, Clone)]
 /// Stable room identity bundle for one media operation.

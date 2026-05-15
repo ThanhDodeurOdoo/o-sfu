@@ -27,8 +27,10 @@
 
 mod config;
 mod rtc_transport;
+mod source_policy;
 #[cfg(any(test, feature = "testing-transport"))]
 pub mod test_support;
+mod types;
 mod worker_manager;
 
 #[cfg(any(test, feature = "testing-transport"))]
@@ -38,27 +40,24 @@ use std::{collections::BTreeSet, time::Instant};
 pub use config::{MediaTransportDeps, RtcTransportConfig};
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
 pub use rtc_transport::{RtcTransport, RtcTransportBuildError, RtcTransportBuilder};
+pub use source_policy::{
+    SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
+};
 #[cfg(any(test, feature = "testing-transport"))]
 use test_support::FakeMediaTransport;
 use tracing::warn;
-use worker_manager::RtcWorkerManager;
-
-pub use crate::transport::{
+pub use types::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
     ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,
     ConsumerPacketGateUpdate, ProducerActivity, ReceiverBandwidthSnapshot, SessionOffer,
     SessionUploadEncoding, SessionUploadSlot, SourcePacketGate, SourcePacketOperatingPoint,
-    SourcePolicySignal, TransportAdapterError, TransportBitrateSnapshot, TransportMediaId,
-    TransportPlacementPressureSnapshot, TransportResult, TransportSessionKey,
-    TransportWorkerPressureSnapshot,
+    TransportAdapterError, TransportBitrateSnapshot, TransportMediaId,
+    TransportPlacementPressureSnapshot, TransportRelayRouteAction, TransportRelayRouteEffect,
+    TransportResult, TransportSessionHealth, TransportSessionKey, TransportWorkerPressureSnapshot,
 };
-use crate::{
-    CoreOptions,
-    runtime::RoomInstanceId,
-    transport::{
-        SourcePolicyUpdateSubscription, TransportRelayRouteEffect, TransportSessionHealth,
-    },
-};
+use worker_manager::RtcWorkerManager;
+
+use crate::{CoreOptions, runtime::RoomInstanceId};
 
 /// Opaque runtime media transport handle.
 ///

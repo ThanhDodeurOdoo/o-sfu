@@ -1,35 +1,23 @@
-//! Transport-side source-policy wake coordination.
+//! transport-side source-policy wake coordination
 //!
-//! The room layer own the actual source-packet selection policy: it decides,
-//! from room membership and publication state, which producer layers should stay
-//! routable. The transport layer in the other hand own observations such as active-speaker
-//! activity and expiry deadlines that can change wihtout any room mutation. That
-//! split means the runtime needs one narrow bridge from transport-side observation
-//! changes back into the room-side policy sync task.
+//! `Room` owns source-packet selection policy
+//! packet loops only observe facts that can make that policy stale,
+//! like receiver bandwidth and active speaker state
 //!
-//! This module is that bridge. It deliberatley does not store the policy itself,
-//! any room state, or any queued work items. Instead it exposes one coalescing
-//! dirty bit, a coalesced room-id set, and a wake primitive:
+//! this module is the bounded wake bridge between those two layers
+//! it carries no room state and no policy result
+//! it only records which room instances need another policy pass, then wakes
+//! the room-side sync task once for a clean to dirty transition
 //!
-//! - `SourcePolicyDirtyState` tracks whether at least one transport-side change
-//!   happened since the last policy sync
-//! - `SourcePolicySignal::mark_dirty()` records the affected room instance id,
-//!   transitions the state from clean to dirty, and only wakes the listener on
-//!   that edge.
-//! - `SourcePolicyUpdateSubscription::wait_for_update()` consumes the dirty state
-//!   plus the coalesced room-id set before sleeping again, so a previously
-//!   observed update cannot be lost if it races with the wait path
+//! many packet-loop observations can arrive while the room sync task is busy
+//! the task only needs the affected room instance ids because policy sync
+//! re-reads current transport snapshots before recomputing policy
+//! this keeps hot-path observation from becoming an unbounded job queue, so
+//! these info are coalesced
 //!
-//! The important property is coalescingL: Multiple RTP packets can arrive
-//! while the room sync task is still busy, but those packets do not need
-//! an equal number of wakeups or replayed jobs. The room task only needs to
-//! know which room instance ids changed and then re-read the current
-//! transport-owned observation state from the adapter. This keeps the signaling
-//! between packet-loop activity and policy recomputation bounded and avoids
-//! turning hot-path packet observation into an unbounded event queue.
-//!
-//! Tokio's `Notify` handles the async wakeup in production, while the dirty-bit
-//! logic remains separately (so it can be tested in Loom)
+//! ordering is important: callers record room ids before setting the dirty bit so a waiter that
+//! observes the dirty edge can drain the matching room set without losing a
+//! pre-existing update
 use std::{
     collections::BTreeSet,
     mem,
@@ -43,25 +31,51 @@ use tokio::sync::Notify;
 
 use crate::RoomInstanceId;
 
+/// shared dirty bit for coalesced source-policy wakeups
+///
+/// the bit represents "at least one transport observation changed since the
+/// last drain"
+/// it is intentionally separate from the room-id registry so Loom and unit
+/// tests can verify the wake edge without depending on `Notify`
 #[derive(Debug, Default)]
 pub struct SourcePolicyDirtyState {
     dirty: AtomicBool,
 }
 
 impl SourcePolicyDirtyState {
+    /// consume the current dirty edge
+    ///
+    /// callers that receive `true` must drain the room-id registry before
+    /// sleeping again
+    /// this preserves the pairing between the dirty edge and the affected room
+    /// instances
     pub fn take_dirty(&self) -> bool {
         self.dirty.swap(false, Ordering::AcqRel)
     }
 
+    /// mark the state dirty and report whether a wakeup is needed
+    ///
+    /// returns `true` only for the clean to dirty transition
+    /// callers use that edge to avoid waking the policy task for every
+    /// packet-loop observation
     pub fn mark_dirty(&self) -> bool {
         !self.dirty.swap(true, Ordering::AcqRel)
     }
 
+    /// inspect the dirty state without consuming it
+    ///
+    /// this is useful for tests and diagnostics that need to observe the bridge
+    /// state without changing waiter behavior
     pub fn is_dirty(&self) -> bool {
         self.dirty.load(Ordering::Acquire)
     }
 }
 
+/// coalesced room instances that need source-policy recomputation
+///
+/// the registry is a cold-path companion to the dirty bit
+/// packet-loop code batches and deduplicates before publishing when it can,
+/// while this set keeps duplicate room ids harmless for direct callers
 #[derive(Debug, Default)]
 struct DirtyRoomRegistry {
     room_instance_ids: Mutex<BTreeSet<RoomInstanceId>>,
@@ -99,6 +113,11 @@ impl DirtyRoomRegistry {
     }
 }
 
+/// receiver side of the source-policy wake bridge
+///
+/// a subscription is owned by the room-side policy sync task
+/// it drains coalesced room ids after a dirty edge, then the task asks the
+/// media transport for fresh observations before recomputing policy
 #[derive(Debug, Clone)]
 pub struct SourcePolicyUpdateSubscription {
     dirty: Arc<SourcePolicyDirtyState>,
@@ -107,6 +126,12 @@ pub struct SourcePolicyUpdateSubscription {
 }
 
 impl SourcePolicyUpdateSubscription {
+    /// wait until at least one room has transport-observed source-policy input
+    ///
+    /// updates marked before this method starts are observed before sleeping
+    /// because the dirty bit is checked first
+    /// updates that race with the wait path either set the bit before the next
+    /// check or wake the `Notify` listener
     pub async fn wait_for_update(&self) -> BTreeSet<RoomInstanceId> {
         loop {
             if self.dirty.take_dirty() {
@@ -116,6 +141,10 @@ impl SourcePolicyUpdateSubscription {
         }
     }
 
+    /// drain pending room ids without waiting
+    ///
+    /// manager-level loops use this after processing expiry deadlines so they
+    /// can merge timer-driven and packet-driven policy work into one room pass
     #[must_use]
     pub fn take_pending_updates(&self) -> BTreeSet<RoomInstanceId> {
         if self.dirty.take_dirty() {
@@ -125,6 +154,12 @@ impl SourcePolicyUpdateSubscription {
     }
 }
 
+/// sender side of the source-policy wake bridge
+///
+/// packet loops and deterministic test transports share this signal
+/// callers report room instances whose transport observations changed
+/// the signal coalesces duplicates and wakes one room-side listener when the
+/// bridge moves from clean to dirty
 #[derive(Debug, Default)]
 pub struct SourcePolicySignal {
     dirty: Arc<SourcePolicyDirtyState>,
@@ -133,6 +168,10 @@ pub struct SourcePolicySignal {
 }
 
 impl SourcePolicySignal {
+    /// create a subscription for the room-side policy sync task
+    ///
+    /// subscriptions share the same dirty bit and room registry
+    /// the runtime expects one active waiter for normal operation
     #[must_use]
     pub fn subscribe(&self) -> SourcePolicyUpdateSubscription {
         SourcePolicyUpdateSubscription {
@@ -142,6 +181,10 @@ impl SourcePolicySignal {
         }
     }
 
+    /// mark one room instance as needing a source-policy refresh
+    ///
+    /// duplicate marks are cheap
+    /// only the first mark after a drain wakes the subscription
     pub fn mark_dirty(&self, room_instance_id: RoomInstanceId) {
         self.dirty_rooms.insert(room_instance_id);
         if self.dirty.mark_dirty() {
@@ -149,6 +192,10 @@ impl SourcePolicySignal {
         }
     }
 
+    /// mark a batch of room instances as needing a source-policy refresh
+    ///
+    /// empty batches do not set the dirty bit
+    /// duplicate room ids collapse into one entry before the next drain
     pub fn mark_dirty_rooms(&self, room_instance_ids: impl IntoIterator<Item = RoomInstanceId>) {
         if !self.dirty_rooms.insert_many(room_instance_ids) {
             return;

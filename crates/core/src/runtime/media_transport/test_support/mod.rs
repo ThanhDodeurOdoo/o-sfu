@@ -12,16 +12,12 @@ use str0m::media::Mid;
 #[cfg(any(test, feature = "testing-transport"))]
 use super::worker_manager::RtcWorkerManager;
 use super::{Backend, MediaTransport};
+#[cfg(test)]
+use super::{TransportAdapterError, TransportMediaId};
+#[cfg(any(test, feature = "testing-transport"))]
+use super::{TransportSessionHealth, TransportSessionKey};
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::rtc_engine::test_support::DebugRouteEntry;
-#[cfg(test)]
-use crate::transport::TransportAdapterError;
-#[cfg(test)]
-use crate::transport::TransportMediaId;
-#[cfg(any(test, feature = "testing-transport"))]
-use crate::transport::TransportSessionHealth;
-#[cfg(any(test, feature = "testing-transport"))]
-use crate::transport::TransportSessionKey;
 
 impl MediaTransport {
     #[cfg(any(test, feature = "testing-transport"))]

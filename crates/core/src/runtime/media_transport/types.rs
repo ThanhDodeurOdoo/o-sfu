@@ -1,3 +1,5 @@
+//! Media transport boundary values shared by room state, server code and RTC workers.
+
 use std::{
     collections::BTreeMap,
     sync::Arc,

@@ -20,13 +20,13 @@ use crate::{
         diagnostics::DiagnosticsStore,
         media_transport::{
             ConsumerActivity, MediaTransportDeps, RtcTransportConfig, TransportAdapterError,
-            TransportMediaId, TransportSessionKey, test_support::FakeMediaTransport,
+            TransportMediaId, TransportRelayRouteAction, TransportRelayRouteEffect,
+            TransportSessionKey, test_support::FakeMediaTransport,
         },
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
         rtc_engine::RtcTransportWorker,
     },
-    transport::{TransportRelayRouteAction, TransportRelayRouteEffect},
 };
 
 fn test_session_key(

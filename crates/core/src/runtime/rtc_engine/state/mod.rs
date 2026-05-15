@@ -57,7 +57,7 @@ use super::{
     relay_registry::RelaySourceRegistration,
     route_control::RouteControlState,
 };
-pub use crate::transport::TransportSessionHealth;
+pub use crate::runtime::media_transport::TransportSessionHealth;
 use crate::{
     Bitrate,
     runtime::media_transport::{

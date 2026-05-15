@@ -96,18 +96,16 @@ pub mod transport {
     pub use crate::{
         SessionBitrateLimits,
         runtime::media_transport::{
-            MediaTransport, MediaTransportDeps, RtcTransport, RtcTransportBuildError,
-            RtcTransportBuilder, RtcTransportConfig,
-        },
-        transport::{
             ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
             ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,
-            ConsumerPacketGateUpdate, ProducerActivity, ReceiverBandwidthSnapshot, SessionOffer,
-            SessionUploadEncoding, SessionUploadSlot, SourcePacketGate, SourcePacketOperatingPoint,
-            SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
-            TransportAdapterError, TransportBitrateSnapshot, TransportMediaId,
-            TransportPlacementPressureSnapshot, TransportResult, TransportSessionHealth,
-            TransportSessionKey, TransportWorkerPressureSnapshot,
+            ConsumerPacketGateUpdate, MediaTransport, MediaTransportDeps, ProducerActivity,
+            ReceiverBandwidthSnapshot, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,
+            RtcTransportConfig, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
+            SourcePacketGate, SourcePacketOperatingPoint, SourcePolicyDirtyState,
+            SourcePolicySignal, SourcePolicyUpdateSubscription, TransportAdapterError,
+            TransportBitrateSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
+            TransportRelayRouteAction, TransportRelayRouteEffect, TransportResult,
+            TransportSessionHealth, TransportSessionKey, TransportWorkerPressureSnapshot,
         },
     };
 }

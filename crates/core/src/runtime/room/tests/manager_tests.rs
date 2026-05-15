@@ -7,12 +7,13 @@ use crate::{
     Bitrate, LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts,
     MediaCodecFlags, RuntimeFeatureFlags,
     runtime::{
-        diagnostics::DiagnosticsStore, media_transport::TransportPlacementPressureSnapshot,
-        metrics::RuntimeMetrics, packet_sink_registry::RoomPacketSinkRegistry,
-    },
-    transport::{
-        TransportRelayRouteAction,
-        TransportRelayRouteAction::{Install, Release, SetActive},
+        diagnostics::DiagnosticsStore,
+        media_transport::{
+            TransportPlacementPressureSnapshot, TransportRelayRouteAction,
+            TransportRelayRouteAction::{Install, Release, SetActive},
+        },
+        metrics::RuntimeMetrics,
+        packet_sink_registry::RoomPacketSinkRegistry,
     },
 };
 

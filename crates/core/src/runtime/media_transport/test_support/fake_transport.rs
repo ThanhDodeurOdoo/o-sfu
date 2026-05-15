@@ -38,12 +38,12 @@ use crate::{
         media_transport::{
             ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
             ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerPacketGateUpdate,
-            ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate, TransportAdapterError,
-            TransportMediaId, TransportPlacementPressureSnapshot, TransportSessionKey,
+            ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate, SourcePolicySignal,
+            TransportAdapterError, TransportMediaId, TransportPlacementPressureSnapshot,
+            TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionKey,
             TransportWorkerPressureSnapshot,
         },
     },
-    transport::{SourcePolicySignal, TransportRelayRouteAction, TransportRelayRouteEffect},
 };
 
 const FAKE_SESSION_NEGOTIATION_OFFER_SDP: &str = "v=0\r\ns=o-sfu-fake-offer\r\n";
