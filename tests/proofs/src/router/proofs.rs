@@ -1,31 +1,47 @@
+//! bounded Kani proofs for router topology invariants
+//!
+//! the harnesses build small symbolic call graphs that cover session ownership,
+//! transport direction, producer dependency, consumer dependency and route-state
+//! shadowing
+//! each proof checks both primary maps and reverse indexes so teardown
+//! changes cannot silently leave stale dependency edges
+
 use o_sfu_router::{
     Consumer, ConsumerCapability, ConsumerId, ConsumerRouteState, MediaKind, Producer, ProducerId,
     ProducerRouteState, Router, RouterId, Session, SessionId, Transport, TransportDirection,
     TransportId,
     test_support::{
-        router_consumer_count, router_consumer_origin_matches, router_consumer_route_matches,
-        router_consumer_shadows_producer, router_contains_consumer, router_contains_producer,
-        router_contains_session, router_contains_transport, router_has_producer_consumer,
-        router_has_producer_consumer_index, router_has_session_transport,
-        router_has_session_transport_index, router_has_transport_consumer,
-        router_has_transport_consumer_index, router_has_transport_producer,
-        router_has_transport_producer_index, router_producer_consumer_count,
-        router_producer_consumer_index_count, router_producer_count,
-        router_producer_origin_matches, router_satisfies_invariants,
-        router_session_transport_count, router_session_transport_index_count,
-        router_transport_consumer_count, router_transport_consumer_index_count,
-        router_transport_count, router_transport_matches, router_transport_producer_count,
-        router_transport_producer_index_count,
+        proof::{
+            router_consumer_count, router_consumer_origin_matches, router_consumer_route_matches,
+            router_consumer_shadows_producer, router_contains_consumer, router_contains_producer,
+            router_contains_session, router_contains_transport, router_has_producer_consumer,
+            router_has_producer_consumer_index, router_has_session_transport,
+            router_has_session_transport_index, router_has_transport_consumer,
+            router_has_transport_consumer_index, router_has_transport_producer,
+            router_has_transport_producer_index, router_producer_consumer_count,
+            router_producer_consumer_index_count, router_producer_count,
+            router_producer_origin_matches, router_session_transport_count,
+            router_session_transport_index_count, router_transport_consumer_count,
+            router_transport_consumer_index_count, router_transport_count,
+            router_transport_matches, router_transport_producer_count,
+            router_transport_producer_index_count,
+        },
+        router_satisfies_invariants,
     },
 };
 
 const SYMBOLIC_ROUTE_COMMAND_VARIANTS: u8 = 9;
 const SYMBOLIC_CLEANUP_COMMAND_VARIANTS: u8 = 7;
 
+/// build a session entity for the symbolic topology fixtures
 fn user(id: SessionId) -> Session {
     Session::new(id)
 }
 
+/// prove that all bounded add paths preserve the complete router invariant
+///
+/// consumers are accepted or rejected with symbolic capability results
+/// the postcondition must hold for every accepted subset
 #[kani::proof]
 #[kani::unwind(8)]
 fn bounded_symbolic_router_adds_preserve_invariants() {
@@ -38,6 +54,10 @@ fn bounded_symbolic_router_adds_preserve_invariants() {
     std::mem::forget(router);
 }
 
+/// prove that route-state commands preserve topology and shadow invariants
+///
+/// this keeps cleanup out of scope so the proof can assert that the base
+/// topology remains live while producer shadows follow source-side route state
 #[kani::proof]
 #[kani::unwind(8)]
 fn bounded_symbolic_router_route_trace_preserves_invariants() {
@@ -51,6 +71,11 @@ fn bounded_symbolic_router_route_trace_preserves_invariants() {
     std::mem::forget(router);
 }
 
+/// prove that cleanup commands preserve reverse-index exactness
+///
+/// the proof starts from a topology where consumers are known to exist
+/// symbolic cleanup then removes one route, one producer or one session and checks that
+/// every remaining relation is still exact
 #[kani::proof]
 #[kani::unwind(8)]
 fn bounded_symbolic_router_cleanup_trace_preserves_invariants() {
@@ -65,6 +90,7 @@ fn bounded_symbolic_router_cleanup_trace_preserves_invariants() {
     std::mem::forget(router);
 }
 
+/// choose whether a symbolic consumer should pass the external capability gate
 fn symbolic_capability() -> ConsumerCapability {
     if kani::any() {
         ConsumerCapability::Compatible
@@ -73,19 +99,23 @@ fn symbolic_capability() -> ConsumerCapability {
     }
 }
 
+/// choose one bounded route-state command for the route trace proof
 fn symbolic_route_command() -> u8 {
     kani::any_where(|command| *command < SYMBOLIC_ROUTE_COMMAND_VARIANTS)
 }
 
+/// choose one bounded cleanup command for the teardown trace proof
 fn symbolic_cleanup_command() -> u8 {
     kani::any_where(|command| *command < SYMBOLIC_CLEANUP_COMMAND_VARIANTS)
 }
 
+/// add consumers whose capability result remains symbolic
 fn add_symbolic_trace_consumers(router: &mut Router) {
     let _ = router.add_consumer(trace_audio_consumer(), symbolic_capability());
     let _ = router.add_consumer(trace_video_consumer(), symbolic_capability());
 }
 
+/// add consumers that must exist before cleanup is explored
 fn add_compatible_trace_consumers(router: &mut Router) {
     assert!(
         router
@@ -100,6 +130,7 @@ fn add_compatible_trace_consumers(router: &mut Router) {
     );
 }
 
+/// build the audio consumer used by the bounded trace topology
 fn trace_audio_consumer() -> Consumer {
     Consumer::new(
         ConsumerId(40),
@@ -109,6 +140,7 @@ fn trace_audio_consumer() -> Consumer {
     )
 }
 
+/// build the video consumer used by the bounded trace topology
 fn trace_video_consumer() -> Consumer {
     Consumer::new(
         ConsumerId(41),
@@ -118,6 +150,10 @@ fn trace_video_consumer() -> Consumer {
     )
 }
 
+/// place the cleanup trace in a mixed route-state configuration
+///
+/// cleanup must preserve invariants regardless of local pause state or producer
+/// pause shadows
 fn apply_cleanup_trace_route_state(router: &mut Router) {
     assert!(
         router
@@ -136,6 +172,11 @@ fn apply_cleanup_trace_route_state(router: &mut Router) {
     );
 }
 
+/// assert exact topology facts after symbolic add or cleanup commands
+///
+/// each entity may or may not be present depending on earlier symbolic choices
+/// every count, reverse-index key and membership assertion is derived from that
+/// present set
 fn assert_symbolic_trace_invariants(router: &Router) {
     let session_1 = router_contains_session(router, SessionId(1));
     let session_2 = router_contains_session(router, SessionId(2));
@@ -262,6 +303,10 @@ fn assert_symbolic_trace_invariants(router: &Router) {
     );
 }
 
+/// assert route-state trace facts when base topology must remain live
+///
+/// route commands are not allowed to remove entities
+/// only consumer acceptance remains symbolic
 fn assert_symbolic_route_trace_invariants(router: &Router) {
     let consumer_40 = router_contains_consumer(router, ConsumerId(40));
     let consumer_41 = router_contains_consumer(router, ConsumerId(41));
@@ -376,6 +421,7 @@ fn assert_symbolic_route_trace_invariants(router: &Router) {
     );
 }
 
+/// assert the session reverse index for a pair of known transports
 fn assert_session_transport_index(
     router: &Router,
     session_id: SessionId,
@@ -388,6 +434,7 @@ fn assert_session_transport_index(
     assert!(router_has_session_transport_index(router, session_id) == (expected > 0));
 }
 
+/// assert transport primary-map data plus the owning session index edge
 fn assert_known_transport(
     router: &Router,
     transport_id: TransportId,
@@ -409,6 +456,7 @@ fn assert_known_transport(
     }
 }
 
+/// assert the receive-transport-to-producer reverse index for one producer
 fn assert_transport_producer_index(
     router: &Router,
     transport_id: TransportId,
@@ -420,11 +468,13 @@ fn assert_transport_producer_index(
     assert!(router_has_transport_producer(router, transport_id, producer_id) == producer_exists);
 }
 
+/// assert that a transport has no indexed producer
 fn assert_empty_transport_producer_index(router: &Router, transport_id: TransportId) {
     assert!(router_transport_producer_count(router, transport_id) == 0);
     assert!(!router_has_transport_producer_index(router, transport_id));
 }
 
+/// assert producer primary-map data against its owning receive transport
 fn assert_known_producer(
     router: &Router,
     producer_id: ProducerId,
@@ -442,6 +492,7 @@ fn assert_known_producer(
     }
 }
 
+/// assert the send-transport-to-consumer reverse index for one consumer
 fn assert_transport_consumer_index(
     router: &Router,
     transport_id: TransportId,
@@ -453,11 +504,13 @@ fn assert_transport_consumer_index(
     assert!(router_has_transport_consumer(router, transport_id, consumer_id) == consumer_exists);
 }
 
+/// assert that a transport has no indexed consumer
 fn assert_empty_transport_consumer_index(router: &Router, transport_id: TransportId) {
     assert!(router_transport_consumer_count(router, transport_id) == 0);
     assert!(!router_has_transport_consumer_index(router, transport_id));
 }
 
+/// assert the producer-to-consumer reverse index for one consumer dependency
 fn assert_producer_consumer_index(
     router: &Router,
     producer_id: ProducerId,
@@ -469,6 +522,7 @@ fn assert_producer_consumer_index(
     assert!(router_has_producer_consumer(router, producer_id, consumer_id) == consumer_exists);
 }
 
+/// assert consumer primary-map data plus required producer and transport owners
 fn assert_known_consumer(
     router: &Router,
     consumer_id: ConsumerId,
@@ -490,10 +544,16 @@ fn assert_known_consumer(
     }
 }
 
+/// convert symbolic presence into an arithmetic count contribution
 fn present(value: bool) -> usize {
     if value { 1 } else { 0 }
 }
 
+/// build the base two-session topology shared by symbolic traces
+///
+/// sessions own one receive and one send transport each
+/// producers live on the
+/// receive transports so consumers can later target the opposite send transport
 fn build_symbolic_trace_topology(router: &mut Router) {
     assert!(router.join_session(user(SessionId(1))).is_ok());
     assert!(router.join_session(user(SessionId(2))).is_ok());
@@ -553,6 +613,12 @@ fn build_symbolic_trace_topology(router: &mut Router) {
     );
 }
 
+/// prove session teardown drains all owned transports and dependent media
+///
+/// the scenario includes a consumer on another live session that depends on a
+/// removed producer
+/// removing the source session must remove that remote
+/// consumer as well
 #[kani::proof]
 #[kani::unwind(8)]
 fn session_teardown_clears_reverse_indices_and_dependents() {
@@ -666,6 +732,7 @@ fn session_teardown_clears_reverse_indices_and_dependents() {
     std::mem::forget(router);
 }
 
+/// prove producer teardown drains all dependent consumers but keeps transports
 #[kani::proof]
 #[kani::unwind(8)]
 fn removing_a_producer_clears_dependents_but_keeps_live_transports() {
@@ -775,6 +842,7 @@ fn removing_a_producer_clears_dependents_but_keeps_live_transports() {
     std::mem::forget(router);
 }
 
+/// prove consumer teardown leaves sibling routes and producer indexes intact
 #[kani::proof]
 #[kani::unwind(8)]
 fn removing_a_consumer_preserves_other_routes_and_indices() {
@@ -891,6 +959,7 @@ fn removing_a_consumer_preserves_other_routes_and_indices() {
     std::mem::forget(router);
 }
 
+/// prove new consumers inherit the current producer route-state shadow
 #[kani::proof]
 #[kani::unwind(8)]
 fn new_consumers_inherit_their_producer_pause_shadow() {
@@ -954,6 +1023,7 @@ fn new_consumers_inherit_their_producer_pause_shadow() {
     std::mem::forget(router);
 }
 
+/// prove pausing a producer updates every dependent consumer shadow
 #[kani::proof]
 #[kani::unwind(8)]
 fn pausing_a_producer_updates_all_dependent_consumers() {
@@ -1047,6 +1117,7 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
     std::mem::forget(router);
 }
 
+/// prove resuming a producer clears every dependent consumer shadow
 #[kani::proof]
 #[kani::unwind(8)]
 fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
@@ -1145,6 +1216,7 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
     std::mem::forget(router);
 }
 
+/// prove consumer-local pause state is independent from producer shadows
 #[kani::proof]
 #[kani::unwind(8)]
 fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
@@ -1234,6 +1306,7 @@ fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
     std::mem::forget(router);
 }
 
+/// apply one bounded route-state command to the symbolic trace topology
 fn apply_symbolic_route_command(router: &mut Router, command: u8) {
     match command {
         0 => {}
@@ -1265,6 +1338,7 @@ fn apply_symbolic_route_command(router: &mut Router, command: u8) {
     }
 }
 
+/// apply one bounded cleanup command to the symbolic trace topology
 fn apply_symbolic_cleanup_command(router: &mut Router, command: u8) {
     match command {
         0 => {}

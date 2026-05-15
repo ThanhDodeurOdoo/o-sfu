@@ -1,35 +1,54 @@
-//! Pure router state machine plus the reverse indexes that keep teardown local.
+//! pure router state machine plus local dependency indexes
+//!
+//! this file owns legal topology transitions for one router instance
+//! callers supply already-normalized ids and capability results from outer layers
+//! the router records pure session, transport, producer and consumer state
+//! then uses reverse indexes to keep teardown proportional to the affected topology
 
 use super::{
     Consumer, ConsumerCapability, ConsumerId, ConsumerRouteState, NoopRouterObserver, Producer,
     ProducerId, ProducerRouteState, RouterError, RouterEvent, RouterId, RouterObserver, Session,
-    SessionId, Transport, TransportDirection, TransportId,
-    proof_storage::{BTreeMap, BTreeSet},
+    SessionId, Transport, TransportDirection, TransportId, proof_storage::BTreeMap,
+    relation_index::RouterIndexes,
 };
 
-/// Pure routing state for one router instance.
+/// pure routing state for one router instance
 ///
-/// The main maps hold the persistent entities.
+/// the router is intentionally synchronous and in-memory
+/// it does not perform media I/O or signaling negotiation
+/// it only accepts typed router-domain entities and keeps the topology internally
+/// consistent
 ///
-/// And their associated reverse indexes to keep dependency cleanup proportional
-/// to the removed entity instead of requiring scans across the full router state.
+/// the primary maps own live entities
+/// `indexes` mirrors ownership edges that are needed for teardown and
+/// producer route-state propagation
+/// every mutation that changes a primary entity must keep the matching reverse
+/// relation in the same transition
 #[derive(Debug, Clone)]
 pub struct Router<O: RouterObserver = NoopRouterObserver> {
+    /// stable identity for this pure router instance
     pub(super) id: RouterId,
-    /// Live sessions that currently belong to this router.
+    /// live sessions admitted through `join_session`
     pub(super) sessions: BTreeMap<SessionId, Session>,
+    /// live transports grouped by id in the primary topology map
     pub(super) transports: BTreeMap<TransportId, Transport>,
+    /// live source-side producers keyed by router-native producer id
     pub(super) producers: BTreeMap<ProducerId, Producer>,
+    /// live receiver-side consumers keyed by router-native consumer id
     pub(super) consumers: BTreeMap<ConsumerId, Consumer>,
-    // Reverse indexes
-    pub(super) session_transports: BTreeMap<SessionId, BTreeSet<TransportId>>,
-    pub(super) transport_producers: BTreeMap<TransportId, BTreeSet<ProducerId>>,
-    pub(super) transport_consumers: BTreeMap<TransportId, BTreeSet<ConsumerId>>,
-    pub(super) producer_consumers: BTreeMap<ProducerId, BTreeSet<ConsumerId>>,
+    /// reverse ownership indexes used for local teardown plus invariant checks
+    pub(super) indexes: RouterIndexes,
+    /// synchronous lifecycle sink for outer runtime state
     observer: O,
 }
 
 impl Router<NoopRouterObserver> {
+    /// create a router without lifecycle observation
+    ///
+    /// this constructor is the normal choice for tests or callers that only need
+    /// pure topology state
+    /// use `new_with_observer` when session or producer lifecycle events must be
+    /// mirrored to another owner
     #[must_use]
     pub fn new(id: RouterId) -> Self {
         Self::new_with_observer(id, NoopRouterObserver)
@@ -37,6 +56,10 @@ impl Router<NoopRouterObserver> {
 }
 
 impl<O: RouterObserver> Router<O> {
+    /// create a router with a synchronous observer
+    ///
+    /// the observer is called while the router mutation is still executing
+    /// it must stay cheap and must not call back into the same router
     #[must_use]
     pub fn new_with_observer(id: RouterId, observer: O) -> Self {
         Self {
@@ -45,37 +68,44 @@ impl<O: RouterObserver> Router<O> {
             transports: BTreeMap::new(),
             producers: BTreeMap::new(),
             consumers: BTreeMap::new(),
-            session_transports: BTreeMap::new(),
-            transport_producers: BTreeMap::new(),
-            transport_consumers: BTreeMap::new(),
-            producer_consumers: BTreeMap::new(),
+            indexes: RouterIndexes::new(),
             observer,
         }
     }
 
+    /// return the stable router identity
     #[must_use]
     pub fn id(&self) -> RouterId {
         self.id
     }
 
+    /// return the number of live sessions
+    ///
+    /// this is a primary-map count
+    /// it does not include transports or media entities
     #[must_use]
     pub fn session_count(&self) -> usize {
         self.sessions.len()
     }
 
+    /// iterate live sessions without exposing mutable router state
+    ///
+    /// callers should treat this as an inspection surface only
+    /// topology changes still have to go through the mutation methods so reverse
+    /// indexes remain exact
     pub fn sessions(&self) -> impl Iterator<Item = &Session> {
         self.sessions.values()
     }
 
-    /// Admit a new session to the router.
+    /// admit a new session to the router
     ///
-    /// This is the first state transition for a participant. A joined session
-    /// has no transports or media yet, but later transitions require the
-    /// session to exist first.
+    /// this is the first state transition for a participant
+    /// a joined session has no transports or media yet, but later transitions
+    /// require the session to exist first
     ///
     /// # Errors
     ///
-    /// Returns [`RouterError::DuplicateSession`] when the session already exists.
+    /// returns [`RouterError::DuplicateSession`] when the session already exists
     pub fn join_session(&mut self, session: Session) -> Result<(), RouterError> {
         let session_id = session.id();
         if self.sessions.contains_key(&session_id) {
@@ -87,15 +117,15 @@ impl<O: RouterObserver> Router<O> {
         Ok(())
     }
 
-    /// Register a transport under an existing session.
+    /// register a transport under an existing session
     ///
-    /// The router only records ownership and direction here. Transport-specific
-    /// protocol or WebRTC state stays outside the router core.
+    /// the router only records ownership and direction here
+    /// transport-specific protocol or WebRTC state stays outside the router core
     ///
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingSession`] when the owning session does not exist
-    /// or [`RouterError::DuplicateTransport`] when the transport already exists.
+    /// returns [`RouterError::MissingSession`] when the owning session does not exist
+    /// or [`RouterError::DuplicateTransport`] when the transport already exists
     pub fn open_transport(&mut self, transport: Transport) -> Result<(), RouterError> {
         let transport_id = transport.id();
         let session_id = transport.session_id();
@@ -106,20 +136,21 @@ impl<O: RouterObserver> Router<O> {
             return Err(RouterError::DuplicateTransport(transport_id));
         }
         self.transports.insert(transport_id, transport);
-        Self::insert_index_member(&mut self.session_transports, session_id, transport_id);
+        self.indexes.add_transport(session_id, transport_id);
         Ok(())
     }
 
-    /// Register a producer on a receive transport.
+    /// register a producer on a receive transport
     ///
-    /// Producers are source-side entities. The router enforces that they only
-    /// live on receive transports so downstream state stays structurally valid.
+    /// producers are source-side entities
+    /// the router enforces that they only
+    /// live on receive transports so downstream state stays structurally valid
     ///
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingTransport`] when the owning transport does not exist
+    /// returns [`RouterError::MissingTransport`] when the owning transport does not exist
     /// [`RouterError::ProducerRequiresReceiveTransport`] when the transport does not accept
-    /// producers or [`RouterError::DuplicateProducer`] when the producer already exists.
+    /// producers or [`RouterError::DuplicateProducer`] when the producer already exists
     pub fn add_producer(&mut self, producer: Producer) -> Result<(), RouterError> {
         let producer_id = producer.id();
         let transport_id = producer.transport_id();
@@ -135,7 +166,7 @@ impl<O: RouterObserver> Router<O> {
             return Err(RouterError::DuplicateProducer(producer_id));
         }
         self.producers.insert(producer_id, producer);
-        Self::insert_index_member(&mut self.transport_producers, transport_id, producer_id);
+        self.indexes.add_producer(transport_id, producer_id);
         self.observer.on_event(RouterEvent::ProducerAdded {
             session_id,
             transport_id,
@@ -145,31 +176,33 @@ impl<O: RouterObserver> Router<O> {
         Ok(())
     }
 
-    /// Register a consumer on a send transport.
+    /// register a consumer on a send transport
     ///
-    /// The `capability` parameter is the result of external capability
-    /// negotiation such as [`crate::can_consume`]. The router
-    /// treats it as an opaque compatibility gate. When
-    /// [`ConsumerCapability::Incompatible`], the consumer is rejected without
-    /// inspecting RTP parameters. This keeps the full RTP capability matching
+    /// the `capability` parameter is the result of external capability
+    /// negotiation such as [`crate::can_consume`]
+    /// the router treats it as an opaque compatibility gate
+    /// a [`ConsumerCapability::Incompatible`] result rejects the consumer
+    /// without inspecting RTP parameters
+    /// this keeps the full RTP capability matching
     /// logic outside the router while still letting the router enforce the
-    /// structural gate.
+    /// structural gate
     ///
-    /// The consumer's producer shadow is copied from the current producer route
-    /// state before insertion. After this transition, source-side route changes
+    /// the consumer's producer shadow is copied from the current producer route
+    /// state before insertion
+    /// after this transition, source-side route changes
     /// must go through [`Router::set_producer_route_state`] so the shadow stays
-    /// coherent on every dependent consumer.
+    /// coherent on every dependent consumer
     ///
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingTransport`] when the consumer transport does not exist,
+    /// returns [`RouterError::MissingTransport`] when the consumer transport does not exist,
     /// [`RouterError::MissingProducer`] when the target producer does not exist,
     /// [`RouterError::ConsumerRequiresSendTransport`] when the transport does not accept
     /// consumers, [`RouterError::IncompatibleCapabilities`] when the external capability
     /// negotiation determined that the consumer cannot consume the producer,
     /// [`RouterError::ConsumerMediaKindMismatch`] when the consumer metadata does not
     /// match its source producer,
-    /// or [`RouterError::DuplicateConsumer`] when the consumer already exists.
+    /// or [`RouterError::DuplicateConsumer`] when the consumer already exists
     pub fn add_consumer(
         &mut self,
         mut consumer: Consumer,
@@ -202,23 +235,24 @@ impl<O: RouterObserver> Router<O> {
         }
         consumer.set_producer_route_state(producer.route_state());
         self.consumers.insert(consumer_id, consumer);
-        Self::insert_index_member(&mut self.transport_consumers, transport_id, consumer_id);
-        Self::insert_index_member(&mut self.producer_consumers, producer_id, consumer_id);
+        self.indexes
+            .add_consumer(transport_id, producer_id, consumer_id);
         Ok(())
     }
 
-    /// Set the source-side route state for a producer.
+    /// set the source-side route state for a producer
     ///
-    /// This is the authoritative producer pause transition in the pure router.
-    /// It mutates the producer and then updates the producer shadow stored on
-    /// each dependent consumer. The consumer-local route state is left unchanged.
+    /// this is the authoritative producer pause transition in the pure router
+    /// it mutates the producer and then updates the producer shadow stored on
+    /// each dependent consumer
+    /// the consumer-local route state is left unchanged
     ///
-    /// The update cost is proportional to the number of consumers attached to
-    /// the producer because the router uses the reverse producer-consumer index.
+    /// the update cost is proportional to the number of consumers attached to
+    /// the producer because the router uses the reverse producer-consumer index
     ///
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingProducer`] when the producer does not exist.
+    /// returns [`RouterError::MissingProducer`] when the producer does not exist
     pub fn set_producer_route_state(
         &mut self,
         producer_id: ProducerId,
@@ -229,45 +263,25 @@ impl<O: RouterObserver> Router<O> {
         };
         producer.set_route_state(route_state);
 
-        // Kani verifies this update through fixed-slot proof storage. The
-        // production path collects ids first to satisfy borrowing over BTreeMap,
-        // while the proof path avoids a heap-backed Vec that expands CBMC state.
-        #[cfg(not(kani))]
-        {
-            let consumer_ids: Vec<_> = self
-                .producer_consumers
-                .get(&producer_id)
-                .map_or_else(Vec::new, |ids| ids.iter().copied().collect());
-            for consumer_id in consumer_ids {
-                if let Some(consumer) = self.consumers.get_mut(&consumer_id) {
-                    consumer.set_producer_route_state(route_state);
-                }
-            }
-        }
-
-        #[cfg(kani)]
-        {
-            if let Some(consumer_ids) = self.producer_consumers.get(&producer_id).copied() {
-                for consumer_id in consumer_ids {
-                    if let Some(consumer) = self.consumers.get_mut(&consumer_id) {
-                        consumer.set_producer_route_state(route_state);
-                    }
-                }
+        let consumer_ids = self.indexes.producer_consumers_for_update(producer_id);
+        for consumer_id in consumer_ids {
+            if let Some(consumer) = self.consumers.get_mut(&consumer_id) {
+                consumer.set_producer_route_state(route_state);
             }
         }
 
         Ok(())
     }
 
-    /// Set the receiver-local route state for a consumer.
+    /// set the receiver-local route state for a consumer
     ///
-    /// This only changes the consumer's own route state. It does not change the
-    /// producer route state or any other consumer that depends on the same
-    /// producer.
+    /// this only changes the consumer's own route state
+    /// it does not change the producer route state or any other consumer that
+    /// depends on the same producer
     ///
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingConsumer`] when the consumer does not exist.
+    /// returns [`RouterError::MissingConsumer`] when the consumer does not exist
     pub fn set_consumer_route_state(
         &mut self,
         consumer_id: ConsumerId,
@@ -280,10 +294,20 @@ impl<O: RouterObserver> Router<O> {
         Ok(())
     }
 
+    /// remove one producer and every consumer that depends on it
+    ///
+    /// producer removal is strict about its owning transport
+    /// if the transport is
+    /// missing, the router state has already diverged and the caller gets a
+    /// recoverable error instead of a fabricated lifecycle event
+    ///
+    /// unrelated transports and unrelated consumers stay live
+    ///
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingProducer`] when the producer does not exist, or
-    /// [`RouterError::MissingProducerTransport`] when the producer's owning transport is missing.
+    /// returns [`RouterError::MissingProducer`] when the producer does not exist
+    /// or [`RouterError::MissingProducerTransport`] when the producer's owning
+    /// transport is missing
     pub fn remove_producer(&mut self, producer_id: ProducerId) -> Result<(), RouterError> {
         let Some(producer) = self.producers.get(&producer_id).copied() else {
             return Err(RouterError::MissingProducer(producer_id));
@@ -300,9 +324,15 @@ impl<O: RouterObserver> Router<O> {
         Ok(())
     }
 
+    /// remove one receiver-side route without touching its producer
+    ///
+    /// this is the narrowest teardown path
+    /// it only removes the consumer primary
+    /// record plus the two reverse relations that mention it
+    ///
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingConsumer`] when the consumer does not exist.
+    /// returns [`RouterError::MissingConsumer`] when the consumer does not exist
     pub fn remove_consumer(&mut self, consumer_id: ConsumerId) -> Result<(), RouterError> {
         if !self.consumers.contains_key(&consumer_id) {
             return Err(RouterError::MissingConsumer(consumer_id));
@@ -311,22 +341,22 @@ impl<O: RouterObserver> Router<O> {
         Ok(())
     }
 
-    /// Remove a session and cascade all dependent transports and media entities.
+    /// remove a session and cascade all dependent transports plus media entities
     ///
-    /// This is the authoritative teardown path for session-owned router state.
-    /// Reverse indexes guarantee that cleanup only walks the transports,
-    /// producers and consumers that actually belong to the removed session.
+    /// this is the authoritative teardown path for session-owned router state
+    /// reverse indexes guarantee that cleanup only walks the transports,
+    /// producers and consumers that belong to the removed session
     ///
     /// # Errors
     ///
-    /// Returns [`RouterError::MissingSession`] when the session does not exist.
+    /// returns [`RouterError::MissingSession`] when the session does not exist
     pub fn remove_session(&mut self, session_id: SessionId) -> Result<(), RouterError> {
         let Some(mut session) = self.sessions.remove(&session_id) else {
             return Err(RouterError::MissingSession(session_id));
         };
         session.close();
 
-        let transport_ids = Self::take_ids(&mut self.session_transports, &session_id);
+        let transport_ids = self.indexes.take_session_transports(session_id);
         for transport_id in transport_ids {
             self.remove_transport(transport_id);
         }
@@ -341,32 +371,36 @@ impl<O: RouterObserver> Router<O> {
             return;
         };
 
-        Self::remove_index_member(
-            &mut self.session_transports,
-            transport.session_id(),
-            &transport_id,
-        );
+        self.indexes
+            .remove_transport_from_session(transport.session_id(), transport_id);
 
-        let consumer_ids = Self::take_ids(&mut self.transport_consumers, &transport_id);
+        let consumer_ids = self.indexes.take_transport_consumers(transport_id);
         for consumer_id in consumer_ids {
             self.detach_consumer(consumer_id);
         }
 
-        let producer_ids = Self::take_ids(&mut self.transport_producers, &transport_id);
+        let producer_ids = self.indexes.take_transport_producers(transport_id);
         for producer_id in producer_ids {
             self.detach_producer(producer_id, transport.session_id());
         }
     }
 
+    /// remove a producer after the caller has resolved its owning session
+    ///
+    /// this helper is used by both explicit producer removal and wider transport
+    /// or session teardown
+    /// it assumes the caller already knows the session id
+    /// needed for observer emission
     fn detach_producer(&mut self, producer_id: ProducerId, session_id: SessionId) {
         let Some(producer) = self.producers.remove(&producer_id) else {
             return;
         };
         let transport_id = producer.transport_id();
 
-        Self::remove_index_member(&mut self.transport_producers, transport_id, &producer_id);
+        self.indexes
+            .remove_producer_from_transport(transport_id, producer_id);
 
-        let consumer_ids = Self::take_ids(&mut self.producer_consumers, &producer_id);
+        let consumer_ids = self.indexes.take_producer_consumers(producer_id);
         for consumer_id in consumer_ids {
             self.detach_consumer(consumer_id);
         }
@@ -378,81 +412,16 @@ impl<O: RouterObserver> Router<O> {
         });
     }
 
+    /// remove a consumer primary record plus both reverse relations
+    ///
+    /// the helper is intentionally tolerant of missing consumers because multiple
+    /// teardown paths can converge here after a relation has already been drained
     fn detach_consumer(&mut self, consumer_id: ConsumerId) {
         let Some(consumer) = self.consumers.remove(&consumer_id) else {
             return;
         };
 
-        Self::remove_index_member(
-            &mut self.transport_consumers,
-            consumer.transport_id(),
-            &consumer_id,
-        );
-        Self::remove_index_member(
-            &mut self.producer_consumers,
-            consumer.producer_id(),
-            &consumer_id,
-        );
-    }
-
-    fn take_ids<K, V>(index: &mut BTreeMap<K, BTreeSet<V>>, key: &K) -> BTreeSet<V>
-    where
-        K: Copy + Ord,
-        V: Copy + Ord,
-    {
-        index.remove(key).unwrap_or_default()
-    }
-
-    fn insert_index_member<K, V>(index: &mut BTreeMap<K, BTreeSet<V>>, key: K, value: V)
-    where
-        K: Copy + Ord,
-        V: Copy + Ord,
-    {
-        // Kani's proof map is fixed-slot storage. Using entry().or_default() here
-        // would require a synthetic entry API that returns mutable references through
-        // symbolic slot indexes, so the proof branch spells out get-or-create directly.
-        #[cfg(not(kani))]
-        {
-            index.entry(key).or_default().insert(value);
-        }
-
-        #[cfg(kani)]
-        {
-            if let Some(values) = index.get_mut(&key) {
-                values.insert(value);
-                return;
-            }
-
-            let mut values = BTreeSet::new();
-            values.insert(value);
-            index.insert(key, values);
-        }
-    }
-
-    fn remove_index_member<K, V>(index: &mut BTreeMap<K, BTreeSet<V>>, key: K, value: &V)
-    where
-        K: Copy + Ord,
-        V: Copy + Ord,
-    {
-        // Kani proves teardown through fixed-slot maps. Spelling out the
-        // Option branch avoids cloning the is_some_and closure into every
-        // symbolic cleanup path while keeping the same remove-if-empty update.
-        #[cfg(not(kani))]
-        let should_remove_key = index.get_mut(&key).is_some_and(|values| {
-            values.remove(value);
-            values.is_empty()
-        });
-
-        #[cfg(kani)]
-        let should_remove_key = if let Some(values) = index.get_mut(&key) {
-            values.remove(value);
-            values.is_empty()
-        } else {
-            false
-        };
-
-        if should_remove_key {
-            index.remove(&key);
-        }
+        self.indexes
+            .remove_consumer(consumer.transport_id(), consumer.producer_id(), consumer_id);
     }
 }

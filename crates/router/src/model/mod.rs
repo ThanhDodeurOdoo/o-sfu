@@ -9,6 +9,7 @@ mod media;
 mod observer;
 mod producer;
 mod proof_storage;
+mod relation_index;
 mod route_state;
 mod router;
 mod rtp;

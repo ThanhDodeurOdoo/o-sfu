@@ -5,6 +5,7 @@ use crate::{
     Consumer, ConsumerCapability, ConsumerId, ConsumerRouteState, MediaKind, Producer, ProducerId,
     ProducerRouteState, Router, RouterError, RouterEvent, RouterId, RouterObserver, Session,
     SessionId, SessionState, Transport, TransportDirection, TransportId,
+    model::test_support::router_state_snapshot,
 };
 
 fn session(id: SessionId) -> Session {
@@ -124,10 +125,11 @@ fn removing_a_session_cleans_dependent_resources() {
     );
 
     assert_eq!(router.remove_session(SessionId(10)), Ok(()));
-    assert_eq!(router.sessions.len(), 1);
-    assert_eq!(router.transports.len(), 1);
-    assert_eq!(router.producers.len(), 0);
-    assert_eq!(router.consumers.len(), 0);
+    let snapshot = router_state_snapshot(&router);
+    assert_eq!(snapshot.session_count(), 1);
+    assert_eq!(snapshot.transport_count(), 1);
+    assert_eq!(snapshot.producer_count(), 0);
+    assert_eq!(snapshot.consumer_count(), 0);
     assert_router_is_consistent(&router);
 }
 
@@ -195,16 +197,17 @@ fn removing_a_producer_cleans_dependent_consumers_but_keeps_transports() {
     );
 
     assert_eq!(router.remove_producer(ProducerId(300)), Ok(()));
-    assert!(!router.producers.contains_key(&ProducerId(300)));
-    assert!(!router.consumers.contains_key(&ConsumerId(400)));
-    assert!(!router.consumers.contains_key(&ConsumerId(401)));
-    assert!(router.transports.contains_key(&TransportId(100)));
-    assert!(router.transports.contains_key(&TransportId(101)));
-    assert!(router.transports.contains_key(&TransportId(200)));
-    assert!(!router.transport_producers.contains_key(&TransportId(100)));
-    assert!(!router.transport_consumers.contains_key(&TransportId(101)));
-    assert!(!router.transport_consumers.contains_key(&TransportId(200)));
-    assert!(!router.producer_consumers.contains_key(&ProducerId(300)));
+    let snapshot = router_state_snapshot(&router);
+    assert!(!snapshot.contains_producer(ProducerId(300)));
+    assert!(!snapshot.contains_consumer(ConsumerId(400)));
+    assert!(!snapshot.contains_consumer(ConsumerId(401)));
+    assert!(snapshot.contains_transport(TransportId(100)));
+    assert!(snapshot.contains_transport(TransportId(101)));
+    assert!(snapshot.contains_transport(TransportId(200)));
+    assert!(!snapshot.has_transport_producer_index(TransportId(100)));
+    assert!(!snapshot.has_transport_consumer_index(TransportId(101)));
+    assert!(!snapshot.has_transport_consumer_index(TransportId(200)));
+    assert!(!snapshot.has_producer_consumer_index(ProducerId(300)));
     assert_router_is_consistent(&router);
 }
 
@@ -241,7 +244,7 @@ fn removing_a_producer_rejects_missing_owning_transport() {
             transport_id: TransportId(100),
         })
     );
-    assert!(router.producers.contains_key(&ProducerId(300)));
+    assert!(router_state_snapshot(&router).contains_producer(ProducerId(300)));
     assert_eq!(
         inspector.recorded_events(),
         vec![
@@ -322,22 +325,13 @@ fn removing_a_consumer_preserves_other_routes() {
     );
 
     assert_eq!(router.remove_consumer(ConsumerId(400)), Ok(()));
-    assert!(!router.consumers.contains_key(&ConsumerId(400)));
-    assert!(router.consumers.contains_key(&ConsumerId(401)));
-    assert!(router.producers.contains_key(&ProducerId(300)));
-    assert!(!router.transport_consumers.contains_key(&TransportId(101)));
-    assert!(
-        router
-            .transport_consumers
-            .get(&TransportId(200))
-            .is_some_and(|consumer_ids| consumer_ids.contains(&ConsumerId(401)))
-    );
-    assert!(
-        router
-            .producer_consumers
-            .get(&ProducerId(300))
-            .is_some_and(|consumer_ids| consumer_ids.contains(&ConsumerId(401)))
-    );
+    let snapshot = router_state_snapshot(&router);
+    assert!(!snapshot.contains_consumer(ConsumerId(400)));
+    assert!(snapshot.contains_consumer(ConsumerId(401)));
+    assert!(snapshot.contains_producer(ProducerId(300)));
+    assert!(!snapshot.has_transport_consumer_index(TransportId(101)));
+    assert!(snapshot.has_transport_consumer(TransportId(200), ConsumerId(401)));
+    assert!(snapshot.has_producer_consumer(ProducerId(300), ConsumerId(401)));
     assert_router_is_consistent(&router);
 }
 
@@ -405,22 +399,18 @@ fn removing_a_session_clears_cross_session_reverse_indices() {
     );
 
     assert_eq!(router.remove_session(SessionId(10)), Ok(()));
-    assert!(router.sessions.contains_key(&SessionId(20)));
-    assert!(router.transports.contains_key(&TransportId(200)));
-    assert!(!router.transports.contains_key(&TransportId(100)));
-    assert!(!router.transports.contains_key(&TransportId(101)));
-    assert!(!router.producers.contains_key(&ProducerId(300)));
-    assert!(!router.consumers.contains_key(&ConsumerId(400)));
-    assert!(!router.consumers.contains_key(&ConsumerId(401)));
-    assert!(!router.session_transports.contains_key(&SessionId(10)));
-    assert!(
-        router
-            .session_transports
-            .get(&SessionId(20))
-            .is_some_and(|transport_ids| { transport_ids.contains(&TransportId(200)) })
-    );
-    assert!(!router.transport_consumers.contains_key(&TransportId(200)));
-    assert!(!router.producer_consumers.contains_key(&ProducerId(300)));
+    let snapshot = router_state_snapshot(&router);
+    assert!(snapshot.contains_session(SessionId(20)));
+    assert!(snapshot.contains_transport(TransportId(200)));
+    assert!(!snapshot.contains_transport(TransportId(100)));
+    assert!(!snapshot.contains_transport(TransportId(101)));
+    assert!(!snapshot.contains_producer(ProducerId(300)));
+    assert!(!snapshot.contains_consumer(ConsumerId(400)));
+    assert!(!snapshot.contains_consumer(ConsumerId(401)));
+    assert!(!snapshot.has_session_transport_index(SessionId(10)));
+    assert!(snapshot.has_session_transport(SessionId(20), TransportId(200)));
+    assert!(!snapshot.has_transport_consumer_index(TransportId(200)));
+    assert!(!snapshot.has_producer_consumer_index(ProducerId(300)));
     assert_router_is_consistent(&router);
 }
 
@@ -643,13 +633,12 @@ fn new_consumers_inherit_their_producer_pause_state() {
         Ok(())
     );
 
-    let consumer = router.consumers.get(&ConsumerId(400));
-    assert!(consumer.is_some());
-    let Some(consumer) = consumer else {
-        return;
-    };
-    assert!(!consumer.paused());
-    assert!(consumer.producer_paused());
+    let snapshot = router_state_snapshot(&router);
+    assert!(snapshot.consumer_route_matches(
+        ConsumerId(400),
+        ConsumerRouteState::Active,
+        ProducerRouteState::Paused,
+    ));
     assert_router_is_consistent(&router);
 }
 
@@ -722,24 +711,18 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
         Ok(())
     );
 
-    let producer = router.producers.get(&ProducerId(300));
-    assert!(producer.is_some());
-    let Some(producer) = producer else {
-        return;
-    };
-    assert!(producer.paused());
-    assert!(
-        router
-            .consumers
-            .get(&ConsumerId(400))
-            .is_some_and(Consumer::producer_paused)
-    );
-    assert!(
-        router
-            .consumers
-            .get(&ConsumerId(401))
-            .is_some_and(Consumer::producer_paused)
-    );
+    let snapshot = router_state_snapshot(&router);
+    assert!(snapshot.producer_route_state_matches(ProducerId(300), ProducerRouteState::Paused,));
+    assert!(snapshot.consumer_route_matches(
+        ConsumerId(400),
+        ConsumerRouteState::Active,
+        ProducerRouteState::Paused,
+    ));
+    assert!(snapshot.consumer_route_matches(
+        ConsumerId(401),
+        ConsumerRouteState::Active,
+        ProducerRouteState::Paused,
+    ));
     assert_router_is_consistent(&router);
 }
 
@@ -795,18 +778,13 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
         Ok(())
     );
 
-    assert!(
-        router
-            .producers
-            .get(&ProducerId(300))
-            .is_some_and(|producer| !producer.paused())
-    );
-    assert!(
-        router
-            .consumers
-            .get(&ConsumerId(400))
-            .is_some_and(|consumer| !consumer.producer_paused())
-    );
+    let snapshot = router_state_snapshot(&router);
+    assert!(snapshot.producer_route_state_matches(ProducerId(300), ProducerRouteState::Active,));
+    assert!(snapshot.consumer_route_matches(
+        ConsumerId(400),
+        ConsumerRouteState::Active,
+        ProducerRouteState::Active,
+    ));
     assert_router_is_consistent(&router);
 }
 
@@ -866,13 +844,12 @@ fn pausing_a_consumer_only_changes_its_local_pause_flag() {
         Ok(())
     );
 
-    let consumer = router.consumers.get(&ConsumerId(400));
-    assert!(consumer.is_some());
-    let Some(consumer) = consumer else {
-        return;
-    };
-    assert!(consumer.paused());
-    assert!(!consumer.producer_paused());
+    let snapshot = router_state_snapshot(&router);
+    assert!(snapshot.consumer_route_matches(
+        ConsumerId(400),
+        ConsumerRouteState::Paused,
+        ProducerRouteState::Active,
+    ));
     assert_router_is_consistent(&router);
 }
 
