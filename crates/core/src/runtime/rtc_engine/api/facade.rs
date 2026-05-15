@@ -110,22 +110,22 @@ pub struct RtcTransportWorker {
 
 #[derive(Clone, Copy)]
 pub struct RtcTransportNegotiationFacade<'a> {
-    adapter: &'a RtcTransportWorker,
+    worker: &'a RtcTransportWorker,
 }
 
 #[derive(Clone, Copy)]
 pub struct RtcTransportMediaFacade<'a> {
-    adapter: &'a RtcTransportWorker,
+    worker: &'a RtcTransportWorker,
 }
 
 #[derive(Clone, Copy)]
 pub struct RtcTransportSessionFacade<'a> {
-    adapter: &'a RtcTransportWorker,
+    worker: &'a RtcTransportWorker,
 }
 
 #[derive(Clone, Copy)]
 pub struct RtcTransportObservabilityFacade<'a> {
-    pub(super) adapter: &'a RtcTransportWorker,
+    pub(super) worker: &'a RtcTransportWorker,
 }
 
 impl RtcTransportWorker {
@@ -161,22 +161,22 @@ impl RtcTransportWorker {
 
     #[must_use]
     pub const fn negotiation(&self) -> RtcTransportNegotiationFacade<'_> {
-        RtcTransportNegotiationFacade { adapter: self }
+        RtcTransportNegotiationFacade { worker: self }
     }
 
     #[must_use]
     pub const fn media(&self) -> RtcTransportMediaFacade<'_> {
-        RtcTransportMediaFacade { adapter: self }
+        RtcTransportMediaFacade { worker: self }
     }
 
     #[must_use]
     pub const fn users(&self) -> RtcTransportSessionFacade<'_> {
-        RtcTransportSessionFacade { adapter: self }
+        RtcTransportSessionFacade { worker: self }
     }
 
     #[must_use]
     pub const fn observability(&self) -> RtcTransportObservabilityFacade<'_> {
-        RtcTransportObservabilityFacade { adapter: self }
+        RtcTransportObservabilityFacade { worker: self }
     }
 }
 
@@ -185,7 +185,7 @@ impl RtcTransportNegotiationFacade<'_> {
         self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        self.adapter
+        self.worker
             .request_worker(|response| RtcWorkerCommand::CreateInitialSessionOffer {
                 session_key: session_key.clone(),
                 response,
@@ -197,7 +197,7 @@ impl RtcTransportNegotiationFacade<'_> {
         self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        self.adapter
+        self.worker
             .request_worker(
                 |response| RtcWorkerCommand::CreateSessionRenegotiationOffer {
                     session_key: session_key.clone(),
@@ -212,7 +212,7 @@ impl RtcTransportNegotiationFacade<'_> {
         session_key: &TransportSessionKey,
         answer_sdp: &str,
     ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-        self.adapter
+        self.worker
             .request_worker(|response| RtcWorkerCommand::ApplySessionAnswer {
                 session_key: session_key.clone(),
                 answer_sdp: answer_sdp.to_owned(),
@@ -227,11 +227,11 @@ impl RtcTransportSessionFacade<'_> {
         self,
         session_key: &TransportSessionKey,
     ) -> Result<CloseSessionOutcome, TransportAdapterError> {
-        let Some(worker_handle) = self.adapter.worker_handle()? else {
+        let Some(worker_handle) = self.worker.worker_handle()? else {
             return Ok(CloseSessionOutcome::new(CloseSessionState::SessionClosed));
         };
         let close_outcome = self
-            .adapter
+            .worker
             .send_worker_command(&worker_handle, |response| RtcWorkerCommand::CloseSession {
                 session_key: session_key.clone(),
                 response,
@@ -239,7 +239,7 @@ impl RtcTransportSessionFacade<'_> {
             .await?;
         if close_outcome.state() == CloseSessionState::WorkerDrained {
             worker_handle.shutdown_token.cancel();
-            if let Ok(mut worker_slot) = self.adapter.worker_handle.lock() {
+            if let Ok(mut worker_slot) = self.worker.worker_handle.lock() {
                 worker_slot.clear();
             }
         }
@@ -253,7 +253,7 @@ impl RtcTransportMediaFacade<'_> {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        self.adapter
+        self.worker
             .request_worker(|response| RtcWorkerCommand::RemoveMedia {
                 session_key: session_key.clone(),
                 transport_media_id,
@@ -268,7 +268,7 @@ impl RtcTransportMediaFacade<'_> {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<RouterRtpParameters, TransportAdapterError> {
-        self.adapter
+        self.worker
             .request_worker(
                 |response| RtcWorkerCommand::ResolveNegotiatedProducerParameters {
                     session_key: session_key.clone(),
@@ -285,7 +285,7 @@ impl RtcTransportMediaFacade<'_> {
         media_kind: MediaKind,
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        self.adapter
+        self.worker
             .request_worker(|response| RtcWorkerCommand::AddRecvMedia {
                 session_key: session_key.clone(),
                 media_kind,
@@ -304,7 +304,7 @@ impl RtcTransportMediaFacade<'_> {
         remote_source_control: Option<RemoteSourceControl>,
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        self.adapter
+        self.worker
             .request_worker(|response| RtcWorkerCommand::AddSendMedia {
                 consumer_session_key: consumer_session_key.clone(),
                 media_kind,
@@ -323,7 +323,7 @@ impl RtcTransportMediaFacade<'_> {
         transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        self.adapter
+        self.worker
             .request_worker(|response| RtcWorkerCommand::SetProducerActive {
                 session_key: session_key.clone(),
                 transport_media_id,
@@ -341,7 +341,7 @@ impl RtcTransportMediaFacade<'_> {
         source_transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        self.adapter
+        self.worker
             .request_worker(|response| RtcWorkerCommand::SetConsumerActive {
                 consumer_session_key: consumer_session_key.clone(),
                 consumer_transport_media_id,
@@ -362,7 +362,7 @@ impl RtcTransportMediaFacade<'_> {
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
         let packet_gate = packet_layer_gate(packet_gate);
-        self.adapter
+        self.worker
             .request_worker(|response| RtcWorkerCommand::SetConsumerPacketGate {
                 consumer_session_key: consumer_session_key.clone(),
                 consumer_transport_media_id,
@@ -390,7 +390,7 @@ impl RtcTransportMediaFacade<'_> {
                 )
             })
             .collect();
-        self.adapter
+        self.worker
             .request_worker(|response| RtcWorkerCommand::SetConsumerPacketGateBatch {
                 source_session_key: source_session_key.clone(),
                 source_transport_media_id,
@@ -407,7 +407,7 @@ impl RtcTransportMediaFacade<'_> {
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        self.adapter
+        self.worker
             .request_worker(|response| RtcWorkerCommand::RequestConsumerKeyframe {
                 consumer_session_key: consumer_session_key.clone(),
                 consumer_transport_media_id,
@@ -422,7 +422,7 @@ impl RtcTransportMediaFacade<'_> {
         self,
         transport_media_id: TransportMediaId,
     ) -> Result<Option<String>, TransportAdapterError> {
-        self.adapter
+        self.worker
             .request_worker(|response| RtcWorkerCommand::ResolveMediaMid {
                 transport_media_id,
                 response,
@@ -434,7 +434,7 @@ impl RtcTransportMediaFacade<'_> {
         self,
         target: &RtcTransportWorker,
     ) -> Result<RemoteSourceControl, TransportAdapterError> {
-        let worker_handle = self.adapter.ensure_packet_loop_started()?;
+        let worker_handle = self.worker.ensure_packet_loop_started()?;
         Ok(RemoteSourceControl::new(
             worker_handle.command_tx,
             target.relay_target_id,
@@ -448,7 +448,7 @@ impl RtcTransportMediaFacade<'_> {
         target: &RtcTransportWorker,
     ) -> Result<(), TransportAdapterError> {
         let mailbox = target.ensure_packet_loop_started()?.relay_mailbox;
-        self.adapter
+        self.worker
             .request_worker(|response| RtcWorkerCommand::AddRelayTarget {
                 source_session_key: source_session_key.clone(),
                 source_transport_media_id,
@@ -464,7 +464,7 @@ impl RtcTransportMediaFacade<'_> {
         source_transport_media_id: TransportMediaId,
         target: &RtcTransportWorker,
     ) -> Result<(), TransportAdapterError> {
-        self.adapter
+        self.worker
             .request_worker(|response| RtcWorkerCommand::RemoveRelayTarget {
                 source_transport_media_id,
                 target_id: target.relay_target_id,
@@ -480,7 +480,7 @@ impl RtcTransportMediaFacade<'_> {
         target: &RtcTransportWorker,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        self.adapter
+        self.worker
             .request_worker(|response| RtcWorkerCommand::SetRelayTargetActive {
                 source_session_key: source_session_key.clone(),
                 source_transport_media_id,

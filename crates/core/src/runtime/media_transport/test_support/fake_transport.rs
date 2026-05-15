@@ -1,3 +1,23 @@
+//! deterministic media transport backend used by tests through
+//! [`MediaTransport`](crate::runtime::media_transport::MediaTransport)
+//!
+//! this file is sueful so room and source-policy tests can exercise the same
+//! transport boundary as production without starting RTC workers, UDP sockets
+//! or `str0m` state
+//!
+//! the fake is selected by the `MediaTransport` enum instead of
+//! trait objects or ad hoc test hooks for two reasons:
+//!
+//! - production callers keep one opaque transport handle and exercise the same
+//!   port traits in tests
+//! - fake-only controls stay behind `cfg(test)` or `testing-transport`, so the
+//!   production RTC backend does not grow simulation optionc
+//!
+//! tests may assert recorded [`FakeMediaTransportEvent`] values or inject
+//! transport failures, delays and snapshots
+//! those controls model cold-path transport effects
+//! they do not emulate packet-loop behavior
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},

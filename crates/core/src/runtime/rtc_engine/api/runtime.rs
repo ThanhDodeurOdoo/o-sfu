@@ -279,7 +279,7 @@ impl RtcTransportObservabilityFacade<'_> {
         self,
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
-        let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
+        let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
             return TransportBitrateSnapshot::default();
         };
         let Ok(bitrate_registry) = worker_handle.bitrate_registry.lock() else {
@@ -292,7 +292,7 @@ impl RtcTransportObservabilityFacade<'_> {
         self,
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
-        let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
+        let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
             return ReceiverBandwidthSnapshot::default();
         };
         let Ok(snapshot_state) = worker_handle.snapshot_state.lock() else {
@@ -305,7 +305,7 @@ impl RtcTransportObservabilityFacade<'_> {
         self,
         session_keys: &[TransportSessionKey],
     ) -> TransportPlacementPressureSnapshot {
-        let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
+        let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
             return TransportPlacementPressureSnapshot::default();
         };
         let now = Instant::now();
@@ -334,7 +334,7 @@ impl RtcTransportObservabilityFacade<'_> {
         self,
         media_worker_id: usize,
     ) -> TransportWorkerPressureSnapshot {
-        let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
+        let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
             return TransportWorkerPressureSnapshot::new(
                 media_worker_id,
                 TransportPlacementPressureSnapshot::default(),
@@ -369,7 +369,7 @@ impl RtcTransportObservabilityFacade<'_> {
         self,
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
-        let worker_handle = self.adapter.worker_handle().ok().flatten()?;
+        let worker_handle = self.worker.worker_handle().ok().flatten()?;
         let Ok(snapshot_state) = worker_handle.snapshot_state.lock() else {
             return None;
         };
@@ -377,10 +377,10 @@ impl RtcTransportObservabilityFacade<'_> {
     }
 
     pub async fn active_speaker_source_snapshot(self) -> Vec<ActiveSpeakerSource> {
-        let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
+        let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
             return Vec::new();
         };
-        self.adapter
+        self.worker
             .send_worker_command(&worker_handle, |response| {
                 RtcWorkerCommand::ActiveSpeakerSourceSnapshot { response }
             })
@@ -389,10 +389,10 @@ impl RtcTransportObservabilityFacade<'_> {
     }
 
     pub async fn active_speaker_diagnostic_snapshot(self) -> Vec<ActiveSpeakerSourceDiagnostic> {
-        let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
+        let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
             return Vec::new();
         };
-        self.adapter
+        self.worker
             .send_worker_command(&worker_handle, |response| {
                 RtcWorkerCommand::ActiveSpeakerDiagnosticSnapshot { response }
             })
@@ -401,8 +401,8 @@ impl RtcTransportObservabilityFacade<'_> {
     }
 
     pub async fn next_active_speaker_deadline(self) -> Option<Instant> {
-        let worker_handle = self.adapter.worker_handle().ok().flatten()?;
-        self.adapter
+        let worker_handle = self.worker.worker_handle().ok().flatten()?;
+        self.worker
             .send_worker_command(&worker_handle, |response| {
                 RtcWorkerCommand::NextActiveSpeakerDeadline { response }
             })
@@ -415,10 +415,10 @@ impl RtcTransportObservabilityFacade<'_> {
         self,
         now: Instant,
     ) -> BTreeSet<RoomInstanceId> {
-        let Some(worker_handle) = self.adapter.worker_handle().ok().flatten() else {
+        let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
             return BTreeSet::new();
         };
-        self.adapter
+        self.worker
             .send_worker_command(&worker_handle, |response| {
                 RtcWorkerCommand::ExpiredActiveSpeakerRoomInstanceIds { now, response }
             })
