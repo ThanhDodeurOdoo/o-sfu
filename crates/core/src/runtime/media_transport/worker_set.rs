@@ -109,6 +109,7 @@ impl RtcTransportWorkerSet {
                     config.transport_deps(),
                     Arc::clone(&source_policy_signal),
                     media_id_base_for_worker_index(0),
+                    0,
                 )),
                 extra_workers: Vec::new(),
                 source_policy_signal,
@@ -122,6 +123,7 @@ impl RtcTransportWorkerSet {
                     config.transport_deps(),
                     Arc::clone(&source_policy_signal),
                     media_id_base_for_worker_index(0),
+                    0,
                 )),
                 extra_workers: Vec::new(),
                 source_policy_signal,
@@ -133,15 +135,18 @@ impl RtcTransportWorkerSet {
                 config.transport_deps(),
                 Arc::clone(&source_policy_signal),
                 media_id_base_for_worker_index(0),
+                0,
             )),
             extra_workers: worker_ranges
                 .enumerate()
                 .map(|(index, range)| {
+                    let media_worker_id = index.saturating_add(1);
                     Arc::new(RtcTransportWorker::new(
                         &config.worker_config_with_port_range(range),
                         config.transport_deps(),
                         Arc::clone(&source_policy_signal),
-                        media_id_base_for_worker_index(index + 1),
+                        media_id_base_for_worker_index(media_worker_id),
+                        media_worker_id,
                     ))
                 })
                 .collect(),

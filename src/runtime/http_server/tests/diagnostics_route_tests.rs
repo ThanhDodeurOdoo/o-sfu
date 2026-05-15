@@ -37,6 +37,7 @@ fn test_simulcast_video_rtp_parameters() -> MediaStream {
 const DIAGNOSTICS_ROUTE_PATHS: &[&str] = &[
     DIAGNOSTICS_SUMMARY_PATH,
     DIAGNOSTICS_ROOMS_PATH,
+    DIAGNOSTICS_WORKERS_PATH,
     "/internal/diagnostics/rooms/test-room",
     "/internal/diagnostics/rooms/test-room/users",
     "/internal/diagnostics/node-graph/rooms/test-room",
@@ -220,6 +221,16 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     .await;
     if let Some(fake) = test_state.media_transport.as_fake_transport() {
         fake.set_receiver_bandwidth_estimate(bob_session_id.clone(), Bitrate::from_kbps(200));
+        fake.set_worker_pressure_snapshot(
+            0,
+            TransportPlacementPressureSnapshot {
+                egress_bitrate: Bitrate::from_kbps(750),
+                packet_loop_lag_ms: 6,
+                command_backlog_depth: 2,
+                relay_mailbox_depth: 3,
+                worker_pressure_score: 4,
+            },
+        );
     }
     let Some(alice_connection_id) = room
         .test_api()
@@ -288,6 +299,36 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     assert_eq!(alice_summary.publication_count, 1);
     assert_eq!(alice_summary.subscription_count, 0);
     assert_eq!(alice_summary.media_worker_id, 0);
+
+    let workers_request = build_request(Request::get(DIAGNOSTICS_WORKERS_PATH), Body::empty());
+    assert!(workers_request.is_some());
+    let Some(workers_request) = workers_request else {
+        return;
+    };
+    let workers_response = app(test_state.state.clone()).oneshot(workers_request).await;
+    assert!(workers_response.is_ok());
+    let Some(workers_response) = workers_response.ok() else {
+        return;
+    };
+    assert_eq!(workers_response.status(), StatusCode::OK);
+    let worker_summaries: Option<Vec<DiagnosticsWorkerSummary>> =
+        parse_json(workers_response).await;
+    assert!(worker_summaries.is_some());
+    let Some(worker_summaries) = worker_summaries else {
+        return;
+    };
+    assert_eq!(worker_summaries.len(), 1);
+    let worker_summary = &worker_summaries[0];
+    assert_eq!(worker_summary.media_worker_id, 0);
+    assert_eq!(worker_summary.room_count, 1);
+    assert_eq!(worker_summary.user_count, 3);
+    assert_eq!(worker_summary.publication_count, 1);
+    assert_eq!(worker_summary.subscription_count, 2);
+    assert_eq!(worker_summary.pressure.egress_bitrate_bps, 750_000);
+    assert_eq!(worker_summary.pressure.packet_loop_lag_ms, 6);
+    assert_eq!(worker_summary.pressure.command_backlog_depth, 2);
+    assert_eq!(worker_summary.pressure.relay_mailbox_depth, 3);
+    assert_eq!(worker_summary.pressure.worker_pressure_score, 4);
 
     let detail_request = build_request(
         Request::get(format!("/internal/diagnostics/rooms/{}", room.uuid())),

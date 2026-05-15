@@ -134,6 +134,7 @@ impl RtcTransportWorker {
         deps: &MediaTransportDeps,
         source_policy_signal: Arc<SourcePolicySignal>,
         media_id_base: u64,
+        media_worker_id: usize,
     ) -> Self {
         let metrics = deps.metrics();
         Self {
@@ -152,7 +153,7 @@ impl RtcTransportWorker {
             packet_sink_registry: deps.packet_sink_registry(),
             source_policy_signal,
             metrics: Arc::clone(&metrics),
-            rtp_metrics: metrics.register_rtp_worker(),
+            rtp_metrics: metrics.register_rtp_worker_for_media_worker(media_worker_id),
             rtc_metrics: metrics.register_rtc_worker(),
             worker_handle: Mutex::new(super::runtime::WorkerHandleSlot::default()),
         }

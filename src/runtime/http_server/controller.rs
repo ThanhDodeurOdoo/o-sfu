@@ -25,8 +25,9 @@ use crate::{
         diagnostics::DiagnosticsUserLookup,
         http_server::contract::{
             CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
-            DISCONNECT_PATH, IncomingBitRateStatsResponse, METRICS_PATH, NOOP_PATH, NoopResponse,
-            RoomResponse, RoomStatsResponse, STATS_PATH, UsersStatsResponse,
+            DIAGNOSTICS_WORKERS_PATH, DISCONNECT_PATH, IncomingBitRateStatsResponse, METRICS_PATH,
+            NOOP_PATH, NoopResponse, RoomResponse, RoomStatsResponse, STATS_PATH,
+            UsersStatsResponse,
         },
         metrics::HttpRoute,
         prometheus::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
@@ -89,6 +90,7 @@ fn diagnostics_router(state: RuntimeState) -> Router<RuntimeState> {
     Router::new()
         .route(DIAGNOSTICS_SUMMARY_PATH, get(diagnostics_summary))
         .route(DIAGNOSTICS_ROOMS_PATH, get(diagnostics_rooms))
+        .route(DIAGNOSTICS_WORKERS_PATH, get(diagnostics_workers))
         .route(
             "/internal/diagnostics/rooms/{uuid}",
             get(diagnostics_room_detail),
@@ -324,6 +326,14 @@ async fn diagnostics_rooms(State(state): State<RuntimeState>) -> Response {
             .await,
         )
         .into_response()
+    }
+    .await
+}
+
+async fn diagnostics_workers(State(state): State<RuntimeState>) -> Response {
+    async {
+        axum::Json(diagnostics::workers_response(&state.room_manager, &state.media_transport).await)
+            .into_response()
     }
     .await
 }

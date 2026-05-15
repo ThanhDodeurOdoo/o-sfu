@@ -29,7 +29,7 @@ pub(crate) use o_sfu_telemetry::{
 };
 pub(crate) use queries::{
     room_detail_response, room_users_response, rooms_response, summary_response,
-    user_detail_response,
+    user_detail_response, workers_response,
 };
 pub(crate) use types::DiagnosticsUserLookup;
 #[cfg(test)]

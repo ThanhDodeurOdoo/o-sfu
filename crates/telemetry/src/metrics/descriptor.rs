@@ -12,7 +12,7 @@ use super::{
         TransportHealthTransition,
     },
     rtc::RtcMetricsSnapshot,
-    rtp::RtpMetricsSnapshot,
+    rtp::{RtpMetricsSnapshot, RtpWorkerMetricsSnapshot},
     snapshot::{
         MetricFamilySnapshot, MetricHistogramBucketSnapshot, MetricHistogramSnapshot, MetricKind,
         MetricLabel, MetricSample, RuntimeMetricsSnapshot,
@@ -395,6 +395,46 @@ metric_catalog! {
             RtpMetricsSnapshot::forwarded_payload_bytes
         )
     },
+    WorkerRtpPacketsTotal {
+        name: "osfu_worker_rtp_packets_total",
+        help: "Total RTP packets processed by media worker and flow direction.",
+        kind: Counter,
+        samples: |metrics| rtp_worker_flow_samples(
+            &metrics.rtp_metrics.snapshot(),
+            "direction",
+            RtpWorkerMetricsSnapshot::packets
+        )
+    },
+    WorkerRtpPayloadBytesTotal {
+        name: "osfu_worker_rtp_payload_bytes_total",
+        help: "Total RTP payload bytes processed by media worker and flow direction.",
+        kind: Counter,
+        samples: |metrics| rtp_worker_flow_samples(
+            &metrics.rtp_metrics.snapshot(),
+            "direction",
+            RtpWorkerMetricsSnapshot::payload_bytes
+        )
+    },
+    WorkerRtpForwardedPacketsTotal {
+        name: "osfu_worker_rtp_forwarded_packets_total",
+        help: "Total RTP packet fan-out operations by media worker and forwarding destination.",
+        kind: Counter,
+        samples: |metrics| rtp_worker_forward_destination_samples(
+            &metrics.rtp_metrics.snapshot(),
+            "destination",
+            RtpWorkerMetricsSnapshot::forwarded_packets
+        )
+    },
+    WorkerRtpForwardedPayloadBytesTotal {
+        name: "osfu_worker_rtp_forwarded_payload_bytes_total",
+        help: "Total RTP payload bytes fanned out by media worker and forwarding destination.",
+        kind: Counter,
+        samples: |metrics| rtp_worker_forward_destination_samples(
+            &metrics.rtp_metrics.snapshot(),
+            "destination",
+            RtpWorkerMetricsSnapshot::forwarded_payload_bytes
+        )
+    },
     RtpRelayOverloadDropsTotal {
         name: "osfu_rtp_relay_overload_drops_total",
         help: "Total RTP relay packets dropped because the bounded relay mailbox was full.",
@@ -532,6 +572,52 @@ fn rtp_forward_destination_samples(
         .collect()
 }
 
+fn rtp_worker_flow_samples(
+    snapshot: &RtpMetricsSnapshot,
+    label_name: &'static str,
+    read: fn(&RtpWorkerMetricsSnapshot, RtpFlowDirection) -> u64,
+) -> Vec<MetricSample> {
+    snapshot
+        .worker_snapshots()
+        .iter()
+        .flat_map(|worker| {
+            <RtpFlowDirection as MetricStorageLabel>::VARIANTS
+                .iter()
+                .map(move |label| {
+                    worker_counter(
+                        worker.media_worker_id(),
+                        label_name,
+                        label.label_value(),
+                        read(worker, *label),
+                    )
+                })
+        })
+        .collect()
+}
+
+fn rtp_worker_forward_destination_samples(
+    snapshot: &RtpMetricsSnapshot,
+    label_name: &'static str,
+    read: fn(&RtpWorkerMetricsSnapshot, RtpForwardDestinationKind) -> u64,
+) -> Vec<MetricSample> {
+    snapshot
+        .worker_snapshots()
+        .iter()
+        .flat_map(|worker| {
+            <RtpForwardDestinationKind as MetricStorageLabel>::VARIANTS
+                .iter()
+                .map(move |label| {
+                    worker_counter(
+                        worker.media_worker_id(),
+                        label_name,
+                        label.label_value(),
+                        read(worker, *label),
+                    )
+                })
+        })
+        .collect()
+}
+
 fn rtc_datagram_route_samples(
     snapshot: &RtcMetricsSnapshot,
     label_name: &'static str,
@@ -603,6 +689,22 @@ fn unlabeled_counter(value: u64) -> MetricSample {
 
 fn counter<const N: usize>(labels: [(&'static str, &'static str); N], value: u64) -> MetricSample {
     MetricSample::counter(label_set(labels), value)
+}
+
+fn worker_counter(
+    media_worker_id: usize,
+    label_name: &'static str,
+    label_value: &'static str,
+    value: u64,
+) -> MetricSample {
+    MetricSample::counter(
+        [
+            MetricLabel::new("media_worker_id", media_worker_id.to_string()),
+            MetricLabel::new(label_name, label_value),
+        ]
+        .into(),
+        value,
+    )
 }
 
 fn unlabeled_gauge(value: i64) -> MetricSample {

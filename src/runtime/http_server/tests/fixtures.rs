@@ -29,15 +29,15 @@ pub(super) use crate::{
             types::{
                 DiagnosticsRoomDetail, DiagnosticsRoomSummary, DiagnosticsSourceSelectionReason,
                 DiagnosticsSummaryResponse, DiagnosticsUserDetail, DiagnosticsUserLookupConflict,
-                DiagnosticsUserSummary,
+                DiagnosticsUserSummary, DiagnosticsWorkerSummary,
             },
         },
         http_server::contract::{
             CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
-            DISCONNECT_PATH, METRICS_PATH, NOOP_PATH, NoopResponse, RoomResponse, STATS_PATH,
-            StatsResponse,
+            DIAGNOSTICS_WORKERS_PATH, DISCONNECT_PATH, METRICS_PATH, NOOP_PATH, NoopResponse,
+            RoomResponse, STATS_PATH, StatsResponse,
         },
-        media_transport::MediaTransport,
+        media_transport::{MediaTransport, TransportPlacementPressureSnapshot},
         metrics::{
             MetricName, RuntimeMetrics, RuntimeMetricsSnapshot,
             test_support::RuntimeMetricsSnapshotLookup,

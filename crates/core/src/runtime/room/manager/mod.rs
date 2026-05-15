@@ -228,6 +228,11 @@ impl RoomManager {
         })
     }
 
+    #[must_use]
+    pub const fn media_worker_count(&self) -> usize {
+        self.media_worker_count
+    }
+
     /// Returns live directory snapshots for known room ids.
     ///
     /// Diagnostics user lookup uses this after resolving candidate rooms from

@@ -340,6 +340,30 @@ pub struct DiagnosticsUserSummary {
     pub user_key: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsWorkerPressure {
+    pub command_backlog_depth: usize,
+    pub egress_bitrate_bps: u64,
+    pub packet_loop_lag_ms: u64,
+    pub relay_mailbox_depth: usize,
+    pub worker_pressure_score: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsWorkerSummary {
+    pub connected_user_count: usize,
+    pub disconnected_user_count: usize,
+    pub media_worker_id: usize,
+    pub pressure: DiagnosticsWorkerPressure,
+    pub publication_count: usize,
+    pub room_count: usize,
+    pub subscription_count: usize,
+    pub unknown_user_count: usize,
+    pub user_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsRoomDetail {

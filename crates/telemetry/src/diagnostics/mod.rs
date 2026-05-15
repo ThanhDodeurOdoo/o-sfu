@@ -13,5 +13,6 @@ pub use types::{
     DiagnosticsTemporalLayerSelection, DiagnosticsTransportCounts, DiagnosticsTransportHealth,
     DiagnosticsUserDetail, DiagnosticsUserLookup, DiagnosticsUserLookupConflict,
     DiagnosticsUserSummary, DiagnosticsUserTransport, DiagnosticsUserView,
-    DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
+    DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority, DiagnosticsWorkerPressure,
+    DiagnosticsWorkerSummary,
 };

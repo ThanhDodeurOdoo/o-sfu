@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
 
 use super::{
     counter::{MetricLabel, PaddedCounterFamily},
@@ -43,18 +46,24 @@ impl RtpMetricsRecorder {
 #[derive(Debug, Default)]
 pub(super) struct RtpMetrics {
     process_recorder: RtpMetricsRecorder,
-    worker_recorders: Mutex<Vec<Arc<RtpMetricsRecorder>>>,
+    worker_recorders: Mutex<Vec<RtpWorkerMetricsRecorder>>,
 }
 
 impl RtpMetrics {
-    pub(super) fn register_worker(&self) -> Arc<RtpMetricsRecorder> {
+    pub(super) fn register_worker(
+        &self,
+        media_worker_id: Option<usize>,
+    ) -> Arc<RtpMetricsRecorder> {
         let recorder = Arc::new(RtpMetricsRecorder::default());
         {
             let mut workers = match self.worker_recorders.lock() {
                 Ok(workers) => workers,
                 Err(poisoned) => poisoned.into_inner(),
             };
-            workers.push(Arc::clone(&recorder));
+            workers.push(RtpWorkerMetricsRecorder {
+                media_worker_id,
+                recorder: Arc::clone(&recorder),
+            });
         }
         recorder
     }
@@ -84,12 +93,27 @@ impl RtpMetrics {
                 Ok(workers) => workers,
                 Err(poisoned) => poisoned.into_inner(),
             };
-            for recorder in workers.iter() {
-                snapshot.add_recorder(recorder);
+            let mut worker_snapshots = BTreeMap::<usize, RtpWorkerMetricsSnapshot>::new();
+            for worker in workers.iter() {
+                snapshot.add_recorder(&worker.recorder);
+                if let Some(media_worker_id) = worker.media_worker_id {
+                    worker_snapshots
+                        .entry(media_worker_id)
+                        .or_insert_with(|| RtpWorkerMetricsSnapshot::new(media_worker_id))
+                        .add_recorder(&worker.recorder);
+                }
             }
+            drop(workers);
+            snapshot.worker_snapshots = worker_snapshots.into_values().collect();
         }
         snapshot
     }
+}
+
+#[derive(Debug)]
+struct RtpWorkerMetricsRecorder {
+    media_worker_id: Option<usize>,
+    recorder: Arc<RtpMetricsRecorder>,
 }
 
 #[derive(Debug, Default)]
@@ -98,9 +122,101 @@ pub(super) struct RtpMetricsSnapshot {
     payload_bytes: [u64; RTP_FLOW_DIRECTION_COUNT],
     forwarded_packets: [u64; RTP_FORWARD_DESTINATION_COUNT],
     forwarded_payload_bytes: [u64; RTP_FORWARD_DESTINATION_COUNT],
+    worker_snapshots: Vec<RtpWorkerMetricsSnapshot>,
 }
 
 impl RtpMetricsSnapshot {
+    pub(super) fn packets(&self, direction: RtpFlowDirection) -> u64 {
+        self.packets.get(direction.as_index()).copied().unwrap_or(0)
+    }
+
+    pub(super) fn payload_bytes(&self, direction: RtpFlowDirection) -> u64 {
+        self.payload_bytes
+            .get(direction.as_index())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(super) fn forwarded_packets(&self, destination: RtpForwardDestinationKind) -> u64 {
+        self.forwarded_packets
+            .get(destination.as_index())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(super) fn forwarded_payload_bytes(&self, destination: RtpForwardDestinationKind) -> u64 {
+        self.forwarded_payload_bytes
+            .get(destination.as_index())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(super) fn worker_snapshots(&self) -> &[RtpWorkerMetricsSnapshot] {
+        &self.worker_snapshots
+    }
+
+    fn add_recorder(&mut self, recorder: &RtpMetricsRecorder) {
+        for direction in <RtpFlowDirection as MetricLabel>::VARIANTS {
+            self.add_flow(
+                *direction,
+                recorder.packets.load(*direction),
+                recorder.payload_bytes.load(*direction),
+            );
+        }
+        for destination in <RtpForwardDestinationKind as MetricLabel>::VARIANTS {
+            self.add_forwarded(
+                *destination,
+                recorder.forwarded_packets.load(*destination),
+                recorder.forwarded_payload_bytes.load(*destination),
+            );
+        }
+    }
+
+    fn add_flow(&mut self, direction: RtpFlowDirection, packets: u64, payload_bytes: u64) {
+        if let Some(counter) = self.packets.get_mut(direction.as_index()) {
+            *counter = counter.saturating_add(packets);
+        }
+        if let Some(counter) = self.payload_bytes.get_mut(direction.as_index()) {
+            *counter = counter.saturating_add(payload_bytes);
+        }
+    }
+
+    fn add_forwarded(
+        &mut self,
+        destination: RtpForwardDestinationKind,
+        packets: u64,
+        payload_bytes: u64,
+    ) {
+        if let Some(counter) = self.forwarded_packets.get_mut(destination.as_index()) {
+            *counter = counter.saturating_add(packets);
+        }
+        if let Some(counter) = self.forwarded_payload_bytes.get_mut(destination.as_index()) {
+            *counter = counter.saturating_add(payload_bytes);
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct RtpWorkerMetricsSnapshot {
+    media_worker_id: usize,
+    packets: [u64; RTP_FLOW_DIRECTION_COUNT],
+    payload_bytes: [u64; RTP_FLOW_DIRECTION_COUNT],
+    forwarded_packets: [u64; RTP_FORWARD_DESTINATION_COUNT],
+    forwarded_payload_bytes: [u64; RTP_FORWARD_DESTINATION_COUNT],
+}
+
+impl RtpWorkerMetricsSnapshot {
+    fn new(media_worker_id: usize) -> Self {
+        Self {
+            media_worker_id,
+            ..Self::default()
+        }
+    }
+
+    pub(super) const fn media_worker_id(&self) -> usize {
+        self.media_worker_id
+    }
+
     pub(super) fn packets(&self, direction: RtpFlowDirection) -> u64 {
         self.packets.get(direction.as_index()).copied().unwrap_or(0)
     }

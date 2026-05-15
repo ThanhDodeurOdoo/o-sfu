@@ -10,7 +10,9 @@
 //! They gather room snapshots, merge in transport health and bitrate
 //! data, and attach the relevant recent-event history from `DiagnosticsStore`.
 
-use o_sfu_core::server::session::UserId;
+use std::collections::{BTreeMap, BTreeSet};
+
+use o_sfu_core::server::{session::UserId, transport::TransportPlacementPressureSnapshot};
 
 use super::{
     DiagnosticsStore,
@@ -18,7 +20,7 @@ use super::{
         DiagnosticsRoomDetail, DiagnosticsRoomSummary, DiagnosticsSummaryResponse,
         DiagnosticsTransportCounts, DiagnosticsTransportHealth, DiagnosticsUserDetail,
         DiagnosticsUserLookup, DiagnosticsUserLookupConflict, DiagnosticsUserSummary,
-        DiagnosticsUserView,
+        DiagnosticsUserView, DiagnosticsWorkerPressure, DiagnosticsWorkerSummary,
     },
 };
 use crate::{
@@ -35,6 +37,79 @@ use crate::{
 #[derive(Debug, Clone)]
 struct DiagnosticsRoomSnapshot {
     detail: DiagnosticsRoomDetail,
+}
+
+#[derive(Debug, Clone)]
+struct DiagnosticsWorkerAccumulator {
+    connected_user_count: usize,
+    disconnected_user_count: usize,
+    media_worker_id: usize,
+    pressure: DiagnosticsWorkerPressure,
+    publication_count: usize,
+    room_ids: BTreeSet<String>,
+    subscription_count: usize,
+    unknown_user_count: usize,
+    user_count: usize,
+}
+
+impl DiagnosticsWorkerAccumulator {
+    fn new(media_worker_id: usize) -> Self {
+        Self {
+            connected_user_count: 0,
+            disconnected_user_count: 0,
+            media_worker_id,
+            pressure: DiagnosticsWorkerPressure::default(),
+            publication_count: 0,
+            room_ids: BTreeSet::new(),
+            subscription_count: 0,
+            unknown_user_count: 0,
+            user_count: 0,
+        }
+    }
+
+    fn record_user(&mut self, room_id: &str, user: &DiagnosticsUserView) {
+        self.room_ids.insert(room_id.to_owned());
+        self.user_count = self.user_count.saturating_add(1);
+        self.publication_count = self
+            .publication_count
+            .saturating_add(user.publications.len());
+        self.subscription_count = self
+            .subscription_count
+            .saturating_add(user.subscriptions.len());
+        match user.transport.health {
+            Some(DiagnosticsTransportHealth::Connected) => {
+                self.connected_user_count = self.connected_user_count.saturating_add(1);
+            }
+            Some(DiagnosticsTransportHealth::Disconnected) => {
+                self.disconnected_user_count = self.disconnected_user_count.saturating_add(1);
+            }
+            None => {
+                self.unknown_user_count = self.unknown_user_count.saturating_add(1);
+            }
+        }
+    }
+
+    fn record_empty_room(&mut self, room_id: &str) {
+        self.room_ids.insert(room_id.to_owned());
+    }
+
+    fn set_pressure(&mut self, pressure: DiagnosticsWorkerPressure) {
+        self.pressure = pressure;
+    }
+
+    fn into_summary(self) -> DiagnosticsWorkerSummary {
+        DiagnosticsWorkerSummary {
+            connected_user_count: self.connected_user_count,
+            disconnected_user_count: self.disconnected_user_count,
+            media_worker_id: self.media_worker_id,
+            pressure: self.pressure,
+            publication_count: self.publication_count,
+            room_count: self.room_ids.len(),
+            subscription_count: self.subscription_count,
+            unknown_user_count: self.unknown_user_count,
+            user_count: self.user_count,
+        }
+    }
 }
 
 /// aggregate all live room snapshots into one process-wide view for
@@ -120,6 +195,50 @@ pub(crate) async fn room_users_response(
     let entry = rooms.directory_snapshot(room_id).await?;
     let snapshot = room_snapshot(&entry, observability_port, diagnostics).await;
     Some(user_summaries(&snapshot.detail))
+}
+
+pub(crate) async fn workers_response(
+    rooms: &RoomManager,
+    observability_port: &impl ObservabilityPort,
+) -> Vec<DiagnosticsWorkerSummary> {
+    let mut workers = (0..rooms.media_worker_count())
+        .map(|media_worker_id| {
+            (
+                media_worker_id,
+                DiagnosticsWorkerAccumulator::new(media_worker_id),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for pressure in observability_port.worker_pressure_snapshots() {
+        workers
+            .entry(pressure.media_worker_id)
+            .or_insert_with(|| DiagnosticsWorkerAccumulator::new(pressure.media_worker_id))
+            .set_pressure(diagnostics_worker_pressure(pressure.pressure));
+    }
+    for entry in rooms.directory_snapshots().await {
+        let room = entry.room();
+        let room_id = room.uuid();
+        let users = room.diagnostics_user_views(observability_port).await;
+        if users.is_empty() {
+            workers
+                .entry(room.media_worker_id())
+                .or_insert_with(|| DiagnosticsWorkerAccumulator::new(room.media_worker_id()))
+                .record_empty_room(room_id);
+            continue;
+        }
+        for user in &users {
+            workers
+                .entry(user.transport.media_worker_id)
+                .or_insert_with(|| {
+                    DiagnosticsWorkerAccumulator::new(user.transport.media_worker_id)
+                })
+                .record_user(room_id, user);
+        }
+    }
+    workers
+        .into_values()
+        .map(DiagnosticsWorkerAccumulator::into_summary)
+        .collect()
 }
 
 /// Resolves a user-focused diagnostics query from the diagnostics user index.
@@ -276,4 +395,16 @@ fn transport_counts(users: &[DiagnosticsUserView]) -> DiagnosticsTransportCounts
     }
     counts.total = users.len();
     counts
+}
+
+fn diagnostics_worker_pressure(
+    pressure: TransportPlacementPressureSnapshot,
+) -> DiagnosticsWorkerPressure {
+    DiagnosticsWorkerPressure {
+        command_backlog_depth: pressure.command_backlog_depth,
+        egress_bitrate_bps: pressure.egress_bitrate.as_bps(),
+        packet_loop_lag_ms: pressure.packet_loop_lag_ms,
+        relay_mailbox_depth: pressure.relay_mailbox_depth,
+        worker_pressure_score: pressure.worker_pressure_score,
+    }
 }

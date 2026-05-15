@@ -117,7 +117,7 @@ fn append_labels(output: &mut String, labels: &[MetricLabel], extra_label: Optio
         }
         output.push_str(label.name);
         output.push_str("=\"");
-        output.push_str(label.value);
+        output.push_str(&label.value);
         output.push('"');
         needs_separator = true;
     }
@@ -323,8 +323,8 @@ mod tests {
     #[test]
     fn prometheus_export_keeps_rtp_shape_for_worker_recorders() {
         let metrics = RuntimeMetrics::default();
-        let first_worker = metrics.register_rtp_worker();
-        let second_worker = metrics.register_rtp_worker();
+        let first_worker = metrics.register_rtp_worker_for_media_worker(0);
+        let second_worker = metrics.register_rtp_worker_for_media_worker(1);
 
         first_worker.record_ingress(1200);
         first_worker.record_egress(900);
@@ -341,7 +341,23 @@ mod tests {
             rendered
                 .contains("osfu_rtp_forwarded_payload_bytes_total{destination=\"recording\"} 300")
         );
-        assert!(!rendered.contains("worker="));
+        assert!(rendered.contains(
+            "osfu_worker_rtp_packets_total{media_worker_id=\"0\",direction=\"ingress\"} 1"
+        ));
+        assert!(rendered.contains(
+            "osfu_worker_rtp_packets_total{media_worker_id=\"1\",direction=\"ingress\"} 1"
+        ));
+        assert!(rendered.contains(
+            "osfu_worker_rtp_payload_bytes_total{media_worker_id=\"0\",direction=\"egress\"} 900"
+        ));
+        assert!(
+            rendered
+                .contains("osfu_worker_rtp_forwarded_packets_total{media_worker_id=\"0\",destination=\"local_rtc\"} 1")
+        );
+        assert!(
+            rendered
+                .contains("osfu_worker_rtp_forwarded_payload_bytes_total{media_worker_id=\"1\",destination=\"recording\"} 300")
+        );
     }
 
     #[test]

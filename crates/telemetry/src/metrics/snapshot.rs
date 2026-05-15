@@ -10,13 +10,16 @@ pub enum MetricKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetricLabel {
     pub name: &'static str,
-    pub value: &'static str,
+    pub value: Box<str>,
 }
 
 impl MetricLabel {
     #[must_use]
-    pub const fn new(name: &'static str, value: &'static str) -> Self {
-        Self { name, value }
+    pub fn new(name: &'static str, value: impl Into<Box<str>>) -> Self {
+        Self {
+            name,
+            value: value.into(),
+        }
     }
 }
 
@@ -205,6 +208,6 @@ fn labels_match(sample_labels: &[MetricLabel], labels: &[(&str, &str)]) -> bool 
         && labels.iter().all(|(name, value)| {
             sample_labels
                 .iter()
-                .any(|label| label.name == *name && label.value == *value)
+                .any(|label| label.name == *name && label.value.as_ref() == *value)
         })
 }

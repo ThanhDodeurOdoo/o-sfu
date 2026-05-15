@@ -348,7 +348,18 @@ impl RuntimeMetrics {
     /// The caller should keep the returned handle beside the packet loop and
     /// reuse it for every RTP packet observation owned by that worker.
     pub fn register_rtp_worker(&self) -> Arc<RtpMetricsRecorder> {
-        self.rtp_metrics.register_worker()
+        self.rtp_metrics.register_worker(None)
+    }
+
+    /// Registers one worker-local recorder for a known media worker.
+    ///
+    /// The media-worker id is exported only as a bounded worker label. Runtime
+    /// code must not pass room or user identity here.
+    pub fn register_rtp_worker_for_media_worker(
+        &self,
+        media_worker_id: usize,
+    ) -> Arc<RtpMetricsRecorder> {
+        self.rtp_metrics.register_worker(Some(media_worker_id))
     }
 
     /// Registers one worker-local recorder for RTC packet-loop metrics.
