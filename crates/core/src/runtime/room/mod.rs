@@ -6,7 +6,8 @@
 //! `- Room
 //!    |- controller          -> room-facing facade and immutable accessors
 //!    |- lifecycle           -> close reasons and permission translation
-//!    |- membership          -> join, leave, readiness, cleanup, presence and fanout
+//!    |- membership          -> join, leave, readiness, presence and fanout
+//!    |- cleanup             -> transport cleanup execution and retry reconciliation
 //!    |- effects             -> explicit side-effect plans for transport, fanout, and diagnostics
 //!    |- state               -> locked mutable room model
 //!    |- user_negotiation    -> per-user transport readiness
@@ -42,6 +43,8 @@ mod tests;
 mod topology;
 mod user_negotiation;
 
+#[cfg(any(test, feature = "testing-transport"))]
+pub(in crate::runtime::room) use cleanup::UserCleanup;
 pub use controller::{
     IncomingBitrateSnapshot, LocalRoomRouterPlacements, LocalRoomRouterPlacementsError,
     LocalRouterRuntimeContext, Room, RoomAdmissionPolicy, RoomConfig, RoomEventRequest,
@@ -57,7 +60,7 @@ pub use manager::{
     RuntimeRoomStatsSnapshot,
 };
 #[cfg(any(test, feature = "testing-transport"))]
-pub(in crate::runtime::room) use membership::{JoinSessionIntent, UserCleanup};
+pub(in crate::runtime::room) use membership::JoinSessionIntent;
 pub use outbound::{
     DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
     UserOutboundEvent, UserOutboundOverflow, UserOutboundOverflowKind, UserOutboundQueueLimits,
