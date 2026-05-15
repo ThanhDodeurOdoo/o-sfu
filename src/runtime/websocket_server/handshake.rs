@@ -458,7 +458,7 @@ async fn join_user(
                 connection_id,
                 Arc::clone(&remote_address),
                 Arc::clone(&room),
-                state.media_core.clone(),
+                state.sfu_core.clone(),
             );
             let joined_user = JoinedUser {
                 room,

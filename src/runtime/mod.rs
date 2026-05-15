@@ -33,7 +33,7 @@ use tracing::{info, warn};
 
 use crate::{
     config::Config,
-    core::{CoreOptions, MediaCore, SfuCore},
+    core::{CoreOptions, SfuCore},
 };
 
 pub(crate) mod auth;
@@ -93,7 +93,7 @@ pub(super) struct RuntimeState {
     room_manager: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     media_transport: MediaTransport,
-    media_core: MediaCore,
+    sfu_core: SfuCore,
     metrics: Arc<RuntimeMetrics>,
     pre_auth_websocket_admission: websocket_server::PreAuthWebSocketAdmission,
 }
@@ -264,7 +264,7 @@ impl RuntimeState {
         metrics: Arc<RuntimeMetrics>,
         media_transport: MediaTransport,
     ) -> Self {
-        let media_core = SfuCore::new(options.core, media_transport.clone());
+        let sfu_core = SfuCore::new(options.core, media_transport.clone());
         let pre_auth_websocket_admission = websocket_server::PreAuthWebSocketAdmission::new(
             config.auth.max_pre_auth_websocket_sessions,
             config.auth.max_pre_auth_websocket_sessions_per_origin,
@@ -274,7 +274,7 @@ impl RuntimeState {
             room_manager: rooms,
             diagnostics,
             media_transport,
-            media_core,
+            sfu_core,
             metrics,
             pre_auth_websocket_admission,
         }

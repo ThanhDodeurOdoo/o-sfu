@@ -32,10 +32,10 @@ use crate::{
         source_publish_intent_for_stream_type, stream_id_for_stream_type, stream_type_for_stream_id,
     },
     core::{
-        MediaCore, MediaEndpointHealth, MediaSession, NegotiationOffer, PublicationActivity,
+        MediaEndpointHealth, MediaSession, NegotiationOffer, PublicationActivity,
         PublicationActivityOutcome, RollbackStagedPublishOutcome, SessionNegotiationOutcome,
-        SfuCoreError, SourceSubscriptionIntent, SubscriptionUpdateOutcome, TransportEffectOutcome,
-        UnpublishOutcome, UserInfoRefresh, UserStreamId,
+        SfuCore, SfuCoreError, SourceSubscriptionIntent, SubscriptionUpdateOutcome,
+        TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh, UserStreamId,
     },
     runtime::{
         ConnectionId,
@@ -235,7 +235,7 @@ pub struct User {
     /// Authoritative room facade for membership, snapshots and fanout.
     room: Arc<Room>,
     /// Process media facade used to build borrow-based session handles.
-    media_core: MediaCore,
+    sfu_core: SfuCore,
     /// Connection-local request sequencing and compatibility wire state.
     state: UserState,
     /// Whether async staged-publish cleanup has completed for this connection.
@@ -255,13 +255,13 @@ impl User {
         connection_id: ConnectionId,
         remote_address: Arc<str>,
         room: Arc<Room>,
-        media_core: MediaCore,
+        sfu_core: SfuCore,
     ) -> Self {
         Self {
             id: user_id,
             connection_id,
             remote_address,
-            media_core,
+            sfu_core,
             room,
             state: UserState::default(),
             cleanup_finished: false,
@@ -271,7 +271,7 @@ impl User {
     /// Rebuild a borrow-based media session for this room, user and runtime
     /// connection identity.
     fn media(&self) -> MediaSession<'_> {
-        self.media_core
+        self.sfu_core
             .session(self.room.as_ref(), &self.id, self.connection_id)
     }
 

@@ -36,13 +36,13 @@
 //! # Server-facing example
 //!
 //! ```rust,no_run
-//! use o_sfu_core::{CoreOptions, MediaCore, MediaTransport};
+//! use o_sfu_core::{CoreOptions, MediaTransport, SfuCore};
 //! use o_sfu_core::server::room::Room;
 //! use o_sfu_core::server::session::UserId;
 //! use o_sfu_core::ConnectionId;
 //!
 //! async fn create_offer(
-//!     core: &MediaCore,
+//!     core: &SfuCore,
 //!     room: &Room,
 //!     user_id: &UserId,
 //!     connection_id: ConnectionId,
@@ -62,14 +62,14 @@
 //!     Ok(String::from("v=0\r\n"))
 //! }
 //!
-//! fn build_core(options: CoreOptions, transport: MediaTransport) -> MediaCore {
-//!     MediaCore::new(options, transport)
+//! fn build_core(options: CoreOptions, transport: MediaTransport) -> SfuCore {
+//!     SfuCore::new(options, transport)
 //! }
 //! ```
 //!
 //! `o-sfu-core` keeps backend selection behind [`MediaTransport`], while the
 //! session facade targets the runtime [`server::room::Room`] implementation.
-//! Normal server application code should use [`MediaCore`] and should not name
+//! Normal server application code should use [`SfuCore`] and should not name
 //! concrete RTC workers or fake transport variants.
 mod bitrate;
 mod ids;
@@ -105,9 +105,3 @@ pub use sfu::{
     MediaEndpointHealth, MediaSession, NegotiationOffer, OfferedMediaCapabilities, SfuCore,
     SfuCoreError, UploadEncoding, UploadSlot,
 };
-
-/// Production media-core facade used by the server runtime.
-///
-/// Normal server application code should depend on this type instead of naming
-/// transport construction details.
-pub type MediaCore = SfuCore;

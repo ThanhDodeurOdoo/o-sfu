@@ -232,7 +232,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     for _ in 0..2 {
         test_state
             .state
-            .media_core
+            .sfu_core
             .session(&room, &alice_session_id, alice_connection_id)
             .update_user_info(UserInfo::default(), UserInfoRefresh::NotNeeded)
             .await;
