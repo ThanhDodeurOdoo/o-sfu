@@ -9,7 +9,7 @@
 //! The engine is worker-oriented. Each [`RtcTransportWorker`] owns one lazy
 //! packet loop, command and relay mailboxes, worker-local relay target state,
 //! diagnostics hooks, packet-sink fanout, bitrate snapshots, and the state machines
-//! needed to drive Str0m. The surrounding media transport worker set decides
+//! needed to drive Str0m. The surrounding media transport worker manager decides
 //! which session belongs to which worker and hides cross-worker relay setup
 //! from room orchestration.
 //!

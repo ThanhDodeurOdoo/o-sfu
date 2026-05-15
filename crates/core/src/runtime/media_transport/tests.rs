@@ -648,15 +648,12 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
     let local_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-local", 62_000);
     let remote_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-remote", 63_000);
 
-    prepare_rtc_sessions(
-        &adapter,
-        &[
-            &source_session,
-            &local_consumer_session,
-            &remote_consumer_session,
-        ],
-    )
-    .await;
+    let sessions = [
+        &source_session,
+        &local_consumer_session,
+        &remote_consumer_session,
+    ];
+    prepare_rtc_sessions(&adapter, &sessions).await;
 
     let Some(source_media_id) =
         publish_audio(&adapter, &source_session, &producer_rtp_parameters).await
@@ -693,11 +690,15 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
         return;
     };
 
-    let Some(workers) = adapter.as_rtc_worker_set() else {
+    let Some(worker_manager) = adapter.as_rtc_worker_manager() else {
         return;
     };
-    let source_worker = workers.worker_for_user(&source_session);
-    let remote_consumer_worker = workers.worker_for_user(&remote_consumer_session);
+    let (Some(source_worker), Some(remote_consumer_worker)) = (
+        worker_manager.worker_for_user(&source_session),
+        worker_manager.worker_for_user(&remote_consumer_session),
+    ) else {
+        return;
+    };
 
     assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 1).await;
 

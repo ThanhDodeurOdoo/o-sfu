@@ -1,13 +1,11 @@
-//! RTC worker placement below the media transport boundary.
+//! RTC worker management below the media transport boundary.
 //!
-//! `MediaTransport` hides this module from server orchestration. The worker set
+//! `MediaTransport` hides this module from server orchestration. The worker manager
 //! owns the process-local RTC worker topology, maps each transport session to
 //! the worker selected by its media-worker id and coordinates cross-worker
 //! relay cleanup. It is still cold-path orchestration around worker services.
 //! Packet-loop hot paths live inside `runtime::rtc_engine`.
 
-#[cfg(any(test, feature = "testing-transport"))]
-use std::iter;
 use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet},
@@ -21,7 +19,7 @@ use str0m::media::MediaKind as Str0mMediaKind;
 use crate::{
     runtime::{
         RoomInstanceId,
-        media_transport::config::RtcTransportWorkerSetConfig,
+        media_transport::config::RtcWorkerManagerConfig,
         rtc_engine::{RtcTransportWorker, client_rtp_capabilities_from_answer},
     },
     transport::{
@@ -42,9 +40,11 @@ use crate::{
 /// key while still avoiding collisions between spillover workers.
 const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
 
-/// Process-local collection of RTC transport workers keyed by media-worker id.
+type RelayRegistrationWorkers = Option<(Arc<RtcTransportWorker>, Arc<RtcTransportWorker>)>;
+
+/// Process-local manager for RTC transport workers keyed by media-worker id.
 ///
-/// The worker set is the last transport layer that knows about worker
+/// The worker manager is the last transport layer that knows about worker
 /// distribution. Above it, callers express media intent through transport
 /// ports. Below it, each [`RtcTransportWorker`] owns one worker-local RTC
 /// state machine and packet loop.
@@ -53,10 +53,10 @@ const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
 ///
 /// Cloning worker handles is cheap because each worker is stored in an `Arc`.
 /// Operations route to the selected worker and await the worker-owned async work.
-/// The worker set does not hold a global lock across those awaits.
+/// The worker manager does not hold a global lock across those awaits.
 ///
 /// Cross-worker subscriptions use source-to-consumer relay. The pure room
-/// router decides that a consumer route exists; this worker set installs the
+/// router decides that a consumer route exists; this worker manager installs the
 /// worker-local packet bridge that makes the route deliver media:
 ///
 /// ```text
@@ -78,78 +78,56 @@ const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
 ///          +---------------------------> W1 packet loop -> consumer session W1
 /// ```
 #[derive(Debug)]
-pub struct RtcTransportWorkerSet {
-    /// Worker used when there is only one worker or when a media-worker id maps
-    /// to index zero.
-    primary_worker: Arc<RtcTransportWorker>,
-    /// Additional RTC workers addressed by media-worker id modulo worker count.
-    extra_workers: Vec<Arc<RtcTransportWorker>>,
+pub struct RtcWorkerManager {
+    /// RTC workers addressed by media-worker id modulo worker count.
+    workers: Vec<Arc<RtcTransportWorker>>,
     /// Shared wakeup signal used by every worker to notify room-level source
-    /// policy tasks about transport-observed changes.
+    /// policy tasks about transport-observed changes without polling every room
     source_policy_signal: Arc<SourcePolicySignal>,
 }
 
-impl RtcTransportWorkerSet {
+impl RtcWorkerManager {
     /// Builds RTC workers and installs one shared source-policy signal.
     ///
     /// Invalid worker or port-range combinations should already be rejected by
     /// `RtcTransportBuilder`. If a transitional caller bypasses that builder
     /// this constructor falls back to a single worker, preserving availability
     /// rather than panicking during startup.
-    pub(super) fn new(config: &RtcTransportWorkerSetConfig) -> Self {
+    pub(super) fn new(config: &RtcWorkerManagerConfig) -> Self {
         let source_policy_signal = Arc::new(SourcePolicySignal::default());
-        let Some(worker_ranges) = config
+        let workers = config
             .transport_config()
             .rtc_port_range()
             .split_for_workers(config.worker_count())
-        else {
-            return Self {
-                primary_worker: Arc::new(RtcTransportWorker::new(
-                    config.transport_config(),
-                    config.transport_deps(),
-                    Arc::clone(&source_policy_signal),
-                    media_id_base_for_worker_index(0),
-                    0,
-                )),
-                extra_workers: Vec::new(),
-                source_policy_signal,
-            };
-        };
-        let mut worker_ranges = worker_ranges.into_iter();
-        let Some(primary_range) = worker_ranges.next() else {
-            return Self {
-                primary_worker: Arc::new(RtcTransportWorker::new(
-                    config.transport_config(),
-                    config.transport_deps(),
-                    Arc::clone(&source_policy_signal),
-                    media_id_base_for_worker_index(0),
-                    0,
-                )),
-                extra_workers: Vec::new(),
-                source_policy_signal,
-            };
-        };
-        Self {
-            primary_worker: Arc::new(RtcTransportWorker::new(
-                &config.worker_config_with_port_range(primary_range),
-                config.transport_deps(),
-                Arc::clone(&source_policy_signal),
-                media_id_base_for_worker_index(0),
-                0,
-            )),
-            extra_workers: worker_ranges
-                .enumerate()
-                .map(|(index, range)| {
-                    let media_worker_id = index.saturating_add(1);
-                    Arc::new(RtcTransportWorker::new(
-                        &config.worker_config_with_port_range(range),
+            .filter(|worker_ranges| !worker_ranges.is_empty())
+            .map_or_else(
+                || {
+                    vec![Arc::new(RtcTransportWorker::new(
+                        config.transport_config(),
                         config.transport_deps(),
                         Arc::clone(&source_policy_signal),
-                        media_id_base_for_worker_index(media_worker_id),
-                        media_worker_id,
-                    ))
-                })
-                .collect(),
+                        media_id_base_for_worker_index(0),
+                        0,
+                    ))]
+                },
+                |worker_ranges| {
+                    worker_ranges
+                        .into_iter()
+                        .enumerate()
+                        .map(|(media_worker_id, range)| {
+                            Arc::new(RtcTransportWorker::new(
+                                &config.worker_config_with_port_range(range),
+                                config.transport_deps(),
+                                Arc::clone(&source_policy_signal),
+                                media_id_base_for_worker_index(media_worker_id),
+                                media_worker_id,
+                            ))
+                        })
+                        .collect()
+                },
+            );
+        Self {
+            workers,
             source_policy_signal,
         }
     }
@@ -162,7 +140,7 @@ impl RtcTransportWorkerSet {
     pub(super) fn worker_for_user(
         &self,
         session_key: &TransportSessionKey,
-    ) -> Arc<RtcTransportWorker> {
+    ) -> Option<Arc<RtcTransportWorker>> {
         self.worker_for_media_worker_id(session_key.media_worker_id())
     }
 
@@ -176,13 +154,17 @@ impl RtcTransportWorkerSet {
         &self,
         consumer_session_key: &TransportSessionKey,
         source_session_key: &TransportSessionKey,
-    ) -> Option<(Arc<RtcTransportWorker>, Arc<RtcTransportWorker>)> {
-        let consumer_worker = self.worker_for_user(consumer_session_key);
-        let source_worker = self.worker_for_user(source_session_key);
+    ) -> Result<RelayRegistrationWorkers, TransportAdapterError> {
+        let consumer_worker = self
+            .worker_for_user(consumer_session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        let source_worker = self
+            .worker_for_user(source_session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
         if Arc::ptr_eq(&consumer_worker, &source_worker) {
-            return None;
+            return Ok(None);
         }
-        Some((source_worker, consumer_worker))
+        Ok(Some((source_worker, consumer_worker)))
     }
 
     /// Builds a best-effort bitrate snapshot across the workers that own the
@@ -196,17 +178,20 @@ impl RtcTransportWorkerSet {
     ) -> TransportBitrateSnapshot {
         let mut keys_by_worker = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
         for session_key in session_keys {
-            keys_by_worker
-                .entry(self.worker_index_for_user(session_key))
-                .or_default()
-                .push(session_key.clone());
+            if let Some(worker_index) = self.worker_index_for_user(session_key) {
+                keys_by_worker
+                    .entry(worker_index)
+                    .or_default()
+                    .push(session_key.clone());
+            }
         }
         let mut snapshot = TransportBitrateSnapshot::default();
         for (worker_index, worker_session_keys) in keys_by_worker {
-            let worker = self.worker_for_index(worker_index);
-            let worker_snapshot = worker.transport_bitrate_snapshot(&worker_session_keys);
-            snapshot.total = snapshot.total.saturating_add(worker_snapshot.total);
-            snapshot.per_media.extend(worker_snapshot.per_media);
+            if let Some(worker) = self.worker_for_index(worker_index) {
+                let worker_snapshot = worker.transport_bitrate_snapshot(&worker_session_keys);
+                snapshot.total = snapshot.total.saturating_add(worker_snapshot.total);
+                snapshot.per_media.extend(worker_snapshot.per_media);
+            }
         }
         snapshot
     }
@@ -221,16 +206,19 @@ impl RtcTransportWorkerSet {
     ) -> ReceiverBandwidthSnapshot {
         let mut keys_by_worker = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
         for session_key in session_keys {
-            keys_by_worker
-                .entry(self.worker_index_for_user(session_key))
-                .or_default()
-                .push(session_key.clone());
+            if let Some(worker_index) = self.worker_index_for_user(session_key) {
+                keys_by_worker
+                    .entry(worker_index)
+                    .or_default()
+                    .push(session_key.clone());
+            }
         }
         let mut snapshot = ReceiverBandwidthSnapshot::default();
         for (worker_index, worker_session_keys) in keys_by_worker {
-            let worker = self.worker_for_index(worker_index);
-            let worker_snapshot = worker.receiver_bandwidth_snapshot(&worker_session_keys);
-            snapshot.per_session.extend(worker_snapshot.per_session);
+            if let Some(worker) = self.worker_for_index(worker_index) {
+                let worker_snapshot = worker.receiver_bandwidth_snapshot(&worker_session_keys);
+                snapshot.per_session.extend(worker_snapshot.per_session);
+            }
         }
         snapshot
     }
@@ -246,29 +234,30 @@ impl RtcTransportWorkerSet {
     ) -> TransportPlacementPressureSnapshot {
         let mut keys_by_worker = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
         for session_key in session_keys {
-            keys_by_worker
-                .entry(self.worker_index_for_user(session_key))
-                .or_default()
-                .push(session_key.clone());
+            if let Some(worker_index) = self.worker_index_for_user(session_key) {
+                keys_by_worker
+                    .entry(worker_index)
+                    .or_default()
+                    .push(session_key.clone());
+            }
         }
         let mut snapshot = TransportPlacementPressureSnapshot::default();
         for (worker_index, worker_session_keys) in keys_by_worker {
-            let worker = self.worker_for_index(worker_index);
-            snapshot =
-                snapshot.merged_with(worker.placement_pressure_snapshot(&worker_session_keys));
+            if let Some(worker) = self.worker_for_index(worker_index) {
+                snapshot =
+                    snapshot.merged_with(worker.placement_pressure_snapshot(&worker_session_keys));
+            }
         }
         snapshot
     }
 
     /// Builds best-effort pressure snapshots for every local RTC worker.
     pub(super) fn worker_pressure_snapshots(&self) -> Vec<TransportWorkerPressureSnapshot> {
-        let mut snapshots = Vec::with_capacity(self.extra_workers.len().saturating_add(1));
-        snapshots.push(self.primary_worker.worker_pressure_snapshot(0));
-        for (index, worker) in self.extra_workers.iter().enumerate() {
-            let media_worker_id = index.saturating_add(1);
-            snapshots.push(worker.worker_pressure_snapshot(media_worker_id));
-        }
-        snapshots
+        self.workers
+            .iter()
+            .enumerate()
+            .map(|(media_worker_id, worker)| worker.worker_pressure_snapshot(media_worker_id))
+            .collect()
     }
 
     /// Applies packet-gate updates in worker-local batches.
@@ -292,15 +281,21 @@ impl RtcTransportWorkerSet {
                 }
                 continue;
             }
+            let Some(worker_index) = self.worker_index_for_user(update.consumer_session_key())
+            else {
+                continue;
+            };
             let key = ConsumerPacketGateBatchKey {
-                worker_index: self.worker_index_for_user(update.consumer_session_key()),
+                worker_index,
                 source_session_key: update.source_session_key().clone(),
                 source_transport_media_id: update.source_transport_media_id(),
             };
             batches.entry(key).or_default().push(index);
         }
         for (key, batch) in batches {
-            let worker = self.worker_for_index(key.worker_index);
+            let Some(worker) = self.worker_for_index(key.worker_index) else {
+                continue;
+            };
             let update_count = batch.len();
             let batch_results = worker
                 .media()
@@ -326,8 +321,8 @@ impl RtcTransportWorkerSet {
     /// deduplicated by transport media id so room policy can consume it without
     /// learning which worker observed the packet.
     pub(super) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
-        let mut snapshot = self.primary_worker.active_speaker_source_snapshot().await;
-        for worker in &self.extra_workers {
+        let mut snapshot = Vec::new();
+        for worker in &self.workers {
             snapshot.extend(worker.active_speaker_source_snapshot().await);
         }
         snapshot.sort_by_key(|source| {
@@ -347,11 +342,8 @@ impl RtcTransportWorkerSet {
     pub(super) async fn active_speaker_diagnostic_snapshot(
         &self,
     ) -> Vec<ActiveSpeakerSourceDiagnostic> {
-        let mut snapshot = self
-            .primary_worker
-            .active_speaker_diagnostic_snapshot()
-            .await;
-        for worker in &self.extra_workers {
+        let mut snapshot = Vec::new();
+        for worker in &self.workers {
             snapshot.extend(worker.active_speaker_diagnostic_snapshot().await);
         }
         snapshot.sort_by_key(|source| source.transport_media_id().as_u64());
@@ -364,8 +356,8 @@ impl RtcTransportWorkerSet {
     /// The runtime uses this to wake room source-policy sync without polling
     /// every room on a fixed interval.
     pub(super) async fn next_active_speaker_deadline(&self) -> Option<Instant> {
-        let mut next_deadline = self.primary_worker.next_active_speaker_deadline().await;
-        for worker in &self.extra_workers {
+        let mut next_deadline: Option<Instant> = None;
+        for worker in &self.workers {
             let worker_deadline = worker.next_active_speaker_deadline().await;
             next_deadline = match (next_deadline, worker_deadline) {
                 (Some(current), Some(candidate)) => Some(current.min(candidate)),
@@ -386,11 +378,8 @@ impl RtcTransportWorkerSet {
         &self,
         now: Instant,
     ) -> BTreeSet<RoomInstanceId> {
-        let mut room_instance_ids = self
-            .primary_worker
-            .expired_active_speaker_room_instance_ids(now)
-            .await;
-        for worker in &self.extra_workers {
+        let mut room_instance_ids = BTreeSet::new();
+        for worker in &self.workers {
             room_instance_ids.extend(worker.expired_active_speaker_room_instance_ids(now).await);
         }
         room_instance_ids
@@ -402,13 +391,14 @@ impl RtcTransportWorkerSet {
 
     /// Creates the first offer on the worker that owns the session.
     ///
-    /// Offer state remains worker-local. The worker set only applies the
+    /// Offer state remains worker-local. The worker manager only applies the
     /// deterministic session-to-worker mapping.
     pub(super) async fn create_initial_session_offer(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
         self.worker_for_user(session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)?
             .negotiation()
             .create_initial_session_offer(session_key)
             .await
@@ -423,6 +413,7 @@ impl RtcTransportWorkerSet {
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
         self.worker_for_user(session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)?
             .negotiation()
             .create_session_renegotiation_offer(session_key)
             .await
@@ -438,6 +429,7 @@ impl RtcTransportWorkerSet {
         answer_sdp: &str,
     ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
         self.worker_for_user(session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)?
             .negotiation()
             .apply_session_answer(session_key, answer_sdp)
             .await
@@ -465,6 +457,7 @@ impl RtcTransportWorkerSet {
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
         self.worker_for_user(session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)?
             .users()
             .close_session_with_outcome(session_key)
             .await
@@ -478,6 +471,7 @@ impl RtcTransportWorkerSet {
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
         self.worker_for_user(session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)?
             .media()
             .remove_media(session_key, transport_media_id)
             .await
@@ -494,6 +488,7 @@ impl RtcTransportWorkerSet {
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.worker_for_user(session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)?
             .media()
             .add_recv_media(
                 session_key,
@@ -529,7 +524,8 @@ impl RtcTransportWorkerSet {
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         ensure_same_room_instance(consumer_session_key, source_session_key)?;
-        let relay_route = self.relay_registration_workers(consumer_session_key, source_session_key);
+        let relay_route =
+            self.relay_registration_workers(consumer_session_key, source_session_key)?;
         let remote_source_control = relay_route
             .as_ref()
             .map(|(source_worker, consumer_worker)| {
@@ -538,7 +534,9 @@ impl RtcTransportWorkerSet {
                     .remote_source_control(consumer_worker.as_ref())
             })
             .transpose()?;
-        let consumer_worker = self.worker_for_user(consumer_session_key);
+        let consumer_worker = self
+            .worker_for_user(consumer_session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
         consumer_worker
             .media()
             .add_send_media(
@@ -557,8 +555,12 @@ impl RtcTransportWorkerSet {
         &self,
         effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
-        let source_worker = self.worker_for_user(&effect.source_session_key);
-        let target_worker = self.worker_for_media_worker_id(effect.target_media_worker_id);
+        let source_worker = self
+            .worker_for_user(&effect.source_session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        let target_worker = self
+            .worker_for_media_worker_id(effect.target_media_worker_id)
+            .ok_or(TransportAdapterError::TransportUnavailable)?;
         if Arc::ptr_eq(&source_worker, &target_worker) {
             return Ok(());
         }
@@ -604,6 +606,7 @@ impl RtcTransportWorkerSet {
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         self.worker_for_user(session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)?
             .media()
             .set_producer_active(session_key, transport_media_id, active)
             .await
@@ -623,6 +626,7 @@ impl RtcTransportWorkerSet {
     ) -> Result<(), TransportAdapterError> {
         ensure_same_room_instance(consumer_session_key, source_session_key)?;
         self.worker_for_user(consumer_session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)?
             .media()
             .set_consumer_active(
                 consumer_session_key,
@@ -649,6 +653,7 @@ impl RtcTransportWorkerSet {
     ) -> Result<(), TransportAdapterError> {
         ensure_same_room_instance(consumer_session_key, source_session_key)?;
         self.worker_for_user(consumer_session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)?
             .media()
             .set_consumer_packet_gate(
                 consumer_session_key,
@@ -673,6 +678,7 @@ impl RtcTransportWorkerSet {
     ) -> Result<(), TransportAdapterError> {
         ensure_same_room_instance(consumer_session_key, source_session_key)?;
         self.worker_for_user(consumer_session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)?
             .media()
             .request_consumer_keyframe(
                 consumer_session_key,
@@ -693,7 +699,8 @@ impl RtcTransportWorkerSet {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Option<String> {
-        self.worker_for_user(session_key)
+        let worker = self.worker_for_user(session_key)?;
+        worker
             .media()
             .transport_media_mid(transport_media_id)
             .await
@@ -710,37 +717,38 @@ impl RtcTransportWorkerSet {
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
-        self.worker_for_user(session_key)
+        self.worker_for_user(session_key)?
             .observability()
             .session_transport_health(session_key)
     }
 
-    fn worker_index_for_user(&self, session_key: &TransportSessionKey) -> usize {
+    fn worker_index_for_user(&self, session_key: &TransportSessionKey) -> Option<usize> {
         self.worker_index_for_media_worker_id(session_key.media_worker_id())
     }
 
-    fn worker_for_media_worker_id(&self, media_worker_id: usize) -> Arc<RtcTransportWorker> {
-        self.worker_for_index(self.worker_index_for_media_worker_id(media_worker_id))
+    fn worker_for_media_worker_id(
+        &self,
+        media_worker_id: usize,
+    ) -> Option<Arc<RtcTransportWorker>> {
+        self.worker_index_for_media_worker_id(media_worker_id)
+            .and_then(|worker_index| self.worker_for_index(worker_index))
     }
 
-    fn worker_index_for_media_worker_id(&self, media_worker_id: usize) -> usize {
-        let worker_count = self.extra_workers.len().saturating_add(1);
-        media_worker_id % worker_count
-    }
-
-    fn worker_for_index(&self, worker_index: usize) -> Arc<RtcTransportWorker> {
-        if worker_index == 0 {
-            return Arc::clone(&self.primary_worker);
+    fn worker_index_for_media_worker_id(&self, media_worker_id: usize) -> Option<usize> {
+        let worker_count = self.workers.len();
+        if worker_count == 0 {
+            return None;
         }
-        self.extra_workers
-            .get(worker_index.saturating_sub(1))
-            .cloned()
-            .unwrap_or_else(|| Arc::clone(&self.primary_worker))
+        Some(media_worker_id % worker_count)
+    }
+
+    fn worker_for_index(&self, worker_index: usize) -> Option<Arc<RtcTransportWorker>> {
+        self.workers.get(worker_index).map(Arc::clone)
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub(super) fn all_workers(&self) -> impl Iterator<Item = &Arc<RtcTransportWorker>> {
-        iter::once(&self.primary_worker).chain(self.extra_workers.iter())
+        self.workers.iter()
     }
 }
 

@@ -11,7 +11,7 @@ use str0m::media::Mid;
 
 use super::MediaTransport;
 #[cfg(any(test, feature = "testing-transport"))]
-use super::worker_set::RtcTransportWorkerSet;
+use super::worker_manager::RtcWorkerManager;
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::rtc_engine::test_support::DebugRouteEntry;
 #[cfg(test)]
@@ -62,8 +62,9 @@ impl MediaTransport {
         match self {
             Self::Rtc(transport) => {
                 transport
-                    .workers()
+                    .worker_manager()
                     .worker_for_user(session_key)
+                    .ok_or(TransportAdapterError::TransportUnavailable)?
                     .media()
                     .negotiated_producer_parameters(session_key, transport_media_id)
                     .await
@@ -77,9 +78,9 @@ impl MediaTransport {
     }
 
     #[cfg(test)]
-    pub(super) fn as_rtc_worker_set(&self) -> Option<&Arc<RtcTransportWorkerSet>> {
+    pub(super) fn as_rtc_worker_manager(&self) -> Option<&Arc<RtcWorkerManager>> {
         match self {
-            Self::Rtc(transport) => Some(transport.workers()),
+            Self::Rtc(transport) => Some(transport.worker_manager()),
             Self::Fake(_) => None,
         }
     }
@@ -90,11 +91,10 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         health: TransportSessionHealth,
     ) {
-        if let Self::Rtc(adapter) = self {
-            adapter
-                .workers()
-                .worker_for_user(session_key)
-                .debug_set_session_transport_health(session_key, health);
+        if let Self::Rtc(adapter) = self
+            && let Some(worker) = adapter.worker_manager().worker_for_user(session_key)
+        {
+            worker.debug_set_session_transport_health(session_key, health);
         }
     }
 
@@ -108,7 +108,7 @@ impl MediaTransport {
             Self::Fake(_) => None,
             Self::Rtc(adapter) => {
                 adapter
-                    .workers()
+                    .worker_manager()
                     .debug_route_entry(source_session_key, source_mid)
                     .await
             }
@@ -125,7 +125,7 @@ impl MediaTransport {
             Self::Fake(_) => None,
             Self::Rtc(adapter) => {
                 adapter
-                    .workers()
+                    .worker_manager()
                     .debug_route_entry_by_consumer_mid(consumer_session_key, consumer_mid)
                     .await
             }
@@ -141,7 +141,7 @@ impl MediaTransport {
             Self::Fake(_) => None,
             Self::Rtc(adapter) => {
                 adapter
-                    .workers()
+                    .worker_manager()
                     .debug_route_entry_by_media_id(source_transport_media_id)
                     .await
             }
@@ -150,14 +150,14 @@ impl MediaTransport {
 }
 
 #[cfg(any(test, feature = "testing-transport"))]
-impl RtcTransportWorkerSet {
+impl RtcWorkerManager {
     #[cfg(test)]
     pub(super) async fn debug_route_entry(
         &self,
         source_session_key: &TransportSessionKey,
         source_mid: Mid,
     ) -> Option<DebugRouteEntry> {
-        self.worker_for_user(source_session_key)
+        self.worker_for_user(source_session_key)?
             .debug_route_entry(source_session_key, source_mid)
             .await
     }

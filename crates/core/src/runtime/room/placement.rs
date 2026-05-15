@@ -284,7 +284,7 @@ pub(super) struct RoomPlacementPlanner {
 }
 
 impl RoomPlacementPlanner {
-    /// create a planner for the configured local worker set and room policy
+    /// create a planner for the configured local workers and room policy
     #[must_use]
     pub(super) fn new(media_worker_count: usize, policy: RoomWorkerPolicy) -> Self {
         Self {

@@ -53,8 +53,8 @@ pub struct RtcTransportConfig {
 impl RtcTransportConfig {
     /// Returns a copy scoped to one worker-owned UDP port range.
     ///
-    /// This is used only by worker-set construction. Callers outside the worker
-    /// set should validate the original range once through the media transport
+    /// This is used only by worker-manager construction. Callers outside the worker
+    /// manager should validate the original range once through the media transport
     /// builder instead of slicing it themselves.
     #[must_use]
     pub(super) fn with_rtc_port_range(&self, rtc_port_range: RtcPortRange) -> Self {
@@ -142,17 +142,17 @@ impl MediaTransportDeps {
     }
 }
 
-/// Internal worker-set construction input.
+/// Internal worker-manager construction input.
 ///
 /// # Design note
 ///
 /// Public runtime construction goes through `MediaTransport::from_core_options`
 /// or `RtcTransport::builder()`, which validate worker and port policy before
 /// creating transport state. This struct remains as the narrow handoff from the
-/// builder to the worker set, where worker-local RTC workers are actually
+/// builder to the worker manager, where worker-local RTC workers are actually
 /// created.
 #[derive(Debug, Clone)]
-pub(in crate::runtime::media_transport) struct RtcTransportWorkerSetConfig {
+pub(in crate::runtime::media_transport) struct RtcWorkerManagerConfig {
     /// Number of media workers that should receive transport workers.
     worker_count: usize,
     /// Shared operator policy before worker-local port splitting.
@@ -161,7 +161,7 @@ pub(in crate::runtime::media_transport) struct RtcTransportWorkerSetConfig {
     deps: MediaTransportDeps,
 }
 
-impl RtcTransportWorkerSetConfig {
+impl RtcWorkerManagerConfig {
     #[must_use]
     pub(in crate::runtime::media_transport) fn new(
         transport: RtcTransportConfig,

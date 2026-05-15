@@ -80,7 +80,7 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopConfig {
     ///
     /// Media ids are worker-local counters once the loop is running, but the
     /// values must be unique across workers because cross-worker relay state is
-    /// keyed by the producing media id. The worker set assigns disjoint ranges
+    /// keyed by the producing media id. The worker manager assigns disjoint ranges
     /// before boot so per-packet routing does not need to carry a wider key.
     pub media_id_base: u64,
     /// Cold-path diagnostics sink for transport health changes.

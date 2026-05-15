@@ -9,12 +9,12 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use super::{
-    config::{MediaTransportDeps, RtcTransportConfig, RtcTransportWorkerSetConfig},
-    worker_set::RtcTransportWorkerSet,
+    config::{MediaTransportDeps, RtcTransportConfig, RtcWorkerManagerConfig},
+    worker_manager::RtcWorkerManager,
 };
 use crate::CoreOptions;
 
-/// Production media transport backed by the process-local RTC worker set.
+/// Production media transport backed by the process-local RTC worker manager.
 ///
 /// `RtcTransport` owns the actual RTC worker collection. It is a core-owned
 /// implementation detail for production media, not the type the server runtime
@@ -22,12 +22,12 @@ use crate::CoreOptions;
 /// at the runtime boundary unless a targeted transport test needs to construct
 /// a real RTC backend directly.
 ///
-/// Cloning this handle is cheap. Clones share the same worker set and therefore
+/// Cloning this handle is cheap. Clones share the same worker manager and therefore
 /// the same packet loops, diagnostics state, source-policy signal and relay
 /// registrations.
 #[derive(Debug, Clone)]
 pub struct RtcTransport {
-    pub(super) workers: Arc<RtcTransportWorkerSet>,
+    pub(super) worker_manager: Arc<RtcWorkerManager>,
 }
 
 impl RtcTransport {
@@ -54,25 +54,25 @@ impl RtcTransport {
         builder.build()
     }
 
-    fn from_worker_set_config(
-        config: &RtcTransportWorkerSetConfig,
+    fn from_worker_manager_config(
+        config: &RtcWorkerManagerConfig,
     ) -> Result<Self, RtcTransportBuildError> {
         validate_worker_split(
             config.transport_config().rtc_port_range(),
             config.worker_count(),
         )?;
-        Ok(Self::from_unchecked_worker_set_config(config))
+        Ok(Self::from_unchecked_worker_manager_config(config))
     }
 
-    fn from_unchecked_worker_set_config(config: &RtcTransportWorkerSetConfig) -> Self {
+    fn from_unchecked_worker_manager_config(config: &RtcWorkerManagerConfig) -> Self {
         Self {
-            workers: Arc::new(RtcTransportWorkerSet::new(config)),
+            worker_manager: Arc::new(RtcWorkerManager::new(config)),
         }
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(super) fn workers(&self) -> &Arc<RtcTransportWorkerSet> {
-        &self.workers
+    pub(super) fn worker_manager(&self) -> &Arc<RtcWorkerManager> {
+        &self.worker_manager
     }
 }
 
@@ -80,7 +80,7 @@ impl RtcTransport {
 ///
 /// Building the RTC transport needs operator policy, process services and
 /// worker topology. The builder keeps those inputs named so the runtime does
-/// not have to assemble positional worker-set plumbing or know that one shared
+/// not have to assemble positional worker-manager plumbing or know that one shared
 /// source-policy signal will be installed into every worker.
 ///
 /// # Validation
@@ -160,7 +160,7 @@ impl RtcTransportBuilder {
     /// Creates the RTC transport and validates worker topology.
     ///
     /// The method is cold-path only. It allocates worker state, creates one
-    /// shared source-policy signal for the worker set and does no packet-loop
+    /// shared source-policy signal for the worker manager and does no packet-loop
     /// work by itself.
     ///
     /// # Errors
@@ -172,7 +172,7 @@ impl RtcTransportBuilder {
             .transport
             .ok_or(RtcTransportBuildError::MissingTransportConfig)?;
         let deps = self.deps.ok_or(RtcTransportBuildError::MissingDeps)?;
-        RtcTransport::from_worker_set_config(&RtcTransportWorkerSetConfig::new(
+        RtcTransport::from_worker_manager_config(&RtcWorkerManagerConfig::new(
             transport,
             deps,
             self.worker_count,

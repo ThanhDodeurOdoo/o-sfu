@@ -235,7 +235,7 @@ impl RoutedConsumerId {
 ///   A RTP -> W0 packet loop -> W1 relay mailbox -> W1 packet loop -> B RTP
 /// ```
 ///
-/// `RoomTopology` owns the first graph. The transport worker set owns the
+/// `RoomTopology` owns the first graph. The transport worker manager owns the
 /// second graph.
 #[derive(Debug, Clone)]
 pub(super) struct RoomTopology {

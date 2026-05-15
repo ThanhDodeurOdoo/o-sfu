@@ -79,13 +79,13 @@ impl fmt::Debug for RtcWorkerHandle {
 /// Worker-local RTC transport facade.
 ///
 /// A worker owns one packet loop and the process-local services that feed it.
-/// The surrounding worker set decides which transport sessions live here, while
+/// The surrounding worker manager decides which transport sessions live here, while
 /// this type keeps the worker state hidden behind negotiation, media, session
 /// and observability facades.
 ///
 /// `TransportMediaId` values allocated by a worker must be process-wide
 /// distinct because worker-local relay target maps, route-control maps and
-/// packet gates use them as source keys across workers. The worker set assigns `media_id_base`
+/// packet gates use them as source keys across workers. The worker manager assigns `media_id_base`
 /// before the packet loop starts so the hot path can keep using the compact
 /// media id key without adding a composite worker key to every packet lookup.
 pub struct RtcTransportWorker {
