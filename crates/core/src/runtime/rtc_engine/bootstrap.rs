@@ -1,8 +1,15 @@
-//! Production RTC user and socket bootstrap primitives.
+//! cold-path rtc socket and session bootstrap
 //!
-//! This module contain the real cold-path setup that production worker logic
-//! reuses: bind the worker-local UDP socket, construct `str0m::Rtc`, seed local
-//! candidates, and create the worker-owned user state.
+//! this module is the only production path that creates worker-owned `str0m`
+//! state
+//! negotiation calls it before offer creation so the packet loop can
+//! later treat sockets, ICE credentials, codec configuration and per-session
+//! bookkeeping as already initialized worker-local state
+//!
+//! bootstrap stops at transport setup
+//! room policy, media registration, SDP
+//! staging and packet routing stay in the worker modules that own those
+//! contracts
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -29,6 +36,23 @@ use crate::{
 
 const VIDEO_PAYLOAD_TYPE_VP8: u8 = 96;
 
+/// bind the shared worker UDP socket and return the advertised candidate tuple
+///
+/// the bind address uses the unspecified address for the configured public IP
+/// family so one socket can receive traffic for every session owned by the
+/// worker
+/// the advertised candidate keeps the configured public IP with the
+/// bound port because that is what browsers must see in SDP
+///
+/// ports are tried in configured order
+/// a port that cannot be bound, switched to
+/// nonblocking mode or converted into a tokio socket is skipped so startup can
+/// continue with the next candidate
+///
+/// # errors
+///
+/// returns `TransportUnavailable` when no port in the configured range produces
+/// a usable shared socket
 pub(super) fn bind_shared_rtc_socket(
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
@@ -61,6 +85,10 @@ pub(super) fn bind_shared_rtc_socket(
     Err(TransportAdapterError::TransportUnavailable)
 }
 
+/// choose the local bind address that matches the advertised IP family
+///
+/// workers bind to all local interfaces for that family while keeping SDP
+/// candidates anchored to the configured public address
 fn bind_ip_for_public_ip(public_ip: IpAddr) -> IpAddr {
     match public_ip {
         IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
@@ -68,6 +96,21 @@ fn bind_ip_for_public_ip(public_ip: IpAddr) -> IpAddr {
     }
 }
 
+/// ensure one worker-owned `RtcSessionState` exists for a session
+///
+/// this is idempotent because negotiation may ask for readiness more than once
+/// while a session is still alive
+/// `Ok(true)` means a fresh `Rtc` was created and inserted
+/// `Ok(false)` means the existing session state is still the owner for that key
+///
+/// new sessions start in ICE-lite mode, with RTP mode enabled, bandwidth
+/// estimation capped by `max_bitrate_out` and exactly one local host candidate
+/// attached to the shared worker socket's advertised address
+///
+/// # errors
+///
+/// returns `TransportUnavailable` if the local candidate cannot be represented
+/// by str0m or cannot be attached to the newly created rtc state
 pub(super) fn ensure_session_rtc_state(
     users: &mut BTreeMap<TransportSessionKey, RtcSessionState>,
     session_key: &TransportSessionKey,
@@ -110,6 +153,13 @@ pub(super) fn ensure_session_rtc_state(
     Ok(true)
 }
 
+/// build the codec and RTP configuration used for newly created sessions
+///
+/// codec flags are applied before any media is declared so initial offers and
+/// later staged media additions share one capability surface
+/// the builder runs
+/// in RTP mode because the SFU forwards RTP packets through worker-owned str0m
+/// sessions instead of using data channels or peer-connection media sources
 fn rtc_builder(codec_flags: MediaCodecFlags) -> str0m::RtcConfig {
     let mut config = Rtc::builder()
         .clear_codecs()
@@ -136,6 +186,11 @@ fn rtc_builder(codec_flags: MediaCodecFlags) -> str0m::RtcConfig {
         .enable_av1(codec_flags.av1_enabled())
 }
 
+/// register the h264 payload types that match the existing browser contract
+///
+/// these entries intentionally omit RTX because local forwarding projects one
+/// receiver-safe RTP stream per consumer and does not model retransmission as a
+/// separate negotiated payload in this bootstrap path
 fn add_h264_codecs_without_rtx(codec_config: &mut CodecConfig) {
     const H264_CODECS: &[(u8, bool, u32)] = &[
         (127, true, 0x0042_001f),

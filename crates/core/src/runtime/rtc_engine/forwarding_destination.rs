@@ -1,3 +1,11 @@
+//! executable forwarding destinations for one packet-loop flush
+//!
+//! the forwarding planner records destination intent in this file's types before
+//! `flush_forward_routes` executes the side effects in a stable order
+//! keeping destinations as data lets planning stay read-only over route state
+//! while the flush step owns mutable rtc state, payload sharing and destination
+//! metrics
+
 use std::fmt;
 
 use str0m::RtcError;
@@ -15,45 +23,67 @@ use crate::runtime::{
     packet_sink_registry::RegisteredPacketSink,
 };
 
+/// one planned packet-to-destination edge for the current packet-loop turn
+///
+/// `packet_idx` points into the turn-local pending packet buffer
+/// the value is only valid until the current flush completes, which keeps the
+/// hot path from cloning packet payloads while destinations are being planned
 #[derive(Debug, Clone)]
 pub(super) struct PacketForward {
     packet_idx: usize,
     destination: ForwardingDestination,
 }
 
+/// concrete side effect performed for one planned packet
+///
+/// local rtc destinations may rewrite and enqueue RTP into str0m
+/// packet sinks and relay destinations observe or enqueue source packets
+/// without taking mutable session state
 #[derive(Debug, Clone)]
 pub(super) enum ForwardingDestination {
+    /// local browser consumer reached through a worker-owned `Rtc`
     LocalRtc(LocalRtcPacketDestination),
+    /// room-scoped packet sink such as recording
     PacketSink(PacketSinkDestination),
+    /// relay mailbox for another worker in the same node
     IntraNodeRelay(IntraNodeRelayPacketDestination),
+    /// relay sender for another node
     InterNodeRelay(InterNodeRelayPacketDestination),
 }
 
+/// flush result used for destination metrics and overload accounting
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ForwardSendOutcome {
+    /// local rtc send path, with payload bytes only when str0m accepted a write
     LocalRtc { payload_bytes: Option<usize> },
+    /// non-local side effect completed or had no stronger delivery signal
     SideEffect,
+    /// relay enqueue refused the packet because the target was overloaded
     OverloadedRelay,
 }
 
+/// local rtc send target with the consumer session and rewrite identity
 #[derive(Debug, Clone)]
 pub(super) struct LocalRtcPacketDestination {
     session_key: TransportSessionKey,
     sender: LocalPacketDestination,
 }
 
+/// packet sink destination tied to the source transport media id
 #[derive(Clone)]
 pub(super) struct PacketSinkDestination {
     transport_media_id: TransportMediaId,
     sink: RegisteredPacketSink,
 }
 
+/// intra-node relay destination tied to the source transport media id
 #[derive(Clone)]
 pub(super) struct IntraNodeRelayPacketDestination {
     transport_media_id: TransportMediaId,
     mailbox: RelayPacketMailbox,
 }
 
+/// inter-node relay destination tied to the source transport media id
 #[derive(Clone)]
 pub(super) struct InterNodeRelayPacketDestination {
     transport_media_id: TransportMediaId,
@@ -61,6 +91,7 @@ pub(super) struct InterNodeRelayPacketDestination {
 }
 
 impl PacketForward {
+    /// builds a local rtc destination from an already-authorized media route
     pub(super) fn from_local_route_destination(
         packet_idx: usize,
         route_destination: &MediaRouteDestination,
@@ -78,6 +109,7 @@ impl PacketForward {
         }
     }
 
+    /// builds a packet sink destination for the source side of a route
     pub(super) fn from_packet_sink(
         packet_idx: usize,
         transport_media_id: TransportMediaId,
@@ -92,6 +124,7 @@ impl PacketForward {
         }
     }
 
+    /// builds an intra-node relay destination for the source side of a route
     pub(super) fn from_intra_node_relay_sink(
         packet_idx: usize,
         transport_media_id: TransportMediaId,
@@ -106,6 +139,7 @@ impl PacketForward {
         }
     }
 
+    /// builds an inter-node relay destination for the source side of a route
     pub(super) fn from_inter_node_relay_sink(
         packet_idx: usize,
         transport_media_id: TransportMediaId,
@@ -120,16 +154,19 @@ impl PacketForward {
         }
     }
 
+    /// returns the pending packet buffer index for this planned destination
     pub(super) const fn packet_idx(&self) -> usize {
         self.packet_idx
     }
 
+    /// returns the executable destination for the flush step
     pub(super) fn destination(&self) -> &ForwardingDestination {
         &self.destination
     }
 }
 
 impl ForwardingDestination {
+    /// exposes the local rtc session key for route-planner assertions
     #[cfg(test)]
     pub(super) fn session_key(&self) -> Option<&TransportSessionKey> {
         match self {
@@ -138,6 +175,7 @@ impl ForwardingDestination {
         }
     }
 
+    /// maps the destination to the recorder bucket used by flush metrics
     pub(super) const fn metrics_kind(&self) -> RtpForwardDestinationKind {
         match self {
             Self::LocalRtc(_) => RtpForwardDestinationKind::LocalRtc,
@@ -147,6 +185,7 @@ impl ForwardingDestination {
         }
     }
 
+    /// maps relay destinations to the overload metric namespace
     pub(super) const fn relay_drop_kind(&self) -> Option<RtpRelayDropKind> {
         match self {
             Self::IntraNodeRelay(_) => Some(RtpRelayDropKind::IntraNodeRelay),
@@ -155,6 +194,15 @@ impl ForwardingDestination {
         }
     }
 
+    /// performs this destination's side effect during route flushing
+    ///
+    /// local rtc sends can return a `RtcError` from str0m
+    /// packet sinks and relay destinations collapse their result into
+    /// `ForwardSendOutcome` so the packet loop can continue flushing other
+    /// destinations
+    ///
+    /// `is_last_destination` lets the local send path move the payload instead
+    /// of cloning it when no later destination for the same packet exists
     pub(super) fn send(
         &self,
         state: &mut PacketLoopState,
@@ -171,6 +219,7 @@ impl ForwardingDestination {
 }
 
 impl LocalRtcPacketDestination {
+    /// stores the consumer session and rewrite target chosen by route planning
     fn new(session_key: TransportSessionKey, sender: LocalPacketDestination) -> Self {
         Self {
             session_key,
@@ -178,11 +227,18 @@ impl LocalRtcPacketDestination {
         }
     }
 
+    /// exposes the session key for route-planner assertions
     #[cfg(test)]
     fn session_key(&self) -> &TransportSessionKey {
         &self.session_key
     }
 
+    /// writes one packet to the destination session when it is still live
+    ///
+    /// missing sessions are treated as a no-op because route cleanup and packet
+    /// flushing can interleave across packet-loop turns
+    /// a successful local write records egress bitrate and marks the destination
+    /// session dirty so str0m output is drained later
     fn send(
         &self,
         state: &mut PacketLoopState,
@@ -209,10 +265,12 @@ impl LocalRtcPacketDestination {
 }
 
 impl PacketSinkDestination {
+    /// uses the sink-provided metric kind instead of exposing sink internals
     const fn metrics_kind(&self) -> RtpForwardDestinationKind {
         self.sink.forward_destination_kind()
     }
 
+    /// records the source packet without mutating rtc session state
     fn send(&self, packet: &ForwardedPacket) -> ForwardSendOutcome {
         self.sink.record_packet(
             packet.source_session_key(),
@@ -225,6 +283,7 @@ impl PacketSinkDestination {
 }
 
 impl IntraNodeRelayPacketDestination {
+    /// enqueues a shared relay packet for another worker in this process
     fn send(&self, packet: &ForwardedPacket) -> ForwardSendOutcome {
         match self.mailbox.forward_packet(packet, self.transport_media_id) {
             RelayEnqueueOutcome::Overloaded => ForwardSendOutcome::OverloadedRelay,
@@ -236,6 +295,7 @@ impl IntraNodeRelayPacketDestination {
 }
 
 impl InterNodeRelayPacketDestination {
+    /// enqueues a shared relay packet for a transport outside this process
     fn send(&self, packet: &ForwardedPacket) -> ForwardSendOutcome {
         match self.sender.forward_packet(packet, self.transport_media_id) {
             RelayEnqueueOutcome::Overloaded => ForwardSendOutcome::OverloadedRelay,

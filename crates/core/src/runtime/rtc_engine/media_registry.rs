@@ -1,8 +1,15 @@
-//! Media handle tracking for the RTC transport worker.
+//! transport-media ownership indexes for the rtc packet loop
 //!
-//! Owns the transport-media registry and the negotiation-facing producer
-//! `(session_key, mid)` reverse lookup within `PacketLoopState`, plus the
-//! worker-local remote-source placeholders used by cross-worker relay routes.
+//! this module keeps every worker-local lookup that turns negotiated browser
+//! media identity into `TransportMediaId` values used by packet routing
+//! producers, consumers and remote sources all share that id space, while their
+//! reverse indexes stay separate so teardown can clean only the ownership facts
+//! that belong to one registration
+//!
+//! the registry is stateful packet-loop metadata
+//! it does not decide room policy or route selection, but incorrect entries here
+//! make ingress routing, local forwarding, relay fanout, active-speaker expiry
+//! and bitrate accounting point at the wrong source
 
 use std::{collections::BTreeSet, time::Instant};
 
@@ -22,30 +29,40 @@ use crate::runtime::{
     },
 };
 
-// ---------------------------------------------------------------------------
-// Registered media handle
-// ---------------------------------------------------------------------------
-
+/// worker-owned browser media handle stored under one transport media id
+///
+/// producers represent browser uploads that can become packet sources
+/// consumers represent browser downloads that consume packets from one source
+/// media id
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum RegisteredMediaHandle {
+    /// browser upload owned by a session and negotiated under one MID
     Producer {
+        /// session that owns the uploading `Rtc`
         session_key: TransportSessionKey,
+        /// browser-facing MID for this producer media section
         mid: Mid,
     },
+    /// browser download owned by a session and fed by one source media id
     Consumer {
+        /// session that owns the receiving `Rtc`
         session_key: TransportSessionKey,
+        /// browser-facing MID for this consumer media section
         mid: Mid,
+        /// producer or remote-source id that feeds this consumer route
         source_transport_media_id: TransportMediaId,
     },
 }
 
 impl RegisteredMediaHandle {
+    /// returns the session that owns the browser media section
     pub(super) fn session_key(&self) -> &TransportSessionKey {
         match self {
             Self::Producer { session_key, .. } | Self::Consumer { session_key, .. } => session_key,
         }
     }
 
+    /// returns the negotiated MID that identifies the browser media section
     pub(super) fn mid(&self) -> Mid {
         match self {
             Self::Producer { mid, .. } | Self::Consumer { mid, .. } => *mid,
@@ -53,20 +70,39 @@ impl RegisteredMediaHandle {
     }
 }
 
+/// remote producer placeholder used by consumer routes on this worker
+///
+/// a remote source has no local `RegisteredMediaHandle`, but the packet loop
+/// still needs source ownership and a command path back to the producer worker
+/// for keyframe requests and relay-layer gates
 #[derive(Debug, Clone)]
 pub(super) struct RemoteSourceRegistration {
+    /// session that owns the producer on another worker
     source_session_key: TransportSessionKey,
+    /// best-effort command path back to the producer worker
     source_control: RemoteSourceControl,
 }
 
+/// codec class used for decoder-refresh detection on forwarded keyframes
+///
+/// this is intentionally smaller than the negotiated codec list
+/// the packet path only needs to know whether it can recognize a refresh frame
+/// from packet payload bytes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DecoderRefreshCodec {
+    /// h264 source where IDR detection is available
     H264,
+    /// vp8 source where keyframe detection is available
     Vp8,
+    /// primary codec exists but packet-level refresh detection is not supported
     Unsupported,
 }
 
 impl DecoderRefreshCodec {
+    /// derive the packet-level refresh classifier from negotiated RTP parameters
+    ///
+    /// h264 wins over vp8 because an IDR is the strongest explicit decoder
+    /// refresh signal this packet path can inspect
     fn from_parameters(parameters: &o_sfu_router::MediaStream) -> Option<Self> {
         let mut has_vp8 = false;
         let mut has_unsupported_primary = false;
@@ -87,6 +123,7 @@ impl DecoderRefreshCodec {
 }
 
 impl RemoteSourceRegistration {
+    /// create a remote-source entry for one source owner and control handle
     fn new(source_session_key: TransportSessionKey, source_control: RemoteSourceControl) -> Self {
         Self {
             source_session_key,
@@ -94,15 +131,18 @@ impl RemoteSourceRegistration {
         }
     }
 
+    /// returns the session that owns the remote producer
     pub(super) fn source_session_key(&self) -> &TransportSessionKey {
         &self.source_session_key
     }
 
+    /// returns the command handle used to reach the remote producer worker
     pub(super) fn source_control(&self) -> &RemoteSourceControl {
         &self.source_control
     }
 }
 
+/// reverse lookup key from producer session and MID to transport media id
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ProducerMidLookupKey {
     session_key: TransportSessionKey,
@@ -110,11 +150,13 @@ pub(super) struct ProducerMidLookupKey {
 }
 
 impl ProducerMidLookupKey {
+    /// build a producer MID lookup key with session scope
     fn new(session_key: TransportSessionKey, mid: Mid) -> Self {
         Self { session_key, mid }
     }
 }
 
+/// reverse lookup key from producer session and SSRC to transport media id
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ProducerSsrcLookupKey {
     session_key: TransportSessionKey,
@@ -122,11 +164,13 @@ pub(super) struct ProducerSsrcLookupKey {
 }
 
 impl ProducerSsrcLookupKey {
+    /// build a producer SSRC lookup key with session scope
     fn new(session_key: TransportSessionKey, ssrc: Ssrc) -> Self {
         Self { session_key, ssrc }
     }
 }
 
+/// reverse lookup key from consumer session and MID to source media id
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ConsumerMidLookupKey {
     session_key: TransportSessionKey,
@@ -134,16 +178,19 @@ pub(super) struct ConsumerMidLookupKey {
 }
 
 impl ConsumerMidLookupKey {
+    /// build a consumer MID lookup key with session scope
     fn new(session_key: TransportSessionKey, mid: Mid) -> Self {
         Self { session_key, mid }
     }
 }
 
-// ---------------------------------------------------------------------------
-// Media registry methods on PacketLoopState
-// ---------------------------------------------------------------------------
-
 impl PacketLoopState {
+    /// allocate a transport media id and register its primary reverse indexes
+    ///
+    /// producers gain a `(session, MID)` lookup and an empty SSRC set that can
+    /// be filled by negotiation or dynamic RTP header discovery
+    /// consumers gain a `(session, MID)` lookup to their source media id so RTCP
+    /// feedback can be mapped back to the producer route
     pub(super) fn register_media_handle(
         &mut self,
         handle: RegisteredMediaHandle,
@@ -172,12 +219,14 @@ impl PacketLoopState {
         TransportMediaId::new(id)
     }
 
+    /// resolve a transport media id back to its browser-facing MID
     pub(super) fn resolve_mid(&self, transport_media_id: TransportMediaId) -> Option<Mid> {
         self.mid_registry
             .get(&transport_media_id.as_u64())
             .map(RegisteredMediaHandle::mid)
     }
 
+    /// return the primary media handle for a transport media id
     pub(super) fn media_handle(
         &self,
         transport_media_id: TransportMediaId,
@@ -185,6 +234,12 @@ impl PacketLoopState {
         self.mid_registry.get(&transport_media_id.as_u64())
     }
 
+    /// remove one media handle and every dependent reverse index owned by it
+    ///
+    /// producer removal clears source packet policy, incoming bitrate counters,
+    /// decoder-refresh metadata, live RID state and SSRC lookups
+    /// consumer removal clears only the consumer MID lookup because route and
+    /// local rewrite teardown are owned by media lifecycle code
     pub(super) fn remove_media_handle(
         &mut self,
         transport_media_id: TransportMediaId,
@@ -209,12 +264,24 @@ impl PacketLoopState {
         Some(handle)
     }
 
+    /// report whether a session owns any registered producer or consumer media
     pub(super) fn session_has_registered_media(&self, session_key: &TransportSessionKey) -> bool {
         self.mid_registry
             .values()
             .any(|handle| handle.session_key() == session_key)
     }
 
+    /// register or replace the command path for a remote source media id
+    ///
+    /// a remote source id can be reused only when it still names the same source
+    /// session
+    /// a different owner is rejected so stale room effects cannot steal an
+    /// existing source id
+    ///
+    /// # errors
+    ///
+    /// returns `InvalidInput` when the media id is already registered for a
+    /// different remote source session
     pub(super) fn register_remote_source(
         &mut self,
         source_transport_media_id: TransportMediaId,
@@ -244,6 +311,12 @@ impl PacketLoopState {
         }
     }
 
+    /// restore the previous remote-source registration after failed route setup
+    ///
+    /// this is the rollback half of consumer registration
+    /// when no previous registration existed, source-local packet policy and
+    /// decoder-refresh metadata must also be removed because no route owns the
+    /// placeholder anymore
     pub(super) fn restore_remote_source_registration(
         &mut self,
         source_transport_media_id: TransportMediaId,
@@ -262,6 +335,10 @@ impl PacketLoopState {
         }
     }
 
+    /// return the remote-source registration for a source media id
+    ///
+    /// only remote sources live in this registry
+    /// local producers must be resolved through `media_handle`
     pub(super) fn remote_source_registration(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -269,6 +346,12 @@ impl PacketLoopState {
         self.remote_source_registry.get(&source_transport_media_id)
     }
 
+    /// remove a remote-source placeholder when no local route still references it
+    ///
+    /// this is called after consumer-route removal
+    /// if the last consumer route disappeared, source-level route-control state,
+    /// live RID memory and decoder-refresh metadata must disappear with the
+    /// remote-source entry
     pub(super) fn prune_remote_source_if_unrouted(
         &mut self,
         source_transport_media_id: TransportMediaId,
@@ -287,6 +370,12 @@ impl PacketLoopState {
             .remove(&source_transport_media_id);
     }
 
+    /// remove every remote-source side table entry that no longer has a route
+    ///
+    /// session teardown can remove several media handles and route entries at
+    /// once
+    /// this sweep keeps relay-facing source state aligned with the final
+    /// route graph after that bulk removal
     pub(super) fn prune_unrouted_remote_sources(&mut self) {
         self.remote_source_registry
             .retain(|source_transport_media_id, _registration| {
@@ -319,6 +408,7 @@ impl PacketLoopState {
             });
     }
 
+    /// return the packet-level decoder-refresh classifier for one source
     pub(super) fn source_decoder_refresh_codec(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -328,6 +418,10 @@ impl PacketLoopState {
             .copied()
     }
 
+    /// refresh the decoder-refresh classifier from negotiated RTP parameters
+    ///
+    /// returns the previous classifier so route registration rollback can put
+    /// the source metadata back exactly as it was before a failed mutation
     pub(super) fn refresh_source_decoder_refresh_codec(
         &mut self,
         source_transport_media_id: TransportMediaId,
@@ -344,6 +438,7 @@ impl PacketLoopState {
         previous
     }
 
+    /// restore decoder-refresh metadata captured before a tentative mutation
     pub(super) fn restore_source_decoder_refresh_codec(
         &mut self,
         source_transport_media_id: TransportMediaId,
@@ -358,10 +453,15 @@ impl PacketLoopState {
         }
     }
 
+    /// snapshot active-speaker sources from route-control state
+    ///
+    /// registry ownership is used indirectly by expiry helpers, while this
+    /// snapshot preserves route-control's source-centric view
     pub(super) fn active_speaker_source_snapshot(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
         self.route_control.active_speaker_sources(now)
     }
 
+    /// snapshot active-speaker diagnostics from route-control state
     pub(super) fn active_speaker_diagnostic_snapshot(
         &self,
         now: Instant,
@@ -369,6 +469,11 @@ impl PacketLoopState {
         self.route_control.active_speaker_diagnostics(now)
     }
 
+    /// return room ids whose active-speaker sources expired by `now`
+    ///
+    /// route-control only knows source media ids
+    /// the registry maps each local or remote source back to the owning room
+    /// before the worker reports expiry to room orchestration
     pub(super) fn expired_active_speaker_room_instance_ids(
         &self,
         now: Instant,
@@ -382,6 +487,7 @@ impl PacketLoopState {
             .collect()
     }
 
+    /// resolve producer media by the session and MID observed on a packet
     pub(super) fn source_transport_media_id_for_mid(
         &self,
         source_session_key: &TransportSessionKey,
@@ -395,6 +501,10 @@ impl PacketLoopState {
             .copied()
     }
 
+    /// resolve producer media by the session and SSRC observed on a packet
+    ///
+    /// this lookup is populated from negotiated bindings when available and can
+    /// later be extended by RTP header discovery for RID-only publishers
     pub(super) fn source_transport_media_id_for_ssrc(
         &self,
         source_session_key: &TransportSessionKey,
@@ -408,6 +518,10 @@ impl PacketLoopState {
             .copied()
     }
 
+    /// resolve the producer RID learned for a session-scoped SSRC
+    ///
+    /// a missing value means either the source is not simulcast or the worker
+    /// has not learned the RID for this SSRC yet
     pub(super) fn source_rid_for_ssrc(
         &self,
         source_session_key: &TransportSessionKey,
@@ -421,18 +535,20 @@ impl PacketLoopState {
             .copied()
     }
 
-    /// Learn the SSRC chosen by a RID-only publisher from RTP header metadata.
+    /// learn the SSRC chosen by a RID-only publisher from RTP header metadata
     ///
-    /// Chrome can answer simulcast offers with RIDs but no SSRC attributes.
-    /// Str0m can still demux the first packets through MID/RID header
-    /// extensions. The adapter must persist that discovery here because later
-    /// packets may only carry the SSRC. Without this late binding, packet
-    /// routing, RID gate metadata and bitrate accounting lose the producer as
-    /// soon as the browser stops repeating MID/RID extensions.
+    /// chrome can answer simulcast offers with RIDs but no SSRC attributes
+    /// str0m can still demux the first packets through MID/RID header
+    /// extensions
+    /// the adapter must persist that discovery here because later packets may
+    /// only carry the SSRC
+    /// without this late binding, packet routing, RID gate metadata and bitrate
+    /// accounting lose the producer as soon as the browser stops repeating
+    /// mid/rid extensions
     ///
-    /// The binding is accepted only for the already resolved producer media id.
-    /// A same-session SSRC collision with a different media id is treated as a
-    /// suspicious transport fact and ignored rather than stealing ownership.
+    /// the binding is accepted only for the already resolved producer media id
+    /// a same-session SSRC collision with a different media id is treated as a
+    /// suspicious transport fact and ignored rather than stealing ownership
     pub(super) fn learn_producer_ssrc_binding(
         &mut self,
         session_key: &TransportSessionKey,
@@ -493,6 +609,10 @@ impl PacketLoopState {
         }
     }
 
+    /// resolve the source media id that feeds a consumer MID
+    ///
+    /// rtcp feedback arrives from the consumer session, so the packet loop uses
+    /// this lookup to route keyframe requests back to the correct source
     pub(super) fn consumer_source_transport_media_id_for_mid(
         &self,
         consumer_session_key: &TransportSessionKey,
@@ -506,6 +626,7 @@ impl PacketLoopState {
             .copied()
     }
 
+    /// resolve the room that owns a local or remote source media id
     fn source_room_instance_id(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -518,6 +639,11 @@ impl PacketLoopState {
             })
     }
 
+    /// remove every media handle owned by a session
+    ///
+    /// each handle goes through `remove_media_handle` so producer and consumer
+    /// reverse indexes are cleaned consistently
+    /// callers still own route cleanup that spans other sessions
     pub(super) fn remove_session_media_handles(
         &mut self,
         session_key: &TransportSessionKey,
@@ -538,6 +664,11 @@ impl PacketLoopState {
         removed_handles
     }
 
+    /// replace producer SSRC and RID bindings from negotiated parameters
+    ///
+    /// this is the authoritative refresh after answer application
+    /// old SSRC mappings for the media id are cleared before inserting the new
+    /// set so packet routing cannot keep stale producer identities alive
     pub(super) fn refresh_producer_ssrc_bindings(
         &mut self,
         session_key: &TransportSessionKey,
@@ -582,6 +713,10 @@ impl PacketLoopState {
             .insert(transport_media_id, ssrcs);
     }
 
+    /// clear negotiated producer SSRC bindings for a MID while keeping media alive
+    ///
+    /// this is used when a staged removal or negotiation refresh invalidates the
+    /// packet identities before the media handle itself is removed
     pub(super) fn clear_producer_ssrc_bindings_for_mid(
         &mut self,
         session_key: &TransportSessionKey,
@@ -602,6 +737,7 @@ impl PacketLoopState {
             .or_default();
     }
 
+    /// remove every SSRC and RID lookup currently attached to a producer id
     fn clear_producer_ssrc_bindings(
         &mut self,
         transport_media_id: TransportMediaId,

@@ -1,7 +1,7 @@
 //! Private media runtime implementation tree.
 //!
 //! This is the core crate's media engine internals. It is different from the
-//! server process `Runtime` in `o-sfu/src/runtime.rs`, which owns process boot,
+//! server process `Runtime` in `o-sfu/src/runtime/mod.rs`, which owns process boot,
 //! HTTP and WebSocket serving plus task lifetime. This tree owns the concrete
 //! room engine, media transport facade, RTC worker implementation, recording
 //! hooks, diagnostics projections, metrics bridge and source policy machinery

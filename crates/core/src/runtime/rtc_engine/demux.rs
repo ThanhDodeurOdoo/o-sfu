@@ -1,4 +1,16 @@
-//! IP hash-indexed demux and media route entries for the RTC transport worker.
+//! packet-loop demux indexes for rtc ingress and media fanout
+//!
+//! this module keeps the compact lookup state that the rtc packet loop needs
+//! while it routes UDP datagrams and forwards RTP packets
+//! media route entries bind one producer media id to local consumer destinations
+//! address demux entries map learned or signaled network hints back to sessions so
+//! ingress recovery can probe a bounded candidate set before `Rtc::accepts()`
+//! makes the final ownership decision
+//!
+//! the indexes are worker-local state
+//! snapshot state may mirror selected entries for observation
+//! callers must update each demux value through the methods here so forward and
+//! reverse indexes cannot drift apart
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -10,52 +22,87 @@ use str0m::media::{Mid, Pt};
 use super::route_control::PacketLayerGate;
 use crate::runtime::media_transport::{TransportMediaId, TransportSessionKey};
 
-/// A single forwarding destination within the media route index.
+/// forwarding destination selected for one source media route
 ///
-/// One source can have manny destinations, each with its own selected packet
-/// gate. The destination also carries the consumer-negotiated RTP identity so
-/// local forwarding can present one browser stream even when the publisher
-/// source is simulcast.
+/// one producer media id can fan out to many consumer transports
+/// each destination keeps the consumer-negotiated RTP identity and the
+/// currently effective packet gate so the packet loop can forward without
+/// consulting room policy on the hot path
 #[derive(Debug, Clone)]
 pub(super) struct MediaRouteDestination {
+    /// consumer session that owns the destination `Rtc`
     pub(super) dest_session: TransportSessionKey,
+    /// consumer media id used by the destination session state
     pub(super) dest_transport_media_id: TransportMediaId,
+    /// consumer MID used when rewriting the packet for local egress
     pub(super) dest_mid: Mid,
-    /// Payload type negotiated for this consumer stream.
+    /// payload type negotiated for this consumer stream
     ///
-    /// Source payload types can differ from consumer payload types after router
-    /// negotiation, so forwarding must not reuse the publisher value blindly.
+    /// source payload types can differ from consumer payload types after router
+    /// negotiation, so forwarding must not reuse the publisher value blindly
     pub(super) dest_payload_type: Option<Pt>,
+    /// destination-level activity gate controlled by consumer state
     pub(super) active: bool,
-    /// Effective transport gate used by the packet loop right now.
+    /// effective transport gate used by the packet loop right now
     pub(super) packet_gate: PacketLayerGate,
-    /// Selected strict gate that is waiting for a decodable live RID.
+    /// selected strict gate that is waiting for a decodable live RID
     ///
-    /// Pending gates keepp a route from opening to multiple publisher RIDs wile
-    /// some browsers may is still bringing up or refreshing the selected layer.
+    /// pending gates keep a route from opening to multiple publisher RIDs while
+    /// a browser is still bringing up or refreshing the selected layer
     pub(super) pending_packet_gate: Option<PacketLayerGate>,
 }
 
+/// packet-loop fanout state for one producer media id
+///
+/// `source_active` is a source-wide route gate
+/// individual destinations still carry their own activity and layer gates so
+/// producer pause, consumer pause and selected-layer policy remain independent
 #[derive(Debug, Clone)]
 pub(super) struct MediaRouteEntry {
+    /// source-wide activity gate applied before local destination fanout
     pub(super) source_active: bool,
+    /// local consumer destinations reached from this source media id
     pub(super) destinations: Vec<MediaRouteDestination>,
 }
 
-/// Media route source key: transport-native producer media identity.
+/// source media id used as the packet-loop route index key
 pub(super) type MediaRouteKey = TransportMediaId;
 
+/// bidirectional demux indexes for worker-local UDP ingress recovery
+///
+/// learned remote addresses are the fast path for packets that already passed
+/// `Rtc::accepts()`
+/// local ICE ufrags and remote candidate addresses are recovery hints used for
+/// unknown source tuples
+/// all mappings are non-authoritative because ICE state can change after an
+/// index was written
+///
+/// mutating methods keep reverse indexes in sync so session teardown can remove
+/// every tuple, ufrag and candidate hint owned by one session without scanning
+/// unrelated sessions
 #[derive(Debug, Default)]
 pub struct RemoteAddrDemux {
+    /// learned UDP source tuple to session pin
     remote_addr_index: HashMap<SocketAddr, TransportSessionKey>,
+    /// reverse lookup for learned UDP source tuple cleanup
     remote_addrs_by_session: BTreeMap<TransportSessionKey, Vec<SocketAddr>>,
+    /// local ICE ufrag to session recovery hint
     local_ice_ufrag_index: HashMap<String, TransportSessionKey>,
+    /// reverse lookup for replacing or removing a session local ICE ufrag
     local_ice_ufrag_by_session: BTreeMap<TransportSessionKey, String>,
+    /// signaled remote candidate address to possible sessions
     remote_candidate_addr_index: HashMap<SocketAddr, Vec<TransportSessionKey>>,
+    /// reverse lookup for candidate hint cleanup after renegotiation or teardown
     remote_candidate_addrs_by_session: BTreeMap<TransportSessionKey, Vec<SocketAddr>>,
 }
 
 impl RemoteAddrDemux {
+    /// returns the session currently pinned to a UDP source tuple
+    ///
+    /// this is a hot-path hint for cached ingress routing
+    /// callers must still re-check the packet with `Rtc::accepts()` before
+    /// feeding it into a session because ICE state can move after the pin was
+    /// learned
     #[must_use]
     pub fn session_key_for_remote_addr(
         &self,
@@ -64,6 +111,12 @@ impl RemoteAddrDemux {
         self.remote_addr_index.get(&source_addr)
     }
 
+    /// pins a UDP source tuple to the session that just accepted traffic
+    ///
+    /// returns `true` when the visible mapping changed
+    /// remapping a tuple also removes it from the previous session reverse
+    /// index so session teardown can later clean every learned tuple with one
+    /// key
     #[must_use]
     pub fn remember_remote_addr(
         &mut self,
@@ -93,6 +146,11 @@ impl RemoteAddrDemux {
         true
     }
 
+    /// returns the session advertised by a local ICE ufrag
+    ///
+    /// this index is used to narrow STUN recovery when the USERNAME attribute
+    /// names the local fragment
+    /// the returned session is still only a candidate for `Rtc::accepts()`
     pub(super) fn session_key_for_local_ice_ufrag(
         &self,
         local_ice_ufrag: &str,
@@ -100,6 +158,12 @@ impl RemoteAddrDemux {
         self.local_ice_ufrag_index.get(local_ice_ufrag)
     }
 
+    /// replaces the local ICE ufrag registered for a session
+    ///
+    /// each session owns at most one local ufrag
+    /// each local ufrag maps to at most one session
+    /// returning `false` means the existing mapping already expressed that
+    /// contract
     pub(super) fn remember_local_ice_ufrag(
         &mut self,
         local_ice_ufrag: &str,
@@ -127,6 +191,12 @@ impl RemoteAddrDemux {
         true
     }
 
+    /// returns sessions whose signaled candidates match the observed source
+    ///
+    /// candidate addresses are weaker than learned source pins because many
+    /// sessions can advertise the same address
+    /// callers must treat the slice as a bounded probe set and let
+    /// `Rtc::accepts()` decide ownership
     #[must_use]
     pub fn candidate_sessions_for_source_addr(
         &self,
@@ -137,6 +207,12 @@ impl RemoteAddrDemux {
             .map(Vec::as_slice)
     }
 
+    /// replaces all signaled remote candidate addresses for one session
+    ///
+    /// this is called after answer application when str0m has updated the
+    /// candidate set
+    /// old hints are removed first so recovery cannot keep probing a session
+    /// through candidates that no longer belong to it
     pub fn replace_session_remote_candidate_addrs<I>(
         &mut self,
         session_key: &TransportSessionKey,
@@ -164,6 +240,10 @@ impl RemoteAddrDemux {
         }
     }
 
+    /// removes one learned UDP source tuple pin
+    ///
+    /// this is used when the cached path no longer passes `Rtc::accepts()` or
+    /// when snapshot state mirrors a worker cleanup
     pub(super) fn forget_remote_addr(&mut self, source_addr: SocketAddr) {
         let Some(session_key) = self.remote_addr_index.remove(&source_addr) else {
             return;
@@ -171,6 +251,10 @@ impl RemoteAddrDemux {
         self.remove_remote_addr_from_session(&session_key, source_addr);
     }
 
+    /// removes every learned UDP source tuple owned by a session
+    ///
+    /// session teardown calls this on both worker and snapshot demux state so
+    /// stale source pins cannot route packets to a removed user
     pub(super) fn forget_user_remote_addrs(&mut self, session_key: &TransportSessionKey) {
         let Some(session_addrs) = self.remote_addrs_by_session.remove(session_key) else {
             return;
@@ -180,6 +264,7 @@ impl RemoteAddrDemux {
         }
     }
 
+    /// removes the local ICE ufrag recovery hint for a session
     pub(super) fn forget_user_local_ice_ufrag(&mut self, session_key: &TransportSessionKey) {
         let Some(local_ice_ufrag) = self.local_ice_ufrag_by_session.remove(session_key) else {
             return;
@@ -187,6 +272,11 @@ impl RemoteAddrDemux {
         self.local_ice_ufrag_index.remove(&local_ice_ufrag);
     }
 
+    /// removes all remote candidate recovery hints owned by a session
+    ///
+    /// candidate address indexes can contain several sessions for one address
+    /// cleanup removes only the target session from each fanout list and drops
+    /// empty address entries afterward
     pub(super) fn forget_user_remote_candidate_addrs(&mut self, session_key: &TransportSessionKey) {
         let Some(candidate_addrs) = self.remote_candidate_addrs_by_session.remove(session_key)
         else {
