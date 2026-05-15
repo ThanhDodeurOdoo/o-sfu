@@ -1147,7 +1147,6 @@ dependencies = [
  "anyhow",
  "axum",
  "base64",
- "bitflags",
  "futures-util",
  "hmac",
  "o-sfu-cluster",
@@ -1159,14 +1158,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "str0m",
  "thiserror",
- "time",
  "tokio",
- "tokio-tungstenite",
  "tokio-util",
  "tracing",
- "uuid",
 ]
 
 [[package]]

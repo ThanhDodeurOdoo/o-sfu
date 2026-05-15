@@ -35,3 +35,7 @@ jobs:
 
       - name: Run clippy without OpenTelemetry feature
         run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
+
+      - name: Prepare trybuild cache cleanup
+        if: always()
+        run: mkdir -p target/tests/target

@@ -59,6 +59,10 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Prepare trybuild cache cleanup
+        if: always()
+        run: mkdir -p target/tests/target
+
   coverage-report:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
@@ -86,6 +90,10 @@ jobs:
 
       - name: Export coverage summary
         run: cargo llvm-cov report --json --summary-only --output-path coverage-summary.json
+
+      - name: Prepare trybuild cache cleanup
+        if: always()
+        run: mkdir -p target/tests/target
 
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v4
