@@ -1,4 +1,22 @@
-//! Selected-RID readiness and retry scheduling for route packet gates.
+//! selected-rid readiness and retry scheduling for route packet gates
+//!
+//! selected-rid gates are stricter than ordinary packet gates because the
+//! receiver must not be switched to a simulcast layer until that layer is fresh
+//! enough to decode
+//! this module keeps the room-selected gate in `pending_packet_gate` while the
+//! packet loop waits for recent rtp and a keyframe on that rid
+//!
+//! the effective gate is allowed to differ from the selected gate during
+//! bootstrap:
+//! - `Block` means the selected rid has not produced a fresh packet yet
+//! - a fallback `Rid` means another live rid has produced a keyframe and can
+//!   keep the receiver decodable while the selected rid is requested again
+//! - the pending gate becomes effective only when the selected rid produces a
+//!   keyframe
+//!
+//! all state here is worker-local transport state
+//! room policy still owns which rid should be selected, while this file decides
+//! when that selected rid is safe to enforce on the packet path
 
 use std::{
     mem::take,
@@ -23,27 +41,41 @@ use crate::runtime::{
     },
 };
 
+/// summary of route mutations caused by one source/rid readiness observation
+///
+/// this keeps the route scan separate from follow-up work
+/// the scan mutates destination gates and records what kind of side effects the
+/// caller must perform after the mutable route borrow ends
 #[derive(Default)]
 struct RidReadinessRouteUpdate {
+    /// a strict selected rid became stale and was moved back to pending state
     suspended_stale_gate: bool,
+    /// selected-gate transition observed while scanning destinations
     selected_gate: RidReadinessSelectedGateUpdate,
 }
 
 impl RidReadinessRouteUpdate {
+    /// records that at least one destination is waiting on the incoming rid
+    ///
+    /// this must not overwrite a stronger transition because activation and
+    /// fallback require different follow-up work
     fn mark_pending_selected_gate(&mut self) {
         if matches!(self.selected_gate, RidReadinessSelectedGateUpdate::None) {
             self.selected_gate = RidReadinessSelectedGateUpdate::Pending;
         }
     }
 
+    /// records that a pending selected gate became the effective gate
     fn mark_activated_pending_gate(&mut self) {
         self.selected_gate = RidReadinessSelectedGateUpdate::Activated;
     }
 
+    /// records that a fallback rid was opened while the selected rid stays pending
     fn mark_activated_bootstrap_fallback_gate(&mut self) {
         self.selected_gate = RidReadinessSelectedGateUpdate::BootstrapFallback;
     }
 
+    /// reports whether the selected rid became strict for at least one destination
     fn activated_pending_gate(&self) -> bool {
         matches!(
             self.selected_gate,
@@ -51,6 +83,7 @@ impl RidReadinessRouteUpdate {
         )
     }
 
+    /// reports whether a temporary fallback rid became effective
     fn activated_bootstrap_fallback_gate(&self) -> bool {
         matches!(
             self.selected_gate,
@@ -58,10 +91,14 @@ impl RidReadinessRouteUpdate {
         )
     }
 
+    /// reports whether the incoming rid is selected but still waiting for a keyframe
     fn has_pending_selected_gate(&self) -> bool {
         matches!(self.selected_gate, RidReadinessSelectedGateUpdate::Pending)
     }
 
+    /// reports whether route-control aggregation must be refreshed
+    ///
+    /// keyframe requests alone do not count as gate changes
     fn changed_gate(&self) -> bool {
         self.activated_pending_gate()
             || self.activated_bootstrap_fallback_gate()
@@ -69,16 +106,34 @@ impl RidReadinessRouteUpdate {
     }
 }
 
+/// selected-gate transition seen while processing one source/rid observation
+///
+/// the variants are ordered by how much follow-up work they imply
+/// `Pending` can be promoted to either activation variant during the same scan
 #[derive(Default)]
 enum RidReadinessSelectedGateUpdate {
+    /// no selected-rid destination was affected
     #[default]
     None,
+    /// at least one destination wants the incoming rid but still needs a keyframe
     Pending,
+    /// a selected rid produced a keyframe and became effective
     Activated,
+    /// a different rid produced a keyframe and was opened as a temporary fallback
     BootstrapFallback,
 }
 
+/// maximum age for treating a producer rid as live enough for strict gating
+///
+/// browser encoders may stop sending a rid after adaptation
+/// readiness is therefore freshness-based instead of a permanent once-seen bit
 const SELECTED_RID_READY_MAX_AGE: Duration = Duration::from_secs(2);
+
+/// bounded follow-up refresh schedule after a selected rid becomes effective
+///
+/// the first keyframe can still be followed by decoder loss or reordered packet
+/// delivery, so a few delayed requests help receivers settle without keeping an
+/// unbounded retry loop alive
 const SELECTED_RID_KEYFRAME_RETRY_DELAYS: [Duration; 5] = [
     Duration::from_millis(1_100),
     Duration::from_millis(2_500),
@@ -87,13 +142,14 @@ const SELECTED_RID_KEYFRAME_RETRY_DELAYS: [Duration; 5] = [
     Duration::from_secs(13),
 ];
 
-/// Update packet-path readiness for one incoming producer RID.
+/// updates packet-path readiness for one incoming producer rid
 ///
-/// This is the bridge between RTP observation and route control. It may move
-/// pending consumer gates to their selected RID, install a single fallback RID
-/// while the selected layer waits for a keyframe, or suspend a stale strict gate
-/// that no longer has fresh packets. It only mutates transport state and queues
-/// keyframe refreshes. Room policy remains the owner of which RID is selected.
+/// this test helper mirrors the packet-loop sequence by recording liveness
+/// before applying readiness work
+/// production packet-loop batches record liveness per packet and then call
+/// [`apply_source_rid_readiness`] once per unique source/rid
+///
+/// returns `true` when an effective packet gate changed
 #[cfg(test)]
 pub fn observe_source_rid_readiness(
     state: &mut PacketLoopState,
@@ -126,11 +182,19 @@ pub fn observe_source_rid_readiness(
     )
 }
 
-/// Apply source/RID readiness work after packet-level liveness was recorded.
+/// applies source/rid readiness work after packet-level liveness was recorded
 ///
-/// Packet-loop batches can call this once per unique source/RID observed in a
-/// turn. That keeps route scans proportional to unique readiness changes rather
-/// than packet count while preserving per-packet liveness updates.
+/// packet-loop batches can call this once per unique source/rid observed in a
+/// turn
+/// that keeps route scans proportional to unique readiness changes rather than
+/// packet count while preserving per-packet liveness updates
+///
+/// the caller must pass the source session associated with the observed packet
+/// remote-source keyframe requests revalidate that ownership before crossing
+/// back to the producer worker
+///
+/// returns `true` when an effective gate changed and downstream planning should
+/// treat the source as route-control dirty
 pub(in crate::runtime::rtc_engine) fn apply_source_rid_readiness(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
@@ -207,11 +271,12 @@ pub(in crate::runtime::rtc_engine) fn apply_source_rid_readiness(
     route_update.changed_gate()
 }
 
-/// Drain selected-RID keyframe retries whose packet-loop deadlines have passed.
+/// drains selected-rid keyframe retries whose packet-loop deadlines have passed
 ///
-/// Retries live in `PacketLoopState` so they can fire even if the selected
-/// RID does not keep sending packets. Missing source ownership is expected
-/// after teardown and is handled as a dropped best-effort refresh.
+/// retries live in `PacketLoopState` so they can fire even if the selected rid
+/// does not keep sending packets
+/// missing source ownership is expected after teardown and is handled as a
+/// dropped best-effort refresh
 pub fn drain_due_rid_keyframe_refreshes(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
@@ -246,11 +311,16 @@ pub fn drain_due_rid_keyframe_refreshes(
     }
 }
 
-/// Split a selected-RID gate into effective and pending transport state.
+/// splits a selected-rid gate into effective and pending transport state
 ///
-/// The effective gate is what the packet loop enforces now. The pending gate is
-/// the target selected by room policy. Keeping both lets bootstrap forwarding
-/// stay decodable without losing the receiver's intended layer.
+/// the effective gate is what the packet loop enforces now
+/// the pending gate is the target selected by room policy
+/// keeping both lets bootstrap forwarding stay decodable without losing the
+/// receiver's intended layer
+///
+/// non-rid gates pass through unchanged
+/// rid gates become effective immediately only when the producer rid has recent
+/// packet liveness
 pub(super) fn guarded_packet_gate(
     state: &PacketLoopState,
     source_transport_media_id: TransportMediaId,
@@ -277,12 +347,13 @@ pub(super) fn guarded_packet_gate(
     (PacketLayerGate::Block, Some(packet_gate))
 }
 
-/// Update RID-gated routes with one scan over the source destinations.
+/// updates rid-gated routes with one scan over the source destinations
 ///
-/// Packet observation can activate a selected RID, open a temporary bootstrap
-/// fallback or suspend a stale selected RID. Keeping those decisions in one
-/// route pass makes the packet-loop cost proportional to the source fanout once
-/// per observed RID packet instead of once per sub-decision.
+/// packet observation can activate a selected rid, open a temporary bootstrap
+/// fallback or suspend a stale selected rid
+/// keeping those decisions in one route pass makes the packet-loop cost
+/// proportional to the source fanout once per observed rid packet instead of
+/// once per sub-decision
 fn update_rid_readiness_routes(
     state: &mut PacketLoopState,
     source_transport_media_id: TransportMediaId,
@@ -312,6 +383,11 @@ fn update_rid_readiness_routes(
         })
 }
 
+/// applies readiness transitions to every destination of a source route
+///
+/// selected gates are activated only by a keyframe on their selected rid
+/// a keyframe from another rid may become a bootstrap fallback, but only when no
+/// selected gate was activated by this observation
 fn update_selected_rid_destinations(
     route_entry: &mut MediaRouteEntry,
     source_transport_media_id: TransportMediaId,
@@ -365,6 +441,12 @@ fn update_selected_rid_destinations(
     update
 }
 
+/// moves a strict selected-rid gate back to pending when its rid goes stale
+///
+/// a selected rid is considered safe if it is the incoming rid or appears in
+/// the ready-rid scratch set
+/// otherwise the destination is blocked until the selected rid resumes and a
+/// keyframe can activate it again
 fn suspend_stale_destination_gate(
     destination: &mut MediaRouteDestination,
     source_transport_media_id: TransportMediaId,
@@ -398,6 +480,12 @@ fn suspend_stale_destination_gate(
     update.suspended_stale_gate = true;
 }
 
+/// opens the incoming rid as a temporary bootstrap fallback
+///
+/// fallback is used only for destinations that are blocked while waiting for a
+/// different selected rid
+/// this avoids black video during selected-rid bootstrap while preserving the
+/// pending selected gate for the eventual strict switch
 fn activate_bootstrap_fallback_destinations(
     route_entry: &mut MediaRouteEntry,
     source_transport_media_id: TransportMediaId,
@@ -430,12 +518,21 @@ fn activate_bootstrap_fallback_destinations(
     }
 }
 
+/// appends a rid to a small scratch vector when it is not already present
+///
+/// the vector is intentionally used instead of a set because the number of rids
+/// per source is tiny and this runs on the packet-loop path
 fn add_unique_rid(rids: &mut Vec<Rid>, rid: Rid) {
     if !rids.contains(&rid) {
         rids.push(rid);
     }
 }
 
+/// requests a keyframe for a live rid on either a local or remote source
+///
+/// local sources can be refreshed directly through their registered producer
+/// remote sources are refreshed through the relay source control after the
+/// observed ownership is checked against the current registration
 fn request_live_rid_keyframe(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
@@ -513,6 +610,10 @@ fn request_live_rid_keyframe(
     }
 }
 
+/// schedules bounded follow-up keyframe refreshes after selected-rid activation
+///
+/// the retry schedule is tied to the source/rid pair rather than a destination
+/// so multiple consumers selecting the same rid share the same refresh stream
 fn schedule_live_rid_keyframe_retries(
     state: &mut PacketLoopState,
     source_transport_media_id: TransportMediaId,
@@ -530,6 +631,10 @@ fn schedule_live_rid_keyframe_retries(
     );
 }
 
+/// drains due follow-up refreshes for the source/rid currently being observed
+///
+/// this catches retry deadlines naturally when the rid remains active and keeps
+/// the packet-loop timer path as a fallback for quiet rids
 fn drain_live_rid_keyframe_retries(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
@@ -558,6 +663,12 @@ fn drain_live_rid_keyframe_retries(
     }
 }
 
+/// resolves the current owner session used for timer-driven rid refreshes
+///
+/// a source may be local to this worker or represented as a remote consumer
+/// registration
+/// the returned session key is only a best-effort snapshot and request-time
+/// ownership checks still apply before a remote keyframe request is sent
 fn keyframe_refresh_source_session(
     state: &PacketLoopState,
     source_transport_media_id: TransportMediaId,

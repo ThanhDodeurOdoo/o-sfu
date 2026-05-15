@@ -1,9 +1,21 @@
-//! Worker-local route-control state.
+//! worker-local route-control state for source packet forwarding
 //!
-//! `RouteControlState` composes source-local packet gates, relay-target gates,
-//! active-speaker packet policy, and keyframe coalescing. It remains
-//! transport-facing: callers provide transport media ids and packet metadata,
-//! and room policy stays outside this module.
+//! route control sits between worker-owned media routes and packet planning
+//! callers address it with transport media ids plus packet metadata
+//! room policy reaches this layer only after it has been projected into
+//! [`PacketLayerGate`] values
+//!
+//! each source entry is sparse and exists only while some transport-side
+//! control state is installed
+//! keyframe request windows, packet-level audio policy, local route gates and
+//! relay-target gates are kept together because the packet loop needs one
+//! source-wide answer before it fans out to destinations
+//!
+//! packet gating is composed in two stages
+//! local and relay gates are unioned first so a source packet survives when any
+//! downstream route can still use it
+//! active-speaker audio policy is intersected afterward because a silent source
+//! policy must be able to block every downstream route
 
 use std::{cmp::Reverse, collections::BTreeMap, time::Instant};
 
@@ -23,12 +35,25 @@ use crate::runtime::{
     rtc_engine::relay_registry::RelayTargetId,
 };
 
+/// worker-local route-control state keyed by source transport media id
+///
+/// this state is not room authority
+/// it stores packet-path facts that let the worker make cheap forwarding and
+/// feedback decisions while room state remains the owner of source policy,
+/// receiver selection and route lifecycle
 #[derive(Debug, Default)]
 pub(in crate::runtime::rtc_engine) struct RouteControlState {
+    /// sparse per-source control entries
+    ///
+    /// entries may be created by packet gates, audio observations or keyframe
+    /// request coalescing
+    /// source teardown must call [`Self::forget_source`] because keyframe
+    /// windows are retained until the source disappears
     sources: BTreeMap<TransportMediaId, SourceRouteControl>,
 }
 
 impl RouteControlState {
+    /// test helper for source-wide keyframe request coalescing
     #[cfg(test)]
     pub(in crate::runtime::rtc_engine) fn decide_keyframe_request(
         &mut self,
@@ -38,6 +63,11 @@ impl RouteControlState {
         self.decide_keyframe_request_for_rid(source_transport_media_id, None, now)
     }
 
+    /// decides whether a keyframe request for a source/rid should be forwarded
+    ///
+    /// the first request in a coalescing window forwards and records the window
+    /// later requests for the same rid are absorbed until the window reopens
+    /// `None` is used for source-wide refreshes that are not bound to a rid
     pub(in crate::runtime::rtc_engine) fn decide_keyframe_request_for_rid(
         &mut self,
         source_transport_media_id: TransportMediaId,
@@ -48,6 +78,11 @@ impl RouteControlState {
         source_control.decide_keyframe_request(rid, now)
     }
 
+    /// decides whether the packet may enter destination planning for a source
+    ///
+    /// missing source state means no route-control restriction is installed
+    /// the packet is then forwarded to downstream planning where relay and local
+    /// destination gates still get their own checks
     pub(in crate::runtime::rtc_engine) fn decide_packet_route(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -65,6 +100,13 @@ impl RouteControlState {
         }
     }
 
+    /// installs or clears the source-wide gate derived from local destinations
+    ///
+    /// `None` means no local route gate is installed
+    /// it is different from [`PacketLayerGate::Block`], which is an explicit
+    /// source-level deny
+    /// callers refresh this value after local route destinations are added,
+    /// removed or retargeted
     pub(in crate::runtime::rtc_engine) fn set_local_packet_gate(
         &mut self,
         source_transport_media_id: TransportMediaId,
@@ -103,6 +145,12 @@ impl RouteControlState {
         );
     }
 
+    /// observes packet-level audio activity for active-speaker policy
+    ///
+    /// the return value tells the packet loop whether room-facing active-speaker
+    /// state may have changed and needs a policy refresh
+    /// unknown sources without audio metadata are ignored so empty control
+    /// entries are not created for ordinary packets
     pub(in crate::runtime::rtc_engine) fn observe_audio_activity(
         &mut self,
         source_transport_media_id: TransportMediaId,
@@ -137,6 +185,12 @@ impl RouteControlState {
         true
     }
 
+    /// installs the packet gate requested by one relay target
+    ///
+    /// relay gates contribute to the source-wide union so the source worker
+    /// keeps packets that at least one remote target still needs
+    /// the forwarding planner also checks the same target gate later before
+    /// enqueueing that relay destination
     pub(in crate::runtime::rtc_engine) fn set_relay_packet_gate(
         &mut self,
         source_transport_media_id: TransportMediaId,
@@ -150,6 +204,10 @@ impl RouteControlState {
             .insert(target_id, packet_gate);
     }
 
+    /// returns the relay-specific packet gate for destination planning
+    ///
+    /// `None` means the relay target has no extra layer restriction beyond the
+    /// source-wide gate
     pub(in crate::runtime::rtc_engine) fn relay_packet_gate(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -160,6 +218,10 @@ impl RouteControlState {
             .and_then(|source_control| source_control.relay_packet_gates.get(&target_id))
     }
 
+    /// removes the packet gate owned by one relay target
+    ///
+    /// relay cleanup uses this when a target is released while the source itself
+    /// may still have local routes, audio policy or keyframe windows
     pub(in crate::runtime::rtc_engine) fn forget_relay_packet_gate(
         &mut self,
         source_transport_media_id: TransportMediaId,
@@ -174,6 +236,11 @@ impl RouteControlState {
         }
     }
 
+    /// drops all route-control state for a source
+    ///
+    /// source teardown must use this instead of clearing individual gates so
+    /// keyframe windows and audio policy do not outlive the media handle they
+    /// describe
     pub(in crate::runtime::rtc_engine) fn forget_source(
         &mut self,
         source_transport_media_id: TransportMediaId,
@@ -181,6 +248,10 @@ impl RouteControlState {
         self.sources.remove(&source_transport_media_id);
     }
 
+    /// retains only sources accepted by the caller's registry snapshot
+    ///
+    /// this is used by media-registry reconciliation to discard control state
+    /// for sources that no longer have live media ownership
     pub(in crate::runtime::rtc_engine) fn retain_sources<F>(&mut self, mut keep: F)
     where
         F: FnMut(&TransportMediaId) -> bool,
@@ -189,6 +260,11 @@ impl RouteControlState {
             .retain(|source_transport_media_id, _source_control| keep(source_transport_media_id));
     }
 
+    /// returns active-speaker sources currently inside their hold window
+    ///
+    /// results are ordered by most recent speech observation first
+    /// transport media id is used as a deterministic tie-breaker so room policy
+    /// sees stable ordering when packets share the same timestamp
     pub(in crate::runtime::rtc_engine) fn active_speaker_sources(
         &self,
         now: Instant,
@@ -209,6 +285,10 @@ impl RouteControlState {
         sources
     }
 
+    /// returns audio-policy diagnostics for sources with observed audio policy
+    ///
+    /// diagnostics include blocked and recently expired states because those are
+    /// useful for debugging why audio did not affect active-speaker policy
     pub(in crate::runtime::rtc_engine) fn active_speaker_diagnostics(
         &self,
         now: Instant,
@@ -221,6 +301,10 @@ impl RouteControlState {
             .collect()
     }
 
+    /// returns the next deadline where an active-speaker source may expire
+    ///
+    /// the runtime uses this as a timer hint
+    /// returning `None` means there is no active audio hold window to wake for
     pub(in crate::runtime::rtc_engine) fn next_active_speaker_deadline(
         &self,
         now: Instant,
@@ -236,6 +320,11 @@ impl RouteControlState {
             .min()
     }
 
+    /// returns sources whose active-speaker hold window has expired
+    ///
+    /// callers use these ids to trigger room policy refresh after timer wakeup
+    /// the audio diagnostic state is kept so later diagnostics can still explain
+    /// why the source became inactive
     pub(in crate::runtime::rtc_engine) fn expired_active_speaker_source_ids(
         &self,
         now: Instant,
@@ -252,6 +341,7 @@ impl RouteControlState {
             .collect()
     }
 
+    /// test helper that installs a local packet gate directly
     #[cfg(test)]
     pub(in crate::runtime::rtc_engine) fn set_packet_gate(
         &mut self,
@@ -261,6 +351,10 @@ impl RouteControlState {
         self.set_local_packet_gate(source_transport_media_id, Some(packet_gate));
     }
 
+    /// returns the composed source-wide packet gate for tests and diagnostics
+    ///
+    /// `None` means no gate is installed
+    /// [`PacketLayerGate::Open`] means an explicit allow-all gate exists
     #[cfg(any(test, feature = "testing-transport"))]
     pub(in crate::runtime::rtc_engine) fn effective_packet_gate(
         &self,
@@ -271,6 +365,7 @@ impl RouteControlState {
             .and_then(SourceRouteControl::effective_packet_gate)
     }
 
+    /// computes the gate shown in route-control update logs
     fn effective_packet_gate_for_log(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -281,21 +376,42 @@ impl RouteControlState {
     }
 }
 
+/// all route-control state known for one source media id
+///
+/// the source entry composes independent concerns that have to agree before a
+/// packet reaches fanout:
+///
+/// * keyframe requests are coalesced per rid
+/// * local and relay gates preserve downstream selected-layer needs
+/// * audio policy can block the source when packet metadata says it is inactive
 #[derive(Debug, Default)]
 struct SourceRouteControl {
+    /// keyframe coalescing windows keyed by optional rid
+    ///
+    /// these windows stay with the source until source cleanup so repeated
+    /// refresh requests remain bounded across route changes
     keyframe_requests: Vec<KeyframeRequestState>,
+    /// packet-derived audio policy for active-speaker state and audio gating
     source_audio_policy: Option<SourceAudioPolicyState>,
+    /// source gate aggregated from local consumer destinations
     local_packet_gate: Option<PacketLayerGate>,
+    /// target-specific gates installed for active relay targets
     relay_packet_gates: BTreeMap<RelayTargetId, PacketLayerGate>,
 }
 
+/// coalescing window for keyframe requests that share one source/rid scope
 #[derive(Debug, Clone, Copy)]
 struct KeyframeRequestState {
+    /// selected rid for rid-specific refreshes
+    ///
+    /// `None` represents a source-wide refresh
     rid: Option<Rid>,
+    /// time window during which repeated requests are absorbed
     window: KeyframeRequestWindow,
 }
 
 impl SourceRouteControl {
+    /// decides whether a keyframe request escapes the coalescing window
     fn decide_keyframe_request(
         &mut self,
         rid: Option<Rid>,
@@ -319,6 +435,7 @@ impl SourceRouteControl {
         KeyframeRequestDecision::Forward
     }
 
+    /// projects audio policy into the active-speaker source list
     fn active_speaker_source(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -330,6 +447,7 @@ impl SourceRouteControl {
             .map(|observed_at| ActiveSpeakerSource::new(source_transport_media_id, observed_at))
     }
 
+    /// builds diagnostics for the source audio policy when one exists
     fn active_speaker_diagnostic(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -342,6 +460,10 @@ impl SourceRouteControl {
             })
     }
 
+    /// updates packet-level audio policy and reports whether it changed
+    ///
+    /// policy is created lazily only after a packet exposes voice-activity or
+    /// audio-level metadata
     fn observe_audio_activity(
         &mut self,
         voice_activity: Option<bool>,
@@ -360,6 +482,12 @@ impl SourceRouteControl {
         self.source_audio_policy != previous
     }
 
+    /// computes the source-wide packet gate used by early packet filtering
+    ///
+    /// local and relay gates are unioned because source filtering must preserve
+    /// every downstream route that may need the packet
+    /// the packet-level audio policy is then intersected so inactive audio can
+    /// block all downstream fanout
     fn effective_packet_gate(&self) -> Option<PacketLayerGate> {
         intersect_packet_gates(
             aggregate_packet_gates(
@@ -373,6 +501,10 @@ impl SourceRouteControl {
         )
     }
 
+    /// reports whether the source entry can be pruned from route-control state
+    ///
+    /// keyframe request windows make the entry non-empty until explicit source
+    /// cleanup because they preserve coalescing state across route changes
     fn is_empty(&self) -> bool {
         self.keyframe_requests.is_empty()
             && self.source_audio_policy.is_none()
