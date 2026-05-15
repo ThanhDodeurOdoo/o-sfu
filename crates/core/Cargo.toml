@@ -12,7 +12,7 @@ fuzzing = []
 testing-transport = []
 
 [dependencies]
-bitflags.workspace = true
+bitflags = "2.6"
 futures-util.workspace = true
 o-sfu-rfc.workspace = true
 o-sfu-model.workspace = true
@@ -26,7 +26,7 @@ time.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
-uuid.workspace = true
+uuid = { version = "1.18", features = ["v4"] }
 
 [lints]
 workspace = true

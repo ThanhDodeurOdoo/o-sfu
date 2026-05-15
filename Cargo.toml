@@ -22,11 +22,8 @@ version = "0.3.0" # SFU basic feature is ready and can be used as a substitute f
 
 [workspace.dependencies]
 anyhow = "1.0"
-axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
-bitflags = "2.6"
 futures-util = "0.3"
-hmac = "0.13"
 o-sfu-protocol = { path = "crates/protocol" }
 o-sfu-cluster = { path = "crates/cluster" }
 o-sfu-core = { path = "crates/core" }
@@ -36,7 +33,6 @@ o-sfu-router = { path = "crates/router" }
 o-sfu-telemetry = { path = "crates/telemetry", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sha2 = "0.11.0"
 str0m = { version = "0.19", default-features = false, features = ["aws-lc-rs"] }
 time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1.52", features = [
@@ -50,7 +46,6 @@ tokio-tungstenite = "0.29"
 tokio-util = "0.7"
 tracing = "0.1"
 thiserror = "2.0"
-uuid = { version = "1.18", features = ["v4"] }
 
 [workspace.lints.rust]
 rust_2018_idioms = { level = "warn", priority = -1 }
@@ -130,11 +125,10 @@ testing-transport = ["o-sfu-core/testing-transport"]
 
 [dependencies]
 anyhow.workspace = true
-axum.workspace = true
+axum = { version = "0.8", features = ["ws"] }
 base64.workspace = true
-bitflags.workspace = true
 futures-util.workspace = true
-hmac.workspace = true
+hmac = "0.13"
 o-sfu-cluster.workspace = true
 o-sfu-protocol.workspace = true
 o-sfu-core.workspace = true
@@ -143,15 +137,11 @@ o-sfu-router.workspace = true
 o-sfu-telemetry = { workspace = true, features = ["macros"] }
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
-str0m.workspace = true
-time.workspace = true
+sha2 = "0.11.0"
 tokio.workspace = true
-tokio-tungstenite.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
-uuid.workspace = true
 
 [lints]
 workspace = true
@@ -160,4 +150,6 @@ workspace = true
 o-sfu-core = { workspace = true, features = ["testing-transport"] }
 o-sfu-telemetry = { workspace = true, features = ["test-support"] }
 o-sfu-router = { workspace = true, features = ["test-support"] }
+str0m.workspace = true
+tokio-tungstenite.workspace = true
 tower = { version = "0.5", features = ["util"] }
