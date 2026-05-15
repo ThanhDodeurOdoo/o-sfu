@@ -1,28 +1,26 @@
-//! Application-owned user session orchestration.
+//! this module owns the cold-path compatibility flow for one authenticated
+//! websocket connection. it accepts Odoo protocol intent, translates stream
+//! labels through [`crate::application::stream_catalog`] and calls the media
+//! facade with generic source intents
 //!
-//! This module contain the compatibility flow for one authenticated websocket
-//! connection. It accepts Odoo protocol messages, translates stream labels
-//! through [`crate::application::stream_catalog`] and calls the core media
-//! facade with generic source intents.
-//!
-//! Business-layer changes to publication shape should enter core as
+//! business-layer changes to publication shape should enter core as
 //! [`crate::core::SourcePublishIntent`] and
-//! [`crate::core::SourceSubscriptionIntent`] values. This file sequences those
-//! intents around negotiation, request tracking and user-info fanout, but it
-//! should not duplicate the stream policy matrix from `stream_catalog`.
+//! [`crate::core::SourceSubscriptionIntent`] values. `User` sequences those
+//! intents around negotiation, request tracking and user-info fanout, while the
+//! pure connection-local state lives under `state/` and ordered websocket
+//! output lives in `output`
 //!
-//! `User` is the post-auth websocket session facade. It keeps the
+//! `User` is the post-auth websocket session facade. it keeps the
 //! connection-scoped signaling state needed to answer one browser, including
 //! pending request ids, staged renegotiation decisions and compatibility track
-//! snapshots.
+//! snapshots
 
 use std::{collections::BTreeMap, sync::Arc};
 
 use o_sfu_protocol::{
     shared::{DownloadStates, JsonPayload, StreamType, UserId, UserInfo},
     signaling::{
-        RequestId, ServerMessage, ServerRequest, ServerResponse, SessionDescriptionPayload,
-        WelcomePayload,
+        RequestId, ServerMessage, ServerRequest, SessionDescriptionPayload, WelcomePayload,
     },
 };
 use tracing::{debug, error, info, instrument, warn};
@@ -44,124 +42,16 @@ use crate::{
     },
 };
 
+mod output;
 mod projection;
 mod state;
 
+pub use output::{UserOutput, UserSignal};
 use projection::session_description_payload;
 use state::{
     PendingUserAction, PendingUserRequest, RenegotiationDisposition, ResolvedUserNegotiation,
     UserState,
 };
-
-/// Ordered signaling produced by one user-session transition.
-///
-/// The websocket IO layer consumes this value after the application layer has
-/// finished a client or room event. Plain messages can be batched together, but
-/// requests and responses are kept as explicit signal variants so the sender
-/// can flush request metadata in its own envelope.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct UserOutput {
-    signals: Vec<UserSignal>,
-}
-
-impl UserOutput {
-    /// Build an empty output for an accepted transition with no client-visible
-    /// websocket work.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            signals: Vec::new(),
-        }
-    }
-
-    /// Append one signal while preserving the application ordering decision.
-    #[must_use]
-    pub fn with_signal(mut self, signal: UserSignal) -> Self {
-        self.signals.push(signal);
-        self
-    }
-
-    /// Merge another transition output after this one.
-    ///
-    /// This is used when a single high-level action first emits compatibility
-    /// messages, then discovers that negotiation work must follow.
-    pub fn extend(&mut self, other: Self) {
-        self.signals.extend(other.signals);
-    }
-
-    /// Consume the ordered signals for websocket serialization.
-    #[must_use]
-    pub fn into_signals(self) -> Vec<UserSignal> {
-        self.signals
-    }
-
-    /// Create an output from a sequence of compatibility messages.
-    pub fn from_messages(messages: impl IntoIterator<Item = ServerMessage>) -> Self {
-        messages.into_iter().map(UserSignal::from).collect()
-    }
-}
-
-impl FromIterator<UserSignal> for UserOutput {
-    fn from_iter<T: IntoIterator<Item = UserSignal>>(iter: T) -> Self {
-        Self {
-            signals: iter.into_iter().collect(),
-        }
-    }
-}
-
-/// One envelope-level signal that the websocket edge can serialize.
-///
-/// The application layer keeps notification messages separate from
-/// request/response envelopes. That lets the IO layer batch adjacent messages
-/// while still sending server-authored requests and client-request responses as
-/// distinct envelopes with their routing metadata intact.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UserSignal {
-    /// Fire-and-forget server message.
-    ///
-    /// Adjacent message signals may share one websocket batch.
-    Message(ServerMessage),
-    /// Server-authored request that expects a later client response.
-    Request {
-        /// Server-local request id used to correlate the client answer.
-        request_id: RequestId,
-        /// Typed request payload sent to the browser.
-        request: ServerRequest,
-    },
-    /// Response to a request previously authored by the client.
-    Response {
-        /// Client request id that this response resolves.
-        response_to: RequestId,
-        /// Typed response payload sent back to the browser.
-        response: ServerResponse,
-    },
-}
-
-impl UserSignal {
-    /// Create a server-authored request signal.
-    #[must_use]
-    pub const fn request(request_id: RequestId, request: ServerRequest) -> Self {
-        Self::Request {
-            request_id,
-            request,
-        }
-    }
-
-    /// Create a response signal for a client-authored request.
-    #[must_use]
-    pub const fn response(response_to: RequestId, response: ServerResponse) -> Self {
-        Self::Response {
-            response_to,
-            response,
-        }
-    }
-}
-
-impl From<ServerMessage> for UserSignal {
-    fn from(message: ServerMessage) -> Self {
-        Self::Message(message)
-    }
-}
 
 /// User-loop exit reason derived from media endpoint health.
 ///
