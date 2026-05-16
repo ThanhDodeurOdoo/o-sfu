@@ -3,14 +3,10 @@ use super::support::*;
 #[tokio::test]
 async fn protocol_core_subscribe_updates_consumer_activity() {
     let adapter = Arc::new(FakeMediaTransport::default());
-    let server = spawn_test_server_with_timeouts(
-        1_000,
-        10_000,
-        60_000,
-        100,
-        MediaTransport::from_fake_transport(Arc::clone(&adapter)),
-    )
-    .await;
+    let server = TestServerBuilder::new()
+        .media_transport(MediaTransport::from_fake_transport(Arc::clone(&adapter)))
+        .spawn()
+        .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -355,17 +351,14 @@ async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery()
 
 #[tokio::test]
 async fn protocol_core_recording_requests_resolve_as_unsupported_without_backend() {
-    let server = spawn_test_server_with_feature_flags(
-        1_000,
-        100,
-        MediaTransport::fake_for_testing(),
-        RuntimeFeatureFlags {
+    let server = TestServerBuilder::new()
+        .feature_flags(RuntimeFeatureFlags {
             transcription: true,
             audio_recording: true,
             video_recording: true,
-        },
-    )
-    .await;
+        })
+        .spawn()
+        .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;

@@ -2,7 +2,7 @@ use super::support::*;
 
 #[tokio::test]
 async fn protocol_core_replays_real_server_welcome_peer_snapshot() {
-    let server = spawn_test_server(1_000, 100).await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -87,7 +87,7 @@ async fn protocol_core_replays_real_server_welcome_peer_snapshot() {
 
 #[tokio::test]
 async fn protocol_core_maps_real_server_auth_failure_to_closed_state() {
-    let server = spawn_test_server(1_000, 100).await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -136,7 +136,7 @@ async fn protocol_core_maps_real_server_auth_failure_to_closed_state() {
 
 #[tokio::test]
 async fn protocol_core_answers_real_server_offer_when_enabled() {
-    let server = spawn_protocol_test_server(1_000, 100).await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -176,7 +176,7 @@ async fn protocol_core_answers_real_server_offer_when_enabled() {
 
 #[tokio::test]
 async fn protocol_core_receives_protocol_broadcast_and_peer_updates() {
-    let server = spawn_protocol_test_server(1_000, 100).await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -280,7 +280,7 @@ async fn protocol_core_receives_protocol_broadcast_and_peer_updates() {
 
 #[tokio::test]
 async fn protocol_user_emits_peerjoined_message_for_existing_peers() {
-    let server = spawn_protocol_test_server(1_000, 100).await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -349,7 +349,7 @@ async fn protocol_user_emits_peerjoined_message_for_existing_peers() {
 
 #[tokio::test]
 async fn protocol_user_replacement_emits_peerleft_then_peerjoined_for_existing_peers() {
-    let server = spawn_protocol_test_server(1_000, 100).await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;

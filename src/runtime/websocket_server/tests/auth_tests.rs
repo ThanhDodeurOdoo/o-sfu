@@ -5,7 +5,10 @@ use crate::runtime::auth::MAX_JWT_TOKEN_BYTES;
 
 #[tokio::test]
 async fn websocket_rejects_pre_auth_connections_over_configured_capacity() {
-    let server = spawn_test_server_with_pre_auth_capacity(1_000, 100, 1, 1).await;
+    let server = TestServerBuilder::new()
+        .pre_auth_capacity(1, 1)
+        .spawn()
+        .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -36,7 +39,10 @@ async fn websocket_rejects_pre_auth_connections_over_configured_capacity() {
 
 #[tokio::test]
 async fn websocket_rejects_pre_auth_connections_over_origin_capacity() {
-    let server = spawn_test_server_with_pre_auth_capacity(1_000, 100, 2, 1).await;
+    let server = TestServerBuilder::new()
+        .pre_auth_capacity(2, 1)
+        .spawn()
+        .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -67,7 +73,11 @@ async fn websocket_rejects_pre_auth_connections_over_origin_capacity() {
 
 #[tokio::test]
 async fn websocket_pre_auth_origin_cap_allows_distinct_trusted_origins() {
-    let server = spawn_proxy_trusted_test_server_with_pre_auth_capacity(1_000, 100, 2, 1).await;
+    let server = TestServerBuilder::new()
+        .pre_auth_capacity(2, 1)
+        .trust_proxy_headers(true)
+        .spawn()
+        .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -92,7 +102,10 @@ async fn websocket_pre_auth_origin_cap_allows_distinct_trusted_origins() {
 
 #[tokio::test]
 async fn websocket_times_out_when_client_never_authenticates() {
-    let server = spawn_test_server(25, 100).await;
+    let server = TestServerBuilder::new()
+        .authentication_timeout_ms(25)
+        .spawn()
+        .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -118,7 +131,11 @@ async fn websocket_times_out_when_client_never_authenticates() {
 
 #[tokio::test]
 async fn websocket_pre_auth_permit_is_released_after_auth_timeout() {
-    let server = spawn_test_server_with_pre_auth_capacity(25, 100, 1, 1).await;
+    let server = TestServerBuilder::new()
+        .authentication_timeout_ms(25)
+        .pre_auth_capacity(1, 1)
+        .spawn()
+        .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -144,7 +161,10 @@ async fn websocket_pre_auth_permit_is_released_after_auth_timeout() {
 
 #[tokio::test]
 async fn websocket_pre_auth_permit_is_released_after_auth_failure() {
-    let server = spawn_test_server_with_pre_auth_capacity(1_000, 100, 1, 1).await;
+    let server = TestServerBuilder::new()
+        .pre_auth_capacity(1, 1)
+        .spawn()
+        .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -178,7 +198,10 @@ async fn websocket_pre_auth_permit_is_released_after_auth_failure() {
 
 #[tokio::test]
 async fn websocket_pre_auth_permit_is_released_after_early_client_close() {
-    let server = spawn_test_server_with_pre_auth_capacity(1_000, 100, 1, 1).await;
+    let server = TestServerBuilder::new()
+        .pre_auth_capacity(1, 1)
+        .spawn()
+        .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -201,7 +224,7 @@ async fn websocket_pre_auth_permit_is_released_after_early_client_close() {
 
 #[tokio::test]
 async fn websocket_authenticates_with_room_key_and_sends_welcome_payload() {
-    let server = spawn_test_server(1_000, 100).await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -260,7 +283,10 @@ async fn websocket_authenticates_with_room_key_and_sends_welcome_payload() {
 
 #[tokio::test]
 async fn websocket_pre_auth_permit_is_released_after_auth_success() {
-    let server = spawn_test_server_with_pre_auth_capacity(1_000, 100, 1, 1).await;
+    let server = TestServerBuilder::new()
+        .pre_auth_capacity(1, 1)
+        .spawn()
+        .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -287,7 +313,7 @@ async fn websocket_pre_auth_permit_is_released_after_auth_success() {
 
 #[tokio::test]
 async fn websocket_authenticates_legacy_room_scoped_token_with_explicit_room_id() {
-    let server = spawn_test_server(1_000, 100).await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -317,7 +343,7 @@ async fn websocket_authenticates_legacy_room_scoped_token_with_explicit_room_id(
 
 #[tokio::test]
 async fn websocket_rejects_explicit_room_id_that_disagrees_with_claims() {
-    let server = spawn_test_server(1_000, 100).await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -343,7 +369,7 @@ async fn websocket_rejects_explicit_room_id_that_disagrees_with_claims() {
 
 #[tokio::test]
 async fn websocket_rejects_oversized_auth_token_with_auth_failure() {
-    let server = spawn_test_server(1_000, 100).await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -363,7 +389,7 @@ async fn websocket_rejects_oversized_auth_token_with_auth_failure() {
 
 #[tokio::test]
 async fn websocket_accepts_global_key_without_explicit_room_id() {
-    let server = spawn_test_server(1_000, 100).await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -385,7 +411,7 @@ async fn websocket_accepts_global_key_without_explicit_room_id() {
 
 #[tokio::test]
 async fn websocket_rejects_non_auth_handshake_frame_with_protocol_metric() {
-    let server = spawn_test_server(1_000, 100).await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
