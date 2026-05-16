@@ -152,12 +152,8 @@ impl RtcWorkerManager {
         consumer_session_key: &TransportSessionKey,
         source_session_key: &TransportSessionKey,
     ) -> Result<RelayRegistrationWorkers, TransportAdapterError> {
-        let consumer_worker = self
-            .worker_for_user(consumer_session_key)
-            .ok_or(TransportAdapterError::TransportUnavailable)?;
-        let source_worker = self
-            .worker_for_user(source_session_key)
-            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        let consumer_worker = self.require_worker_for_user(consumer_session_key)?;
+        let source_worker = self.require_worker_for_user(source_session_key)?;
         if Arc::ptr_eq(&consumer_worker, &source_worker) {
             return Ok(None);
         }
@@ -173,17 +169,8 @@ impl RtcWorkerManager {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
-        let mut keys_by_worker = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
-        for session_key in session_keys {
-            if let Some(worker_index) = self.worker_index_for_user(session_key) {
-                keys_by_worker
-                    .entry(worker_index)
-                    .or_default()
-                    .push(session_key.clone());
-            }
-        }
         let mut snapshot = TransportBitrateSnapshot::default();
-        for (worker_index, worker_session_keys) in keys_by_worker {
+        for (worker_index, worker_session_keys) in self.session_keys_by_worker(session_keys) {
             if let Some(worker) = self.worker_for_index(worker_index) {
                 let worker_snapshot = worker.transport_bitrate_snapshot(&worker_session_keys);
                 snapshot.total = snapshot.total.saturating_add(worker_snapshot.total);
@@ -201,17 +188,8 @@ impl RtcWorkerManager {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
-        let mut keys_by_worker = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
-        for session_key in session_keys {
-            if let Some(worker_index) = self.worker_index_for_user(session_key) {
-                keys_by_worker
-                    .entry(worker_index)
-                    .or_default()
-                    .push(session_key.clone());
-            }
-        }
         let mut snapshot = ReceiverBandwidthSnapshot::default();
-        for (worker_index, worker_session_keys) in keys_by_worker {
+        for (worker_index, worker_session_keys) in self.session_keys_by_worker(session_keys) {
             if let Some(worker) = self.worker_for_index(worker_index) {
                 let worker_snapshot = worker.receiver_bandwidth_snapshot(&worker_session_keys);
                 snapshot.per_session.extend(worker_snapshot.per_session);
@@ -229,17 +207,8 @@ impl RtcWorkerManager {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportPlacementPressureSnapshot {
-        let mut keys_by_worker = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
-        for session_key in session_keys {
-            if let Some(worker_index) = self.worker_index_for_user(session_key) {
-                keys_by_worker
-                    .entry(worker_index)
-                    .or_default()
-                    .push(session_key.clone());
-            }
-        }
         let mut snapshot = TransportPlacementPressureSnapshot::default();
-        for (worker_index, worker_session_keys) in keys_by_worker {
+        for (worker_index, worker_session_keys) in self.session_keys_by_worker(session_keys) {
             if let Some(worker) = self.worker_for_index(worker_index) {
                 snapshot =
                     snapshot.merged_with(worker.placement_pressure_snapshot(&worker_session_keys));
@@ -394,8 +363,7 @@ impl RtcWorkerManager {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        self.worker_for_user(session_key)
-            .ok_or(TransportAdapterError::TransportUnavailable)?
+        self.require_worker_for_user(session_key)?
             .negotiation()
             .create_initial_session_offer(session_key)
             .await
@@ -409,8 +377,7 @@ impl RtcWorkerManager {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        self.worker_for_user(session_key)
-            .ok_or(TransportAdapterError::TransportUnavailable)?
+        self.require_worker_for_user(session_key)?
             .negotiation()
             .create_session_renegotiation_offer(session_key)
             .await
@@ -425,8 +392,7 @@ impl RtcWorkerManager {
         session_key: &TransportSessionKey,
         answer_sdp: &str,
     ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-        self.worker_for_user(session_key)
-            .ok_or(TransportAdapterError::TransportUnavailable)?
+        self.require_worker_for_user(session_key)?
             .negotiation()
             .apply_session_answer(session_key, answer_sdp)
             .await
@@ -453,8 +419,7 @@ impl RtcWorkerManager {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
-        self.worker_for_user(session_key)
-            .ok_or(TransportAdapterError::TransportUnavailable)?
+        self.require_worker_for_user(session_key)?
             .users()
             .close_session_with_outcome(session_key)
             .await
@@ -467,8 +432,7 @@ impl RtcWorkerManager {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        self.worker_for_user(session_key)
-            .ok_or(TransportAdapterError::TransportUnavailable)?
+        self.require_worker_for_user(session_key)?
             .media()
             .remove_media(session_key, transport_media_id)
             .await
@@ -484,8 +448,7 @@ impl RtcWorkerManager {
         media_kind: MediaKind,
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        self.worker_for_user(session_key)
-            .ok_or(TransportAdapterError::TransportUnavailable)?
+        self.require_worker_for_user(session_key)?
             .media()
             .add_recv_media(
                 session_key,
@@ -531,9 +494,7 @@ impl RtcWorkerManager {
                     .remote_source_control(consumer_worker.as_ref())
             })
             .transpose()?;
-        let consumer_worker = self
-            .worker_for_user(consumer_session_key)
-            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        let consumer_worker = self.require_worker_for_user(consumer_session_key)?;
         consumer_worker
             .media()
             .add_send_media(
@@ -552,12 +513,9 @@ impl RtcWorkerManager {
         &self,
         effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
-        let source_worker = self
-            .worker_for_user(&effect.source_session_key)
-            .ok_or(TransportAdapterError::TransportUnavailable)?;
-        let target_worker = self
-            .worker_for_media_worker_id(effect.target_media_worker_id)
-            .ok_or(TransportAdapterError::TransportUnavailable)?;
+        let source_worker = self.require_worker_for_user(&effect.source_session_key)?;
+        let target_worker =
+            self.require_worker_for_media_worker_id(effect.target_media_worker_id)?;
         if Arc::ptr_eq(&source_worker, &target_worker) {
             return Ok(());
         }
@@ -602,8 +560,7 @@ impl RtcWorkerManager {
         transport_media_id: TransportMediaId,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        self.worker_for_user(session_key)
-            .ok_or(TransportAdapterError::TransportUnavailable)?
+        self.require_worker_for_user(session_key)?
             .media()
             .set_producer_active(session_key, transport_media_id, active)
             .await
@@ -622,8 +579,7 @@ impl RtcWorkerManager {
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         ensure_same_room_instance(consumer_session_key, source_session_key)?;
-        self.worker_for_user(consumer_session_key)
-            .ok_or(TransportAdapterError::TransportUnavailable)?
+        self.require_worker_for_user(consumer_session_key)?
             .media()
             .set_consumer_active(
                 consumer_session_key,
@@ -649,8 +605,7 @@ impl RtcWorkerManager {
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
         ensure_same_room_instance(consumer_session_key, source_session_key)?;
-        self.worker_for_user(consumer_session_key)
-            .ok_or(TransportAdapterError::TransportUnavailable)?
+        self.require_worker_for_user(consumer_session_key)?
             .media()
             .set_consumer_packet_gate(
                 consumer_session_key,
@@ -674,8 +629,7 @@ impl RtcWorkerManager {
         source_transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
         ensure_same_room_instance(consumer_session_key, source_session_key)?;
-        self.worker_for_user(consumer_session_key)
-            .ok_or(TransportAdapterError::TransportUnavailable)?
+        self.require_worker_for_user(consumer_session_key)?
             .media()
             .request_consumer_keyframe(
                 consumer_session_key,
@@ -721,6 +675,38 @@ impl RtcWorkerManager {
 
     fn worker_index_for_user(&self, session_key: &TransportSessionKey) -> Option<usize> {
         self.worker_index_for_media_worker_id(session_key.media_worker_id())
+    }
+
+    fn require_worker_for_user(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Result<Arc<RtcTransportWorker>, TransportAdapterError> {
+        self.worker_for_user(session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)
+    }
+
+    fn require_worker_for_media_worker_id(
+        &self,
+        media_worker_id: usize,
+    ) -> Result<Arc<RtcTransportWorker>, TransportAdapterError> {
+        self.worker_for_media_worker_id(media_worker_id)
+            .ok_or(TransportAdapterError::TransportUnavailable)
+    }
+
+    fn session_keys_by_worker(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> BTreeMap<usize, Vec<TransportSessionKey>> {
+        let mut keys_by_worker = BTreeMap::<usize, Vec<TransportSessionKey>>::new();
+        for session_key in session_keys {
+            if let Some(worker_index) = self.worker_index_for_user(session_key) {
+                keys_by_worker
+                    .entry(worker_index)
+                    .or_default()
+                    .push(session_key.clone());
+            }
+        }
+        keys_by_worker
     }
 
     fn worker_for_media_worker_id(
