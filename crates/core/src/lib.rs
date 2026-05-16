@@ -34,7 +34,7 @@
 //! # Server-facing example
 //!
 //! ```rust,no_run
-//! use o_sfu_core::{CoreOptions, MediaTransport, SfuCore};
+//! use o_sfu_core::{MediaTransport, SfuCore};
 //! use o_sfu_core::server::room::Room;
 //! use o_sfu_core::server::session::UserId;
 //! use o_sfu_core::ConnectionId;
@@ -60,8 +60,8 @@
 //!     Ok(String::from("v=0\r\n"))
 //! }
 //!
-//! fn build_core(options: CoreOptions, transport: MediaTransport) -> SfuCore {
-//!     SfuCore::new(options, transport)
+//! fn build_core(transport: MediaTransport) -> SfuCore {
+//!     SfuCore::new(transport)
 //! }
 //! ```
 //!
@@ -89,7 +89,10 @@ pub use room::{
     TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
 };
 pub use runtime::{
-    media_transport::{MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder},
+    media_transport::{
+        MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,
+        TransportSessionHealth,
+    },
     source_model::{
         ActiveSpeakerGroup, ActiveSpeakerPolicy, ActiveSpeakerSourceRole, SourceAdaptationPolicy,
         SourceLayoutPolicy, SourcePolicy, SourcePublishIntent, SourceRoomPolicySelector,
@@ -97,8 +100,8 @@ pub use runtime::{
     },
 };
 pub use sfu::{
-    MediaEndpointHealth, MediaSession, NegotiationOffer, OfferedMediaCapabilities, SfuCore,
-    SfuCoreError, UploadEncoding, UploadSlot,
+    MediaSession, NegotiationOffer, OfferedMediaCapabilities, SfuCore, SfuCoreError,
+    UploadEncoding, UploadSlot,
 };
 
 /// Media bitrate stored as bits per second (not bytes per second).

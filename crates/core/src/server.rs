@@ -68,7 +68,11 @@ pub mod session {
 pub mod source_model {
     //! Room-domain source descriptors shared with server-side protocol projection.
 
-    pub use crate::runtime::source_model::*;
+    pub use crate::runtime::source_model::{
+        PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
+        PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
+        SourceEncodingId, SourceModelError, SourceTemporalLayerId,
+    };
 }
 
 pub mod transport {

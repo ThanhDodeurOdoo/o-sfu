@@ -8,7 +8,7 @@ use tracing::{debug, error};
 
 use super::{User, UserDisconnectReason, UserError, UserOutput};
 use crate::{
-    core::{MediaEndpointHealth, MediaSession, SfuCore, UserInfoRefresh},
+    core::{MediaSession, SfuCore, TransportSessionHealth, UserInfoRefresh},
     runtime::{ConnectionId, room::Room},
 };
 
@@ -55,10 +55,10 @@ impl User {
         self.media()
             .endpoint_health()
             .and_then(|health| match health {
-                MediaEndpointHealth::Disconnected => {
+                TransportSessionHealth::Disconnected => {
                     Some(UserDisconnectReason::TransportDisconnected)
                 }
-                MediaEndpointHealth::Connected => None,
+                TransportSessionHealth::Connected => None,
             })
     }
 
