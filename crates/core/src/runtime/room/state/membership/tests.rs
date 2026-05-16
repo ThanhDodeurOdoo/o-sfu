@@ -100,15 +100,17 @@ fn install_test_published_producer(
         )],
     })
     .expect("test source graph should be valid");
-    state.sources.insert(source_id, source);
+    state.media.sources.insert(source_id, source);
     state
+        .media
         .source_ids_by_owner_stream
         .insert(SourceKey::new(user_id, intent.stream_id()), source_id);
     state
+        .media
         .producer_id_by_source_id
         .insert(source_id, producer_id);
     state.register_source_owner(user_id, source_id);
-    state.producers.insert(
+    state.media.producers.insert(
         producer_id,
         super::super::shared::PublishedProducer {
             source_id,
@@ -124,7 +126,7 @@ fn install_test_published_producer(
     );
     state.register_producer_owner(user_id, producer_id);
     if let Some(transport_media_id) = transport_media_id {
-        state.source_transport_media_index.insert(
+        state.media.source_transport_media_index.insert(
             transport_media_id,
             SourceTransportMediaIndexEntry::new(
                 source_id,
@@ -264,7 +266,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
         Some(TransportMediaId::new(11)),
     );
     let consumer_key = ConsumerKey::new(&UserId::Integer(2), source_id);
-    state.consumer_index.insert(
+    state.media.consumer_index.insert(
         consumer_key.clone(),
         ConsumerState {
             routed_consumer_id: RoutedConsumerId::new(RouterId(1), ConsumerId(20)),
@@ -279,9 +281,9 @@ fn leave_removes_consumer_routes_for_departed_session() {
     let outcome = state.apply_leave(&UserId::Integer(2), consumer_connection_id);
 
     assert!(outcome.is_some());
-    assert_eq!(state.consumer_index.len(), 0);
-    assert_eq!(state.producers.len(), 1);
-    assert!(state.producers.contains_key(&producer_id));
+    assert_eq!(state.media.consumer_index.len(), 0);
+    assert_eq!(state.media.producers.len(), 1);
+    assert!(state.media.producers.contains_key(&producer_id));
 }
 
 #[test]
@@ -402,6 +404,6 @@ fn replacement_join_clears_transport_media_owner_index() {
         state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
         None
     );
-    assert!(state.source_ids_by_owner.is_empty());
-    assert!(state.producer_ids_by_owner.is_empty());
+    assert!(state.media.source_ids_by_owner.is_empty());
+    assert!(state.media.producer_ids_by_owner.is_empty());
 }

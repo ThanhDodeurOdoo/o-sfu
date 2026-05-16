@@ -142,16 +142,17 @@ impl SourcePolicyEffectPlan {
             let Some(packet_gate) = update.packet_gate() else {
                 continue;
             };
+            let route = update.route();
             plan.push(
                 index,
                 ConsumerPacketGateUpdate::new(
                     room.transport_user_key(
-                        update.consumer_user_id(),
-                        update.consumer_connection_id(),
+                        route.consumer_user_id(),
+                        route.consumer_connection_id(),
                     ),
-                    update.consumer_transport_media_id(),
-                    room.transport_user_key(update.source_user_id(), update.source_connection_id()),
-                    update.source_transport_media_id(),
+                    route.consumer_media(),
+                    room.transport_user_key(route.source_user_id(), route.source_connection_id()),
+                    route.source_media(),
                     packet_gate.clone(),
                 ),
             );
@@ -165,12 +166,10 @@ impl SourcePolicyEffectPlan {
         update: ConsumerPacketSelectionUpdate,
     ) -> Option<ConsumerPacketSelectionUpdate> {
         Self::log_accepted_packet_update(&update);
+        let route = update.route();
         if !Self::apply_route_activity_update(room, media_port, &update).await {
             warn!(
-                consumer_user_id = ?update.consumer_user_id(),
-                source_user_id = ?update.source_user_id(),
-                source_transport_media_id = ?update.source_transport_media_id(),
-                consumer_transport_media_id = ?update.consumer_transport_media_id(),
+                ?route,
                 route_active = update.route_active(),
                 "media transport failed to apply receiver video policy route activity"
             );
@@ -180,10 +179,7 @@ impl SourcePolicyEffectPlan {
             return Some(update);
         }
         warn!(
-            consumer_user_id = ?update.consumer_user_id(),
-            source_user_id = ?update.source_user_id(),
-            source_transport_media_id = ?update.source_transport_media_id(),
-            consumer_transport_media_id = ?update.consumer_transport_media_id(),
+            ?route,
             "media transport failed to request an adaptation keyframe refresh"
         );
         Some(update)
@@ -197,13 +193,13 @@ impl SourcePolicyEffectPlan {
         if !update.route_activity_update() {
             return true;
         }
+        let route = update.route();
         media_port
             .set_consumer_active(
-                &room
-                    .transport_user_key(update.consumer_user_id(), update.consumer_connection_id()),
-                update.consumer_transport_media_id(),
-                &room.transport_user_key(update.source_user_id(), update.source_connection_id()),
-                update.source_transport_media_id(),
+                &room.transport_user_key(route.consumer_user_id(), route.consumer_connection_id()),
+                route.consumer_media(),
+                &room.transport_user_key(route.source_user_id(), route.source_connection_id()),
+                route.source_media(),
                 ConsumerActivity::from_active(update.route_active()),
             )
             .await
@@ -231,39 +227,27 @@ impl SourcePolicyEffectPlan {
         media_port: &MediaTransport,
         update: &ConsumerPacketSelectionUpdate,
     ) -> bool {
+        let route = update.route();
         if !update.request_keyframe() {
             debug!(
-                consumer_user_id = ?update.consumer_user_id(),
-                source_user_id = ?update.source_user_id(),
-                source_transport_media_id = ?update.source_transport_media_id(),
-                consumer_transport_media_id = ?update.consumer_transport_media_id(),
+                ?route,
                 "receiver-driven packet selection did not request a keyframe refresh"
             );
             return true;
         }
-        debug!(
-            consumer_user_id = ?update.consumer_user_id(),
-            source_user_id = ?update.source_user_id(),
-            source_transport_media_id = ?update.source_transport_media_id(),
-            consumer_transport_media_id = ?update.consumer_transport_media_id(),
-            "requesting adaptation keyframe refresh"
-        );
+        debug!(?route, "requesting adaptation keyframe refresh");
         let accepted = media_port
             .request_consumer_keyframe(
-                &room
-                    .transport_user_key(update.consumer_user_id(), update.consumer_connection_id()),
-                update.consumer_transport_media_id(),
-                &room.transport_user_key(update.source_user_id(), update.source_connection_id()),
-                update.source_transport_media_id(),
+                &room.transport_user_key(route.consumer_user_id(), route.consumer_connection_id()),
+                route.consumer_media(),
+                &room.transport_user_key(route.source_user_id(), route.source_connection_id()),
+                route.source_media(),
             )
             .await
             .is_ok();
         if accepted {
             debug!(
-                consumer_user_id = ?update.consumer_user_id(),
-                source_user_id = ?update.source_user_id(),
-                source_transport_media_id = ?update.source_transport_media_id(),
-                consumer_transport_media_id = ?update.consumer_transport_media_id(),
+                ?route,
                 "media transport accepted adaptation keyframe refresh"
             );
         }
@@ -271,11 +255,9 @@ impl SourcePolicyEffectPlan {
     }
 
     fn log_prepared_packet_update(update: &ConsumerPacketSelectionUpdate) {
+        let route = update.route();
         debug!(
-            consumer_user_id = ?update.consumer_user_id(),
-            source_user_id = ?update.source_user_id(),
-            source_transport_media_id = ?update.source_transport_media_id(),
-            consumer_transport_media_id = ?update.consumer_transport_media_id(),
+            ?route,
             selector = ?update.selector(),
             policy_pause_reason = ?update.policy_pause_reason(),
             packet_gate = ?update.packet_gate(),
@@ -285,11 +267,9 @@ impl SourcePolicyEffectPlan {
     }
 
     fn log_accepted_packet_update(update: &ConsumerPacketSelectionUpdate) {
+        let route = update.route();
         debug!(
-            consumer_user_id = ?update.consumer_user_id(),
-            source_user_id = ?update.source_user_id(),
-            source_transport_media_id = ?update.source_transport_media_id(),
-            consumer_transport_media_id = ?update.consumer_transport_media_id(),
+            ?route,
             selector = ?update.selector(),
             policy_pause_reason = ?update.policy_pause_reason(),
             packet_gate = ?update.packet_gate(),
@@ -299,11 +279,9 @@ impl SourcePolicyEffectPlan {
     }
 
     fn warn_rejected_packet_update(update: &ConsumerPacketSelectionUpdate) {
+        let route = update.route();
         warn!(
-            consumer_user_id = ?update.consumer_user_id(),
-            source_user_id = ?update.source_user_id(),
-            source_transport_media_id = ?update.source_transport_media_id(),
-            consumer_transport_media_id = ?update.consumer_transport_media_id(),
+            ?route,
             "media transport rejected the receiver-driven packet selection update"
         );
     }

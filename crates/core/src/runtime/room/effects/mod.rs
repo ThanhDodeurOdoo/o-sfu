@@ -23,9 +23,9 @@ pub(super) use source_policy::SourcePolicyEffectPlan;
 use super::{
     Room, RoomMediaCounts,
     state::{
-        ConsumerBootstrapOrigin, ConsumerRouteUpdate, PendingConsumerBootstrap,
-        PendingConsumerBootstrapTarget, PlannedConsumerBootstrap, PlannedSubscriptionChange,
-        PreparedConsumerBootstrap, RelayRouteEffect,
+        ConsumerBootstrapOrigin, ConsumerRouteTransportRef, ConsumerRouteUpdate,
+        PendingConsumerBootstrap, PendingConsumerBootstrapTarget, PlannedConsumerBootstrap,
+        PlannedSubscriptionChange, PreparedConsumerBootstrap, RelayRouteEffect,
     },
 };
 use crate::runtime::{
@@ -93,12 +93,7 @@ impl MediaCountDelta {
 
 #[derive(Debug)]
 struct SubscriptionTransportOp {
-    consumer_user_id: UserId,
-    consumer_connection_id: ConnectionId,
-    consumer_media: TransportMediaId,
-    producer_user_id: UserId,
-    producer_connection_id: ConnectionId,
-    source_media: TransportMediaId,
+    route: ConsumerRouteTransportRef,
     stream_id: UserStreamId,
     media_kind: o_sfu_router::MediaKind,
     active: bool,
@@ -145,35 +140,30 @@ impl SubscriptionEffectPlan {
     ) -> Self {
         let transport_ops = route_updates
             .into_iter()
-            .map(|route_update| SubscriptionTransportOp {
-                consumer_user_id: user_id.clone(),
-                consumer_connection_id: route_update.consumer_connection_id(),
-                consumer_media: route_update.consumer_media(),
-                producer_user_id: route_update.producer_user_id().clone(),
-                producer_connection_id: route_update.source_connection_id(),
-                source_media: route_update.source_media(),
-                stream_id: route_update.stream_id().clone(),
-                media_kind: route_update.media_kind(),
-                active: route_update.active(),
-                diagnostics: DiagnosticsEventData::for_user(
+            .map(|route_update| {
+                let route = route_update.route().clone();
+                let diagnostics = DiagnosticsEventData::for_user(
                     room.uuid(),
                     user_id,
                     telemetry_event::SUBSCRIPTION_ACTIVITY_CHANGED,
                 )
                 .with_connection_id(connection_id.as_u64())
                 .with_media_worker_id(room.media_worker_id())
-                .with_transport_media_id(route_update.consumer_media().as_u64())
+                .with_transport_media_id(route.consumer_media().as_u64())
                 .insert_field("active", route_update.active())
                 .insert_field(
                     "producer_user_id",
-                    serde_json::to_value(route_update.producer_user_id())
-                        .unwrap_or(serde_json::Value::Null),
+                    serde_json::to_value(route.source_user_id()).unwrap_or(serde_json::Value::Null),
                 )
-                .insert_field(
-                    "source_transport_media_id",
-                    route_update.source_media().as_u64(),
-                )
-                .insert_field("stream_id", route_update.stream_id().to_string()),
+                .insert_field("source_transport_media_id", route.source_media().as_u64())
+                .insert_field("stream_id", route_update.stream_id().to_string());
+                SubscriptionTransportOp {
+                    route,
+                    stream_id: route_update.stream_id().clone(),
+                    media_kind: route_update.media_kind(),
+                    active: route_update.active(),
+                    diagnostics,
+                }
             })
             .collect();
         Self {
@@ -241,29 +231,26 @@ impl SubscriptionEffectPlan {
         }
         execute_relay_route_effects(room, media_port, &self.relay_ops).await;
         for transport_op in self.transport_ops {
+            let route = &transport_op.route;
             // Transport activity is best-effort here because the room intent has
             // already been committed, so the failure path is to surface it to
             // operators instead of trying to rebuild the previous room state.
             if media_port
                 .set_consumer_active(
                     &room.transport_user_key(
-                        &transport_op.consumer_user_id,
-                        transport_op.consumer_connection_id,
+                        route.consumer_user_id(),
+                        route.consumer_connection_id(),
                     ),
-                    transport_op.consumer_media,
-                    &room.transport_user_key(
-                        &transport_op.producer_user_id,
-                        transport_op.producer_connection_id,
-                    ),
-                    transport_op.source_media,
+                    route.consumer_media(),
+                    &room.transport_user_key(route.source_user_id(), route.source_connection_id()),
+                    route.source_media(),
                     ConsumerActivity::from_active(transport_op.active),
                 )
                 .await
                 .is_err()
             {
                 warn!(
-                    user_id = ?transport_op.consumer_user_id,
-                    target_user_id = ?transport_op.producer_user_id,
+                    ?route,
                     stream_id = %transport_op.stream_id,
                     active = transport_op.active,
                     "media transport failed to update consumer route activity"
@@ -273,22 +260,21 @@ impl SubscriptionEffectPlan {
                 && media_port
                     .request_consumer_keyframe(
                         &room.transport_user_key(
-                            &transport_op.consumer_user_id,
-                            transport_op.consumer_connection_id,
+                            route.consumer_user_id(),
+                            route.consumer_connection_id(),
                         ),
-                        transport_op.consumer_media,
+                        route.consumer_media(),
                         &room.transport_user_key(
-                            &transport_op.producer_user_id,
-                            transport_op.producer_connection_id,
+                            route.source_user_id(),
+                            route.source_connection_id(),
                         ),
-                        transport_op.source_media,
+                        route.source_media(),
                     )
                     .await
                     .is_err()
             {
                 warn!(
-                    user_id = ?transport_op.consumer_user_id,
-                    target_user_id = ?transport_op.producer_user_id,
+                    ?route,
                     stream_id = %transport_op.stream_id,
                     "media transport failed to request a consumer keyframe refresh"
                 );
@@ -334,20 +320,14 @@ impl ConsumerBootstrapOp {
         };
         let (media_counts_before, outbound, media_counts_after) = {
             let mut state = room.state.write().await;
-            let media_counts_before = RoomMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
+            let media_counts_before = state.media_counts();
             let outbound = state.commit_consumer_bootstrap(
                 &target,
                 pending_bootstrap,
                 consumer_transport_media_id,
                 consumer_mid,
             );
-            let media_counts_after = RoomMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
+            let media_counts_after = state.media_counts();
             drop(state);
             (media_counts_before, outbound, media_counts_after)
         };
@@ -510,15 +490,9 @@ impl UnpublishEffectPlan {
     ) -> UnpublishOutcome {
         let (media_counts_before, outcome, media_counts_after) = {
             let mut state = room.state.write().await;
-            let media_counts_before = RoomMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
+            let media_counts_before = state.media_counts();
             let outcome = state.unpublish_track(&self.user, self.connection, &self.stream);
-            let media_counts_after = RoomMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
+            let media_counts_after = state.media_counts();
             drop(state);
             (media_counts_before, outcome, media_counts_after)
         };

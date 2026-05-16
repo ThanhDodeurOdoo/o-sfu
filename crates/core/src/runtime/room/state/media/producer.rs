@@ -269,7 +269,11 @@ impl RoomState {
             return None;
         }
         let source_key = SourceKey::new(&pending.owner_user_id, &pending.stream_id);
-        if self.source_ids_by_owner_stream.contains_key(&source_key) {
+        if self
+            .media
+            .source_ids_by_owner_stream
+            .contains_key(&source_key)
+        {
             warn!(
                 user_id = ?pending.owner_user_id,
                 owner_connection_id = ?pending.owner_connection_id,
@@ -313,7 +317,7 @@ impl RoomState {
             transport_media_id,
         } = install;
         let source_id = source_descriptor.source_id();
-        self.producers.insert(
+        self.media.producers.insert(
             producer_id,
             PublishedProducer {
                 source_id,
@@ -327,13 +331,16 @@ impl RoomState {
                 active: true,
             },
         );
-        self.sources.insert(source_id, source_descriptor);
-        self.source_ids_by_owner_stream
+        self.media.sources.insert(source_id, source_descriptor);
+        self.media
+            .source_ids_by_owner_stream
             .insert(source_key, source_id);
-        self.producer_id_by_source_id.insert(source_id, producer_id);
+        self.media
+            .producer_id_by_source_id
+            .insert(source_id, producer_id);
         self.register_source_owner(&pending.owner_user_id, source_id);
         self.register_producer_owner(&pending.owner_user_id, producer_id);
-        self.source_transport_media_index.insert(
+        self.media.source_transport_media_index.insert(
             transport_media_id,
             SourceTransportMediaIndexEntry::new(
                 source_id,
@@ -429,7 +436,8 @@ impl RoomState {
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<UserStreamId> {
-        self.source_transport_media_index
+        self.media
+            .source_transport_media_index
             .get(&transport_media_id)
             .map(|entry| entry.stream_id().clone())
     }
@@ -439,7 +447,9 @@ impl RoomState {
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<&SourceTransportMediaIndexEntry> {
-        self.source_transport_media_index.get(&transport_media_id)
+        self.media
+            .source_transport_media_index
+            .get(&transport_media_id)
     }
 
     #[must_use]
@@ -451,7 +461,7 @@ impl RoomState {
     ) -> Option<ProducerRouteTarget> {
         let producer_id =
             self.producer_id_for_source_key(&SourceKey::new(owner_user_id, stream_id))?;
-        let producer = self.producers.get(&producer_id)?;
+        let producer = self.media.producers.get(&producer_id)?;
         if producer.owner_connection_id != owner_connection_id {
             return None;
         }
@@ -496,7 +506,7 @@ impl RoomState {
             .consumer_keys_for_source(producer_target.source_id)
             .into_iter()
             .filter_map(|key| {
-                let consumer_state = self.consumer_index.get(&key)?;
+                let consumer_state = self.media.consumer_index.get(&key)?;
                 Some(TransportMediaRemoval {
                     user: key.consumer_user_id,
                     connection: consumer_state.consumer_connection_id,
@@ -565,7 +575,7 @@ impl RoomState {
         active: bool,
     ) -> Option<ProducerActivityOutcome> {
         let current_connection_id = self.user_connection_id(user_id);
-        let producer = self.producers.get(&producer_target.producer_id)?;
+        let producer = self.media.producers.get(&producer_target.producer_id)?;
         if producer.source_id != producer_target.source_id
             || producer.owner_connection_id != producer_target.owner_connection_id
             || Some(producer.owner_connection_id) != current_connection_id
@@ -595,7 +605,7 @@ impl RoomState {
             return None;
         }
         {
-            let producer = self.producers.get_mut(&producer_target.producer_id)?;
+            let producer = self.media.producers.get_mut(&producer_target.producer_id)?;
             producer.active = active;
         }
         Some(ProducerActivityOutcome {

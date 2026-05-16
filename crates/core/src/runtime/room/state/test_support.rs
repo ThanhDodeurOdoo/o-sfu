@@ -35,11 +35,11 @@ impl RoomState {
     }
 
     pub fn producer_count(&self) -> usize {
-        self.producers.len()
+        self.media.producers.len()
     }
 
     pub fn consumer_count(&self) -> usize {
-        self.consumer_index.len()
+        self.media.consumer_index.len()
     }
 
     pub fn has_session(&self, user_id: &UserId) -> bool {
@@ -61,7 +61,8 @@ impl RoomState {
     }
 
     pub fn first_published_transport_media_id(&self) -> Option<TransportMediaId> {
-        self.producers
+        self.media
+            .producers
             .values()
             .find_map(|producer| producer.transport_media_id)
     }
@@ -76,7 +77,7 @@ impl RoomState {
             user_id,
             &stream_id_for_source(stream_type),
         ))?;
-        let producer = self.producers.get(&producer_id)?;
+        let producer = self.media.producers.get(&producer_id)?;
         if producer.owner_connection_id != connection_id {
             return None;
         }

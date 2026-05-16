@@ -380,7 +380,7 @@ impl RoomState {
         let routed_consumers = self
             .consumer_keys_for_user(user_id)
             .into_iter()
-            .filter_map(|key| self.consumer_index.get(&key))
+            .filter_map(|key| self.media.consumer_index.get(&key))
             .map(|consumer_state| consumer_state.routed_consumer_id)
             .collect::<Vec<_>>();
         for routed_consumer_id in routed_consumers {
@@ -390,7 +390,7 @@ impl RoomState {
         let routed_producers = self
             .producer_ids_for_user(user_id)
             .into_iter()
-            .filter_map(|producer_id| self.producers.get(&producer_id))
+            .filter_map(|producer_id| self.media.producers.get(&producer_id))
             .map(|producer| producer.routed_producer_id)
             .collect::<Vec<_>>();
         for routed_producer_id in routed_producers {

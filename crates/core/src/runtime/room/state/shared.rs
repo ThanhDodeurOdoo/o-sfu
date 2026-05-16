@@ -7,7 +7,7 @@ use o_sfu_router::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities
 
 use super::{
     super::{
-        RoomAdmissionPolicy, RoomUserPermissions,
+        RoomAdmissionPolicy, RoomMediaCounts, RoomUserPermissions,
         outbound::OutboundSender,
         placement::RoomPlacementUsageSnapshot,
         topology::{RoomRouterStateFactory, RoomTopology, RoutedConsumerId, RoutedProducerId},
@@ -53,44 +53,33 @@ pub(in crate::runtime::room) struct RoomState {
     pub(super) next_producer_id: u64,
     pub(super) next_consumer_id: u64,
     pub(super) recording_state: RecordingState,
-    /// Source graph keyed by stable room-domain source id.
+    pub(super) media: RoomMediaGraph,
+    /// Shadow of user/producer/consumer state inside the pure router core.
+    pub(super) topology: RoomTopology,
+}
+
+/// room-owned media graph and reverse indexes
+///
+/// source, producer and consumer stores live together because their teardown
+/// rules are one graph
+/// callers should update them through narrow room-state methods so indexes
+/// cannot drift from the owning stores
+#[derive(Debug, Default)]
+pub(in crate::runtime::room) struct RoomMediaGraph {
     pub(super) sources: BTreeMap<PublishedSourceId, PublishedSourceDescriptor>,
-    /// Source lookup keyed by publisher user and orchestration stream id.
     pub(super) source_ids_by_owner_stream: BTreeMap<SourceKey, PublishedSourceId>,
-    /// Published source ids owned by each room user.
-    ///
-    /// This is an ownership index for local teardown. It is updated in the
-    /// same state transition as `sources` and prevents a departing user from
-    /// scanning unrelated source entries.
     pub(super) source_ids_by_owner: BTreeMap<UserId, BTreeSet<PublishedSourceId>>,
-    /// Current routed producer realization keyed by source id.
     pub(super) producer_id_by_source_id: BTreeMap<PublishedSourceId, ProducerRuntimeId>,
-    /// Runtime producer ids owned by each room user.
-    ///
-    /// Producer media cleanup uses this index before state mutation so
-    /// replacement joins and disconnect bursts only inspect the departing
-    /// user's producers.
     pub(super) producer_ids_by_owner: BTreeMap<UserId, BTreeSet<ProducerRuntimeId>>,
-    /// Keyed by typed runtime producer id. Compatibility wire ids are rendered at the edge.
     pub(super) producers: BTreeMap<ProducerRuntimeId, PublishedProducer>,
-    /// Source ownership and encoding metadata keyed by transport-owned media ids.
     pub(super) source_transport_media_index:
         BTreeMap<TransportMediaId, SourceTransportMediaIndexEntry>,
-    /// Desired per-consumer source state keyed above transport realization.
     pub(super) consumer_source_selections: BTreeMap<ConsumerKey, ConsumerSourceSelection>,
-    /// Concrete routed consumer media currently realizing a source selection.
     pub(super) consumer_index: BTreeMap<ConsumerKey, ConsumerState>,
     pub(super) pending_consumer_bootstraps: BTreeSet<ConsumerKey>,
-    /// Consumer keys grouped by receiver and by source.
-    ///
-    /// These are ownership facts for all room-owned consumer key stores:
-    /// desired source selections, pending bootstraps, and realized consumers.
-    /// A key stays indexed while any of those stores contains it.
     pub(super) consumer_keys_by_user: BTreeMap<UserId, BTreeSet<ConsumerKey>>,
     pub(super) consumer_keys_by_source: BTreeMap<PublishedSourceId, BTreeSet<ConsumerKey>>,
     pub(super) relay_routes: RoomRelayRoutes,
-    /// Shadow of user/producer/consumer state inside the pure router core.
-    pub(super) topology: RoomTopology,
 }
 
 /// Uniquely identifies one consumer's desired or realized route to a source.
@@ -166,6 +155,75 @@ pub(in crate::runtime::room) struct ConsumerState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::runtime::room) struct ConsumerRouteTransportRef {
+    consumer_user_id: UserId,
+    consumer_connection_id: ConnectionId,
+    consumer_media: TransportMediaId,
+    source_user_id: UserId,
+    source_connection_id: ConnectionId,
+    source_media: TransportMediaId,
+}
+
+impl ConsumerRouteTransportRef {
+    pub(super) fn new(
+        consumer_key: &ConsumerKey,
+        consumer_state: ConsumerState,
+        source_user_id: &UserId,
+    ) -> Self {
+        Self::from_parts(
+            consumer_key.consumer_user_id.clone(),
+            consumer_state.consumer_connection_id,
+            consumer_state.consumer_media,
+            source_user_id.clone(),
+            consumer_state.source_connection_id,
+            consumer_state.source_media,
+        )
+    }
+
+    pub(super) fn from_parts(
+        consumer_user_id: UserId,
+        consumer_connection_id: ConnectionId,
+        consumer_media: TransportMediaId,
+        source_user_id: UserId,
+        source_connection_id: ConnectionId,
+        source_media: TransportMediaId,
+    ) -> Self {
+        Self {
+            consumer_user_id,
+            consumer_connection_id,
+            consumer_media,
+            source_user_id,
+            source_connection_id,
+            source_media,
+        }
+    }
+
+    pub fn consumer_user_id(&self) -> &UserId {
+        &self.consumer_user_id
+    }
+
+    pub const fn consumer_connection_id(&self) -> ConnectionId {
+        self.consumer_connection_id
+    }
+
+    pub const fn consumer_media(&self) -> TransportMediaId {
+        self.consumer_media
+    }
+
+    pub fn source_user_id(&self) -> &UserId {
+        &self.source_user_id
+    }
+
+    pub const fn source_connection_id(&self) -> ConnectionId {
+        self.source_connection_id
+    }
+
+    pub const fn source_media(&self) -> TransportMediaId {
+        self.source_media
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::room) struct TransportMediaRemoval {
     pub user: UserId,
     pub connection: ConnectionId,
@@ -194,19 +252,7 @@ impl RoomState {
                 transcription: Some(false),
                 video: Some(false),
             },
-            sources: BTreeMap::new(),
-            source_ids_by_owner_stream: BTreeMap::new(),
-            source_ids_by_owner: BTreeMap::new(),
-            producer_id_by_source_id: BTreeMap::new(),
-            producer_ids_by_owner: BTreeMap::new(),
-            producers: BTreeMap::new(),
-            source_transport_media_index: BTreeMap::new(),
-            consumer_source_selections: BTreeMap::new(),
-            consumer_index: BTreeMap::new(),
-            pending_consumer_bootstraps: BTreeSet::new(),
-            consumer_keys_by_user: BTreeMap::new(),
-            consumer_keys_by_source: BTreeMap::new(),
-            relay_routes: RoomRelayRoutes::default(),
+            media: RoomMediaGraph::default(),
             topology: RoomTopology::new_with_router_state_factory(
                 runtime_context.local_routers().clone(),
                 room_worker_policy,
@@ -222,12 +268,12 @@ impl RoomState {
     ) -> Vec<TransportMediaRemoval> {
         let mut keys = BTreeSet::new();
         for user_id in departing_user_ids {
-            if let Some(user_keys) = self.consumer_keys_by_user.get(user_id) {
+            if let Some(user_keys) = self.media.consumer_keys_by_user.get(user_id) {
                 keys.extend(user_keys.iter().cloned());
             }
-            if let Some(source_ids) = self.source_ids_by_owner.get(user_id) {
+            if let Some(source_ids) = self.media.source_ids_by_owner.get(user_id) {
                 for source_id in source_ids {
-                    if let Some(source_keys) = self.consumer_keys_by_source.get(source_id) {
+                    if let Some(source_keys) = self.media.consumer_keys_by_source.get(source_id) {
                         keys.extend(source_keys.iter().cloned());
                     }
                 }
@@ -235,7 +281,7 @@ impl RoomState {
         }
         keys.into_iter()
             .filter_map(|key| {
-                let consumer_state = self.consumer_index.get(&key)?;
+                let consumer_state = self.media.consumer_index.get(&key)?;
                 Some(TransportMediaRemoval {
                     user: key.consumer_user_id,
                     connection: consumer_state.consumer_connection_id,
@@ -251,10 +297,10 @@ impl RoomState {
     ) -> Vec<TransportMediaRemoval> {
         departing_user_ids
             .iter()
-            .filter_map(|user_id| self.producer_ids_by_owner.get(user_id))
+            .filter_map(|user_id| self.media.producer_ids_by_owner.get(user_id))
             .flat_map(|producer_ids| producer_ids.iter())
             .filter_map(|producer_id| {
-                let producer = self.producers.get(producer_id)?;
+                let producer = self.media.producers.get(producer_id)?;
                 let transport_media = producer.transport_media_id?;
                 Some(TransportMediaRemoval {
                     user: producer.owner_user_id.clone(),
@@ -277,6 +323,7 @@ impl RoomState {
     pub fn purge_user_media_state(&mut self, user_id: &UserId) -> Vec<RelayRouteEffect> {
         let mut relay_effects = Vec::new();
         let source_ids = self
+            .media
             .source_ids_by_owner
             .remove(user_id)
             .unwrap_or_default()
@@ -288,6 +335,7 @@ impl RoomState {
             }
         }
         let consumer_keys = self
+            .media
             .consumer_keys_by_user
             .remove(user_id)
             .unwrap_or_default()
@@ -340,15 +388,21 @@ impl RoomState {
 
     pub fn transport_consumer_entries(&self) -> Vec<(UserId, ConnectionId)> {
         let mut entries = self
+            .media
             .consumer_index
             .iter()
             .map(|(key, state)| (key.consumer_user_id.clone(), state.consumer_connection_id))
             .collect::<Vec<_>>();
-        entries.extend(self.pending_consumer_bootstraps.iter().filter_map(|key| {
-            self.users
-                .get(&key.consumer_user_id)
-                .map(|user| (key.consumer_user_id.clone(), user.connection_id))
-        }));
+        entries.extend(
+            self.media
+                .pending_consumer_bootstraps
+                .iter()
+                .filter_map(|key| {
+                    self.users
+                        .get(&key.consumer_user_id)
+                        .map(|user| (key.consumer_user_id.clone(), user.connection_id))
+                }),
+        );
         entries
     }
 
@@ -369,13 +423,21 @@ impl RoomState {
     }
 
     pub fn publication_count(&self) -> usize {
-        self.sources.len()
+        self.media.sources.len()
     }
 
     pub fn subscription_count(&self) -> usize {
-        self.consumer_index
+        self.media
+            .consumer_index
             .len()
-            .saturating_add(self.pending_consumer_bootstraps.len())
+            .saturating_add(self.media.pending_consumer_bootstraps.len())
+    }
+
+    pub fn media_counts(&self) -> RoomMediaCounts {
+        RoomMediaCounts {
+            publications: self.publication_count(),
+            subscriptions: self.subscription_count(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -449,7 +511,8 @@ impl SourceKey {
 
 impl RoomState {
     pub(super) fn register_source_owner(&mut self, user_id: &UserId, source_id: PublishedSourceId) {
-        self.source_ids_by_owner
+        self.media
+            .source_ids_by_owner
             .entry(user_id.clone())
             .or_default()
             .insert(source_id);
@@ -460,7 +523,7 @@ impl RoomState {
         user_id: &UserId,
         source_id: PublishedSourceId,
     ) {
-        remove_from_index_set(&mut self.source_ids_by_owner, user_id, &source_id);
+        remove_from_index_set(&mut self.media.source_ids_by_owner, user_id, &source_id);
     }
 
     pub(super) fn register_producer_owner(
@@ -468,7 +531,8 @@ impl RoomState {
         user_id: &UserId,
         producer_id: ProducerRuntimeId,
     ) {
-        self.producer_ids_by_owner
+        self.media
+            .producer_ids_by_owner
             .entry(user_id.clone())
             .or_default()
             .insert(producer_id);
@@ -479,43 +543,55 @@ impl RoomState {
         user_id: &UserId,
         producer_id: ProducerRuntimeId,
     ) {
-        remove_from_index_set(&mut self.producer_ids_by_owner, user_id, &producer_id);
+        remove_from_index_set(&mut self.media.producer_ids_by_owner, user_id, &producer_id);
     }
 
     pub(super) fn register_consumer_key(&mut self, key: &ConsumerKey) {
-        self.consumer_keys_by_user
+        self.media
+            .consumer_keys_by_user
             .entry(key.consumer_user_id.clone())
             .or_default()
             .insert(key.clone());
-        self.consumer_keys_by_source
+        self.media
+            .consumer_keys_by_source
             .entry(key.source_id)
             .or_default()
             .insert(key.clone());
     }
 
     pub(super) fn prune_consumer_key_indexes_if_unused(&mut self, key: &ConsumerKey) {
-        if self.consumer_index.contains_key(key)
-            || self.pending_consumer_bootstraps.contains(key)
-            || self.consumer_source_selections.contains_key(key)
+        if self.media.consumer_index.contains_key(key)
+            || self.media.pending_consumer_bootstraps.contains(key)
+            || self.media.consumer_source_selections.contains_key(key)
         {
             return;
         }
-        remove_from_index_set(&mut self.consumer_keys_by_user, &key.consumer_user_id, key);
-        remove_from_index_set(&mut self.consumer_keys_by_source, &key.source_id, key);
+        remove_from_index_set(
+            &mut self.media.consumer_keys_by_user,
+            &key.consumer_user_id,
+            key,
+        );
+        remove_from_index_set(&mut self.media.consumer_keys_by_source, &key.source_id, key);
     }
 
     pub(super) fn remove_consumer_key_state(&mut self, key: &ConsumerKey) -> Vec<RelayRouteEffect> {
-        self.consumer_index.remove(key);
-        self.pending_consumer_bootstraps.remove(key);
-        self.consumer_source_selections.remove(key);
-        remove_from_index_set(&mut self.consumer_keys_by_user, &key.consumer_user_id, key);
-        remove_from_index_set(&mut self.consumer_keys_by_source, &key.source_id, key);
-        self.relay_routes
+        self.media.consumer_index.remove(key);
+        self.media.pending_consumer_bootstraps.remove(key);
+        self.media.consumer_source_selections.remove(key);
+        remove_from_index_set(
+            &mut self.media.consumer_keys_by_user,
+            &key.consumer_user_id,
+            key,
+        );
+        remove_from_index_set(&mut self.media.consumer_keys_by_source, &key.source_id, key);
+        self.media
+            .relay_routes
             .release_consumer_key(&key.consumer_user_id, key.source_id)
     }
 
     pub(super) fn consumer_keys_for_user(&self, user_id: &UserId) -> Vec<ConsumerKey> {
-        self.consumer_keys_by_user
+        self.media
+            .consumer_keys_by_user
             .get(user_id)
             .map(|keys| keys.iter().cloned().collect())
             .unwrap_or_default()
@@ -525,14 +601,16 @@ impl RoomState {
         &self,
         source_id: PublishedSourceId,
     ) -> Vec<ConsumerKey> {
-        self.consumer_keys_by_source
+        self.media
+            .consumer_keys_by_source
             .get(&source_id)
             .map(|keys| keys.iter().cloned().collect())
             .unwrap_or_default()
     }
 
     pub(super) fn producer_ids_for_user(&self, user_id: &UserId) -> Vec<ProducerRuntimeId> {
-        self.producer_ids_by_owner
+        self.media
+            .producer_ids_by_owner
             .get(user_id)
             .map(|producer_ids| producer_ids.iter().copied().collect())
             .unwrap_or_default()
@@ -542,28 +620,29 @@ impl RoomState {
         &self,
         source_key: &SourceKey,
     ) -> Option<ProducerRuntimeId> {
-        let source_id = self.source_ids_by_owner_stream.get(source_key)?;
-        self.producer_id_by_source_id.get(source_id).copied()
+        let source_id = self.media.source_ids_by_owner_stream.get(source_key)?;
+        self.media.producer_id_by_source_id.get(source_id).copied()
     }
 
     pub(super) fn remove_source_registry_entry(
         &mut self,
         source_id: PublishedSourceId,
     ) -> Option<(PublishedProducer, Vec<RelayRouteEffect>)> {
-        let source = self.sources.remove(&source_id)?;
+        let source = self.media.sources.remove(&source_id)?;
         let consumer_keys = self.consumer_keys_for_source(source_id);
         let mut relay_effects = Vec::new();
         for key in consumer_keys {
             relay_effects.extend(self.remove_consumer_key_state(&key));
         }
         let source_key = SourceKey::new(source.owner().user_id(), source.stream_id());
-        self.source_ids_by_owner_stream.remove(&source_key);
+        self.media.source_ids_by_owner_stream.remove(&source_key);
         self.unregister_source_owner(source.owner().user_id(), source_id);
-        let producer_id = self.producer_id_by_source_id.remove(&source_id)?;
-        let producer = self.producers.remove(&producer_id)?;
+        let producer_id = self.media.producer_id_by_source_id.remove(&source_id)?;
+        let producer = self.media.producers.remove(&producer_id)?;
         self.unregister_producer_owner(&producer.owner_user_id, producer_id);
         if let Some(transport_media_id) = producer.transport_media_id {
-            self.source_transport_media_index
+            self.media
+                .source_transport_media_index
                 .remove(&transport_media_id);
         }
         Some((producer, relay_effects))

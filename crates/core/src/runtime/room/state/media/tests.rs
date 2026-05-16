@@ -152,7 +152,7 @@ fn install_test_consumer_route(
         producer_id,
         TransportMediaId::new(1),
     );
-    state.producers.insert(
+    state.media.producers.insert(
         producer_id,
         PublishedProducer {
             source_id,
@@ -176,6 +176,7 @@ fn install_test_consumer_route(
         consumer_media: TransportMediaId::new(2),
     };
     state
+        .media
         .consumer_index
         .insert(route_key.clone(), consumer_state);
     state.register_consumer_key(&route_key);
@@ -217,15 +218,17 @@ fn install_test_source_graph(
         )],
     })
     .expect("test source graph should be valid");
-    state.sources.insert(source_id, source);
+    state.media.sources.insert(source_id, source);
     state
+        .media
         .source_ids_by_owner_stream
         .insert(SourceKey::new(user_id, intent.stream_id()), source_id);
     state
+        .media
         .producer_id_by_source_id
         .insert(source_id, producer_id);
     state.register_source_owner(user_id, source_id);
-    state.source_transport_media_index.insert(
+    state.media.source_transport_media_index.insert(
         transport_media_id,
         SourceTransportMediaIndexEntry::new(
             source_id,
@@ -260,7 +263,7 @@ fn install_test_published_producer(
         producer_id,
         transport_media_id,
     );
-    state.producers.insert(
+    state.media.producers.insert(
         producer_id,
         PublishedProducer {
             source_id,
@@ -290,7 +293,7 @@ fn install_test_consumer_state(
         .user_connection_id(consumer_user_id)
         .expect("consumer user should have a connection id");
     let key = ConsumerKey::new(consumer_user_id, source_id);
-    state.consumer_index.insert(
+    state.media.consumer_index.insert(
         key.clone(),
         ConsumerState {
             routed_consumer_id: RoutedConsumerId::new(
@@ -330,7 +333,7 @@ fn producer_activity_does_not_flip_room_state_when_router_update_fails() {
         producer_id,
         transport_media_id,
     );
-    state.producers.insert(
+    state.media.producers.insert(
         producer_id,
         PublishedProducer {
             source_id,
@@ -362,6 +365,7 @@ fn producer_activity_does_not_flip_room_state_when_router_update_fails() {
     assert!(outcome.is_none());
     assert!(
         state
+            .media
             .producers
             .get(&producer_id)
             .is_some_and(|producer| producer.active),
@@ -421,7 +425,7 @@ fn stale_replaced_connection_cannot_update_download_state() {
         "stale subscription updates must not overwrite the replacement user's stored preferences"
     );
     assert_eq!(
-        state.consumer_index.get(&route_key),
+        state.media.consumer_index.get(&route_key),
         None,
         "replacement join should clear stale consumer routes before the new connection reboots them"
     );
@@ -481,7 +485,7 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
         producer_id,
         TransportMediaId::new(10),
     );
-    state.producers.insert(
+    state.media.producers.insert(
         producer_id,
         PublishedProducer {
             source_id,
@@ -517,6 +521,7 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
     assert!(relay_effects.is_empty());
     assert_eq!(planned_bootstraps.len(), 1);
     let selection = state
+        .media
         .consumer_source_selections
         .get(&ConsumerKey::new(&subscriber_user_id, source_id))
         .expect("compat subscription should create a source-level selection");
@@ -590,12 +595,12 @@ fn commit_published_track_populates_transport_media_owner_index() {
         state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
         Some(connection_id)
     );
-    assert_eq!(state.sources.len(), 1);
+    assert_eq!(state.media.sources.len(), 1);
     let source_id = state
         .inspect_source_id_for_transport_media_id(transport_media_id)
         .expect("transport media should resolve to a source id");
     assert!(
-        state.sources.contains_key(&source_id),
+        state.media.sources.contains_key(&source_id),
         "transport media source id should point into the source registry"
     );
     assert_eq!(
@@ -659,6 +664,7 @@ fn commit_published_track_registers_all_source_encodings() {
         .inspect_source_id_for_transport_media_id(transport_media_id)
         .expect("transport media should resolve to the committed source");
     let source = state
+        .media
         .sources
         .get(&source_id)
         .expect("source registry should own the committed source");
@@ -768,11 +774,11 @@ fn unpublish_track_clears_transport_media_owner_index() {
         state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
         None
     );
-    assert!(state.sources.is_empty());
-    assert!(state.source_ids_by_owner_stream.is_empty());
-    assert!(state.source_ids_by_owner.is_empty());
-    assert!(state.producer_id_by_source_id.is_empty());
-    assert!(state.producer_ids_by_owner.is_empty());
+    assert!(state.media.sources.is_empty());
+    assert!(state.media.source_ids_by_owner_stream.is_empty());
+    assert!(state.media.source_ids_by_owner.is_empty());
+    assert!(state.media.producer_id_by_source_id.is_empty());
+    assert!(state.media.producer_ids_by_owner.is_empty());
 }
 
 #[test]
@@ -834,9 +840,9 @@ fn unpublish_track_repairs_missing_topology_router_and_clears_state() {
         state.producer_stream_id_for_transport_media_id(transport_media_id),
         None
     );
-    assert!(state.source_ids_by_owner_stream.is_empty());
-    assert!(state.producer_id_by_source_id.is_empty());
-    assert!(state.producers.is_empty());
+    assert!(state.media.source_ids_by_owner_stream.is_empty());
+    assert!(state.media.producer_id_by_source_id.is_empty());
+    assert!(state.media.producers.is_empty());
 }
 
 #[test]
@@ -877,13 +883,14 @@ fn purge_user_media_state_removes_only_indexed_user_and_source_entries() {
         TransportMediaId::new(10),
         TransportMediaId::new(20),
     );
-    state.consumer_source_selections.insert(
+    state.media.consumer_source_selections.insert(
         removed_consumer_key.clone(),
         ConsumerSourceSelection::open(true),
     );
     state.register_consumer_key(&removed_consumer_key);
     let pending_removed_key = ConsumerKey::new(&publisher_id, other_source_id);
     state
+        .media
         .pending_consumer_bootstraps
         .insert(pending_removed_key.clone());
     state.register_consumer_key(&pending_removed_key);
@@ -896,7 +903,7 @@ fn purge_user_media_state_removes_only_indexed_user_and_source_entries() {
         TransportMediaId::new(30),
         TransportMediaId::new(40),
     );
-    state.consumer_source_selections.insert(
+    state.media.consumer_source_selections.insert(
         surviving_consumer_key.clone(),
         ConsumerSourceSelection::open(false),
     );
@@ -904,41 +911,42 @@ fn purge_user_media_state_removes_only_indexed_user_and_source_entries() {
 
     state.purge_user_media_state(&publisher_id);
 
-    assert!(!state.sources.contains_key(&publisher_source_id));
-    assert!(state.sources.contains_key(&other_source_id));
-    assert!(!state.consumer_index.contains_key(&removed_consumer_key));
+    let media = &state.media;
+    assert!(!media.sources.contains_key(&publisher_source_id));
+    assert!(media.sources.contains_key(&other_source_id));
+    assert!(!media.consumer_index.contains_key(&removed_consumer_key));
     assert!(
-        !state
+        !media
             .pending_consumer_bootstraps
             .contains(&pending_removed_key)
     );
     assert!(
-        !state
+        !media
             .consumer_source_selections
             .contains_key(&removed_consumer_key)
     );
-    assert!(state.consumer_index.contains_key(&surviving_consumer_key));
+    assert!(media.consumer_index.contains_key(&surviving_consumer_key));
     assert!(
-        state
+        media
             .consumer_source_selections
             .contains_key(&surviving_consumer_key)
     );
     assert!(
-        state
+        media
             .consumer_keys_by_user
             .get(&subscriber_id)
             .is_some_and(|keys| keys == &BTreeSet::from([surviving_consumer_key.clone()]))
     );
     assert!(
-        state
+        media
             .consumer_keys_by_source
             .get(&other_source_id)
             .is_some_and(|keys| keys == &BTreeSet::from([surviving_consumer_key]))
     );
     assert_eq!(
-        state.producer_ids_by_owner.get(&other_publisher_id),
+        media.producer_ids_by_owner.get(&other_publisher_id),
         Some(&BTreeSet::from([other_producer_id]))
     );
-    assert!(!state.producer_ids_by_owner.contains_key(&publisher_id));
-    assert!(!state.source_ids_by_owner.contains_key(&publisher_id));
+    assert!(!media.producer_ids_by_owner.contains_key(&publisher_id));
+    assert!(!media.source_ids_by_owner.contains_key(&publisher_id));
 }
