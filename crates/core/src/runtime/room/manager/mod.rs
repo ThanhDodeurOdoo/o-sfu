@@ -15,10 +15,7 @@ use super::{
     RoomMediaCounts, RoomRuntimePolicy, RoomUserStatsSnapshot, UserOutboundSender,
     directory::{RoomDirectory, RoomDirectoryEntry},
     factory::{RoomCreationIntent, RoomFactory},
-    placement::{
-        RoomPlacementDecision, RoomPlacementPlanner, RoomPlacementUsageSnapshot,
-        WorkerPlacementLoad, WorkerPlacementLoadSet,
-    },
+    placement::{RoomPlacementPlanner, WorkerLoadIndex},
 };
 use crate::runtime::{
     ConnectionId, RoomInstanceId, UserId, UserPermissions,
@@ -336,52 +333,28 @@ impl RoomManager {
         media_transport: &MediaTransport,
     ) -> LocalRouterRuntimeContext {
         let room_snapshot = room.placement_usage_snapshot().await;
-        let worker_loads = self.worker_placement_loads(media_transport).await;
+        let worker_loads = self.worker_load_index(media_transport).await;
         let planner = RoomPlacementPlanner::new(self.media_worker_count, room.room_worker_policy());
-        self.resolve_placement_decision(
-            &room_snapshot,
-            planner.choose(&room_snapshot, &worker_loads),
-        )
+        planner
+            .choose(&room_snapshot, &worker_loads)
+            .resolve(&room_snapshot, || self.factory.allocate_spillover_router())
     }
 
-    async fn worker_placement_loads(
-        &self,
-        media_transport: &MediaTransport,
-    ) -> Vec<WorkerPlacementLoad> {
-        let mut load_set = WorkerPlacementLoadSet::new(
+    async fn worker_load_index(&self, media_transport: &MediaTransport) -> WorkerLoadIndex {
+        let mut load_index = WorkerLoadIndex::new(
             self.media_worker_count,
             media_transport.worker_pressure_snapshots(),
         );
         for entry in self.directory_entries().await {
             let contribution = entry.room().worker_load_contribution().await;
             for media_worker_id in contribution.session_workers {
-                load_set.record_session(media_worker_id);
+                load_index.record_session(media_worker_id);
             }
             for media_worker_id in contribution.consumer_workers {
-                load_set.record_consumer(media_worker_id);
+                load_index.record_consumer(media_worker_id);
             }
         }
-        load_set.into_loads()
-    }
-
-    fn resolve_placement_decision(
-        &self,
-        room_snapshot: &RoomPlacementUsageSnapshot,
-        decision: RoomPlacementDecision,
-    ) -> LocalRouterRuntimeContext {
-        match decision {
-            RoomPlacementDecision::AssignPrimary { media_worker_id } => LocalRouterRuntimeContext {
-                router: room_snapshot.primary_router(),
-                media_worker: media_worker_id,
-            },
-            RoomPlacementDecision::UseExisting(placement) => placement,
-            RoomPlacementDecision::AllocateSpillover { media_worker_id } => {
-                LocalRouterRuntimeContext {
-                    router: self.factory.allocate_spillover_router(),
-                    media_worker: media_worker_id,
-                }
-            }
-        }
+        load_index
     }
 
     /// Closes one runtime connection if the room is still current.

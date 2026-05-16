@@ -19,8 +19,8 @@
 //!
 //! The file exists to keep one clear contract at the room boundary:
 //!
-//! - immutable room identity lives in `RoomDefinition`, while transport
-//!   placement lookup lives in `RoomPlacementDirectory`
+//! - immutable room identity lives in `RoomDefinition`, while committed
+//!   placement lookup lives in `RoomPlacementLedger`
 //! - mutable membership and media topology live behind `RoomState`
 //! - websocket and transport work must happen after room locks are released
 //! - signaling code consumes high-level room events instead of reaching into
@@ -41,7 +41,7 @@ use super::{
     events::RoomEventMessage,
     lifecycle::UserCloseReason,
     media_transaction::PendingPublishTransactions,
-    placement::{RoomPlacementDirectory, RoomPlacementUsageSnapshot, RoomWorkerLoadContribution},
+    placement::{RoomPlacementLedger, RoomPlacementUsageSnapshot, RoomWorkerLoadContribution},
     state::{ConsumerRouteState, RemoteTrackBootstrap, RoomState},
 };
 use crate::{
@@ -583,12 +583,12 @@ pub struct Room {
     /// `definition` is the stable read-only half of the room, while `state`
     /// contains the mutable membership and media graph.
     pub(super) definition: RoomDefinition,
-    /// Mutable transport placement lookup for committed room connections.
+    /// Mutable placement lookup for committed room connections.
     ///
-    /// The pure topology owns router execution state. This directory keeps the
-    /// transport worker address needed to build session keys after placement
+    /// The pure topology owns router execution state. This ledger keeps the
+    /// full committed placement needed to build session keys after placement
     /// has been committed.
-    pub(super) placement_directory: RoomPlacementDirectory,
+    pub(super) placement_ledger: RoomPlacementLedger,
     #[allow(
         dead_code,
         reason = "recording control-plane wiring is intentionally deferred until the replacement baseline is validated"
@@ -664,9 +664,7 @@ impl Room {
         Self {
             diagnostics,
             definition,
-            placement_directory: RoomPlacementDirectory::new(
-                runtime_context.local_routers().primary(),
-            ),
+            placement_ledger: RoomPlacementLedger::new(runtime_context.local_routers().primary()),
             recording_service: Arc::clone(&recording_service),
             metrics,
             cleanup_reconciler: StdMutex::new(CleanupReconciler::default()),
@@ -704,7 +702,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> TransportSessionKey {
-        self.placement_directory.transport_user_key(
+        self.placement_ledger.transport_user_key(
             self.definition.instance_id(),
             user_id,
             connection_id,
@@ -905,7 +903,7 @@ impl Room {
     /// Runtime diagnostics and transport command paths use this to route work
     /// to the correct RTC worker.
     pub fn media_worker_id(&self) -> usize {
-        self.placement_directory.media_worker_id()
+        self.placement_ledger.media_worker_id()
     }
 
     pub(in crate::runtime::room) fn room_worker_policy(&self) -> RoomWorkerPolicy {
@@ -970,7 +968,7 @@ impl Room {
             })
             .collect();
         state.diagnostics_user_views(
-            self.placement_directory.media_worker_id(),
+            self.placement_ledger.media_worker_id(),
             &transport_by_session,
         )
     }
@@ -1036,10 +1034,7 @@ impl fmt::Debug for Room {
         formatter
             .debug_struct("Room")
             .field("instance_id", &self.definition.instance_id())
-            .field(
-                "media_worker_id",
-                &self.placement_directory.media_worker_id(),
-            )
+            .field("media_worker_id", &self.placement_ledger.media_worker_id())
             .field("uuid", &self.definition.uuid())
             .field("issuer", &self.definition.issuer())
             .field("web_rtc_enabled", &self.definition.web_rtc_enabled())
