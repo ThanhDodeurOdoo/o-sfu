@@ -2,7 +2,7 @@ use super::support::*;
 
 #[tokio::test]
 async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish_removal() {
-    let server = spawn_protocol_test_server(1_000, 100).await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -101,14 +101,10 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
 #[tokio::test]
 async fn protocol_core_publish_round_trips_through_real_server_user_protocol() {
     let adapter = Arc::new(FakeMediaTransport::default());
-    let server = spawn_test_server_with_timeouts(
-        1_000,
-        10_000,
-        60_000,
-        100,
-        MediaTransport::from_fake_transport(Arc::clone(&adapter)),
-    )
-    .await;
+    let server = TestServerBuilder::new()
+        .media_transport(MediaTransport::from_fake_transport(Arc::clone(&adapter)))
+        .spawn()
+        .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -193,7 +189,10 @@ async fn protocol_core_publish_round_trips_through_real_server_user_protocol() {
 
 #[tokio::test]
 async fn protocol_core_publish_round_trips_through_real_rtc_server_user_protocol() {
-    let server = spawn_protocol_rtc_test_server(1_000, 100).await;
+    let server = TestServerBuilder::new()
+        .media_transport(build_real_rtc_media_transport())
+        .spawn()
+        .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -298,7 +297,10 @@ async fn protocol_core_publish_round_trips_through_real_rtc_server_user_protocol
 
 #[tokio::test]
 async fn protocol_handshake_uses_answer_derived_client_capabilities_for_user_state() {
-    let server = spawn_protocol_rtc_test_server(1_000, 100).await;
+    let server = TestServerBuilder::new()
+        .media_transport(build_real_rtc_media_transport())
+        .spawn()
+        .await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;

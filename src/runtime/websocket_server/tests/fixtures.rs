@@ -25,15 +25,13 @@ pub(super) use tokio_tungstenite::{
     },
 };
 
-use crate::config::RoomWorkerPolicy;
 pub(super) use crate::{
     application::stream_catalog::{
         source_publish_intent_for_stream_type, stream_id_for_stream_type,
     },
     config::{
-        AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
-        MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig, TransportConfig,
-        UserConfig, VideoBitrateLimits,
+        Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
+        VideoBitrateLimits,
     },
     runtime::{
         RoomPacketSinkRegistry, RuntimeState,
@@ -45,89 +43,16 @@ pub(super) use crate::{
             SessionBitrateLimits,
             test_support::{FakeMediaTransport, FakeMediaTransportEvent},
         },
-        metrics::{
-            MetricName, RuntimeMetrics, RuntimeMetricsSnapshot,
-            test_support::RuntimeMetricsSnapshotLookup,
-        },
-        room::{
-            DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY, Room,
-            RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomManagerDeps,
-            RoomRuntimePolicy, rtp_capabilities,
-        },
+        metrics::RuntimeMetrics,
+        room::{Room, RoomConfig, RoomManager},
+        test_support::{RuntimeMetricsSnapshotTestExt, RuntimeTestBuilder, TEST_AUTH_KEY},
     },
 };
 
-pub(super) const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
 pub(super) type TestWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
 pub(super) type CreateRoomQuery = RoomConfig;
-
-pub(super) trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
-    fn ws_connections_accepted(&self) -> u64 {
-        self.counter_value(MetricName::WsConnectionsTotal, &[("stage", "accepted")])
-    }
-
-    fn ws_handshake_credentials_received(&self) -> u64 {
-        self.counter_value(
-            MetricName::WsConnectionsTotal,
-            &[("stage", "credentials_received")],
-        )
-    }
-
-    fn ws_users_joined(&self) -> u64 {
-        self.counter_value(MetricName::WsConnectionsTotal, &[("stage", "joined")])
-    }
-
-    fn ws_handshake_rejected_timeout(&self) -> u64 {
-        self.counter_value(
-            MetricName::WsHandshakeRejectionsTotal,
-            &[("close_code", "auth_timeout")],
-        )
-    }
-
-    fn ws_handshake_rejected_protocol_error(&self) -> u64 {
-        self.counter_value(
-            MetricName::WsHandshakeRejectionsTotal,
-            &[("close_code", "protocol_error")],
-        )
-    }
-
-    fn ws_handshake_rejected_error(&self) -> u64 {
-        self.counter_value(
-            MetricName::WsHandshakeRejectionsTotal,
-            &[("close_code", "error")],
-        )
-    }
-
-    fn ws_user_loops_started(&self) -> u64 {
-        self.counter_value(MetricName::WsUserLoopsStartedTotal, &[])
-    }
-
-    fn ws_user_loop_exits_ping_timeout(&self) -> u64 {
-        self.counter_value(
-            MetricName::WsUserLoopExitsTotal,
-            &[("reason", "ping_timeout")],
-        )
-    }
-
-    fn ws_bus_parse_failures(&self) -> u64 {
-        self.counter_value(MetricName::WsBusParseFailuresTotal, &[])
-    }
-
-    fn ws_bus_invalid_input_failures(&self) -> u64 {
-        self.counter_value(MetricName::WsBusFailuresTotal, &[("kind", "invalid_input")])
-    }
-
-    fn ws_bus_unsupported_feature_failures(&self) -> u64 {
-        self.counter_value(
-            MetricName::WsBusFailuresTotal,
-            &[("kind", "unsupported_feature")],
-        )
-    }
-}
-
-impl RuntimeMetricsSnapshotTestExt for RuntimeMetricsSnapshot {}
 
 /// App-level WebSocket subsystem fixture.
 ///
@@ -154,219 +79,84 @@ impl Drop for TestServer {
     }
 }
 
-pub(super) fn test_config(
-    authentication_timeout_ms: u64,
-    user_timeout_ms: u64,
-    ping_interval_ms: u64,
-    room_size: usize,
-) -> Config {
-    Config {
-        auth: AuthConfig {
-            key: TEST_AUTH_KEY.to_owned(),
-            authentication_timeout_ms,
-            max_pre_auth_websocket_sessions: 512,
-            max_pre_auth_websocket_sessions_per_origin: 16,
-        },
-        http: HttpConfig {
-            bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
-            trust_proxy_headers: false,
-        },
-        user: UserConfig {
-            room_size,
-            timeout_ms: user_timeout_ms,
-            ping_interval_ms,
-            outbound_queue_capacity: DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
-            outbound_queue_byte_capacity: DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY,
-        },
-        transport: TransportConfig {
-            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            rtc_port_range: RtcPortRange::new(40_000, 49_999),
-            max_bitrate_in: Bitrate::from_mbps(8),
-            max_bitrate_out: Bitrate::from_mbps(10),
-            video_bitrate_limits: VideoBitrateLimits::default(),
-            rtc_media_worker_count: 1,
-            room_worker_policy: RoomWorkerPolicy::strict_single_router(),
-        },
-        codecs: CodecConfig {
-            flags: MediaCodecFlags::default(),
-            preferences: CodecPreferences::default(),
-        },
-        features: RuntimeFeatureFlags::default(),
-        telemetry: TelemetryConfig::default(),
-        diagnostics: DiagnosticsConfig::default(),
+pub(super) struct TestServerBuilder {
+    runtime: RuntimeTestBuilder,
+}
+
+impl TestServerBuilder {
+    pub(super) fn new() -> Self {
+        Self {
+            runtime: RuntimeTestBuilder::new(),
+        }
+    }
+
+    pub(super) fn authentication_timeout_ms(mut self, value: u64) -> Self {
+        self.runtime = self.runtime.authentication_timeout_ms(value);
+        self
+    }
+
+    pub(super) fn user_timeout_ms(mut self, value: u64) -> Self {
+        self.runtime = self.runtime.user_timeout_ms(value);
+        self
+    }
+
+    pub(super) fn ping_interval_ms(mut self, value: u64) -> Self {
+        self.runtime = self.runtime.ping_interval_ms(value);
+        self
+    }
+
+    pub(super) fn room_size(mut self, value: usize) -> Self {
+        self.runtime = self.runtime.room_size(value);
+        self
+    }
+
+    pub(super) fn pre_auth_capacity(mut self, total: usize, per_origin: usize) -> Self {
+        self.runtime = self.runtime.pre_auth_capacity(total, per_origin);
+        self
+    }
+
+    pub(super) fn trust_proxy_headers(mut self, value: bool) -> Self {
+        self.runtime = self.runtime.trust_proxy_headers(value);
+        self
+    }
+
+    pub(super) fn media_transport(mut self, value: MediaTransport) -> Self {
+        self.runtime = self.runtime.media_transport(value);
+        self
+    }
+
+    pub(super) fn feature_flags(mut self, value: RuntimeFeatureFlags) -> Self {
+        self.runtime = self.runtime.feature_flags(value);
+        self
+    }
+
+    pub(super) async fn spawn(self) -> Option<TestServer> {
+        let bind_address = self.runtime.config().http.bind_address;
+        let runtime = self.runtime.build_state();
+        let state_for_server = runtime.state.clone();
+        let listener = TcpListener::bind(bind_address).await.ok()?;
+        let addr = listener.local_addr().ok()?;
+        let handle = tokio::spawn(async move {
+            let result = axum::serve(listener, app(state_for_server)).await;
+            assert!(
+                result.is_ok(),
+                "test server should stop cleanly: {result:?}"
+            );
+        });
+        Some(TestServer {
+            addr,
+            handle,
+            room_manager: runtime.room_manager,
+            media_transport: runtime.media_transport,
+            state: runtime.state,
+        })
     }
 }
 
-pub(super) async fn spawn_test_server(
-    authentication_timeout_ms: u64,
-    room_size: usize,
-) -> Option<TestServer> {
-    spawn_test_server_with_timeouts(
-        authentication_timeout_ms,
-        10_000,
-        60_000,
-        room_size,
-        MediaTransport::fake_for_testing(),
-    )
-    .await
-}
-
-pub(super) async fn spawn_test_server_with_timeouts(
-    authentication_timeout_ms: u64,
-    user_timeout_ms: u64,
-    ping_interval_ms: u64,
-    room_size: usize,
-    media_transport: MediaTransport,
-) -> Option<TestServer> {
-    spawn_test_server_impl(
-        authentication_timeout_ms,
-        user_timeout_ms,
-        ping_interval_ms,
-        room_size,
-        media_transport,
-        RuntimeFeatureFlags::default(),
-    )
-    .await
-}
-
-async fn spawn_test_server_impl(
-    authentication_timeout_ms: u64,
-    user_timeout_ms: u64,
-    ping_interval_ms: u64,
-    room_size: usize,
-    media_transport: MediaTransport,
-    feature_flags: RuntimeFeatureFlags,
-) -> Option<TestServer> {
-    let mut config = test_config(
-        authentication_timeout_ms,
-        user_timeout_ms,
-        ping_interval_ms,
-        room_size,
-    );
-    config.features = feature_flags;
-    spawn_test_server_from_config(config, media_transport).await
-}
-
-async fn spawn_test_server_from_config(
-    config: Config,
-    media_transport: MediaTransport,
-) -> Option<TestServer> {
-    let diagnostics = Arc::new(DiagnosticsStore::default());
-    let metrics = Arc::new(RuntimeMetrics::default());
-    let room_manager = Arc::new(RoomManager::new(
-        RoomManagerConfig::new(
-            1,
-            RoomRuntimePolicy::new(
-                RoomAdmissionPolicy::new(config.user.room_size),
-                config.features,
-                rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
-            )
-            .with_room_worker_policy(config.transport.room_worker_policy),
-        ),
-        RoomManagerDeps {
-            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
-            diagnostics: Arc::clone(&diagnostics),
-            metrics: Arc::clone(&metrics),
-        },
-    ));
-    let bind_address = config.http.bind_address;
-    let state = RuntimeState::for_config_parts(
-        &config,
-        Arc::clone(&room_manager),
-        Arc::clone(&diagnostics),
-        metrics,
-        media_transport.clone(),
-    );
-    let state_for_server = state.clone();
-    let listener = TcpListener::bind(bind_address).await.ok()?;
-    let addr = listener.local_addr().ok()?;
-    let handle = tokio::spawn(async move {
-        let result = axum::serve(listener, app(state_for_server)).await;
-        assert!(
-            result.is_ok(),
-            "test server should stop cleanly: {result:?}"
-        );
-    });
-    Some(TestServer {
-        addr,
-        handle,
-        room_manager,
-        media_transport,
-        state,
-    })
-}
-
-pub(super) async fn spawn_test_server_with_pre_auth_capacity(
-    authentication_timeout_ms: u64,
-    room_size: usize,
-    max_pre_auth_websocket_sessions: usize,
-    max_pre_auth_websocket_sessions_per_origin: usize,
-) -> Option<TestServer> {
-    let mut config = test_config(authentication_timeout_ms, 10_000, 60_000, room_size);
-    config.auth.max_pre_auth_websocket_sessions = max_pre_auth_websocket_sessions;
-    config.auth.max_pre_auth_websocket_sessions_per_origin =
-        max_pre_auth_websocket_sessions_per_origin;
-    spawn_test_server_from_config(config, MediaTransport::fake_for_testing()).await
-}
-
-pub(super) async fn spawn_proxy_trusted_test_server_with_pre_auth_capacity(
-    authentication_timeout_ms: u64,
-    room_size: usize,
-    max_pre_auth_websocket_sessions: usize,
-    max_pre_auth_websocket_sessions_per_origin: usize,
-) -> Option<TestServer> {
-    let mut config = test_config(authentication_timeout_ms, 10_000, 60_000, room_size);
-    config.http.trust_proxy_headers = true;
-    config.auth.max_pre_auth_websocket_sessions = max_pre_auth_websocket_sessions;
-    config.auth.max_pre_auth_websocket_sessions_per_origin =
-        max_pre_auth_websocket_sessions_per_origin;
-    spawn_test_server_from_config(config, MediaTransport::fake_for_testing()).await
-}
-
-pub(super) async fn spawn_test_server_with_adapter(
-    authentication_timeout_ms: u64,
-    room_size: usize,
-    media_transport: MediaTransport,
-) -> Option<TestServer> {
-    spawn_test_server_with_timeouts(
-        authentication_timeout_ms,
-        10_000,
-        60_000,
-        room_size,
-        media_transport,
-    )
-    .await
-}
-
-pub(super) async fn spawn_protocol_test_server(
-    authentication_timeout_ms: u64,
-    room_size: usize,
-) -> Option<TestServer> {
-    spawn_test_server_with_timeouts(
-        authentication_timeout_ms,
-        10_000,
-        60_000,
-        room_size,
-        MediaTransport::fake_for_testing(),
-    )
-    .await
-}
-
-pub(super) async fn spawn_test_server_with_feature_flags(
-    authentication_timeout_ms: u64,
-    room_size: usize,
-    media_transport: MediaTransport,
-    feature_flags: RuntimeFeatureFlags,
-) -> Option<TestServer> {
-    spawn_test_server_impl(
-        authentication_timeout_ms,
-        10_000,
-        60_000,
-        room_size,
-        media_transport,
-        feature_flags,
-    )
-    .await
+impl Default for TestServerBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[allow(
@@ -397,20 +187,6 @@ pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
         Ok(transport) => MediaTransport::from_rtc_transport(transport),
         Err(error) => panic!("constant RTC test transport config should be valid: {error}"),
     }
-}
-
-pub(super) async fn spawn_protocol_rtc_test_server(
-    authentication_timeout_ms: u64,
-    room_size: usize,
-) -> Option<TestServer> {
-    spawn_test_server_with_timeouts(
-        authentication_timeout_ms,
-        10_000,
-        60_000,
-        room_size,
-        build_real_rtc_media_transport(),
-    )
-    .await
 }
 
 pub(super) async fn wait_for_fake_webrtc_events(

@@ -106,14 +106,10 @@ pub(crate) async fn setup_fake_protocol_peers(
     ProtocolHarnessPeer,
     ProtocolHarnessPeer,
 )> {
-    let server = spawn_test_server_with_timeouts(
-        1_000,
-        10_000,
-        60_000,
-        100,
-        MediaTransport::from_fake_transport(adapter),
-    )
-    .await?;
+    let server = TestServerBuilder::new()
+        .media_transport(MediaTransport::from_fake_transport(adapter))
+        .spawn()
+        .await?;
     let room = create_room(&server, room_name, None, CreateRoomQuery::default()).await;
     let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), alice_user_id.clone())?;
     let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), bob_user_id.clone())?;
@@ -141,7 +137,10 @@ pub(crate) async fn setup_real_rtc_protocol_peers(
     ProtocolHarnessPeer,
     ProtocolHarnessPeer,
 )> {
-    let server = spawn_protocol_rtc_test_server(1_000, 100).await?;
+    let server = TestServerBuilder::new()
+        .media_transport(build_real_rtc_media_transport())
+        .spawn()
+        .await?;
     let room = create_room(&server, room_name, None, CreateRoomQuery::default()).await;
     let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), alice_user_id)?;
     let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), bob_user_id.clone())?;
@@ -167,7 +166,7 @@ pub(crate) async fn setup_protocol_recovery_peers(
     ProtocolHarnessPeer,
     ProtocolHarnessPeer,
 )> {
-    let server = spawn_protocol_test_server(1_000, 100).await?;
+    let server = TestServerBuilder::new().spawn().await?;
     let room = create_room(
         &server,
         "issuer-protocol-recovery",

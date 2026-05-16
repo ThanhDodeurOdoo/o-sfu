@@ -41,6 +41,8 @@ pub(crate) mod diagnostics;
 pub(crate) mod http_server;
 pub(crate) mod options;
 pub(crate) mod request_origin;
+#[cfg(test)]
+pub(super) mod test_support;
 pub(crate) mod websocket_server;
 
 pub(crate) use diagnostics::DiagnosticsStore;

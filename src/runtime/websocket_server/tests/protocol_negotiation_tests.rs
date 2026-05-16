@@ -72,7 +72,7 @@ async fn protocol_user_serializes_topology_renegotiations() {
 
 async fn setup_negotiated_protocol_pair()
 -> Option<(TestServer, Arc<Room>, TestWebSocket, TestWebSocket)> {
-    let server = spawn_protocol_test_server(1_000, 100).await?;
+    let server = TestServerBuilder::new().spawn().await?;
     let room = create_room(
         &server,
         "issuer-protocol-negotiation",

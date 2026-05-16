@@ -35,7 +35,7 @@ async fn authenticated_protocol_websocket(
     user_id: UserId,
 ) -> (TestServer, Arc<Room>, TestWebSocket) {
     let server = require_some(
-        spawn_test_server(1_000, 100).await,
+        TestServerBuilder::new().spawn().await,
         "test websocket server should start",
     );
     let room = create_room(&server, issuer, None, CreateRoomQuery::default()).await;
@@ -105,7 +105,7 @@ async fn websocket_rejects_invalid_json_payload() {
 #[tokio::test]
 async fn websocket_rejects_oversized_auth_frame() {
     let server = require_some(
-        spawn_test_server(1_000, 100).await,
+        TestServerBuilder::new().spawn().await,
         "test websocket server should start",
     );
     let mut websocket = require_some(
