@@ -26,9 +26,8 @@ use crate::runtime::{
         route_control::{PacketLayerGate, PacketOperatingPointGate},
         state::PacketLoopState,
         test_support::{
-            RouteDestinationFixture, RouteSourceFixture, sample_forwarded_packet,
-            sample_forwarded_packet_with_frame_mark, sample_forwarded_packet_with_rid,
-            test_transport_session_key,
+            MediaWorkerScenario, sample_forwarded_packet, sample_forwarded_packet_with_frame_mark,
+            sample_forwarded_packet_with_rid, test_transport_session_key,
         },
     },
 };
@@ -93,10 +92,13 @@ fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() 
     let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
-    let source_transport_media_id =
-        RouteSourceFixture::new(producer_session.clone(), Mid::from("aud-up")).install(&mut state);
-    RouteDestinationFixture::new(consumer_session.clone(), Mid::from("aud-down"))
-        .install(&mut state, source_transport_media_id);
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    let source_transport_media_id = scenario.source(producer_session.clone(), Mid::from("aud-up"));
+    scenario.destination(
+        source_transport_media_id,
+        consumer_session.clone(),
+        Mid::from("aud-down"),
+    );
     let pending_packets = vec![sample_forwarded_packet(
         producer_session,
         "aud-up",
@@ -130,10 +132,13 @@ fn populate_forward_routes_keeps_recording_and_local_rtc_destinations_together()
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let sink = Arc::new(CountingSink::new());
-    let source_transport_media_id =
-        RouteSourceFixture::new(producer_session.clone(), Mid::from("aud-up")).install(&mut state);
-    RouteDestinationFixture::new(consumer_session, Mid::from("aud-down"))
-        .install(&mut state, source_transport_media_id);
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    let source_transport_media_id = scenario.source(producer_session.clone(), Mid::from("aud-up"));
+    scenario.destination(
+        source_transport_media_id,
+        consumer_session,
+        Mid::from("aud-down"),
+    );
     packet_sink_registry.register_room(
         producer_session.room_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&sink)),
@@ -175,11 +180,14 @@ fn populate_forward_routes_reserves_dense_fanout_before_pushing_destinations() {
     let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
-    let source_transport_media_id =
-        RouteSourceFixture::new(producer_session.clone(), Mid::from("cam-up")).install(&mut state);
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    let source_transport_media_id = scenario.source(producer_session.clone(), Mid::from("cam-up"));
     for _ in 0..DESTINATION_COUNT {
-        RouteDestinationFixture::new(consumer_session.clone(), Mid::from("cam-down"))
-            .install(&mut state, source_transport_media_id);
+        scenario.destination(
+            source_transport_media_id,
+            consumer_session.clone(),
+            Mid::from("cam-down"),
+        );
     }
     let mut pending_packets = vec![sample_forwarded_packet(
         producer_session,
@@ -210,10 +218,13 @@ fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc
     let recording_sink = Arc::new(CountingSink::new());
     let (first_relay_mailbox, _first_relay_rx) = RelayPacketMailbox::channel_for_test();
     let (second_relay_mailbox, _second_relay_rx) = RelayPacketMailbox::channel_for_test();
-    let source_transport_media_id =
-        RouteSourceFixture::new(producer_session.clone(), Mid::from("aud-up")).install(&mut state);
-    RouteDestinationFixture::new(consumer_session, Mid::from("aud-down"))
-        .install(&mut state, source_transport_media_id);
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    let source_transport_media_id = scenario.source(producer_session.clone(), Mid::from("aud-up"));
+    scenario.destination(
+        source_transport_media_id,
+        consumer_session,
+        Mid::from("aud-down"),
+    );
     packet_sink_registry.register_room(
         producer_session.room_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
@@ -276,14 +287,13 @@ fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_r
     let recording_sink = Arc::new(CountingSink::new());
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
     let source_transport_media_id = TransportMediaId::new(51);
-    RouteSourceFixture::existing(
-        producer_session.clone(),
-        Mid::from("aud-up"),
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    scenario.existing_source(source_transport_media_id);
+    scenario.destination(
         source_transport_media_id,
-    )
-    .install(&mut state);
-    RouteDestinationFixture::new(consumer_session, Mid::from("aud-down"))
-        .install(&mut state, source_transport_media_id);
+        consumer_session,
+        Mid::from("aud-down"),
+    );
     packet_sink_registry.register_room(
         producer_session.room_instance_id(),
         into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
@@ -326,14 +336,16 @@ fn populate_forward_routes_only_relays_the_registered_source_media() {
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
+    let mut scenario = MediaWorkerScenario::new(&mut state);
     let first_source_transport_media_id =
-        RouteSourceFixture::new(first_producer_session.clone(), Mid::from("aud-up-1"))
-            .install(&mut state);
+        scenario.source(first_producer_session.clone(), Mid::from("aud-up-1"));
     let second_source_transport_media_id =
-        RouteSourceFixture::new(second_producer_session.clone(), Mid::from("aud-up-2"))
-            .install(&mut state);
-    RouteDestinationFixture::new(remote_consumer_session, Mid::from("aud-down"))
-        .install(&mut state, first_source_transport_media_id);
+        scenario.source(second_producer_session.clone(), Mid::from("aud-up-2"));
+    scenario.destination(
+        first_source_transport_media_id,
+        remote_consumer_session,
+        Mid::from("aud-down"),
+    );
     state.add_relay_target(
         first_source_transport_media_id,
         RelayTargetId::new(1),
@@ -379,8 +391,8 @@ fn populate_forward_routes_plans_inter_node_relay_targets_without_new_packet_sha
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
     let (inter_node_sender, _inter_node_rx) = InterNodeRelaySender::channel_for_test();
-    let source_transport_media_id =
-        RouteSourceFixture::new(producer_session.clone(), Mid::from("aud-up")).install(&mut state);
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    let source_transport_media_id = scenario.source(producer_session.clone(), Mid::from("aud-up"));
 
     state.add_relay_target(
         source_transport_media_id,
@@ -424,14 +436,20 @@ fn populate_forward_routes_enforces_per_consumer_rid_gates_after_aggregate_admit
     let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
-    let source_transport_media_id =
-        RouteSourceFixture::new(producer_session.clone(), Mid::from("cam-up")).install(&mut state);
-    RouteDestinationFixture::new(lo_consumer_session.clone(), Mid::from("cam-down-lo"))
-        .packet_gate(PacketLayerGate::Rid("lo".into()))
-        .install(&mut state, source_transport_media_id);
-    RouteDestinationFixture::new(hi_consumer_session.clone(), Mid::from("cam-down-hi"))
-        .packet_gate(PacketLayerGate::Rid("hi".into()))
-        .install(&mut state, source_transport_media_id);
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    let source_transport_media_id = scenario.source(producer_session.clone(), Mid::from("cam-up"));
+    scenario.destination_with_gate(
+        source_transport_media_id,
+        lo_consumer_session.clone(),
+        Mid::from("cam-down-lo"),
+        PacketLayerGate::Rid("lo".into()),
+    );
+    scenario.destination_with_gate(
+        source_transport_media_id,
+        hi_consumer_session.clone(),
+        Mid::from("cam-down-hi"),
+        PacketLayerGate::Rid("hi".into()),
+    );
     state
         .route_control
         .set_local_packet_gate(source_transport_media_id, Some(PacketLayerGate::Open));
@@ -482,18 +500,20 @@ fn populate_forward_routes_enforces_per_consumer_temporal_ceilings_after_aggrega
     let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
-    let source_transport_media_id =
-        RouteSourceFixture::new(producer_session.clone(), Mid::from("cam-up")).install(&mut state);
-    RouteDestinationFixture::new(base_consumer_session.clone(), Mid::from("cam-down-base"))
-        .packet_gate(PacketLayerGate::OperatingPoint(
-            PacketOperatingPointGate::new(Some("hi".into()), 0),
-        ))
-        .install(&mut state, source_transport_media_id);
-    RouteDestinationFixture::new(high_consumer_session.clone(), Mid::from("cam-down-high"))
-        .packet_gate(PacketLayerGate::OperatingPoint(
-            PacketOperatingPointGate::new(Some("hi".into()), 2),
-        ))
-        .install(&mut state, source_transport_media_id);
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    let source_transport_media_id = scenario.source(producer_session.clone(), Mid::from("cam-up"));
+    scenario.destination_with_gate(
+        source_transport_media_id,
+        base_consumer_session.clone(),
+        Mid::from("cam-down-base"),
+        PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 0)),
+    );
+    scenario.destination_with_gate(
+        source_transport_media_id,
+        high_consumer_session.clone(),
+        Mid::from("cam-down-high"),
+        PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 2)),
+    );
     state.route_control.set_local_packet_gate(
         source_transport_media_id,
         Some(PacketLayerGate::OperatingPoint(
@@ -559,8 +579,8 @@ fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admit
     let metrics = RuntimeMetrics::default();
     let (intra_node_mailbox, _intra_node_rx) = RelayPacketMailbox::channel_for_test();
     let (inter_node_sender, _inter_node_rx) = InterNodeRelaySender::channel_for_test();
-    let source_transport_media_id =
-        RouteSourceFixture::new(producer_session.clone(), Mid::from("cam-up")).install(&mut state);
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    let source_transport_media_id = scenario.source(producer_session.clone(), Mid::from("cam-up"));
     let hi_target_id = RelayTargetId::new(1);
     let lo_target_id = RelayTargetId::new(2);
     state.add_relay_target(
@@ -635,16 +655,21 @@ fn populate_forward_routes_gates_only_the_selected_source_media() {
     let metrics = RuntimeMetrics::default();
     let recording_sink = Arc::new(CountingSink::new());
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
+    let mut scenario = MediaWorkerScenario::new(&mut state);
     let gated_source_transport_media_id =
-        RouteSourceFixture::new(gated_producer_session.clone(), Mid::from("cam-up"))
-            .install(&mut state);
+        scenario.source(gated_producer_session.clone(), Mid::from("cam-up"));
     let open_source_transport_media_id =
-        RouteSourceFixture::new(open_producer_session.clone(), Mid::from("screen-up"))
-            .install(&mut state);
-    RouteDestinationFixture::new(gated_consumer_session, Mid::from("cam-down"))
-        .install(&mut state, gated_source_transport_media_id);
-    RouteDestinationFixture::new(open_consumer_session.clone(), Mid::from("screen-down"))
-        .install(&mut state, open_source_transport_media_id);
+        scenario.source(open_producer_session.clone(), Mid::from("screen-up"));
+    scenario.destination(
+        gated_source_transport_media_id,
+        gated_consumer_session,
+        Mid::from("cam-down"),
+    );
+    scenario.destination(
+        open_source_transport_media_id,
+        open_consumer_session.clone(),
+        Mid::from("screen-down"),
+    );
     state.set_local_packet_gate(
         gated_source_transport_media_id,
         PacketLayerGate::Rid("hi".into()),
@@ -706,10 +731,13 @@ fn populate_forward_routes_applies_operating_point_packet_gates() {
     let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
-    let source_transport_media_id =
-        RouteSourceFixture::new(producer_session.clone(), Mid::from("cam-up")).install(&mut state);
-    RouteDestinationFixture::new(consumer_session.clone(), Mid::from("cam-down"))
-        .install(&mut state, source_transport_media_id);
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    let source_transport_media_id = scenario.source(producer_session.clone(), Mid::from("cam-up"));
+    scenario.destination(
+        source_transport_media_id,
+        consumer_session.clone(),
+        Mid::from("cam-down"),
+    );
     state.set_local_packet_gate(
         source_transport_media_id,
         PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 1)),

@@ -12,7 +12,7 @@ use o_sfu_router::{
 use str0m::media::Mid;
 use tokio::time::timeout;
 
-use super::{MediaTransport, RtcTransport, RtcTransportBuildError};
+use super::{MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder};
 use crate::{
     Bitrate, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
     runtime::{
@@ -41,6 +41,26 @@ fn test_session_key(
         ConnectionId::from_raw(connection_id),
         user_id,
     )
+}
+
+fn test_rtc_builder(rtc_port_range: RtcPortRange) -> RtcTransportBuilder {
+    RtcTransport::builder()
+        .transport_config(RtcTransportConfig {
+            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            bitrate_limits: SessionBitrateLimits::new(
+                Bitrate::from_mbps(8),
+                Bitrate::from_mbps(10),
+            ),
+            video_bitrate_limits: crate::VideoBitrateLimits::default(),
+            rtc_port_range,
+            codec_flags: MediaCodecFlags::default(),
+            codec_preferences: crate::CodecPreferences::default(),
+        })
+        .deps(MediaTransportDeps {
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
+            metrics: Arc::new(RuntimeMetrics::default()),
+        })
 }
 
 fn sample_router_capabilities() -> RouterRtpCapabilities {
@@ -275,23 +295,7 @@ async fn assert_remote_route_activity(
     reason = "media transport tests use fixed valid RTC ranges and should fail immediately if their fixture is invalid"
 )]
 fn test_rtc_engine(worker_count: usize, rtc_port_range: RtcPortRange) -> MediaTransport {
-    match RtcTransport::builder()
-        .transport_config(RtcTransportConfig {
-            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(
-                Bitrate::from_mbps(8),
-                Bitrate::from_mbps(10),
-            ),
-            video_bitrate_limits: crate::VideoBitrateLimits::default(),
-            rtc_port_range,
-            codec_flags: MediaCodecFlags::default(),
-            codec_preferences: crate::CodecPreferences::default(),
-        })
-        .deps(MediaTransportDeps {
-            diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
-            metrics: Arc::new(RuntimeMetrics::default()),
-        })
+    match test_rtc_builder(rtc_port_range)
         .worker_count(worker_count)
         .build()
     {
@@ -310,47 +314,14 @@ fn first_candidate_port(offer_sdp: &str) -> Option<u16> {
 
 #[test]
 fn rtc_transport_builder_uses_one_worker_by_default() {
-    let result = RtcTransport::builder()
-        .transport_config(RtcTransportConfig {
-            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(
-                Bitrate::from_mbps(8),
-                Bitrate::from_mbps(10),
-            ),
-            video_bitrate_limits: crate::VideoBitrateLimits::default(),
-            rtc_port_range: RtcPortRange::new(46_200, 46_200),
-            codec_flags: MediaCodecFlags::default(),
-            codec_preferences: crate::CodecPreferences::default(),
-        })
-        .deps(MediaTransportDeps {
-            diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
-            metrics: Arc::new(RuntimeMetrics::default()),
-        })
-        .build();
+    let result = test_rtc_builder(RtcPortRange::new(46_200, 46_200)).build();
 
     assert!(result.is_ok());
 }
 
 #[test]
 fn rtc_transport_builder_rejects_invalid_worker_count() {
-    let result = RtcTransport::builder()
-        .transport_config(RtcTransportConfig {
-            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(
-                Bitrate::from_mbps(8),
-                Bitrate::from_mbps(10),
-            ),
-            video_bitrate_limits: crate::VideoBitrateLimits::default(),
-            rtc_port_range: RtcPortRange::new(46_210, 46_211),
-            codec_flags: MediaCodecFlags::default(),
-            codec_preferences: crate::CodecPreferences::default(),
-        })
-        .deps(MediaTransportDeps {
-            diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
-            metrics: Arc::new(RuntimeMetrics::default()),
-        })
+    let result = test_rtc_builder(RtcPortRange::new(46_210, 46_211))
         .worker_count(0)
         .build();
 
@@ -362,23 +333,7 @@ fn rtc_transport_builder_rejects_invalid_worker_count() {
 
 #[test]
 fn rtc_transport_builder_rejects_invalid_port_split() {
-    let result = RtcTransport::builder()
-        .transport_config(RtcTransportConfig {
-            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(
-                Bitrate::from_mbps(8),
-                Bitrate::from_mbps(10),
-            ),
-            video_bitrate_limits: crate::VideoBitrateLimits::default(),
-            rtc_port_range: RtcPortRange::new(46_220, 46_221),
-            codec_flags: MediaCodecFlags::default(),
-            codec_preferences: crate::CodecPreferences::default(),
-        })
-        .deps(MediaTransportDeps {
-            diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
-            metrics: Arc::new(RuntimeMetrics::default()),
-        })
+    let result = test_rtc_builder(RtcPortRange::new(46_220, 46_221))
         .worker_count(3)
         .build();
 
