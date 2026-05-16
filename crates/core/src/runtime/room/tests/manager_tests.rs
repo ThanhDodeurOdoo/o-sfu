@@ -91,12 +91,8 @@ async fn join_users_for_placement(
     for raw_user_id in raw_user_ids {
         let user_id = UserId::Integer(*raw_user_id);
         let (tx, _rx) = test_sender();
-        let joined = room
-            .test_api()
-            .lifecycle()
-            .join_user(user_id.clone(), None, UserPermissions::default(), tx)
-            .await;
-        users.push((user_id, joined.expect("user should join")));
+        let connection_id = join_user_with_sender(room, user_id.clone(), tx).await;
+        users.push((user_id, connection_id));
     }
     users
 }
@@ -441,17 +437,7 @@ async fn load_triggered_room_keeps_small_room_transport_on_primary_worker()
 
     for raw_user_id in [10_i64, 20] {
         let (tx, _rx) = test_sender();
-        let joined = room
-            .test_api()
-            .lifecycle()
-            .join_user(
-                UserId::Integer(raw_user_id),
-                None,
-                UserPermissions::default(),
-                tx,
-            )
-            .await;
-        assert!(joined.is_ok());
+        join_user_with_sender(&room, UserId::Integer(raw_user_id), tx).await;
     }
 
     for raw_user_id in [10_i64, 20] {
@@ -528,17 +514,7 @@ async fn load_triggered_room_places_new_receivers_on_spillover_worker_after_pres
 
     for raw_user_id in [10_i64, 20] {
         let (tx, _rx) = test_sender();
-        let joined = room
-            .test_api()
-            .lifecycle()
-            .join_user(
-                UserId::Integer(raw_user_id),
-                None,
-                UserPermissions::default(),
-                tx,
-            )
-            .await;
-        assert!(joined.is_ok());
+        join_user_with_sender(&room, UserId::Integer(raw_user_id), tx).await;
     }
     let first_user_id = UserId::Integer(10);
     let second_user_id = UserId::Integer(20);
@@ -734,12 +710,7 @@ async fn room_spillover_diagnostics_reports_each_users_transport_worker() {
     let second_user_id = UserId::Integer(20);
     for user_id in [first_user_id.clone(), second_user_id.clone()] {
         let (tx, _rx) = test_sender();
-        let joined = room
-            .test_api()
-            .lifecycle()
-            .join_user(user_id, None, UserPermissions::default(), tx)
-            .await;
-        assert!(joined.is_ok());
+        join_user_with_sender(&room, user_id, tx).await;
     }
     let adapter = MediaTransport::fake_for_testing();
 
@@ -775,31 +746,9 @@ async fn room_spillover_publish_subscribe_and_leave_cleanup_stay_aligned() {
     let (publisher_tx, _publisher_rx) = test_sender();
     let (subscriber_tx, _subscriber_rx) = test_sender();
 
-    let publisher_join = room
-        .test_api()
-        .lifecycle()
-        .join_user(
-            publisher_id.clone(),
-            None,
-            UserPermissions::default(),
-            publisher_tx,
-        )
-        .await;
-    assert!(publisher_join.is_ok());
-    let subscriber_join = room
-        .test_api()
-        .lifecycle()
-        .join_user(
-            subscriber_id.clone(),
-            None,
-            UserPermissions::default(),
-            subscriber_tx,
-        )
-        .await;
-    assert!(subscriber_join.is_ok());
-    let Some(subscriber_connection) = subscriber_join.ok() else {
-        return;
-    };
+    join_user_with_sender(&room, publisher_id.clone(), publisher_tx).await;
+    let subscriber_connection =
+        join_user_with_sender(&room, subscriber_id.clone(), subscriber_tx).await;
     make_session_ready(&room, &publisher_id).await;
     make_session_ready(&room, &subscriber_id).await;
 

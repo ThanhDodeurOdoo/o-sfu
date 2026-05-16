@@ -75,6 +75,37 @@ pub(super) fn test_connection_id(raw: u64) -> ConnectionId {
     ConnectionId::from_raw(raw)
 }
 
+pub(super) async fn join_user_with_sender(
+    room: &Arc<super::super::Room>,
+    user_id: UserId,
+    sender: UserOutboundSender,
+) -> ConnectionId {
+    room.test_api()
+        .lifecycle()
+        .join_user(user_id, None, UserPermissions::default(), sender)
+        .await
+        .expect("user should join")
+}
+
+pub(super) async fn join_user_with_fake_cleanup(
+    room: &Arc<super::super::Room>,
+    adapter: &MediaTransport,
+    user_id: UserId,
+    sender: UserOutboundSender,
+) -> ConnectionId {
+    room.test_api()
+        .lifecycle()
+        .join_session_without_transport_cleanup(
+            user_id,
+            None,
+            UserPermissions::default(),
+            sender,
+            adapter,
+        )
+        .await
+        .expect("user should join")
+}
+
 pub(super) async fn user_connection_id(
     room: &super::super::Room,
     user_id: &UserId,
@@ -384,12 +415,12 @@ impl StagedPublishScenario {
 }
 
 #[derive(Clone, Copy)]
-struct ReadySessionScenarioOptions {
+struct ReadyRoomFixtureOptions {
     include_fake_adapter: bool,
     publish_camera_before_subscriber_ready: bool,
 }
 
-struct ReadySessionScenario {
+pub(super) struct ReadyRoomFixture {
     room: Arc<super::super::Room>,
     adapter: MediaTransport,
     fake: Option<Arc<FakeMediaTransport>>,
@@ -397,7 +428,7 @@ struct ReadySessionScenario {
     second_rx: UserOutboundReceiver,
 }
 
-impl ReadySessionScenarioOptions {
+impl ReadyRoomFixtureOptions {
     const fn two_ready_users() -> Self {
         Self {
             include_fake_adapter: false,
@@ -420,33 +451,15 @@ impl ReadySessionScenarioOptions {
     }
 }
 
-async fn setup_ready_user_scenario(options: ReadySessionScenarioOptions) -> ReadySessionScenario {
+async fn setup_ready_room_fixture(options: ReadyRoomFixtureOptions) -> ReadyRoomFixture {
     let manager = RoomManager::for_test();
     let room = manager
         .serve_room("issuer-a", None, &RoomConfig::default(), None)
         .await;
     let (first_tx, first_rx) = test_sender();
     let (second_tx, second_rx) = test_sender();
-    room.test_api()
-        .lifecycle()
-        .join_user(
-            UserId::Integer(1),
-            None,
-            UserPermissions::default(),
-            first_tx,
-        )
-        .await
-        .unwrap();
-    room.test_api()
-        .lifecycle()
-        .join_user(
-            UserId::Integer(2),
-            None,
-            UserPermissions::default(),
-            second_tx,
-        )
-        .await
-        .unwrap();
+    join_user_with_sender(&room, UserId::Integer(1), first_tx).await;
+    join_user_with_sender(&room, UserId::Integer(2), second_tx).await;
 
     let (adapter, fake) = if options.include_fake_adapter {
         let (adapter, fake) = fake_adapter();
@@ -458,23 +471,14 @@ async fn setup_ready_user_scenario(options: ReadySessionScenarioOptions) -> Read
     make_session_ready(&room, &UserId::Integer(1)).await;
 
     if options.publish_camera_before_subscriber_ready {
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_video_rtp_parameters(),
-                &adapter,
-            )
-            .await;
+        try_publish_camera(&room, &UserId::Integer(1), &adapter).await;
     }
 
     if !options.publish_camera_before_subscriber_ready {
         make_session_ready(&room, &UserId::Integer(2)).await;
     }
 
-    ReadySessionScenario {
+    ReadyRoomFixture {
         room,
         adapter,
         fake,
@@ -491,12 +495,12 @@ pub(super) async fn setup_two_ready_users() -> (
     UserOutboundReceiver,
     UserOutboundReceiver,
 ) {
-    let scenario = setup_ready_user_scenario(ReadySessionScenarioOptions::two_ready_users()).await;
+    let fixture = setup_ready_room_fixture(ReadyRoomFixtureOptions::two_ready_users()).await;
     (
-        scenario.room,
-        scenario.adapter,
-        scenario.first_rx,
-        scenario.second_rx,
+        fixture.room,
+        fixture.adapter,
+        fixture.first_rx,
+        fixture.second_rx,
     )
 }
 
@@ -507,14 +511,14 @@ pub(super) async fn setup_two_ready_users_with_fake() -> (
     UserOutboundReceiver,
     UserOutboundReceiver,
 ) {
-    let scenario =
-        setup_ready_user_scenario(ReadySessionScenarioOptions::two_ready_users_with_fake()).await;
+    let fixture =
+        setup_ready_room_fixture(ReadyRoomFixtureOptions::two_ready_users_with_fake()).await;
     (
-        scenario.room,
-        scenario.adapter,
-        scenario.fake.unwrap(),
-        scenario.first_rx,
-        scenario.second_rx,
+        fixture.room,
+        fixture.adapter,
+        fixture.fake.unwrap(),
+        fixture.first_rx,
+        fixture.second_rx,
     )
 }
 
@@ -525,14 +529,13 @@ pub(super) async fn setup_late_join_bootstrap_scenario() -> (
     UserOutboundReceiver,
     UserOutboundReceiver,
 ) {
-    let scenario =
-        setup_ready_user_scenario(ReadySessionScenarioOptions::late_join_bootstrap()).await;
+    let fixture = setup_ready_room_fixture(ReadyRoomFixtureOptions::late_join_bootstrap()).await;
     (
-        scenario.room,
-        scenario.adapter,
-        scenario.fake.unwrap(),
-        scenario.first_rx,
-        scenario.second_rx,
+        fixture.room,
+        fixture.adapter,
+        fixture.fake.unwrap(),
+        fixture.first_rx,
+        fixture.second_rx,
     )
 }
 
@@ -565,17 +568,7 @@ pub(super) async fn setup_ready_users_with_fake_receivers(
         let (sender, receiver) = test_sender();
         receivers.push(receiver);
         let user_id = UserId::Integer(raw_user_id);
-        room.test_api()
-            .lifecycle()
-            .join_session_without_transport_cleanup(
-                user_id.clone(),
-                None,
-                UserPermissions::default(),
-                sender,
-                &adapter,
-            )
-            .await
-            .expect("user should join");
+        join_user_with_fake_cleanup(&room, &adapter, user_id.clone(), sender).await;
         make_session_ready(&room, &user_id).await;
     }
     (room, adapter, fake, receivers)
@@ -741,6 +734,26 @@ pub(super) async fn try_publish_camera(
             media_transport,
         )
         .await
+}
+
+pub(super) async fn published_camera_media_id(
+    room: &Arc<super::super::Room>,
+    user_id: &UserId,
+    media_transport: &MediaTransport,
+) -> (ConnectionId, TransportMediaId) {
+    assert!(
+        try_publish_camera(room, user_id, media_transport)
+            .await
+            .is_some()
+    );
+    let connection_id = user_connection_id(room, user_id).await;
+    let transport_media_id = room
+        .test_api()
+        .inspect()
+        .producer_transport_media_id(user_id, connection_id, TestSourceKind::ScalableVideo)
+        .await
+        .expect("published camera should expose a transport media id");
+    (connection_id, transport_media_id)
 }
 
 pub(super) async fn publish_simulcast_camera(

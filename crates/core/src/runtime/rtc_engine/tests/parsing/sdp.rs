@@ -427,6 +427,21 @@ a=mid:0\r\n\
 m=video 9 UDP/TLS/RTP/SAVPF 96\r\n\
 a=mid:1\r\n";
 
+    fn expect_sdp_diagnostic(
+        raw_sdp: &str,
+        kind: ParseDiagnosticKind,
+        summary: &'static str,
+    ) -> SdpParseDiagnostic {
+        let result = parse_offer_sdp(raw_sdp);
+        assert!(result.is_err());
+        let Some(diagnostic) = result.err() else {
+            panic!("SDP offer should fail with a parse diagnostic");
+        };
+        assert_eq!(diagnostic.kind(), kind);
+        assert_eq!(diagnostic.summary(), summary);
+        *diagnostic
+    }
+
     #[test]
     fn parse_offer_sdp_extracts_supported_media_sections() {
         let result = parse_offer_sdp(VALID_OFFER_SDP);
@@ -505,17 +520,12 @@ a=mid:1\r\n";
 
     #[test]
     fn parse_offer_sdp_marks_safari_datachannel_offer_as_unsupported_fixture() {
-        let result = parse_offer_sdp(SAFARI_DATA_CHANNEL_OFFER);
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::UnsupportedFeature);
-        assert_eq!(
-            diagnostic.summary(),
-            "SDP transport protocol is valid but not supported yet"
+        let diagnostic = expect_sdp_diagnostic(
+            SAFARI_DATA_CHANNEL_OFFER,
+            ParseDiagnosticKind::UnsupportedFeature,
+            "SDP transport protocol is valid but not supported yet",
         );
-        let SdpParseDiagnostic::UnsupportedFeature { context, .. } = diagnostic.as_ref() else {
+        let SdpParseDiagnostic::UnsupportedFeature { context, .. } = &diagnostic else {
             return;
         };
         assert_eq!(context.got(), "UDP/DTLS/SCTP");
@@ -525,98 +535,67 @@ a=mid:1\r\n";
 
     #[test]
     fn parse_offer_sdp_rejects_offer_without_media_lines() {
-        let result = parse_offer_sdp("v=0\r\ns=-\r\nt=0 0\r\n");
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
-        assert_eq!(
-            diagnostic.summary(),
-            "SDP offer did not contain any media description line"
+        let diagnostic = expect_sdp_diagnostic(
+            "v=0\r\ns=-\r\nt=0 0\r\n",
+            ParseDiagnosticKind::InvalidInput,
+            "SDP offer did not contain any media description line",
         );
         assert!(diagnostic.replay_context().contains("v=0"));
     }
 
     #[test]
     fn parse_offer_sdp_rejects_incomplete_media_description() {
-        let result = parse_offer_sdp("m=audio 9 UDP/TLS/RTP/SAVPF\r\n");
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
-        assert_eq!(
-            diagnostic.summary(),
-            "SDP media description line is incomplete"
+        expect_sdp_diagnostic(
+            "m=audio 9 UDP/TLS/RTP/SAVPF\r\n",
+            ParseDiagnosticKind::InvalidInput,
+            "SDP media description line is incomplete",
         );
     }
 
     #[test]
     fn parse_offer_sdp_rejects_invalid_port_field() {
-        let result = parse_offer_sdp("m=audio x UDP/TLS/RTP/SAVPF 111\r\n");
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
-        assert_eq!(
-            diagnostic.summary(),
-            "SDP media description has an invalid port field"
+        expect_sdp_diagnostic(
+            "m=audio x UDP/TLS/RTP/SAVPF 111\r\n",
+            ParseDiagnosticKind::InvalidInput,
+            "SDP media description has an invalid port field",
         );
     }
 
     #[test]
     fn parse_offer_sdp_marks_known_transport_profile_as_unsupported() {
-        let result = parse_offer_sdp("m=audio 9 RTP/SAVPF 111\r\n");
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::UnsupportedFeature);
-        assert_eq!(
-            diagnostic.summary(),
-            "SDP transport protocol is valid but not supported yet"
+        expect_sdp_diagnostic(
+            "m=audio 9 RTP/SAVPF 111\r\n",
+            ParseDiagnosticKind::UnsupportedFeature,
+            "SDP transport protocol is valid but not supported yet",
         );
     }
 
     #[test]
     fn parse_offer_sdp_rejects_unknown_transport_profile_token_as_invalid() {
-        let result = parse_offer_sdp("m=audio 9 INVALID/PROTO 111\r\n");
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
-        assert_eq!(
-            diagnostic.summary(),
-            "SDP media description has an invalid transport protocol token"
+        expect_sdp_diagnostic(
+            "m=audio 9 INVALID/PROTO 111\r\n",
+            ParseDiagnosticKind::InvalidInput,
+            "SDP media description has an invalid transport protocol token",
         );
     }
 
     #[test]
     fn parse_offer_sdp_marks_unknown_media_kind_as_unsupported() {
-        let result = parse_offer_sdp("m=text 9 UDP/TLS/RTP/SAVPF 111\r\n");
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::UnsupportedFeature);
-        assert_eq!(
-            diagnostic.summary(),
-            "SDP media kind is valid but not supported yet"
+        expect_sdp_diagnostic(
+            "m=text 9 UDP/TLS/RTP/SAVPF 111\r\n",
+            ParseDiagnosticKind::UnsupportedFeature,
+            "SDP media kind is valid but not supported yet",
         );
     }
 
     #[test]
     fn parse_offer_sdp_preserves_line_context_on_invalid_diagnostic() {
-        let result = parse_offer_sdp("m=audio x UDP/TLS/RTP/SAVPF 111\r\n");
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
-        let SdpParseDiagnostic::InvalidInput { context, .. } = diagnostic.as_ref() else {
+        let diagnostic = expect_sdp_diagnostic(
+            "m=audio x UDP/TLS/RTP/SAVPF 111\r\n",
+            ParseDiagnosticKind::InvalidInput,
+            "SDP media description has an invalid port field",
+        );
+        let SdpParseDiagnostic::InvalidInput { context, .. } = &diagnostic else {
             return;
         };
         assert_eq!(context.line_number(), Some(1));

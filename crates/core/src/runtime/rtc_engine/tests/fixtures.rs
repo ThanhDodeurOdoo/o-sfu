@@ -21,8 +21,7 @@ pub(super) use tokio::time::sleep;
 pub(super) use super::super::{
     RtcTransportWorker,
     shared_payload::SharedPayload,
-    state::TransportSessionHealth,
-    test_support::{DebugPacketGate, DebugRouteEntry, test_transport_session_key},
+    test_support::{DebugPacketGate, test_transport_session_key},
 };
 pub(super) use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
@@ -30,8 +29,8 @@ pub(super) use crate::{
         UserId,
         diagnostics::DiagnosticsStore,
         media_transport::{
-            ActiveSpeakerSource, MediaTransportDeps, RtcTransportConfig, SessionOffer,
-            SourcePolicySignal, TransportAdapterError, TransportMediaId, TransportSessionKey,
+            ActiveSpeakerSource, MediaTransportDeps, RtcTransportConfig, SourcePolicySignal,
+            TransportAdapterError, TransportSessionKey,
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -134,131 +133,4 @@ fn rtc_engine_for_test(
         0,
         0,
     )
-}
-
-pub(super) async fn prepare_transport_session(
-    adapter: &RtcTransportWorker,
-    session_key: &TransportSessionKey,
-) -> Result<SessionOffer, TransportAdapterError> {
-    adapter
-        .negotiation()
-        .create_initial_session_offer(session_key)
-        .await
-}
-
-pub(super) fn set_transport_health(
-    adapter: &RtcTransportWorker,
-    session_key: &TransportSessionKey,
-    health: TransportSessionHealth,
-) {
-    adapter.debug_set_session_transport_health(session_key, health);
-}
-
-pub(super) async fn remember_remote_addr(
-    adapter: &RtcTransportWorker,
-    source_addr: SocketAddr,
-    session_key: &TransportSessionKey,
-) {
-    adapter
-        .debug_remember_remote_addr(source_addr, session_key)
-        .await;
-}
-
-pub(super) async fn remote_addr_owner(
-    adapter: &RtcTransportWorker,
-    source_addr: SocketAddr,
-) -> Option<TransportSessionKey> {
-    adapter.debug_remote_addr_owner(source_addr).await
-}
-
-pub(super) async fn has_any_remote_addr_session(adapter: &RtcTransportWorker) -> bool {
-    adapter.debug_has_any_remote_addr_session().await
-}
-
-pub(super) async fn resolve_mid(
-    adapter: &RtcTransportWorker,
-    transport_media_id: TransportMediaId,
-) -> Option<Mid> {
-    adapter.debug_resolve_mid(transport_media_id).await
-}
-
-pub(super) async fn session_stream_rx_ssrc(
-    adapter: &RtcTransportWorker,
-    session_key: &TransportSessionKey,
-    mid: Mid,
-) -> Option<u32> {
-    adapter.debug_session_stream_rx_ssrc(session_key, mid).await
-}
-
-pub(super) async fn session_stream_tx_ssrc(
-    adapter: &RtcTransportWorker,
-    session_key: &TransportSessionKey,
-    mid: Mid,
-) -> Option<u32> {
-    adapter.debug_session_stream_tx_ssrc(session_key, mid).await
-}
-
-pub(super) async fn session_max_bitrate_in(
-    adapter: &RtcTransportWorker,
-    session_key: &TransportSessionKey,
-) -> Option<Bitrate> {
-    adapter.debug_session_max_bitrate_in(session_key).await
-}
-
-pub(super) async fn session_max_bitrate_out(
-    adapter: &RtcTransportWorker,
-    session_key: &TransportSessionKey,
-) -> Option<Bitrate> {
-    adapter.debug_session_max_bitrate_out(session_key).await
-}
-
-pub(super) async fn route_entry_by_media_id(
-    adapter: &RtcTransportWorker,
-    source_transport_media_id: TransportMediaId,
-) -> Option<DebugRouteEntry> {
-    adapter
-        .debug_route_entry_by_media_id(source_transport_media_id)
-        .await
-}
-
-pub(super) async fn record_incoming_media(
-    adapter: &RtcTransportWorker,
-    session_key: &TransportSessionKey,
-    transport_media_id: TransportMediaId,
-    payload_bytes: usize,
-    now: Instant,
-) {
-    adapter
-        .debug_record_incoming_media(session_key, transport_media_id, payload_bytes, now)
-        .await;
-}
-
-pub(super) async fn observe_audio_activity(
-    adapter: &RtcTransportWorker,
-    transport_media_id: TransportMediaId,
-    voice_activity: Option<bool>,
-    audio_level_dbov: Option<i8>,
-    now: Instant,
-) {
-    adapter
-        .debug_observe_audio_activity(transport_media_id, voice_activity, audio_level_dbov, now)
-        .await;
-}
-
-pub(super) async fn relay_target_count_for_source(
-    adapter: &RtcTransportWorker,
-    source_transport_media_id: TransportMediaId,
-) -> usize {
-    adapter
-        .debug_relay_target_count_for_source(source_transport_media_id)
-        .await
-}
-
-pub(super) async fn active_relay_target_count_for_source(
-    adapter: &RtcTransportWorker,
-    source_transport_media_id: TransportMediaId,
-) -> usize {
-    adapter
-        .debug_active_relay_target_count_for_source(source_transport_media_id)
-        .await
 }

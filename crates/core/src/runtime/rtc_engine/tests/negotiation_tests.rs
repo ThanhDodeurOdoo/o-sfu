@@ -306,7 +306,8 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
         )
         .await
         .expect("simulcast publish intent should stage a renegotiation offer");
-    let negotiated_mid = resolve_mid(&adapter, transport_media_id)
+    let negotiated_mid = adapter
+        .debug_resolve_mid(transport_media_id)
         .await
         .expect("simulcast publish should expose the staged mid");
 
@@ -440,7 +441,8 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
     let renegotiation_sdp = renegotiation_offer.into_sdp();
     assert!(renegotiation_sdp.contains("m=video"));
 
-    let negotiated_mid = resolve_mid(&adapter, transport_media_id)
+    let negotiated_mid = adapter
+        .debug_resolve_mid(transport_media_id)
         .await
         .expect("transport media should resolve to the server-assigned mid");
     assert!(renegotiation_sdp.contains(&format!("a=mid:{negotiated_mid}")));
@@ -448,12 +450,14 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
     apply_offer_answer(&adapter, &session_key, &mut remote, renegotiation_sdp).await;
 
     assert_eq!(
-        session_stream_rx_ssrc(&adapter, &session_key, negotiated_mid).await,
+        adapter
+            .debug_session_stream_rx_ssrc(&session_key, negotiated_mid)
+            .await,
         Some(89_000),
         "renegotiated recv media should expect the published SSRC once the answer lands"
     );
     assert_eq!(
-        session_max_bitrate_in(&adapter, &session_key).await,
+        adapter.debug_session_max_bitrate_in(&session_key).await,
         Some(Bitrate::from_bps(2_222_222)),
         "renegotiated recv media should reapply the incoming bitrate cap after the answer lands"
     );
@@ -520,7 +524,8 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
         )),
         "empty protocol publish intents should emit the server-owned RID ladder"
     );
-    let negotiated_mid = resolve_mid(&adapter, transport_media_id)
+    let negotiated_mid = adapter
+        .debug_resolve_mid(transport_media_id)
         .await
         .expect("transport media should expose its negotiated mid");
     let answer_sdp = remote
@@ -544,7 +549,8 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
         .expect("default simulcast answer should apply");
 
     assert!(
-        session_stream_rx_ssrc(&adapter, &session_key, negotiated_mid)
+        adapter
+            .debug_session_stream_rx_ssrc(&session_key, negotiated_mid)
             .await
             .is_some(),
         "answered protocol publish should recover the recv expectation from the negotiated SDP"
@@ -636,7 +642,9 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
     let consumer_session_key = transport_key(1, 37, UserId::Integer(37));
 
     assert!(
-        prepare_transport_session(&adapter, &source_session_key)
+        adapter
+            .negotiation()
+            .create_initial_session_offer(&source_session_key)
             .await
             .is_ok()
     );
@@ -685,7 +693,8 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
     let renegotiation_sdp = renegotiation_offer.into_sdp();
     assert!(renegotiation_sdp.contains("m=video"));
 
-    let renegotiated_mid = resolve_mid(&adapter, consumer_media_id)
+    let renegotiated_mid = adapter
+        .debug_resolve_mid(consumer_media_id)
         .await
         .expect("transport media should resolve to the server-assigned mid");
     assert!(renegotiation_sdp.contains(&format!("a=mid:{renegotiated_mid}")));
@@ -699,7 +708,8 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
     .await;
 
     assert!(
-        session_stream_tx_ssrc(&adapter, &consumer_session_key, renegotiated_mid)
+        adapter
+            .debug_session_stream_tx_ssrc(&consumer_session_key, renegotiated_mid)
             .await
             .is_some(),
         "renegotiated send media should exist after the answer is applied"
@@ -713,7 +723,9 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
     let consumer_session_key = transport_key(1, 40, UserId::Integer(40));
 
     assert!(
-        prepare_transport_session(&adapter, &source_session_key)
+        adapter
+            .negotiation()
+            .create_initial_session_offer(&source_session_key)
             .await
             .is_ok()
     );
@@ -753,7 +765,8 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
         )
         .await
         .expect("protocol consumer media should stage a renegotiation offer");
-    let consumer_mid = resolve_mid(&adapter, consumer_media_id)
+    let consumer_mid = adapter
+        .debug_resolve_mid(consumer_media_id)
         .await
         .expect("consumer media should expose its staged mid");
 
@@ -778,7 +791,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
             .is_ok()
     );
     assert_eq!(
-        route_entry_by_media_id(&adapter, source_media_id).await,
+        adapter.debug_route_entry_by_media_id(source_media_id).await,
         None
     );
 
@@ -893,7 +906,8 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
         )
         .await
         .expect("protocol producer media should stage an addition offer");
-    let producer_mid = resolve_mid(&adapter, producer_media_id)
+    let producer_mid = adapter
+        .debug_resolve_mid(producer_media_id)
         .await
         .expect("producer media should expose its staged mid");
     let addition_offer = adapter
@@ -975,7 +989,8 @@ async fn rtc_session_cleanup_releases_declined_staged_producer_without_follow_up
         )
         .await
         .expect("protocol producer media should stage an addition offer");
-    let producer_mid = resolve_mid(&adapter, producer_media_id)
+    let producer_mid = adapter
+        .debug_resolve_mid(producer_media_id)
         .await
         .expect("producer media should expose its staged mid");
     let addition_offer = adapter
@@ -1088,7 +1103,9 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
             .is_ok()
     );
     assert_eq!(
-        route_entry_by_media_id(&adapter, first_source_media_id).await,
+        adapter
+            .debug_route_entry_by_media_id(first_source_media_id)
+            .await,
         None
     );
     assert_eq!(
@@ -1323,7 +1340,9 @@ async fn setup_queued_removal_sources(
     source_session_key: &TransportSessionKey,
 ) -> (TransportMediaId, TransportMediaId) {
     assert!(
-        prepare_transport_session(adapter, source_session_key)
+        adapter
+            .negotiation()
+            .create_initial_session_offer(source_session_key)
             .await
             .is_ok()
     );
@@ -1369,7 +1388,8 @@ async fn add_negotiated_consumer_media(
         )
         .await
         .expect("protocol consumer media should stage an addition offer");
-    let consumer_mid = resolve_mid(adapter, consumer_media_id)
+    let consumer_mid = adapter
+        .debug_resolve_mid(consumer_media_id)
         .await
         .expect("consumer media should expose its staged mid");
     let addition_offer = adapter
@@ -1403,7 +1423,8 @@ async fn add_negotiated_producer_media(
         )
         .await
         .expect("protocol producer media should stage an addition offer");
-    let producer_mid = resolve_mid(adapter, producer_media_id)
+    let producer_mid = adapter
+        .debug_resolve_mid(producer_media_id)
         .await
         .expect("producer media should expose its staged mid");
     let addition_offer = adapter

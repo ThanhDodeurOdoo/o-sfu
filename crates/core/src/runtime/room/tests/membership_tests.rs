@@ -109,21 +109,8 @@ async fn leave_user_sends_departure_to_remaining_peers() {
         .await;
     let (tx1, mut rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
-    let alice_connection = room
-        .test_api()
-        .lifecycle()
-        .join_user(UserId::Integer(1), None, UserPermissions::default(), tx1)
-        .await;
-    let bob_connection = room
-        .test_api()
-        .lifecycle()
-        .join_user(UserId::Integer(2), None, UserPermissions::default(), tx2)
-        .await;
-    assert!(alice_connection.is_ok());
-    assert!(bob_connection.is_ok());
-    let Some(bob_connection) = bob_connection.ok() else {
-        return;
-    };
+    join_user_with_sender(&room, UserId::Integer(1), tx1).await;
+    let bob_connection = join_user_with_sender(&room, UserId::Integer(2), tx2).await;
 
     room.remove_user_with_cleanup(
         &UserId::Integer(2),
@@ -191,22 +178,9 @@ async fn replacing_a_user_notifies_remaining_peers() {
     let (tx1, mut alice_rx) = test_sender();
     let (tx2, mut bob_old_rx) = test_sender();
     let (tx3, _bob_new_rx) = test_sender();
-    let _alice_connection = room
-        .test_api()
-        .lifecycle()
-        .join_user(UserId::Integer(1), None, UserPermissions::default(), tx1)
-        .await;
-    let _bob_old_connection = room
-        .test_api()
-        .lifecycle()
-        .join_user(UserId::Integer(2), None, UserPermissions::default(), tx2)
-        .await;
-
-    let _bob_new_connection = room
-        .test_api()
-        .lifecycle()
-        .join_user(UserId::Integer(2), None, UserPermissions::default(), tx3)
-        .await;
+    join_user_with_sender(&room, UserId::Integer(1), tx1).await;
+    join_user_with_sender(&room, UserId::Integer(2), tx2).await;
+    join_user_with_sender(&room, UserId::Integer(2), tx3).await;
     assert!(matches!(
         bob_old_rx.try_recv().ok(),
         Some(UserOutbound::Close(UserCloseReason::Replaced))
@@ -290,19 +264,10 @@ async fn replacing_a_user_runtime_emits_departure_then_join_for_existing_peers()
 async fn join_same_user_twice(room: &Arc<super::super::Room>) -> (ConnectionId, ConnectionId) {
     let (tx1, _rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
-    let first_connection = room
-        .test_api()
-        .lifecycle()
-        .join_user(UserId::Integer(1), None, UserPermissions::default(), tx1)
-        .await
-        .unwrap_or(test_connection_id(u64::MAX));
-    let second_connection = room
-        .test_api()
-        .lifecycle()
-        .join_user(UserId::Integer(1), None, UserPermissions::default(), tx2)
-        .await
-        .unwrap_or(test_connection_id(u64::MAX));
-    (first_connection, second_connection)
+    (
+        join_user_with_sender(room, UserId::Integer(1), tx1).await,
+        join_user_with_sender(room, UserId::Integer(1), tx2).await,
+    )
 }
 
 #[tokio::test]
@@ -311,15 +276,7 @@ async fn leave_user_runtime_removes_surviving_consumer_media() {
         setup_two_ready_users_with_fake().await;
 
     assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_video_rtp_parameters(),
-                &media_transport,
-            )
+        try_publish_camera(&room, &UserId::Integer(1), &media_transport)
             .await
             .is_some()
     );
@@ -374,15 +331,7 @@ async fn leave_user_runtime_removes_departing_consumer_media() {
         setup_two_ready_users_with_fake().await;
 
     assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(2),
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_video_rtp_parameters(),
-                &media_transport,
-            )
+        try_publish_camera(&room, &UserId::Integer(2), &media_transport)
             .await
             .is_some()
     );
@@ -430,15 +379,7 @@ async fn join_user_runtime_replacement_removes_surviving_consumer_media() {
         setup_two_ready_users_with_fake().await;
 
     assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_video_rtp_parameters(),
-                &media_transport,
-            )
+        try_publish_camera(&room, &UserId::Integer(1), &media_transport)
             .await
             .is_some()
     );
@@ -492,35 +433,8 @@ async fn media_cleanup_failure_retries_until_success() {
     let (room, media_transport, fake, _publisher_rx, _subscriber_rx) =
         setup_two_ready_users_with_fake().await;
 
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_video_rtp_parameters(),
-                &media_transport,
-            )
-            .await
-            .is_some()
-    );
-    let connection_id = room
-        .test_api()
-        .inspect()
-        .user_connection_id(&UserId::Integer(1))
-        .await
-        .expect("publisher should have a live connection");
-    let transport_media_id = room
-        .test_api()
-        .inspect()
-        .producer_transport_media_id(
-            &UserId::Integer(1),
-            connection_id,
-            TestSourceKind::ScalableVideo,
-        )
-        .await
-        .expect("published camera should expose a transport media id");
+    let (connection_id, transport_media_id) =
+        published_camera_media_id(&room, &UserId::Integer(1), &media_transport).await;
     fake.fail_next_remove_media(transport_media_id);
 
     assert!(
@@ -580,35 +494,8 @@ async fn cleanup_retry_exhaustion_drops_pending_retry() {
     let (room, media_transport, fake, _publisher_rx, _subscriber_rx) =
         setup_two_ready_users_with_fake().await;
 
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_video_rtp_parameters(),
-                &media_transport,
-            )
-            .await
-            .is_some()
-    );
-    let connection_id = room
-        .test_api()
-        .inspect()
-        .user_connection_id(&UserId::Integer(1))
-        .await
-        .expect("publisher should have a live connection");
-    let transport_media_id = room
-        .test_api()
-        .inspect()
-        .producer_transport_media_id(
-            &UserId::Integer(1),
-            connection_id,
-            TestSourceKind::ScalableVideo,
-        )
-        .await
-        .expect("published camera should expose a transport media id");
+    let (connection_id, transport_media_id) =
+        published_camera_media_id(&room, &UserId::Integer(1), &media_transport).await;
     fake.fail_remove_media_until_allowed(transport_media_id);
 
     assert!(
@@ -701,35 +588,8 @@ async fn state_only_cleanup_does_not_enqueue_transport_retry() {
     let (room, media_transport, fake, _publisher_rx, _subscriber_rx) =
         setup_two_ready_users_with_fake().await;
 
-    assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_video_rtp_parameters(),
-                &media_transport,
-            )
-            .await
-            .is_some()
-    );
-    let connection_id = room
-        .test_api()
-        .inspect()
-        .user_connection_id(&UserId::Integer(1))
-        .await
-        .expect("publisher should have a live connection");
-    let transport_media_id = room
-        .test_api()
-        .inspect()
-        .producer_transport_media_id(
-            &UserId::Integer(1),
-            connection_id,
-            TestSourceKind::ScalableVideo,
-        )
-        .await
-        .expect("published camera should expose a transport media id");
+    let (connection_id, transport_media_id) =
+        published_camera_media_id(&room, &UserId::Integer(1), &media_transport).await;
     fake.fail_next_remove_media(transport_media_id);
 
     assert!(
@@ -955,15 +815,7 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
         SessionNegotiationOutcome::Applied
     );
     assert!(
-        room.test_api()
-            .media()
-            .publish_track(
-                &UserId::Integer(1),
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                test_video_rtp_parameters(),
-                &media_transport,
-            )
+        try_publish_camera(&room, &UserId::Integer(1), &media_transport)
             .await
             .is_some()
     );
