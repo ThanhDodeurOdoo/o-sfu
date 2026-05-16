@@ -14,13 +14,33 @@ impl<'a> ConfigLogView<'a> {
     }
 }
 
+fn write_top_field(
+    formatter: &mut fmt::Formatter<'_>,
+    key: &str,
+    value: impl fmt::Display,
+) -> fmt::Result {
+    writeln!(formatter, "  - {key}={value}")
+}
+
+fn write_section(formatter: &mut fmt::Formatter<'_>, name: &str) -> fmt::Result {
+    writeln!(formatter, "  - {name}:")
+}
+
+fn write_field(
+    formatter: &mut fmt::Formatter<'_>,
+    key: &str,
+    value: impl fmt::Display,
+) -> fmt::Result {
+    writeln!(formatter, "    - {key}={value}")
+}
+
 impl fmt::Display for ConfigLogView<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let config = self.config;
         writeln!(formatter, "booted runtime systems:")?;
-        writeln!(formatter, "  - pid={}", self.process_id)?;
-        writeln!(formatter, "  - bind_address={}", config.http.bind_address)?;
-        writeln!(formatter, "  - public_ip={}", config.transport.public_ip)?;
+        write_top_field(formatter, "pid", self.process_id)?;
+        write_top_field(formatter, "bind_address", config.http.bind_address)?;
+        write_top_field(formatter, "public_ip", config.transport.public_ip)?;
         self.write_telemetry(formatter)?;
         self.write_timing_and_admission(formatter)?;
         self.write_rtc_transport(formatter)?;
@@ -32,213 +52,181 @@ impl fmt::Display for ConfigLogView<'_> {
 impl ConfigLogView<'_> {
     fn write_telemetry(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let config = self.config;
-        writeln!(formatter, "  - telemetry:")?;
-        writeln!(
+        write_section(formatter, "telemetry")?;
+        write_field(
             formatter,
-            "    - service_name={}",
-            config.telemetry.resource.service_name
+            "service_name",
+            config.telemetry.resource.service_name.as_str(),
         )?;
-        writeln!(
+        write_field(
             formatter,
-            "    - deployment_environment={}",
-            config.telemetry.resource.deployment_environment
+            "deployment_environment",
+            config.telemetry.resource.deployment_environment.as_str(),
         )?;
-        writeln!(
+        write_field(
             formatter,
-            "    - service_instance_id={}",
+            "service_instance_id",
             config
                 .telemetry
                 .resource
-                .resolved_instance_id(self.process_id)
+                .resolved_instance_id(self.process_id),
         )?;
-        writeln!(
+        write_field(
             formatter,
-            "    - log_format={}",
-            config.telemetry.log_format.as_str()
+            "log_format",
+            config.telemetry.log_format.as_str(),
         )?;
-        writeln!(
+        write_field(
             formatter,
-            "    - trace_export_otlp_endpoint={}",
+            "trace_export_otlp_endpoint",
             config
                 .telemetry
                 .trace_export
                 .otlp_endpoint
                 .as_deref()
-                .unwrap_or("disabled")
+                .unwrap_or("disabled"),
         )
     }
 
     fn write_timing_and_admission(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let config = self.config;
-        writeln!(formatter, "  - timing_and_admission:")?;
-        writeln!(
+        write_section(formatter, "timing_and_admission")?;
+        write_field(
             formatter,
-            "    - authentication_timeout_ms={}",
-            config.auth.authentication_timeout_ms
+            "authentication_timeout_ms",
+            config.auth.authentication_timeout_ms,
         )?;
-        writeln!(
+        write_field(
             formatter,
-            "    - max_pre_auth_websocket_sessions={}",
-            config.auth.max_pre_auth_websocket_sessions
+            "max_pre_auth_websocket_sessions",
+            config.auth.max_pre_auth_websocket_sessions,
         )?;
-        writeln!(
+        write_field(
             formatter,
-            "    - max_pre_auth_websocket_sessions_per_origin={}",
-            config.auth.max_pre_auth_websocket_sessions_per_origin
+            "max_pre_auth_websocket_sessions_per_origin",
+            config.auth.max_pre_auth_websocket_sessions_per_origin,
         )?;
-        writeln!(
+        write_field(formatter, "user_timeout_ms", config.user.timeout_ms)?;
+        write_field(formatter, "ping_interval_ms", config.user.ping_interval_ms)?;
+        write_field(
             formatter,
-            "    - user_timeout_ms={}",
-            config.user.timeout_ms
+            "user_outbound_queue_capacity",
+            config.user.outbound_queue_capacity,
         )?;
-        writeln!(
+        write_field(
             formatter,
-            "    - ping_interval_ms={}",
-            config.user.ping_interval_ms
+            "user_outbound_queue_byte_capacity",
+            config.user.outbound_queue_byte_capacity,
         )?;
-        writeln!(
+        write_field(formatter, "room_size", config.user.room_size)?;
+        write_field(
             formatter,
-            "    - user_outbound_queue_capacity={}",
-            config.user.outbound_queue_capacity
+            "trust_proxy_headers",
+            config.http.trust_proxy_headers,
         )?;
-        writeln!(
+        write_field(
             formatter,
-            "    - user_outbound_queue_byte_capacity={}",
-            config.user.outbound_queue_byte_capacity
-        )?;
-        writeln!(formatter, "    - room_size={}", config.user.room_size)?;
-        writeln!(
-            formatter,
-            "    - trust_proxy_headers={}",
-            config.http.trust_proxy_headers
-        )?;
-        writeln!(
-            formatter,
-            "    - diagnostics_access={}",
+            "diagnostics_access",
             if config.diagnostics.auth_token.is_some() {
                 "bearer_token"
             } else if config.http.bind_address.ip().is_loopback() {
                 "loopback_only"
             } else {
                 "disabled"
-            }
+            },
         )
     }
 
     fn write_rtc_transport(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let config = self.config;
-        writeln!(formatter, "  - rtc_transport:")?;
-        writeln!(
+        write_section(formatter, "rtc_transport")?;
+        write_field(
             formatter,
-            "    - max_bitrate_in_bps={}",
-            config.transport.max_bitrate_in.as_bps()
+            "max_bitrate_in_bps",
+            config.transport.max_bitrate_in.as_bps(),
         )?;
-        writeln!(
+        write_field(
             formatter,
-            "    - max_bitrate_out_bps={}",
-            config.transport.max_bitrate_out.as_bps()
+            "max_bitrate_out_bps",
+            config.transport.max_bitrate_out.as_bps(),
         )?;
-        writeln!(
+        write_field(
             formatter,
-            "    - max_video_bitrate_bps={}",
+            "max_video_bitrate_bps",
             config
                 .transport
                 .video_bitrate_limits
                 .max_video_bitrate()
-                .as_bps()
+                .as_bps(),
         )?;
-        writeln!(
+        write_field(
             formatter,
-            "    - rtc_port_range_min={}",
-            config.transport.rtc_port_range.min()
+            "rtc_port_range_min",
+            config.transport.rtc_port_range.min(),
         )?;
-        writeln!(
+        write_field(
             formatter,
-            "    - rtc_port_range_max={}",
-            config.transport.rtc_port_range.max()
+            "rtc_port_range_max",
+            config.transport.rtc_port_range.max(),
         )?;
-        writeln!(
+        write_field(
             formatter,
-            "    - rtc_media_worker_count={}",
-            config.transport.rtc_media_worker_count
+            "rtc_media_worker_count",
+            config.transport.rtc_media_worker_count,
         )?;
-        writeln!(
+        write_field(
             formatter,
-            "    - room_max_local_routers={}",
-            config.transport.room_worker_policy.max_local_routers()
+            "room_max_local_routers",
+            config.transport.room_worker_policy.max_local_routers(),
         )
     }
 
     fn write_feature_flags(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let config = self.config;
-        writeln!(formatter, "  - feature_flags:")?;
-        writeln!(
+        write_section(formatter, "feature_flags")?;
+        write_field(formatter, "transcription", config.features.transcription)?;
+        write_field(
             formatter,
-            "    - transcription={}",
-            config.features.transcription
+            "audio_recording",
+            config.features.audio_recording,
         )?;
-        writeln!(
+        write_field(
             formatter,
-            "    - audio_recording={}",
-            config.features.audio_recording
-        )?;
-        writeln!(
-            formatter,
-            "    - video_recording={}",
-            config.features.video_recording
+            "video_recording",
+            config.features.video_recording,
         )
     }
 
     fn write_codec_flags(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let config = self.config;
-        writeln!(formatter, "  - codec_flags:")?;
-        writeln!(
+        write_section(formatter, "codec_flags")?;
+        write_field(formatter, "opus", config.codecs.flags.opus_enabled())?;
+        write_field(formatter, "pcmu", config.codecs.flags.pcmu_enabled())?;
+        write_field(formatter, "pcma", config.codecs.flags.pcma_enabled())?;
+        write_field(formatter, "vp8", config.codecs.flags.vp8_enabled())?;
+        write_field(formatter, "h264", config.codecs.flags.h264_enabled())?;
+        write_field(formatter, "h265", config.codecs.flags.h265_enabled())?;
+        write_field(formatter, "vp9", config.codecs.flags.vp9_enabled())?;
+        write_field(formatter, "av1", config.codecs.flags.av1_enabled())?;
+        write_field(
             formatter,
-            "    - opus={}",
-            config.codecs.flags.opus_enabled()
-        )?;
-        writeln!(
-            formatter,
-            "    - pcmu={}",
-            config.codecs.flags.pcmu_enabled()
-        )?;
-        writeln!(
-            formatter,
-            "    - pcma={}",
-            config.codecs.flags.pcma_enabled()
-        )?;
-        writeln!(formatter, "    - vp8={}", config.codecs.flags.vp8_enabled())?;
-        writeln!(
-            formatter,
-            "    - h264={}",
-            config.codecs.flags.h264_enabled()
-        )?;
-        writeln!(
-            formatter,
-            "    - h265={}",
-            config.codecs.flags.h265_enabled()
-        )?;
-        writeln!(formatter, "    - vp9={}", config.codecs.flags.vp9_enabled())?;
-        writeln!(formatter, "    - av1={}", config.codecs.flags.av1_enabled())?;
-        writeln!(
-            formatter,
-            "    - audio_preference={}",
+            "audio_preference",
             config
                 .codecs
                 .preferences
                 .audio_order()
                 .map(o_sfu_core::AudioCodecPreference::wire_name)
-                .join(",")
+                .join(","),
         )?;
-        write!(
+        write_field(
             formatter,
-            "    - video_preference={}",
+            "video_preference",
             config
                 .codecs
                 .preferences
                 .video_order()
                 .map(o_sfu_core::VideoCodecPreference::wire_name)
-                .join(",")
+                .join(","),
         )
     }
 }
