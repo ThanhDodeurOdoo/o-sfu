@@ -11,7 +11,10 @@
 //! make ingress routing, local forwarding, relay fanout, active-speaker expiry
 //! and bitrate accounting point at the wrong source
 
-use std::{collections::BTreeSet, time::Instant};
+use std::{
+    collections::{BTreeSet, btree_map::Entry},
+    time::Instant,
+};
 
 use o_sfu_rfc::rtp;
 use str0m::{
@@ -249,10 +252,7 @@ impl PacketLoopState {
             self.producer_mid_registry
                 .remove(&ProducerMidLookupKey::new(session_key.clone(), *mid));
             self.clear_producer_ssrc_bindings(transport_media_id, session_key);
-            self.forget_live_producer_rids(transport_media_id);
-            self.route_control.forget_source(transport_media_id);
-            self.source_decoder_refresh_codecs
-                .remove(&transport_media_id);
+            self.forget_source_side_tables(transport_media_id);
             self.remove_incoming_bitrate_counter(transport_media_id);
         } else if let RegisteredMediaHandle::Consumer {
             session_key, mid, ..
@@ -288,24 +288,17 @@ impl PacketLoopState {
         source_session_key: &TransportSessionKey,
         source_control: RemoteSourceControl,
     ) -> Result<Option<RemoteSourceRegistration>, TransportAdapterError> {
-        match self.remote_source_registry.get(&source_transport_media_id) {
-            Some(existing) if existing.source_session_key() == source_session_key => {
-                let previous = self
-                    .remote_source_registry
-                    .get(&source_transport_media_id)
-                    .cloned();
-                self.remote_source_registry.insert(
-                    source_transport_media_id,
-                    RemoteSourceRegistration::new(source_session_key.clone(), source_control),
-                );
-                Ok(previous)
+        let registration =
+            RemoteSourceRegistration::new(source_session_key.clone(), source_control);
+        match self.remote_source_registry.entry(source_transport_media_id) {
+            Entry::Occupied(mut entry)
+                if entry.get().source_session_key() == source_session_key =>
+            {
+                Ok(Some(entry.insert(registration)))
             }
-            Some(_existing) => Err(TransportAdapterError::InvalidInput),
-            None => {
-                self.remote_source_registry.insert(
-                    source_transport_media_id,
-                    RemoteSourceRegistration::new(source_session_key.clone(), source_control),
-                );
+            Entry::Occupied(_entry) => Err(TransportAdapterError::InvalidInput),
+            Entry::Vacant(entry) => {
+                entry.insert(registration);
                 Ok(None)
             }
         }
@@ -351,13 +344,12 @@ impl PacketLoopState {
         &mut self,
         source_transport_media_id: TransportMediaId,
     ) {
-        if self
+        if !self
             .media_route_index
             .contains_key(&source_transport_media_id)
         {
-            return;
+            self.remove_remote_source_side_tables(source_transport_media_id);
         }
-        self.remove_remote_source_side_tables(source_transport_media_id);
     }
 
     /// remove every remote-source side table entry that no longer has a route
@@ -372,22 +364,7 @@ impl PacketLoopState {
                 self.media_route_index
                     .contains_key(source_transport_media_id)
             });
-        let mid_registry = &self.mid_registry;
-        let remote_source_registry = &self.remote_source_registry;
-        let source_has_live_registration = |source_transport_media_id: &TransportMediaId| {
-            mid_registry.contains_key(&source_transport_media_id.as_u64())
-                || remote_source_registry.contains_key(source_transport_media_id)
-        };
-        self.route_control
-            .retain_sources(&source_has_live_registration);
-        self.live_producer_rids
-            .retain(|source_transport_media_id, _rids| {
-                source_has_live_registration(source_transport_media_id)
-            });
-        self.source_decoder_refresh_codecs
-            .retain(|source_transport_media_id, _codec| {
-                source_has_live_registration(source_transport_media_id)
-            });
+        self.retain_registered_source_side_tables();
     }
 
     /// remove every packet-loop side table owned by one remote-source entry
@@ -400,10 +377,33 @@ impl PacketLoopState {
     fn remove_remote_source_side_tables(&mut self, source_transport_media_id: TransportMediaId) {
         self.remote_source_registry
             .remove(&source_transport_media_id);
+        self.forget_source_side_tables(source_transport_media_id);
+    }
+
+    /// remove source-local side tables shared by local and remote producer ids
+    fn forget_source_side_tables(&mut self, source_transport_media_id: TransportMediaId) {
         self.forget_live_producer_rids(source_transport_media_id);
         self.route_control.forget_source(source_transport_media_id);
+        self.set_source_decoder_refresh_codec(source_transport_media_id, None);
+    }
+
+    /// keep source side tables only for local producers or routed remote sources
+    fn retain_registered_source_side_tables(&mut self) {
+        let mid_registry = &self.mid_registry;
+        let remote_source_registry = &self.remote_source_registry;
+        let source_is_registered = |source_transport_media_id: &TransportMediaId| {
+            mid_registry.contains_key(&source_transport_media_id.as_u64())
+                || remote_source_registry.contains_key(source_transport_media_id)
+        };
+        self.route_control.retain_sources(&source_is_registered);
+        self.live_producer_rids
+            .retain(|source_transport_media_id, _rids| {
+                source_is_registered(source_transport_media_id)
+            });
         self.source_decoder_refresh_codecs
-            .remove(&source_transport_media_id);
+            .retain(|source_transport_media_id, _codec| {
+                source_is_registered(source_transport_media_id)
+            });
     }
 
     /// return the packet-level decoder-refresh classifier for one source
@@ -426,13 +426,10 @@ impl PacketLoopState {
         parameters: &o_sfu_router::MediaStream,
     ) -> Option<DecoderRefreshCodec> {
         let previous = self.source_decoder_refresh_codec(source_transport_media_id);
-        if let Some(codec) = DecoderRefreshCodec::from_parameters(parameters) {
-            self.source_decoder_refresh_codecs
-                .insert(source_transport_media_id, codec);
-        } else {
-            self.source_decoder_refresh_codecs
-                .remove(&source_transport_media_id);
-        }
+        self.set_source_decoder_refresh_codec(
+            source_transport_media_id,
+            DecoderRefreshCodec::from_parameters(parameters),
+        );
         previous
     }
 
@@ -442,9 +439,18 @@ impl PacketLoopState {
         source_transport_media_id: TransportMediaId,
         previous_codec: Option<DecoderRefreshCodec>,
     ) {
-        if let Some(previous_codec) = previous_codec {
+        self.set_source_decoder_refresh_codec(source_transport_media_id, previous_codec);
+    }
+
+    /// set or clear packet-level decoder-refresh metadata for one source
+    fn set_source_decoder_refresh_codec(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        codec: Option<DecoderRefreshCodec>,
+    ) {
+        if let Some(codec) = codec {
             self.source_decoder_refresh_codecs
-                .insert(source_transport_media_id, previous_codec);
+                .insert(source_transport_media_id, codec);
         } else {
             self.source_decoder_refresh_codecs
                 .remove(&source_transport_media_id);
@@ -728,8 +734,7 @@ impl PacketLoopState {
             return;
         };
         self.clear_producer_ssrc_bindings(transport_media_id, session_key);
-        self.source_decoder_refresh_codecs
-            .remove(&transport_media_id);
+        self.set_source_decoder_refresh_codec(transport_media_id, None);
         self.producer_ssrcs_by_media
             .entry(transport_media_id)
             .or_default();

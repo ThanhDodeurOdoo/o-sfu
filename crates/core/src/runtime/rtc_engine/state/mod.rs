@@ -263,21 +263,16 @@ impl PacketLoopState {
                 ready_sessions.push(session_key);
             }
         }
-        while let Some(Reverse((deadline, session_key))) = self.timeout_queue.peek().cloned() {
-            let Some(current_deadline) = self.session_timeouts.get(&session_key).copied() else {
-                self.timeout_queue.pop();
-                continue;
-            };
-            if current_deadline != deadline {
-                self.timeout_queue.pop();
-                continue;
+        let session_timeouts = &mut self.session_timeouts;
+        while let Some((deadline, session_key)) =
+            pop_due_deadline(&mut self.timeout_queue, now, |(deadline, _session_key)| {
+                *deadline
+            })
+        {
+            if session_timeouts.get(&session_key).copied() == Some(deadline) {
+                session_timeouts.remove(&session_key);
+                ready_sessions.push(session_key);
             }
-            if deadline > now {
-                break;
-            }
-            self.timeout_queue.pop();
-            self.session_timeouts.remove(&session_key);
-            ready_sessions.push(session_key);
         }
         ready_sessions.sort_unstable();
         ready_sessions.dedup();
@@ -308,18 +303,12 @@ impl PacketLoopState {
     /// callers may invoke this before awaiting because it does not borrow any
     /// session state after returning
     pub(super) fn next_timeout_deadline(&mut self) -> Option<Instant> {
-        while let Some(Reverse((deadline, session_key))) = self.timeout_queue.peek().cloned() {
-            let Some(current_deadline) = self.session_timeouts.get(&session_key).copied() else {
-                self.timeout_queue.pop();
-                continue;
-            };
-            if current_deadline != deadline {
-                self.timeout_queue.pop();
-                continue;
-            }
-            return Some(deadline);
-        }
-        None
+        let session_timeouts = &self.session_timeouts;
+        next_live_deadline(
+            &mut self.timeout_queue,
+            |(deadline, session_key)| session_timeouts.get(session_key).copied() == Some(*deadline),
+            |(deadline, _session_key)| *deadline,
+        )
     }
 
     /// remove all explicit scheduler state for a session being torn down
@@ -453,7 +442,7 @@ impl PacketLoopState {
         };
         let mut due_count = 0;
         refreshes.retain(|refresh| {
-            let due = refresh.rid() == rid && refresh.is_due(now);
+            let due = refresh.rid == rid && refresh.request_at <= now;
             if due {
                 due_count += 1;
             }
@@ -477,13 +466,14 @@ impl PacketLoopState {
         now: Instant,
     ) -> Vec<(TransportMediaId, Rid)> {
         let mut due_refreshes = Vec::new();
-        while let Some(Reverse(refresh)) = self.pending_rid_keyframe_refresh_queue.peek().copied() {
-            if !refresh.is_due(now) {
-                break;
-            }
-            self.pending_rid_keyframe_refresh_queue.pop();
-            if self.remove_pending_rid_keyframe_refresh(refresh) {
-                due_refreshes.push((refresh.transport_media_id(), refresh.rid()));
+        let pending_refreshes = &mut self.pending_rid_keyframe_refreshes;
+        while let Some(refresh) = pop_due_deadline(
+            &mut self.pending_rid_keyframe_refresh_queue,
+            now,
+            |refresh| refresh.request_at,
+        ) {
+            if remove_pending_rid_keyframe_refresh(pending_refreshes, refresh) {
+                due_refreshes.push((refresh.transport_media_id, refresh.rid));
             }
         }
         due_refreshes
@@ -494,40 +484,70 @@ impl PacketLoopState {
     /// the heap uses lazy cancellation, so invalidated entries are removed while
     /// searching for the next live refresh
     pub(super) fn next_rid_keyframe_refresh_deadline(&mut self) -> Option<Instant> {
-        while let Some(Reverse(refresh)) = self.pending_rid_keyframe_refresh_queue.peek().copied() {
-            if self.has_pending_rid_keyframe_refresh(refresh) {
-                return Some(refresh.request_at());
-            }
-            self.pending_rid_keyframe_refresh_queue.pop();
-        }
-        None
+        let pending_refreshes = &self.pending_rid_keyframe_refreshes;
+        next_live_deadline(
+            &mut self.pending_rid_keyframe_refresh_queue,
+            |refresh| has_pending_rid_keyframe_refresh(pending_refreshes, *refresh),
+            |refresh| refresh.request_at,
+        )
     }
+}
 
-    /// test whether the source map still owns this refresh
-    fn has_pending_rid_keyframe_refresh(&self, refresh: PendingRidKeyframeRefresh) -> bool {
-        self.pending_rid_keyframe_refreshes
-            .get(&refresh.transport_media_id())
-            .is_some_and(|refreshes| refreshes.contains(&refresh))
+fn pop_due_deadline<T>(
+    heap: &mut BinaryHeap<Reverse<T>>,
+    now: Instant,
+    mut deadline: impl FnMut(&T) -> Instant,
+) -> Option<T>
+where
+    T: Ord,
+{
+    if !matches!(heap.peek(), Some(Reverse(entry)) if deadline(entry) <= now) {
+        return None;
     }
+    heap.pop().map(|Reverse(entry)| entry)
+}
 
-    /// remove one exact refresh from source-owned storage
-    fn remove_pending_rid_keyframe_refresh(&mut self, refresh: PendingRidKeyframeRefresh) -> bool {
-        let Some(refreshes) = self
-            .pending_rid_keyframe_refreshes
-            .get_mut(&refresh.transport_media_id())
-        else {
-            return false;
-        };
-        let Some(position) = refreshes.iter().position(|pending| *pending == refresh) else {
-            return false;
-        };
-        refreshes.swap_remove(position);
-        if refreshes.is_empty() {
-            self.pending_rid_keyframe_refreshes
-                .remove(&refresh.transport_media_id());
+fn next_live_deadline<T>(
+    heap: &mut BinaryHeap<Reverse<T>>,
+    mut is_live_entry: impl FnMut(&T) -> bool,
+    mut deadline: impl FnMut(&T) -> Instant,
+) -> Option<Instant>
+where
+    T: Ord,
+{
+    loop {
+        let Reverse(entry) = heap.peek()?;
+        if is_live_entry(entry) {
+            return Some(deadline(entry));
         }
-        true
+        heap.pop();
     }
+}
+
+fn has_pending_rid_keyframe_refresh(
+    pending_refreshes: &BTreeMap<TransportMediaId, Vec<PendingRidKeyframeRefresh>>,
+    refresh: PendingRidKeyframeRefresh,
+) -> bool {
+    pending_refreshes
+        .get(&refresh.transport_media_id)
+        .is_some_and(|refreshes| refreshes.contains(&refresh))
+}
+
+fn remove_pending_rid_keyframe_refresh(
+    pending_refreshes: &mut BTreeMap<TransportMediaId, Vec<PendingRidKeyframeRefresh>>,
+    refresh: PendingRidKeyframeRefresh,
+) -> bool {
+    let Some(refreshes) = pending_refreshes.get_mut(&refresh.transport_media_id) else {
+        return false;
+    };
+    let Some(position) = refreshes.iter().position(|pending| *pending == refresh) else {
+        return false;
+    };
+    refreshes.swap_remove(position);
+    if refreshes.is_empty() {
+        pending_refreshes.remove(&refresh.transport_media_id);
+    }
+    true
 }
 
 /// reusable selected-RID readiness vectors owned by packet-loop state
@@ -601,60 +621,37 @@ impl ProducerRidLiveness {
 /// outlive source removal
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct PendingRidKeyframeRefresh {
+    /// packet-loop deadline for the refresh
+    request_at: Instant,
     /// monotonic identity used to order equal deadlines
     id: u64,
     /// source media id that owns the selected RID
     transport_media_id: TransportMediaId,
     /// selected producer RID that should receive another refresh request
     rid: Rid,
-    /// packet-loop deadline for the refresh
-    request_at: Instant,
 }
 
 impl PendingRidKeyframeRefresh {
     /// create a refresh owned by source-keyed packet-loop state
     fn new(id: u64, transport_media_id: TransportMediaId, rid: Rid, request_at: Instant) -> Self {
         Self {
+            request_at,
             id,
             transport_media_id,
             rid,
-            request_at,
         }
     }
+}
 
-    /// return the source media id that owns this refresh
-    const fn transport_media_id(self) -> TransportMediaId {
-        self.transport_media_id
-    }
-
-    /// return the selected RID that should be refreshed
-    const fn rid(self) -> Rid {
-        self.rid
-    }
-
-    /// return the packet-loop deadline for this refresh
-    const fn request_at(self) -> Instant {
-        self.request_at
-    }
-
-    /// report whether this refresh deadline has elapsed
-    fn is_due(self, now: Instant) -> bool {
-        self.request_at <= now
+impl Ord for PendingRidKeyframeRefresh {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        (self.request_at, self.id).cmp(&(other.request_at, other.id))
     }
 }
 
 impl PartialOrd for PendingRidKeyframeRefresh {
     fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
         Some(self.cmp(other))
-    }
-}
-
-/// order by deadline so `Reverse<PendingRidKeyframeRefresh>` works as a min-heap
-impl Ord for PendingRidKeyframeRefresh {
-    fn cmp(&self, other: &Self) -> CmpOrdering {
-        self.request_at
-            .cmp(&other.request_at)
-            .then_with(|| self.id.cmp(&other.id))
     }
 }
 

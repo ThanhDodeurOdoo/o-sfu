@@ -481,32 +481,12 @@ fn update_consumer_route(
     source_transport_media_id: TransportMediaId,
     mutation: ConsumerRouteMutation,
 ) -> Result<bool, TransportAdapterError> {
-    ensure_route_source(
+    ensure_existing_route_source(
         state,
         consumer_session_key,
         source_session_key,
         source_transport_media_id,
-        RouteSourceAccess::Existing,
     )?;
-    let Some(handle) = state
-        .mid_registry
-        .get(&consumer_transport_media_id.as_u64())
-    else {
-        return Err(TransportAdapterError::TransportUnavailable);
-    };
-    let RegisteredMediaHandle::Consumer {
-        session_key,
-        source_transport_media_id: consumer_source_transport_media_id,
-        ..
-    } = handle
-    else {
-        return Err(TransportAdapterError::InvalidInput);
-    };
-    if session_key != consumer_session_key
-        || *consumer_source_transport_media_id != source_transport_media_id
-    {
-        return Err(TransportAdapterError::InvalidInput);
-    }
     let (active, packet_gate_update) = match mutation {
         ConsumerRouteMutation::Active(active) => (Some(active), None),
         ConsumerRouteMutation::PacketGate(packet_gate, now) => (
@@ -519,12 +499,25 @@ fn update_consumer_route(
             )),
         ),
     };
-    let route_entry = state
+    let RegisteredMediaHandle::Consumer {
+        session_key,
+        source_transport_media_id: consumer_source_transport_media_id,
+        ..
+    } = state
+        .media_handle(consumer_transport_media_id)
+        .ok_or(TransportAdapterError::TransportUnavailable)?
+    else {
+        return Err(TransportAdapterError::InvalidInput);
+    };
+    if session_key != consumer_session_key
+        || *consumer_source_transport_media_id != source_transport_media_id
+    {
+        return Err(TransportAdapterError::InvalidInput);
+    }
+    let destination = state
         .media_route_index
         .get_mut(&source_transport_media_id)
-        .ok_or(TransportAdapterError::TransportUnavailable)?;
-    // linear scan stays until dense rooms justify a destination-side index
-    let destination = route_entry
+        .ok_or(TransportAdapterError::TransportUnavailable)?
         .destinations
         .iter_mut()
         .find(|destination| {
