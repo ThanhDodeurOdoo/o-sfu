@@ -4,10 +4,13 @@
 //! resolves to a source selector and active consumer route; `Pause` keeps the
 //! subscription intact while withholding RTP delivery for a policy-owned reason.
 
-use super::{input::ReceiverVideoRouteInput, projection::source_packet_gate_for_selector};
+use super::{
+    super::shared::ConsumerRouteTransportRef, input::ReceiverVideoRouteInput,
+    projection::source_packet_gate_for_selector,
+};
 use crate::runtime::{
-    ConnectionId, UserId,
-    media_transport::{SourcePacketGate, TransportMediaId},
+    UserId,
+    media_transport::SourcePacketGate,
     source_model::{
         PolicyPauseReason, PublishedSourceId, ReceiverVideoBudgetDiagnostics, SourceSelector,
     },
@@ -81,12 +84,7 @@ impl<'a> ReceiverVideoRouteAction<'a> {
             return None;
         }
         Some(ConsumerPacketSelectionUpdate {
-            consumer_user_id: self.route.consumer_user_id().clone(),
-            consumer_connection_id: self.route.consumer_connection_id(),
-            source_user_id: self.route.source_user_id().clone(),
-            source_connection_id: self.route.source_connection_id(),
-            source_transport_media_id: self.route.source_transport_media_id(),
-            consumer_transport_media_id: self.route.consumer_transport_media_id(),
+            route: self.route.transport_ref().clone(),
             source_id: self.route.source_id(),
             selector,
             policy_pause_reason,
@@ -157,12 +155,7 @@ impl BudgetSolverOutcomes {
 /// replacement or cleanup events cannot write selector state onto a newer route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::room) struct ConsumerPacketSelectionUpdate {
-    consumer_user_id: UserId,
-    consumer_connection_id: ConnectionId,
-    source_user_id: UserId,
-    source_connection_id: ConnectionId,
-    source_transport_media_id: TransportMediaId,
-    consumer_transport_media_id: TransportMediaId,
+    route: ConsumerRouteTransportRef,
     source_id: PublishedSourceId,
     selector: SourceSelector,
     policy_pause_reason: Option<PolicyPauseReason>,
@@ -176,28 +169,8 @@ pub(in crate::runtime::room) struct ConsumerPacketSelectionUpdate {
 }
 
 impl ConsumerPacketSelectionUpdate {
-    pub fn consumer_user_id(&self) -> &UserId {
-        &self.consumer_user_id
-    }
-
-    pub const fn consumer_connection_id(&self) -> ConnectionId {
-        self.consumer_connection_id
-    }
-
-    pub fn source_user_id(&self) -> &UserId {
-        &self.source_user_id
-    }
-
-    pub const fn source_connection_id(&self) -> ConnectionId {
-        self.source_connection_id
-    }
-
-    pub const fn source_transport_media_id(&self) -> TransportMediaId {
-        self.source_transport_media_id
-    }
-
-    pub const fn consumer_transport_media_id(&self) -> TransportMediaId {
-        self.consumer_transport_media_id
+    pub fn route(&self) -> &ConsumerRouteTransportRef {
+        &self.route
     }
 
     pub const fn source_id(&self) -> PublishedSourceId {

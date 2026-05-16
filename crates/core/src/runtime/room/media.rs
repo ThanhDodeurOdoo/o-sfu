@@ -16,7 +16,7 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 
 use super::{
-    Room, RoomMediaCounts,
+    Room,
     effects::{SubscriptionEffectContext, SubscriptionEffectPlan, UnpublishEffectPlan},
     state::ConsumerBootstrapOrigin,
 };
@@ -39,19 +39,13 @@ impl Room {
         media_port: &MediaTransport,
     ) -> bool {
         let mut state = self.state.write().await;
-        let media_counts_before = RoomMediaCounts {
-            publications: state.publication_count(),
-            subscriptions: state.subscription_count(),
-        };
+        let media_counts_before = state.media_counts();
         let Some(planned_bootstraps) =
             state.plan_missing_consumer_bootstraps_for_connection(user_id, connection_id)
         else {
             return false;
         };
-        let media_counts_after = RoomMediaCounts {
-            publications: state.publication_count(),
-            subscriptions: state.subscription_count(),
-        };
+        let media_counts_after = state.media_counts();
         drop(state);
         let effect_plan = SubscriptionEffectPlan::from_planned_bootstraps(
             media_counts_before,
@@ -71,15 +65,9 @@ impl Room {
     ) {
         let effect_plan = {
             let mut state = self.state.write().await;
-            let media_counts_before = RoomMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
+            let media_counts_before = state.media_counts();
             let planned_bootstraps = state.plan_consumer_bootstraps_for_targets(targets);
-            let media_counts_after = RoomMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
+            let media_counts_after = state.media_counts();
             drop(state);
             SubscriptionEffectPlan::from_planned_bootstraps(
                 media_counts_before,
@@ -168,16 +156,10 @@ impl Room {
             if state.user_for_connection(user_id, connection_id).is_none() {
                 return SubscriptionUpdateOutcome::StaleConnection;
             }
-            let media_counts_before = RoomMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
+            let media_counts_before = state.media_counts();
             let planned_change =
                 state.plan_subscription_change(user_id, connection_id, target_user_id, intents);
-            let media_counts_after = RoomMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
+            let media_counts_after = state.media_counts();
             drop(state);
             SubscriptionEffectPlan::from_planned_change(
                 self,

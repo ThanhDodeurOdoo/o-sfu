@@ -866,10 +866,7 @@ impl Room {
 
     pub(crate) async fn media_counts(&self) -> RoomMediaCounts {
         let state = self.state.read().await;
-        RoomMediaCounts {
-            publications: state.publication_count(),
-            subscriptions: state.subscription_count(),
-        }
+        state.media_counts()
     }
 
     #[must_use]

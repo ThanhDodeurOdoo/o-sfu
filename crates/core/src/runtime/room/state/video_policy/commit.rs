@@ -25,18 +25,20 @@ impl RoomState {
         updates: &[ConsumerPacketSelectionUpdate],
     ) {
         for update in updates {
-            let key = ConsumerKey::new(update.consumer_user_id(), update.source_id());
-            let Some(consumer_state) = self.consumer_index.get(&key) else {
+            let route = update.route();
+            let key = ConsumerKey::new(route.consumer_user_id(), update.source_id());
+            let Some(consumer_state) = self.media.consumer_index.get(&key) else {
                 continue;
             };
-            if consumer_state.consumer_connection_id != update.consumer_connection_id()
-                || consumer_state.source_connection_id != update.source_connection_id()
-                || consumer_state.source_media != update.source_transport_media_id()
-                || consumer_state.consumer_media != update.consumer_transport_media_id()
+            if consumer_state.consumer_connection_id != route.consumer_connection_id()
+                || consumer_state.source_connection_id != route.source_connection_id()
+                || consumer_state.source_media != route.source_media()
+                || consumer_state.consumer_media != route.consumer_media()
             {
                 continue;
             }
             let selection = self
+                .media
                 .consumer_source_selections
                 .entry(key)
                 .or_insert_with(|| ConsumerSourceSelection::open(true));

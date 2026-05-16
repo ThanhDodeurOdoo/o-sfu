@@ -379,10 +379,7 @@ impl PendingPublishTransaction {
         let transport_media_id = reservation.transport_media_id();
         let committed_publish = {
             let mut state = room.state.write().await;
-            let media_counts_before = RoomMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
+            let media_counts_before = state.media_counts();
             // The descriptor is consumed only at the final state commit. If the
             // user was replaced or lost publish readiness while transport
             // work was happening, `commit_published_track` rejects it and we
@@ -392,10 +389,7 @@ impl PendingPublishTransaction {
                 upload_encodings,
             );
             let consumer_targets = state.commit_published_track(prepared_track, transport_media_id);
-            let media_counts_after = RoomMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
+            let media_counts_after = state.media_counts();
             drop(state);
             consumer_targets.map(|(_producer_id, consumer_targets)| CommittedPublish {
                 stream_id: stream_id.clone(),
@@ -775,15 +769,9 @@ impl Room {
     ) {
         let (media_counts_before, media_counts_after, relay_effects) = {
             let mut state = self.state.write().await;
-            let media_counts_before = RoomMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
+            let media_counts_before = state.media_counts();
             let relay_effects = state.release_pending_consumer_bootstrap(target);
-            let media_counts_after = RoomMediaCounts {
-                publications: state.publication_count(),
-                subscriptions: state.subscription_count(),
-            };
+            let media_counts_after = state.media_counts();
             drop(state);
             (media_counts_before, media_counts_after, relay_effects)
         };

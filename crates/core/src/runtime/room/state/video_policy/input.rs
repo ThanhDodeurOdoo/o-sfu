@@ -24,13 +24,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    super::shared::RoomState,
+    super::shared::{ConsumerRouteTransportRef, RoomState},
     layout::{ReceiverVideoLayoutIntent, featured_source_user_ids_for_active_speakers},
 };
 use crate::{
     Bitrate,
     runtime::{
-        ConnectionId, UserId,
+        UserId,
         media_transport::{ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportMediaId},
         source_model::{
             ActiveSpeakerSourceRole, ConsumerSourceSelection, PublishedSourceDescriptor,
@@ -91,21 +91,24 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
         let visible_scalable_route_counts =
             visible_scalable_route_counts_by_consumer(state, &featured_source_user_ids);
         let routes = state
+            .media
             .consumer_index
             .iter()
             .filter_map(|(consumer_key, consumer_state)| {
-                let source = state.sources.get(&consumer_key.source_id)?;
+                let source = state.media.sources.get(&consumer_key.source_id)?;
                 if source.selectable_encoding_count() == 0 {
                     return None;
                 }
                 let producer_id = state
+                    .media
                     .producer_id_by_source_id
                     .get(&consumer_key.source_id)?;
-                let producer = state.producers.get(producer_id)?;
+                let producer = state.media.producers.get(producer_id)?;
                 if !producer.active {
                     return None;
                 }
                 let current_selection = state
+                    .media
                     .consumer_source_selections
                     .get(consumer_key)
                     .copied()
@@ -121,12 +124,11 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
                 Some(ReceiverVideoRouteInput::new(ReceiverVideoRouteInputParts {
                     user_count: state.user_count(),
                     source,
-                    consumer_user_id: &consumer_key.consumer_user_id,
-                    consumer_connection_id: consumer_state.consumer_connection_id,
-                    source_user_id: source.owner().user_id(),
-                    source_connection_id: consumer_state.source_connection_id,
-                    source_transport_media_id: consumer_state.source_media,
-                    consumer_transport_media_id: consumer_state.consumer_media,
+                    transport_ref: ConsumerRouteTransportRef::new(
+                        consumer_key,
+                        *consumer_state,
+                        source.owner().user_id(),
+                    ),
                     current_selection,
                     layout_intent,
                     visible_scalable_route_count: visible_scalable_route_counts
@@ -163,18 +165,8 @@ pub(in crate::runtime::room) struct ReceiverVideoRouteInput<'a> {
     user_count: usize,
     /// committed source descriptor that owns policy and encoding metadata
     source: &'a PublishedSourceDescriptor,
-    /// receiver user that owns the consumer transport route
-    consumer_user_id: &'a UserId,
-    /// connection that owns the consumer transport route
-    consumer_connection_id: ConnectionId,
-    /// publisher user that owns the source
-    source_user_id: &'a UserId,
-    /// connection that produced the source media for this consumer route
-    source_connection_id: ConnectionId,
-    /// transport media id of the producer or remote source
-    source_transport_media_id: TransportMediaId,
-    /// transport media id of the consumer route to update
-    consumer_transport_media_id: TransportMediaId,
+    /// stable transport identity for this receiver/source route
+    transport_ref: ConsumerRouteTransportRef,
     /// last committed consumer source selection before this refresh
     current_selection: ConsumerSourceSelection,
     /// receiver-specific layout role resolved for this source
@@ -191,24 +183,14 @@ pub(in crate::runtime::room) struct ReceiverVideoRouteInput<'a> {
 /// planner input without constructing a full room or media transport
 /// production callers should normally use `ReceiverVideoPolicyInput::from_state`
 /// so stale route filtering stays centralized
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(in crate::runtime::room) struct ReceiverVideoRouteInputParts<'a> {
     /// live user count at snapshot time
     pub user_count: usize,
     /// committed source descriptor for the route
     pub source: &'a PublishedSourceDescriptor,
-    /// receiver user that owns the consumer media route
-    pub consumer_user_id: &'a UserId,
-    /// connection that owns the consumer media route
-    pub consumer_connection_id: ConnectionId,
-    /// user that owns the producer source
-    pub source_user_id: &'a UserId,
-    /// connection that owns the producer source
-    pub source_connection_id: ConnectionId,
-    /// source-side transport media id
-    pub source_transport_media_id: TransportMediaId,
-    /// consumer-side transport media id
-    pub consumer_transport_media_id: TransportMediaId,
+    /// stable transport identity for this route
+    pub transport_ref: ConsumerRouteTransportRef,
     /// current committed transport selection for this route
     pub current_selection: ConsumerSourceSelection,
     /// layout importance resolved for this receiver/source pair
@@ -226,12 +208,7 @@ impl<'a> ReceiverVideoRouteInput<'a> {
         Self {
             user_count: parts.user_count,
             source: parts.source,
-            consumer_user_id: parts.consumer_user_id,
-            consumer_connection_id: parts.consumer_connection_id,
-            source_user_id: parts.source_user_id,
-            source_connection_id: parts.source_connection_id,
-            source_transport_media_id: parts.source_transport_media_id,
-            consumer_transport_media_id: parts.consumer_transport_media_id,
+            transport_ref: parts.transport_ref,
             current_selection: parts.current_selection,
             layout_intent: parts.layout_intent,
             visible_scalable_route_count: parts.visible_scalable_route_count,
@@ -255,33 +232,13 @@ impl<'a> ReceiverVideoRouteInput<'a> {
     }
 
     /// returns the receiver user id for grouping and effect routing
-    pub fn consumer_user_id(&self) -> &'a UserId {
-        self.consumer_user_id
+    pub fn consumer_user_id(&self) -> &UserId {
+        self.transport_ref.consumer_user_id()
     }
 
-    /// returns the receiver connection that owned the route at snapshot time
-    pub const fn consumer_connection_id(&self) -> ConnectionId {
-        self.consumer_connection_id
-    }
-
-    /// returns the user that owns the source at snapshot time
-    pub fn source_user_id(&self) -> &'a UserId {
-        self.source_user_id
-    }
-
-    /// returns the source connection that owned the route at snapshot time
-    pub const fn source_connection_id(&self) -> ConnectionId {
-        self.source_connection_id
-    }
-
-    /// returns the source-side transport media id used by packet-gate effects
-    pub const fn source_transport_media_id(&self) -> TransportMediaId {
-        self.source_transport_media_id
-    }
-
-    /// returns the consumer-side transport media id used by packet-gate effects
-    pub const fn consumer_transport_media_id(&self) -> TransportMediaId {
-        self.consumer_transport_media_id
+    /// returns the stable transport identity for effect execution
+    pub fn transport_ref(&self) -> &ConsumerRouteTransportRef {
+        &self.transport_ref
     }
 
     /// returns the selection currently committed for this consumer route
@@ -370,17 +327,21 @@ fn visible_scalable_route_counts_by_consumer(
     featured_source_user_ids: &BTreeSet<UserId>,
 ) -> BTreeMap<UserId, usize> {
     let mut counts = BTreeMap::new();
-    for (consumer_key, consumer_state) in &state.consumer_index {
-        let Some(source) = state.sources.get(&consumer_key.source_id) else {
+    for (consumer_key, consumer_state) in &state.media.consumer_index {
+        let Some(source) = state.media.sources.get(&consumer_key.source_id) else {
             continue;
         };
         if source.policy().adaptation() != SourceAdaptationPolicy::ScalableVideo {
             continue;
         }
-        let Some(producer_id) = state.producer_id_by_source_id.get(&consumer_key.source_id) else {
+        let Some(producer_id) = state
+            .media
+            .producer_id_by_source_id
+            .get(&consumer_key.source_id)
+        else {
             continue;
         };
-        let Some(producer) = state.producers.get(producer_id) else {
+        let Some(producer) = state.media.producers.get(producer_id) else {
             continue;
         };
         let Some(consumer_connection_id) = state.user_connection_id(&consumer_key.consumer_user_id)
@@ -390,6 +351,7 @@ fn visible_scalable_route_counts_by_consumer(
         if !producer.active
             || consumer_state.consumer_connection_id != consumer_connection_id
             || !state
+                .media
                 .consumer_source_selections
                 .get(consumer_key)
                 .is_none_or(|selection| selection.active())
@@ -437,17 +399,18 @@ pub(super) fn featured_source_owner_for_active_speaker_source(
     transport_media_id: TransportMediaId,
 ) -> Option<UserId> {
     let entry = state.source_transport_media_entry(transport_media_id)?;
-    let detector_source = state.sources.get(&entry.source_id())?;
+    let detector_source = state.media.sources.get(&entry.source_id())?;
     let detector_policy = detector_source.policy().active_speaker()?;
     if detector_policy.role() != ActiveSpeakerSourceRole::Detector {
         return None;
     }
     let owner_user_id = entry.owner_user_id().clone();
     state
+        .media
         .source_ids_by_owner
         .get(&owner_user_id)?
         .iter()
-        .filter_map(|source_id| state.sources.get(source_id))
+        .filter_map(|source_id| state.media.sources.get(source_id))
         .any(|source| {
             source.policy().active_speaker().is_some_and(|policy| {
                 policy.group() == detector_policy.group()
@@ -493,9 +456,13 @@ mod tests {
     use o_sfu_router::{MediaKind, Rid};
 
     use super::*;
-    use crate::runtime::source_model::{
-        PublishedSourceDescriptorParts, PublishedSourceOwner, SourceEncodingDescriptorParts,
-        SourceEncodingId, SourceModelError, SourcePolicy, SourceRoomPolicySelector, UserStreamId,
+    use crate::runtime::{
+        ConnectionId,
+        source_model::{
+            PublishedSourceDescriptorParts, PublishedSourceOwner, SourceEncodingDescriptorParts,
+            SourceEncodingId, SourceModelError, SourcePolicy, SourceRoomPolicySelector,
+            UserStreamId,
+        },
     };
 
     fn source_encoding(
@@ -549,12 +516,14 @@ mod tests {
         let route = ReceiverVideoRouteInput::new(ReceiverVideoRouteInputParts {
             user_count: 2,
             source: &source,
-            consumer_user_id: &consumer_user_id,
-            consumer_connection_id: ConnectionId::from_raw(10),
-            source_user_id: &source_user_id,
-            source_connection_id: ConnectionId::from_raw(9),
-            source_transport_media_id: TransportMediaId::new(11),
-            consumer_transport_media_id: TransportMediaId::new(12),
+            transport_ref: ConsumerRouteTransportRef::from_parts(
+                consumer_user_id,
+                ConnectionId::from_raw(10),
+                TransportMediaId::new(12),
+                source_user_id,
+                ConnectionId::from_raw(9),
+                TransportMediaId::new(11),
+            ),
             current_selection: ConsumerSourceSelection::open(true),
             layout_intent: ReceiverVideoLayoutIntent::new(
                 SourceRoomPolicySelector::VisibleThumbnail,

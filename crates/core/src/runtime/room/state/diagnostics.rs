@@ -78,13 +78,15 @@ impl RoomState {
             ActiveSpeakerSourceDiagnostic,
         >,
     ) -> Vec<DiagnosticsSource> {
-        self.sources
+        self.media
+            .sources
             .values()
             .map(|source| {
                 let producer = self
+                    .media
                     .producer_id_by_source_id
                     .get(&source.source_id())
-                    .and_then(|producer_id| self.producers.get(producer_id));
+                    .and_then(|producer_id| self.media.producers.get(producer_id));
                 let encodings = source
                     .encodings()
                     .map(diagnostics_source_encoding)
@@ -150,13 +152,14 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Vec<DiagnosticsPublication> {
-        self.producers
+        self.media
+            .producers
             .values()
             .filter(|producer| {
                 producer.owner_user_id == *user_id && producer.owner_connection_id == connection_id
             })
             .filter_map(|producer| {
-                let source = self.sources.get(&producer.source_id)?;
+                let source = self.media.sources.get(&producer.source_id)?;
                 Some(DiagnosticsPublication {
                     active: producer.active,
                     encoding_ids: source
@@ -178,6 +181,7 @@ impl RoomState {
         connection_id: ConnectionId,
     ) -> Vec<DiagnosticsSubscription> {
         let mut subscriptions = self
+            .media
             .consumer_index
             .iter()
             .filter_map(|(key, consumer_state)| {
@@ -186,8 +190,9 @@ impl RoomState {
                 {
                     return None;
                 }
-                let source = self.sources.get(&key.source_id)?;
+                let source = self.media.sources.get(&key.source_id)?;
                 let selection = self
+                    .media
                     .consumer_source_selections
                     .get(key)
                     .copied()
@@ -219,20 +224,23 @@ impl RoomState {
             .collect::<Vec<_>>();
 
         let pending_keys = self
+            .media
             .pending_consumer_bootstraps
             .iter()
             .filter(|key| key.consumer_user_id == *user_id)
             .cloned()
             .collect::<BTreeSet<ConsumerKey>>();
         let existing_keys = self
+            .media
             .consumer_index
             .keys()
             .filter(|key| key.consumer_user_id == *user_id)
             .cloned()
             .collect::<BTreeSet<ConsumerKey>>();
         subscriptions.extend(pending_keys.difference(&existing_keys).filter_map(|key| {
-            let source = self.sources.get(&key.source_id)?;
+            let source = self.media.sources.get(&key.source_id)?;
             let selection = self
+                .media
                 .consumer_source_selections
                 .get(key)
                 .copied()
@@ -248,9 +256,10 @@ impl RoomState {
                 selection: diagnostics_source_selection(source, selection),
                 source_id: source.source_id().as_u64(),
                 source_transport_media_id: self
+                    .media
                     .producer_id_by_source_id
                     .get(&key.source_id)
-                    .and_then(|producer_id| self.producers.get(producer_id))
+                    .and_then(|producer_id| self.media.producers.get(producer_id))
                     .and_then(|producer| producer.transport_media_id)
                     .map(TransportMediaId::as_u64),
                 state: DiagnosticsRouteState::Pending,
