@@ -25,6 +25,7 @@
 //! signaling orchestration from growing knowledge of the concrete WebRTC
 //! implementation.
 
+mod backend;
 mod config;
 mod rtc_transport;
 mod source_policy;
@@ -33,18 +34,15 @@ pub mod test_support;
 mod types;
 mod worker_manager;
 
-#[cfg(any(test, feature = "testing-transport"))]
-use std::sync::Arc;
 use std::{collections::BTreeSet, time::Instant};
 
+use backend::Backend;
 pub use config::{MediaTransportDeps, RtcTransportConfig};
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
 pub use rtc_transport::{RtcTransport, RtcTransportBuildError, RtcTransportBuilder};
 pub use source_policy::{
     SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
 };
-#[cfg(any(test, feature = "testing-transport"))]
-use test_support::FakeMediaTransport;
 use tracing::warn;
 pub use types::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
@@ -55,7 +53,6 @@ pub use types::{
     TransportPlacementPressureSnapshot, TransportRelayRouteAction, TransportRelayRouteEffect,
     TransportResult, TransportSessionHealth, TransportSessionKey, TransportWorkerPressureSnapshot,
 };
-use worker_manager::RtcWorkerManager;
 
 use crate::{CoreOptions, runtime::RoomInstanceId};
 
@@ -72,15 +69,6 @@ use crate::{CoreOptions, runtime::RoomInstanceId};
 #[derive(Debug, Clone)]
 pub struct MediaTransport {
     backend: Backend,
-}
-
-#[derive(Debug, Clone)]
-enum Backend {
-    /// Production RTC transport selected by normal server builds.
-    Rtc(RtcTransport),
-    /// Deterministic transport selected by tests or `testing-transport` builds.
-    #[cfg(any(test, feature = "testing-transport"))]
-    Fake(Arc<FakeMediaTransport>),
 }
 
 impl MediaTransport {
@@ -117,9 +105,6 @@ impl MediaTransport {
             backend: Backend::Rtc(transport),
         }
     }
-}
-
-impl MediaTransport {
     /// Creates the first SDP offer for a transport session.
     ///
     /// The session must already be assigned to a transport worker by its
@@ -134,16 +119,7 @@ impl MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        let result = match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .create_initial_session_offer(session_key)
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => transport.create_initial_session_offer(session_key).await,
-        };
+        let result = self.backend.create_initial_session_offer(session_key).await;
         if let Err(error) = &result {
             warn!(
                 ?session_key,
@@ -168,20 +144,10 @@ impl MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        let result = match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .create_session_renegotiation_offer(session_key)
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => {
-                transport
-                    .create_session_renegotiation_offer(session_key)
-                    .await
-            }
-        };
+        let result = self
+            .backend
+            .create_session_renegotiation_offer(session_key)
+            .await;
         if let Err(error) = &result {
             warn!(
                 ?session_key,
@@ -207,20 +173,10 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         answer_sdp: &str,
     ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-        let result = match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .apply_session_answer(session_key, answer_sdp)
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => {
-                transport
-                    .apply_session_answer(session_key, answer_sdp)
-                    .await
-            }
-        };
+        let result = self
+            .backend
+            .apply_session_answer(session_key, answer_sdp)
+            .await;
         if let Err(error) = &result {
             warn!(
                 ?session_key,
@@ -247,17 +203,9 @@ impl MediaTransport {
         answer_sdp: &str,
         offered_router_capabilities: &MediaCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
-        let result = match &self.backend {
-            Backend::Rtc(_) => RtcWorkerManager::negotiated_client_rtp_capabilities(
-                answer_sdp,
-                offered_router_capabilities,
-            ),
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(_) => FakeMediaTransport::project_answered_client_rtp_capabilities(
-                answer_sdp,
-                offered_router_capabilities,
-            ),
-        };
+        let result = self
+            .backend
+            .negotiated_client_rtp_capabilities(answer_sdp, offered_router_capabilities);
         if let Err(error) = &result {
             warn!(
                 answer_len = answer_sdp.len(),
@@ -267,9 +215,6 @@ impl MediaTransport {
         }
         result
     }
-}
-
-impl MediaTransport {
     /// Closes all backend state owned by a transport session.
     ///
     /// Backends should release producer, consumer and relay state tied to the
@@ -284,19 +229,12 @@ impl MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
-        let result = match &self.backend {
-            Backend::Rtc(transport) => transport.worker_manager.close_session(session_key).await,
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => transport.close_session(session_key).await,
-        };
+        let result = self.backend.close_session(session_key).await;
         if let Err(error) = &result {
             warn!(?session_key, ?error, "media transport failed to close user");
         }
         result
     }
-}
-
-impl MediaTransport {
     /// Removes one producer or consumer handle from a transport session.
     ///
     /// Returns [`TransportAdapterError`] when the session or media id is unknown
@@ -311,20 +249,10 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        let result = match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .remove_media(session_key, transport_media_id)
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => {
-                transport
-                    .remove_media(session_key, transport_media_id)
-                    .await
-            }
-        };
+        let result = self
+            .backend
+            .remove_media(session_key, transport_media_id)
+            .await;
         if let Err(error) = &result {
             warn!(
                 ?session_key,
@@ -353,20 +281,10 @@ impl MediaTransport {
         media_kind: MediaKind,
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        let result = match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .publish_media(session_key, media_kind, rtp_parameters)
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => {
-                transport
-                    .publish_media(session_key, media_kind, rtp_parameters)
-                    .await
-            }
-        };
+        let result = self
+            .backend
+            .publish_media(session_key, media_kind, rtp_parameters)
+            .await;
         if let Err(error) = &result {
             warn!(
                 ?session_key,
@@ -398,32 +316,16 @@ impl MediaTransport {
         source_media_id: TransportMediaId,
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        let result = match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .consume_media(
-                        consumer_session_key,
-                        media_kind,
-                        source_session_key,
-                        source_media_id,
-                        consumer_rtp_parameters,
-                    )
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => {
-                transport
-                    .consume_media(
-                        consumer_session_key,
-                        media_kind,
-                        source_session_key,
-                        source_media_id,
-                        consumer_rtp_parameters,
-                    )
-                    .await
-            }
-        };
+        let result = self
+            .backend
+            .consume_media(
+                consumer_session_key,
+                media_kind,
+                source_session_key,
+                source_media_id,
+                consumer_rtp_parameters,
+            )
+            .await;
         if let Err(error) = &result {
             warn!(
                 ?consumer_session_key,
@@ -451,16 +353,7 @@ impl MediaTransport {
         &self,
         effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
-        let result = match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .apply_relay_route_effect(effect)
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => transport.apply_relay_route_effect(effect).await,
-        };
+        let result = self.backend.apply_relay_route_effect(effect).await;
         if let Err(error) = &result {
             warn!(
                 source_session_key = ?effect.source_session_key,
@@ -489,25 +382,16 @@ impl MediaTransport {
         transport_media_id: TransportMediaId,
         activity: ProducerActivity,
     ) -> Result<(), TransportAdapterError> {
-        let result = match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .set_producer_active(session_key, transport_media_id, activity.is_active())
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => {
-                transport
-                    .set_producer_active(session_key, transport_media_id, activity.is_active())
-                    .await
-            }
-        };
+        let active = activity.is_active();
+        let result = self
+            .backend
+            .set_producer_active(session_key, transport_media_id, active)
+            .await;
         if let Err(error) = &result {
             warn!(
                 ?session_key,
                 ?transport_media_id,
-                active = activity.is_active(),
+                active,
                 ?error,
                 "media transport failed to update producer activity"
             );
@@ -532,39 +416,24 @@ impl MediaTransport {
         source_transport_media_id: TransportMediaId,
         activity: ConsumerActivity,
     ) -> Result<(), TransportAdapterError> {
-        let result = match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .set_consumer_active(
-                        consumer_session_key,
-                        consumer_transport_media_id,
-                        source_session_key,
-                        source_transport_media_id,
-                        activity.is_active(),
-                    )
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => {
-                transport
-                    .set_consumer_active(
-                        consumer_session_key,
-                        consumer_transport_media_id,
-                        source_session_key,
-                        source_transport_media_id,
-                        activity.is_active(),
-                    )
-                    .await
-            }
-        };
+        let active = activity.is_active();
+        let result = self
+            .backend
+            .set_consumer_active(
+                consumer_session_key,
+                consumer_transport_media_id,
+                source_session_key,
+                source_transport_media_id,
+                active,
+            )
+            .await;
         if let Err(error) = &result {
             warn!(
                 ?consumer_session_key,
                 ?consumer_transport_media_id,
                 ?source_session_key,
                 ?source_transport_media_id,
-                active = activity.is_active(),
+                active,
                 ?error,
                 "media transport failed to update consumer activity"
             );
@@ -591,32 +460,16 @@ impl MediaTransport {
         source_transport_media_id: TransportMediaId,
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
-        let result = match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .set_consumer_packet_gate(
-                        consumer_session_key,
-                        consumer_transport_media_id,
-                        source_session_key,
-                        source_transport_media_id,
-                        packet_gate.clone(),
-                    )
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => {
-                transport
-                    .set_consumer_packet_gate(
-                        consumer_session_key,
-                        consumer_transport_media_id,
-                        source_session_key,
-                        source_transport_media_id,
-                        packet_gate.clone(),
-                    )
-                    .await
-            }
-        };
+        let result = self
+            .backend
+            .set_consumer_packet_gate(
+                consumer_session_key,
+                consumer_transport_media_id,
+                source_session_key,
+                source_transport_media_id,
+                packet_gate.clone(),
+            )
+            .await;
         if let Err(error) = &result {
             warn!(
                 ?consumer_session_key,
@@ -637,16 +490,7 @@ impl MediaTransport {
         &self,
         updates: &[ConsumerPacketGateUpdate],
     ) -> Vec<Result<(), TransportAdapterError>> {
-        let results = match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .set_consumer_packet_gates(updates)
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => transport.set_consumer_packet_gates(updates).await,
-        };
+        let results = self.backend.set_consumer_packet_gates(updates).await;
         for (update, result) in updates.iter().zip(results.iter()) {
             if let Err(error) = result {
                 warn!(
@@ -680,30 +524,15 @@ impl MediaTransport {
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        let result = match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .request_consumer_keyframe(
-                        consumer_session_key,
-                        consumer_transport_media_id,
-                        source_session_key,
-                        source_transport_media_id,
-                    )
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => {
-                transport
-                    .request_consumer_keyframe(
-                        consumer_session_key,
-                        consumer_transport_media_id,
-                        source_session_key,
-                        source_transport_media_id,
-                    )
-                    .await
-            }
-        };
+        let result = self
+            .backend
+            .request_consumer_keyframe(
+                consumer_session_key,
+                consumer_transport_media_id,
+                source_session_key,
+                source_transport_media_id,
+            )
+            .await;
         if let Err(error) = &result {
             warn!(
                 ?consumer_session_key,
@@ -726,20 +555,10 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Option<String> {
-        match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .transport_media_mid(session_key, transport_media_id)
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(_) => None,
-        }
+        self.backend
+            .transport_media_mid(session_key, transport_media_id)
+            .await
     }
-}
-
-impl MediaTransport {
     /// Returns the latest bitrate estimates for the requested sessions.
     ///
     /// Missing sessions are omitted from the snapshot. Estimates are suitable
@@ -749,13 +568,7 @@ impl MediaTransport {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
-        match &self.backend {
-            Backend::Rtc(transport) => transport
-                .worker_manager
-                .transport_bitrate_snapshot(session_keys),
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(_) => TransportBitrateSnapshot::default(),
-        }
+        self.backend.transport_bitrate_snapshot(session_keys)
     }
 
     /// Returns receiver-side bandwidth estimates for the requested sessions.
@@ -767,13 +580,7 @@ impl MediaTransport {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
-        match &self.backend {
-            Backend::Rtc(transport) => transport
-                .worker_manager
-                .receiver_bandwidth_snapshot(session_keys),
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => transport.receiver_bandwidth_snapshot(session_keys),
-        }
+        self.backend.receiver_bandwidth_snapshot(session_keys)
     }
 
     /// Returns transport-worker pressure for the workers that own the sessions.
@@ -785,13 +592,7 @@ impl MediaTransport {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportPlacementPressureSnapshot {
-        match &self.backend {
-            Backend::Rtc(transport) => transport
-                .worker_manager
-                .placement_pressure_snapshot(session_keys),
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => transport.placement_pressure_snapshot(session_keys),
-        }
+        self.backend.placement_pressure_snapshot(session_keys)
     }
 
     /// Returns transport-worker pressure for every worker the backend can rank.
@@ -801,39 +602,17 @@ impl MediaTransport {
     /// race with worker startup and teardown.
     #[must_use]
     pub fn worker_pressure_snapshots(&self) -> Vec<TransportWorkerPressureSnapshot> {
-        match &self.backend {
-            Backend::Rtc(transport) => transport.worker_manager.worker_pressure_snapshots(),
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => transport.worker_pressure_snapshots(),
-        }
+        self.backend.worker_pressure_snapshots()
     }
 
     /// Returns recent active-speaker sources observed by transport workers.
     pub async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
-        match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .active_speaker_source_snapshot()
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => transport.active_speaker_source_snapshot().await,
-        }
+        self.backend.active_speaker_source_snapshot().await
     }
 
     /// Returns diagnostic active-speaker state for operator-facing output.
     pub async fn active_speaker_diagnostic_snapshot(&self) -> Vec<ActiveSpeakerSourceDiagnostic> {
-        match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .active_speaker_diagnostic_snapshot()
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => transport.active_speaker_diagnostic_snapshot().await,
-        }
+        self.backend.active_speaker_diagnostic_snapshot().await
     }
 
     /// Returns the next known deadline for active-speaker expiry work.
@@ -841,16 +620,7 @@ impl MediaTransport {
     /// Runtimes use this to schedule source-policy wakeups without polling all
     /// rooms on a fixed cadence.
     pub async fn next_active_speaker_deadline(&self) -> Option<Instant> {
-        match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .next_active_speaker_deadline()
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(_) => None,
-        }
+        self.backend.next_active_speaker_deadline().await
     }
 
     /// Returns rooms whose transport-observed active-speaker state expired by
@@ -862,16 +632,9 @@ impl MediaTransport {
         &self,
         now: Instant,
     ) -> BTreeSet<RoomInstanceId> {
-        match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager
-                    .expired_active_speaker_room_instance_ids(now)
-                    .await
-            }
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(_) => BTreeSet::new(),
-        }
+        self.backend
+            .expired_active_speaker_room_instance_ids(now)
+            .await
     }
 
     /// Returns the latest known transport health for one session.
@@ -883,26 +646,13 @@ impl MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
-        match &self.backend {
-            Backend::Rtc(transport) => transport
-                .worker_manager
-                .session_transport_health(session_key),
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(_) => None,
-        }
+        self.backend.session_transport_health(session_key)
     }
-}
-
-impl MediaTransport {
     /// Subscribes to source-policy invalidation signals emitted by transport
     /// workers.
     #[must_use]
     pub fn source_policy_subscription(&self) -> SourcePolicyUpdateSubscription {
-        match &self.backend {
-            Backend::Rtc(transport) => transport.worker_manager.source_policy_subscription(),
-            #[cfg(any(test, feature = "testing-transport"))]
-            Backend::Fake(transport) => transport.source_policy_signal().subscribe(),
-        }
+        self.backend.source_policy_subscription()
     }
 }
 
