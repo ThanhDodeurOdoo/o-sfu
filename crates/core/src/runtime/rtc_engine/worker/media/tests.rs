@@ -38,9 +38,7 @@ use crate::{
             relay_registry::{RelayPacketMailbox, RelayTargetId},
             route_control::{KeyframeRequestDecision, PacketLayerGate},
             state::PacketLoopState,
-            test_support::{
-                RouteDestinationFixture, RouteSourceFixture, test_transport_session_key,
-            },
+            test_support::{MediaWorkerScenario, test_transport_session_key},
         },
     },
 };
@@ -127,16 +125,12 @@ fn assert_consumer_packet_gate(
 
 fn install_video_route(
     state: &mut PacketLoopState,
-    source_session: &TransportSessionKey,
-    source_mid: Mid,
     source_transport_media_id: TransportMediaId,
     consumer_session: &TransportSessionKey,
     consumer_mid: Mid,
 ) -> TransportMediaId {
     install_video_route_with_gate(
         state,
-        source_session,
-        source_mid,
         source_transport_media_id,
         consumer_session,
         consumer_mid,
@@ -146,22 +140,19 @@ fn install_video_route(
 
 fn install_video_route_with_gate(
     state: &mut PacketLoopState,
-    source_session: &TransportSessionKey,
-    source_mid: Mid,
     source_transport_media_id: TransportMediaId,
     consumer_session: &TransportSessionKey,
     consumer_mid: Mid,
     packet_gate: PacketLayerGate,
 ) -> TransportMediaId {
-    RouteSourceFixture::existing(
-        source_session.clone(),
-        source_mid,
+    let mut scenario = MediaWorkerScenario::new(state);
+    scenario.existing_source(source_transport_media_id);
+    scenario.destination_with_gate(
         source_transport_media_id,
+        consumer_session.clone(),
+        consumer_mid,
+        packet_gate,
     )
-    .install(state);
-    RouteDestinationFixture::new(consumer_session.clone(), consumer_mid)
-        .packet_gate(packet_gate)
-        .install(state, source_transport_media_id)
 }
 
 fn request_consumer_keyframe(
@@ -259,15 +250,13 @@ fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
         88_302,
         fallback_rid,
     );
-    RouteSourceFixture::existing(
-        source_session.clone(),
-        source_mid,
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    scenario.existing_source(source_transport_media_id);
+    let consumer_transport_media_id = scenario.destination(
         source_transport_media_id,
-    )
-    .install(&mut state);
-    let consumer_transport_media_id =
-        RouteDestinationFixture::new(consumer_session.clone(), consumer_mid)
-            .install(&mut state, source_transport_media_id);
+        consumer_session.clone(),
+        consumer_mid,
+    );
     let command_now = Instant::now();
     let (response_tx, response_rx) = oneshot::channel();
     respond_set_consumer_packet_gate(
@@ -379,8 +368,6 @@ fn consumer_keyframe_request_marks_local_video_source_dirty() {
         prepare_source_session(&mut state, &source_session, source_mid, 88_001);
     let consumer_transport_media_id = install_video_route(
         &mut state,
-        &source_session,
-        source_mid,
         source_transport_media_id,
         &consumer_session,
         consumer_mid,
@@ -416,8 +403,6 @@ fn consumer_keyframe_request_uses_rid_scoped_local_video_source() {
     );
     let consumer_transport_media_id = install_video_route_with_gate(
         &mut state,
-        &source_session,
-        source_mid,
         source_transport_media_id,
         &consumer_session,
         consumer_mid,
@@ -477,8 +462,6 @@ fn open_consumer_keyframe_request_refreshes_simulcast_video_source() {
         );
     let consumer_transport_media_id = install_video_route(
         &mut state,
-        &source_session,
-        source_mid,
         source_transport_media_id,
         &consumer_session,
         consumer_mid,
@@ -514,8 +497,6 @@ fn consumer_keyframe_request_forwards_remote_video_refresh() {
 
     let consumer_transport_media_id = install_video_route(
         &mut state,
-        &source_session,
-        Mid::from("cam-up"),
         source_transport_media_id,
         &consumer_session,
         consumer_mid,
@@ -558,8 +539,6 @@ fn consumer_keyframe_request_forwards_remote_video_refresh_with_selected_rid() {
 
     let consumer_transport_media_id = install_video_route_with_gate(
         &mut state,
-        &source_session,
-        Mid::from("cam-up"),
         source_transport_media_id,
         &consumer_session,
         consumer_mid,
@@ -595,17 +574,18 @@ fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate(
     let mut state = PacketLoopState::default();
     let source_transport_media_id =
         prepare_source_session(&mut state, &source_session, source_mid, 88_889);
-    RouteSourceFixture::existing(
-        source_session.clone(),
-        source_mid,
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    scenario.existing_source(source_transport_media_id);
+    let first_consumer_transport_media_id = scenario.destination(
         source_transport_media_id,
-    )
-    .install(&mut state);
-    let first_consumer_transport_media_id =
-        RouteDestinationFixture::new(first_consumer_session.clone(), first_consumer_mid)
-            .install(&mut state, source_transport_media_id);
-    RouteDestinationFixture::new(second_consumer_session.clone(), second_consumer_mid)
-        .install(&mut state, source_transport_media_id);
+        first_consumer_session.clone(),
+        first_consumer_mid,
+    );
+    scenario.destination(
+        source_transport_media_id,
+        second_consumer_session.clone(),
+        second_consumer_mid,
+    );
     let observed_at = Instant::now();
     state.observe_producer_rid_packet(source_transport_media_id, Rid::from("lo"), observed_at);
 
@@ -661,15 +641,13 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
         88_921,
         Some(selected_rid),
     );
-    RouteSourceFixture::existing(
-        source_session.clone(),
-        source_mid,
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    scenario.existing_source(source_transport_media_id);
+    let consumer_transport_media_id = scenario.destination(
         source_transport_media_id,
-    )
-    .install(&mut state);
-    let consumer_transport_media_id =
-        RouteDestinationFixture::new(consumer_session.clone(), consumer_mid)
-            .install(&mut state, source_transport_media_id);
+        consumer_session.clone(),
+        consumer_mid,
+    );
     let observed_at = Instant::now();
     state.observe_producer_rid_packet(source_transport_media_id, selected_rid, observed_at);
 
@@ -881,15 +859,14 @@ fn selected_rid_activation_sends_bounded_follow_up_keyframe_refreshes() {
         88_351,
         Some(selected_rid),
     );
-    RouteSourceFixture::existing(
-        source_session.clone(),
-        source_mid,
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    scenario.existing_source(source_transport_media_id);
+    scenario.destination_with_pending_gate(
         source_transport_media_id,
-    )
-    .install(&mut state);
-    RouteDestinationFixture::new(consumer_session, consumer_mid)
-        .pending_packet_gate(PacketLayerGate::Rid(selected_rid))
-        .install(&mut state, source_transport_media_id);
+        consumer_session,
+        consumer_mid,
+        PacketLayerGate::Rid(selected_rid),
+    );
 
     let now = Instant::now();
     assert!(observe_source_rid_readiness(
@@ -943,15 +920,14 @@ fn selected_rid_keyframe_refreshes_are_timer_driven_after_activation() {
         88_451,
         Some(selected_rid),
     );
-    RouteSourceFixture::existing(
-        source_session.clone(),
-        source_mid,
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    scenario.existing_source(source_transport_media_id);
+    scenario.destination_with_pending_gate(
         source_transport_media_id,
-    )
-    .install(&mut state);
-    RouteDestinationFixture::new(consumer_session, consumer_mid)
-        .pending_packet_gate(PacketLayerGate::Rid(selected_rid))
-        .install(&mut state, source_transport_media_id);
+        consumer_session,
+        consumer_mid,
+        PacketLayerGate::Rid(selected_rid),
+    );
 
     let now = Instant::now();
     assert!(observe_source_rid_readiness(
@@ -988,15 +964,14 @@ fn selected_rid_packet_gate_blocks_when_selected_rid_goes_stale() {
         88_401,
         Some(selected_rid),
     );
-    RouteSourceFixture::existing(
-        source_session.clone(),
-        source_mid,
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    scenario.existing_source(source_transport_media_id);
+    scenario.destination_with_gate(
         source_transport_media_id,
-    )
-    .install(&mut state);
-    RouteDestinationFixture::new(consumer_session.clone(), consumer_mid)
-        .packet_gate(PacketLayerGate::Rid(selected_rid))
-        .install(&mut state, source_transport_media_id);
+        consumer_session.clone(),
+        consumer_mid,
+        PacketLayerGate::Rid(selected_rid),
+    );
     refresh_source_packet_gate(&mut state, source_transport_media_id);
 
     let now = Instant::now();
@@ -1086,18 +1061,18 @@ fn batched_consumer_packet_gates_keep_remote_relay_open_during_rid_bootstrap() {
             )
             .is_ok()
     );
-    RouteSourceFixture::existing(
-        source_session.clone(),
-        Mid::from("cam-up"),
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    scenario.existing_source(source_transport_media_id);
+    let first_consumer_transport_media_id = scenario.destination(
         source_transport_media_id,
-    )
-    .install(&mut state);
-    let first_consumer_transport_media_id =
-        RouteDestinationFixture::new(first_consumer_session.clone(), first_consumer_mid)
-            .install(&mut state, source_transport_media_id);
-    let second_consumer_transport_media_id =
-        RouteDestinationFixture::new(second_consumer_session.clone(), second_consumer_mid)
-            .install(&mut state, source_transport_media_id);
+        first_consumer_session.clone(),
+        first_consumer_mid,
+    );
+    let second_consumer_transport_media_id = scenario.destination(
+        source_transport_media_id,
+        second_consumer_session.clone(),
+        second_consumer_mid,
+    );
 
     let (response_tx, response_rx) = oneshot::channel();
     respond_set_consumer_packet_gates(
@@ -1152,15 +1127,14 @@ fn explicit_consumer_block_still_blocks_remote_relay() {
             )
             .is_ok()
     );
-    RouteSourceFixture::existing(
-        source_session.clone(),
-        Mid::from("cam-up"),
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    scenario.existing_source(source_transport_media_id);
+    scenario.destination_with_gate(
         source_transport_media_id,
-    )
-    .install(&mut state);
-    RouteDestinationFixture::new(consumer_session, consumer_mid)
-        .packet_gate(PacketLayerGate::Block)
-        .install(&mut state, source_transport_media_id);
+        consumer_session,
+        consumer_mid,
+        PacketLayerGate::Block,
+    );
 
     refresh_source_packet_gate(&mut state, source_transport_media_id);
 
@@ -1195,15 +1169,14 @@ fn selected_consumer_rid_keeps_remote_relay_open() {
             )
             .is_ok()
     );
-    RouteSourceFixture::existing(
-        source_session.clone(),
-        Mid::from("cam-up"),
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    scenario.existing_source(source_transport_media_id);
+    scenario.destination_with_gate(
         source_transport_media_id,
-    )
-    .install(&mut state);
-    RouteDestinationFixture::new(consumer_session, consumer_mid)
-        .packet_gate(PacketLayerGate::Rid("lo".into()))
-        .install(&mut state, source_transport_media_id);
+        consumer_session,
+        consumer_mid,
+        PacketLayerGate::Rid("lo".into()),
+    );
 
     refresh_source_packet_gate(&mut state, source_transport_media_id);
 

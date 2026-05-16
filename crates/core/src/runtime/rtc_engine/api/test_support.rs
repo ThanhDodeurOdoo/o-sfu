@@ -1,8 +1,8 @@
 #[cfg(test)]
-use std::{net::SocketAddr, time::Instant};
 use std::{
-    net::{IpAddr, Ipv4Addr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
+    time::Instant,
 };
 
 use str0m::media::Mid;
@@ -17,19 +17,25 @@ use super::{
 };
 #[cfg(test)]
 use crate::runtime::media_transport::TransportMediaId;
+use crate::runtime::{media_transport::TransportSessionKey, metrics};
+#[cfg(test)]
 use crate::{
-    Bitrate, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
+    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
     runtime::{
         diagnostics::DiagnosticsStore,
-        media_transport::{
-            MediaTransportDeps, RtcTransportConfig, SourcePolicySignal, TransportSessionKey,
-        },
-        metrics::{self, RuntimeMetrics},
+        media_transport::{MediaTransportDeps, RtcTransportConfig, SourcePolicySignal},
+        metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
     },
 };
 
 impl RtcTransportWorker {
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn test_builder() -> RtcTransportWorkerTestBuilder {
+        RtcTransportWorkerTestBuilder::default()
+    }
+
     pub fn debug_set_session_transport_health(
         &self,
         session_key: &TransportSessionKey,
@@ -266,19 +272,64 @@ impl RtcTransportWorker {
     }
 }
 
-impl Default for RtcTransportWorker {
-    fn default() -> Self {
-        Self::new(
+#[cfg(test)]
+pub(crate) struct RtcTransportWorkerTestBuilder {
+    max_bitrate_in: Bitrate,
+    max_bitrate_out: Bitrate,
+    rtc_port_range: RtcPortRange,
+    codec_flags: MediaCodecFlags,
+    codec_preferences: CodecPreferences,
+}
+
+#[cfg(test)]
+impl RtcTransportWorkerTestBuilder {
+    #[must_use]
+    pub(crate) fn bitrate_limits(
+        mut self,
+        max_bitrate_in: Bitrate,
+        max_bitrate_out: Bitrate,
+    ) -> Self {
+        self.max_bitrate_in = max_bitrate_in;
+        self.max_bitrate_out = max_bitrate_out;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn port_range(mut self, rtc_port_range: RtcPortRange) -> Self {
+        self.rtc_port_range = rtc_port_range;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn codec_flags(mut self, codec_flags: MediaCodecFlags) -> Self {
+        self.codec_flags = codec_flags;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn codec_policy(
+        mut self,
+        codec_flags: MediaCodecFlags,
+        codec_preferences: CodecPreferences,
+    ) -> Self {
+        self.codec_flags = codec_flags;
+        self.codec_preferences = codec_preferences;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn build(self) -> RtcTransportWorker {
+        RtcTransportWorker::new(
             &RtcTransportConfig {
                 public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
                 bitrate_limits: SessionBitrateLimits::new(
-                    Bitrate::from_mbps(8),
-                    Bitrate::from_mbps(10),
+                    self.max_bitrate_in,
+                    self.max_bitrate_out,
                 ),
                 video_bitrate_limits: crate::VideoBitrateLimits::default(),
-                rtc_port_range: RtcPortRange::new(40_000, 49_999),
-                codec_flags: MediaCodecFlags::default(),
-                codec_preferences: crate::CodecPreferences::default(),
+                rtc_port_range: self.rtc_port_range,
+                codec_flags: self.codec_flags,
+                codec_preferences: self.codec_preferences,
             },
             &MediaTransportDeps {
                 diagnostics: Arc::new(DiagnosticsStore::default()),
@@ -289,5 +340,27 @@ impl Default for RtcTransportWorker {
             0,
             0,
         )
+    }
+}
+
+#[cfg(test)]
+impl Default for RtcTransportWorkerTestBuilder {
+    fn default() -> Self {
+        Self {
+            max_bitrate_in: Bitrate::from_mbps(8),
+            max_bitrate_out: Bitrate::from_mbps(10),
+            rtc_port_range: RtcPortRange::new(40_000, 49_999),
+            codec_flags: MediaCodecFlags::default(),
+            codec_preferences: CodecPreferences::default(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Default for RtcTransportWorker {
+    fn default() -> Self {
+        Self::test_builder()
+            .port_range(RtcPortRange::new(40_000, 49_999))
+            .build()
     }
 }

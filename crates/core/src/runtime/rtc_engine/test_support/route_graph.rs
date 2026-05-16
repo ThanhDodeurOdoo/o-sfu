@@ -1,4 +1,4 @@
-use str0m::media::{Mid, Pt};
+use str0m::media::Mid;
 
 use super::super::{
     demux::{MediaRouteDestination, MediaRouteEntry},
@@ -8,100 +8,101 @@ use super::super::{
 };
 use crate::runtime::media_transport::{TransportMediaId, TransportSessionKey};
 
-pub(in crate::runtime::rtc_engine) struct RouteSourceFixture {
-    session_key: TransportSessionKey,
-    mid: Mid,
-    transport_media_id: Option<TransportMediaId>,
-    active: bool,
+pub(in crate::runtime::rtc_engine) struct MediaWorkerScenario<'a> {
+    state: &'a mut PacketLoopState,
 }
 
-impl RouteSourceFixture {
-    pub fn new(session_key: TransportSessionKey, mid: Mid) -> Self {
-        Self {
-            session_key,
-            mid,
-            transport_media_id: None,
-            active: true,
-        }
+impl<'a> MediaWorkerScenario<'a> {
+    pub fn new(state: &'a mut PacketLoopState) -> Self {
+        Self { state }
     }
 
-    pub fn existing(
-        session_key: TransportSessionKey,
-        mid: Mid,
-        transport_media_id: TransportMediaId,
-    ) -> Self {
-        Self {
-            session_key,
-            mid,
-            transport_media_id: Some(transport_media_id),
-            active: true,
-        }
-    }
-
-    pub fn install(self, state: &mut PacketLoopState) -> TransportMediaId {
-        let Self {
-            session_key,
-            mid,
-            transport_media_id,
-            active,
-        } = self;
-        let transport_media_id = transport_media_id.unwrap_or_else(|| {
-            state.register_media_handle(RegisteredMediaHandle::Producer { session_key, mid })
-        });
-        state
-            .media_route_index
-            .entry(transport_media_id)
-            .and_modify(|route_entry| route_entry.source_active = active)
-            .or_insert_with(|| MediaRouteEntry {
-                source_active: active,
-                destinations: Vec::new(),
-            });
+    pub fn source(&mut self, session_key: TransportSessionKey, mid: Mid) -> TransportMediaId {
+        let transport_media_id = self
+            .state
+            .register_media_handle(RegisteredMediaHandle::Producer { session_key, mid });
+        self.install_source_route(transport_media_id);
         transport_media_id
     }
-}
 
-pub(in crate::runtime::rtc_engine) struct RouteDestinationFixture {
-    session_key: TransportSessionKey,
-    mid: Mid,
-    payload_type: Option<Pt>,
-    active: bool,
-    packet_gate: PacketLayerGate,
-    pending_packet_gate: Option<PacketLayerGate>,
-}
+    pub fn existing_source(&mut self, transport_media_id: TransportMediaId) -> TransportMediaId {
+        self.install_source_route(transport_media_id);
+        transport_media_id
+    }
 
-impl RouteDestinationFixture {
-    pub fn new(session_key: TransportSessionKey, mid: Mid) -> Self {
-        Self {
+    pub fn destination(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        session_key: TransportSessionKey,
+        mid: Mid,
+    ) -> TransportMediaId {
+        self.destination_with_gate(
+            source_transport_media_id,
             session_key,
             mid,
-            payload_type: None,
-            active: true,
-            packet_gate: PacketLayerGate::Open,
-            pending_packet_gate: None,
-        }
+            PacketLayerGate::Open,
+        )
     }
 
-    pub fn packet_gate(mut self, packet_gate: PacketLayerGate) -> Self {
-        self.packet_gate = packet_gate;
-        self
-    }
-
-    pub fn pending_packet_gate(mut self, packet_gate: PacketLayerGate) -> Self {
-        self.pending_packet_gate = Some(packet_gate);
-        self
-    }
-
-    pub fn install(
-        self,
-        state: &mut PacketLoopState,
+    pub fn destination_with_gate(
+        &mut self,
         source_transport_media_id: TransportMediaId,
+        session_key: TransportSessionKey,
+        mid: Mid,
+        packet_gate: PacketLayerGate,
     ) -> TransportMediaId {
-        let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: self.session_key.clone(),
-            mid: self.mid,
+        self.install_destination(
             source_transport_media_id,
-        });
-        state
+            session_key,
+            mid,
+            packet_gate,
+            None,
+        )
+    }
+
+    pub fn destination_with_pending_gate(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        session_key: TransportSessionKey,
+        mid: Mid,
+        packet_gate: PacketLayerGate,
+    ) -> TransportMediaId {
+        self.install_destination(
+            source_transport_media_id,
+            session_key,
+            mid,
+            PacketLayerGate::Open,
+            Some(packet_gate),
+        )
+    }
+
+    fn install_source_route(&mut self, transport_media_id: TransportMediaId) {
+        self.state
+            .media_route_index
+            .entry(transport_media_id)
+            .and_modify(|route_entry| route_entry.source_active = true)
+            .or_insert_with(|| MediaRouteEntry {
+                source_active: true,
+                destinations: Vec::new(),
+            });
+    }
+
+    fn install_destination(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        session_key: TransportSessionKey,
+        mid: Mid,
+        packet_gate: PacketLayerGate,
+        pending_packet_gate: Option<PacketLayerGate>,
+    ) -> TransportMediaId {
+        let transport_media_id =
+            self.state
+                .register_media_handle(RegisteredMediaHandle::Consumer {
+                    session_key: session_key.clone(),
+                    mid,
+                    source_transport_media_id,
+                });
+        self.state
             .media_route_index
             .entry(source_transport_media_id)
             .or_insert_with(|| MediaRouteEntry {
@@ -110,13 +111,13 @@ impl RouteDestinationFixture {
             })
             .destinations
             .push(MediaRouteDestination {
-                dest_session: self.session_key,
+                dest_session: session_key,
                 dest_transport_media_id: transport_media_id,
-                dest_mid: self.mid,
-                dest_payload_type: self.payload_type,
-                active: self.active,
-                packet_gate: self.packet_gate,
-                pending_packet_gate: self.pending_packet_gate,
+                dest_mid: mid,
+                dest_payload_type: None,
+                active: true,
+                packet_gate,
+                pending_packet_gate,
             });
         transport_media_id
     }

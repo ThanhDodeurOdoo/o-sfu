@@ -12,7 +12,7 @@ pub(super) use debug_command::DebugRtcWorkerCommand;
 pub use debug_command::{DebugPacketGate, DebugRouteDestination, DebugRouteEntry};
 pub(super) use debug_mailbox::{RtcWorkerDebugChannels, RtcWorkerDebugHandle};
 #[cfg(test)]
-pub(in crate::runtime::rtc_engine) use route_graph::{RouteDestinationFixture, RouteSourceFixture};
+pub(in crate::runtime::rtc_engine) use route_graph::MediaWorkerScenario;
 pub(super) use worker_debug::handle_debug_worker_command;
 
 #[cfg(any(test, feature = "testing-transport"))]
