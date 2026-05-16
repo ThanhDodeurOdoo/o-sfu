@@ -1,3 +1,8 @@
+#![allow(
+    clippy::panic,
+    reason = "media worker tests use panic only for mandatory fixture setup failures"
+)]
+
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -68,7 +73,7 @@ fn prepare_source_session_with_rid(
         .is_ok()
     );
     let Some(source_session_state) = state.users.get_mut(source_session) else {
-        return TransportMediaId::default();
+        panic!("source session should exist after RTC state bootstrap");
     };
     let mut direct_api = source_session_state.rtc.direct_api();
     direct_api.declare_media(source_mid, MediaKind::Video);
@@ -94,6 +99,8 @@ fn add_source_rid_stream(
             source_mid,
             Some(rid),
         );
+    } else {
+        panic!("source session should exist before adding RID stream");
     }
 }
 
@@ -354,8 +361,7 @@ fn open_consumer_keyframe_request_refreshes_simulcast_video_source() {
         Some(Rid::from("lo")),
     );
     let Some(source_session_state) = state.users.get_mut(&source_session) else {
-        assert!(state.users.contains_key(&source_session));
-        return;
+        panic!("source session should exist before adding the high RID stream");
     };
     source_session_state.rtc.direct_api().expect_stream_rx(
         Ssrc::from(88_202),
@@ -1243,12 +1249,8 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
     );
 
     assert!(matches!(response_rx.blocking_recv(), Ok(Ok(_))));
-    if !state.users.contains_key(&consumer_session) {
-        assert!(state.users.contains_key(&consumer_session));
-        return;
-    }
     let Some(consumer_session_state) = state.users.get_mut(&consumer_session) else {
-        return;
+        panic!("consumer session should exist after RTC state bootstrap");
     };
     let mut direct_api = consumer_session_state.rtc.direct_api();
     assert!(direct_api.stream_tx_by_mid(consumer_mid, None).is_some());
@@ -1366,7 +1368,7 @@ fn prepare_already_absent_producer_registration(
     let session_state = state.users.get_mut(session_key);
     assert!(session_state.is_some());
     let Some(session_state) = session_state else {
-        return TransportMediaId::default();
+        panic!("producer session should exist after RTC state bootstrap");
     };
     {
         let mut direct_api = session_state.rtc.direct_api();
