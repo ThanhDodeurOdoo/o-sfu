@@ -12,7 +12,7 @@
 //! committed
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     sync::{Mutex, PoisonError},
 };
 
@@ -30,25 +30,23 @@ use crate::{
     },
 };
 
-/// room-local transport placement directory
+/// room-local committed placement ledger
 ///
-/// joins register the selected worker for each committed connection
-/// later transport commands use the same mapping to build stable session keys
-/// without putting mutable placement state inside `RoomDefinition`
+/// joins register the selected router and media worker for each committed
+/// connection. later transport commands use the same mapping to build stable
+/// session keys without deriving placement from several room indexes
 #[derive(Debug)]
-pub(super) struct RoomPlacementDirectory {
-    primary_router: RouterId,
-    primary_media_worker_id: Mutex<usize>,
-    worker_by_connection: Mutex<BTreeMap<ConnectionId, usize>>,
+pub(super) struct RoomPlacementLedger {
+    primary_placement: Mutex<LocalRouterRuntimeContext>,
+    placement_by_connection: Mutex<BTreeMap<ConnectionId, LocalRouterRuntimeContext>>,
 }
 
-impl RoomPlacementDirectory {
+impl RoomPlacementLedger {
     #[must_use]
     pub(super) fn new(primary: LocalRouterRuntimeContext) -> Self {
         Self {
-            primary_router: primary.router,
-            primary_media_worker_id: Mutex::new(primary.media_worker),
-            worker_by_connection: Mutex::new(BTreeMap::new()),
+            primary_placement: Mutex::new(primary),
+            placement_by_connection: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -67,48 +65,56 @@ impl RoomPlacementDirectory {
         )
     }
 
-    pub(super) fn register_transport_placement(
+    pub(super) fn register_committed_placement(
         &self,
         connection_id: ConnectionId,
         placement: LocalRouterRuntimeContext,
     ) {
-        self.worker_by_connection
+        self.placement_by_connection
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(connection_id, placement.media_worker);
-        if placement.router == self.primary_router {
-            *self
-                .primary_media_worker_id
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = placement.media_worker;
+            .insert(connection_id, placement);
+        let mut primary = self
+            .primary_placement
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if placement.router == primary.router {
+            *primary = placement;
         }
     }
 
-    pub(super) fn unregister_transport_worker(&self, connection_id: ConnectionId) {
-        self.worker_by_connection
+    pub(super) fn unregister_committed_placement(&self, connection_id: ConnectionId) {
+        self.placement_by_connection
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&connection_id);
     }
 
-    pub(super) fn media_worker_id_for_connection(&self, connection_id: ConnectionId) -> usize {
-        if let Some(media_worker_id) = self
-            .worker_by_connection
+    fn placement_for_connection(&self, connection_id: ConnectionId) -> LocalRouterRuntimeContext {
+        if let Some(placement) = self
+            .placement_by_connection
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&connection_id)
             .copied()
         {
-            return media_worker_id;
+            return placement;
         }
-        self.media_worker_id()
+        *self
+            .primary_placement
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(super) fn media_worker_id_for_connection(&self, connection_id: ConnectionId) -> usize {
+        self.placement_for_connection(connection_id).media_worker
     }
 
     pub(super) fn media_worker_id(&self) -> usize {
-        *self
-            .primary_media_worker_id
+        self.primary_placement
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+            .media_worker
     }
 }
 
@@ -202,6 +208,26 @@ pub(super) enum RoomPlacementDecision {
     AllocateSpillover { media_worker_id: usize },
 }
 
+impl RoomPlacementDecision {
+    pub(super) fn resolve(
+        self,
+        room: &RoomPlacementUsageSnapshot,
+        allocate_spillover_router: impl FnOnce() -> RouterId,
+    ) -> LocalRouterRuntimeContext {
+        match self {
+            Self::AssignPrimary { media_worker_id } => LocalRouterRuntimeContext {
+                router: room.primary_router(),
+                media_worker: media_worker_id,
+            },
+            Self::UseExisting(placement) => placement,
+            Self::AllocateSpillover { media_worker_id } => LocalRouterRuntimeContext {
+                router: allocate_spillover_router(),
+                media_worker: media_worker_id,
+            },
+        }
+    }
+}
+
 /// aggregate placement load for one local media worker
 ///
 /// the room manager builds this from committed room mappings plus
@@ -209,7 +235,7 @@ pub(super) enum RoomPlacementDecision {
 /// each value is a one-join snapshot rather than a continuously maintained
 /// counter
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct WorkerPlacementLoad {
+struct WorkerPlacementLoad {
     /// worker this load describes after normalization by configured worker count
     media_worker_id: usize,
     /// sessions currently mapped to this worker
@@ -222,10 +248,7 @@ pub(super) struct WorkerPlacementLoad {
 
 impl WorkerPlacementLoad {
     #[must_use]
-    pub(super) const fn new(
-        media_worker_id: usize,
-        pressure: TransportPlacementPressureSnapshot,
-    ) -> Self {
+    const fn new(media_worker_id: usize, pressure: TransportPlacementPressureSnapshot) -> Self {
         Self {
             media_worker_id,
             session_count: 0,
@@ -298,13 +321,13 @@ struct WorkerPlacementScore {
 /// every configured worker receives an entry, even if transport observability
 /// has not published pressure yet
 /// this lets first-join placement prefer unused workers
-#[derive(Debug, Clone)]
-pub(super) struct WorkerPlacementLoadSet {
-    worker_count: usize,
-    loads: BTreeMap<usize, WorkerPlacementLoad>,
+#[derive(Debug)]
+pub(super) struct WorkerLoadIndex {
+    media_worker_count: usize,
+    loads: Vec<WorkerPlacementLoad>,
 }
 
-impl WorkerPlacementLoadSet {
+impl WorkerLoadIndex {
     /// create a complete worker load set from best-effort transport pressure
     ///
     /// missing snapshots are treated as idle workers
@@ -313,51 +336,87 @@ impl WorkerPlacementLoadSet {
     /// runtimes
     #[must_use]
     pub(super) fn new(
-        worker_count: usize,
+        media_worker_count: usize,
         pressure_snapshots: Vec<TransportWorkerPressureSnapshot>,
     ) -> Self {
-        let worker_count = worker_count.max(1);
-        let mut loads = (0..worker_count)
+        let media_worker_count = media_worker_count.max(1);
+        let mut loads = (0..media_worker_count)
             .map(|media_worker_id| {
-                (
+                WorkerPlacementLoad::new(
                     media_worker_id,
-                    WorkerPlacementLoad::new(
-                        media_worker_id,
-                        TransportPlacementPressureSnapshot::default(),
-                    ),
+                    TransportPlacementPressureSnapshot::default(),
                 )
             })
-            .collect::<BTreeMap<_, _>>();
+            .collect::<Vec<_>>();
         for snapshot in pressure_snapshots {
-            let media_worker_id = snapshot.media_worker_id % worker_count;
-            loads.insert(
-                media_worker_id,
-                WorkerPlacementLoad::new(media_worker_id, snapshot.pressure),
-            );
+            let media_worker_id = snapshot.media_worker_id % media_worker_count;
+            if let Some(load) = loads.get_mut(media_worker_id) {
+                *load = WorkerPlacementLoad::new(media_worker_id, snapshot.pressure);
+            }
         }
         Self {
-            worker_count,
+            media_worker_count,
             loads,
         }
     }
 
     pub(super) fn record_session(&mut self, media_worker_id: usize) {
-        let media_worker_id = media_worker_id % self.worker_count;
-        if let Some(load) = self.loads.get_mut(&media_worker_id) {
+        if let Some(load) = self.load_mut_for_worker(media_worker_id) {
             load.record_session();
         }
     }
 
     pub(super) fn record_consumer(&mut self, media_worker_id: usize) {
-        let media_worker_id = media_worker_id % self.worker_count;
-        if let Some(load) = self.loads.get_mut(&media_worker_id) {
+        if let Some(load) = self.load_mut_for_worker(media_worker_id) {
             load.record_consumer();
         }
     }
 
-    #[must_use]
-    pub(super) fn into_loads(self) -> Vec<WorkerPlacementLoad> {
-        self.loads.into_values().collect()
+    fn load_mut_for_worker(&mut self, media_worker_id: usize) -> Option<&mut WorkerPlacementLoad> {
+        self.loads
+            .get_mut(media_worker_id % self.media_worker_count)
+    }
+
+    fn load_for_worker(&self, media_worker_id: usize) -> WorkerPlacementLoad {
+        let media_worker_id = media_worker_id % self.media_worker_count;
+        self.loads.get(media_worker_id).copied().unwrap_or_else(|| {
+            WorkerPlacementLoad::new(
+                media_worker_id,
+                TransportPlacementPressureSnapshot::default(),
+            )
+        })
+    }
+
+    fn least_loaded_worker(
+        &self,
+        excluded_placements: &[LocalRouterRuntimeContext],
+        policy: LocalSpilloverPolicy,
+    ) -> usize {
+        self.loads
+            .iter()
+            .filter(|load| {
+                !excluded_placements
+                    .iter()
+                    .any(|placement| placement.media_worker == load.media_worker_id)
+            })
+            .min_by_key(|load| load.score(policy))
+            .or_else(|| self.loads.iter().min_by_key(|load| load.score(policy)))
+            .map_or(0, |load| load.media_worker_id)
+    }
+
+    fn least_loaded_placement(
+        &self,
+        placements: &[LocalRouterRuntimeContext],
+        policy: LocalSpilloverPolicy,
+    ) -> LocalRouterRuntimeContext {
+        placements
+            .iter()
+            .copied()
+            .min_by_key(|placement| self.load_for_worker(placement.media_worker).score(policy))
+            .unwrap_or(LocalRouterRuntimeContext {
+                router: RouterId(0),
+                media_worker: 0,
+            })
     }
 }
 
@@ -392,9 +451,8 @@ impl RoomPlacementPlanner {
     pub(super) fn choose(
         &self,
         room: &RoomPlacementUsageSnapshot,
-        worker_loads: &[WorkerPlacementLoad],
+        load_index: &WorkerLoadIndex,
     ) -> RoomPlacementDecision {
-        let load_index = WorkerLoadIndex::new(self.media_worker_count, worker_loads);
         let placement_cap = self
             .policy
             .max_local_routers()
@@ -404,7 +462,7 @@ impl RoomPlacementPlanner {
         let assigned_placements = room.assigned_placements();
         if assigned_placements.is_empty() {
             return RoomPlacementDecision::AssignPrimary {
-                media_worker_id: load_index.least_loaded_worker(&BTreeSet::new(), score_policy),
+                media_worker_id: load_index.least_loaded_worker(&[], score_policy),
             };
         }
         match self.policy.spillover() {
@@ -420,7 +478,7 @@ impl RoomPlacementPlanner {
                 if assigned_placements.len() < placement_cap {
                     return RoomPlacementDecision::AllocateSpillover {
                         media_worker_id: load_index
-                            .least_loaded_worker(&used_workers(assigned_placements), score_policy),
+                            .least_loaded_worker(assigned_placements, score_policy),
                     };
                 }
                 RoomPlacementDecision::UseExisting(
@@ -438,95 +496,12 @@ impl RoomPlacementPlanner {
                 if assigned_placements.len() < placement_cap {
                     return RoomPlacementDecision::AllocateSpillover {
                         media_worker_id: load_index
-                            .least_loaded_worker(&used_workers(assigned_placements), policy),
+                            .least_loaded_worker(assigned_placements, policy),
                     };
                 }
                 RoomPlacementDecision::UseExisting(placement)
             }
         }
-    }
-}
-
-/// lookup table that gives the planner a stable score for every worker
-///
-/// callers can pass sparse data
-/// the index fills missing workers with idle loads so an unused worker can
-/// still win placement
-#[derive(Debug)]
-struct WorkerLoadIndex {
-    media_worker_count: usize,
-    loads: BTreeMap<usize, WorkerPlacementLoad>,
-}
-
-impl WorkerLoadIndex {
-    fn new(media_worker_count: usize, worker_loads: &[WorkerPlacementLoad]) -> Self {
-        let media_worker_count = media_worker_count.max(1);
-        let mut loads = (0..media_worker_count)
-            .map(|media_worker_id| {
-                (
-                    media_worker_id,
-                    WorkerPlacementLoad::new(
-                        media_worker_id,
-                        TransportPlacementPressureSnapshot::default(),
-                    ),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        for load in worker_loads {
-            let media_worker_id = load.media_worker_id % media_worker_count;
-            loads.insert(
-                media_worker_id,
-                WorkerPlacementLoad {
-                    media_worker_id,
-                    ..*load
-                },
-            );
-        }
-        Self {
-            media_worker_count,
-            loads,
-        }
-    }
-
-    fn load_for_worker(&self, media_worker_id: usize) -> WorkerPlacementLoad {
-        let media_worker_id = media_worker_id % self.media_worker_count;
-        self.loads
-            .get(&media_worker_id)
-            .copied()
-            .unwrap_or_else(|| {
-                WorkerPlacementLoad::new(
-                    media_worker_id,
-                    TransportPlacementPressureSnapshot::default(),
-                )
-            })
-    }
-
-    fn least_loaded_worker(
-        &self,
-        excluded_workers: &BTreeSet<usize>,
-        policy: LocalSpilloverPolicy,
-    ) -> usize {
-        self.loads
-            .values()
-            .filter(|load| !excluded_workers.contains(&load.media_worker_id))
-            .min_by_key(|load| load.score(policy))
-            .or_else(|| self.loads.values().min_by_key(|load| load.score(policy)))
-            .map_or(0, |load| load.media_worker_id)
-    }
-
-    fn least_loaded_placement(
-        &self,
-        placements: &[LocalRouterRuntimeContext],
-        policy: LocalSpilloverPolicy,
-    ) -> LocalRouterRuntimeContext {
-        placements
-            .iter()
-            .copied()
-            .min_by_key(|placement| self.load_for_worker(placement.media_worker).score(policy))
-            .unwrap_or(LocalRouterRuntimeContext {
-                router: RouterId(0),
-                media_worker: 0,
-            })
     }
 }
 
@@ -539,13 +514,6 @@ fn score_policy(policy: RoomWorkerPolicy) -> LocalSpilloverPolicy {
     }
 }
 
-fn used_workers(placements: &[LocalRouterRuntimeContext]) -> BTreeSet<usize> {
-    placements
-        .iter()
-        .map(|placement| placement.media_worker)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use o_sfu_router::RouterId;
@@ -555,20 +523,20 @@ mod tests {
 
     #[test]
     fn first_join_uses_lowest_load_worker() {
-        let mut loads = WorkerPlacementLoadSet::new(2, Vec::new());
+        let mut loads = WorkerLoadIndex::new(2, Vec::new());
         loads.record_session(0);
         let planner = RoomPlacementPlanner::new(2, RoomWorkerPolicy::strict_single_router());
         let room = RoomPlacementUsageSnapshot::new(RouterId(7), false, Vec::new());
 
         assert_eq!(
-            planner.choose(&room, &loads.into_loads()),
+            planner.choose(&room, &loads),
             RoomPlacementDecision::AssignPrimary { media_worker_id: 1 }
         );
     }
 
     #[test]
     fn bounded_spillover_allocates_unused_worker_until_cap() {
-        let mut loads = WorkerPlacementLoadSet::new(3, Vec::new());
+        let mut loads = WorkerLoadIndex::new(3, Vec::new());
         loads.record_session(0);
         let planner = RoomPlacementPlanner::new(3, RoomWorkerPolicy::bounded_local_spillover(2));
         let room = RoomPlacementUsageSnapshot::new(
@@ -581,7 +549,7 @@ mod tests {
         );
 
         assert_eq!(
-            planner.choose(&room, &loads.into_loads()),
+            planner.choose(&room, &loads),
             RoomPlacementDecision::AllocateSpillover { media_worker_id: 1 }
         );
     }
@@ -599,10 +567,7 @@ mod tests {
         );
 
         assert_eq!(
-            planner.choose(
-                &room,
-                &WorkerPlacementLoadSet::new(3, Vec::new()).into_loads()
-            ),
+            planner.choose(&room, &WorkerLoadIndex::new(3, Vec::new())),
             RoomPlacementDecision::UseExisting(LocalRouterRuntimeContext {
                 router: RouterId(7),
                 media_worker: 2,
@@ -613,7 +578,7 @@ mod tests {
     #[test]
     fn load_triggered_spillover_reuses_capable_room_worker() -> Result<(), LocalSpilloverPolicyError>
     {
-        let mut loads = WorkerPlacementLoadSet::new(2, Vec::new());
+        let mut loads = WorkerLoadIndex::new(2, Vec::new());
         loads.record_session(0);
         let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
             min_receiver_count: 4,
@@ -630,7 +595,7 @@ mod tests {
         let room = RoomPlacementUsageSnapshot::new(RouterId(7), true, vec![placement]);
 
         assert_eq!(
-            planner.choose(&room, &loads.into_loads()),
+            planner.choose(&room, &loads),
             RoomPlacementDecision::UseExisting(placement)
         );
         Ok(())
@@ -639,7 +604,7 @@ mod tests {
     #[test]
     fn load_triggered_spillover_allocates_when_existing_worker_is_hot()
     -> Result<(), LocalSpilloverPolicyError> {
-        let mut loads = WorkerPlacementLoadSet::new(
+        let mut loads = WorkerLoadIndex::new(
             2,
             vec![TransportWorkerPressureSnapshot::new(
                 0,
@@ -669,7 +634,7 @@ mod tests {
         );
 
         assert_eq!(
-            planner.choose(&room, &loads.into_loads()),
+            planner.choose(&room, &loads),
             RoomPlacementDecision::AllocateSpillover { media_worker_id: 1 }
         );
         Ok(())
