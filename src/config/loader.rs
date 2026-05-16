@@ -1,13 +1,20 @@
 use std::{env, net::SocketAddr};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::Result;
 
 use super::{
     AuthConfig, CodecConfig, ConfigLogView, DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS,
     DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN, HttpConfig, UserConfig,
-    codec_flags::load_media_codec_flags, codec_preferences::load_codec_preferences,
-    diagnostics::load_diagnostics_config, feature_flags::load_runtime_feature_flags,
-    parsing::parse_optional_env, settings::Config, telemetry::load_telemetry_config,
+    codec_flags::load_media_codec_flags,
+    codec_preferences::load_codec_preferences,
+    diagnostics::load_diagnostics_config,
+    feature_flags::load_runtime_feature_flags,
+    parsing::{
+        parse_bool_env_or_default, parse_env_or_default, parse_positive_env_or_default,
+        required_env,
+    },
+    settings::Config,
+    telemetry::load_telemetry_config,
     transport::load_transport_config,
 };
 use crate::core::server::room::{
@@ -35,67 +42,34 @@ impl Config {
     }
 
     fn from_var_lookup(mut get_var: impl FnMut(&str) -> Option<String>) -> Result<Self> {
-        let bind_address: SocketAddr = get_var("BIND_ADDRESS")
-            .unwrap_or_else(|| "0.0.0.0:8070".to_owned())
-            .parse()
-            .context("BIND_ADDRESS must be a valid socket address")?;
+        let bind_address = parse_env_or_default(
+            &mut get_var,
+            "BIND_ADDRESS",
+            SocketAddr::from(([0, 0, 0, 0], 8070)),
+        )?;
         let auth = load_auth_config(&mut get_var)?;
-        let room_size =
-            parse_optional_env(&mut get_var, "ROOM_SIZE", "ROOM_SIZE must be a valid usize")?
-                .unwrap_or(100);
-        let user_timeout_ms = parse_optional_env(
-            &mut get_var,
-            "USER_TIMEOUT_MS",
-            "USER_TIMEOUT_MS must be a valid u64",
-        )?
-        .unwrap_or(10_000);
-        let ping_interval_ms = parse_optional_env(
-            &mut get_var,
-            "PING_INTERVAL_MS",
-            "PING_INTERVAL_MS must be a valid u64",
-        )?
-        .unwrap_or(60_000);
-        let outbound_queue_capacity = parse_optional_env(
+        let room_size = parse_positive_env_or_default(&mut get_var, "ROOM_SIZE", 100)?;
+        let user_timeout_ms =
+            parse_positive_env_or_default(&mut get_var, "USER_TIMEOUT_MS", 10_000)?;
+        let ping_interval_ms =
+            parse_positive_env_or_default(&mut get_var, "PING_INTERVAL_MS", 60_000)?;
+        let outbound_queue_capacity = parse_positive_env_or_default(
             &mut get_var,
             "USER_OUTBOUND_QUEUE_CAPACITY",
-            "USER_OUTBOUND_QUEUE_CAPACITY must be a valid usize",
-        )?
-        .unwrap_or(DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY);
-        let outbound_queue_byte_capacity = parse_optional_env(
+            DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
+        )?;
+        let outbound_queue_byte_capacity = parse_positive_env_or_default(
             &mut get_var,
             "USER_OUTBOUND_QUEUE_BYTE_CAPACITY",
-            "USER_OUTBOUND_QUEUE_BYTE_CAPACITY must be a valid usize",
-        )?
-        .unwrap_or(DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY);
-        let trust_proxy_headers = parse_optional_env(
-            &mut get_var,
-            "PROXY",
-            "PROXY must be either `true` or `false`",
-        )?
-        .unwrap_or(false);
+            DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY,
+        )?;
+        let trust_proxy_headers = parse_bool_env_or_default(&mut get_var, "PROXY", false)?;
         let feature_flags = load_runtime_feature_flags(&mut get_var)?;
         let codec_flags = load_media_codec_flags(&mut get_var)?;
         let codec_preferences = load_codec_preferences(&mut get_var)?;
         let diagnostics = load_diagnostics_config(&mut get_var)?;
         let telemetry = load_telemetry_config(&mut get_var)?;
         let transport = load_transport_config(&mut get_var)?;
-        ensure!(room_size > 0, "ROOM_SIZE must be greater than zero");
-        ensure!(
-            user_timeout_ms > 0,
-            "USER_TIMEOUT_MS must be greater than zero"
-        );
-        ensure!(
-            ping_interval_ms > 0,
-            "PING_INTERVAL_MS must be greater than zero"
-        );
-        ensure!(
-            outbound_queue_capacity > 0,
-            "USER_OUTBOUND_QUEUE_CAPACITY must be greater than zero"
-        );
-        ensure!(
-            outbound_queue_byte_capacity > 0,
-            "USER_OUTBOUND_QUEUE_BYTE_CAPACITY must be greater than zero"
-        );
         Ok(Self {
             auth,
             http: HttpConfig {
@@ -122,33 +96,19 @@ impl Config {
 }
 
 fn load_auth_config(get_var: &mut impl FnMut(&str) -> Option<String>) -> Result<AuthConfig> {
-    let key = get_var("AUTH_KEY").context("AUTH_KEY env variable is required")?;
-    let authentication_timeout_ms = parse_optional_env(
-        &mut *get_var,
-        "AUTHENTICATION_TIMEOUT_MS",
-        "AUTHENTICATION_TIMEOUT_MS must be a valid u64",
-    )?
-    .unwrap_or(10_000);
-    let max_pre_auth_websocket_sessions = parse_optional_env(
+    let key = required_env(get_var, "AUTH_KEY")?;
+    let authentication_timeout_ms =
+        parse_env_or_default(&mut *get_var, "AUTHENTICATION_TIMEOUT_MS", 10_000)?;
+    let max_pre_auth_websocket_sessions = parse_positive_env_or_default(
         &mut *get_var,
         "MAX_PRE_AUTH_WEBSOCKET_SESSIONS",
-        "MAX_PRE_AUTH_WEBSOCKET_SESSIONS must be a valid usize",
-    )?
-    .unwrap_or(DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS);
-    let max_pre_auth_websocket_sessions_per_origin = parse_optional_env(
+        DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS,
+    )?;
+    let max_pre_auth_websocket_sessions_per_origin = parse_positive_env_or_default(
         &mut *get_var,
         "MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN",
-        "MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN must be a valid usize",
-    )?
-    .unwrap_or(DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN);
-    ensure!(
-        max_pre_auth_websocket_sessions > 0,
-        "MAX_PRE_AUTH_WEBSOCKET_SESSIONS must be greater than zero"
-    );
-    ensure!(
-        max_pre_auth_websocket_sessions_per_origin > 0,
-        "MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN must be greater than zero"
-    );
+        DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN,
+    )?;
     Ok(AuthConfig {
         key,
         authentication_timeout_ms,
