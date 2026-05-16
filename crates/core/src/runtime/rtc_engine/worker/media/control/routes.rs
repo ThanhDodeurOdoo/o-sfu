@@ -360,51 +360,16 @@ pub(super) fn worker_set_consumer_active(
     source_transport_media_id: TransportMediaId,
     active: bool,
 ) -> Result<(), TransportAdapterError> {
-    ensure_route_source(
+    if update_consumer_route(
         state,
         consumer_session_key,
+        consumer_transport_media_id,
         source_session_key,
         source_transport_media_id,
-        RouteSourceAccess::Existing,
-    )?;
-    match state
-        .mid_registry
-        .get(&consumer_transport_media_id.as_u64())
-    {
-        Some(RegisteredMediaHandle::Consumer {
-            session_key,
-            source_transport_media_id: consumer_source_transport_media_id,
-            ..
-        }) if session_key == consumer_session_key
-            && *consumer_source_transport_media_id == source_transport_media_id => {}
-        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
-            return Err(TransportAdapterError::InvalidInput);
-        }
-        None => return Err(TransportAdapterError::TransportUnavailable),
+        ConsumerRouteMutation::Active(active),
+    )? {
+        refresh_source_packet_gate(state, source_transport_media_id);
     }
-    let mut route_changed = false;
-    {
-        let route_entry = state
-            .media_route_index
-            .get_mut(&source_transport_media_id)
-            .ok_or(TransportAdapterError::TransportUnavailable)?;
-        let destination = route_entry
-            .destinations
-            .iter_mut()
-            .find(|destination| {
-                destination.dest_session == *consumer_session_key
-                    && destination.dest_transport_media_id == consumer_transport_media_id
-            })
-            .ok_or(TransportAdapterError::TransportUnavailable)?;
-        if destination.active != active {
-            destination.active = active;
-            route_changed = true;
-        }
-    }
-    if !route_changed {
-        return Ok(());
-    }
-    refresh_source_packet_gate(state, source_transport_media_id);
     Ok(())
 }
 
@@ -426,14 +391,13 @@ pub(super) fn worker_set_consumer_packet_gate(
     request: ConsumerPacketGateRequest<'_>,
     now: Instant,
 ) -> Result<(), TransportAdapterError> {
-    if update_consumer_packet_gate(
+    if update_consumer_route(
         state,
         request.consumer_session_key,
         request.consumer_transport_media_id,
         request.source_session_key,
         request.source_transport_media_id,
-        request.packet_gate,
-        now,
+        ConsumerRouteMutation::PacketGate(request.packet_gate, now),
     )? {
         refresh_source_packet_gate(state, request.source_transport_media_id);
     }
@@ -457,14 +421,13 @@ pub(super) fn worker_set_consumer_packet_gates(
     let mut results = Vec::with_capacity(updates.len());
     for update in updates {
         let (consumer_session_key, consumer_transport_media_id, packet_gate) = update.into_parts();
-        match update_consumer_packet_gate(
+        match update_consumer_route(
             state,
             &consumer_session_key,
             consumer_transport_media_id,
             source_session_key,
             source_transport_media_id,
-            packet_gate,
-            now,
+            ConsumerRouteMutation::PacketGate(packet_gate, now),
         ) {
             Ok(changed) => {
                 route_changed |= changed;
@@ -479,27 +442,44 @@ pub(super) fn worker_set_consumer_packet_gates(
     results
 }
 
-/// mutates one destination packet gate and reports whether the route changed
+/// destination mutation requested by a route-control command
 ///
-/// selected-rid gates pass through readiness guarding before they are written
-/// to the destination
-/// this keeps room policy attached to the route as `pending_packet_gate` until
-/// the packet loop observes a decodable rid
+/// both variants must pass through the same ownership checks before touching
+/// `media_route_index`
+/// this keeps late active-state and packet-gate commands from reaching a route
+/// after cleanup has removed or replaced either side of the binding
+enum ConsumerRouteMutation {
+    /// replace the destination activity bit
+    Active(bool),
+    /// replace the destination packet-layer gate after selected-rid guarding
+    PacketGate(PacketLayerGate, Instant),
+}
+
+/// validate and mutate one existing consumer destination
+///
+/// this is the shared mutation path for consumer activity and packet-gate
+/// updates
+/// it first proves that the source still exists under the expected owner, then
+/// proves that the consumer handle still points at that source before borrowing
+/// the route destination mutably
+///
+/// selected-rid packet gates are guarded before the route entry is borrowed so
+/// packet-path liveness checks can read the broader packet-loop state without
+/// aliasing the destination mutation
 ///
 /// # errors
 ///
 /// returns `InvalidInput` when the source or consumer media id belongs to a
 /// different owner
 /// returns `TransportUnavailable` when the source, consumer handle or route
-/// destination is gone
-fn update_consumer_packet_gate(
+/// destination has already been removed
+fn update_consumer_route(
     state: &mut PacketLoopState,
     consumer_session_key: &TransportSessionKey,
     consumer_transport_media_id: TransportMediaId,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
-    packet_gate: PacketLayerGate,
-    now: Instant,
+    mutation: ConsumerRouteMutation,
 ) -> Result<bool, TransportAdapterError> {
     ensure_route_source(
         state,
@@ -508,50 +488,65 @@ fn update_consumer_packet_gate(
         source_transport_media_id,
         RouteSourceAccess::Existing,
     )?;
-    match state
+    let Some(handle) = state
         .mid_registry
         .get(&consumer_transport_media_id.as_u64())
+    else {
+        return Err(TransportAdapterError::TransportUnavailable);
+    };
+    let RegisteredMediaHandle::Consumer {
+        session_key,
+        source_transport_media_id: consumer_source_transport_media_id,
+        ..
+    } = handle
+    else {
+        return Err(TransportAdapterError::InvalidInput);
+    };
+    if session_key != consumer_session_key
+        || *consumer_source_transport_media_id != source_transport_media_id
     {
-        Some(RegisteredMediaHandle::Consumer {
-            session_key,
-            source_transport_media_id: consumer_source_transport_media_id,
-            ..
-        }) if session_key == consumer_session_key
-            && *consumer_source_transport_media_id == source_transport_media_id => {}
-        Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {
-            return Err(TransportAdapterError::InvalidInput);
-        }
-        None => return Err(TransportAdapterError::TransportUnavailable),
+        return Err(TransportAdapterError::InvalidInput);
     }
-    let (packet_gate, pending_packet_gate) =
-        selected_rid::guarded_packet_gate(state, source_transport_media_id, packet_gate, now);
-    {
-        let route_entry = state
-            .media_route_index
-            .get_mut(&source_transport_media_id)
-            .ok_or(TransportAdapterError::TransportUnavailable)?;
-        // linear scan stays until dense-room packet-gate batches become a
-        // production priority
-        // benchmarks showed a destination-side index wins clearly only in
-        // larger rooms, about 4.15x at 128 consumers and 12.91x at 512 consumers
-        // tiny rooms do not justify the extra route-maintenance cost
-        let destination = route_entry
-            .destinations
-            .iter_mut()
-            .find(|destination| {
-                destination.dest_session == *consumer_session_key
-                    && destination.dest_transport_media_id == consumer_transport_media_id
-            })
-            .ok_or(TransportAdapterError::TransportUnavailable)?;
-        if destination.packet_gate != packet_gate
-            || destination.pending_packet_gate != pending_packet_gate
-        {
+    let (active, packet_gate_update) = match mutation {
+        ConsumerRouteMutation::Active(active) => (Some(active), None),
+        ConsumerRouteMutation::PacketGate(packet_gate, now) => (
+            None,
+            Some(selected_rid::guarded_packet_gate(
+                state,
+                source_transport_media_id,
+                packet_gate,
+                now,
+            )),
+        ),
+    };
+    let route_entry = state
+        .media_route_index
+        .get_mut(&source_transport_media_id)
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    // linear scan stays until dense rooms justify a destination-side index
+    let destination = route_entry
+        .destinations
+        .iter_mut()
+        .find(|destination| {
+            destination.dest_session == *consumer_session_key
+                && destination.dest_transport_media_id == consumer_transport_media_id
+        })
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    Ok(match (active, packet_gate_update) {
+        (Some(active), None) => {
+            let route_changed = destination.active != active;
+            destination.active = active;
+            route_changed
+        }
+        (None, Some((packet_gate, pending_packet_gate))) => {
+            let route_changed = destination.packet_gate != packet_gate
+                || destination.pending_packet_gate != pending_packet_gate;
             destination.packet_gate = packet_gate;
             destination.pending_packet_gate = pending_packet_gate;
-            return Ok(true);
+            route_changed
         }
-    }
-    Ok(false)
+        _ => false,
+    })
 }
 
 /// extracts the rid restriction carried by a packet-layer gate

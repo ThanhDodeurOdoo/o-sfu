@@ -43,12 +43,24 @@ use crate::{
     },
 };
 
+/// join request prepared before acquiring the room-state write lock
+///
+/// this keeps the public join entrypoints small while making the transition
+/// pipeline consume one owned intent
+/// placement is resolved before the state mutation so `RoomState` can mirror
+/// the session into topology without awaiting worker-pressure reads
 pub(in crate::runtime::room) struct JoinSessionIntent {
+    /// stable room user identity
     pub user_id: UserId,
+    /// browser-visible label stored on the room user
     pub label: Option<String>,
+    /// permissions translated into room-owned capability flags
     pub permissions: UserPermissions,
+    /// outbound queue for post-auth room events
     pub sender: UserOutboundSender,
+    /// whether existing peers should receive a joined fan-out
     pub emit_joined_fanout: bool,
+    /// router and media-worker placement selected before the join commits
     pub home_placement: LocalRouterRuntimeContext,
 }
 
@@ -189,6 +201,12 @@ impl Room {
         }
     }
 
+    /// join a user after placement has already been selected
+    ///
+    /// callers use this when the room manager has resolved the target router
+    /// and media worker from current load
+    /// the join is still allowed to fail if room state is full or topology
+    /// rejects the placement while committing the membership transition
     pub(crate) async fn add_user_on_placement(
         &self,
         user_id: UserId,
@@ -509,9 +527,7 @@ impl Room {
         let connection_id = outcome.connection_id;
         self.definition
             .register_transport_placement(connection_id, outcome.transport_home_placement);
-        if let Some(media_transport) = cleanup.media_transport()
-            && cleanup.cleans_transport_state()
-        {
+        if let Some(media_transport) = cleanup.cleaning_media_transport() {
             execute_relay_route_effects(self, media_transport, &outcome.relay_effects).await;
         }
         self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
@@ -549,9 +565,7 @@ impl Room {
             .definition
             .media_worker_id_for_connection(connection_id);
         if let Some(outcome) = outcome {
-            if let Some(media_transport) = cleanup.media_transport()
-                && cleanup.cleans_transport_state()
-            {
+            if let Some(media_transport) = cleanup.cleaning_media_transport() {
                 execute_relay_route_effects(self, media_transport, &outcome.relay_effects).await;
             }
             self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
@@ -606,9 +620,7 @@ impl Room {
         outcome: DisconnectUsersOutcome,
         cleanup: UserCleanup<'_>,
     ) -> UserTransitionResult {
-        if let Some(media_transport) = cleanup.media_transport()
-            && cleanup.cleans_transport_state()
-        {
+        if let Some(media_transport) = cleanup.cleaning_media_transport() {
             execute_relay_route_effects(self, media_transport, &outcome.relay_effects).await;
         }
         self.cleanup_transport_removals(cleanup, &outcome.transport_removals)

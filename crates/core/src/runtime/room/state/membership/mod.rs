@@ -1,3 +1,18 @@
+//! pure membership transitions for authoritative room state
+//!
+//! this module owns the synchronous half of user lifecycle changes
+//! it mutates `RoomState`, captures outbound effects and returns cleanup
+//! intents that async room orchestration can execute after the state lock is
+//! released
+//!
+//! transport, websocket and diagnostics work must not happen here
+//! every outcome is a snapshot of work that was valid at the moment the state
+//! transition committed
+//!
+//! leave and bulk disconnect share the same runtime removal path so topology
+//! repair, transport-media cleanup and relay-route release stay aligned when a
+//! user disappears
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use tracing::{debug, error, warn};
@@ -22,9 +37,16 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
+/// deferred side effects captured while membership state is authoritative
+///
+/// callers emit these only after the `RoomState` guard is released
+/// this keeps websocket sends and close notifications outside the synchronous
+/// state transition while preserving the order chosen by the state layer
 #[derive(Debug)]
 pub(in crate::runtime::room) struct LifecycleEffects {
+    /// user-local close messages that should reach the removed session
     pub close_requests: Vec<UserCloseRequest>,
+    /// room fan-outs that should reach peers after the transition commits
     pub fanouts: Vec<MessageFanout>,
 }
 
@@ -42,30 +64,70 @@ impl LifecycleEffects {
     }
 }
 
+/// close request for a user sender that state has just detached
+///
+/// this carries the sender by value so async finalization does not need to look
+/// the user up again after membership has moved on
 #[derive(Debug)]
 pub(in crate::runtime::room) struct UserCloseRequest {
+    /// outbound queue owned by the removed or replaced user
     pub sender: OutboundSender,
+    /// lifecycle reason exposed to the websocket edge
     pub reason: UserCloseReason,
 }
 
+/// data removed from state when a runtime user leaves the authoritative set
+///
+/// the tuple keeps teardown internal to this module while making leave and
+/// disconnect consume the same removal contract
+type RuntimeUserRemoval = (
+    ActiveUser,
+    Vec<TransportMediaRemoval>,
+    Vec<RelayRouteEffect>,
+);
+
+/// committed join result passed to async room orchestration
+///
+/// a join may replace an existing connection for the same user
+/// replacement cleanup is represented as transport removals, relay effects and
+/// close requests so finalization does not need to rediscover stale state
 #[derive(Debug)]
 pub(in crate::runtime::room) struct JoinUserOutcome {
+    /// runtime-local connection id allocated by this state transition
     pub connection_id: ConnectionId,
+    /// websocket effects that should run after the state guard is released
     pub effects: LifecycleEffects,
+    /// joined user id cloned for diagnostics after lock release
     pub user_id: UserId,
+    /// authoritative router and media-worker placement for the new connection
     pub transport_home_placement: LocalRouterRuntimeContext,
+    /// media worker used by diagnostics for the accepted connection
     pub transport_media_worker_id: usize,
+    /// transport media owned by any connection replaced during the join
     pub transport_removals: Vec<TransportMediaRemoval>,
+    /// relay routes that belonged to replaced media state
     pub relay_effects: Vec<RelayRouteEffect>,
 }
 
+/// committed leave result for one current connection
+///
+/// stale leave requests return `None` before this is built
+/// every field describes work derived from the removed user while state still
+/// had the authoritative indexes
 #[derive(Debug)]
 pub(in crate::runtime::room) struct LeaveUserOutcome {
+    /// close and fan-out effects for the removed current connection
     pub effects: LifecycleEffects,
+    /// transport media detached by the leave transition
     pub transport_removals: Vec<TransportMediaRemoval>,
+    /// relay routes that must be released after media state is purged
     pub relay_effects: Vec<RelayRouteEffect>,
 }
 
+/// committed user-info update ready for post-lock fan-out
+///
+/// the state layer decides whether the connection is current
+/// callers only emit the captured fan-out after the write guard is gone
 #[derive(Debug)]
 pub(in crate::runtime::room) struct UserInfoUpdateOutcome {
     fanout: MessageFanout,
@@ -77,17 +139,31 @@ impl UserInfoUpdateOutcome {
     }
 }
 
+/// user removed by a bulk disconnect request
+///
+/// only users present in `RoomState` are returned
+/// missing ids intentionally create no cleanup or diagnostics work
 #[derive(Debug)]
 pub(in crate::runtime::room) struct DisconnectedUser {
+    /// removed runtime user id
     pub user_id: UserId,
+    /// connection that was current when the disconnect committed
     pub connection_id: ConnectionId,
 }
 
+/// committed bulk-disconnect result
+///
+/// the outcome contains one entry per live user removed by the request
+/// transport cleanup and peer notifications are scoped to that committed set
 #[derive(Debug)]
 pub(in crate::runtime::room) struct DisconnectUsersOutcome {
+    /// users that were present and were removed by this transition
     pub disconnected_users: Vec<DisconnectedUser>,
+    /// close and fan-out effects for the removed users
     pub effects: LifecycleEffects,
+    /// transport media detached by all removed users
     pub transport_removals: Vec<TransportMediaRemoval>,
+    /// relay routes that must be released after media state is purged
     pub relay_effects: Vec<RelayRouteEffect>,
 }
 
@@ -215,6 +291,17 @@ impl RoomState {
         )
     }
 
+    /// commit a join or replacement on a preselected room placement
+    ///
+    /// this is the pure state half of joining a runtime session
+    /// it allocates the connection id, mirrors the session into topology and
+    /// captures cleanup for any replaced session before installing the new user
+    /// data
+    ///
+    /// # errors
+    ///
+    /// returns `RoomFull` when a new user would exceed the room admission cap
+    /// returns `RouterState` when topology cannot mirror the join
     pub fn apply_join_on_placement(
         &mut self,
         user_id: &UserId,
@@ -312,6 +399,34 @@ impl RoomState {
         Ok(())
     }
 
+    /// remove one current user and return every state-derived cleanup intent
+    ///
+    /// this is the shared teardown primitive for runtime leave and bulk
+    /// disconnect
+    /// it repairs router topology, captures transport-media removals and purges
+    /// media indexes while the state layer still has the only authoritative
+    /// view of the user's producers and consumers
+    fn remove_runtime_user(&mut self, user_id: &UserId) -> Option<RuntimeUserRemoval> {
+        let user = self.users.remove(user_id)?;
+        let departing_user_ids = BTreeSet::from([user_id.clone()]);
+        let transport_removals = self.collect_user_transport_removals(&departing_user_ids);
+        let topology_repair = self.topology.remove_session_repairing(user_id);
+        if !topology_repair.is_clean() {
+            error!(
+                ?user_id,
+                errors = ?topology_repair.errors(),
+                "repaired user topology during room teardown"
+            );
+        }
+        let relay_effects = self.purge_user_media_state(user_id);
+        Some((user, transport_removals, relay_effects))
+    }
+
+    /// commit a leave for one current runtime connection
+    ///
+    /// the connection id is checked before any state is removed
+    /// stale close requests return `None`, leaving async finalization to handle
+    /// only best-effort transport cleanup for the requested identity
     pub fn apply_leave(
         &mut self,
         user_id: &UserId,
@@ -321,31 +436,17 @@ impl RoomState {
         if user.connection_id != connection_id {
             return None;
         }
-        let transport_removals =
-            self.collect_user_transport_removals(&BTreeSet::from([user_id.clone()]));
-        let topology_repair = self.topology.remove_session_repairing(user_id);
-        if !topology_repair.is_clean() {
-            error!(
-                ?user_id,
-                errors = ?topology_repair.errors(),
-                "repaired departed user topology during room teardown"
-            );
-        }
-        let relay_effects = self.purge_user_media_state(user_id);
-        let user = self.users.remove(user_id)?;
-        let mut effects = LifecycleEffects {
-            close_requests: Vec::new(),
-            fanouts: Vec::new(),
-        };
-        effects.push_fanout(Some(self.fanout_all(&RoomEventMessage::UserDeparted {
-            user_id: user_id.clone(),
-        })));
-        effects.push_close_request(Some(UserCloseRequest {
-            sender: user.sender,
-            reason: UserCloseReason::RemovedByRuntime,
-        }));
+        let (user, transport_removals, relay_effects) = self.remove_runtime_user(user_id)?;
         Some(LeaveUserOutcome {
-            effects,
+            effects: LifecycleEffects {
+                close_requests: vec![UserCloseRequest {
+                    sender: user.sender,
+                    reason: UserCloseReason::RemovedByRuntime,
+                }],
+                fanouts: vec![self.fanout_all(&RoomEventMessage::UserDeparted {
+                    user_id: user_id.clone(),
+                })],
+            },
             transport_removals,
             relay_effects,
         })
@@ -414,6 +515,12 @@ impl RoomState {
         user.negotiation.set_user_negotiated()
     }
 
+    /// remove every requested user that is still current in room state
+    ///
+    /// missing users are ignored so runtime disconnect can be idempotent across
+    /// repeated manager or websocket cleanup paths
+    /// every returned cleanup intent belongs to a user that was actually
+    /// removed by this transition
     pub fn apply_disconnect_users(&mut self, user_ids: &[UserId]) -> DisconnectUsersOutcome {
         let mut transport_removals = Vec::new();
         let mut close_requests = Vec::new();
@@ -421,34 +528,25 @@ impl RoomState {
         let mut fanouts = Vec::new();
         let mut relay_effects = Vec::new();
         for user_id in user_ids {
-            if !self.users.contains_key(user_id) {
+            let Some((user, user_transport_removals, user_relay_effects)) =
+                self.remove_runtime_user(user_id)
+            else {
                 continue;
-            }
-            let topology_repair = self.topology.remove_session_repairing(user_id);
-            if !topology_repair.is_clean() {
-                error!(
-                    ?user_id,
-                    errors = ?topology_repair.errors(),
-                    "repaired disconnected user topology during room teardown"
-                );
-            }
-            transport_removals
-                .extend(self.collect_user_transport_removals(&BTreeSet::from([user_id.clone()])));
-            if let Some(user) = self.users.remove(user_id) {
-                let connection_id = user.connection_id;
-                relay_effects.extend(self.purge_user_media_state(user_id));
-                disconnected_users.push(DisconnectedUser {
-                    user_id: user_id.clone(),
-                    connection_id,
-                });
-                close_requests.push(UserCloseRequest {
-                    sender: user.sender,
-                    reason: UserCloseReason::RemovedByRuntime,
-                });
-                fanouts.push(self.fanout_all(&RoomEventMessage::UserDeparted {
-                    user_id: user_id.clone(),
-                }));
-            }
+            };
+            let connection_id = user.connection_id;
+            transport_removals.extend(user_transport_removals);
+            relay_effects.extend(user_relay_effects);
+            disconnected_users.push(DisconnectedUser {
+                user_id: user_id.clone(),
+                connection_id,
+            });
+            close_requests.push(UserCloseRequest {
+                sender: user.sender,
+                reason: UserCloseReason::RemovedByRuntime,
+            });
+            fanouts.push(self.fanout_all(&RoomEventMessage::UserDeparted {
+                user_id: user_id.clone(),
+            }));
         }
         DisconnectUsersOutcome {
             disconnected_users,
@@ -461,6 +559,15 @@ impl RoomState {
         }
     }
 
+    /// build a broadcast fan-out for one current sender
+    ///
+    /// stale senders return `Ok(None)` because websocket tasks can race with
+    /// replacement or disconnect after they have already accepted a message
+    ///
+    /// # errors
+    ///
+    /// returns `BroadcastPayloadError` when the payload cannot fit within the
+    /// room broadcast limit
     pub fn broadcast_fanout(
         &self,
         user_id: &UserId,
