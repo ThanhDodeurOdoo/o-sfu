@@ -7,9 +7,9 @@
 use super::{
     ConnectionState, INITIAL_RECOVERY_DELAY_MS, RECOVERY_TIMER_ID,
     connection_lifecycle::{
-        LifecycleCloseCause, LifecycleEffect, LifecycleEffects, LifecycleModel, LifecyclePlan,
-        RuntimeCleanupMode, connect_model, disconnect_model, handle_recovery_timer_model,
-        on_transport_ready_model, on_ws_close_model,
+        ConnectCommandSource, LifecycleCloseCause, LifecycleEffect, LifecycleEffects,
+        LifecycleModel, LifecyclePlan, RuntimeCleanupMode, connect_model, disconnect_model,
+        handle_recovery_timer_model, on_transport_ready_model, on_ws_close_model,
     },
 };
 
@@ -163,7 +163,7 @@ impl VerificationConnectionLifecycle {
         let mut effects = VerificationLifecycleEffects::default();
         summarize_effects(&mut effects, &plan.effects_before_cleanup);
         summarize_effects(&mut effects, &plan.effects_after_cleanup);
-        if plan.connect_after_cleanup {
+        if !matches!(plan.connect_after_cleanup, ConnectCommandSource::None) {
             effects.connect_requested = true;
         }
         effects

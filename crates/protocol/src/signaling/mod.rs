@@ -5,6 +5,7 @@ mod codec;
 mod envelope;
 mod request;
 mod response;
+mod tags;
 #[cfg(test)]
 mod tests;
 

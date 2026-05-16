@@ -62,74 +62,15 @@ pub(super) struct UserLoop<'a> {
     pub(super) metrics: &'a RuntimeMetrics,
 }
 
-pub(super) async fn run(session: UserLoop<'_>) -> WsSessionLoopExitReason {
-    let UserLoop {
-        writer,
-        reader,
-        room_manager,
-        room,
-        user_id,
-        connection_id,
-        outbound_rx,
-        user,
-        media_transport,
-        user_timeout_ms,
-        ping_interval_ms,
-        metrics,
-    } = session;
-    let exit_reason = run_until_exit(UserLoopState {
-        writer,
-        reader,
-        room,
-        user_id,
-        connection_id,
-        outbound_rx,
-        user,
-        user_timeout_ms,
-        ping_interval_ms,
-        metrics,
-    })
-    .await;
-    teardown(
-        room_manager,
-        room,
-        user_id,
-        connection_id,
-        user,
-        media_transport,
-    )
-    .await;
+pub(super) async fn run(mut session: UserLoop<'_>) -> WsSessionLoopExitReason {
+    let exit_reason = run_until_exit(&mut session).await;
+    teardown(&mut session).await;
     exit_reason
 }
 
-struct UserLoopState<'a> {
-    writer: &'a mut WsWriter,
-    reader: &'a mut WsReader,
-    room: &'a Room,
-    user_id: &'a UserId,
-    connection_id: ConnectionId,
-    outbound_rx: &'a mut UserOutboundReceiver,
-    user: &'a mut User,
-    user_timeout_ms: u64,
-    ping_interval_ms: u64,
-    metrics: &'a RuntimeMetrics,
-}
-
-async fn run_until_exit(session: UserLoopState<'_>) -> WsSessionLoopExitReason {
-    let UserLoopState {
-        writer,
-        reader,
-        room,
-        user_id,
-        connection_id,
-        outbound_rx,
-        user,
-        user_timeout_ms,
-        ping_interval_ms,
-        metrics,
-    } = session;
-    let ping_interval = Duration::from_millis(ping_interval_ms);
-    let ping_timeout = Duration::from_millis(user_timeout_ms);
+async fn run_until_exit(session: &mut UserLoop<'_>) -> WsSessionLoopExitReason {
+    let ping_interval = Duration::from_millis(session.ping_interval_ms);
+    let ping_timeout = Duration::from_millis(session.user_timeout_ms);
     let mut next_ping_at = Instant::now() + ping_interval;
     let mut next_transport_state_check_at = next_ping_at;
     let mut liveness_state = LivenessState::Idle;
@@ -142,16 +83,16 @@ async fn run_until_exit(session: UserLoopState<'_>) -> WsSessionLoopExitReason {
         tokio::select! {
             () = &mut transport_state_tick => {
                 next_transport_state_check_at = Instant::now() + ping_interval;
-                if let Some(reason) = handle_transport_state_tick(writer, user).await {
+                if let Some(reason) = handle_transport_state_tick(session).await {
                     return reason;
                 }
             }
             () = &mut ping_tick, if matches!(liveness_state, LivenessState::Idle) => {
-                if let Some(reason) = handle_transport_state_tick(writer, user).await {
+                if let Some(reason) = handle_transport_state_tick(session).await {
                     return reason;
                 }
                 if let Some(reason) = handle_ping_tick(
-                    writer,
+                    session.writer,
                     ping_interval,
                     ping_timeout,
                     &mut next_ping_at,
@@ -166,25 +107,20 @@ async fn run_until_exit(session: UserLoopState<'_>) -> WsSessionLoopExitReason {
                 }
             }, if pong_deadline.is_some() => {
                 debug!("timed out waiting for websocket pong");
-                close_writer_bounded(writer, WebSocketCloseCode::Error).await;
+                close_writer_bounded(session.writer, WebSocketCloseCode::Error).await;
                 return WsSessionLoopExitReason::PingTimeout;
             }
-            message = reader.next() => {
+            message = session.reader.next() => {
                 if let Some(reason) = handle_incoming_socket_event(
-                    writer,
-                    room,
-                    user_id,
-                    connection_id,
-                    user,
+                    session,
                     message,
                     &mut liveness_state,
-                    metrics,
                 ).await {
                     return reason;
                 }
             }
-            outbound = outbound_rx.recv_event() => {
-                if let Some(reason) = handle_outbound_event(writer, outbound, user, metrics).await {
+            outbound = session.outbound_rx.recv_event() => {
+                if let Some(reason) = handle_outbound_event(session, outbound).await {
                     return reason;
                 }
             }
@@ -192,17 +128,16 @@ async fn run_until_exit(session: UserLoopState<'_>) -> WsSessionLoopExitReason {
     }
 }
 
-async fn teardown(
-    room_manager: &RoomManager,
-    room: &Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    user: &mut User,
-    media_transport: &MediaTransport,
-) {
-    user.close().await;
-    let _removed = room_manager
-        .close_session(room.uuid(), user_id, connection_id, media_transport)
+async fn teardown(session: &mut UserLoop<'_>) {
+    session.user.close().await;
+    let _removed = session
+        .room_manager
+        .close_session(
+            session.room.uuid(),
+            session.user_id,
+            session.connection_id,
+            session.media_transport,
+        )
         .await;
 }
 
@@ -226,43 +161,21 @@ async fn handle_ping_tick(
 }
 
 async fn handle_transport_state_tick(
-    writer: &mut WsWriter,
-    user: &User,
+    session: &mut UserLoop<'_>,
 ) -> Option<WsSessionLoopExitReason> {
-    user.disconnect_reason()?;
+    session.user.disconnect_reason()?;
     debug!("closing websocket because the underlying RTC transport disconnected");
-    close_writer_bounded(writer, WebSocketCloseCode::Error).await;
+    close_writer_bounded(session.writer, WebSocketCloseCode::Error).await;
     Some(WsSessionLoopExitReason::TransportDisconnected)
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the websocket select loop passes the active user context into one socket-event branch"
-)]
 async fn handle_incoming_socket_event(
-    writer: &mut WsWriter,
-    room: &Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    user: &mut User,
+    session: &mut UserLoop<'_>,
     message: Option<Result<Message, AxumError>>,
     liveness_state: &mut LivenessState,
-    metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
     match message {
-        Some(Ok(message)) => {
-            handle_incoming_frame(
-                writer,
-                room,
-                user_id,
-                connection_id,
-                user,
-                message,
-                liveness_state,
-                metrics,
-            )
-            .await
-        }
+        Some(Ok(message)) => handle_incoming_frame(session, message, liveness_state).await,
         Some(Err(_error)) => {
             debug!("websocket reader returned an error");
             Some(WsSessionLoopExitReason::ReaderError)
@@ -274,23 +187,14 @@ async fn handle_incoming_socket_event(
     }
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "frame handling needs the socket writer plus room-scoped user context"
-)]
 async fn handle_incoming_frame(
-    writer: &mut WsWriter,
-    room: &Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    user: &mut User,
+    session: &mut UserLoop<'_>,
     message: Message,
     liveness_state: &mut LivenessState,
-    metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
     match message {
         Message::Ping(payload) => {
-            if writer.send(Message::Pong(payload)).await.is_err() {
+            if session.writer.send(Message::Pong(payload)).await.is_err() {
                 debug!("failed to send websocket pong frame");
                 return Some(WsSessionLoopExitReason::OutboundMessageSendFailure);
             }
@@ -304,121 +208,78 @@ async fn handle_incoming_frame(
             info!(?frame, "websocket user sent close frame");
             Some(WsSessionLoopExitReason::BusBreak)
         }
-        Message::Text(payload) => {
-            handle_text_payload(
-                writer,
-                room,
-                user_id,
-                connection_id,
-                user,
-                &payload,
-                metrics,
-            )
-            .await
-        }
-        Message::Binary(payload) => {
-            handle_binary_payload(
-                writer,
-                room,
-                user_id,
-                connection_id,
-                user,
-                &payload,
-                metrics,
-            )
-            .await
-        }
+        Message::Text(payload) => handle_text_payload(session, &payload).await,
+        Message::Binary(payload) => handle_binary_payload(session, &payload).await,
     }
 }
 
 async fn handle_binary_payload(
-    writer: &mut WsWriter,
-    room: &Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    user: &mut User,
+    session: &mut UserLoop<'_>,
     payload: &[u8],
-    metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
     if payload.len() > MAX_CLIENT_FRAME_BYTES {
-        metrics.record_ws_bus_invalid_input_failure();
+        session.metrics.record_ws_bus_invalid_input_failure();
         warn!(
             payload_len = payload.len(),
             max_len = MAX_CLIENT_FRAME_BYTES,
             "received oversized websocket binary frame"
         );
-        close_writer_bounded(writer, WebSocketCloseCode::ProtocolError).await;
+        close_writer_bounded(session.writer, WebSocketCloseCode::ProtocolError).await;
         return Some(WsSessionLoopExitReason::BusBreak);
     }
     match String::from_utf8(payload.to_vec()) {
-        Ok(payload) => {
-            handle_text_payload(
-                writer,
-                room,
-                user_id,
-                connection_id,
-                user,
-                &payload,
-                metrics,
-            )
-            .await
-        }
+        Ok(payload) => handle_text_payload(session, &payload).await,
         Err(_error) => {
-            metrics.record_ws_bus_invalid_input_failure();
+            session.metrics.record_ws_bus_invalid_input_failure();
             warn!("received websocket binary frame with invalid UTF-8");
-            close_writer_bounded(writer, WebSocketCloseCode::ProtocolError).await;
+            close_writer_bounded(session.writer, WebSocketCloseCode::ProtocolError).await;
             Some(WsSessionLoopExitReason::BusBreak)
         }
     }
 }
 
 async fn handle_text_payload(
-    writer: &mut WsWriter,
-    room: &Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    user: &mut User,
+    session: &mut UserLoop<'_>,
     payload: &str,
-    metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
     let batch = match decode_client_batch(payload) {
         Ok(batch) => batch,
         Err(error) => {
             match error.kind() {
                 ClientBatchDecodeFailureKind::InvalidInput => {
-                    metrics.record_ws_bus_invalid_input_failure();
+                    session.metrics.record_ws_bus_invalid_input_failure();
                     warn!(
                         "failed to decode client websocket batch because the payload was invalid"
                     );
                 }
                 ClientBatchDecodeFailureKind::UnsupportedFeature => {
-                    metrics.record_ws_bus_unsupported_feature_failure();
+                    session.metrics.record_ws_bus_unsupported_feature_failure();
                     warn!(
                         "failed to decode client websocket batch because it used an unsupported feature"
                     );
                 }
             }
-            close_writer_bounded(writer, WebSocketCloseCode::ProtocolError).await;
+            close_writer_bounded(session.writer, WebSocketCloseCode::ProtocolError).await;
             return Some(WsSessionLoopExitReason::BusBreak);
         }
     };
-    metrics.record_ws_bus_batch_received(batch.len());
+    session.metrics.record_ws_bus_batch_received(batch.len());
     let mut output = UserOutput::new();
     for envelope in batch {
-        record_client_envelope_metrics(metrics, &envelope);
-        match dispatch_client_envelope(room, user_id, connection_id, user, envelope).await {
+        record_client_envelope_metrics(session.metrics, &envelope);
+        match dispatch_client_envelope(session, envelope).await {
             Ok(user_output) => output.extend(user_output),
             Err(error) => {
                 let close_code = map_user_error(error);
-                close_writer_bounded(writer, close_code).await;
+                close_writer_bounded(session.writer, close_code).await;
                 return Some(WsSessionLoopExitReason::BusBreak);
             }
         }
     }
-    match send_user_output_bounded(writer, output).await {
+    match send_user_output_bounded(session.writer, output).await {
         Ok(_sent) => None,
         Err(code) => {
-            close_writer_bounded(writer, code).await;
+            close_writer_bounded(session.writer, code).await;
             Some(WsSessionLoopExitReason::BusBreak)
         }
     }
@@ -433,52 +294,51 @@ fn record_client_envelope_metrics(metrics: &RuntimeMetrics, envelope: &ClientEnv
 }
 
 async fn dispatch_client_envelope(
-    room: &Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    user: &mut User,
+    session: &mut UserLoop<'_>,
     envelope: ClientEnvelope,
 ) -> Result<UserOutput, UserError> {
     match envelope {
-        ClientEnvelope::Message(ClientMessage::Info(info)) => user.update_info(info).await,
+        ClientEnvelope::Message(ClientMessage::Info(info)) => session.user.update_info(info).await,
         ClientEnvelope::Message(ClientMessage::Broadcast(ClientBroadcastPayload { message })) => {
-            user.broadcast(message).await
+            session.user.broadcast(message).await
         }
         ClientEnvelope::Message(ClientMessage::Subscribe(payload)) => {
             let target_user_id = payload.user_id.normalized_for_runtime();
-            user.subscribe_to(&target_user_id, &payload.states).await
+            session
+                .user
+                .subscribe_to(&target_user_id, &payload.states)
+                .await
         }
         ClientEnvelope::Message(ClientMessage::Publish(payload)) => {
-            user.publish(payload.stream_type).await
+            session.user.publish(payload.stream_type).await
         }
         ClientEnvelope::Message(ClientMessage::Unpublish(payload)) => {
-            user.unpublish(payload.stream_type).await
+            session.user.unpublish(payload.stream_type).await
         }
         ClientEnvelope::Response {
             response_to,
             response: ClientResponse::Offer(answer) | ClientResponse::Renegotiate(answer),
-        } => user.complete_negotiation(response_to, answer).await,
+        } => session.user.complete_negotiation(response_to, answer).await,
         ClientEnvelope::Request {
             request_id,
             request: ClientRequest::StartRecording(payload),
-        } => Ok(start_recording(room, user_id, connection_id, request_id, payload).await),
+        } => Ok(start_recording(session, request_id, payload).await),
         ClientEnvelope::Request {
             request_id,
             request: ClientRequest::StopRecording,
-        } => Ok(stop_recording(room, user_id, connection_id, request_id).await),
+        } => Ok(stop_recording(session, request_id).await),
         ClientEnvelope::Message(ClientMessage::Auth(_)) => Err(UserError::ProtocolViolation),
     }
 }
 
 async fn start_recording(
-    room: &Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
+    session: &UserLoop<'_>,
     request_id: RequestId,
     payload: RecordingOptions,
 ) -> UserOutput {
-    let ok = room
-        .start_recording_runtime(user_id, connection_id, payload)
+    let ok = session
+        .room
+        .start_recording_runtime(session.user_id, session.connection_id, payload)
         .await;
     info!(
         event = telemetry_event::RECORDING_STARTED,
@@ -492,13 +352,11 @@ async fn start_recording(
     ))
 }
 
-async fn stop_recording(
-    room: &Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    request_id: RequestId,
-) -> UserOutput {
-    let ok = room.stop_recording_runtime(user_id, connection_id).await;
+async fn stop_recording(session: &UserLoop<'_>, request_id: RequestId) -> UserOutput {
+    let ok = session
+        .room
+        .stop_recording_runtime(session.user_id, session.connection_id)
+        .await;
     info!(
         event = telemetry_event::RECORDING_STOPPED,
         operation = "recording_stop",
@@ -512,17 +370,13 @@ async fn stop_recording(
 }
 
 async fn handle_outbound_event(
-    writer: &mut WsWriter,
+    session: &mut UserLoop<'_>,
     outbound: UserOutboundEvent,
-    user: &mut User,
-    metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
     match outbound {
-        UserOutboundEvent::Message(outbound) => {
-            handle_outbound_payload(writer, outbound, user, metrics).await
-        }
+        UserOutboundEvent::Message(outbound) => handle_outbound_payload(session, outbound).await,
         UserOutboundEvent::Overflow(overflow) => {
-            handle_outbound_overflow(writer, overflow).await;
+            handle_outbound_overflow(session.writer, overflow).await;
             Some(WsSessionLoopExitReason::OutboundQueueOverflow)
         }
         UserOutboundEvent::Closed => {
@@ -549,40 +403,38 @@ async fn handle_outbound_overflow(writer: &mut WsWriter, overflow: UserOutboundO
     reason = "outbound handling keeps protocol send, close-signal handling, and metrics in one explicit user-loop branch"
 )]
 async fn handle_outbound_payload(
-    writer: &mut WsWriter,
+    session: &mut UserLoop<'_>,
     outbound: UserOutbound,
-    user: &mut User,
-    metrics: &RuntimeMetrics,
 ) -> Option<WsSessionLoopExitReason> {
-    match dispatch_room_outbound(user, outbound).await {
-        Ok(output) => match send_user_output_bounded(writer, output).await {
+    match dispatch_room_outbound(session.user, outbound).await {
+        Ok(output) => match send_user_output_bounded(session.writer, output).await {
             Ok(batch_len) => {
-                metrics.record_ws_bus_batch_sent(batch_len);
+                session.metrics.record_ws_bus_batch_sent(batch_len);
                 None
             }
             Err(WebSocketCloseCode::Kicked) => {
                 debug!(close_code = 4108, "closing websocket from outbound signal");
-                close_writer_bounded(writer, WebSocketCloseCode::Kicked).await;
+                close_writer_bounded(session.writer, WebSocketCloseCode::Kicked).await;
                 Some(WsSessionLoopExitReason::OutboundCloseSignal)
             }
             Err(code) => {
-                metrics.record_ws_bus_send_failure();
+                session.metrics.record_ws_bus_send_failure();
                 debug!(
                     close_code = u16::from(code),
                     "failed to send outbound user event"
                 );
-                close_writer_if_terminal(writer, code).await;
+                close_writer_if_terminal(session.writer, code).await;
                 Some(WsSessionLoopExitReason::OutboundMessageSendFailure)
             }
         },
         Err(code) => {
             if code == WebSocketCloseCode::Kicked {
                 debug!(close_code = 4108, "closing websocket from outbound signal");
-                close_writer_bounded(writer, WebSocketCloseCode::Kicked).await;
+                close_writer_bounded(session.writer, WebSocketCloseCode::Kicked).await;
                 Some(WsSessionLoopExitReason::OutboundCloseSignal)
             } else {
-                metrics.record_ws_bus_send_failure();
-                close_writer_if_terminal(writer, code).await;
+                session.metrics.record_ws_bus_send_failure();
+                close_writer_if_terminal(session.writer, code).await;
                 Some(WsSessionLoopExitReason::OutboundMessageSendFailure)
             }
         }

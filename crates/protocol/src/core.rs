@@ -345,15 +345,13 @@ impl ProtocolCore {
         let Some(connect_context) = self.connect_context.as_ref() else {
             return CommandBatch::default();
         };
-        let Some(envelope) = ClientEnvelope::Message(ClientMessage::Auth(AuthPayload {
-            jwt: connect_context.jwt.clone(),
-            channel: connect_context.room.clone(),
-        }))
-        .into_envelope()
-        .ok() else {
-            return CommandBatch::default();
-        };
-        command_batch(self.enqueue_envelope(envelope, FlushMode::Immediate))
+        command_batch(self.enqueue_client_message(
+            ClientMessage::Auth(AuthPayload {
+                jwt: connect_context.jwt.clone(),
+                channel: connect_context.room.clone(),
+            }),
+            FlushMode::Immediate,
+        ))
     }
 
     /// handle ws message
@@ -429,16 +427,12 @@ impl ProtocolCore {
         if !self.can_send_client_messages() {
             return CommandBatch::default();
         }
-        let Some(envelope) = ClientEnvelope::Message(if active {
+        let message = if active {
             ClientMessage::Publish(StreamIntentPayload { stream_type })
         } else {
             ClientMessage::Unpublish(StreamIntentPayload { stream_type })
-        })
-        .into_envelope()
-        .ok() else {
-            return CommandBatch::default();
         };
-        command_batch(self.enqueue_envelope(envelope, FlushMode::Batched))
+        command_batch(self.enqueue_client_message(message, FlushMode::Batched))
     }
 
     /// Remembers the latest per-peer subscription intent for reconnect replay.
@@ -452,15 +446,10 @@ impl ProtocolCore {
         if !self.can_send_client_messages() {
             return CommandBatch::default();
         }
-        let Some(envelope) = ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
-            user_id,
-            states,
-        }))
-        .into_envelope()
-        .ok() else {
-            return CommandBatch::default();
-        };
-        command_batch(self.enqueue_envelope(envelope, FlushMode::Batched))
+        command_batch(self.enqueue_client_message(
+            ClientMessage::Subscribe(SubscribePayload { user_id, states }),
+            FlushMode::Batched,
+        ))
     }
 
     /// Persists the laetst local user metadata patch for the current room.
@@ -473,13 +462,7 @@ impl ProtocolCore {
         if !self.can_send_client_messages() {
             return CommandBatch::default();
         }
-        let Some(envelope) = ClientEnvelope::Message(ClientMessage::Info(info))
-            .into_envelope()
-            .ok()
-        else {
-            return CommandBatch::default();
-        };
-        command_batch(self.enqueue_envelope(envelope, FlushMode::Batched))
+        command_batch(self.enqueue_client_message(ClientMessage::Info(info), FlushMode::Batched))
     }
 
     /// Sends a best-effort broadcast to the current room.
@@ -491,14 +474,10 @@ impl ProtocolCore {
         if !self.can_send_client_messages() {
             return CommandBatch::default();
         }
-        let Some(envelope) =
-            ClientEnvelope::Message(ClientMessage::Broadcast(ClientBroadcastPayload { message }))
-                .into_envelope()
-                .ok()
-        else {
-            return CommandBatch::default();
-        };
-        command_batch(self.enqueue_envelope(envelope, FlushMode::Batched))
+        command_batch(self.enqueue_client_message(
+            ClientMessage::Broadcast(ClientBroadcastPayload { message }),
+            FlushMode::Batched,
+        ))
     }
 
     pub fn start_recording(&mut self, options: RecordingOptions) -> CommandBatch {
@@ -589,6 +568,13 @@ impl ProtocolCore {
 
     fn enqueue_envelope(&mut self, envelope: Envelope, mode: FlushMode) -> Commands {
         self.outbound_batch.enqueue(envelope, mode)
+    }
+
+    fn enqueue_client_message(&mut self, message: ClientMessage, mode: FlushMode) -> Commands {
+        let Some(envelope) = ClientEnvelope::Message(message).into_envelope().ok() else {
+            return Vec::new();
+        };
+        self.enqueue_envelope(envelope, mode)
     }
 
     fn flush_pending_batch(&mut self, cancel_timer: bool) -> Commands {
