@@ -73,7 +73,7 @@
 
 use std::{
     collections::{BTreeMap, btree_map::Entry},
-    sync::{MutexGuard, PoisonError},
+    sync::MutexGuard,
 };
 
 use tracing::warn;
@@ -93,6 +93,7 @@ use crate::{
         metrics::TransportCleanupFailureKind::{
             self, QueueFull, RetryExhausted, Shutdown, Terminal,
         },
+        sync::lock_unpoisoned,
     },
 };
 
@@ -874,8 +875,6 @@ impl Room {
     }
 
     fn cleanup_reconciler(&self) -> MutexGuard<'_, CleanupReconciler> {
-        self.cleanup_reconciler
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        lock_unpoisoned(&self.cleanup_reconciler)
     }
 }

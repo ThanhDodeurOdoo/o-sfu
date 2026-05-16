@@ -30,6 +30,7 @@ pub mod room;
 pub(in crate::runtime) mod router_events;
 pub mod rtc_engine;
 pub mod source_model;
+pub(in crate::runtime) mod sync;
 
 pub use o_sfu_model::{
     AvailableFeatures, JsonPayload, PeerSnapshot, RecordingOptions, RecordingState,

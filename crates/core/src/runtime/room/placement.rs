@@ -11,10 +11,7 @@
 //! the packet loop only sees the resolved transport keys after the join has
 //! committed
 
-use std::{
-    collections::BTreeMap,
-    sync::{Mutex, PoisonError},
-};
+use std::{collections::BTreeMap, sync::Mutex};
 
 use o_sfu_router::RouterId;
 
@@ -27,6 +24,7 @@ use crate::{
             TransportPlacementPressureSnapshot, TransportSessionKey,
             TransportWorkerPressureSnapshot,
         },
+        sync::lock_unpoisoned,
     },
 };
 
@@ -70,40 +68,25 @@ impl RoomPlacementLedger {
         connection_id: ConnectionId,
         placement: LocalRouterRuntimeContext,
     ) {
-        self.placement_by_connection
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(connection_id, placement);
-        let mut primary = self
-            .primary_placement
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        lock_unpoisoned(&self.placement_by_connection).insert(connection_id, placement);
+        let mut primary = lock_unpoisoned(&self.primary_placement);
         if placement.router == primary.router {
             *primary = placement;
         }
     }
 
     pub(super) fn unregister_committed_placement(&self, connection_id: ConnectionId) {
-        self.placement_by_connection
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&connection_id);
+        lock_unpoisoned(&self.placement_by_connection).remove(&connection_id);
     }
 
     fn placement_for_connection(&self, connection_id: ConnectionId) -> LocalRouterRuntimeContext {
-        if let Some(placement) = self
-            .placement_by_connection
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        if let Some(placement) = lock_unpoisoned(&self.placement_by_connection)
             .get(&connection_id)
             .copied()
         {
             return placement;
         }
-        *self
-            .primary_placement
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        *lock_unpoisoned(&self.primary_placement)
     }
 
     pub(super) fn media_worker_id_for_connection(&self, connection_id: ConnectionId) -> usize {
@@ -111,10 +94,7 @@ impl RoomPlacementLedger {
     }
 
     pub(super) fn media_worker_id(&self) -> usize {
-        self.primary_placement
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .media_worker
+        lock_unpoisoned(&self.primary_placement).media_worker
     }
 }
 

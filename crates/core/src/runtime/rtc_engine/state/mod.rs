@@ -51,8 +51,8 @@ use super::{
     demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux},
     local_send_rewrite::{ConsumerStream, ConsumerStreamKey},
     media_registry::{
-        ConsumerMidLookupKey, DecoderRefreshCodec, ProducerMidLookupKey, ProducerSsrcLookupKey,
-        RegisteredMediaHandle, RemoteSourceRegistration,
+        DecoderRefreshCodec, ProducerSsrcLookupKey, RegisteredMediaHandle,
+        RemoteSourceRegistration, SessionMidLookupKey,
     },
     relay_registry::RelaySourceRegistration,
     route_control::RouteControlState,
@@ -168,7 +168,7 @@ pub(super) struct PacketLoopState {
     /// packet-layer source policy already projected from room decisions
     pub(super) route_control: RouteControlState,
     /// producer lookup by session and MID for packet source resolution
-    pub(super) producer_mid_registry: BTreeMap<ProducerMidLookupKey, TransportMediaId>,
+    pub(super) producer_mid_registry: BTreeMap<SessionMidLookupKey, TransportMediaId>,
     /// producer lookup by session and SSRC after negotiation or dynamic discovery
     pub(super) producer_ssrc_registry: BTreeMap<ProducerSsrcLookupKey, TransportMediaId>,
     /// producer RID learned for a session-scoped SSRC
@@ -201,7 +201,7 @@ pub(super) struct PacketLoopState {
     /// packet-loop write handles for per-session egress bitrate accounting
     pub(super) egress_bitrate_counters: BTreeMap<TransportSessionKey, Arc<MediaBitrateCounter>>,
     /// consumer lookup by session and MID for RTCP feedback routing
-    pub(super) consumer_mid_registry: BTreeMap<ConsumerMidLookupKey, TransportMediaId>,
+    pub(super) consumer_mid_registry: BTreeMap<SessionMidLookupKey, TransportMediaId>,
     /// command path for source media owned by another worker
     pub(super) remote_source_registry: BTreeMap<TransportMediaId, RemoteSourceRegistration>,
     /// cross-worker relay destinations indexed by local source media id

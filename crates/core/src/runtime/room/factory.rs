@@ -14,14 +14,14 @@
 //! `RoomManager::join_user` assigns workers from live load snapshots when
 //! sessions arrive.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use o_sfu_router::RouterId;
 
 use super::{LocalRouterRuntimeContext, Room, RoomConfig, RoomRuntimeContext, RoomRuntimePolicy};
 use crate::runtime::{
     RoomInstanceId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
-    packet_sink_registry::RoomPacketSinkRegistry,
+    packet_sink_registry::RoomPacketSinkRegistry, sync::lock_unpoisoned,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,10 +175,7 @@ impl RoomFactory {
     /// value keeps later room creation possible after an unrelated panic.
     fn allocate_runtime_context(&self) -> RoomRuntimeContext {
         let (room_instance_id, primary) = {
-            let mut allocator = self
-                .allocator
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut allocator = lock_unpoisoned(&self.allocator);
             let room_instance_id = RoomInstanceId::allocate(&mut allocator.next_room_instance_id);
             let primary = LocalRouterRuntimeContext {
                 router: RouterId(allocator.next_router_id),
@@ -192,10 +189,7 @@ impl RoomFactory {
     }
 
     pub(super) fn allocate_spillover_router(&self) -> RouterId {
-        let mut allocator = self
-            .allocator
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut allocator = lock_unpoisoned(&self.allocator);
         let router = RouterId(allocator.next_router_id);
         allocator.next_router_id = allocator.next_router_id.saturating_add(1);
         router

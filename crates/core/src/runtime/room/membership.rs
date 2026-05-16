@@ -772,12 +772,12 @@ impl Room {
             if media_port
                 .request_consumer_keyframe(
                     &self.transport_user_key(user_id, connection_id),
-                    target.consumer_media(),
+                    target.consumer_media,
                     &self.transport_user_key(
-                        target.producer_user_id(),
-                        target.producer_connection_id(),
+                        &target.producer_user_id,
+                        target.producer_connection_id,
                     ),
-                    target.source_media(),
+                    target.source_media,
                 )
                 .await
                 .is_err()
@@ -785,8 +785,8 @@ impl Room {
                 warn!(
                     ?user_id,
                     connection_id = ?connection_id,
-                    producer_user_id = ?target.producer_user_id(),
-                    source_transport_media_id = ?target.source_media(),
+                    producer_user_id = ?target.producer_user_id,
+                    source_transport_media_id = ?target.source_media,
                     "media transport failed to request a refreshed consumer keyframe"
                 );
             }
