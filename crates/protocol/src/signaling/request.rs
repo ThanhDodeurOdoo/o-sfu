@@ -1,6 +1,6 @@
 use super::{
     ClientBroadcastPayload, Envelope, RecordingOptions, RequestId, SessionDescriptionPayload,
-    StreamIntentPayload, SubscribePayload,
+    StreamIntentPayload, SubscribePayload, tags,
 };
 use crate::shared::UserInfo;
 
@@ -17,12 +17,12 @@ pub enum ClientMessage {
 impl ClientMessage {
     fn tag(&self) -> &'static str {
         match self {
-            Self::Auth(_) => "auth",
-            Self::Publish(_) => "publish",
-            Self::Unpublish(_) => "unpublish",
-            Self::Subscribe(_) => "subscribe",
-            Self::Info(_) => "info",
-            Self::Broadcast(_) => "broadcast",
+            Self::Auth(_) => tags::AUTH,
+            Self::Publish(_) => tags::PUBLISH,
+            Self::Unpublish(_) => tags::UNPUBLISH,
+            Self::Subscribe(_) => tags::SUBSCRIBE,
+            Self::Info(_) => tags::INFO,
+            Self::Broadcast(_) => tags::BROADCAST,
         }
     }
 
@@ -49,8 +49,8 @@ pub enum ClientRequest {
 impl ClientRequest {
     fn tag(&self) -> &'static str {
         match self {
-            Self::StartRecording(_) => "startrecording",
-            Self::StopRecording => "stoprecording",
+            Self::StartRecording(_) => tags::START_RECORDING,
+            Self::StopRecording => tags::STOP_RECORDING,
         }
     }
 
@@ -78,8 +78,8 @@ pub enum ServerRequest {
 impl ServerRequest {
     fn tag(&self) -> &'static str {
         match self {
-            Self::Offer(_) => "offer",
-            Self::Renegotiate(_) => "renegotiate",
+            Self::Offer(_) => tags::OFFER,
+            Self::Renegotiate(_) => tags::RENEGOTIATE,
         }
     }
 

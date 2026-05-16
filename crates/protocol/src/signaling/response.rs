@@ -1,6 +1,6 @@
 use super::{
     Envelope, PeerInfoPayload, PeerLeftPayload, RecordingActionResult, RequestId,
-    ServerBroadcastPayload, SessionDescriptionPayload, TrackBinding, WelcomePayload,
+    ServerBroadcastPayload, SessionDescriptionPayload, TrackBinding, WelcomePayload, tags,
 };
 use crate::shared::RecordingStateUpdate;
 
@@ -24,13 +24,13 @@ pub enum ServerMessage {
 impl ServerMessage {
     fn tag(&self) -> &'static str {
         match self {
-            Self::Welcome(_) => "welcome",
-            Self::Tracks(_) => "tracks",
-            Self::PeerInfo(_) => "peerinfo",
-            Self::PeerJoined(_) => "peerjoined",
-            Self::PeerLeft(_) => "peerleft",
-            Self::Broadcast(_) => "broadcast",
-            Self::RecordingChange(_) => "recordingchange",
+            Self::Welcome(_) => tags::WELCOME,
+            Self::Tracks(_) => tags::TRACKS,
+            Self::PeerInfo(_) => tags::PEER_INFO,
+            Self::PeerJoined(_) => tags::PEER_JOINED,
+            Self::PeerLeft(_) => tags::PEER_LEFT,
+            Self::Broadcast(_) => tags::BROADCAST,
+            Self::RecordingChange(_) => tags::RECORDING_CHANGE,
         }
     }
 
@@ -65,8 +65,8 @@ pub enum ServerResponse {
 impl ServerResponse {
     fn tag(&self) -> &'static str {
         match self {
-            Self::StartRecording(_) => "startrecording",
-            Self::StopRecording(_) => "stoprecording",
+            Self::StartRecording(_) => tags::START_RECORDING,
+            Self::StopRecording(_) => tags::STOP_RECORDING,
         }
     }
 

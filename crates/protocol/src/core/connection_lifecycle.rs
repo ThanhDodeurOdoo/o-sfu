@@ -106,6 +106,13 @@ pub(super) enum RuntimeCleanupMode {
     WithCommands,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ConnectCommandSource {
+    None,
+    FreshInput,
+    SavedContext,
+}
+
 /// Small typed effect surface for the connection lifecycle state machine.
 ///
 /// The lifecycle logic only needs a narrow slice of the full protocol command
@@ -203,7 +210,7 @@ pub enum LifecycleCloseCause {
 pub(super) struct LifecyclePlan {
     pub(super) effects_before_cleanup: LifecycleEffects,
     pub(super) effects_after_cleanup: LifecycleEffects,
-    pub(super) connect_after_cleanup: bool,
+    pub(super) connect_after_cleanup: ConnectCommandSource,
     pub(super) clear_sticky_state: bool,
     pub(super) runtime_cleanup_mode: RuntimeCleanupMode,
     pub(super) connect_context_update: ConnectContextUpdate,
@@ -216,11 +223,109 @@ impl LifecyclePlan {
         Self {
             effects_before_cleanup: LifecycleEffects::new(),
             effects_after_cleanup: LifecycleEffects::new(),
-            connect_after_cleanup: false,
+            connect_after_cleanup: ConnectCommandSource::None,
             clear_sticky_state: false,
             runtime_cleanup_mode: RuntimeCleanupMode::None,
             connect_context_update: ConnectContextUpdate::Preserve,
             reset_session_state: false,
+        }
+    }
+
+    #[must_use]
+    fn fresh_connect(state: BundleConnectionState) -> Self {
+        Self {
+            effects_after_cleanup: LifecycleEffects::one(LifecycleEffect::EmitStateChange {
+                state,
+                cause: None,
+            }),
+            connect_after_cleanup: ConnectCommandSource::FreshInput,
+            clear_sticky_state: true,
+            runtime_cleanup_mode: RuntimeCleanupMode::Silent,
+            connect_context_update: ConnectContextUpdate::ReplaceFromInput,
+            reset_session_state: true,
+            ..Self::none()
+        }
+    }
+
+    #[must_use]
+    fn state_change(state: BundleConnectionState) -> Self {
+        Self {
+            effects_after_cleanup: LifecycleEffects::one(LifecycleEffect::EmitStateChange {
+                state,
+                cause: None,
+            }),
+            ..Self::none()
+        }
+    }
+
+    #[must_use]
+    fn explicit_disconnect(state: BundleConnectionState) -> Self {
+        Self {
+            effects_before_cleanup: LifecycleEffects::one(LifecycleEffect::CancelRecoveryTimer),
+            effects_after_cleanup: LifecycleEffects::three(
+                LifecycleEffect::CloseWebSocket {
+                    code: u16::from(WebSocketCloseCode::Clean),
+                },
+                LifecycleEffect::ClosePeerConnection,
+                LifecycleEffect::EmitStateChange { state, cause: None },
+            ),
+            clear_sticky_state: true,
+            runtime_cleanup_mode: RuntimeCleanupMode::WithCommands,
+            connect_context_update: ConnectContextUpdate::Clear,
+            reset_session_state: true,
+            ..Self::none()
+        }
+    }
+
+    #[must_use]
+    fn terminal_close(state: BundleConnectionState, cause: Option<LifecycleCloseCause>) -> Self {
+        Self {
+            effects_after_cleanup: LifecycleEffects::three(
+                LifecycleEffect::CancelRecoveryTimer,
+                LifecycleEffect::ClosePeerConnection,
+                LifecycleEffect::EmitStateChange { state, cause },
+            ),
+            runtime_cleanup_mode: RuntimeCleanupMode::WithCommands,
+            connect_context_update: ConnectContextUpdate::Clear,
+            reset_session_state: true,
+            ..Self::none()
+        }
+    }
+
+    #[must_use]
+    fn socket_closed_without_context(state: BundleConnectionState) -> Self {
+        Self {
+            effects_after_cleanup: LifecycleEffects::one(LifecycleEffect::EmitStateChange {
+                state,
+                cause: None,
+            }),
+            runtime_cleanup_mode: RuntimeCleanupMode::WithCommands,
+            ..Self::none()
+        }
+    }
+
+    #[must_use]
+    fn recover(state: BundleConnectionState, delay_ms: u32) -> Self {
+        Self {
+            effects_after_cleanup: LifecycleEffects::three(
+                LifecycleEffect::ClosePeerConnection,
+                LifecycleEffect::EmitStateChange { state, cause: None },
+                LifecycleEffect::ScheduleRecoveryTimer { ms: delay_ms },
+            ),
+            runtime_cleanup_mode: RuntimeCleanupMode::WithCommands,
+            ..Self::none()
+        }
+    }
+
+    #[must_use]
+    fn retry_connect(state: BundleConnectionState) -> Self {
+        Self {
+            effects_after_cleanup: LifecycleEffects::one(LifecycleEffect::EmitStateChange {
+                state,
+                cause: None,
+            }),
+            connect_after_cleanup: ConnectCommandSource::SavedContext,
+            ..Self::none()
         }
     }
 }
@@ -235,18 +340,7 @@ pub(super) fn connect_model(model: &mut LifecycleModel) -> LifecyclePlan {
     model.has_connect_context = true;
     model.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
     model.state = BundleConnectionState::Connecting;
-    LifecyclePlan {
-        effects_before_cleanup: LifecycleEffects::new(),
-        effects_after_cleanup: LifecycleEffects::one(LifecycleEffect::EmitStateChange {
-            state: model.state,
-            cause: None,
-        }),
-        connect_after_cleanup: true,
-        clear_sticky_state: true,
-        runtime_cleanup_mode: RuntimeCleanupMode::Silent,
-        connect_context_update: ConnectContextUpdate::ReplaceFromInput,
-        reset_session_state: true,
-    }
+    LifecyclePlan::fresh_connect(model.state)
 }
 
 pub(super) fn on_transport_ready_model(model: &mut LifecycleModel) -> LifecyclePlan {
@@ -254,18 +348,7 @@ pub(super) fn on_transport_ready_model(model: &mut LifecycleModel) -> LifecycleP
         return LifecyclePlan::none();
     }
     model.state = BundleConnectionState::Connected;
-    LifecyclePlan {
-        effects_before_cleanup: LifecycleEffects::new(),
-        effects_after_cleanup: LifecycleEffects::one(LifecycleEffect::EmitStateChange {
-            state: model.state,
-            cause: None,
-        }),
-        connect_after_cleanup: false,
-        clear_sticky_state: false,
-        runtime_cleanup_mode: RuntimeCleanupMode::None,
-        connect_context_update: ConnectContextUpdate::Preserve,
-        reset_session_state: false,
-    }
+    LifecyclePlan::state_change(model.state)
 }
 
 pub(super) fn disconnect_model(model: &mut LifecycleModel) -> LifecyclePlan {
@@ -278,24 +361,7 @@ pub(super) fn disconnect_model(model: &mut LifecycleModel) -> LifecyclePlan {
     model.state = BundleConnectionState::Disconnected;
     model.has_connect_context = false;
     model.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
-    LifecyclePlan {
-        effects_before_cleanup: LifecycleEffects::one(LifecycleEffect::CancelRecoveryTimer),
-        effects_after_cleanup: LifecycleEffects::three(
-            LifecycleEffect::CloseWebSocket {
-                code: u16::from(WebSocketCloseCode::Clean),
-            },
-            LifecycleEffect::ClosePeerConnection,
-            LifecycleEffect::EmitStateChange {
-                state: model.state,
-                cause: None,
-            },
-        ),
-        connect_after_cleanup: false,
-        clear_sticky_state: true,
-        runtime_cleanup_mode: RuntimeCleanupMode::WithCommands,
-        connect_context_update: ConnectContextUpdate::Clear,
-        reset_session_state: true,
-    }
+    LifecyclePlan::explicit_disconnect(model.state)
 }
 
 pub(super) fn on_ws_close_model(model: &mut LifecycleModel, close_code: u16) -> LifecyclePlan {
@@ -313,58 +379,17 @@ pub(super) fn on_ws_close_model(model: &mut LifecycleModel, close_code: u16) -> 
         model.state = BundleConnectionState::Closed;
         model.has_connect_context = false;
         model.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
-        return LifecyclePlan {
-            effects_before_cleanup: LifecycleEffects::new(),
-            effects_after_cleanup: LifecycleEffects::three(
-                LifecycleEffect::CancelRecoveryTimer,
-                LifecycleEffect::ClosePeerConnection,
-                LifecycleEffect::EmitStateChange {
-                    state: model.state,
-                    cause: terminal_close_cause(close_code),
-                },
-            ),
-            connect_after_cleanup: false,
-            clear_sticky_state: false,
-            runtime_cleanup_mode: RuntimeCleanupMode::WithCommands,
-            connect_context_update: ConnectContextUpdate::Clear,
-            reset_session_state: true,
-        };
+        return LifecyclePlan::terminal_close(model.state, terminal_close_cause(close_code));
     }
 
     if !model.has_connect_context {
         model.state = BundleConnectionState::Disconnected;
-        return LifecyclePlan {
-            effects_before_cleanup: LifecycleEffects::new(),
-            effects_after_cleanup: LifecycleEffects::one(LifecycleEffect::EmitStateChange {
-                state: model.state,
-                cause: None,
-            }),
-            connect_after_cleanup: false,
-            clear_sticky_state: false,
-            runtime_cleanup_mode: RuntimeCleanupMode::WithCommands,
-            connect_context_update: ConnectContextUpdate::Preserve,
-            reset_session_state: false,
-        };
+        return LifecyclePlan::socket_closed_without_context(model.state);
     }
     let delay_ms = model.recovery_delay_ms;
     model.recovery_delay_ms = next_recovery_delay(delay_ms);
     model.state = BundleConnectionState::Recovering;
-    LifecyclePlan {
-        effects_before_cleanup: LifecycleEffects::new(),
-        effects_after_cleanup: LifecycleEffects::three(
-            LifecycleEffect::ClosePeerConnection,
-            LifecycleEffect::EmitStateChange {
-                state: model.state,
-                cause: None,
-            },
-            LifecycleEffect::ScheduleRecoveryTimer { ms: delay_ms },
-        ),
-        connect_after_cleanup: false,
-        clear_sticky_state: false,
-        runtime_cleanup_mode: RuntimeCleanupMode::WithCommands,
-        connect_context_update: ConnectContextUpdate::Preserve,
-        reset_session_state: false,
-    }
+    LifecyclePlan::recover(model.state, delay_ms)
 }
 
 pub(super) fn handle_recovery_timer_model(model: &mut LifecycleModel) -> LifecyclePlan {
@@ -372,18 +397,7 @@ pub(super) fn handle_recovery_timer_model(model: &mut LifecycleModel) -> Lifecyc
         return LifecyclePlan::none();
     }
     model.state = BundleConnectionState::Connecting;
-    LifecyclePlan {
-        effects_before_cleanup: LifecycleEffects::new(),
-        effects_after_cleanup: LifecycleEffects::one(LifecycleEffect::EmitStateChange {
-            state: model.state,
-            cause: None,
-        }),
-        connect_after_cleanup: true,
-        clear_sticky_state: false,
-        runtime_cleanup_mode: RuntimeCleanupMode::None,
-        connect_context_update: ConnectContextUpdate::Preserve,
-        reset_session_state: false,
-    }
+    LifecyclePlan::retry_connect(model.state)
 }
 
 fn lifecycle_model(core: &ProtocolCore) -> LifecycleModel {
@@ -400,6 +414,7 @@ fn apply_model(
     plan: LifecyclePlan,
     fresh_connect_context: Option<ConnectContext>,
 ) -> Commands {
+    let connect_url = connect_url(core, &plan, fresh_connect_context.as_ref());
     core.state = model.state;
     core.recovery_delay_ms = model.recovery_delay_ms;
     if plan.reset_session_state {
@@ -431,10 +446,27 @@ fn apply_model(
         core,
         plan.effects_after_cleanup,
     ));
-    if plan.connect_after_cleanup {
-        commands.push(connect_command(core));
+    if let Some(url) = connect_url {
+        commands.push(Command::Connect { url });
     }
     commands
+}
+
+fn connect_url(
+    core: &ProtocolCore,
+    plan: &LifecyclePlan,
+    fresh_connect_context: Option<&ConnectContext>,
+) -> Option<String> {
+    match plan.connect_after_cleanup {
+        ConnectCommandSource::None => None,
+        ConnectCommandSource::FreshInput => {
+            fresh_connect_context.map(|connect_context| connect_context.url.clone())
+        }
+        ConnectCommandSource::SavedContext => core
+            .connect_context
+            .as_ref()
+            .map(|connect_context| connect_context.url.clone()),
+    }
 }
 
 fn lifecycle_effects_to_commands(core: &ProtocolCore, effects: LifecycleEffects) -> Commands {
@@ -464,20 +496,6 @@ fn lifecycle_effect_to_command(_core: &ProtocolCore, effect: LifecycleEffect) ->
         LifecycleEffect::CancelRecoveryTimer => Command::CancelTimer {
             id: RECOVERY_TIMER_ID,
         },
-    }
-}
-
-fn connect_command(core: &ProtocolCore) -> Command {
-    let url = core
-        .connect_context
-        .as_ref()
-        .map(|connect_context| connect_context.url.clone());
-    assert!(
-        url.is_some(),
-        "connect command requires saved connect context"
-    );
-    Command::Connect {
-        url: url.unwrap_or_default(),
     }
 }
 

@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use super::{
     ClientMessage, ClientRequest, ClientResponse, Envelope, RequestId, ServerMessage,
-    ServerRequest, ServerResponse,
+    ServerRequest, ServerResponse, tags,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,12 +58,12 @@ impl ClientEnvelope {
                 response,
             } => match response {
                 ClientResponse::Offer(payload) => Ok(Envelope::response(
-                    "offer",
+                    tags::OFFER,
                     response_to,
                     Some(serde_json::to_value(payload)?),
                 )),
                 ClientResponse::Renegotiate(payload) => Ok(Envelope::response(
-                    "renegotiate",
+                    tags::RENEGOTIATE,
                     response_to,
                     Some(serde_json::to_value(payload)?),
                 )),
@@ -136,22 +136,22 @@ fn decode_client_message(
     payload: Option<Value>,
 ) -> Result<ClientEnvelope, EnvelopeDecodeError> {
     match tag {
-        "auth" => Ok(ClientEnvelope::Message(ClientMessage::Auth(parse_payload(
+        tags::AUTH => Ok(ClientEnvelope::Message(ClientMessage::Auth(parse_payload(
             tag, payload,
         )?))),
-        "publish" => Ok(ClientEnvelope::Message(ClientMessage::Publish(
+        tags::PUBLISH => Ok(ClientEnvelope::Message(ClientMessage::Publish(
             parse_payload(tag, payload)?,
         ))),
-        "unpublish" => Ok(ClientEnvelope::Message(ClientMessage::Unpublish(
+        tags::UNPUBLISH => Ok(ClientEnvelope::Message(ClientMessage::Unpublish(
             parse_payload(tag, payload)?,
         ))),
-        "subscribe" => Ok(ClientEnvelope::Message(ClientMessage::Subscribe(
+        tags::SUBSCRIBE => Ok(ClientEnvelope::Message(ClientMessage::Subscribe(
             parse_payload(tag, payload)?,
         ))),
-        "info" => Ok(ClientEnvelope::Message(ClientMessage::Info(parse_payload(
+        tags::INFO => Ok(ClientEnvelope::Message(ClientMessage::Info(parse_payload(
             tag, payload,
         )?))),
-        "broadcast" => Ok(ClientEnvelope::Message(ClientMessage::Broadcast(
+        tags::BROADCAST => Ok(ClientEnvelope::Message(ClientMessage::Broadcast(
             parse_payload(tag, payload)?,
         ))),
         _ => Err(EnvelopeDecodeError::UnknownTag(tag.to_owned())),
@@ -164,11 +164,11 @@ fn decode_client_request(
     payload: Option<Value>,
 ) -> Result<ClientEnvelope, EnvelopeDecodeError> {
     match tag {
-        "startrecording" => Ok(ClientEnvelope::Request {
+        tags::START_RECORDING => Ok(ClientEnvelope::Request {
             request_id,
             request: ClientRequest::StartRecording(parse_payload(tag, payload)?),
         }),
-        "stoprecording" => {
+        tags::STOP_RECORDING => {
             ensure_empty_payload(tag, payload.as_ref())?;
             Ok(ClientEnvelope::Request {
                 request_id,
@@ -185,8 +185,8 @@ fn decode_client_response(
     payload: Option<Value>,
 ) -> Result<ClientEnvelope, EnvelopeDecodeError> {
     let response = match tag {
-        "offer" => ClientResponse::Offer(parse_payload(tag, payload)?),
-        "renegotiate" => ClientResponse::Renegotiate(parse_payload(tag, payload)?),
+        tags::OFFER => ClientResponse::Offer(parse_payload(tag, payload)?),
+        tags::RENEGOTIATE => ClientResponse::Renegotiate(parse_payload(tag, payload)?),
         _ => return Err(EnvelopeDecodeError::UnknownTag(tag.to_owned())),
     };
     Ok(ClientEnvelope::Response {
@@ -200,25 +200,25 @@ fn decode_server_message(
     payload: Option<Value>,
 ) -> Result<ServerEnvelope, EnvelopeDecodeError> {
     match tag {
-        "welcome" => Ok(ServerEnvelope::Message(ServerMessage::Welcome(
+        tags::WELCOME => Ok(ServerEnvelope::Message(ServerMessage::Welcome(
             parse_payload(tag, payload)?,
         ))),
-        "tracks" => Ok(ServerEnvelope::Message(ServerMessage::Tracks(
+        tags::TRACKS => Ok(ServerEnvelope::Message(ServerMessage::Tracks(
             parse_payload(tag, payload)?,
         ))),
-        "peerinfo" => Ok(ServerEnvelope::Message(ServerMessage::PeerInfo(
+        tags::PEER_INFO => Ok(ServerEnvelope::Message(ServerMessage::PeerInfo(
             parse_payload(tag, payload)?,
         ))),
-        "peerjoined" => Ok(ServerEnvelope::Message(ServerMessage::PeerJoined(
+        tags::PEER_JOINED => Ok(ServerEnvelope::Message(ServerMessage::PeerJoined(
             parse_payload(tag, payload)?,
         ))),
-        "peerleft" => Ok(ServerEnvelope::Message(ServerMessage::PeerLeft(
+        tags::PEER_LEFT => Ok(ServerEnvelope::Message(ServerMessage::PeerLeft(
             parse_payload(tag, payload)?,
         ))),
-        "broadcast" => Ok(ServerEnvelope::Message(ServerMessage::Broadcast(
+        tags::BROADCAST => Ok(ServerEnvelope::Message(ServerMessage::Broadcast(
             parse_payload(tag, payload)?,
         ))),
-        "recordingchange" => Ok(ServerEnvelope::Message(ServerMessage::RecordingChange(
+        tags::RECORDING_CHANGE => Ok(ServerEnvelope::Message(ServerMessage::RecordingChange(
             parse_payload(tag, payload)?,
         ))),
         _ => Err(EnvelopeDecodeError::UnknownTag(tag.to_owned())),
@@ -231,8 +231,8 @@ fn decode_server_request(
     payload: Option<Value>,
 ) -> Result<ServerEnvelope, EnvelopeDecodeError> {
     let request = match tag {
-        "offer" => ServerRequest::Offer(parse_payload(tag, payload)?),
-        "renegotiate" => ServerRequest::Renegotiate(parse_payload(tag, payload)?),
+        tags::OFFER => ServerRequest::Offer(parse_payload(tag, payload)?),
+        tags::RENEGOTIATE => ServerRequest::Renegotiate(parse_payload(tag, payload)?),
         _ => return Err(EnvelopeDecodeError::UnknownTag(tag.to_owned())),
     };
     Ok(ServerEnvelope::Request {
@@ -247,8 +247,8 @@ fn decode_server_response(
     payload: Option<Value>,
 ) -> Result<ServerEnvelope, EnvelopeDecodeError> {
     let response = match tag {
-        "startrecording" => ServerResponse::StartRecording(parse_payload(tag, payload)?),
-        "stoprecording" => ServerResponse::StopRecording(parse_payload(tag, payload)?),
+        tags::START_RECORDING => ServerResponse::StartRecording(parse_payload(tag, payload)?),
+        tags::STOP_RECORDING => ServerResponse::StopRecording(parse_payload(tag, payload)?),
         _ => return Err(EnvelopeDecodeError::UnknownTag(tag.to_owned())),
     };
     Ok(ServerEnvelope::Response {

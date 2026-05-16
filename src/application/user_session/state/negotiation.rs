@@ -5,7 +5,10 @@
 //! and generic renegotiation requests that arrive during that window become
 //! follow-up work instead of overlapping protocol requests
 
-use std::{collections::BTreeSet, mem::take};
+use std::{
+    collections::BTreeSet,
+    mem::{replace, take},
+};
 
 use o_sfu_protocol::{
     shared::StreamType,
@@ -89,31 +92,25 @@ pub(in crate::application::user_session) struct ResolvedUserNegotiation {
 /// handles queuing for publish intents and room events that arrive while an
 /// answer is outstanding
 #[derive(Debug)]
-pub(in crate::application::user_session) enum UserNegotiationState {
-    /// the connection is authenticated but the first offer is not yet issued
-    BeforeInitialOffer {
-        /// publish intents received before startup
-        queued_publish_slots: BTreeSet<StreamType>,
-    },
-    /// the session is active and no server requests are pending
-    Stable {
-        /// follow-up publish intents waiting for the next stable window
-        queued_publish_slots: BTreeSet<StreamType>,
-    },
-    /// an offer or renegotiation request has been sent to the browser
+pub(in crate::application::user_session) struct UserNegotiationState {
+    phase: NegotiationPhase,
+    queued_publish_slots: BTreeSet<StreamType>,
+}
+
+#[derive(Debug)]
+enum NegotiationPhase {
+    BeforeInitialOffer,
+    Stable,
     Negotiating {
-        /// metadata needed to apply the browser's answer
         pending: PendingUserRequest,
-        /// follow-up publish intents received while this request is pending
-        queued_publish_slots: BTreeSet<StreamType>,
-        /// whether a generic renegotiation is needed after this answer
         queued_renegotiation: bool,
     },
 }
 
 impl Default for UserNegotiationState {
     fn default() -> Self {
-        Self::BeforeInitialOffer {
+        Self {
+            phase: NegotiationPhase::BeforeInitialOffer,
             queued_publish_slots: BTreeSet::default(),
         }
     }
@@ -121,28 +118,28 @@ impl Default for UserNegotiationState {
 
 impl UserNegotiationState {
     pub const fn awaiting_answer(&self) -> bool {
-        matches!(self, Self::Negotiating { .. })
+        matches!(self.phase, NegotiationPhase::Negotiating { .. })
     }
 
     pub fn has_queued_publish(&self, stream_type: StreamType) -> bool {
-        self.queued_publish_slots().contains(&stream_type)
+        self.queued_publish_slots.contains(&stream_type)
     }
 
     pub fn queue_publish_slot(&mut self, stream_type: StreamType) {
-        self.queued_publish_slots_mut().insert(stream_type);
+        self.queued_publish_slots.insert(stream_type);
     }
 
     pub fn clear_queued_publish(&mut self, stream_type: StreamType) -> bool {
-        self.queued_publish_slots_mut().remove(&stream_type)
+        self.queued_publish_slots.remove(&stream_type)
     }
 
     pub fn take_queued_publish_slots(&mut self) -> Vec<StreamType> {
-        take(self.queued_publish_slots_mut()).into_iter().collect()
+        take(&mut self.queued_publish_slots).into_iter().collect()
     }
 
     /// record a newly issued server request in the state machine
     ///
-    /// this moves the session to [`Self::Negotiating`] and preserves any existing
+    /// this moves the session to the negotiating phase and preserves any existing
     /// publish queue
     pub fn issue(
         &mut self,
@@ -150,14 +147,12 @@ impl UserNegotiationState {
         request: ServerRequest,
         action: PendingUserAction,
     ) {
-        let queued_publish_slots = self.take_phase_queue();
-        *self = Self::Negotiating {
+        self.phase = NegotiationPhase::Negotiating {
             pending: PendingUserRequest {
                 request_id,
                 request,
                 action,
             },
-            queued_publish_slots,
             queued_renegotiation: false,
         };
     }
@@ -168,10 +163,10 @@ impl UserNegotiationState {
     /// otherwise it flags the machine to trigger a follow-up after the current
     /// answer arrives
     pub fn schedule_renegotiation(&mut self) -> RenegotiationDisposition {
-        match self {
-            Self::BeforeInitialOffer { .. } => RenegotiationDisposition::Skip,
-            Self::Stable { .. } => RenegotiationDisposition::SendNow,
-            Self::Negotiating {
+        match &mut self.phase {
+            NegotiationPhase::BeforeInitialOffer => RenegotiationDisposition::Skip,
+            NegotiationPhase::Stable => RenegotiationDisposition::SendNow,
+            NegotiationPhase::Negotiating {
                 queued_renegotiation,
                 ..
             } => {
@@ -186,60 +181,25 @@ impl UserNegotiationState {
     /// returns the pending request metadata if the id matches, otherwise it
     /// returns `None` and preserves the current state
     pub fn resolve_answer(&mut self, response_to: &RequestId) -> Option<ResolvedUserNegotiation> {
-        let previous = take(self);
-        match previous {
-            Self::Negotiating {
+        let NegotiationPhase::Negotiating { pending, .. } = &self.phase else {
+            return None;
+        };
+        if pending.request_id != *response_to {
+            return None;
+        }
+        match replace(&mut self.phase, NegotiationPhase::Stable) {
+            NegotiationPhase::Negotiating {
                 pending,
-                queued_publish_slots,
                 queued_renegotiation,
-            } if pending.request_id == *response_to => {
-                *self = Self::Stable {
-                    queued_publish_slots,
-                };
-                Some(ResolvedUserNegotiation {
-                    pending,
-                    queued_renegotiation,
-                })
-            }
+            } => Some(ResolvedUserNegotiation {
+                pending,
+                queued_renegotiation,
+            }),
             other => {
-                *self = other;
+                self.phase = other;
                 None
             }
         }
-    }
-
-    fn queued_publish_slots(&self) -> &BTreeSet<StreamType> {
-        match self {
-            Self::BeforeInitialOffer {
-                queued_publish_slots,
-            }
-            | Self::Stable {
-                queued_publish_slots,
-            }
-            | Self::Negotiating {
-                queued_publish_slots,
-                ..
-            } => queued_publish_slots,
-        }
-    }
-
-    fn queued_publish_slots_mut(&mut self) -> &mut BTreeSet<StreamType> {
-        match self {
-            Self::BeforeInitialOffer {
-                queued_publish_slots,
-            }
-            | Self::Stable {
-                queued_publish_slots,
-            }
-            | Self::Negotiating {
-                queued_publish_slots,
-                ..
-            } => queued_publish_slots,
-        }
-    }
-
-    fn take_phase_queue(&mut self) -> BTreeSet<StreamType> {
-        take(self.queued_publish_slots_mut())
     }
 }
 
