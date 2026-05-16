@@ -70,26 +70,7 @@ pub struct RoomWorkerPolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalSpilloverPolicy {
-    /// Joined receiver count that is high enough to start spillover pressure.
-    min_receiver_count: usize,
-    /// Active and pending consumer routes allowed per active local router.
-    max_active_consumers_per_router: usize,
-    /// Receiver fan-out allowed for one published source before it is pressured.
-    max_fanout_per_source: usize,
-    /// Aggregate transport egress bitrate threshold.
-    egress_bitrate_threshold: Bitrate,
-    /// Packet-loop scheduling lag threshold, in milliseconds.
-    packet_loop_lag_threshold_ms: u64,
-    /// Queued transport command depth that indicates control-path pressure.
-    command_backlog_threshold: usize,
-    /// Relay mailbox depth that indicates cross-worker forwarding pressure.
-    relay_mailbox_depth_threshold: usize,
-    /// Worker pressure score threshold on a 0 to 100 saturation scale.
-    worker_pressure_threshold: u8,
-    /// Consecutive pressured observations required before attaching capacity.
-    activation_window: usize,
-    /// Consecutive idle cleanup observations required before draining capacity.
-    cooldown_window: usize,
+    parts: LocalSpilloverPolicyParts,
 }
 
 /// Validated construction input for [`LocalSpilloverPolicy`].
@@ -291,85 +272,65 @@ impl LocalSpilloverPolicy {
         if parts.cooldown_window == 0 {
             return Err(LocalSpilloverPolicyError::CooldownWindowZero);
         }
-        Ok(Self {
-            min_receiver_count: parts.min_receiver_count,
-            max_active_consumers_per_router: parts.max_active_consumers_per_router,
-            max_fanout_per_source: parts.max_fanout_per_source,
-            egress_bitrate_threshold: parts.egress_bitrate_threshold,
-            packet_loop_lag_threshold_ms: parts.packet_loop_lag_threshold_ms,
-            command_backlog_threshold: parts.command_backlog_threshold,
-            relay_mailbox_depth_threshold: parts.relay_mailbox_depth_threshold,
-            worker_pressure_threshold: parts.worker_pressure_threshold,
-            activation_window: parts.activation_window,
-            cooldown_window: parts.cooldown_window,
-        })
+        Ok(Self { parts })
     }
 
     /// Build the default conservative threshold set.
     #[must_use]
     pub const fn conservative() -> Self {
         Self {
-            min_receiver_count: Self::DEFAULT_MIN_RECEIVER_COUNT,
-            max_active_consumers_per_router: Self::DEFAULT_MAX_ACTIVE_CONSUMERS_PER_ROUTER,
-            max_fanout_per_source: Self::DEFAULT_MAX_FANOUT_PER_SOURCE,
-            egress_bitrate_threshold: Self::DEFAULT_EGRESS_BITRATE_THRESHOLD,
-            packet_loop_lag_threshold_ms: Self::DEFAULT_PACKET_LOOP_LAG_THRESHOLD_MS,
-            command_backlog_threshold: Self::DEFAULT_COMMAND_BACKLOG_THRESHOLD,
-            relay_mailbox_depth_threshold: Self::DEFAULT_RELAY_MAILBOX_DEPTH_THRESHOLD,
-            worker_pressure_threshold: Self::DEFAULT_WORKER_PRESSURE_THRESHOLD,
-            activation_window: Self::DEFAULT_ACTIVATION_WINDOW,
-            cooldown_window: Self::DEFAULT_COOLDOWN_WINDOW,
+            parts: LocalSpilloverPolicyParts::conservative(),
         }
     }
 
     #[must_use]
     pub const fn min_receiver_count(self) -> usize {
-        self.min_receiver_count
+        self.parts.min_receiver_count
     }
 
     #[must_use]
     pub const fn max_active_consumers_per_router(self) -> usize {
-        self.max_active_consumers_per_router
+        self.parts.max_active_consumers_per_router
     }
 
     #[must_use]
     pub const fn max_fanout_per_source(self) -> usize {
-        self.max_fanout_per_source
+        self.parts.max_fanout_per_source
     }
 
     #[must_use]
     pub const fn egress_bitrate_threshold(self) -> Bitrate {
-        self.egress_bitrate_threshold
+        self.parts.egress_bitrate_threshold
     }
 
     #[must_use]
     pub const fn packet_loop_lag_threshold_ms(self) -> u64 {
-        self.packet_loop_lag_threshold_ms
+        self.parts.packet_loop_lag_threshold_ms
     }
 
     #[must_use]
     pub const fn command_backlog_threshold(self) -> usize {
-        self.command_backlog_threshold
+        self.parts.command_backlog_threshold
     }
 
     #[must_use]
     pub const fn relay_mailbox_depth_threshold(self) -> usize {
-        self.relay_mailbox_depth_threshold
+        self.parts.relay_mailbox_depth_threshold
     }
 
     #[must_use]
     pub const fn worker_pressure_threshold(self) -> u8 {
-        self.worker_pressure_threshold
+        self.parts.worker_pressure_threshold
     }
 
     #[must_use]
     pub const fn activation_window(self) -> usize {
-        self.activation_window
+        self.parts.activation_window
     }
 
     #[must_use]
     pub const fn cooldown_window(self) -> usize {
-        self.cooldown_window
+        self.parts.cooldown_window
     }
 }
 
@@ -760,7 +721,7 @@ impl CodecPreferences {
     #[must_use]
     pub fn with_audio_order(self, preferred: &[AudioCodecPreference]) -> Self {
         Self {
-            audio: complete_audio_order(preferred),
+            audio: complete_codec_order(preferred, Self::DEFAULT_AUDIO),
             ..self
         }
     }
@@ -768,7 +729,7 @@ impl CodecPreferences {
     #[must_use]
     pub fn with_video_order(self, preferred: &[VideoCodecPreference]) -> Self {
         Self {
-            video: complete_video_order(preferred),
+            video: complete_codec_order(preferred, Self::DEFAULT_VIDEO),
             ..self
         }
     }
@@ -790,15 +751,14 @@ impl Default for CodecPreferences {
     }
 }
 
-fn complete_audio_order(preferred: &[AudioCodecPreference]) -> [AudioCodecPreference; 3] {
-    let mut output = CodecPreferences::DEFAULT_AUDIO;
+fn complete_codec_order<T, const N: usize>(preferred: &[T], default: [T; N]) -> [T; N]
+where
+    T: Copy + Eq,
+{
+    let mut output = default;
     let mut len = 0;
-    for codec in preferred
-        .iter()
-        .copied()
-        .chain(CodecPreferences::DEFAULT_AUDIO)
-    {
-        if contains_audio_codec(output, len, codec) {
+    for codec in preferred.iter().copied().chain(default) {
+        if contains_codec(&output, len, codec) {
             continue;
         }
         if let Some(slot) = output.get_mut(len) {
@@ -809,39 +769,11 @@ fn complete_audio_order(preferred: &[AudioCodecPreference]) -> [AudioCodecPrefer
     output
 }
 
-fn complete_video_order(preferred: &[VideoCodecPreference]) -> [VideoCodecPreference; 5] {
-    let mut output = CodecPreferences::DEFAULT_VIDEO;
-    let mut len = 0;
-    for codec in preferred
-        .iter()
-        .copied()
-        .chain(CodecPreferences::DEFAULT_VIDEO)
-    {
-        if contains_video_codec(output, len, codec) {
-            continue;
-        }
-        if let Some(slot) = output.get_mut(len) {
-            *slot = codec;
-            len += 1;
-        }
-    }
-    output
-}
-
-fn contains_audio_codec(
-    codecs: [AudioCodecPreference; 3],
-    len: usize,
-    needle: AudioCodecPreference,
-) -> bool {
-    codecs.into_iter().take(len).any(|codec| codec == needle)
-}
-
-fn contains_video_codec(
-    codecs: [VideoCodecPreference; 5],
-    len: usize,
-    needle: VideoCodecPreference,
-) -> bool {
-    codecs.into_iter().take(len).any(|codec| codec == needle)
+fn contains_codec<T, const N: usize>(codecs: &[T; N], len: usize, needle: T) -> bool
+where
+    T: Copy + Eq,
+{
+    codecs.iter().take(len).any(|codec| *codec == needle)
 }
 
 impl CoreOptions {
