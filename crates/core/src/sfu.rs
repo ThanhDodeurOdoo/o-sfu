@@ -20,9 +20,9 @@ use std::collections::BTreeMap;
 use o_sfu_router::MediaCapabilities;
 
 use crate::{
-    Bitrate, ConnectionId, CoreOptions, MediaSessionContext, PublicationActivity,
-    PublicationActivityOutcome, PublishStageOutcome, RollbackStagedPublishOutcome,
-    SessionNegotiationOutcome, SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
+    Bitrate, ConnectionId, MediaSessionContext, PublicationActivity, PublicationActivityOutcome,
+    PublishStageOutcome, RollbackStagedPublishOutcome, SessionNegotiationOutcome,
+    SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
     runtime::{
         UserId, UserInfo,
         media_transport::{
@@ -39,7 +39,7 @@ use crate::{
 /// Pass this value back to [`MediaSession::apply_initial_answer`] for the
 /// matching answer. It binds answer projection to the exact router capability
 /// set that was advertised to the browser.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OfferedMediaCapabilities(MediaCapabilities);
 
 /// Transport-neutral SDP offer returned by the media-core public API.
@@ -97,18 +97,6 @@ pub struct UploadEncoding {
     pub max_framerate: Option<u16>,
 }
 
-/// Best-effort transport health for a media endpoint.
-///
-/// This reports what the transport backend currently knows about the endpoint.
-/// It is not an authoritative room membership check.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MediaEndpointHealth {
-    /// The transport endpoint is still usable.
-    Connected,
-    /// The transport endpoint reached a terminal disconnected state.
-    Disconnected,
-}
-
 /// Errors returned by the media-core session facade.
 ///
 /// # Error handling
@@ -133,9 +121,8 @@ pub enum SfuCoreError {
 /// Process-wide media facade.
 ///
 /// [`SfuCore`] is the main entry point for the media-core library. It owns the
-/// process-wide configuration and the transport backend. It does not manage
-/// websocket state or room membership because those belong to the server
-/// runtime and room engine.
+/// transport backend. It does not manage websocket state or room membership
+/// because those belong to the server runtime and room engine.
 ///
 /// The core acts as a factory for [`MediaSession`] handles. By separating
 /// process-wide resources from connection-specific logic, the API avoids
@@ -148,11 +135,10 @@ pub enum SfuCoreError {
 /// and shared across all user sessions.
 ///
 /// ```ignore
-/// let core = SfuCore::new(options, transport);
+/// let core = SfuCore::new(transport);
 /// ```
 #[derive(Debug, Clone)]
 pub struct SfuCore {
-    _options: CoreOptions,
     media_transport: MediaTransport,
 }
 
@@ -206,11 +192,8 @@ pub struct MediaSession<'a> {
 impl SfuCore {
     /// Build a media core facade over the opaque runtime transport handle.
     #[must_use]
-    pub fn new(options: CoreOptions, media_transport: MediaTransport) -> Self {
-        Self {
-            _options: options,
-            media_transport,
-        }
+    pub fn new(media_transport: MediaTransport) -> Self {
+        Self { media_transport }
     }
 
     /// Create the canonical media handle for one room user connection.
@@ -247,14 +230,10 @@ impl MediaSession<'_> {
     /// None means the transport backend has no endpoint for this session key.
     /// It does not prove that the user is absent from the room.
     #[must_use]
-    pub fn endpoint_health(&self) -> Option<MediaEndpointHealth> {
+    pub fn endpoint_health(&self) -> Option<TransportSessionHealth> {
         self.core
             .media_transport
             .session_transport_health(self.context.transport_user_key())
-            .map(|health| match health {
-                TransportSessionHealth::Connected => MediaEndpointHealth::Connected,
-                TransportSessionHealth::Disconnected => MediaEndpointHealth::Disconnected,
-            })
     }
 
     /// Create the first transport offer for this session.

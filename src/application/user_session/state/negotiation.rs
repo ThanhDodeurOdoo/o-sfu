@@ -211,7 +211,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::core::OfferedMediaCapabilities;
 
     #[test]
     fn queued_publish_slots_are_unique() {
@@ -234,9 +233,7 @@ mod tests {
                 sdp: String::from("v=0"),
                 upload_slots: Vec::new(),
             }),
-            PendingUserAction::EstablishSession {
-                offered_capabilities: OfferedMediaCapabilities::default(),
-            },
+            PendingUserAction::RefreshSession,
         );
 
         let resolved = state.resolve_answer(&request_id);

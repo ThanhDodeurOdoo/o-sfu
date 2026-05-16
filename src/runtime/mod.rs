@@ -74,7 +74,6 @@ use telemetry::{init_tracing, schema::event as telemetry_event};
 #[derive(Debug)]
 pub struct Runtime {
     config: RuntimeConfig,
-    options: RuntimeOptions,
     room_manager: Arc<RoomManager>,
     diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
@@ -138,7 +137,6 @@ impl Runtime {
         let room_manager = build_room_manager(&options, room_runtime_policy, &services);
         Ok(Self {
             config: runtime_config,
-            options,
             room_manager,
             diagnostics: services.diagnostics,
             metrics: services.metrics,
@@ -188,7 +186,6 @@ impl Runtime {
     fn state(&self) -> RuntimeState {
         RuntimeState::from_parts(
             &self.config,
-            &self.options,
             Arc::clone(&self.room_manager),
             Arc::clone(&self.diagnostics),
             Arc::clone(&self.metrics),
@@ -257,13 +254,12 @@ impl Drop for RuntimeTasks {
 impl RuntimeState {
     fn from_parts(
         config: &RuntimeConfig,
-        options: &RuntimeOptions,
         rooms: Arc<RoomManager>,
         diagnostics: Arc<DiagnosticsStore>,
         metrics: Arc<RuntimeMetrics>,
         media_transport: MediaTransport,
     ) -> Self {
-        let sfu_core = SfuCore::new(options.core, media_transport.clone());
+        let sfu_core = SfuCore::new(media_transport.clone());
         let pre_auth_websocket_admission = websocket_server::PreAuthWebSocketAdmission::new(
             config.auth.max_pre_auth_websocket_sessions,
             config.auth.max_pre_auth_websocket_sessions_per_origin,
@@ -288,10 +284,8 @@ impl RuntimeState {
         media_transport: MediaTransport,
     ) -> Self {
         let runtime_config = RuntimeConfig::from_config(config);
-        let options = RuntimeOptions::from_config(config);
         Self::from_parts(
             &runtime_config,
-            &options,
             rooms,
             diagnostics,
             metrics,
