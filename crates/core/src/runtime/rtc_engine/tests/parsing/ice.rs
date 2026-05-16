@@ -342,7 +342,22 @@ mod tests {
     use o_sfu_rfc::webrtc;
     use o_sfu_router::ParseDiagnosticKind;
 
-    use super::parse_ice_candidate;
+    use super::{IceParseDiagnostic, parse_ice_candidate};
+
+    fn expect_ice_diagnostic(
+        candidate: &str,
+        kind: ParseDiagnosticKind,
+        summary: &'static str,
+    ) -> IceParseDiagnostic {
+        let result = parse_ice_candidate(candidate);
+        assert!(result.is_err());
+        let Some(diagnostic) = result.err() else {
+            panic!("candidate should fail with an ICE parse diagnostic");
+        };
+        assert_eq!(diagnostic.kind(), kind);
+        assert_eq!(diagnostic.summary(), summary);
+        *diagnostic
+    }
 
     #[test]
     fn parse_ice_candidate_accepts_supported_udp_host_candidate() {
@@ -359,67 +374,47 @@ mod tests {
 
     #[test]
     fn parse_ice_candidate_rejects_incomplete_line() {
-        let result = parse_ice_candidate("candidate:1 1 udp");
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
-        assert_eq!(diagnostic.summary(), "ICE candidate line is incomplete");
+        expect_ice_diagnostic(
+            "candidate:1 1 udp",
+            ParseDiagnosticKind::InvalidInput,
+            "ICE candidate line is incomplete",
+        );
     }
 
     #[test]
     fn parse_ice_candidate_marks_tcp_transport_as_unsupported() {
-        let candidate = "candidate:1 1 tcp 2113937151 203.0.113.10 9 typ host";
-        let result = parse_ice_candidate(candidate);
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::UnsupportedFeature);
-        assert_eq!(
-            diagnostic.summary(),
-            "ICE TCP candidates are not supported yet"
+        expect_ice_diagnostic(
+            "candidate:1 1 tcp 2113937151 203.0.113.10 9 typ host",
+            ParseDiagnosticKind::UnsupportedFeature,
+            "ICE TCP candidates are not supported yet",
         );
     }
 
     #[test]
     fn parse_ice_candidate_marks_rtcp_component_as_unsupported() {
-        let candidate = "candidate:1 2 udp 2113937151 203.0.113.10 54400 typ host";
-        let result = parse_ice_candidate(candidate);
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::UnsupportedFeature);
-        assert_eq!(
-            diagnostic.summary(),
-            "ICE RTCP component candidates are not supported yet"
+        expect_ice_diagnostic(
+            "candidate:1 2 udp 2113937151 203.0.113.10 54400 typ host",
+            ParseDiagnosticKind::UnsupportedFeature,
+            "ICE RTCP component candidates are not supported yet",
         );
     }
 
     #[test]
     fn parse_ice_candidate_marks_extensions_as_unsupported() {
-        let candidate = "candidate:1 1 udp 2113937151 203.0.113.10 54400 typ host generation 0";
-        let result = parse_ice_candidate(candidate);
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::UnsupportedFeature);
-        assert_eq!(
-            diagnostic.summary(),
-            "ICE candidate extension attributes are not supported yet"
+        expect_ice_diagnostic(
+            "candidate:1 1 udp 2113937151 203.0.113.10 54400 typ host generation 0",
+            ParseDiagnosticKind::UnsupportedFeature,
+            "ICE candidate extension attributes are not supported yet",
         );
     }
 
     #[test]
     fn parse_ice_candidate_preserves_replay_context() {
-        let result = parse_ice_candidate("candidate:1 1 udp 2113937151 203.0.113.10 x typ host");
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
+        let diagnostic = expect_ice_diagnostic(
+            "candidate:1 1 udp 2113937151 203.0.113.10 x typ host",
+            ParseDiagnosticKind::InvalidInput,
+            "ICE candidate port is invalid",
+        );
         assert!(
             diagnostic
                 .replay_context()

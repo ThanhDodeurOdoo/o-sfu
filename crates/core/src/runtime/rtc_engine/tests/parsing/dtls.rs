@@ -278,7 +278,10 @@ fn log_diagnostic(diagnostic: &DtlsParseDiagnostic) {
 mod tests {
     use o_sfu_router::ParseDiagnosticKind;
 
-    use super::{ParsedDtlsRole, RawDtlsFingerprint, RawDtlsParameters, parse_dtls_parameters};
+    use super::{
+        DtlsParseDiagnostic, ParsedDtlsRole, RawDtlsFingerprint, RawDtlsParameters,
+        parse_dtls_parameters,
+    };
 
     const VALID_SHA256_FINGERPRINT: &str = "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99";
 
@@ -290,6 +293,21 @@ mod tests {
                 value: value.to_owned(),
             }],
         }
+    }
+
+    fn expect_dtls_diagnostic(
+        dtls_parameters: &RawDtlsParameters,
+        kind: ParseDiagnosticKind,
+        summary: &'static str,
+    ) -> DtlsParseDiagnostic {
+        let result = parse_dtls_parameters(dtls_parameters);
+        assert!(result.is_err());
+        let Some(diagnostic) = result.err() else {
+            panic!("DTLS parameters should fail with a parse diagnostic");
+        };
+        assert_eq!(diagnostic.kind(), kind);
+        assert_eq!(diagnostic.summary(), summary);
+        *diagnostic
     }
 
     #[test]
@@ -310,15 +328,10 @@ mod tests {
             role: String::from("client"),
             fingerprints: vec![],
         };
-        let result = parse_dtls_parameters(&dtls_parameters);
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
-        assert_eq!(
-            diagnostic.summary(),
-            "DTLS fingerprints array cannot be empty"
+        expect_dtls_diagnostic(
+            &dtls_parameters,
+            ParseDiagnosticKind::InvalidInput,
+            "DTLS fingerprints array cannot be empty",
         );
     }
 
@@ -326,13 +339,11 @@ mod tests {
     fn parse_dtls_parameters_rejects_unknown_role() {
         let dtls_parameters =
             sample_dtls_parameters("passive", "sha-256", VALID_SHA256_FINGERPRINT);
-        let result = parse_dtls_parameters(&dtls_parameters);
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
-        assert_eq!(diagnostic.summary(), "DTLS role is invalid");
+        expect_dtls_diagnostic(
+            &dtls_parameters,
+            ParseDiagnosticKind::InvalidInput,
+            "DTLS role is invalid",
+        );
     }
 
     #[test]
@@ -342,41 +353,31 @@ mod tests {
             "sha-1",
             "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD",
         );
-        let result = parse_dtls_parameters(&dtls_parameters);
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::UnsupportedFeature);
-        assert_eq!(
-            diagnostic.summary(),
-            "DTLS fingerprint algorithm is valid but not supported yet"
+        expect_dtls_diagnostic(
+            &dtls_parameters,
+            ParseDiagnosticKind::UnsupportedFeature,
+            "DTLS fingerprint algorithm is valid but not supported yet",
         );
     }
 
     #[test]
     fn parse_dtls_parameters_rejects_malformed_fingerprint() {
         let dtls_parameters = sample_dtls_parameters("client", "sha-256", "AA:BB:CC");
-        let result = parse_dtls_parameters(&dtls_parameters);
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
-        assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
-        assert_eq!(
-            diagnostic.summary(),
-            "DTLS fingerprint length is invalid for sha-256"
+        expect_dtls_diagnostic(
+            &dtls_parameters,
+            ParseDiagnosticKind::InvalidInput,
+            "DTLS fingerprint length is invalid for sha-256",
         );
     }
 
     #[test]
     fn parse_dtls_parameters_preserves_replay_context() {
         let dtls_parameters = sample_dtls_parameters("client", "sha-256", "ZZ");
-        let result = parse_dtls_parameters(&dtls_parameters);
-        assert!(result.is_err());
-        let Some(diagnostic) = result.err() else {
-            return;
-        };
+        let diagnostic = expect_dtls_diagnostic(
+            &dtls_parameters,
+            ParseDiagnosticKind::InvalidInput,
+            "DTLS fingerprint length is invalid for sha-256",
+        );
         assert!(diagnostic.replay_context().contains("\"role\":\"client\""));
     }
 }

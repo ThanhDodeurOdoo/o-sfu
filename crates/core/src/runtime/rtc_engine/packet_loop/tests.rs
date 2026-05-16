@@ -38,8 +38,8 @@ use crate::{
         RoomInstanceId, UserId,
         media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
         metrics::{
-            RtcRouteControlMetrics, RtpForwardDestinationKind, RtpMetricsRecorder, RuntimeMetrics,
-            test_support::RuntimeMetricsSnapshotTestExt,
+            RtcMetricsRecorder, RtcRouteControlMetrics, RtpForwardDestinationKind,
+            RtpMetricsRecorder, RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt,
         },
         packet_sink_registry::{
             PacketSink as MediaPacketSink, PacketSinkLookup, RegisteredPacketSink,
@@ -83,6 +83,44 @@ impl MediaPacketSink for CountingSink {
         _payload: &[u8],
     ) {
         self.packets.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+struct IngressRoutingHarness {
+    packet_loop_state: PacketLoopState,
+    snapshot_state: Arc<Mutex<RtcSnapshotState>>,
+    routing_state: super::super::routing_miss::PacketLoopRoutingState,
+    metrics: RuntimeMetrics,
+    rtc_metrics: Arc<RtcMetricsRecorder>,
+    source_addr: SocketAddr,
+    candidate_addr: SocketAddr,
+}
+
+impl IngressRoutingHarness {
+    fn new(source_port: u16, candidate_port: u16) -> Self {
+        let metrics = RuntimeMetrics::default();
+        let rtc_metrics = metrics.register_rtc_worker();
+        Self {
+            packet_loop_state: PacketLoopState::default(),
+            snapshot_state: Arc::new(Mutex::new(RtcSnapshotState::default())),
+            routing_state: super::super::routing_miss::PacketLoopRoutingState::new(),
+            metrics,
+            rtc_metrics,
+            source_addr: SocketAddr::from(([127, 0, 0, 1], source_port)),
+            candidate_addr: SocketAddr::from(([127, 0, 0, 1], candidate_port)),
+        }
+    }
+
+    fn route(&mut self, packet: &[u8]) {
+        route_packet_to_matching_session(
+            &mut self.packet_loop_state,
+            &self.snapshot_state,
+            &mut self.routing_state,
+            &self.rtc_metrics,
+            self.source_addr,
+            self.candidate_addr,
+            packet,
+        );
     }
 }
 
@@ -136,36 +174,14 @@ fn serialize_stun_message(message: &StunMessage<'_>, password: Option<&[u8]>) ->
 
 #[test]
 fn recent_miss_cache_skips_repeated_scans_for_the_same_source() {
-    let mut packet_loop_state = PacketLoopState::default();
-    let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
-    let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
-    let metrics = RuntimeMetrics::default();
-    let rtc_metrics = metrics.register_rtc_worker();
-    let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_001));
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_000));
+    let mut harness = IngressRoutingHarness::new(45_001, 45_000);
     let packet = valid_rtp_packet(1, 11);
 
-    route_packet_to_matching_session(
-        &mut packet_loop_state,
-        &snapshot_state,
-        &mut routing_state,
-        &rtc_metrics,
-        source_addr,
-        candidate_addr,
-        &packet,
-    );
-    route_packet_to_matching_session(
-        &mut packet_loop_state,
-        &snapshot_state,
-        &mut routing_state,
-        &rtc_metrics,
-        source_addr,
-        candidate_addr,
-        &packet,
-    );
+    harness.route(&packet);
+    harness.route(&packet);
 
-    assert_eq!(routing_state.fallback_attempts(), 1);
-    let snapshot = metrics.snapshot();
+    assert_eq!(harness.routing_state.fallback_attempts(), 1);
+    let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
     assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache(), 1);
@@ -174,37 +190,15 @@ fn recent_miss_cache_skips_repeated_scans_for_the_same_source() {
 
 #[test]
 fn recent_miss_cache_clears_on_topology_change() {
-    let mut packet_loop_state = PacketLoopState::default();
-    let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
-    let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
-    let metrics = RuntimeMetrics::default();
-    let rtc_metrics = metrics.register_rtc_worker();
-    let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_011));
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_010));
+    let mut harness = IngressRoutingHarness::new(45_011, 45_010);
     let packet = valid_rtp_packet(2, 22);
 
-    route_packet_to_matching_session(
-        &mut packet_loop_state,
-        &snapshot_state,
-        &mut routing_state,
-        &rtc_metrics,
-        source_addr,
-        candidate_addr,
-        &packet,
-    );
-    routing_state.clear_on_topology_change();
-    route_packet_to_matching_session(
-        &mut packet_loop_state,
-        &snapshot_state,
-        &mut routing_state,
-        &rtc_metrics,
-        source_addr,
-        candidate_addr,
-        &packet,
-    );
+    harness.route(&packet);
+    harness.routing_state.clear_on_topology_change();
+    harness.route(&packet);
 
-    assert_eq!(routing_state.fallback_attempts(), 2);
-    let snapshot = metrics.snapshot();
+    assert_eq!(harness.routing_state.fallback_attempts(), 2);
+    let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 2);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 2);
     assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache(), 0);
@@ -212,35 +206,13 @@ fn recent_miss_cache_clears_on_topology_change() {
 
 #[test]
 fn recent_miss_cache_does_not_skip_different_packets_from_the_same_source() {
-    let mut packet_loop_state = PacketLoopState::default();
-    let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
-    let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
-    let metrics = RuntimeMetrics::default();
-    let rtc_metrics = metrics.register_rtc_worker();
-    let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_021));
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_020));
+    let mut harness = IngressRoutingHarness::new(45_021, 45_020);
 
-    route_packet_to_matching_session(
-        &mut packet_loop_state,
-        &snapshot_state,
-        &mut routing_state,
-        &rtc_metrics,
-        source_addr,
-        candidate_addr,
-        &valid_rtp_packet(3, 33),
-    );
-    route_packet_to_matching_session(
-        &mut packet_loop_state,
-        &snapshot_state,
-        &mut routing_state,
-        &rtc_metrics,
-        source_addr,
-        candidate_addr,
-        &valid_rtp_packet(4, 44),
-    );
+    harness.route(&valid_rtp_packet(3, 33));
+    harness.route(&valid_rtp_packet(4, 44));
 
-    assert_eq!(routing_state.fallback_attempts(), 2);
-    let snapshot = metrics.snapshot();
+    assert_eq!(harness.routing_state.fallback_attempts(), 2);
+    let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 2);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 2);
     assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache(), 0);
@@ -249,13 +221,7 @@ fn recent_miss_cache_does_not_skip_different_packets_from_the_same_source() {
 
 #[test]
 fn source_rate_limiter_bounds_varied_unknown_source_misses() {
-    let mut packet_loop_state = PacketLoopState::default();
-    let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
-    let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
-    let metrics = RuntimeMetrics::default();
-    let rtc_metrics = metrics.register_rtc_worker();
-    let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_026));
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_025));
+    let mut harness = IngressRoutingHarness::new(45_026, 45_025);
 
     for (sequence, ssrc) in [
         (5_u16, 55_u32),
@@ -265,19 +231,11 @@ fn source_rate_limiter_bounds_varied_unknown_source_misses() {
         (9, 99),
         (10, 110),
     ] {
-        route_packet_to_matching_session(
-            &mut packet_loop_state,
-            &snapshot_state,
-            &mut routing_state,
-            &rtc_metrics,
-            source_addr,
-            candidate_addr,
-            &valid_rtp_packet(sequence, ssrc),
-        );
+        harness.route(&valid_rtp_packet(sequence, ssrc));
     }
 
-    assert_eq!(routing_state.fallback_attempts(), 4);
-    let snapshot = metrics.snapshot();
+    assert_eq!(harness.routing_state.fallback_attempts(), 4);
+    let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 4);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 4);
     assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache(), 0);
@@ -286,26 +244,12 @@ fn source_rate_limiter_bounds_varied_unknown_source_misses() {
 
 #[test]
 fn malformed_udp_datagram_counts_as_malformed_drop_without_scan_metrics() {
-    let mut packet_loop_state = PacketLoopState::default();
-    let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
-    let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
-    let metrics = RuntimeMetrics::default();
-    let rtc_metrics = metrics.register_rtc_worker();
-    let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_031));
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_030));
+    let mut harness = IngressRoutingHarness::new(45_031, 45_030);
 
-    route_packet_to_matching_session(
-        &mut packet_loop_state,
-        &snapshot_state,
-        &mut routing_state,
-        &rtc_metrics,
-        source_addr,
-        candidate_addr,
-        &[0x01, 0x02, 0x03],
-    );
+    harness.route(&[0x01, 0x02, 0x03]);
 
-    let snapshot = metrics.snapshot();
-    assert_eq!(routing_state.fallback_attempts(), 1);
+    let snapshot = harness.metrics.snapshot();
+    assert_eq!(harness.routing_state.fallback_attempts(), 1);
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 0);
     assert_eq!(snapshot.rtc_datagram_scan_users(), 0);
     assert_eq!(snapshot.rtc_datagram_drops_malformed(), 1);
@@ -315,28 +259,22 @@ fn malformed_udp_datagram_counts_as_malformed_drop_without_scan_metrics() {
 
 #[test]
 fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_040));
-    let mut packet_loop_state = PacketLoopState::default();
-    let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
-    let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
-    let metrics = RuntimeMetrics::default();
-    let rtc_metrics = metrics.register_rtc_worker();
+    let mut harness = IngressRoutingHarness::new(45_041, 45_040);
     let first_session = test_transport_session_key(51, 0, 52, UserId::Integer(53));
     let second_session = test_transport_session_key(51, 0, 54, UserId::Integer(55));
     let packet = [22, 0, 0, 0];
-    let unknown_source_addr = SocketAddr::from(([127, 0, 0, 1], 45_041));
 
     let first_created = bootstrap::ensure_session_rtc_state(
-        &mut packet_loop_state.users,
+        &mut harness.packet_loop_state.users,
         &first_session,
-        candidate_addr,
+        harness.candidate_addr,
         Bitrate::from_mbps(10),
         MediaCodecFlags::default(),
     );
     let second_created = bootstrap::ensure_session_rtc_state(
-        &mut packet_loop_state.users,
+        &mut harness.packet_loop_state.users,
         &second_session,
-        candidate_addr,
+        harness.candidate_addr,
         Bitrate::from_mbps(10),
         MediaCodecFlags::default(),
     );
@@ -344,18 +282,10 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
     assert_eq!(first_created, Ok(true));
     assert_eq!(second_created, Ok(true));
 
-    route_packet_to_matching_session(
-        &mut packet_loop_state,
-        &snapshot_state,
-        &mut routing_state,
-        &rtc_metrics,
-        unknown_source_addr,
-        candidate_addr,
-        &packet,
-    );
+    harness.route(&packet);
 
-    let snapshot = metrics.snapshot();
-    assert_eq!(routing_state.fallback_attempts(), 1);
+    let snapshot = harness.metrics.snapshot();
+    assert_eq!(harness.routing_state.fallback_attempts(), 1);
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
     assert_eq!(snapshot.rtc_datagram_scan_users(), 0);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
@@ -363,41 +293,37 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
 
 #[test]
 fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(), &'static str> {
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_045));
-    let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_046));
+    let mut harness = IngressRoutingHarness::new(45_046, 45_045);
     let session_key = test_transport_session_key(51, 0, 56, UserId::Integer(57));
-    let mut packet_loop_state = PacketLoopState::default();
-    let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
-    let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
-    let metrics = RuntimeMetrics::default();
-    let rtc_metrics = metrics.register_rtc_worker();
 
     let created = bootstrap::ensure_session_rtc_state(
-        &mut packet_loop_state.users,
+        &mut harness.packet_loop_state.users,
         &session_key,
-        candidate_addr,
+        harness.candidate_addr,
         Bitrate::from_mbps(10),
         MediaCodecFlags::default(),
     );
     assert_eq!(created, Ok(true));
-    let local_ice_credentials = packet_loop_state
+    let local_ice_credentials = harness
+        .packet_loop_state
         .users
         .get_mut(&session_key)
         .map(|session_state| session_state.rtc.direct_api().local_ice_credentials())
         .ok_or("session state missing after creation")?;
     assert!(
-        packet_loop_state
+        harness
+            .packet_loop_state
             .remote_addr_demux
-            .remember_remote_addr(source_addr, &session_key)
+            .remember_remote_addr(harness.source_addr, &session_key)
     );
     {
-        let Ok(mut snapshot) = snapshot_state.lock() else {
+        let Ok(mut snapshot) = harness.snapshot_state.lock() else {
             return Err("snapshot state lock poisoned");
         };
         assert!(
             snapshot
                 .remote_addr_demux
-                .remember_remote_addr(source_addr, &session_key)
+                .remember_remote_addr(harness.source_addr, &session_key)
         );
     }
 
@@ -408,46 +334,41 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
     )
     .ok_or("failed to serialize STUN binding request")?;
     let miss_key = super::super::routing_miss::PacketLoopRoutingMissKey::new(
-        source_addr,
-        candidate_addr,
+        harness.source_addr,
+        harness.candidate_addr,
         &packet,
     );
-    routing_state.record_miss(miss_key, &packet, source_addr, Instant::now());
+    harness
+        .routing_state
+        .record_miss(miss_key, &packet, harness.source_addr, Instant::now());
 
-    assert!(routing_state.should_skip_scan(miss_key, &packet));
-    assert!(routing_state.source_is_tracked(source_addr));
+    assert!(harness.routing_state.should_skip_scan(miss_key, &packet));
+    assert!(harness.routing_state.source_is_tracked(harness.source_addr));
 
-    route_packet_to_matching_session(
-        &mut packet_loop_state,
-        &snapshot_state,
-        &mut routing_state,
-        &rtc_metrics,
-        source_addr,
-        candidate_addr,
-        &packet,
-    );
+    harness.route(&packet);
 
-    assert_eq!(routing_state.fallback_attempts(), 0);
+    assert_eq!(harness.routing_state.fallback_attempts(), 0);
     assert_eq!(
-        packet_loop_state
+        harness
+            .packet_loop_state
             .remote_addr_demux
-            .session_key_for_remote_addr(source_addr),
+            .session_key_for_remote_addr(harness.source_addr),
         Some(&session_key)
     );
     {
-        let Ok(snapshot) = snapshot_state.lock() else {
+        let Ok(snapshot) = harness.snapshot_state.lock() else {
             return Err("snapshot state lock poisoned");
         };
         assert_eq!(
             snapshot
                 .remote_addr_demux
-                .session_key_for_remote_addr(source_addr),
+                .session_key_for_remote_addr(harness.source_addr),
             Some(&session_key)
         );
     }
-    assert!(routing_state.should_skip_scan(miss_key, &packet));
-    assert!(routing_state.source_is_tracked(source_addr));
-    let snapshot = metrics.snapshot();
+    assert!(harness.routing_state.should_skip_scan(miss_key, &packet));
+    assert!(harness.routing_state.source_is_tracked(harness.source_addr));
+    let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_routes_indexed(), 1);
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 0);
     assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache(), 0);
@@ -456,60 +377,48 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
 
 #[test]
 fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static str> {
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_047));
-    let source_addr = SocketAddr::from(([127, 0, 0, 1], 45_048));
+    let mut harness = IngressRoutingHarness::new(45_048, 45_047);
     let stale_session_key = test_transport_session_key(51, 0, 58, UserId::Integer(59));
-    let mut packet_loop_state = PacketLoopState::default();
-    let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
-    let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
-    let metrics = RuntimeMetrics::default();
-    let rtc_metrics = metrics.register_rtc_worker();
 
     assert!(
-        packet_loop_state
+        harness
+            .packet_loop_state
             .remote_addr_demux
-            .remember_remote_addr(source_addr, &stale_session_key)
+            .remember_remote_addr(harness.source_addr, &stale_session_key)
     );
     {
-        let Ok(mut snapshot) = snapshot_state.lock() else {
+        let Ok(mut snapshot) = harness.snapshot_state.lock() else {
             return Err("snapshot state lock poisoned");
         };
         assert!(
             snapshot
                 .remote_addr_demux
-                .remember_remote_addr(source_addr, &stale_session_key)
+                .remember_remote_addr(harness.source_addr, &stale_session_key)
         );
     }
 
-    route_packet_to_matching_session(
-        &mut packet_loop_state,
-        &snapshot_state,
-        &mut routing_state,
-        &rtc_metrics,
-        source_addr,
-        candidate_addr,
-        &valid_rtp_packet(11, 111),
-    );
+    harness.route(&valid_rtp_packet(11, 111));
 
     assert!(
-        packet_loop_state
+        harness
+            .packet_loop_state
             .remote_addr_demux
-            .session_key_for_remote_addr(source_addr)
+            .session_key_for_remote_addr(harness.source_addr)
             .is_none()
     );
     {
-        let Ok(snapshot) = snapshot_state.lock() else {
+        let Ok(snapshot) = harness.snapshot_state.lock() else {
             return Err("snapshot state lock poisoned");
         };
         assert!(
             snapshot
                 .remote_addr_demux
-                .session_key_for_remote_addr(source_addr)
+                .session_key_for_remote_addr(harness.source_addr)
                 .is_none()
         );
     }
-    assert_eq!(routing_state.fallback_attempts(), 1);
-    let snapshot = metrics.snapshot();
+    assert_eq!(harness.routing_state.fallback_attempts(), 1);
+    let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
     Ok(())

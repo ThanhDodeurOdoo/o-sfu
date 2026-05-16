@@ -19,7 +19,9 @@ async fn rtc_initial_session_offer_starts_packet_loop() {
 
     assert!(!adapter.packet_loop_started());
     assert!(
-        prepare_transport_session(&adapter, &session_key)
+        adapter
+            .negotiation()
+            .create_initial_session_offer(&session_key)
             .await
             .is_ok()
     );
@@ -32,7 +34,9 @@ async fn rtc_initial_session_offer_contains_real_ice_and_dtls_parameters() {
     let adapter = RtcTransportWorker::default();
     let session_key = transport_key(1, 13, UserId::Integer(13));
 
-    let offer_sdp = prepare_transport_session(&adapter, &session_key)
+    let offer_sdp = adapter
+        .negotiation()
+        .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed")
         .into_sdp();
@@ -106,7 +110,9 @@ async fn rtc_transport_close_session_allows_recreating_the_initial_offer() {
     let session_key = transport_key(1, 14, UserId::Integer(14));
 
     assert!(
-        prepare_transport_session(&adapter, &session_key)
+        adapter
+            .negotiation()
+            .create_initial_session_offer(&session_key)
             .await
             .is_ok()
     );
@@ -118,7 +124,9 @@ async fn rtc_transport_close_session_allows_recreating_the_initial_offer() {
             .is_ok()
     );
     assert!(
-        prepare_transport_session(&adapter, &session_key)
+        adapter
+            .negotiation()
+            .create_initial_session_offer(&session_key)
             .await
             .is_ok()
     );
@@ -129,13 +137,14 @@ async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
     let adapter = RtcTransportWorker::default();
     let session_key = transport_key(1, 143, UserId::Integer(143));
     assert!(
-        prepare_transport_session(&adapter, &session_key)
+        adapter
+            .negotiation()
+            .create_initial_session_offer(&session_key)
             .await
             .is_ok()
     );
 
-    set_transport_health(
-        &adapter,
+    adapter.debug_set_session_transport_health(
         &session_key,
         super::super::state::TransportSessionHealth::Disconnected,
     );
@@ -165,15 +174,19 @@ async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
     let adapter = RtcTransportWorker::default();
     let session_key = transport_key(1, 140, UserId::Integer(140));
     assert!(
-        prepare_transport_session(&adapter, &session_key)
+        adapter
+            .negotiation()
+            .create_initial_session_offer(&session_key)
             .await
             .is_ok()
     );
 
     let source_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 45_000);
-    remember_remote_addr(&adapter, source_addr, &session_key).await;
+    adapter
+        .debug_remember_remote_addr(source_addr, &session_key)
+        .await;
     assert_eq!(
-        remote_addr_owner(&adapter, source_addr).await,
+        adapter.debug_remote_addr_owner(source_addr).await,
         Some(session_key.clone())
     );
 
@@ -185,8 +198,8 @@ async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
             .is_ok()
     );
 
-    assert_eq!(remote_addr_owner(&adapter, source_addr).await, None);
-    assert!(!has_any_remote_addr_session(&adapter).await);
+    assert_eq!(adapter.debug_remote_addr_owner(source_addr).await, None);
+    assert!(!adapter.debug_has_any_remote_addr_session().await);
 }
 
 #[tokio::test]
@@ -194,7 +207,9 @@ async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
     let adapter = RtcTransportWorker::default();
     let first_session_key = transport_key(1, 141, UserId::Integer(141));
     assert!(
-        prepare_transport_session(&adapter, &first_session_key)
+        adapter
+            .negotiation()
+            .create_initial_session_offer(&first_session_key)
             .await
             .is_ok()
     );
@@ -213,7 +228,9 @@ async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
 
     let second_session_key = transport_key(1, 142, UserId::Integer(142));
     assert!(
-        prepare_transport_session(&adapter, &second_session_key)
+        adapter
+            .negotiation()
+            .create_initial_session_offer(&second_session_key)
             .await
             .is_ok()
     );
@@ -228,18 +245,21 @@ async fn rtc_transport_distinguishes_same_session_id_across_channels() {
     let second_session_key = transport_key_on_worker(2, 1, 30, UserId::Integer(30));
 
     assert!(
-        prepare_transport_session(&adapter, &first_session_key)
+        adapter
+            .negotiation()
+            .create_initial_session_offer(&first_session_key)
             .await
             .is_ok()
     );
     assert!(
-        prepare_transport_session(&adapter, &second_session_key)
+        adapter
+            .negotiation()
+            .create_initial_session_offer(&second_session_key)
             .await
             .is_ok()
     );
 
-    set_transport_health(
-        &adapter,
+    adapter.debug_set_session_transport_health(
         &second_session_key,
         super::super::state::TransportSessionHealth::Disconnected,
     );
@@ -303,12 +323,16 @@ async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() 
     let second_session_key = transport_key(4, 302, UserId::Integer(302));
 
     assert!(
-        prepare_transport_session(&adapter, &first_session_key)
+        adapter
+            .negotiation()
+            .create_initial_session_offer(&first_session_key)
             .await
             .is_ok()
     );
     assert!(
-        prepare_transport_session(&adapter, &second_session_key)
+        adapter
+            .negotiation()
+            .create_initial_session_offer(&second_session_key)
             .await
             .is_ok()
     );
@@ -339,7 +363,9 @@ async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() 
 
     let next_session_key = transport_key(4, 303, UserId::Integer(303));
     assert!(
-        prepare_transport_session(&adapter, &next_session_key)
+        adapter
+            .negotiation()
+            .create_initial_session_offer(&next_session_key)
             .await
             .is_ok()
     );
