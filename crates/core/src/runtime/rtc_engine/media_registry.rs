@@ -326,12 +326,7 @@ impl PacketLoopState {
             self.remote_source_registry
                 .insert(source_transport_media_id, previous_registration);
         } else {
-            self.remote_source_registry
-                .remove(&source_transport_media_id);
-            self.forget_live_producer_rids(source_transport_media_id);
-            self.route_control.forget_source(source_transport_media_id);
-            self.source_decoder_refresh_codecs
-                .remove(&source_transport_media_id);
+            self.remove_remote_source_side_tables(source_transport_media_id);
         }
     }
 
@@ -362,12 +357,7 @@ impl PacketLoopState {
         {
             return;
         }
-        self.remote_source_registry
-            .remove(&source_transport_media_id);
-        self.forget_live_producer_rids(source_transport_media_id);
-        self.route_control.forget_source(source_transport_media_id);
-        self.source_decoder_refresh_codecs
-            .remove(&source_transport_media_id);
+        self.remove_remote_source_side_tables(source_transport_media_id);
     }
 
     /// remove every remote-source side table entry that no longer has a route
@@ -382,30 +372,38 @@ impl PacketLoopState {
                 self.media_route_index
                     .contains_key(source_transport_media_id)
             });
+        let mid_registry = &self.mid_registry;
+        let remote_source_registry = &self.remote_source_registry;
+        let source_has_live_registration = |source_transport_media_id: &TransportMediaId| {
+            mid_registry.contains_key(&source_transport_media_id.as_u64())
+                || remote_source_registry.contains_key(source_transport_media_id)
+        };
         self.route_control
-            .retain_sources(|source_transport_media_id| {
-                self.mid_registry
-                    .contains_key(&source_transport_media_id.as_u64())
-                    || self
-                        .remote_source_registry
-                        .contains_key(source_transport_media_id)
-            });
+            .retain_sources(&source_has_live_registration);
         self.live_producer_rids
             .retain(|source_transport_media_id, _rids| {
-                self.mid_registry
-                    .contains_key(&source_transport_media_id.as_u64())
-                    || self
-                        .remote_source_registry
-                        .contains_key(source_transport_media_id)
+                source_has_live_registration(source_transport_media_id)
             });
         self.source_decoder_refresh_codecs
             .retain(|source_transport_media_id, _codec| {
-                self.mid_registry
-                    .contains_key(&source_transport_media_id.as_u64())
-                    || self
-                        .remote_source_registry
-                        .contains_key(source_transport_media_id)
+                source_has_live_registration(source_transport_media_id)
             });
+    }
+
+    /// remove every packet-loop side table owned by one remote-source entry
+    ///
+    /// remote sources are placeholders for producers that live on another
+    /// worker
+    /// when the last local route disappears, the placeholder and every cached
+    /// source-side fact must disappear together so late packet-gate or
+    /// decoder-refresh work cannot keep addressing a stale producer id
+    fn remove_remote_source_side_tables(&mut self, source_transport_media_id: TransportMediaId) {
+        self.remote_source_registry
+            .remove(&source_transport_media_id);
+        self.forget_live_producer_rids(source_transport_media_id);
+        self.route_control.forget_source(source_transport_media_id);
+        self.source_decoder_refresh_codecs
+            .remove(&source_transport_media_id);
     }
 
     /// return the packet-level decoder-refresh classifier for one source

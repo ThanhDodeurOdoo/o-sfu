@@ -90,7 +90,9 @@ use crate::{
             MediaTransport, TransportAdapterError, TransportMediaId, TransportRelayRouteAction,
             TransportRelayRouteEffect, TransportSessionKey,
         },
-        metrics::TransportCleanupFailureKind,
+        metrics::TransportCleanupFailureKind::{
+            self, QueueFull, RetryExhausted, Shutdown, Terminal,
+        },
     },
 };
 
@@ -153,8 +155,13 @@ impl<'a> UserCleanup<'a> {
         self.media_transport
     }
 
-    pub(in crate::runtime::room) const fn cleans_transport_state(self) -> bool {
-        self.clean_transport_state
+    /// return the adapter only when this policy allows transport mutation
+    ///
+    /// callers use this for cleanup effects that would alter adapter state
+    /// policy refresh may still use [`Self::media_transport`] because tests can
+    /// observe transport-derived state while keeping cleanup disabled
+    pub(in crate::runtime::room) fn cleaning_media_transport(self) -> Option<&'a MediaTransport> {
+        self.media_transport.filter(|_| self.clean_transport_state)
     }
 }
 
@@ -170,41 +177,50 @@ pub(super) const CLEANUP_RETRY_CAPACITY: usize = 128;
 /// by the reconciler count toward this limit.
 pub(super) const CLEANUP_MAX_RETRIES: u8 = 3;
 
-/// A transport-side cleanup effect whose room state has already been removed.
+/// transport-side cleanup effect whose room state has already been removed
 ///
-/// The room uses this enum as the stable retry key after membership or media
-/// state has been committed. Keeping the operation explicit avoids rebuilding
+/// the room uses this enum as the stable retry key after membership or media
+/// state has been committed
+/// keeping the operation explicit avoids rebuilding
 /// cleanup intent from current room state, which may already forget the user,
-/// publication or subscription that triggered teardown.
+/// publication or subscription that triggered teardown
 ///
 /// # Ownership split
 ///
-/// The operation stores the identity needed by `MediaTransport`. It
-/// does not own transport resources and it does not prove that those resources
-/// still exist. A retry that finds the resource gone is treated by the adapter
-/// contract, then converted into a retry action by `CleanupReconciler`.
+/// the operation stores the identity needed by `MediaTransport` but does not
+/// own transport resources or prove that those resources still exist
+/// a retry that finds the resource gone is treated by the adapter contract,
+/// then converted into a retry action by `CleanupReconciler`
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum TransportCleanupOperation {
-    /// Remove one media object from an already detached transport user.
+    /// remove one media object from an already detached transport user
     ///
-    /// This is used after room media state has forgotten the publication or
-    /// subscription. If it cannot be recovered, room orchestration escalates by
-    /// closing the owning transport user so the worker or worker can release
-    /// anything still attached to that session.
+    /// this is used after room media state has forgotten the publication or
+    /// subscription
+    /// if it cannot be recovered, room orchestration escalates by closing the
+    /// owning transport user so worker-level state can release anything still
+    /// attached to that session
     RemoveMedia {
         session_key: TransportSessionKey,
         connection_id: ConnectionId,
         transport_media_id: TransportMediaId,
     },
-    /// Close the whole transport user after room membership has moved on.
+    /// close the whole transport user after room membership has moved on
     ///
-    /// This is the final cleanup operation for user teardown. It is retried
+    /// this is the final cleanup operation for user teardown
+    /// it is retried
     /// when the adapter is temporarily unavailable, then abandoned explicitly
-    /// if the room itself is removed before recovery completes.
+    /// if the room itself is removed before recovery completes
     CloseUser {
         session_key: TransportSessionKey,
         connection_id: ConnectionId,
     },
+    /// release one relay route after route state has forgotten the consumer
+    ///
+    /// the source session key is resolved when the effect fails so retry does
+    /// not depend on room state still containing the source user
+    /// escalation can close the source transport user because that is the
+    /// narrowest owner left when a relay mailbox refuses the release
     ReleaseRelayRoute {
         source_session_key: TransportSessionKey,
         route: RelayRouteKey,
@@ -212,6 +228,11 @@ pub(super) enum TransportCleanupOperation {
 }
 
 impl TransportCleanupOperation {
+    /// return the room user that best owns diagnostics for this cleanup effect
+    ///
+    /// media and user cleanup use the resolved transport session key
+    /// relay-route cleanup reports the source user because the source worker
+    /// owns the mailbox being released
     #[must_use]
     pub(super) fn user_id(&self) -> &UserId {
         match self {
@@ -222,6 +243,10 @@ impl TransportCleanupOperation {
         }
     }
 
+    /// return the connection used to correlate cleanup telemetry
+    ///
+    /// for relay releases this is the source connection because source-worker
+    /// cleanup is the remaining precise owner of the route
     #[must_use]
     pub(super) const fn connection_id(&self) -> ConnectionId {
         match self {
@@ -232,6 +257,10 @@ impl TransportCleanupOperation {
         }
     }
 
+    /// return the media id involved in this cleanup when the operation has one
+    ///
+    /// user close has no media id because it addresses the whole transport
+    /// session
     #[must_use]
     pub(super) const fn transport_media_id(&self) -> Option<TransportMediaId> {
         match self {
@@ -243,6 +272,11 @@ impl TransportCleanupOperation {
         }
     }
 
+    /// return the transport session key used by the adapter
+    ///
+    /// every cleanup operation is stored with the adapter-facing identity it
+    /// needs for retry so finalization never has to reconstruct ownership from
+    /// current room state
     #[must_use]
     pub(super) const fn session_key(&self) -> &TransportSessionKey {
         match self {
@@ -255,6 +289,12 @@ impl TransportCleanupOperation {
         }
     }
 
+    /// report whether unrecovered cleanup can be escalated by closing an owner
+    ///
+    /// media removal and relay release can still leave worker state attached to
+    /// a session
+    /// a failed user close already targets that owner, so repeating the same
+    /// close is not a stronger escalation
     #[must_use]
     pub(super) const fn needs_owner_drop(&self) -> bool {
         matches!(
@@ -473,16 +513,20 @@ impl Room {
         cleanup: UserCleanup<'_>,
         removals: &[TransportMediaRemoval],
     ) -> TransportEffectOutcome {
-        let Some(media_transport) = cleanup.media_transport() else {
+        let Some(media_transport) = cleanup.cleaning_media_transport() else {
             return TransportEffectOutcome::Applied;
         };
-        if !cleanup.cleans_transport_state() {
-            return TransportEffectOutcome::Applied;
-        }
         self.cleanup_transport_removals_with_retry(media_transport, removals)
             .await
     }
 
+    /// remove a batch of detached media ids through the retry reconciler
+    ///
+    /// the caller has already committed the room-state transition that produced
+    /// these removals
+    /// failures are therefore not rolled back into state
+    /// recoverable failures are retained by the room so a later cleanup cycle
+    /// can retry with the same resolved transport identities
     pub(in crate::runtime::room) async fn cleanup_transport_removals_with_retry(
         &self,
         media_transport: &MediaTransport,
@@ -563,12 +607,9 @@ impl Room {
         connection_id: ConnectionId,
         cleanup: UserCleanup<'_>,
     ) {
-        let Some(media_transport) = cleanup.media_transport() else {
+        let Some(media_transport) = cleanup.cleaning_media_transport() else {
             return;
         };
-        if !cleanup.cleans_transport_state() {
-            return;
-        }
         let operation = TransportCleanupOperation::CloseUser {
             session_key: self.transport_user_key(user_id, connection_id),
             connection_id,
@@ -623,6 +664,11 @@ impl Room {
         }
     }
 
+    /// convert a failed relay release into room-owned cleanup retry state
+    ///
+    /// relay effects are applied after route state has already been committed
+    /// a failed release cannot be derived again from current topology, so the
+    /// source transport identity and route key become the durable retry owner
     pub(in crate::runtime::room) async fn record_relay_route_release_failure(
         &self,
         effect: &RelayRouteEffect,
@@ -672,20 +718,11 @@ impl Room {
                 );
             }
             CleanupFailureAction::QueueFull => {
-                self.metrics
-                    .record_transport_cleanup_failure(TransportCleanupFailureKind::QueueFull);
-                warn_transport_cleanup_failure(operation, "transport cleanup retry queue is full");
-                self.force_transport_cleanup_owner_drop(operation, media_transport)
+                self.escalate_cleanup(operation, QueueFull, media_transport)
                     .await;
             }
             CleanupFailureAction::Terminal => {
-                self.metrics
-                    .record_transport_cleanup_failure(TransportCleanupFailureKind::Terminal);
-                warn_transport_cleanup_failure(
-                    operation,
-                    "transport cleanup reached terminal failure",
-                );
-                self.force_transport_cleanup_owner_drop(operation, media_transport)
+                self.escalate_cleanup(operation, Terminal, media_transport)
                     .await;
             }
         }
@@ -738,26 +775,37 @@ impl Room {
                 warn_transport_cleanup_failure(operation, "transport cleanup retry failed");
             }
             CleanupRetryAction::Exhausted => {
-                self.metrics
-                    .record_transport_cleanup_failure(TransportCleanupFailureKind::RetryExhausted);
-                warn_transport_cleanup_failure(
-                    operation,
-                    "transport cleanup retry attempts were exhausted",
-                );
-                self.force_transport_cleanup_owner_drop(operation, media_transport)
+                self.escalate_cleanup(operation, RetryExhausted, media_transport)
                     .await;
             }
             CleanupRetryAction::Terminal => {
-                self.metrics
-                    .record_transport_cleanup_failure(TransportCleanupFailureKind::Terminal);
-                warn_transport_cleanup_failure(
-                    operation,
-                    "transport cleanup retry reached terminal failure",
-                );
-                self.force_transport_cleanup_owner_drop(operation, media_transport)
+                self.escalate_cleanup(operation, Terminal, media_transport)
                     .await;
             }
         }
+    }
+
+    /// record an unrecovered cleanup failure and apply the owner-drop fallback
+    ///
+    /// every terminal path reaches this helper so metrics, warning text and
+    /// last-resort owner cleanup cannot drift between first failure and retry
+    /// exhaustion
+    async fn escalate_cleanup(
+        &self,
+        operation: &TransportCleanupOperation,
+        failure_kind: TransportCleanupFailureKind,
+        media_transport: &MediaTransport,
+    ) {
+        self.metrics.record_transport_cleanup_failure(failure_kind);
+        let message = match failure_kind {
+            Terminal => "transport cleanup reached terminal failure",
+            RetryExhausted => "transport cleanup retry attempts were exhausted",
+            QueueFull => "transport cleanup retry queue is full",
+            Shutdown => "transport cleanup was abandoned during shutdown",
+        };
+        warn_transport_cleanup_failure(operation, message);
+        self.force_transport_cleanup_owner_drop(operation, media_transport)
+            .await;
     }
 
     /// Asks the transport boundary to release the owner of an unrecovered
@@ -802,8 +850,7 @@ impl Room {
     pub(in crate::runtime::room) fn abandon_cleanup_retries_for_shutdown(&self) {
         let abandoned = self.cleanup_reconciler().abandon_pending();
         for _ in 0..abandoned {
-            self.metrics
-                .record_transport_cleanup_failure(TransportCleanupFailureKind::Shutdown);
+            self.metrics.record_transport_cleanup_failure(Shutdown);
         }
     }
 
