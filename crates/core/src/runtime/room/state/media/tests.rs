@@ -65,7 +65,6 @@ fn test_state() -> RoomState {
         &runtime_context,
         RoomAdmissionPolicy::new(4),
         router_rtp_capabilities(MediaCodecFlags::default()),
-        crate::RoomWorkerPolicy::strict_single_router(),
         Arc::new(RecordingService::new(
             RoomInstanceId::from_raw(0),
             packet_sink_registry,
@@ -166,7 +165,9 @@ fn install_test_consumer_route(
             active: true,
         },
     );
-    state.register_producer_owner(producer_user_id, producer_id);
+    state
+        .media
+        .register_producer_owner(producer_user_id, producer_id);
     let route_key = ConsumerKey::new(consumer_user_id, source_id);
     let consumer_state = ConsumerState {
         routed_consumer_id,
@@ -179,7 +180,7 @@ fn install_test_consumer_route(
         .media
         .consumer_index
         .insert(route_key.clone(), consumer_state);
-    state.register_consumer_key(&route_key);
+    state.media.register_consumer_key(&route_key);
     (route_key, consumer_connection_id)
 }
 
@@ -227,7 +228,7 @@ fn install_test_source_graph(
         .media
         .producer_id_by_source_id
         .insert(source_id, producer_id);
-    state.register_source_owner(user_id, source_id);
+    state.media.register_source_owner(user_id, source_id);
     state.media.source_transport_media_index.insert(
         transport_media_id,
         SourceTransportMediaIndexEntry::new(
@@ -277,7 +278,7 @@ fn install_test_published_producer(
             active: true,
         },
     );
-    state.register_producer_owner(user_id, producer_id);
+    state.media.register_producer_owner(user_id, producer_id);
     (producer_id, source_id)
 }
 
@@ -306,7 +307,7 @@ fn install_test_consumer_state(
             consumer_media,
         },
     );
-    state.register_consumer_key(&key);
+    state.media.register_consumer_key(&key);
     key
 }
 
@@ -347,7 +348,7 @@ fn producer_activity_does_not_flip_room_state_when_router_update_fails() {
             active: true,
         },
     );
-    state.register_producer_owner(&user_id, producer_id);
+    state.media.register_producer_owner(&user_id, producer_id);
 
     let producer_target = state
         .producer_route_target(
@@ -499,7 +500,9 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
             active: true,
         },
     );
-    state.register_producer_owner(&publisher_user_id, producer_id);
+    state
+        .media
+        .register_producer_owner(&publisher_user_id, producer_id);
 
     let states = TestSubscriptionStates {
         scalable_video: Some(false),
@@ -887,13 +890,13 @@ fn purge_user_media_state_removes_only_indexed_user_and_source_entries() {
         removed_consumer_key.clone(),
         ConsumerSourceSelection::open(true),
     );
-    state.register_consumer_key(&removed_consumer_key);
+    state.media.register_consumer_key(&removed_consumer_key);
     let pending_removed_key = ConsumerKey::new(&publisher_id, other_source_id);
     state
         .media
         .pending_consumer_bootstraps
         .insert(pending_removed_key.clone());
-    state.register_consumer_key(&pending_removed_key);
+    state.media.register_consumer_key(&pending_removed_key);
 
     let surviving_consumer_key = install_test_consumer_state(
         &mut state,
@@ -907,7 +910,7 @@ fn purge_user_media_state_removes_only_indexed_user_and_source_entries() {
         surviving_consumer_key.clone(),
         ConsumerSourceSelection::open(false),
     );
-    state.register_consumer_key(&surviving_consumer_key);
+    state.media.register_consumer_key(&surviving_consumer_key);
 
     state.purge_user_media_state(&publisher_id);
 

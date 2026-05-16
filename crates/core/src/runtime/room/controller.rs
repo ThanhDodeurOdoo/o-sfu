@@ -19,8 +19,8 @@
 //!
 //! The file exists to keep one clear contract at the room boundary:
 //!
-//! - immutable room identity and runtime placement live in `RoomDefinition`
-//!   and the small policy/context/config types defined here
+//! - immutable room identity lives in `RoomDefinition`, while transport
+//!   placement lookup lives in `RoomPlacementDirectory`
 //! - mutable membership and media topology live behind `RoomState`
 //! - websocket and transport work must happen after room locks are released
 //! - signaling code consumes high-level room events instead of reaching into
@@ -41,7 +41,7 @@ use super::{
     events::RoomEventMessage,
     lifecycle::UserCloseReason,
     media_transaction::PendingPublishTransactions,
-    placement::{RoomPlacementUsageSnapshot, RoomWorkerLoadContribution},
+    placement::{RoomPlacementDirectory, RoomPlacementUsageSnapshot, RoomWorkerLoadContribution},
     state::{ConsumerRouteState, RemoteTrackBootstrap, RoomState},
 };
 use crate::{
@@ -426,10 +426,8 @@ pub struct RoomRuntimePolicy {
     pub router_rtp_capabilities: o_sfu_router::MediaCapabilities,
     /// Same-room local worker-placement policy selected at runtime boot.
     ///
-    /// The policy is copied into each room so topology decisions stay stable
-    /// for the room lifetime even if a future runtime reload changes process
-    /// defaults. It is a cold-path room-placement policy, not a packet-loop
-    /// routing rule.
+    /// The room manager reads this when planning joins for the room. It is a
+    /// cold-path placement policy, not a packet-loop routing rule.
     pub room_worker_policy: RoomWorkerPolicy,
 }
 
@@ -580,11 +578,17 @@ pub struct Room {
     /// This is written from room orchestration paths, not from the pure room
     /// model itself.
     pub(super) diagnostics: Arc<DiagnosticsStore>,
-    /// Immutable identity, placement and feature metadata for the room lifetime.
+    /// Immutable identity and feature metadata for the room lifetime.
     ///
     /// `definition` is the stable read-only half of the room, while `state`
     /// contains the mutable membership and media graph.
     pub(super) definition: RoomDefinition,
+    /// Mutable transport placement lookup for committed room connections.
+    ///
+    /// The pure topology owns router execution state. This directory keeps the
+    /// transport worker address needed to build session keys after placement
+    /// has been committed.
+    pub(super) placement_directory: RoomPlacementDirectory,
     #[allow(
         dead_code,
         reason = "recording control-plane wiring is intentionally deferred until the replacement baseline is validated"
@@ -660,6 +664,9 @@ impl Room {
         Self {
             diagnostics,
             definition,
+            placement_directory: RoomPlacementDirectory::new(
+                runtime_context.local_routers().primary(),
+            ),
             recording_service: Arc::clone(&recording_service),
             metrics,
             cleanup_reconciler: StdMutex::new(CleanupReconciler::default()),
@@ -668,7 +675,6 @@ impl Room {
                 runtime_context,
                 runtime_policy.admission_policy,
                 runtime_policy.router_rtp_capabilities,
-                runtime_policy.room_worker_policy,
                 router_event_sink,
             )),
         }
@@ -698,7 +704,11 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> TransportSessionKey {
-        self.definition.transport_user_key(user_id, connection_id)
+        self.placement_directory.transport_user_key(
+            self.definition.instance_id(),
+            user_id,
+            connection_id,
+        )
     }
 
     pub(in crate::runtime::room) async fn placement_usage_snapshot(
@@ -895,7 +905,7 @@ impl Room {
     /// Runtime diagnostics and transport command paths use this to route work
     /// to the correct RTC worker.
     pub fn media_worker_id(&self) -> usize {
-        self.definition.media_worker_id()
+        self.placement_directory.media_worker_id()
     }
 
     pub(in crate::runtime::room) fn room_worker_policy(&self) -> RoomWorkerPolicy {
@@ -959,7 +969,10 @@ impl Room {
                 (user_id, transport)
             })
             .collect();
-        state.diagnostics_user_views(self.definition.media_worker_id(), &transport_by_session)
+        state.diagnostics_user_views(
+            self.placement_directory.media_worker_id(),
+            &transport_by_session,
+        )
     }
 
     /// Builds the live source inventory for operator diagnostics.
@@ -1023,7 +1036,10 @@ impl fmt::Debug for Room {
         formatter
             .debug_struct("Room")
             .field("instance_id", &self.definition.instance_id())
-            .field("media_worker_id", &self.definition.media_worker_id())
+            .field(
+                "media_worker_id",
+                &self.placement_directory.media_worker_id(),
+            )
             .field("uuid", &self.definition.uuid())
             .field("issuer", &self.definition.issuer())
             .field("web_rtc_enabled", &self.definition.web_rtc_enabled())

@@ -525,7 +525,7 @@ impl Room {
         cleanup: UserCleanup<'_>,
     ) -> UserTransitionResult {
         let connection_id = outcome.connection_id;
-        self.definition
+        self.placement_directory
             .register_transport_placement(connection_id, outcome.transport_home_placement);
         if let Some(media_transport) = cleanup.cleaning_media_transport() {
             execute_relay_route_effects(self, media_transport, &outcome.relay_effects).await;
@@ -562,7 +562,7 @@ impl Room {
     ) -> UserTransitionResult {
         let had_state = outcome.is_some();
         let media_worker_id = self
-            .definition
+            .placement_directory
             .media_worker_id_for_connection(connection_id);
         if let Some(outcome) = outcome {
             if let Some(media_transport) = cleanup.cleaning_media_transport() {
@@ -578,7 +578,8 @@ impl Room {
             self.record_closed_user(&user_id, connection_id, media_worker_id, cleanup)
                 .await;
         }
-        self.definition.unregister_transport_worker(connection_id);
+        self.placement_directory
+            .unregister_transport_worker(connection_id);
         if had_state {
             UserTransitionResult::Applied
         } else {
@@ -650,7 +651,7 @@ impl Room {
     /// Record diagnostics for a user removed by the bulk disconnect path.
     fn record_disconnected_user(&self, user_id: &UserId, connection_id: ConnectionId) {
         let media_worker_id = self
-            .definition
+            .placement_directory
             .media_worker_id_for_connection(connection_id);
         self.diagnostics.record(
             DiagnosticsEventData::for_user(
@@ -661,7 +662,8 @@ impl Room {
             .with_media_worker_id(media_worker_id),
         );
         self.diagnostics.forget_user(self.uuid(), user_id);
-        self.definition.unregister_transport_worker(connection_id);
+        self.placement_directory
+            .unregister_transport_worker(connection_id);
     }
 
     /// Emit close requests and room fan-outs captured by a state transition.

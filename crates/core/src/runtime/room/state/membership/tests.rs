@@ -51,7 +51,6 @@ fn test_state() -> RoomState {
         &runtime_context,
         RoomAdmissionPolicy::new(4),
         router_rtp_capabilities(MediaCodecFlags::default()),
-        crate::RoomWorkerPolicy::strict_single_router(),
         Arc::new(RecordingService::new(
             RoomInstanceId::from_raw(0),
             packet_sink_registry,
@@ -109,7 +108,7 @@ fn install_test_published_producer(
         .media
         .producer_id_by_source_id
         .insert(source_id, producer_id);
-    state.register_source_owner(user_id, source_id);
+    state.media.register_source_owner(user_id, source_id);
     state.media.producers.insert(
         producer_id,
         super::super::shared::PublishedProducer {
@@ -124,7 +123,7 @@ fn install_test_published_producer(
             active: true,
         },
     );
-    state.register_producer_owner(user_id, producer_id);
+    state.media.register_producer_owner(user_id, producer_id);
     if let Some(transport_media_id) = transport_media_id {
         state.media.source_transport_media_index.insert(
             transport_media_id,
@@ -276,7 +275,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
             consumer_media: TransportMediaId::new(21),
         },
     );
-    state.register_consumer_key(&consumer_key);
+    state.media.register_consumer_key(&consumer_key);
 
     let outcome = state.apply_leave(&UserId::Integer(2), consumer_connection_id);
 

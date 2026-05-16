@@ -9,7 +9,7 @@ use super::RoomTopology;
 use crate::runtime::UserId;
 #[cfg(test)]
 use crate::{
-    MediaCodecFlags, RoomWorkerPolicy,
+    MediaCodecFlags,
     runtime::{
         RoomInstanceId,
         metrics::RuntimeMetrics,
@@ -25,19 +25,11 @@ use crate::{
 impl RoomTopology {
     #[cfg(test)]
     pub fn new(primary_router_id: RouterId) -> Self {
-        Self::new_with_policy(
-            primary_router_id,
-            RoomWorkerPolicy::strict_single_router(),
-            1,
-        )
+        Self::new_with_placements(primary_router_id, 1)
     }
 
     #[cfg(test)]
-    pub fn new_with_policy(
-        primary_router_id: RouterId,
-        room_worker_policy: RoomWorkerPolicy,
-        local_router_count: usize,
-    ) -> Self {
+    pub fn new_with_placements(primary_router_id: RouterId, local_router_count: usize) -> Self {
         let packet_sink_registry = Arc::new(RoomPacketSinkRegistry::default());
         let event_sink = Arc::new(RecordingService::new(
             RoomInstanceId::from_raw(0),
@@ -60,7 +52,6 @@ impl RoomTopology {
             .collect::<Vec<_>>();
         Self::new_with_router_state_factory(
             LocalRoomRouterPlacements::new(primary, spillover),
-            room_worker_policy,
             router_rtp_capabilities(MediaCodecFlags::default()),
             &RoomRouterStateFactory::new(event_sink),
         )
@@ -71,24 +62,7 @@ impl RoomTopology {
         primary_router_id: RouterId,
         local_router_count: usize,
     ) -> Self {
-        Self::new_with_policy(
-            primary_router_id,
-            RoomWorkerPolicy::bounded_local_spillover(local_router_count),
-            local_router_count,
-        )
-    }
-
-    #[cfg(test)]
-    pub fn new_with_load_spillover(
-        primary_router_id: RouterId,
-        local_router_count: usize,
-        policy: crate::LocalSpilloverPolicy,
-    ) -> Self {
-        Self::new_with_policy(
-            primary_router_id,
-            RoomWorkerPolicy::load_triggered_local_spillover(local_router_count, policy),
-            local_router_count,
-        )
+        Self::new_with_placements(primary_router_id, local_router_count)
     }
 
     #[cfg(test)]
@@ -109,16 +83,6 @@ impl RoomTopology {
 
     pub fn home_router_id_for_user(&self, user_id: &UserId) -> Option<RouterId> {
         self.session_home_router.get(user_id).copied()
-    }
-
-    #[cfg(test)]
-    pub fn active_load_router_count_for_test(&self) -> usize {
-        self.placement_policy.active_router_count_for_test()
-    }
-
-    #[cfg(test)]
-    pub fn last_load_pressure_reason_for_test(&self) -> Option<super::LoadPressureReason> {
-        self.placement_policy.last_load_pressure_reason_for_test()
     }
 
     #[cfg(test)]

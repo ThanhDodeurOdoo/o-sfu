@@ -1,4 +1,4 @@
-//! Room identity and dynamic runtime placement.
+//! Room identity and immutable runtime policy.
 //!
 //! A room has two identities:
 //!
@@ -9,27 +9,15 @@
 //!
 //! The first identity is visible at the HTTP and websocket edge. The second
 //! identity is process-local and drives transport ownership, diagnostics and
-//! room topology. The room is created before a media worker is selected, so
-//! `RoomDefinition` records the worker placement resolved for each committed
-//! connection.
-
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex, PoisonError},
-};
+//! room topology. Mutable placement directories live on `Room` rather than in
+//! this immutable definition.
 
 use uuid::Uuid;
 
-use super::{
-    LocalRoomRouterPlacements, LocalRouterRuntimeContext, RoomConfig, RoomRuntimeContext,
-    RoomRuntimePolicy,
-};
+use super::{RoomConfig, RoomRuntimeContext, RoomRuntimePolicy};
 use crate::{
     RoomWorkerPolicy, RuntimeFeatureFlags,
-    runtime::{
-        AvailableFeatures, ConnectionId, RoomInstanceId, UserId,
-        media_transport::TransportSessionKey,
-    },
+    runtime::{AvailableFeatures, RoomInstanceId},
 };
 
 /// Central gate for exposing recording as a production room capability.
@@ -64,23 +52,7 @@ pub(crate) struct RoomDefinition {
     /// Recreating a room for the same issuer allocates a fresh instance id so
     /// stale transport work cannot be confused with the new room lifetime.
     instance_id: RoomInstanceId,
-    /// Media worker currently assigned to the primary router.
-    ///
-    /// Empty rooms keep the creation placeholder. The first placed session
-    /// updates this value when it lands on the primary router.
-    media_worker_id: Arc<Mutex<usize>>,
-    /// Local router placements assigned to this room.
-    ///
-    /// The room starts with only its primary router. Spillover placements are
-    /// inserted after the placement planner selects a worker for a session.
-    local_routers: Arc<Mutex<LocalRoomRouterPlacements>>,
-    /// Policy used to interpret `local_routers` for transport placement.
-    ///
-    /// The policy is stored here because transport session keys are derived
-    /// outside the topology lock. The room definition can answer that cold-path
-    /// routing question without borrowing mutable room state.
     room_worker_policy: RoomWorkerPolicy,
-    transport_worker_by_connection: Arc<Mutex<BTreeMap<ConnectionId, usize>>>,
     identity: RoomIdentity,
     config: RoomConfig,
     feature_flags: RuntimeFeatureFlags,
@@ -97,10 +69,7 @@ impl RoomDefinition {
     ) -> Self {
         Self {
             instance_id: runtime_context.instance(),
-            media_worker_id: Arc::new(Mutex::new(runtime_context.media_worker())),
-            local_routers: Arc::new(Mutex::new(runtime_context.local_routers().clone())),
             room_worker_policy: runtime_policy.room_worker_policy,
-            transport_worker_by_connection: Arc::new(Mutex::new(BTreeMap::new())),
             identity: RoomIdentity::new(issuer, key),
             config,
             feature_flags: runtime_policy.feature_flags,
@@ -134,74 +103,6 @@ impl RoomDefinition {
     }
 
     #[must_use]
-    pub(crate) fn transport_user_key(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-    ) -> TransportSessionKey {
-        TransportSessionKey::new(
-            self.instance_id,
-            self.media_worker_id_for_connection(connection_id),
-            connection_id,
-            user_id.clone(),
-        )
-    }
-
-    pub(crate) fn register_transport_placement(
-        &self,
-        connection_id: ConnectionId,
-        placement: LocalRouterRuntimeContext,
-    ) {
-        let is_primary = {
-            let mut local_routers = self
-                .local_routers
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            local_routers.upsert(placement);
-            local_routers.primary().router == placement.router
-        };
-        if is_primary {
-            *self
-                .media_worker_id
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = placement.media_worker;
-        }
-        self.transport_worker_by_connection
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(connection_id, placement.media_worker);
-    }
-
-    pub(crate) fn unregister_transport_worker(&self, connection_id: ConnectionId) {
-        self.transport_worker_by_connection
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&connection_id);
-    }
-
-    /// Resolve the media worker that owns one committed connection.
-    ///
-    /// Dynamic placement has no deterministic fallback from the connection id.
-    /// Live transport keys must therefore use the committed mapping recorded
-    /// during join finalization. If the mapping has already been removed, the
-    /// primary worker is returned only as a stale-key fallback.
-    ///
-    /// The method is cold-path control-plane work. It is called while building
-    /// transport commands and diagnostics, not from packet forwarding loops.
-    pub(crate) fn media_worker_id_for_connection(&self, connection_id: ConnectionId) -> usize {
-        if let Some(media_worker_id) = self
-            .transport_worker_by_connection
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&connection_id)
-            .copied()
-        {
-            return media_worker_id;
-        }
-        self.media_worker_id()
-    }
-
-    #[must_use]
     pub(crate) const fn web_rtc_enabled(&self) -> bool {
         self.config.web_rtc_enabled
     }
@@ -222,13 +123,6 @@ impl RoomDefinition {
     #[must_use]
     pub(crate) fn room_worker_policy(&self) -> RoomWorkerPolicy {
         self.room_worker_policy
-    }
-
-    pub(crate) fn media_worker_id(&self) -> usize {
-        *self
-            .media_worker_id
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
     }
 
     #[must_use]

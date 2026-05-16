@@ -23,8 +23,8 @@ use super::{
         },
         ids::ProducerRuntimeId,
         shared::{
-            ConsumerKey, PublishedProducer, RoomState, SourceKey, SourceTransportMediaIndexEntry,
-            TransportMediaRemoval,
+            ConsumerKey, PublishedProducer, PublishedSourceInstall, RoomState, SourceKey,
+            SourceTransportMediaIndexEntry, TransportMediaRemoval,
         },
     },
     relay::RelayRouteEffect,
@@ -92,17 +92,6 @@ pub(in crate::runtime::room) struct PreparedPublishedTrack {
     policy: SourcePolicy,
     consumable_rtp_parameters: RouterRtpParameters,
     upload_encodings: Vec<SessionUploadEncoding>,
-}
-
-#[derive(Debug)]
-struct PublishedSourceInstall {
-    source_key: SourceKey,
-    source_descriptor: PublishedSourceDescriptor,
-    source_encoding_ids: Vec<SourceEncodingId>,
-    producer_id: ProducerRuntimeId,
-    routed_producer_id: RoutedProducerId,
-    pending: PreparedPublishedTrack,
-    transport_media_id: TransportMediaId,
 }
 
 #[derive(Debug)]
@@ -219,13 +208,22 @@ impl RoomState {
         let media_kind = pending.media_kind;
         let source_id = source_descriptor.source_id();
 
-        self.install_published_source(PublishedSourceInstall {
+        self.media.install_published_source(PublishedSourceInstall {
             source_key,
             source_descriptor,
             source_encoding_ids,
             producer_id,
-            routed_producer_id,
-            pending,
+            producer: PublishedProducer {
+                source_id,
+                owner_user_id: owner_user_id.clone(),
+                owner_connection_id,
+                stream_id: stream_id.clone(),
+                media_kind,
+                consumable_rtp_parameters: pending.consumable_rtp_parameters,
+                routed_producer_id,
+                transport_media_id: Some(transport_media_id),
+                active: true,
+            },
             transport_media_id,
         });
         let consumer_snapshot = ConsumerBootstrapProducerSnapshot::pending(
@@ -306,52 +304,6 @@ impl RoomState {
         }
     }
 
-    fn install_published_source(&mut self, install: PublishedSourceInstall) {
-        let PublishedSourceInstall {
-            source_key,
-            source_descriptor,
-            source_encoding_ids,
-            producer_id,
-            routed_producer_id,
-            pending,
-            transport_media_id,
-        } = install;
-        let source_id = source_descriptor.source_id();
-        self.media.producers.insert(
-            producer_id,
-            PublishedProducer {
-                source_id,
-                owner_user_id: pending.owner_user_id.clone(),
-                owner_connection_id: pending.owner_connection_id,
-                stream_id: pending.stream_id.clone(),
-                media_kind: pending.media_kind,
-                consumable_rtp_parameters: pending.consumable_rtp_parameters,
-                routed_producer_id,
-                transport_media_id: Some(transport_media_id),
-                active: true,
-            },
-        );
-        self.media.sources.insert(source_id, source_descriptor);
-        self.media
-            .source_ids_by_owner_stream
-            .insert(source_key, source_id);
-        self.media
-            .producer_id_by_source_id
-            .insert(source_id, producer_id);
-        self.register_source_owner(&pending.owner_user_id, source_id);
-        self.register_producer_owner(&pending.owner_user_id, producer_id);
-        self.media.source_transport_media_index.insert(
-            transport_media_id,
-            SourceTransportMediaIndexEntry::new(
-                source_id,
-                source_encoding_ids,
-                pending.owner_user_id.clone(),
-                pending.owner_connection_id,
-                pending.stream_id,
-            ),
-        );
-    }
-
     fn source_descriptor_for_publish(
         &mut self,
         pending: &PreparedPublishedTrack,
@@ -416,7 +368,7 @@ impl RoomState {
                 {
                     return None;
                 }
-                if self.consumer_bootstrap_exists(&ConsumerKey::new(
+                if self.media.consumer_bootstrap_exists(&ConsumerKey::new(
                     remote_user_id,
                     producer.source_id(),
                 )) {
@@ -459,8 +411,9 @@ impl RoomState {
         owner_connection_id: ConnectionId,
         stream_id: &UserStreamId,
     ) -> Option<ProducerRouteTarget> {
-        let producer_id =
-            self.producer_id_for_source_key(&SourceKey::new(owner_user_id, stream_id))?;
+        let producer_id = self
+            .media
+            .producer_id_for_source_key(&SourceKey::new(owner_user_id, stream_id))?;
         let producer = self.media.producers.get(&producer_id)?;
         if producer.owner_connection_id != owner_connection_id {
             return None;
@@ -503,6 +456,7 @@ impl RoomState {
             transport_media: producer_target.transport_media_id,
         }];
         let consumer_removals = self
+            .media
             .consumer_keys_for_source(producer_target.source_id)
             .into_iter()
             .filter_map(|key| {
@@ -544,8 +498,9 @@ impl RoomState {
                 "repaired published track room state after router producer teardown failed"
             );
         }
-        let (_producer, relay_effects) =
-            self.remove_source_registry_entry(producer_target.source_id)?;
+        let (_producer, relay_effects) = self
+            .media
+            .remove_source_registry_entry(producer_target.source_id)?;
         Some(UnpublishTrackOutcome {
             recipients: self
                 .users
