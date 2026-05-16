@@ -1,9 +1,7 @@
-use std::sync::PoisonError;
-
 use super::{PendingPublishTransactions, Room};
 use crate::runtime::{
     ConnectionId, TestSourceKind, UserId, media_transport::TransportMediaId,
-    source_model::test_support::stream_id_for_source,
+    source_model::test_support::stream_id_for_source, sync::lock_unpoisoned,
 };
 
 impl PendingPublishTransactions {
@@ -44,9 +42,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> usize {
-        self.pending_publish_transactions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        lock_unpoisoned(&self.pending_publish_transactions)
             .staged_count_for_connection(user_id, connection_id)
     }
 
@@ -60,9 +56,10 @@ impl Room {
         connection_id: ConnectionId,
         stream_type: TestSourceKind,
     ) -> Option<TransportMediaId> {
-        self.pending_publish_transactions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .staged_transport_media_id(user_id, connection_id, stream_type)
+        lock_unpoisoned(&self.pending_publish_transactions).staged_transport_media_id(
+            user_id,
+            connection_id,
+            stream_type,
+        )
     }
 }

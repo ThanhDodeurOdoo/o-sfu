@@ -25,10 +25,7 @@
 //! lock is held only for lookup, insertion and draining. Commit and cleanup run
 //! after the registry lock is released.
 
-use std::{
-    collections::BTreeMap,
-    sync::{MutexGuard, PoisonError},
-};
+use std::{collections::BTreeMap, sync::MutexGuard};
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use o_sfu_telemetry::schema::event as telemetry_event;
@@ -48,6 +45,7 @@ use crate::{
             TransportAdapterError, TransportMediaId,
         },
         source_model::{SourcePublishIntent, UserStreamId},
+        sync::lock_unpoisoned,
     },
 };
 
@@ -557,9 +555,7 @@ impl CommittedPublish {
 
 impl Room {
     fn pending_publish_transactions(&self) -> MutexGuard<'_, PendingPublishTransactions> {
-        self.pending_publish_transactions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        lock_unpoisoned(&self.pending_publish_transactions)
     }
 
     /// Records the live media gauge delta after a room state transition.

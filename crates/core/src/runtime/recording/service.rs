@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     sync::{
-        Arc, Mutex, MutexGuard, PoisonError, RwLock,
+        Arc, Mutex, MutexGuard, RwLock,
         atomic::{AtomicU8, AtomicU64, Ordering},
     },
     time::Instant,
@@ -18,6 +18,7 @@ use crate::runtime::{
     metrics::{RtpForwardDestinationKind, RuntimeMetrics},
     packet_sink_registry::RoomPacketSinkRegistry,
     router_events::RoomRouterEventSink,
+    sync::{lock_unpoisoned, read_unpoisoned, write_unpoisoned},
 };
 
 const RECENT_CAPTURED_STREAM_CACHE_SLOTS: usize = 64;
@@ -106,10 +107,7 @@ impl MediaPacketSink for RecordingPacketCollector {
         }
 
         let is_new_stream = {
-            let mut captured_streams = self
-                .captured_streams
-                .write()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut captured_streams = write_unpoisoned(&self.captured_streams);
             captured_streams.insert(transport_media_id)
         };
         if is_new_stream {
@@ -231,10 +229,7 @@ impl RecordingService {
     pub(crate) fn snapshot(&self) -> RecordingServiceSnapshot {
         let lifecycle = RecordingLifecycleState::from_u8(self.lifecycle.load(Ordering::Acquire));
         let state = self.lock_sessions();
-        let captured_streams = self
-            .captured_streams
-            .read()
-            .unwrap_or_else(PoisonError::into_inner);
+        let captured_streams = read_unpoisoned(&self.captured_streams);
         RecordingServiceSnapshot {
             lifecycle,
             user_count: state.users.len(),
@@ -306,7 +301,7 @@ impl RecordingService {
     }
 
     fn lock_sessions(&self) -> MutexGuard<'_, RecordingServiceState> {
-        self.users.lock().unwrap_or_else(PoisonError::into_inner)
+        lock_unpoisoned(&self.users)
     }
 }
 

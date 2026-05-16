@@ -145,17 +145,19 @@ impl RemoteSourceRegistration {
     }
 }
 
-/// reverse lookup key from producer session and MID to transport media id
+/// reverse lookup key from browser session and MID to transport media id
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct ProducerMidLookupKey {
+pub(super) struct SessionMidLookupKey {
     session_key: TransportSessionKey,
     mid: Mid,
 }
 
-impl ProducerMidLookupKey {
-    /// build a producer MID lookup key with session scope
-    fn new(session_key: TransportSessionKey, mid: Mid) -> Self {
-        Self { session_key, mid }
+impl SessionMidLookupKey {
+    fn new(session_key: &TransportSessionKey, mid: Mid) -> Self {
+        Self {
+            session_key: session_key.clone(),
+            mid,
+        }
     }
 }
 
@@ -170,20 +172,6 @@ impl ProducerSsrcLookupKey {
     /// build a producer SSRC lookup key with session scope
     fn new(session_key: TransportSessionKey, ssrc: Ssrc) -> Self {
         Self { session_key, ssrc }
-    }
-}
-
-/// reverse lookup key from consumer session and MID to source media id
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct ConsumerMidLookupKey {
-    session_key: TransportSessionKey,
-    mid: Mid,
-}
-
-impl ConsumerMidLookupKey {
-    /// build a consumer MID lookup key with session scope
-    fn new(session_key: TransportSessionKey, mid: Mid) -> Self {
-        Self { session_key, mid }
     }
 }
 
@@ -202,7 +190,7 @@ impl PacketLoopState {
         self.next_media_id = self.next_media_id.saturating_add(1);
         if let RegisteredMediaHandle::Producer { session_key, mid } = &handle {
             self.producer_mid_registry.insert(
-                ProducerMidLookupKey::new(session_key.clone(), *mid),
+                SessionMidLookupKey::new(session_key, *mid),
                 TransportMediaId::new(id),
             );
             self.producer_ssrcs_by_media
@@ -214,7 +202,7 @@ impl PacketLoopState {
         } = &handle
         {
             self.consumer_mid_registry.insert(
-                ConsumerMidLookupKey::new(session_key.clone(), *mid),
+                SessionMidLookupKey::new(session_key, *mid),
                 *source_transport_media_id,
             );
         }
@@ -250,7 +238,7 @@ impl PacketLoopState {
         let handle = self.mid_registry.remove(&transport_media_id.as_u64())?;
         if let RegisteredMediaHandle::Producer { session_key, mid } = &handle {
             self.producer_mid_registry
-                .remove(&ProducerMidLookupKey::new(session_key.clone(), *mid));
+                .remove(&SessionMidLookupKey::new(session_key, *mid));
             self.clear_producer_ssrc_bindings(transport_media_id, session_key);
             self.forget_source_side_tables(transport_media_id);
             self.remove_incoming_bitrate_counter(transport_media_id);
@@ -259,7 +247,7 @@ impl PacketLoopState {
         } = &handle
         {
             self.consumer_mid_registry
-                .remove(&ConsumerMidLookupKey::new(session_key.clone(), *mid));
+                .remove(&SessionMidLookupKey::new(session_key, *mid));
         }
         Some(handle)
     }
@@ -498,10 +486,7 @@ impl PacketLoopState {
         source_mid: Mid,
     ) -> Option<TransportMediaId> {
         self.producer_mid_registry
-            .get(&ProducerMidLookupKey::new(
-                source_session_key.clone(),
-                source_mid,
-            ))
+            .get(&SessionMidLookupKey::new(source_session_key, source_mid))
             .copied()
     }
 
@@ -623,8 +608,8 @@ impl PacketLoopState {
         consumer_mid: Mid,
     ) -> Option<TransportMediaId> {
         self.consumer_mid_registry
-            .get(&ConsumerMidLookupKey::new(
-                consumer_session_key.clone(),
+            .get(&SessionMidLookupKey::new(
+                consumer_session_key,
                 consumer_mid,
             ))
             .copied()
@@ -681,7 +666,7 @@ impl PacketLoopState {
     ) {
         let Some(transport_media_id) = self
             .producer_mid_registry
-            .get(&ProducerMidLookupKey::new(session_key.clone(), mid))
+            .get(&SessionMidLookupKey::new(session_key, mid))
             .copied()
         else {
             return;
@@ -728,7 +713,7 @@ impl PacketLoopState {
     ) {
         let Some(transport_media_id) = self
             .producer_mid_registry
-            .get(&ProducerMidLookupKey::new(session_key.clone(), mid))
+            .get(&SessionMidLookupKey::new(session_key, mid))
             .copied()
         else {
             return;

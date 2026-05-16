@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fmt,
     sync::{
-        Arc, PoisonError, RwLock,
+        Arc, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Instant,
@@ -14,6 +14,7 @@ use super::{
     RoomInstanceId,
     media_transport::{TransportMediaId, TransportSessionKey},
     metrics::RtpForwardDestinationKind,
+    sync::{read_unpoisoned, write_unpoisoned},
 };
 
 pub trait PacketSink: Send + Sync {
@@ -136,9 +137,7 @@ impl RoomPacketSinkRegistry {
         if !self.any_active.load(Ordering::Acquire) {
             return None;
         }
-        self.active_rooms
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
+        read_unpoisoned(&self.active_rooms)
             .get(&room_instance_id)
             .cloned()
     }
@@ -150,11 +149,7 @@ impl RoomPacketSinkRegistry {
     fn snapshot(&self) -> PacketSinkRegistrySnapshot {
         loop {
             let generation = self.generation();
-            let active_rooms = self
-                .active_rooms
-                .read()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone();
+            let active_rooms = read_unpoisoned(&self.active_rooms).clone();
             if generation == self.generation() {
                 return PacketSinkRegistrySnapshot {
                     generation,
@@ -170,10 +165,7 @@ impl RoomPacketSinkRegistry {
         sink: Arc<dyn PacketSink>,
         forward_destination_kind: RtpForwardDestinationKind,
     ) {
-        let mut active_rooms = self
-            .active_rooms
-            .write()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut active_rooms = write_unpoisoned(&self.active_rooms);
         active_rooms.insert(
             room_instance_id,
             RegisteredPacketSink::new(sink, forward_destination_kind),
@@ -184,10 +176,7 @@ impl RoomPacketSinkRegistry {
     }
 
     pub fn unregister_room(&self, room_instance_id: RoomInstanceId) {
-        let mut active_rooms = self
-            .active_rooms
-            .write()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut active_rooms = write_unpoisoned(&self.active_rooms);
         active_rooms.remove(&room_instance_id);
         self.any_active
             .store(!active_rooms.is_empty(), Ordering::Release);
@@ -210,17 +199,11 @@ impl RoomPacketSinkRegistry {
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn has_active_room(&self, room_instance_id: RoomInstanceId) -> bool {
-        self.active_rooms
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .contains_key(&room_instance_id)
+        read_unpoisoned(&self.active_rooms).contains_key(&room_instance_id)
     }
 
     fn active_room_count(&self) -> usize {
-        self.active_rooms
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .len()
+        read_unpoisoned(&self.active_rooms).len()
     }
 }
 

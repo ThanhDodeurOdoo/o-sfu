@@ -22,14 +22,14 @@ use std::{
     collections::BTreeSet,
     mem,
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
 
 use tokio::sync::Notify;
 
-use crate::RoomInstanceId;
+use crate::{RoomInstanceId, runtime::sync::lock_unpoisoned};
 
 /// shared dirty bit for coalesced source-policy wakeups
 ///
@@ -83,18 +83,12 @@ struct DirtyRoomRegistry {
 
 impl DirtyRoomRegistry {
     fn insert(&self, room_instance_id: RoomInstanceId) {
-        let mut dirty_rooms = self
-            .room_instance_ids
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut dirty_rooms = lock_unpoisoned(&self.room_instance_ids);
         dirty_rooms.insert(room_instance_id);
     }
 
     fn insert_many(&self, room_instance_ids: impl IntoIterator<Item = RoomInstanceId>) -> bool {
-        let mut dirty_rooms = self
-            .room_instance_ids
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut dirty_rooms = lock_unpoisoned(&self.room_instance_ids);
         let mut inserted_any = false;
         for room_instance_id in room_instance_ids {
             dirty_rooms.insert(room_instance_id);
@@ -105,10 +99,7 @@ impl DirtyRoomRegistry {
     }
 
     fn drain(&self) -> BTreeSet<RoomInstanceId> {
-        let mut dirty_rooms = self
-            .room_instance_ids
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut dirty_rooms = lock_unpoisoned(&self.room_instance_ids);
         mem::take(&mut *dirty_rooms)
     }
 }

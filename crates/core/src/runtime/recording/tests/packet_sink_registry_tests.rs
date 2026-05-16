@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Instant,
@@ -13,6 +13,7 @@ use crate::runtime::{
     packet_sink_registry::{PacketSinkLookup, PacketSinkRouteCache, RoomPacketSinkRegistry},
     recording::{MediaPacketSink, into_packet_sink},
     rtc_engine::test_support::{sample_forwarded_packet, test_transport_session_key},
+    sync::lock_unpoisoned,
 };
 
 struct CountingSink {
@@ -59,10 +60,7 @@ impl MediaPacketSink for PayloadCapturingSink {
         _received_at: Instant,
         payload: &[u8],
     ) {
-        self.payloads
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(payload.to_vec());
+        lock_unpoisoned(&self.payloads).push(payload.to_vec());
     }
 }
 
@@ -216,10 +214,6 @@ fn packet_sink_registry_records_forwarded_payload_bytes_through_the_shared_bound
     );
     registry.write_packet(&packet, TransportMediaId::new(5));
 
-    let payloads = sink
-        .payloads
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
+    let payloads = lock_unpoisoned(&sink.payloads).clone();
     assert_eq!(payloads.as_slice(), [b"captured".to_vec()]);
 }

@@ -71,10 +71,10 @@ pub enum ConsumerRouteState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::room) struct ConsumerKeyframeRefreshTarget {
-    consumer_media: TransportMediaId,
-    producer_user_id: UserId,
-    producer_connection_id: ConnectionId,
-    source_media: TransportMediaId,
+    pub(in crate::runtime::room) consumer_media: TransportMediaId,
+    pub(in crate::runtime::room) producer_user_id: UserId,
+    pub(in crate::runtime::room) producer_connection_id: ConnectionId,
+    pub(in crate::runtime::room) source_media: TransportMediaId,
 }
 
 #[derive(Debug, Default)]
@@ -294,18 +294,7 @@ impl RoomState {
         user_id: &UserId,
         consumer_connection_id: ConnectionId,
     ) -> Vec<PendingConsumerBootstrapTarget> {
-        self.media
-            .producers
-            .iter()
-            .filter_map(|(producer_id, producer)| {
-                self.pending_consumer_target(
-                    user_id,
-                    consumer_connection_id,
-                    *producer_id,
-                    producer,
-                )
-            })
-            .collect()
+        self.collect_missing_consumer_targets_where(user_id, consumer_connection_id, |_| true)
     }
 
     fn collect_missing_consumer_targets_for_peer(
@@ -314,11 +303,22 @@ impl RoomState {
         consumer_connection_id: ConnectionId,
         target_user_id: &UserId,
     ) -> Vec<PendingConsumerBootstrapTarget> {
+        self.collect_missing_consumer_targets_where(user_id, consumer_connection_id, |producer| {
+            producer.owner_user_id == *target_user_id
+        })
+    }
+
+    fn collect_missing_consumer_targets_where(
+        &self,
+        user_id: &UserId,
+        consumer_connection_id: ConnectionId,
+        should_include: impl Fn(&PublishedProducer) -> bool,
+    ) -> Vec<PendingConsumerBootstrapTarget> {
         self.media
             .producers
             .iter()
             .filter_map(|(producer_id, producer)| {
-                if producer.owner_user_id != *target_user_id {
+                if !should_include(producer) {
                     return None;
                 }
                 self.pending_consumer_target(
@@ -897,23 +897,5 @@ impl RemoteTrackBootstrap {
     #[must_use]
     pub fn into_room_event_request(self) -> RoomEventRequest {
         RoomEventRequest::BootstrapRemoteTrack(self)
-    }
-}
-
-impl ConsumerKeyframeRefreshTarget {
-    pub const fn consumer_media(&self) -> TransportMediaId {
-        self.consumer_media
-    }
-
-    pub fn producer_user_id(&self) -> &UserId {
-        &self.producer_user_id
-    }
-
-    pub const fn producer_connection_id(&self) -> ConnectionId {
-        self.producer_connection_id
-    }
-
-    pub const fn source_media(&self) -> TransportMediaId {
-        self.source_media
     }
 }
