@@ -59,22 +59,12 @@ use super::{
     LocalRoomRouterPlacements,
     router_state::{RoomRouterState, RoomRouterStateError},
 };
-use crate::{
-    RoomWorkerPolicy,
-    runtime::{UserId, router_events::RoomRouterEventSink},
-};
+use crate::runtime::{UserId, router_events::RoomRouterEventSink};
 
-mod policy;
 mod shadow;
 #[cfg(any(test, feature = "testing-transport"))]
 mod test_support;
 
-#[cfg(test)]
-use policy::HomePlacementInput;
-#[cfg(test)]
-pub(in crate::runtime::room) use policy::LoadPressureReason;
-pub(in crate::runtime::room) use policy::TopologyPressureSnapshot;
-use policy::{CleanupInput, PlacementPolicy};
 use shadow::{ShadowSessionKey, ShadowSessionTracker};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,11 +231,6 @@ impl RoutedConsumerId {
 pub(super) struct RoomTopology {
     /// Router that exists for the full room lifetime.
     primary_router: RouterId,
-    /// Policy copied from room creation.
-    ///
-    /// The policy decides whether user home placement may use spillover
-    /// placements. It is never consulted by packet forwarding.
-    placement_policy: PlacementPolicy,
     /// Local router placements assigned to this room.
     ///
     /// The first placement is the primary router. Spillover placements are
@@ -345,7 +330,6 @@ impl RoomTopology {
     /// and it does not allocate transport sessions.
     pub(super) fn new_with_router_state_factory(
         local_routers: LocalRoomRouterPlacements,
-        room_worker_policy: RoomWorkerPolicy,
         router_rtp_capabilities: MediaCapabilities,
         router_state_factory: &RoomRouterStateFactory,
     ) -> Self {
@@ -359,7 +343,6 @@ impl RoomTopology {
         router_memberships.insert(primary_router_id, RouterMembershipState::Primary);
         Self {
             primary_router: primary_router_id,
-            placement_policy: PlacementPolicy::new(room_worker_policy),
             local_routers,
             router_state_factory: router_state_factory.clone(),
             routers,
@@ -383,39 +366,6 @@ impl RoomTopology {
         primary_router.rtp_capabilities()
     }
 
-    /// Ensure the user has a home session in the topology.
-    ///
-    /// The first call chooses the home router from the room's placement policy
-    /// and stores it. Later calls keep the existing home router so reconnect or
-    /// duplicate setup work cannot move a live user between routers.
-    ///
-    /// The seed is also retained for shadow sessions created by cross-router
-    /// subscriptions. This keeps all router-local records for one connection
-    /// tied to the same deterministic session seed.
-    #[cfg(test)]
-    pub(super) fn ensure_session_with_pressure(
-        &mut self,
-        user_id: &UserId,
-        router_session_seed: u64,
-        pressure: TopologyPressureSnapshot,
-    ) -> Result<(), RoomTopologyError> {
-        if let Some(router_id) = self.session_home_router.get(user_id).copied() {
-            self.attach_router(router_id)?;
-            let router = self.router_mut_for_user(user_id, router_id)?;
-            router.ensure_session(user_id, router_session_seed)?;
-            return Ok(());
-        }
-        let router_id = self.router_id_for_connection(router_session_seed, pressure);
-        self.attach_router(router_id)?;
-        let router = self.router_mut_for_user(user_id, router_id)?;
-        router.ensure_session(user_id, router_session_seed)?;
-        self.session_home_router.insert(user_id.clone(), router_id);
-        self.session_seed_by_user
-            .insert(user_id.clone(), router_session_seed);
-        self.has_assigned_local_placements = true;
-        Ok(())
-    }
-
     /// Ensure the user's home router has the transport-side router records.
     ///
     /// Call this after `ensure_session` when a join or reconnect has to make
@@ -427,18 +377,6 @@ impl RoomTopology {
         let router_id = self.require_home_router_id(user_id)?;
         self.router_mut_for_user(user_id, router_id)?
             .ensure_session_transports(user_id)?;
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(super) fn apply_client_join_with_pressure(
-        &mut self,
-        user_id: &UserId,
-        router_session_seed: u64,
-        pressure: TopologyPressureSnapshot,
-    ) -> Result<(), RoomTopologyError> {
-        self.ensure_session_with_pressure(user_id, router_session_seed, pressure)?;
-        self.ensure_session_transports(user_id)?;
         Ok(())
     }
 
@@ -458,17 +396,6 @@ impl RoomTopology {
     /// Replacement joins are not duplicate setup work: the old connection loses
     /// ownership and the new connection must be placed from its own seed so
     /// router placement and transport worker ownership remain aligned.
-    #[cfg(test)]
-    pub(super) fn replace_client_session_with_pressure(
-        &mut self,
-        user_id: &UserId,
-        router_session_seed: u64,
-        pressure: TopologyPressureSnapshot,
-    ) -> Result<(), RoomTopologyError> {
-        self.remove_session(user_id)?;
-        self.apply_client_join_with_pressure(user_id, router_session_seed, pressure)
-    }
-
     pub(super) fn replace_client_session_on_placement(
         &mut self,
         user_id: &UserId,
@@ -739,30 +666,6 @@ impl RoomTopology {
             })
     }
 
-    /// Map a connection seed onto the room's allowed local router set.
-    ///
-    /// The seed is derived from the room connection id by the caller. Using the
-    /// seed instead of user identity lets reconnects receive fresh placement
-    /// while keeping placement deterministic inside one join transition.
-    #[cfg(test)]
-    fn router_id_for_connection(
-        &mut self,
-        router_session_seed: u64,
-        pressure: TopologyPressureSnapshot,
-    ) -> RouterId {
-        let decision = self
-            .placement_policy
-            .choose_home_router(HomePlacementInput {
-                connection_seed: router_session_seed,
-                reserved_router_count: self.local_routers.len(),
-                pressure,
-            });
-        let router_index = decision.router_index().min(self.local_routers.len() - 1);
-        self.local_routers
-            .get(router_index)
-            .map_or(self.primary_router, |placement| placement.router)
-    }
-
     fn ensure_session_on_placement(
         &mut self,
         user_id: &UserId,
@@ -876,46 +779,19 @@ impl RoomTopology {
             .values()
             .copied()
             .collect::<BTreeSet<_>>();
-        let occupied_router_count = self.occupied_router_count(&active_home_routers);
-        let keep_active_router_count = self
-            .placement_policy
-            .active_router_count_to_keep_after_cleanup(CleanupInput {
-                reserved_router_count: self.local_routers.len(),
-                occupied_router_count,
-                pressure: TopologyPressureSnapshot::default(),
-            });
         let removable_router_ids = self
             .router_memberships
             .iter()
             .filter_map(|(router_id, membership)| {
                 (*membership == RouterMembershipState::ActiveSpillover
-                    && !active_home_routers.contains(router_id)
-                    && self.router_index(*router_id) >= keep_active_router_count)
-                    .then_some(*router_id)
+                    && !active_home_routers.contains(router_id))
+                .then_some(*router_id)
             })
             .collect::<Vec<_>>();
         for router_id in removable_router_ids {
             self.routers.remove(&router_id);
             self.router_memberships.remove(&router_id);
         }
-    }
-
-    fn occupied_router_count(&self, active_home_routers: &BTreeSet<RouterId>) -> usize {
-        active_home_routers
-            .iter()
-            .filter_map(|router_id| self.local_router_index(*router_id))
-            .max()
-            .map_or(1, |index| index.saturating_add(1))
-    }
-
-    fn router_index(&self, router_id: RouterId) -> usize {
-        self.local_router_index(router_id).unwrap_or(0)
-    }
-
-    fn local_router_index(&self, router_id: RouterId) -> Option<usize> {
-        self.local_routers
-            .iter()
-            .position(|placement| placement.router == router_id)
     }
 
     fn router_mut(

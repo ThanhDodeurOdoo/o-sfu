@@ -378,6 +378,7 @@ impl RoomState {
         user_id: &UserId,
     ) -> Result<(), RoomTopologyError> {
         let routed_consumers = self
+            .media
             .consumer_keys_for_user(user_id)
             .into_iter()
             .filter_map(|key| self.media.consumer_index.get(&key))
@@ -388,6 +389,7 @@ impl RoomState {
         }
 
         let routed_producers = self
+            .media
             .producer_ids_for_user(user_id)
             .into_iter()
             .filter_map(|producer_id| self.media.producers.get(&producer_id))

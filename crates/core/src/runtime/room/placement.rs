@@ -11,17 +11,106 @@
 //! the packet loop only sees the resolved transport keys after the join has
 //! committed
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Mutex, PoisonError},
+};
 
 use o_sfu_router::RouterId;
 
 use super::LocalRouterRuntimeContext;
 use crate::{
     LocalSpilloverPolicy, RoomSpilloverMode, RoomWorkerPolicy,
-    runtime::media_transport::{
-        TransportPlacementPressureSnapshot, TransportWorkerPressureSnapshot,
+    runtime::{
+        ConnectionId, RoomInstanceId, UserId,
+        media_transport::{
+            TransportPlacementPressureSnapshot, TransportSessionKey,
+            TransportWorkerPressureSnapshot,
+        },
     },
 };
+
+/// room-local transport placement directory
+///
+/// joins register the selected worker for each committed connection
+/// later transport commands use the same mapping to build stable session keys
+/// without putting mutable placement state inside `RoomDefinition`
+#[derive(Debug)]
+pub(super) struct RoomPlacementDirectory {
+    primary_router: RouterId,
+    primary_media_worker_id: Mutex<usize>,
+    worker_by_connection: Mutex<BTreeMap<ConnectionId, usize>>,
+}
+
+impl RoomPlacementDirectory {
+    #[must_use]
+    pub(super) fn new(primary: LocalRouterRuntimeContext) -> Self {
+        Self {
+            primary_router: primary.router,
+            primary_media_worker_id: Mutex::new(primary.media_worker),
+            worker_by_connection: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    #[must_use]
+    pub(super) fn transport_user_key(
+        &self,
+        instance_id: RoomInstanceId,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> TransportSessionKey {
+        TransportSessionKey::new(
+            instance_id,
+            self.media_worker_id_for_connection(connection_id),
+            connection_id,
+            user_id.clone(),
+        )
+    }
+
+    pub(super) fn register_transport_placement(
+        &self,
+        connection_id: ConnectionId,
+        placement: LocalRouterRuntimeContext,
+    ) {
+        self.worker_by_connection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(connection_id, placement.media_worker);
+        if placement.router == self.primary_router {
+            *self
+                .primary_media_worker_id
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = placement.media_worker;
+        }
+    }
+
+    pub(super) fn unregister_transport_worker(&self, connection_id: ConnectionId) {
+        self.worker_by_connection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&connection_id);
+    }
+
+    pub(super) fn media_worker_id_for_connection(&self, connection_id: ConnectionId) -> usize {
+        if let Some(media_worker_id) = self
+            .worker_by_connection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&connection_id)
+            .copied()
+        {
+            return media_worker_id;
+        }
+        self.media_worker_id()
+    }
+
+    pub(super) fn media_worker_id(&self) -> usize {
+        *self
+            .primary_media_worker_id
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
 
 /// snapshot of one room's local placement surface at the start of a join
 ///

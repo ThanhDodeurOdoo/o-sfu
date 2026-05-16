@@ -343,7 +343,7 @@ impl RoomState {
             return None;
         }
         let consumer_key = ConsumerKey::new(user_id, producer.source_id);
-        if self.consumer_bootstrap_exists(&consumer_key) {
+        if self.media.consumer_bootstrap_exists(&consumer_key) {
             return None;
         }
         Some(PendingConsumerBootstrapTarget::new(
@@ -373,12 +373,7 @@ impl RoomState {
     }
 
     fn set_consumer_source_selection(&mut self, key: &ConsumerKey, active: bool) {
-        self.media
-            .consumer_source_selections
-            .entry(key.clone())
-            .and_modify(|selection| selection.set_active(active))
-            .or_insert_with(|| ConsumerSourceSelection::open(active));
-        self.register_consumer_key(key);
+        self.media.set_consumer_source_selection(key, active);
     }
 
     fn plan_consumer_bootstrap(
@@ -403,7 +398,7 @@ impl RoomState {
         }
         let source_descriptor = self.media.sources.get(&target.producer.source_id)?.clone();
         let consumer_key = ConsumerKey::new(&target.consumer_user_id, target.source_id());
-        if self.consumer_bootstrap_exists(&consumer_key) {
+        if self.media.consumer_bootstrap_exists(&consumer_key) {
             return None;
         }
         let consumer_active = self
@@ -421,14 +416,12 @@ impl RoomState {
             &client_capabilities,
         )
         .ok()?;
+        self.media.ensure_consumer_source_selection(
+            &consumer_key,
+            ConsumerSourceSelection::open(consumer_active),
+        );
         self.media
-            .consumer_source_selections
-            .entry(consumer_key.clone())
-            .or_insert_with(|| ConsumerSourceSelection::open(consumer_active));
-        self.register_consumer_key(&consumer_key);
-        self.media
-            .pending_consumer_bootstraps
-            .insert(consumer_key.clone());
+            .reserve_pending_consumer_bootstrap(consumer_key.clone());
         let consumer_id = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
         let relay_effects = self.reserve_relay_route(target, consumer_active);
         Some(PlannedConsumerBootstrap {
@@ -526,9 +519,7 @@ impl RoomState {
         consumer_mid: Option<String>,
     ) -> Option<(OutboundSender, RemoteTrackBootstrap, bool)> {
         self.media
-            .pending_consumer_bootstraps
-            .remove(&pending.consumer_key);
-        self.prune_consumer_key_indexes_if_unused(&pending.consumer_key);
+            .remove_pending_consumer_bootstrap(&pending.consumer_key);
         let user = self.users.get(&target.consumer_user_id)?;
         if user.connection_id != target.consumer_connection_id || !user.negotiation.can_consume() {
             return None;
@@ -544,11 +535,10 @@ impl RoomState {
         {
             return None;
         }
-        self.media
-            .consumer_source_selections
-            .entry(pending.consumer_key.clone())
-            .or_insert_with(|| ConsumerSourceSelection::open(pending.consumer_active));
-        self.register_consumer_key(&pending.consumer_key);
+        self.media.ensure_consumer_source_selection(
+            &pending.consumer_key,
+            ConsumerSourceSelection::open(pending.consumer_active),
+        );
         let initial_route_state = if pending.consumer_active {
             RouterConsumerRouteState::Active
         } else {
@@ -576,7 +566,7 @@ impl RoomState {
             pending.bootstrap.mid = consumer_mid;
         }
         let consumer_key = pending.consumer_key;
-        self.media.consumer_index.insert(
+        self.media.insert_consumer_route(
             consumer_key,
             ConsumerState {
                 routed_consumer_id,
@@ -594,8 +584,7 @@ impl RoomState {
         target: &PendingConsumerBootstrapTarget,
     ) -> Vec<RelayRouteEffect> {
         let consumer_key = ConsumerKey::new(&target.consumer_user_id, target.source_id());
-        self.media.pending_consumer_bootstraps.remove(&consumer_key);
-        self.prune_consumer_key_indexes_if_unused(&consumer_key);
+        self.media.remove_pending_consumer_bootstrap(&consumer_key);
         self.media.relay_routes.release_target(target)
     }
 
@@ -672,7 +661,8 @@ impl RoomState {
             return None;
         }
         Some(
-            self.consumer_keys_for_user(consumer_user_id)
+            self.media
+                .consumer_keys_for_user(consumer_user_id)
                 .into_iter()
                 .filter_map(|key| {
                     let consumer_state = self.media.consumer_index.get(&key)?;
@@ -703,14 +693,6 @@ impl RoomState {
                 })
                 .collect(),
         )
-    }
-
-    pub fn consumer_bootstrap_exists(&self, consumer_key: &ConsumerKey) -> bool {
-        self.media.consumer_index.contains_key(consumer_key)
-            || self
-                .media
-                .pending_consumer_bootstraps
-                .contains(consumer_key)
     }
 }
 

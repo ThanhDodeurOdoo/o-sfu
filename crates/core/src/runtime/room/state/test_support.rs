@@ -73,7 +73,7 @@ impl RoomState {
         connection_id: ConnectionId,
         stream_type: TestSourceKind,
     ) -> Option<TransportMediaId> {
-        let producer_id = self.producer_id_for_source_key(&SourceKey::new(
+        let producer_id = self.media.producer_id_for_source_key(&SourceKey::new(
             user_id,
             &stream_id_for_source(stream_type),
         ))?;
