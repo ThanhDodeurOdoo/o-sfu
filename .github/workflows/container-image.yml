@@ -59,6 +59,10 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          # keep the default image CPU-portable. if a benchmark proves that
+          # a production host needs CPU-specific codegen, add a separate image
+          # tag and pass an explicit CPU through the Dockerfile instead of
+          # using target-cpu=native on the GitHub runner
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
