@@ -1,25 +1,38 @@
-//! Lifecycle and communication runtime for the RTC transport worker.
+//! lazy lifecycle and mailbox runtime for one RTC transport worker
 //!
-//! This module implements the internal machinery for managing the life of a
-//! background packet loop worker and dispatching commands to it.
+//! this module owns the publication contract for the worker handle and the
+//! request-response helpers used by the facade methods in [`super::facade`]
+//! it is the only place where facade calls boot the packet loop, publish its
+//! mailboxes and translate a closed worker into [`TransportAdapterError`]
 //!
-//! ### Worker Bootstrapping
+//! the packet loop is started lazily so unused RTC workers do not bind sockets
+//! or allocate worker-local registries
+//! once a handle is published, callers clone it out of the slot before any
+//! `.await`
+//! this keeps the boot lock cold-path only and prevents mailbox sends from
+//! holding the publication lock
 //!
-//! Workers are started lazily via [`RtcTransportWorker::ensure_packet_loop_started`].
-//! The first call to any facade method that requires worker interaction will
-//! trigger the spawning of the background tokio task that runs the packet loop.
+//! command dispatch follows one pattern:
 //!
-//! ### Command Dispatching
+//! ```text
+//! facade method
+//!   |
+//!   v
+//! ensure worker handle exists
+//!   |
+//!   v
+//! build RtcWorkerCommand with oneshot response
+//!   |
+//!   v
+//! send through worker command mailbox
+//!   |
+//!   v
+//! await worker response
+//! ```
 //!
-//! Communication with the worker follows a request/response pattern:
-//! 1. The facade method constructs a command (e.g., `RtcWorkerCommand::CreateInitialSessionOffer`).
-//! 2. It creates a `oneshot` room for the response.
-//! 3. It sends the command + the response sender to the worker via an `mpsc` room.
-//! 4. It waits for the response on the `oneshot` receiver.
-//!
-//! This pattern allows the facade methods to be `async` and return values from
-//! the worker while keeping the worker itself synchronous and focused on the
-//! media hot-path.
+//! observability methods in this file deliberately avoid lazy boot
+//! a worker that has never started has no packet observations, so the snapshot
+//! surface returns empty or default values instead of creating transport state
 use std::{
     collections::BTreeSet,
     sync::{Arc, Mutex},
@@ -55,11 +68,12 @@ use crate::{
     },
 };
 
-/// Publication slot for the lazily booted packet-loop handle.
+/// publication slot for the lazily booted packet-loop handle
 ///
-/// The RTC worker publishes a fully constructed worker handle into this slot
-/// before any caller can start sending commands. Loom reuses the same slot logic
-/// with modeled synchronization primitives to check the publication contract.
+/// the RTC worker publishes a fully constructed worker handle into this slot
+/// before any caller can start sending commands
+/// loom reuses the same slot logic with modeled synchronization primitives to
+/// check the publication contract
 #[derive(Debug, Clone)]
 pub struct WorkerHandleSlot<T> {
     handle: Option<T>,
@@ -76,11 +90,18 @@ impl<T: Clone> WorkerHandleSlot<T> {
         self.handle.clone()
     }
 
+    /// publishes a fully constructed worker handle and returns a clone
+    ///
+    /// callers use the returned handle after releasing the slot lock so command
+    /// dispatch never awaits while the publication lock is held
     pub fn store(&mut self, handle: T) -> T {
         self.handle = Some(handle.clone());
         handle
     }
 
+    /// clears the published handle after the worker reports it has drained
+    ///
+    /// this makes the next mutating facade call start a fresh packet loop
     pub fn clear(&mut self) {
         self.handle = None;
     }
@@ -92,6 +113,16 @@ impl<T: Clone> WorkerHandleSlot<T> {
 }
 
 impl RtcTransportWorker {
+    /// clones the current worker handle if the packet loop has been started
+    ///
+    /// this method never starts the worker
+    /// observability paths use it so read-only snapshots do not allocate
+    /// transport state just because a caller asked for diagnostics
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError::TransportUnavailable`] when the handle
+    /// slot lock is poisoned
     pub fn worker_handle(&self) -> Result<Option<RtcWorkerHandle>, TransportAdapterError> {
         let Ok(worker_handle) = self.worker_handle.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
@@ -99,6 +130,10 @@ impl RtcTransportWorker {
         Ok(worker_handle.worker_handle())
     }
 
+    /// reports whether this worker has started its packet loop in tests
+    ///
+    /// a poisoned slot lock is treated as not started because tests use this as
+    /// a simple lifecycle observation rather than an error-reporting API
     #[cfg(test)]
     pub fn packet_loop_started(&self) -> bool {
         let Ok(worker_handle) = self.worker_handle.lock() else {
@@ -107,17 +142,56 @@ impl RtcTransportWorker {
         worker_handle.is_started()
     }
 
-    /// Lazily boot the worker-local packet loop and return the handle that all
-    /// facade operations use to talk to the worker.
+    /// lazily boots the worker-local packet loop and returns its published handle
+    ///
+    /// this method is the publication boundary between cold-path facade calls
+    /// and the hot packet loop
+    /// it must publish exactly one complete handle before any caller can send
+    /// commands, then move the receiver halves into the spawned packet-loop
+    /// task
+    ///
+    /// boot order:
+    ///
+    /// ```text
+    /// lock worker slot
+    ///   |
+    ///   +-- return existing handle when another caller already started it
+    ///   +-- capture current Tokio runtime before building worker resources
+    ///   +-- create command, relay and snapshot channels
+    ///   +-- publish cloned sender-side handle in the slot
+    ///   +-- release slot lock before spawning the task
+    ///   `-- spawn packet loop with receiver-side inputs
+    /// ```
+    ///
+    /// publishing before spawn is safe because commands sent immediately after
+    /// publication queue in bounded mailboxes until the spawned task polls them
+    /// publishing after spawn would leave a window where a second caller can
+    /// start another packet loop for the same worker
+    ///
+    /// the published handle contains sender-side control, shared observations
+    /// and the shutdown token
+    /// authoritative RTC state is created and owned by the spawned packet-loop
+    /// task
+    ///
+    /// this is a cold-path lifecycle method
+    /// packet-path allocations and routing state are owned by the spawned task
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError::TransportUnavailable`] when the handle
+    /// slot is poisoned or the call is made outside a Tokio runtime
     pub(super) fn ensure_packet_loop_started(
         &self,
     ) -> Result<RtcWorkerHandle, TransportAdapterError> {
+        // the slot lock is the single-start guard for this worker
         let Ok(mut worker_slot) = self.worker_handle.lock() else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
         if let Some(worker_handle) = worker_slot.worker_handle() {
             return Ok(worker_handle);
         }
+        // spawning must use the caller's current runtime so tests and embedded
+        // runtimes keep ownership of the worker task
         let Ok(current_runtime) = Handle::try_current() else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
@@ -125,6 +199,8 @@ impl RtcTransportWorker {
         #[cfg(any(test, feature = "testing-transport"))]
         let debug_channels = super::super::test_support::RtcWorkerDebugChannels::new();
         let (relay_tx, relay_rx) = mpsc::channel(RELAY_MAILBOX_CAPACITY);
+        // observability reads these side channels without entering the packet
+        // loop, while authoritative state stays owned by the worker task
         let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
         let snapshot_state = Arc::new(Mutex::new(super::super::state::RtcSnapshotState::default()));
         let packet_loop_lag = Arc::new(packet_loop::PacketLoopLagSnapshot::new(Instant::now()));
@@ -139,7 +215,12 @@ impl RtcTransportWorker {
             packet_loop_lag: Arc::clone(&packet_loop_lag),
             shutdown_token: shutdown_token.clone(),
         };
+        // publication happens while the lock is held so competing callers see
+        // one complete handle
         let worker_handle = worker_slot.store(worker_handle);
+        // the lock protects publication only
+        // task spawn, logging and packet-loop construction do not need to extend
+        // the critical section
         drop(worker_slot);
         let packet_loop_inputs =
             packet_loop::PacketLoopInputReceivers::new(command_rx, relay_rx, shutdown_token);
@@ -179,6 +260,15 @@ impl RtcTransportWorker {
         Ok(worker_handle)
     }
 
+    /// sends a request command to the worker after starting it if needed
+    ///
+    /// use this for mutating facade operations where the absence of a worker
+    /// means transport state must be created before the command can run
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError::TransportUnavailable`] when worker boot,
+    /// command send or response receive fails
     pub(super) async fn request_worker<T, F>(
         &self,
         build_command: F,
@@ -191,6 +281,16 @@ impl RtcTransportWorker {
             .await
     }
 
+    /// sends a request command through an already acquired worker handle
+    ///
+    /// observability and close paths use this when they have intentionally
+    /// decided whether a missing worker should be treated as empty state or
+    /// should be booted first
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError::TransportUnavailable`] when the command
+    /// mailbox is closed or the response sender is dropped before answering
     pub(super) async fn send_worker_command<T, F>(
         &self,
         worker_handle: &RtcWorkerHandle,
@@ -275,6 +375,12 @@ impl RtcTransportWorker {
 }
 
 impl RtcTransportObservabilityFacade<'_> {
+    /// reads bitrate counters for the requested sessions without booting worker state
+    ///
+    /// a missing worker, unavailable registry or missing session contributes no
+    /// bitrate
+    /// callers must treat the result as a recent transport observation rather
+    /// than an accounting source of truth
     pub fn transport_bitrate_snapshot(
         self,
         session_keys: &[TransportSessionKey],
@@ -288,6 +394,11 @@ impl RtcTransportObservabilityFacade<'_> {
         bitrate_registry.transport_bitrate_snapshot_at(session_keys, Instant::now())
     }
 
+    /// reads receiver bandwidth estimates from the worker snapshot state
+    ///
+    /// an empty result means the worker has no current estimate or the snapshot
+    /// side channel is unavailable
+    /// it does not mean the room has no receivers
     pub fn receiver_bandwidth_snapshot(
         self,
         session_keys: &[TransportSessionKey],
@@ -301,6 +412,11 @@ impl RtcTransportObservabilityFacade<'_> {
         snapshot_state.receiver_bandwidth_snapshot(session_keys)
     }
 
+    /// builds a placement-pressure snapshot for selected sessions
+    ///
+    /// egress bitrate is scoped to the supplied sessions while packet-loop lag
+    /// and mailbox backlogs describe the whole worker because those resources
+    /// are shared by every session on the packet loop
     pub fn placement_pressure_snapshot(
         self,
         session_keys: &[TransportSessionKey],
@@ -330,6 +446,11 @@ impl RtcTransportObservabilityFacade<'_> {
         }
     }
 
+    /// builds a pressure snapshot for the whole worker
+    ///
+    /// this is used by room placement to compare local workers
+    /// the result is still best-effort and falls back to zero pressure when the
+    /// worker has not started
     pub fn worker_pressure_snapshot(
         self,
         media_worker_id: usize,
@@ -365,6 +486,10 @@ impl RtcTransportObservabilityFacade<'_> {
         )
     }
 
+    /// reads the latest transport health side-channel entry for one session
+    ///
+    /// `None` means the worker is missing, the snapshot lock is unavailable or
+    /// no health event has been observed for the session
     pub fn session_transport_health(
         self,
         session_key: &TransportSessionKey,
@@ -376,6 +501,11 @@ impl RtcTransportObservabilityFacade<'_> {
         snapshot_state.transport_health(session_key)
     }
 
+    /// asks the packet loop for its current active-speaker source snapshot
+    ///
+    /// this command is read-only but still enters the worker mailbox because
+    /// the source activity ordering lives beside route-control state
+    /// dispatch failures return an empty snapshot
     pub async fn active_speaker_source_snapshot(self) -> Vec<ActiveSpeakerSource> {
         let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
             return Vec::new();
@@ -388,6 +518,11 @@ impl RtcTransportObservabilityFacade<'_> {
             .unwrap_or_default()
     }
 
+    /// asks the packet loop for detailed active-speaker diagnostics
+    ///
+    /// diagnostics are read through the mailbox for the same ownership reason
+    /// as source snapshots
+    /// dispatch failures return an empty diagnostic set
     pub async fn active_speaker_diagnostic_snapshot(self) -> Vec<ActiveSpeakerSourceDiagnostic> {
         let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
             return Vec::new();
@@ -400,6 +535,10 @@ impl RtcTransportObservabilityFacade<'_> {
             .unwrap_or_default()
     }
 
+    /// reads the next active-speaker expiry deadline from the packet loop
+    ///
+    /// `None` means no worker is running, no source has an expiry deadline or
+    /// the worker could not answer the read command
     pub async fn next_active_speaker_deadline(self) -> Option<Instant> {
         let worker_handle = self.worker.worker_handle().ok().flatten()?;
         self.worker
@@ -411,6 +550,12 @@ impl RtcTransportObservabilityFacade<'_> {
             .flatten()
     }
 
+    /// reads room ids whose transport-observed source activity expired by `now`
+    ///
+    /// the packet loop owns expiry calculation because the timestamps are
+    /// produced by packet observation
+    /// dispatch failures return an empty set so schedulers can retry on the
+    /// next wakeup
     pub async fn expired_active_speaker_room_instance_ids(
         self,
         now: Instant,
@@ -427,6 +572,11 @@ impl RtcTransportObservabilityFacade<'_> {
     }
 }
 
+/// combines command and relay mailbox saturation into one pressure score
+///
+/// the score is intentionally the max of both queues
+/// one saturated input path should make placement avoid the worker even if the
+/// other path is idle
 fn worker_pressure_score(
     command_backlog_depth: usize,
     command_capacity: usize,
@@ -439,6 +589,10 @@ fn worker_pressure_score(
     ))
 }
 
+/// converts one bounded mailbox depth into a percentage pressure score
+///
+/// zero capacity is treated as no pressure because there is no usable divisor
+/// and current Tokio bounded mailboxes always report a positive capacity
 fn backlog_pressure_score(backlog_depth: usize, capacity: usize) -> u8 {
     if capacity == 0 {
         return 0;

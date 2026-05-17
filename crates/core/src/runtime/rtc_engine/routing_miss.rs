@@ -271,13 +271,14 @@ impl UnknownSourceRateLimitEntry {
     /// After the burst is exhausted, the source enters a short cooldown and the
     /// burst counter resets. That keeps repeated abuse bounded while allowing a
     /// later legitimate ICE update to recover without waiting for long state.
-    fn record_miss(&mut self, now: Instant) {
+    fn record_miss(&mut self, now: Instant) -> bool {
         self.miss_count = self.miss_count.saturating_add(1);
         if self.miss_count < UNKNOWN_SOURCE_MISS_BURST_LIMIT {
-            return;
+            return false;
         }
         self.miss_count = 0;
         self.blocked_until = Some(now + UNKNOWN_SOURCE_RATE_LIMIT_COOLDOWN);
+        true
     }
 }
 
@@ -322,9 +323,10 @@ impl UnknownSourceRateLimiter {
     ///
     /// Capacity enforcement happens after the miss so the source that triggered
     /// growth is represented before older entries are evicted.
-    fn record_miss(&mut self, source_addr: SocketAddr, now: Instant) {
-        self.entry_mut(source_addr).record_miss(now);
+    fn record_miss(&mut self, source_addr: SocketAddr, now: Instant) -> bool {
+        let entered_cooldown = self.entry_mut(source_addr).record_miss(now);
         self.enforce_capacity();
+        entered_cooldown
     }
 
     /// Drops throttling state once the source successfully routes.
@@ -452,9 +454,9 @@ impl PacketLoopRoutingState {
         packet: &[u8],
         source_addr: SocketAddr,
         now: Instant,
-    ) {
+    ) -> bool {
         self.miss_cache.record(miss_key, packet);
-        self.source_rate_limiter.record_miss(source_addr, now);
+        self.source_rate_limiter.record_miss(source_addr, now)
     }
 
     /// Clears negative state for a source after fallback routing succeeds.
@@ -495,7 +497,10 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use super::{PacketLoopRoutingMissKey, PacketLoopRoutingState, UnknownSourceRateLimiter};
+    use super::{
+        PacketLoopRoutingMissKey, PacketLoopRoutingState, UNKNOWN_SOURCE_MISS_BURST_LIMIT,
+        UnknownSourceRateLimiter,
+    };
 
     #[test]
     fn unknown_source_rate_limiter_blocks_after_burst_and_recovers_after_cooldown() {
@@ -503,10 +508,14 @@ mod tests {
         let mut limiter = UnknownSourceRateLimiter::default();
         let start = Instant::now();
 
-        for offset in 0..4 {
-            let now = start + Duration::from_millis(offset);
+        let mut now = start;
+        for offset in 0..UNKNOWN_SOURCE_MISS_BURST_LIMIT {
             assert!(limiter.allow_probe(source_addr, now));
-            limiter.record_miss(source_addr, now);
+            assert_eq!(
+                limiter.record_miss(source_addr, now),
+                offset == UNKNOWN_SOURCE_MISS_BURST_LIMIT - 1
+            );
+            now += Duration::from_millis(1);
         }
 
         assert!(!limiter.allow_probe(source_addr, start + Duration::from_millis(4)));
@@ -523,9 +532,13 @@ mod tests {
         let packet = [0x80, 0x60, 0x00, 0x01];
         let miss_key = PacketLoopRoutingMissKey::new(source_addr, candidate_addr, &packet);
 
-        for offset in 0..4 {
-            let now = start + Duration::from_millis(offset);
-            routing_state.record_miss(miss_key, &packet, source_addr, now);
+        let mut now = start;
+        for offset in 0..UNKNOWN_SOURCE_MISS_BURST_LIMIT {
+            assert_eq!(
+                routing_state.record_miss(miss_key, &packet, source_addr, now),
+                offset == UNKNOWN_SOURCE_MISS_BURST_LIMIT - 1
+            );
+            now += Duration::from_millis(1);
         }
 
         assert!(routing_state.source_is_tracked(source_addr));

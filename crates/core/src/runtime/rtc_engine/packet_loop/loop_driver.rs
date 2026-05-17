@@ -1,22 +1,23 @@
-//! Packet-loop worker driver.
+//! async driver for one worker-local packet loop
 //!
-//! This module contain the async task that ties the RTC worker together. It is the
-//! only packet-loop file that awaits socket I/O or worker-channel input. The
-//! rest of the packet-loop modules are synchronous helpers that run while the
-//! worker owns mutable access to `PacketLoopState`.
+//! this module contains the task that ties the RTC worker together
+//! it is the only packet-loop file that awaits socket I/O or worker-channel
+//! input
+//! the rest of the packet-loop modules are synchronous helpers that run while
+//! the worker owns mutable access to `PacketLoopState`
 //!
-//! The driver preserves the worker ordering contract:
+//! the driver preserves the worker ordering contract:
 //!
 //! - drain already queued commands before touching media
 //! - pump dirty or timed-out sessions and bounded relay packets
 //! - flush all staged UDP transmits outside any shared-state lock
-//! - wait for the next shutdown, command, relay, timeout or UDP datagram event
+//! - wait for the next shutdown, command, relay, timeout or UDP datagram
 //! - try to route one received datagram into its owning `str0m::Rtc`
 //!
-//! Shared observable state is updated through narrow side channels. The packet
-//! loop owns authoritative media state, while snapshots, metrics, diagnostics,
-//! packet sinks, relay target state and source-policy signals are outputs or
-//! configuration dependencies.
+//! shared observable state is updated through narrow side channels
+//! the packet loop owns authoritative media state while snapshots, metrics,
+//! diagnostics, packet sinks, relay target state and source-policy signals are
+//! outputs or configuration dependencies
 
 use std::{
     io::{Error as IoError, ErrorKind},
@@ -55,64 +56,54 @@ use crate::{
     },
 };
 
-/// Immutable configuration and shared side channels for one packet-loop worker.
+/// immutable configuration and shared side channels for one packet-loop worker
 ///
-/// The config is built by `RtcTransportWorker` when the worker is booted. Values
-/// copied into session creation are immutable worker settings. `Arc` fields are
-/// shared services that the packet loop may update or query without exposing
-/// direct access to `PacketLoopState`.
+/// the config is built by `RtcTransportWorker` when the worker is booted
+/// values copied into session creation are immutable worker settings
+/// `Arc` fields are shared services that the packet loop may update or query
+/// without exposing direct access to `PacketLoopState`
 pub(in crate::runtime::rtc_engine) struct PacketLoopConfig {
-    /// Public ICE-lite address advertised by sessions created on this worker.
     pub public_ip: IpAddr,
-    /// Maximum inbound bitrate applied when new RTC engine sessions are created.
     pub max_bitrate_in: Bitrate,
-    /// Maximum outbound bitrate applied when new RTC engine sessions are created.
     pub max_bitrate_out: Bitrate,
-    /// Video bitrate policy projected into session and route-control decisions.
     pub video_bitrate_limits: VideoBitrateLimits,
-    /// UDP port range used when the worker opens or reuses its worker socket.
     pub rtc_port_range: RtcPortRange,
-    /// Codec feature flags used while constructing session offers.
     pub codec_flags: MediaCodecFlags,
-    /// Ordered codec preferences used while constructing session offers.
     pub codec_preferences: CodecPreferences,
-    /// First transport media id allocated by this worker.
+    /// first transport media id allocated by this worker
     ///
-    /// Media ids are worker-local counters once the loop is running, but the
-    /// values must be unique across workers because cross-worker relay state is
-    /// keyed by the producing media id. The worker manager assigns disjoint ranges
-    /// before boot so per-packet routing does not need to carry a wider key.
+    /// media ids are worker-local counters once the loop is running
+    /// the values must be unique across workers because cross-worker relay state
+    /// is keyed by the producing media id
+    /// the worker manager assigns disjoint ranges before boot so per-packet
+    /// routing does not need to carry a wider key
     pub media_id_base: u64,
-    /// Cold-path diagnostics sink for transport health changes.
     pub diagnostics: Arc<DiagnosticsStore>,
-    /// Room-scoped packet sinks such as recording taps.
     pub packet_sink_registry: Arc<RoomPacketSinkRegistry>,
-    /// Wakeup mechanism for room-owned source policy recomputation.
     pub source_policy_signal: Arc<SourcePolicySignal>,
-    /// Central metrics catalog updated by packet-loop observations.
     pub metrics: Arc<RuntimeMetrics>,
-    /// Worker-local RTP metric recorder used by packet forwarding.
     pub rtp_metrics: Arc<RtpMetricsRecorder>,
-    /// Worker-local RTC packet-loop metric recorder.
     pub rtc_metrics: Arc<RtcMetricsRecorder>,
-    /// Shared atomic packet-loop lag snapshot.
     pub packet_loop_lag: Arc<PacketLoopLagSnapshot>,
 }
 
-/// Socket snapshot used for the wait phase of one packet-loop turn.
+/// packet-loop info allowed to cross into the async wait phase
 ///
-/// The `Arc<UdpSocket>` is cloned before the loop awaits so no borrow of
-/// `PacketLoopState` crosses an await point. `next_timeout` is computed from
-/// dirty sessions, `str0m` timeouts and delayed selected-RID keyframe refreshes.
-struct SnapshotInfo {
+/// `snapshot_and_pump` builds this after mutable `PacketLoopState` access is
+/// finished
+/// the driver can then await with only a cloned socket, the candidate address
+/// needed to route the next datagram, the next internal wakeup deadline and the
+/// turn start time used for lag accounting
+///
+/// keeping this type narrow makes it visible when a future change tries to
+/// carry session state, routing state or reusable buffers across `.await`
+struct WaitPhaseSnapshot {
     socket: Arc<UdpSocket>,
     candidate_addr: SocketAddr,
     next_timeout: Option<Instant>,
     turn_started_at: Instant,
 }
 
-/// External input that resumes the worker after the pump phase.
-///
 enum NextLoopInput {
     ReadyNow,
     Control(PacketLoopControlInput),
@@ -124,6 +115,11 @@ enum NextLoopInput {
     },
 }
 
+/// reusable state carried across packet-loop turns
+///
+/// this context owns the allocation surface plus fairness budgets that should
+/// survive across turns
+/// durable RTC state still stays in `PacketLoopState`
 struct PacketLoopTurnContext {
     buffers: PacketLoopBuffers,
     packet_sink_cache: PacketSinkRouteCache,
@@ -133,6 +129,10 @@ struct PacketLoopTurnContext {
     udp_burst_budget: usize,
 }
 
+/// borrowed state needed to apply the input selected by the wait phase
+///
+/// grouping these borrows keeps the ingress function signatures small while
+/// making it clear that no await happens while the context exists
 struct PacketLoopApplyContext<'a> {
     packet_loop_state: &'a mut PacketLoopState,
     bitrate_registry: &'a Arc<Mutex<BitrateRegistry>>,
@@ -164,36 +164,47 @@ const MAX_CONTROL_INPUTS_PER_TURN: usize = 64;
 const MAX_UDP_DATAGRAMS_PER_TURN: usize = 16;
 const MAX_READY_NOW_INPUTS_BEFORE_YIELD: usize = 32;
 
-/// Run the worker-local media packet loop until shutdown or worker-channel close.
+/// runs the worker-local media packet loop until shutdown or command-channel close
 ///
 /// # Concurrency
 ///
-/// This task owns `PacketLoopState`, routing hints, the UDP receive buffer and
-/// `PacketLoopBuffers`. Other tasks communicate with it through channels,
-/// shared read-side snapshots and cancellation. No `MutexGuard` is held across
-/// socket sends or receives.
+/// this task owns `PacketLoopState`, routing hints, the UDP receive buffer and
+/// `PacketLoopBuffers`
+/// other tasks communicate with it through channels, shared read-side snapshots
+/// and cancellation
+/// no `MutexGuard` is held across socket sends or receives
 ///
 /// # Hot-path behavior
 ///
-/// The loop batches work in turns. A turn may produce many transmits and
-/// forwards, but it waits for only one next external input before looping.
-/// Relay draining is bounded so a relay burst cannot starve commands or socket
-/// ingress indefinitely.
+/// the loop batches work in turns
+/// a turn may produce many transmits and forwards but it waits for only one
+/// next external input before looping
+/// relay draining is bounded so a relay burst cannot starve commands or socket
+/// ingress indefinitely
 pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
     config: PacketLoopConfig,
     bitrate_registry: Arc<Mutex<BitrateRegistry>>,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     mut inputs: PacketLoopInputReceivers,
 ) {
+    // transport media ids must start from the worker-assigned range so relay
+    // maps can use the media id alone across workers
     let mut packet_loop_state = PacketLoopState {
         next_media_id: config.media_id_base,
         ..PacketLoopState::default()
     };
+    // routing recovery is cached outside durable RTC state because any topology
+    // command can invalidate source-address or ICE-fragment ownership
     let mut routing_state = PacketLoopRoutingState::new();
+    // datagram bytes are kept in a fixed buffer so socket receive does not
+    // allocate while media is flowing
     let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
     let mut turn = PacketLoopTurnContext::new(Instant::now());
 
     loop {
+        // queued control comes first so close, negotiation and route updates
+        // become visible before the worker pumps more media (what we do with them
+        // depends on the state of the worker which is controlled by the commands)
         if !drain_queued_control_inputs(
             &mut packet_loop_state,
             &bitrate_registry,
@@ -213,8 +224,14 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
             &mut turn,
         );
 
+        // a wait snapshot exists only after a shared UDP socket has been opened
+        // so this turn may have fallback sends and a meaningful lag sample
         if let Some(info) = snapshot.as_ref() {
+            // fallback transmits are sent after the state borrow ends because
+            // async sends must not hold packet-loop mutable state
             flush_staged_transmits(&info.socket, &turn.buffers).await;
+            // lag includes command drain, media pump and fallback async sends
+            // because that is the delay visible to the next packet-loop turn
             record_packet_loop_lag(
                 &config.packet_loop_lag,
                 &mut turn.lag_publisher,
@@ -231,31 +248,45 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
         )
         .await
         else {
+            // shutdown fired or the command receiver closed
+            // both cases end the worker rather than spinning on media
             return;
         };
+        // real external input proves the loop yielded to its environment, so
+        // immediate internal wakeups get a fresh fairness budget
         if !matches!(next_input, NextLoopInput::ReadyNow) {
             turn.reset_ready_now_budget();
         }
 
-        let mut apply_context = PacketLoopApplyContext {
-            packet_loop_state: &mut packet_loop_state,
-            bitrate_registry: &bitrate_registry,
-            snapshot_state: &snapshot_state,
-            config: &config,
-            routing_state: &mut routing_state,
-            inputs: &mut inputs,
-            receive_buffer: &mut receive_buffer,
-        };
+        // applying the selected input is synchronous and prepares state for the
+        // next turn
+        // no await may happen while this context borrows worker state
         apply_ingress_for_next_turn(
-            &mut apply_context,
+            &mut PacketLoopApplyContext {
+                packet_loop_state: &mut packet_loop_state,
+                bitrate_registry: &bitrate_registry,
+                snapshot_state: &snapshot_state,
+                config: &config,
+                routing_state: &mut routing_state,
+                inputs: &mut inputs,
+                receive_buffer: &mut receive_buffer,
+            },
             next_input,
             &mut turn.staged_relay_packet,
         );
     }
 }
 
+/// flushes UDP transmits that could not be sent with `try_send_to`
+///
+/// `str0m` transmit bytes are copied into reusable slots only when the
+/// immediate socket send reports `WouldBlock`
+/// the async fallback happens after the pump phase so no borrow of
+/// `PacketLoopState` crosses `.await`
 async fn flush_staged_transmits(socket: &UdpSocket, buffers: &PacketLoopBuffers) {
     for pending_transmit in buffers.pending_transmits() {
+        // send errors are logged and dropped because `str0m` will drive future
+        // retransmit or timeout behavior through later polls
         if socket
             .send_to(
                 pending_transmit.contents.as_slice(),
@@ -272,6 +303,11 @@ async fn flush_staged_transmits(socket: &UdpSocket, buffers: &PacketLoopBuffers)
     }
 }
 
+/// drains already queued control inputs before media pumping
+///
+/// the cap prevents a large command burst from starving media forever
+/// returning `false` means shutdown was requested before the worker should do
+/// more packet-loop work
 fn drain_queued_control_inputs(
     packet_loop_state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
@@ -281,6 +317,8 @@ fn drain_queued_control_inputs(
     routing_state: &mut PacketLoopRoutingState,
 ) -> bool {
     for _ in 0..MAX_CONTROL_INPUTS_PER_TURN {
+        // shutdown wins even over already queued commands so drained workers
+        // stop promptly
         if inputs.shutdown_cancelled() {
             return false;
         }
@@ -299,14 +337,14 @@ fn drain_queued_control_inputs(
     true
 }
 
-/// Apply the event that woke the worker after the pump phase.
+/// applies the event that woke the worker after the pump phase
 ///
-/// Control inputs mutate authoritative worker state and conservatively
-/// invalidate ingress routing hints. Datagram inputs are routed into the owning
-/// `str0m::Rtc`. Queued UDP datagrams can resume following turns without
-/// another socket await, but every datagram still gets a pump between inputs.
-/// Relay input is staged for the next pump so it reuses the same bounded relay
-/// drain path as already queued relay packets.
+/// control inputs mutate authoritative worker state and conservatively
+/// invalidate ingress routing hints
+/// queued UDP datagrams can resume following turns without another socket await
+/// but every datagram still gets a pump between inputs
+/// relay input is staged for the next pump so it reuses the same bounded relay
+/// drain path as already queued relay packets
 fn apply_ingress_for_next_turn(
     context: &mut PacketLoopApplyContext<'_>,
     next_input: NextLoopInput,
@@ -337,6 +375,11 @@ fn apply_ingress_for_next_turn(
     }
 }
 
+/// guards the fixed receive buffer before demux can mutate a session
+///
+/// `UdpSocket::recv_from` should only report lengths inside
+/// `RECEIVE_BUFFER_LEN`
+/// the guard keeps malformed test input from slicing past the receive buffer
 fn route_received_datagram(
     context: &mut PacketLoopApplyContext<'_>,
     source_addr: SocketAddr,
@@ -346,6 +389,8 @@ fn route_received_datagram(
     let Some(packet) = context.receive_buffer.get(..received_size) else {
         return;
     };
+    // ingress routing owns demux recovery and calls `Rtc::accepts()` before a
+    // packet can mutate a session
     route_packet_to_matching_session(
         context.packet_loop_state,
         context.snapshot_state,
@@ -357,12 +402,10 @@ fn route_received_datagram(
     );
 }
 
-/// Execute one control input against authoritative worker state.
+/// applies control input and forgets cached demux evidence
 ///
-/// The input handler owns all control-plane mutation for the RTC engine. The
-/// packet-loop driver only supplies the worker context and then clears cached
-/// ingress routing state. This is conservative because control input can change
-/// which session owns a source tuple or ICE username fragment.
+/// this is conservative because control input can change which session owns a
+/// source tuple or ICE username fragment
 fn handle_control_input_and_clear_routing_cache(
     packet_loop_state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
@@ -390,25 +433,24 @@ fn handle_control_input_and_clear_routing_cache(
     routing_state.clear_on_topology_change();
 }
 
-/// Drain synchronous worker work and return the socket state for async waiting.
+/// runs the synchronous work for one packet-loop turn
 ///
-/// This is the center of one packet-loop turn. It clears reusable buffers,
-/// drains session outputs, drains bounded relay input, flushes route-control
-/// feedback, records packet observations, plans fanout and executes forwarding.
-/// The returned snapshot contains only the socket handle and next deadline
-/// needed after the mutable borrow of worker state ends. If the worker has not
-/// opened a shared socket yet, the function clears staged buffers and returns
-/// without polling media.
+/// this function is intentionally non-async because it holds mutable worker
+/// state
+/// it returns only the cloned socket and next deadline needed after that borrow
+/// ends
 fn snapshot_and_pump(
     state: &mut PacketLoopState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: &PacketLoopConfig,
     relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
     turn: &mut PacketLoopTurnContext,
-) -> Option<SnapshotInfo> {
+) -> Option<WaitPhaseSnapshot> {
     let turn_started_at = Instant::now();
     turn.buffers.clear();
     let (socket, candidate_addr) = {
+        // no socket means no RTC session has reached transport bootstrap yet
+        // the worker should wait only for control or relay input
         let shared_socket = state.shared_socket.as_ref()?;
         (
             Arc::clone(&shared_socket.socket),
@@ -416,6 +458,8 @@ fn snapshot_and_pump(
         )
     };
     if let Some(packet) = turn.staged_relay_packet.take() {
+        // the packet that woke the wait phase enters the same batch as packets
+        // drained from the relay mailbox below
         turn.buffers.pending_packets.push(packet);
     }
     let now = Instant::now();
@@ -434,6 +478,8 @@ fn snapshot_and_pump(
     );
     drain_due_rid_keyframe_refreshes(state, &*config.rtc_metrics, now);
     flush_pending_keyframe_requests(state, &*config.rtc_metrics, &mut turn.buffers);
+    // packet observations must run before fanout planning because layer gates
+    // and first-ingress keyframes depend on facts learned from this batch
     record_incoming_stats(
         state,
         &config.source_policy_signal,
@@ -441,8 +487,12 @@ fn snapshot_and_pump(
         &config.rtp_metrics,
         &mut turn.buffers,
     );
+    // sink routes are refreshed once per turn so recording lookups do not take
+    // the shared registry lock per packet
     turn.packet_sink_cache
         .refresh_from(&config.packet_sink_registry);
+    // planning is separated from flushing so all destinations for the batch are
+    // known before any send mutates local session state
     for (packet_idx, packet) in turn.buffers.pending_packets.iter_mut().enumerate() {
         populate_forward_routes_for_packet(
             state,
@@ -453,13 +503,15 @@ fn snapshot_and_pump(
             &mut turn.buffers.forwards,
         );
     }
+    // flushing executes local RTC sends, relay sends and packet-sink fanout
+    // planned destination order preserves payload reuse opportunities
     flush_forward_routes(
         state,
         &config.metrics,
         &config.rtp_metrics,
         &mut turn.buffers,
     );
-    Some(SnapshotInfo {
+    Some(WaitPhaseSnapshot {
         socket,
         candidate_addr,
         next_timeout: next_timeout_deadline(state),
@@ -467,6 +519,9 @@ fn snapshot_and_pump(
     })
 }
 
+/// updates lag through the coalescing publisher
+///
+/// this avoids writing the shared atomic snapshot on every loop turn
 fn record_packet_loop_lag(
     snapshot: &PacketLoopLagSnapshot,
     publisher: &mut PacketLoopLagPublisher,
@@ -475,11 +530,12 @@ fn record_packet_loop_lag(
     publisher.observe(snapshot, turn_started_at, Instant::now());
 }
 
-/// Return the next time the loop must wake without external input.
+/// returns the next time the loop must wake without external input
 ///
-/// Dirty sessions are always due immediately because a previous input or local
-/// send has queued more `str0m` output. Otherwise the deadline is the earlier of
-/// the next `str0m` timeout and the next delayed selected-RID keyframe refresh.
+/// dirty sessions are always due immediately because a previous input or local
+/// send has queued more `str0m` output
+/// otherwise the deadline is the earlier of the next `str0m` timeout and the
+/// next delayed selected-RID keyframe refresh
 pub(super) fn next_timeout_deadline(state: &mut PacketLoopState) -> Option<Instant> {
     if state.has_dirty_sessions() {
         return Some(Instant::now());
@@ -496,31 +552,40 @@ pub(super) fn next_timeout_deadline(state: &mut PacketLoopState) -> Option<Insta
     }
 }
 
-/// Wait for the next event that should resume the worker loop.
+/// waits for the next event that should resume the worker loop
 ///
-/// Shutdown and control input are biased ahead of socket receive. When no
-/// socket has been opened yet, only shutdown and control input can wake the
-/// worker.
+/// shutdown and control input are biased ahead of socket receive
+/// when no socket has been opened yet, only mailbox input or shutdown can wake
+/// the worker
 async fn wait_for_next_loop_input(
-    snapshot: Option<SnapshotInfo>,
+    snapshot: Option<WaitPhaseSnapshot>,
     inputs: &mut PacketLoopInputReceivers,
     receive_buffer: &mut [u8],
     ready_now_budget: &mut usize,
     udp_burst_budget: &mut usize,
 ) -> Option<NextLoopInput> {
     let Some(info) = snapshot else {
+        // without a socket there is no media path to poll
+        // the worker waits for lifecycle input that can create a session
         return inputs.recv_control_or_relay().await.map(mailbox_to_input);
     };
     if let Some(next_timeout) = info.next_timeout
         && next_timeout <= Instant::now()
         && *ready_now_budget > 0
     {
+        // ready-now keeps due internal work moving but the budget prevents an
+        // expired deadline from starving mailbox or socket input forever
         *ready_now_budget = (*ready_now_budget).saturating_sub(1);
         return Some(NextLoopInput::ReadyNow);
     }
+    // after one awaited datagram wakes the loop, drain a bounded number of
+    // queued datagrams with `try_recv_from` so socket bursts do not pay one
+    // await per packet
     if let Some(next_input) = try_recv_queued_datagram(&info, receive_buffer, udp_burst_budget) {
         return Some(next_input);
     }
+    // mailbox input is biased so shutdown and lifecycle commands stay
+    // responsive even while media traffic is heavy
     tokio::select! {
         biased;
         next_input = inputs.recv_control_or_relay() => next_input.map(mailbox_to_input),
@@ -528,8 +593,12 @@ async fn wait_for_next_loop_input(
     }
 }
 
+/// tries to consume one already queued UDP datagram without awaiting
+///
+/// the burst budget allows short receive bursts while still forcing the worker
+/// back to the biased wait after a bounded number of datagrams
 fn try_recv_queued_datagram(
-    info: &SnapshotInfo,
+    info: &WaitPhaseSnapshot,
     receive_buffer: &mut [u8],
     udp_burst_budget: &mut usize,
 ) -> Option<NextLoopInput> {
@@ -538,6 +607,8 @@ fn try_recv_queued_datagram(
     }
     match info.socket.try_recv_from(receive_buffer) {
         Ok((received_size, source_addr)) => {
+            // each datagram gets its own following pump turn, so only the input
+            // budget is decremented here
             *udp_burst_budget = (*udp_burst_budget).saturating_sub(1);
             Some(NextLoopInput::Datagram {
                 source_addr,
@@ -546,10 +617,14 @@ fn try_recv_queued_datagram(
             })
         }
         Err(error) if error.kind() == ErrorKind::WouldBlock => {
+            // no queued datagram means the next awaited receive starts a fresh
+            // burst budget
             *udp_burst_budget = MAX_UDP_DATAGRAMS_PER_TURN;
             None
         }
         Err(_error) => {
+            // receive errors should not end the worker
+            // an immediate turn lets timeouts and command handling continue
             warn!("rtc packet loop failed to receive datagram");
             Some(NextLoopInput::ReadyNow)
         }
@@ -563,14 +638,22 @@ fn mailbox_to_input(input: PacketLoopMailboxInput) -> NextLoopInput {
     }
 }
 
+/// waits for either socket input or the next internal timeout
+///
+/// the socket receive future borrows only the fixed receive buffer and cloned
+/// socket handle from the wait snapshot
 async fn wait_for_socket_input(
-    info: &SnapshotInfo,
+    info: &WaitPhaseSnapshot,
     receive_buffer: &mut [u8],
     ready_now_budget: &mut usize,
     udp_burst_budget: &mut usize,
 ) -> NextLoopInput {
     let receive = info.socket.recv_from(receive_buffer);
     let result = if let Some(next_timeout) = info.next_timeout {
+        // an exhausted ready-now budget converts an already-due deadline into a
+        // minimum socket wait through `socket_wait_duration`
+        // that gives the biased `select!` a real executor yield before the
+        // budget is replenished
         match timeout(socket_wait_duration(next_timeout), receive).await {
             Ok(result) => result,
             Err(_elapsed) => {
@@ -581,9 +664,15 @@ async fn wait_for_socket_input(
     } else {
         receive.await
     };
+    // successful receives reset the burst budget around this first datagram
+    // so follow-up queued datagrams can be tried without awaiting again
     handle_socket_receive_result(result, info.candidate_addr, udp_burst_budget)
 }
 
+/// keeps socket receive errors recoverable
+///
+/// a receive error becomes a ready-now wake so the worker can continue handling
+/// control input and future timeouts
 fn handle_socket_receive_result(
     result: Result<(usize, SocketAddr), IoError>,
     candidate_addr: SocketAddr,
@@ -591,6 +680,7 @@ fn handle_socket_receive_result(
 ) -> NextLoopInput {
     match result {
         Ok((received_size, source_addr)) => {
+            // one datagram is already consumed from the new burst
             *udp_burst_budget = MAX_UDP_DATAGRAMS_PER_TURN.saturating_sub(1);
             NextLoopInput::Datagram {
                 source_addr,
@@ -605,10 +695,10 @@ fn handle_socket_receive_result(
     }
 }
 
-/// Convert a deadline into the socket receive timeout used by `tokio::time`.
+/// prevents an expired deadline from becoming a spin loop
 ///
-/// A deadline that is already due becomes a one millisecond timeout. This yields
-/// back to Tokio instead of spinning if the loop reaches an expired deadline.
+/// a deadline that is already due becomes a one millisecond timeout
+/// this gives Tokio a scheduling point before the next ready-now turn
 fn socket_wait_duration(next_timeout: Instant) -> Duration {
     let timeout_duration = next_timeout.saturating_duration_since(Instant::now());
     if timeout_duration.is_zero() {

@@ -1,17 +1,37 @@
-//! Facades for the RTC transport worker.
+//! concern-scoped facades for one RTC transport worker
 //!
-//! ### Key Structures
+//! this file is the narrow backend surface used by the media transport worker
+//! manager after it has selected the worker that owns a session
+//! callers express transport intent through negotiation, media, session and
+//! observability facades while the worker keeps mutable RTC state inside its
+//! packet-loop task
 //!
-//! * [`RtcTransportWorker`]: The central handle for an RTC worker. It owns
-//!   the handle to the background worker loop.
-//! * [`RtcTransportNegotiationFacade`]: Handles SDP-related operations like creating
-//!   offers and applying answers.
-//! * [`RtcTransportMediaFacade`]: Handles media-level operations like adding/removing
-//!   send/recv tracks and controlling producer/consumer activity
-//! * [`RtcTransportSessionFacade`]: Handles user-level lifeccyle like closing
-//!   users and draining workers.
-//! * [`RtcTransportObservabilityFacade`]: Provide read-only access to transport
-//!   health, bitrates, and active speaker information.
+//! facade methods are cold-path orchestration
+//! they clone typed identifiers, build mailbox commands and await worker
+//! responses
+//! the packet loop remains the only owner of WebRTC sessions, media handles,
+//! route-control state and relay fanout
+//!
+//! the split is intentionally small:
+//!
+//! ```text
+//! media transport worker manager
+//!   |
+//!   v
+//! selected rtc worker
+//!   |-- negotiation()  offer and answer state
+//!   |-- media()        producer, consumer and relay mutations
+//!   |-- users()        session teardown and worker draining
+//!   `-- observability() best-effort transport snapshots
+//! ```
+//!
+//! [`TransportMediaId`] values allocated by a worker must stay process-wide
+//! distinct
+//! source route maps and relay maps use them as packet-path keys even when a
+//! source is forwarded to another worker
+//! the worker manager assigns each worker a media-id range before the packet
+//! loop starts so the hot path keeps one compact media key instead of carrying
+//! a composite worker key
 
 use std::{
     fmt,
@@ -53,6 +73,16 @@ use crate::{
 
 static NEXT_RELAY_TARGET_ID: AtomicU64 = AtomicU64::new(1);
 
+/// published handle for a lazily booted packet-loop worker
+///
+/// the handle is cloned by cold-path facade methods so they can enqueue work
+/// without holding the worker publication lock across `.await`
+/// it contains command channels plus the read-mostly snapshot state that can be
+/// observed without entering the packet-loop task
+///
+/// dropping this handle does not stop the worker
+/// shutdown is explicit through `shutdown_token` after the worker reports that
+/// its last session has been closed
 #[derive(Clone)]
 pub struct RtcWorkerHandle {
     pub(super) command_tx: mpsc::Sender<RtcWorkerCommand>,
@@ -76,21 +106,23 @@ impl fmt::Debug for RtcWorkerHandle {
     }
 }
 
-/// Worker-local RTC transport facade.
+/// worker-local RTC transport facade
 ///
-/// A worker owns one packet loop and the process-local services that feed it.
-/// The surrounding worker manager decides which transport sessions live here, while
-/// this type keeps the worker state hidden behind negotiation, media, session
-/// and observability facades.
+/// a worker owns one packet loop plus the process-local services that feed it
+/// the surrounding worker manager decides which transport sessions live here
+/// this type keeps worker state hidden behind negotiation, media, session and
+/// observability facades
 ///
-/// `TransportMediaId` values allocated by a worker must be process-wide
-/// distinct because worker-local relay target maps, route-control maps and
-/// packet gates use them as source keys across workers. The worker manager assigns `media_id_base`
-/// before the packet loop starts so the hot path can keep using the compact
-/// media id key without adding a composite worker key to every packet lookup.
+/// all mutation methods eventually enter the same worker mailbox
+/// that means the packet-loop task serializes WebRTC, media registry and route
+/// state updates without exposing a shared mutable state lock to room code
+///
+/// observability reads are best-effort by design
+/// snapshots may race with packet processing or teardown and must not be used
+/// as room-membership authority
 pub struct RtcTransportWorker {
     pub(super) relay_target_id: RelayTargetId,
-    /// First transport media id reserved for this worker's packet loop.
+    /// first transport media id reserved for this worker's packet loop
     pub(super) media_id_base: u64,
     pub(super) public_ip: IpAddr,
     pub(super) max_bitrate_in: Bitrate,
@@ -108,27 +140,57 @@ pub struct RtcTransportWorker {
     pub(super) worker_handle: Mutex<super::runtime::WorkerHandleSlot<RtcWorkerHandle>>,
 }
 
+/// facade for offer and answer operations on one worker
+///
+/// callers must pass session keys that the worker manager has already mapped
+/// to this worker
+/// the worker enforces SDP state such as the one-outstanding-offer rule
 #[derive(Clone, Copy)]
 pub struct RtcTransportNegotiationFacade<'a> {
     worker: &'a RtcTransportWorker,
 }
 
+/// facade for producer, consumer, packet-gate and relay mutations
+///
+/// this surface is still cold-path orchestration
+/// packet fanout and RTP forwarding stay in the worker-owned packet loop after
+/// commands have installed the needed state
 #[derive(Clone, Copy)]
 pub struct RtcTransportMediaFacade<'a> {
     worker: &'a RtcTransportWorker,
 }
 
+/// facade for session lifecycle operations
+///
+/// closing a session may drain the whole worker
+/// the facade owns the post-close decision that clears the lazy handle and
+/// requests packet-loop shutdown once no session state remains
 #[derive(Clone, Copy)]
 pub struct RtcTransportSessionFacade<'a> {
     worker: &'a RtcTransportWorker,
 }
 
+/// facade for read-only transport observations
+///
+/// these methods expose packet-loop side channels to worker-manager policy and
+/// diagnostics
+/// every result is best-effort and should be interpreted as a current transport
+/// observation rather than authoritative room state
 #[derive(Clone, Copy)]
 pub struct RtcTransportObservabilityFacade<'a> {
     pub(super) worker: &'a RtcTransportWorker,
 }
 
 impl RtcTransportWorker {
+    /// builds one worker facade from validated RTC transport config
+    ///
+    /// construction does not start sockets or spawn the packet loop
+    /// the first command that needs worker-owned state triggers lazy boot
+    ///
+    /// `media_id_base` must identify the media-id range reserved for this
+    /// worker
+    /// callers get that value from the worker manager so media ids remain
+    /// process-wide unique across local relay routes
     pub fn new(
         config: &RtcTransportConfig,
         deps: &MediaTransportDeps,
@@ -181,6 +243,23 @@ impl RtcTransportWorker {
 }
 
 impl RtcTransportNegotiationFacade<'_> {
+    /// creates the first transport offer for a worker-owned session
+    ///
+    /// this boots the packet loop if needed and asks the worker to create the
+    /// bootstrap offer used for WebRTC setup and capability probing
+    /// the session must not already have registered media or an earlier
+    /// outstanding initial offer
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError::TransportUnavailable`] when the worker
+    /// cannot be booted or addressed
+    ///
+    /// returns [`TransportAdapterError::InvalidInput`] when the session already
+    /// has an unresolved local offer
+    ///
+    /// returns [`TransportAdapterError::UnsupportedFeature`] when the session is
+    /// no longer in the initial negotiation phase
     pub async fn create_initial_session_offer(
         self,
         session_key: &TransportSessionKey,
@@ -193,6 +272,22 @@ impl RtcTransportNegotiationFacade<'_> {
             .await
     }
 
+    /// creates the next local offer after media topology changed
+    ///
+    /// the worker owns the staged offer and the one-outstanding-offer rule
+    /// callers should request this after producer or consumer setup has staged
+    /// sdp work for the session
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError::TransportUnavailable`] when the session
+    /// no longer exists on this worker
+    ///
+    /// returns [`TransportAdapterError::InvalidInput`] when the initial answer
+    /// has not landed or another offer is still awaiting an answer
+    ///
+    /// returns [`TransportAdapterError::UnsupportedFeature`] when no
+    /// renegotiation offer is currently staged
     pub async fn create_session_renegotiation_offer(
         self,
         session_key: &TransportSessionKey,
@@ -207,6 +302,19 @@ impl RtcTransportNegotiationFacade<'_> {
             .await
     }
 
+    /// applies the browser answer that matches the current pending local offer
+    ///
+    /// answer application commits worker-local SDP state, refreshes negotiated
+    /// producer parameters and returns the transport-derived facts needed by
+    /// room code to commit staged publications
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError::TransportUnavailable`] when the session
+    /// is gone or the worker cannot be reached
+    ///
+    /// returns [`TransportAdapterError::InvalidInput`] when the SDP cannot be
+    /// parsed or no matching pending offer exists
     pub async fn apply_session_answer(
         self,
         session_key: &TransportSessionKey,
@@ -223,6 +331,18 @@ impl RtcTransportNegotiationFacade<'_> {
 }
 
 impl RtcTransportSessionFacade<'_> {
+    /// closes a session and reports whether the worker still owns live state
+    ///
+    /// if the packet loop was never started, the session is treated as already
+    /// closed
+    /// when the worker reports [`CloseSessionState::WorkerDrained`], this
+    /// method clears the published worker handle and cancels the worker
+    /// shutdown token
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError::TransportUnavailable`] when the worker
+    /// handle lock is poisoned or the worker mailbox cannot answer
     pub async fn close_session_with_outcome(
         self,
         session_key: &TransportSessionKey,
@@ -248,6 +368,19 @@ impl RtcTransportSessionFacade<'_> {
 }
 
 impl RtcTransportMediaFacade<'_> {
+    /// removes one producer or consumer media handle from a session
+    ///
+    /// the worker validates that the handle belongs to the supplied session
+    /// removal may stage SDP cleanup, clear route-control state, drop bitrate
+    /// counters and mark the session dirty for the next packet-loop turn
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError::TransportUnavailable`] when the session
+    /// or media handle is not owned by the worker
+    ///
+    /// returns [`TransportAdapterError::InvalidInput`] when the handle belongs
+    /// to another session or cannot be represented in the current SDP state
     pub async fn remove_media(
         self,
         session_key: &TransportSessionKey,
@@ -262,6 +395,15 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
+    /// reads answer-derived producer RTP parameters in tests
+    ///
+    /// this keeps adapter tests at the transport boundary while still checking
+    /// the negotiated state that production code uses after answer application
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError`] when the worker cannot resolve the
+    /// requested producer media
     #[cfg(test)]
     pub async fn negotiated_producer_parameters(
         self,
@@ -279,6 +421,20 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
+    /// registers browser-uploaded media as a worker-owned producer
+    ///
+    /// before the initial answer, recv state can be declared directly on the
+    /// worker session
+    /// after negotiation, this stages a recv-only m-section and returns the
+    /// transport media id that room state can bind to its producer
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError::TransportUnavailable`] when the session
+    /// is gone or worker command dispatch fails
+    ///
+    /// returns [`TransportAdapterError::InvalidInput`] when a new offer would
+    /// violate the worker-owned one-outstanding-offer rule
     pub async fn add_recv_media(
         self,
         session_key: &TransportSessionKey,
@@ -295,6 +451,20 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
+    /// registers browser-downloaded media as a worker-owned consumer
+    ///
+    /// the source may be local to the same packet loop or represented by a
+    /// remote-source control handle from another worker
+    /// the command creates the consumer media handle and installs the route that
+    /// lets packet-loop fanout deliver RTP to the consumer session
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError::TransportUnavailable`] when the
+    /// consumer session or source route cannot be resolved
+    ///
+    /// returns [`TransportAdapterError::InvalidInput`] when the requested
+    /// consumer setup violates worker SDP or route ownership rules
     pub async fn add_send_media(
         self,
         consumer_session_key: &TransportSessionKey,
@@ -317,6 +487,15 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
+    /// toggles packet fanout from one producer media handle
+    ///
+    /// this preserves producer registration and consumer routes
+    /// it only changes whether packets from the source can leave the worker
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError`] when the worker cannot validate or
+    /// mutate the producer route
     pub async fn set_producer_active(
         self,
         session_key: &TransportSessionKey,
@@ -333,6 +512,17 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
+    /// toggles packet fanout to one consumer route
+    ///
+    /// the route must already have been validated by the worker manager for
+    /// room ownership
+    /// the worker revalidates route state before changing the destination
+    /// activity flag
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError`] when the consumer route cannot be found
+    /// or cannot be updated
     pub async fn set_consumer_active(
         self,
         route: &TransportConsumerRoute,
@@ -347,6 +537,16 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
+    /// applies one source-selection packet gate to a consumer route
+    ///
+    /// packet gates are room-owned policy projected into transport execution
+    /// the facade translates the public transport gate into the worker
+    /// route-control vocabulary before the command enters the packet loop
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError`] when the route cannot be validated or
+    /// the gate cannot become effective for the current source state
     pub async fn set_consumer_packet_gate(
         self,
         route: &TransportConsumerRoute,
@@ -362,6 +562,17 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
+    /// applies several packet gates for one source media id in one worker turn
+    ///
+    /// batching keeps dense-room source-policy changes as one mailbox command
+    /// and one source-gate refresh
+    /// the outer result reports whether the batch reached the worker
+    /// each inner result reports validation for the matching update
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError`] when the worker cannot receive or
+    /// answer the batch command
     pub async fn set_consumer_packet_gates<'a>(
         self,
         source_session_key: &TransportSessionKey,
@@ -388,6 +599,16 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
+    /// asks the worker to request a keyframe for one consumer route
+    ///
+    /// the worker maps the consumer route back to the producer source
+    /// local sources are requested directly, remote sources are forwarded
+    /// through their [`RemoteSourceControl`]
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError`] when the route cannot be validated or
+    /// the source worker cannot be reached
     pub async fn request_consumer_keyframe(
         self,
         route: &TransportConsumerRoute,
@@ -400,6 +621,16 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
+    /// resolves the browser-visible MID for a transport media id
+    ///
+    /// this is a best-effort compatibility and diagnostic lookup
+    /// `Ok(None)` can mean the media id is unknown, already removed or not yet
+    /// negotiated
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError::TransportUnavailable`] when the worker
+    /// command path cannot answer
     pub async fn transport_media_mid(
         self,
         transport_media_id: TransportMediaId,
@@ -412,6 +643,17 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
+    /// builds the control handle a consumer worker stores for a remote source
+    ///
+    /// the returned handle lets the consumer worker send best-effort keyframe
+    /// and packet-gate updates back to the worker that owns the producer
+    /// this starts the source worker if it is not already running because the
+    /// handle needs its command mailbox
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError::TransportUnavailable`] when the source
+    /// worker cannot be booted
     pub fn remote_source_control(
         self,
         target: &RtcTransportWorker,
@@ -423,6 +665,15 @@ impl RtcTransportMediaFacade<'_> {
         ))
     }
 
+    /// installs cross-worker relay delivery from this source worker to a target
+    ///
+    /// the target worker is booted first so its relay mailbox can be registered
+    /// on the source worker before packets need to flow
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError`] when either worker cannot be booted or
+    /// the source worker rejects the relay target
     pub async fn activate_relay_route(
         self,
         source_session_key: &TransportSessionKey,
@@ -441,6 +692,15 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
+    /// removes cross-worker relay delivery from this source worker to a target
+    ///
+    /// relay removal is part of room-owned cleanup and should be safe to retry
+    /// when the target was already removed by earlier teardown
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError`] when the source worker cannot receive
+    /// or answer the removal command
     pub async fn deactivate_relay_route(
         self,
         source_transport_media_id: TransportMediaId,
@@ -455,6 +715,16 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
+    /// applies the active state of one cross-worker relay target
+    ///
+    /// relay target activity is separate from relay target registration
+    /// inactive targets keep their mailbox identity but source fanout stops
+    /// selecting them
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError`] when the source worker cannot validate
+    /// or update the relay target
     pub async fn apply_relay_target_activity(
         self,
         source_session_key: &TransportSessionKey,
@@ -474,6 +744,10 @@ impl RtcTransportMediaFacade<'_> {
     }
 }
 
+/// translates public source-selection policy into packet-loop route-control policy
+///
+/// the conversion stays at this boundary so room and media-transport code do
+/// not import worker-private route-control types
 fn packet_layer_gate(
     packet_gate: SourcePacketGate,
 ) -> super::super::route_control::PacketLayerGate {

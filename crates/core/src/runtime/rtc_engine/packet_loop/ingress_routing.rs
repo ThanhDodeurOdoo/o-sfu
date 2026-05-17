@@ -142,10 +142,6 @@ pub(super) fn route_packet_to_matching_session(
     let now = Instant::now();
     if routing_state.source_is_blocked(source_addr, now) {
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
-        trace!(
-            source = %source_addr,
-            "dropping UDP datagram because sustained unknown-source misses exhausted the rtc recovery budget for this source"
-        );
         return;
     }
     let miss_key = PacketLoopRoutingMissKey::new(source_addr, candidate_addr, packet);
@@ -165,10 +161,6 @@ pub(super) fn route_packet_to_matching_session(
     // Legitimate traffic should have been learned via STUN before hitting this path.
     if routing_state.should_rate_limit_source(source_addr, now) {
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
-        trace!(
-            source = %source_addr,
-            "dropping UDP datagram because sustained unknown-source misses exhausted the rtc recovery budget for this source"
-        );
         return;
     }
     let route = PacketRouteContext {
@@ -417,6 +409,19 @@ fn log_malformed_datagram(source_addr: SocketAddr) {
     );
 }
 
+fn record_unknown_source_miss(
+    routing_state: &mut PacketLoopRoutingState,
+    miss_key: PacketLoopRoutingMissKey,
+    route: &PacketRouteContext<'_>,
+) {
+    if routing_state.record_miss(miss_key, route.packet, route.source_addr, route.now) {
+        trace!(
+            source = %route.source_addr,
+            "entering rtc unknown-source recovery cooldown after sustained routing misses"
+        );
+    }
+}
+
 struct PacketRouteContext<'a> {
     snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
     metrics: &'a RtcMetricsRecorder,
@@ -537,7 +542,7 @@ fn route_packet_by_single_session(
         route
             .metrics
             .record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
-        routing_state.record_miss(miss_key, route.packet, route.source_addr, route.now);
+        record_unknown_source_miss(routing_state, miss_key, route);
         trace!(
             source = %route.source_addr,
             "dropping UDP datagram because no rtc user accepted it"
@@ -597,7 +602,7 @@ fn route_packet_by_recovery_index(
             route
                 .metrics
                 .record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
-            routing_state.record_miss(miss_key, route.packet, route.source_addr, route.now);
+            record_unknown_source_miss(routing_state, miss_key, route);
             trace!(
                 source = %route.source_addr,
                 "dropping UDP datagram because no rtc user accepted it"
