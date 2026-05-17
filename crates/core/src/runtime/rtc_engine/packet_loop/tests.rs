@@ -566,17 +566,17 @@ fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
         ),
     );
     buffers.forwards.push(
-        super::super::forwarding_destination::PacketForward::from_intra_node_relay_sink(
+        super::super::forwarding_destination::PacketForward::from_relay_target(
             0,
             source_transport_media_id,
-            relay_mailbox,
+            relay_mailbox.into(),
         ),
     );
     buffers.forwards.push(
-        super::super::forwarding_destination::PacketForward::from_inter_node_relay_sink(
+        super::super::forwarding_destination::PacketForward::from_relay_target(
             0,
             source_transport_media_id,
-            inter_node_sender,
+            inter_node_sender.into(),
         ),
     );
 
@@ -877,10 +877,10 @@ fn flush_forward_routes_records_relay_overload_drops() {
     );
     buffers.pending_packets.push(packet);
     buffers.forwards.push(
-        super::super::forwarding_destination::PacketForward::from_intra_node_relay_sink(
+        super::super::forwarding_destination::PacketForward::from_relay_target(
             0,
             source_transport_media_id,
-            relay_mailbox,
+            relay_mailbox.into(),
         ),
     );
 

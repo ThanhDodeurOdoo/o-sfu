@@ -62,24 +62,27 @@ pub(super) enum RelayTargetTransport {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct ActiveRelayTarget<TargetId, Target> {
-    target_id: TargetId,
-    target: Target,
+pub(super) struct ActiveRelayTarget {
+    target_id: RelayTargetId,
+    target: RelayTargetTransport,
 }
 
-impl<TargetId, Target> ActiveRelayTarget<TargetId, Target> {
-    fn new(target_id: TargetId, target: Target) -> Self {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RelayTargetKind {
+    IntraNode,
+    InterNode,
+}
+
+impl ActiveRelayTarget {
+    fn new(target_id: RelayTargetId, target: RelayTargetTransport) -> Self {
         Self { target_id, target }
     }
 
-    pub(super) const fn target_id(&self) -> TargetId
-    where
-        TargetId: Copy,
-    {
+    pub(super) const fn target_id(&self) -> RelayTargetId {
         self.target_id
     }
 
-    pub(super) const fn target(&self) -> &Target {
+    pub(super) const fn target(&self) -> &RelayTargetTransport {
         &self.target
     }
 }
@@ -93,6 +96,30 @@ impl From<RelayPacketMailbox> for RelayTargetTransport {
 impl From<InterNodeRelaySender> for RelayTargetTransport {
     fn from(value: InterNodeRelaySender) -> Self {
         Self::InterNodeSender(value)
+    }
+}
+
+impl RelayTargetTransport {
+    pub(super) fn forward_packet(
+        &self,
+        packet: &ForwardedPacket,
+        source_transport_media_id: TransportMediaId,
+    ) -> RelayEnqueueOutcome {
+        match self {
+            Self::IntraNodeMailbox(mailbox) => {
+                mailbox.forward_packet(packet, source_transport_media_id)
+            }
+            Self::InterNodeSender(sender) => {
+                sender.forward_packet(packet, source_transport_media_id)
+            }
+        }
+    }
+
+    pub(super) const fn kind(&self) -> RelayTargetKind {
+        match self {
+            Self::IntraNodeMailbox(_) => RelayTargetKind::IntraNode,
+            Self::InterNodeSender(_) => RelayTargetKind::InterNode,
+        }
     }
 }
 
@@ -122,33 +149,20 @@ impl RelayTargetId {
 }
 
 #[derive(Debug, Clone)]
-struct RelayTargetRegistration<Target> {
-    target: Target,
+struct RelayTargetRegistration {
+    target: RelayTargetTransport,
     active: bool,
 }
 
 /// Source-worker cache for relay target handles and active bits.
-#[derive(Debug, Clone)]
-pub(super) struct RelayTargetRegistry<TargetId, Target> {
-    targets: BTreeMap<TargetId, RelayTargetRegistration<Target>>,
-    active_targets: Arc<[ActiveRelayTarget<TargetId, Target>]>,
+#[derive(Debug, Clone, Default)]
+pub(super) struct RelaySourceRegistration {
+    targets: BTreeMap<RelayTargetId, RelayTargetRegistration>,
+    active_targets: Arc<[ActiveRelayTarget]>,
 }
 
-impl<TargetId, Target> Default for RelayTargetRegistry<TargetId, Target> {
-    fn default() -> Self {
-        Self {
-            targets: BTreeMap::new(),
-            active_targets: Arc::default(),
-        }
-    }
-}
-
-impl<TargetId, Target> RelayTargetRegistry<TargetId, Target>
-where
-    TargetId: Copy + Ord,
-    Target: Clone,
-{
-    pub(super) fn add_target(&mut self, target_id: TargetId, target: Target) {
+impl RelaySourceRegistration {
+    pub(super) fn add_target(&mut self, target_id: RelayTargetId, target: RelayTargetTransport) {
         self.targets
             .entry(target_id)
             .or_insert(RelayTargetRegistration {
@@ -157,13 +171,13 @@ where
             });
     }
 
-    pub(super) fn remove_target(&mut self, target_id: TargetId) -> bool {
+    pub(super) fn remove_target(&mut self, target_id: RelayTargetId) -> bool {
         self.targets.remove(&target_id);
         self.rebuild_mailboxes();
         self.targets.is_empty()
     }
 
-    pub(super) fn set_target_active(&mut self, target_id: TargetId, active: bool) {
+    pub(super) fn set_target_active(&mut self, target_id: RelayTargetId, active: bool) {
         let Some(registration) = self.targets.get_mut(&target_id) else {
             return;
         };
@@ -174,7 +188,7 @@ where
     }
 
     #[must_use]
-    pub(super) fn active_targets_slice(&self) -> &[ActiveRelayTarget<TargetId, Target>] {
+    pub(super) fn active_targets_slice(&self) -> &[ActiveRelayTarget] {
         &self.active_targets
     }
 
@@ -183,11 +197,11 @@ where
         !self.active_targets.is_empty()
     }
 
-    pub(super) fn contains_target(&self, target_id: TargetId) -> bool {
+    pub(super) fn contains_target(&self, target_id: RelayTargetId) -> bool {
         self.targets.contains_key(&target_id)
     }
 
-    pub(super) fn is_target_active(&self, target_id: TargetId) -> bool {
+    pub(super) fn is_target_active(&self, target_id: RelayTargetId) -> bool {
         self.targets
             .get(&target_id)
             .is_some_and(|registration| registration.active)
@@ -221,8 +235,6 @@ where
     }
 }
 
-pub(super) type RelaySourceRegistration = RelayTargetRegistry<RelayTargetId, RelayTargetTransport>;
-
 /// Source-indexed relay destinations owned by one packet loop.
 ///
 /// A source worker keeps this state beside its normal local route table. For
@@ -247,7 +259,7 @@ impl PacketLoopState {
     pub(super) fn relay_targets_for_source(
         &self,
         source_transport_media_id: TransportMediaId,
-    ) -> Option<&[ActiveRelayTarget<RelayTargetId, RelayTargetTransport>]> {
+    ) -> Option<&[ActiveRelayTarget]> {
         self.relay_targets
             .get(&source_transport_media_id)
             .and_then(|registration| {

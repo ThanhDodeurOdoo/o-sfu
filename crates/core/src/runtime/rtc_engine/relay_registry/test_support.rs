@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 #[cfg(test)]
 use super::{
     ActiveRelayTarget, ForwardedPacket, InterNodeRelaySender, RELAY_MAILBOX_CAPACITY,
-    RelayEnqueueOutcome, RelayPacketMailbox, RelayTargetId, RelayTargetTransport,
+    RelayEnqueueOutcome, RelayPacketMailbox,
 };
 #[cfg(test)]
 use crate::runtime::media_transport::TransportMediaId;
@@ -38,25 +38,8 @@ impl InterNodeRelaySender {
 }
 
 #[cfg(test)]
-impl RelayTargetTransport {
-    pub fn forward_packet(
-        &self,
-        packet: &ForwardedPacket,
-        source_transport_media_id: TransportMediaId,
-    ) -> RelayEnqueueOutcome {
-        match self {
-            Self::IntraNodeMailbox(mailbox) => {
-                mailbox.forward_packet(packet, source_transport_media_id)
-            }
-            Self::InterNodeSender(sender) => {
-                sender.forward_packet(packet, source_transport_media_id)
-            }
-        }
-    }
-}
-
 #[cfg(test)]
-impl ActiveRelayTarget<RelayTargetId, RelayTargetTransport> {
+impl ActiveRelayTarget {
     pub fn forward_packet(
         &self,
         packet: &ForwardedPacket,
