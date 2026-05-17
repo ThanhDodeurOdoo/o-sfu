@@ -19,9 +19,10 @@ use crate::{
         ConnectionId, RoomInstanceId, UserId,
         diagnostics::DiagnosticsStore,
         media_transport::{
-            ConsumerActivity, MediaTransportDeps, RtcTransportConfig, TransportAdapterError,
-            TransportConsumerRoute, TransportMediaId, TransportRelayRouteAction,
-            TransportRelayRouteEffect, TransportSessionKey, test_support::FakeMediaTransport,
+            ConsumerActivity, MediaTransportDeps, RelayRouteActivity, RtcTransportConfig,
+            TransportAdapterError, TransportConsumerRoute, TransportMediaId,
+            TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionKey,
+            test_support::FakeMediaTransport,
         },
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -161,7 +162,7 @@ async fn install_active_relay_route(
         source_session_key,
         source_media_id,
         target_session_key,
-        TransportRelayRouteAction::SetActive(true),
+        TransportRelayRouteAction::SetActivity(RelayRouteActivity::Active),
     )
     .await;
 }
@@ -212,7 +213,7 @@ async fn set_remote_relay_and_consumer_active(
         source_session,
         source_media_id,
         remote_consumer_session,
-        TransportRelayRouteAction::SetActive(active),
+        TransportRelayRouteAction::SetActivity(RelayRouteActivity::from_active(active)),
     )
     .await;
     let route = TransportConsumerRoute::new(

@@ -9,8 +9,8 @@ use crate::{
     runtime::{
         diagnostics::DiagnosticsStore,
         media_transport::{
-            TransportPlacementPressureSnapshot, TransportRelayRouteAction,
-            TransportRelayRouteAction::{Install, Release, SetActive},
+            RelayRouteActivity, TransportPlacementPressureSnapshot, TransportRelayRouteAction,
+            TransportRelayRouteAction::{Install, Release, SetActivity},
         },
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -851,7 +851,7 @@ async fn room_owned_relay_route_shares_remote_worker_lifecycle() {
     let source_media_id = camera_media_id(&room, &publisher_id).await;
     let route = (&publisher_id, source_media_id, target_worker_id);
     assert_relay_count(&fake, route, Install, 1);
-    assert_relay_count(&fake, route, SetActive(true), 1);
+    assert_relay_count(&fake, route, SetActivity(RelayRouteActivity::Active), 1);
 
     set_camera_active(
         &room,
@@ -862,7 +862,7 @@ async fn room_owned_relay_route_shares_remote_worker_lifecycle() {
         &media_transport,
     )
     .await;
-    assert_relay_count(&fake, route, SetActive(false), 0);
+    assert_relay_count(&fake, route, SetActivity(RelayRouteActivity::Inactive), 0);
 
     set_camera_active(
         &room,
@@ -873,7 +873,7 @@ async fn room_owned_relay_route_shares_remote_worker_lifecycle() {
         &media_transport,
     )
     .await;
-    wait_relay(&fake, route, SetActive(false)).await;
+    wait_relay(&fake, route, SetActivity(RelayRouteActivity::Inactive)).await;
 
     set_camera_active(
         &room,
@@ -884,7 +884,7 @@ async fn room_owned_relay_route_shares_remote_worker_lifecycle() {
         &media_transport,
     )
     .await;
-    wait_relay(&fake, route, SetActive(true)).await;
+    wait_relay(&fake, route, SetActivity(RelayRouteActivity::Active)).await;
 
     leave(
         &room,

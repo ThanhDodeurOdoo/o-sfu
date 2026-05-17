@@ -427,11 +427,35 @@ pub struct TransportRelayRouteEffect {
     pub action: TransportRelayRouteAction,
 }
 
+/// relay-route transport activity state
+///
+/// inactive relay routes keep their target registration but stop source-worker
+/// fanout to that target
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayRouteActivity {
+    Active,
+    Inactive,
+}
+
+impl RelayRouteActivity {
+    /// converts a boolean route activity flag into the explicit relay state
+    #[must_use]
+    pub const fn from_active(active: bool) -> Self {
+        if active { Self::Active } else { Self::Inactive }
+    }
+
+    /// returns whether this state allows relay forwarding
+    #[must_use]
+    pub const fn is_active(self) -> bool {
+        matches!(self, Self::Active)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportRelayRouteAction {
     Install,
     Release,
-    SetActive(bool),
+    SetActivity(RelayRouteActivity),
 }
 
 /// consumer-to-source route identity owned by the transport boundary
