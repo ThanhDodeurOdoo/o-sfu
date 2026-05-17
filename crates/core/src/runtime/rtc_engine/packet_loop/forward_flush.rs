@@ -270,7 +270,7 @@ pub(super) fn flush_forward_routes(
         let destination_kind = destination.metrics_kind();
         let payload_len = packet.payload_len();
         let relay_packet = match destination {
-            ForwardingDestination::IntraNodeRelay(_) | ForwardingDestination::InterNodeRelay(_) => {
+            ForwardingDestination::Relay(_) => {
                 let Some(source_transport_media_id) =
                     packet.resolve_source_transport_media_id(state)
                 else {
@@ -295,9 +295,7 @@ pub(super) fn flush_forward_routes(
             Ok(ForwardSendOutcome::SideEffect)
                 if matches!(
                     destination,
-                    ForwardingDestination::PacketSink(_)
-                        | ForwardingDestination::IntraNodeRelay(_)
-                        | ForwardingDestination::InterNodeRelay(_)
+                    ForwardingDestination::PacketSink(_) | ForwardingDestination::Relay(_)
                 ) =>
             {
                 rtp_metrics.record_forwarded(destination_kind, payload_len);

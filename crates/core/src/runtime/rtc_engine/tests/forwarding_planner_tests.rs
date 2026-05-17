@@ -265,11 +265,13 @@ fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc
     ));
     assert!(matches!(
         forwards.get(1).map(PacketForward::destination),
-        Some(ForwardingDestination::IntraNodeRelay(_))
+        Some(destination)
+            if destination.metrics_kind() == RtpForwardDestinationKind::IntraNodeRelay
     ));
     assert!(matches!(
         forwards.get(2).map(PacketForward::destination),
-        Some(ForwardingDestination::IntraNodeRelay(_))
+        Some(destination)
+            if destination.metrics_kind() == RtpForwardDestinationKind::IntraNodeRelay
     ));
     assert!(matches!(
         forwards.get(3).map(PacketForward::destination),
@@ -370,7 +372,8 @@ fn populate_forward_routes_only_relays_the_registered_source_media() {
     assert_eq!(forwards.len(), 2);
     assert!(matches!(
         forwards.first().map(PacketForward::destination),
-        Some(ForwardingDestination::IntraNodeRelay(_))
+        Some(destination)
+            if destination.metrics_kind() == RtpForwardDestinationKind::IntraNodeRelay
     ));
     assert!(matches!(
         forwards.get(1).map(PacketForward::destination),
@@ -420,7 +423,8 @@ fn populate_forward_routes_plans_inter_node_relay_targets_without_new_packet_sha
     assert_eq!(forwards.len(), 1);
     assert!(matches!(
         forwards.first().map(PacketForward::destination),
-        Some(ForwardingDestination::InterNodeRelay(_))
+        Some(destination)
+            if destination.metrics_kind() == RtpForwardDestinationKind::InterNodeRelay
     ));
 }
 
@@ -628,12 +632,14 @@ fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admit
     assert_eq!(forwards.first().map(PacketForward::packet_idx), Some(0));
     assert!(matches!(
         forwards.first().map(PacketForward::destination),
-        Some(ForwardingDestination::IntraNodeRelay(_))
+        Some(destination)
+            if destination.metrics_kind() == RtpForwardDestinationKind::IntraNodeRelay
     ));
     assert_eq!(forwards.get(1).map(PacketForward::packet_idx), Some(1));
     assert!(matches!(
         forwards.get(1).map(PacketForward::destination),
-        Some(ForwardingDestination::InterNodeRelay(_))
+        Some(destination)
+            if destination.metrics_kind() == RtpForwardDestinationKind::InterNodeRelay
     ));
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_layer_allowed(), 2);

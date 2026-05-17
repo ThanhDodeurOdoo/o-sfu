@@ -29,7 +29,7 @@ use super::{
     demux::{MediaRouteDestination, MediaRouteEntry},
     forwarded_packet::ForwardedPacket,
     forwarding_destination::PacketForward,
-    relay_registry::{ActiveRelayTarget, RelayTargetId, RelayTargetTransport},
+    relay_registry::{ActiveRelayTarget, RelayTargetId},
     route_control::{PacketLayerMetadata, PacketRouteDecision},
     state::PacketLoopState,
 };
@@ -127,15 +127,12 @@ fn push_origin_sink_forward(
 /// crosses a previous high-water mark.
 fn reserve_forward_capacity(
     origin_sink: Option<&RegisteredPacketSink>,
-    relay_targets: Option<&[ActiveRelayTarget<RelayTargetId, RelayTargetTransport>]>,
+    relay_targets: Option<&[ActiveRelayTarget]>,
     route_entry: Option<&MediaRouteEntry>,
     forwards: &mut Vec<PacketForward>,
 ) {
     let planned_forwards = usize::from(origin_sink.is_some())
-        + relay_targets.map_or(
-            0,
-            <[ActiveRelayTarget<RelayTargetId, RelayTargetTransport>]>::len,
-        )
+        + relay_targets.map_or(0, <[ActiveRelayTarget]>::len)
         + route_entry.map_or(0, |entry| entry.destinations.len());
     forwards.reserve(planned_forwards);
 }
@@ -175,7 +172,7 @@ fn source_packet_gate_permits(
 /// target.
 fn populate_relay_forwards(
     state: &PacketLoopState,
-    relay_targets: Option<&[ActiveRelayTarget<RelayTargetId, RelayTargetTransport>]>,
+    relay_targets: Option<&[ActiveRelayTarget]>,
     packet_idx: usize,
     source_transport_media_id: RouteTransportMediaId,
     metadata: PacketLayerMetadata,
@@ -211,25 +208,14 @@ fn populate_relay_forwards(
 fn push_relay_forward(
     packet_idx: usize,
     source_transport_media_id: RouteTransportMediaId,
-    relay_target: &ActiveRelayTarget<RelayTargetId, RelayTargetTransport>,
+    relay_target: &ActiveRelayTarget,
     forwards: &mut Vec<PacketForward>,
 ) {
-    match relay_target.target().clone() {
-        RelayTargetTransport::IntraNodeMailbox(mailbox) => {
-            forwards.push(PacketForward::from_intra_node_relay_sink(
-                packet_idx,
-                source_transport_media_id,
-                mailbox,
-            ));
-        }
-        RelayTargetTransport::InterNodeSender(sender) => {
-            forwards.push(PacketForward::from_inter_node_relay_sink(
-                packet_idx,
-                source_transport_media_id,
-                sender,
-            ));
-        }
-    }
+    forwards.push(PacketForward::from_relay_target(
+        packet_idx,
+        source_transport_media_id,
+        relay_target.target().clone(),
+    ));
 }
 
 /// Adds local RTC destinations for active routes whose consumer gate permits
@@ -310,7 +296,7 @@ fn relay_target_gate_permits(
 /// effects must still run for source packets even when the source has no live
 /// relay or local RTC consumers.
 fn has_routed_forward(
-    relay_targets: Option<&[ActiveRelayTarget<RelayTargetId, RelayTargetTransport>]>,
+    relay_targets: Option<&[ActiveRelayTarget]>,
     route_entry: Option<&MediaRouteEntry>,
 ) -> bool {
     relay_targets.is_some_and(|targets| !targets.is_empty())
