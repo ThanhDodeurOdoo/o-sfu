@@ -10,7 +10,8 @@ use super::{
 };
 use crate::runtime::{
     media_transport::{
-        TransportAdapterError, TransportMediaId, TransportResult, TransportSessionKey,
+        TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportResult,
+        TransportSessionKey,
     },
     metrics::RuntimeMetrics,
     rtc_engine::{
@@ -38,21 +39,11 @@ pub fn respond_set_producer_active(
 
 pub fn respond_set_consumer_active(
     state: &mut PacketLoopState,
-    consumer_session_key: &TransportSessionKey,
-    consumer_transport_media_id: TransportMediaId,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    route: &TransportConsumerRoute,
     active: bool,
     response: oneshot::Sender<Result<(), TransportAdapterError>>,
 ) {
-    let _ = response.send(routes::worker_set_consumer_active(
-        state,
-        consumer_session_key,
-        consumer_transport_media_id,
-        source_session_key,
-        source_transport_media_id,
-        active,
-    ));
+    let _ = response.send(routes::worker_set_consumer_active(state, route, active));
 }
 
 /// Command adapter for receiver-driven layer updates.
@@ -89,20 +80,10 @@ pub fn respond_set_consumer_packet_gates(
 pub fn respond_request_consumer_keyframe(
     state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
-    consumer_session_key: &TransportSessionKey,
-    consumer_transport_media_id: TransportMediaId,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    route: &TransportConsumerRoute,
     response: oneshot::Sender<Result<(), TransportAdapterError>>,
 ) {
-    let _ = response.send(worker_request_consumer_keyframe(
-        state,
-        metrics,
-        consumer_session_key,
-        consumer_transport_media_id,
-        source_session_key,
-        source_transport_media_id,
-    ));
+    let _ = response.send(worker_request_consumer_keyframe(state, metrics, route));
 }
 
 pub fn respond_add_relay_target(

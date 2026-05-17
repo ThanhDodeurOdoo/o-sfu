@@ -44,7 +44,7 @@ use crate::{
         media_transport::{
             AppliedSessionAnswer, ConsumerPacketGateUpdate, MediaTransportDeps, RtcTransportConfig,
             SessionOffer, SourcePacketGate, SourcePolicySignal, TransportAdapterError,
-            TransportMediaId, TransportResult, TransportSessionKey,
+            TransportConsumerRoute, TransportMediaId, TransportResult, TransportSessionKey,
         },
         metrics::{RtcMetricsRecorder, RtpMetricsRecorder, RuntimeMetrics},
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -335,18 +335,12 @@ impl RtcTransportMediaFacade<'_> {
 
     pub async fn set_consumer_active(
         self,
-        consumer_session_key: &TransportSessionKey,
-        consumer_transport_media_id: TransportMediaId,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        route: &TransportConsumerRoute,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         self.worker
             .request_worker(|response| RtcWorkerCommand::SetConsumerActive {
-                consumer_session_key: consumer_session_key.clone(),
-                consumer_transport_media_id,
-                source_session_key: source_session_key.clone(),
-                source_transport_media_id,
+                route: route.clone(),
                 active,
                 response,
             })
@@ -355,19 +349,13 @@ impl RtcTransportMediaFacade<'_> {
 
     pub async fn set_consumer_packet_gate(
         self,
-        consumer_session_key: &TransportSessionKey,
-        consumer_transport_media_id: TransportMediaId,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        route: &TransportConsumerRoute,
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
         let packet_gate = packet_layer_gate(packet_gate);
         self.worker
             .request_worker(|response| RtcWorkerCommand::SetConsumerPacketGate {
-                consumer_session_key: consumer_session_key.clone(),
-                consumer_transport_media_id,
-                source_session_key: source_session_key.clone(),
-                source_transport_media_id,
+                route: route.clone(),
                 packet_gate,
                 response,
             })
@@ -384,8 +372,8 @@ impl RtcTransportMediaFacade<'_> {
             .into_iter()
             .map(|update| {
                 ConsumerPacketGateCommand::new(
-                    update.consumer_session_key().clone(),
-                    update.consumer_transport_media_id(),
+                    update.route().consumer_session_key().clone(),
+                    update.route().consumer_transport_media_id(),
                     packet_layer_gate(update.packet_gate().clone()),
                 )
             })
@@ -402,17 +390,11 @@ impl RtcTransportMediaFacade<'_> {
 
     pub async fn request_consumer_keyframe(
         self,
-        consumer_session_key: &TransportSessionKey,
-        consumer_transport_media_id: TransportMediaId,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        route: &TransportConsumerRoute,
     ) -> Result<(), TransportAdapterError> {
         self.worker
             .request_worker(|response| RtcWorkerCommand::RequestConsumerKeyframe {
-                consumer_session_key: consumer_session_key.clone(),
-                consumer_transport_media_id,
-                source_session_key: source_session_key.clone(),
-                source_transport_media_id,
+                route: route.clone(),
                 response,
             })
             .await

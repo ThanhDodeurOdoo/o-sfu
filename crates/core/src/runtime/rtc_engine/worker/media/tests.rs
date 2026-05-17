@@ -28,7 +28,9 @@ use crate::{
     Bitrate, MediaCodecFlags,
     runtime::{
         UserId,
-        media_transport::{TransportAdapterError, TransportMediaId, TransportSessionKey},
+        media_transport::{
+            TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportSessionKey,
+        },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
         rtc_engine::{
             bitrate::BitrateRegistry,
@@ -164,15 +166,13 @@ fn request_consumer_keyframe(
     source_transport_media_id: TransportMediaId,
 ) {
     let (response_tx, response_rx) = oneshot::channel();
-    respond_request_consumer_keyframe(
-        state,
-        metrics,
-        consumer_session,
+    let route = TransportConsumerRoute::new(
+        consumer_session.clone(),
         consumer_transport_media_id,
-        source_session,
+        source_session.clone(),
         source_transport_media_id,
-        response_tx,
     );
+    respond_request_consumer_keyframe(state, metrics, &route, response_tx);
     assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
 }
 
@@ -257,15 +257,18 @@ fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
         consumer_session.clone(),
         consumer_mid,
     );
+    let route = TransportConsumerRoute::new(
+        consumer_session.clone(),
+        consumer_transport_media_id,
+        source_session.clone(),
+        source_transport_media_id,
+    );
     let command_now = Instant::now();
     let (response_tx, response_rx) = oneshot::channel();
     respond_set_consumer_packet_gate(
         &mut state,
         ConsumerPacketGateRequest {
-            consumer_session_key: &consumer_session,
-            consumer_transport_media_id,
-            source_session_key: &source_session,
-            source_transport_media_id,
+            route: &route,
             packet_gate: PacketLayerGate::Rid(selected_rid),
         },
         command_now,
@@ -589,14 +592,17 @@ fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate(
     let observed_at = Instant::now();
     state.observe_producer_rid_packet(source_transport_media_id, Rid::from("lo"), observed_at);
 
+    let route = TransportConsumerRoute::new(
+        first_consumer_session.clone(),
+        first_consumer_transport_media_id,
+        source_session.clone(),
+        source_transport_media_id,
+    );
     let (response_tx, response_rx) = oneshot::channel();
     respond_set_consumer_packet_gate(
         &mut state,
         ConsumerPacketGateRequest {
-            consumer_session_key: &first_consumer_session,
-            consumer_transport_media_id: first_consumer_transport_media_id,
-            source_session_key: &source_session,
-            source_transport_media_id,
+            route: &route,
             packet_gate: PacketLayerGate::Rid("lo".into()),
         },
         observed_at + Duration::from_millis(20),
@@ -651,14 +657,17 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
     let observed_at = Instant::now();
     state.observe_producer_rid_packet(source_transport_media_id, selected_rid, observed_at);
 
+    let route = TransportConsumerRoute::new(
+        consumer_session.clone(),
+        consumer_transport_media_id,
+        source_session.clone(),
+        source_transport_media_id,
+    );
     let (live_response_tx, live_response_rx) = oneshot::channel();
     respond_set_consumer_packet_gate(
         &mut state,
         ConsumerPacketGateRequest {
-            consumer_session_key: &consumer_session,
-            consumer_transport_media_id,
-            source_session_key: &source_session,
-            source_transport_media_id,
+            route: &route,
             packet_gate: PacketLayerGate::Rid(selected_rid),
         },
         observed_at + Duration::from_millis(500),
@@ -678,10 +687,7 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
     respond_set_consumer_packet_gate(
         &mut state,
         ConsumerPacketGateRequest {
-            consumer_session_key: &consumer_session,
-            consumer_transport_media_id,
-            source_session_key: &source_session,
-            source_transport_media_id,
+            route: &route,
             packet_gate: PacketLayerGate::Rid(selected_rid),
         },
         observed_at + Duration::from_secs(3),

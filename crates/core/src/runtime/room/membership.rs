@@ -38,8 +38,9 @@ use crate::runtime::media_transport::TransportWorkerPressureSnapshot;
 use crate::{
     SessionNegotiationOutcome, UserInfoRefresh,
     runtime::{
-        ConnectionId, UserId, UserInfo, UserPermissions, diagnostics::DiagnosticsEventData,
-        media_transport::MediaTransport,
+        ConnectionId, UserId, UserInfo, UserPermissions,
+        diagnostics::DiagnosticsEventData,
+        media_transport::{MediaTransport, TransportConsumerRoute},
     },
 };
 
@@ -769,19 +770,13 @@ impl Room {
             return false;
         };
         for target in keyframe_refresh_targets {
-            if media_port
-                .request_consumer_keyframe(
-                    &self.transport_user_key(user_id, connection_id),
-                    target.consumer_media,
-                    &self.transport_user_key(
-                        &target.producer_user_id,
-                        target.producer_connection_id,
-                    ),
-                    target.source_media,
-                )
-                .await
-                .is_err()
-            {
+            let route = TransportConsumerRoute::new(
+                self.transport_user_key(user_id, connection_id),
+                target.consumer_media,
+                self.transport_user_key(&target.producer_user_id, target.producer_connection_id),
+                target.source_media,
+            );
+            if media_port.request_consumer_keyframe(&route).await.is_err() {
                 warn!(
                     ?user_id,
                     connection_id = ?connection_id,

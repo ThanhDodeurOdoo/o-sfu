@@ -107,9 +107,10 @@ pub mod transport {
             RtcTransportConfig, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
             SourcePacketGate, SourcePacketOperatingPoint, SourcePolicyDirtyState,
             SourcePolicySignal, SourcePolicyUpdateSubscription, TransportAdapterError,
-            TransportBitrateSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
-            TransportRelayRouteAction, TransportRelayRouteEffect, TransportResult,
-            TransportSessionHealth, TransportSessionKey, TransportWorkerPressureSnapshot,
+            TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,
+            TransportPlacementPressureSnapshot, TransportRelayRouteAction,
+            TransportRelayRouteEffect, TransportResult, TransportSessionHealth,
+            TransportSessionKey, TransportWorkerPressureSnapshot,
         },
     };
 }

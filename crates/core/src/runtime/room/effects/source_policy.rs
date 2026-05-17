@@ -146,13 +146,7 @@ impl SourcePolicyEffectPlan {
             plan.push(
                 index,
                 ConsumerPacketGateUpdate::new(
-                    room.transport_user_key(
-                        route.consumer_user_id(),
-                        route.consumer_connection_id(),
-                    ),
-                    route.consumer_media(),
-                    room.transport_user_key(route.source_user_id(), route.source_connection_id()),
-                    route.source_media(),
+                    room.transport_consumer_route(route),
                     packet_gate.clone(),
                 ),
             );
@@ -196,10 +190,7 @@ impl SourcePolicyEffectPlan {
         let route = update.route();
         media_port
             .set_consumer_active(
-                &room.transport_user_key(route.consumer_user_id(), route.consumer_connection_id()),
-                route.consumer_media(),
-                &room.transport_user_key(route.source_user_id(), route.source_connection_id()),
-                route.source_media(),
+                &room.transport_consumer_route(route),
                 ConsumerActivity::from_active(update.route_active()),
             )
             .await
@@ -237,12 +228,7 @@ impl SourcePolicyEffectPlan {
         }
         debug!(?route, "requesting adaptation keyframe refresh");
         let accepted = media_port
-            .request_consumer_keyframe(
-                &room.transport_user_key(route.consumer_user_id(), route.consumer_connection_id()),
-                route.consumer_media(),
-                &room.transport_user_key(route.source_user_id(), route.source_connection_id()),
-                route.source_media(),
-            )
+            .request_consumer_keyframe(&room.transport_consumer_route(route))
             .await
             .is_ok();
         if accepted {

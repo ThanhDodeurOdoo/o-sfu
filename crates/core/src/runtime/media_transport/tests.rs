@@ -20,8 +20,8 @@ use crate::{
         diagnostics::DiagnosticsStore,
         media_transport::{
             ConsumerActivity, MediaTransportDeps, RtcTransportConfig, TransportAdapterError,
-            TransportMediaId, TransportRelayRouteAction, TransportRelayRouteEffect,
-            TransportSessionKey, test_support::FakeMediaTransport,
+            TransportConsumerRoute, TransportMediaId, TransportRelayRouteAction,
+            TransportRelayRouteEffect, TransportSessionKey, test_support::FakeMediaTransport,
         },
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -215,15 +215,15 @@ async fn set_remote_relay_and_consumer_active(
         TransportRelayRouteAction::SetActive(active),
     )
     .await;
+    let route = TransportConsumerRoute::new(
+        remote_consumer_session.clone(),
+        remote_consumer_media_id,
+        source_session.clone(),
+        source_media_id,
+    );
     assert!(
         adapter
-            .set_consumer_active(
-                remote_consumer_session,
-                remote_consumer_media_id,
-                source_session,
-                source_media_id,
-                ConsumerActivity::from_active(active),
-            )
+            .set_consumer_active(&route, ConsumerActivity::from_active(active))
             .await
             .is_ok()
     );

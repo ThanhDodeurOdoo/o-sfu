@@ -237,13 +237,7 @@ impl SubscriptionEffectPlan {
             // operators instead of trying to rebuild the previous room state.
             if media_port
                 .set_consumer_active(
-                    &room.transport_user_key(
-                        route.consumer_user_id(),
-                        route.consumer_connection_id(),
-                    ),
-                    route.consumer_media(),
-                    &room.transport_user_key(route.source_user_id(), route.source_connection_id()),
-                    route.source_media(),
+                    &room.transport_consumer_route(route),
                     ConsumerActivity::from_active(transport_op.active),
                 )
                 .await
@@ -258,18 +252,7 @@ impl SubscriptionEffectPlan {
             } else if transport_op.active
                 && transport_op.media_kind == o_sfu_router::MediaKind::Video
                 && media_port
-                    .request_consumer_keyframe(
-                        &room.transport_user_key(
-                            route.consumer_user_id(),
-                            route.consumer_connection_id(),
-                        ),
-                        route.consumer_media(),
-                        &room.transport_user_key(
-                            route.source_user_id(),
-                            route.source_connection_id(),
-                        ),
-                        route.source_media(),
-                    )
+                    .request_consumer_keyframe(&room.transport_consumer_route(route))
                     .await
                     .is_err()
             {

@@ -42,7 +42,7 @@ use crate::{
         diagnostics::DiagnosticsEventData,
         media_transport::{
             AppliedSessionAnswer, ConsumerActivity, MediaTransport, SessionUploadEncoding,
-            TransportAdapterError, TransportMediaId,
+            TransportAdapterError, TransportConsumerRoute, TransportMediaId,
         },
         source_model::{SourcePublishIntent, UserStreamId},
         sync::lock_unpoisoned,
@@ -786,16 +786,14 @@ impl Room {
         if consumer_active {
             return;
         }
+        let route = TransportConsumerRoute::new(
+            self.transport_user_key(target.consumer_user_id(), target.consumer_connection_id()),
+            consumer_transport_media_id,
+            self.transport_user_key(target.producer_user_id(), target.producer_connection_id()),
+            target.transport_media_id(),
+        );
         if media_port
-            .set_consumer_active(
-                &self
-                    .transport_user_key(target.consumer_user_id(), target.consumer_connection_id()),
-                consumer_transport_media_id,
-                &self
-                    .transport_user_key(target.producer_user_id(), target.producer_connection_id()),
-                target.transport_media_id(),
-                ConsumerActivity::Inactive,
-            )
+            .set_consumer_active(&route, ConsumerActivity::Inactive)
             .await
             .is_err()
         {

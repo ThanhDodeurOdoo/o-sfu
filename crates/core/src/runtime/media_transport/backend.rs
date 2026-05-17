@@ -9,10 +9,10 @@ use super::test_support::FakeMediaTransport;
 use super::{
     ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
     ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, RtcTransport, SessionOffer,
-    SourcePacketGate, SourcePolicyUpdateSubscription, TransportBitrateSnapshot, TransportMediaId,
-    TransportPlacementPressureSnapshot, TransportRelayRouteEffect, TransportResult,
-    TransportSessionHealth, TransportSessionKey, TransportWorkerPressureSnapshot,
-    worker_manager::RtcWorkerManager,
+    SourcePacketGate, SourcePolicyUpdateSubscription, TransportBitrateSnapshot,
+    TransportConsumerRoute, TransportMediaId, TransportPlacementPressureSnapshot,
+    TransportRelayRouteEffect, TransportResult, TransportSessionHealth, TransportSessionKey,
+    TransportWorkerPressureSnapshot, worker_manager::RtcWorkerManager,
 };
 use crate::runtime::RoomInstanceId;
 
@@ -152,19 +152,13 @@ impl Backend {
     );
     backend_async_method!(
         fn set_consumer_active(
-            consumer_session_key: &TransportSessionKey,
-            consumer_transport_media_id: TransportMediaId,
-            source_session_key: &TransportSessionKey,
-            source_transport_media_id: TransportMediaId,
+            route: &TransportConsumerRoute,
             active: bool,
         ) -> TransportResult<()>
     );
     backend_async_method!(
         fn set_consumer_packet_gate(
-            consumer_session_key: &TransportSessionKey,
-            consumer_transport_media_id: TransportMediaId,
-            source_session_key: &TransportSessionKey,
-            source_transport_media_id: TransportMediaId,
+            route: &TransportConsumerRoute,
             packet_gate: SourcePacketGate,
         ) -> TransportResult<()>
     );
@@ -175,10 +169,7 @@ impl Backend {
     );
     backend_async_method!(
         fn request_consumer_keyframe(
-            consumer_session_key: &TransportSessionKey,
-            consumer_transport_media_id: TransportMediaId,
-            source_session_key: &TransportSessionKey,
-            source_transport_media_id: TransportMediaId,
+            route: &TransportConsumerRoute,
         ) -> TransportResult<()>
     );
 

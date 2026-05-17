@@ -6,7 +6,9 @@ use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
 use super::super::super::{
     commands::RemoteSourceControl, relay_registry::RelayTargetId, route_control::PacketLayerGate,
 };
-use crate::runtime::media_transport::{TransportMediaId, TransportSessionKey};
+use crate::runtime::media_transport::{
+    TransportConsumerRoute, TransportMediaId, TransportSessionKey,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RouteSourceKind {
@@ -24,10 +26,7 @@ pub struct AddSendMediaRequest<'a> {
 }
 
 pub struct ConsumerPacketGateRequest<'a> {
-    pub consumer_session_key: &'a TransportSessionKey,
-    pub consumer_transport_media_id: TransportMediaId,
-    pub source_session_key: &'a TransportSessionKey,
-    pub source_transport_media_id: TransportMediaId,
+    pub route: &'a TransportConsumerRoute,
     pub packet_gate: PacketLayerGate,
 }
 

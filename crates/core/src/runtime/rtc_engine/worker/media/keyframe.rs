@@ -18,7 +18,9 @@ use super::{
     types::{RemoteKeyframeRequest, RouteSourceKind},
 };
 use crate::runtime::{
-    media_transport::{TransportAdapterError, TransportMediaId, TransportSessionKey},
+    media_transport::{
+        TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportSessionKey,
+    },
     metrics::{RtcRouteControlMetrics, RtcRouteControlOutcome, RuntimeMetrics},
 };
 
@@ -109,11 +111,12 @@ pub fn request_keyframe_for_source(
 pub(in crate::runtime::rtc_engine::worker::media) fn worker_request_consumer_keyframe(
     state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
-    consumer_session_key: &TransportSessionKey,
-    consumer_transport_media_id: TransportMediaId,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    route: &TransportConsumerRoute,
 ) -> Result<(), TransportAdapterError> {
+    let consumer_session_key = route.consumer_session_key();
+    let consumer_transport_media_id = route.consumer_transport_media_id();
+    let source_session_key = route.source_session_key();
+    let source_transport_media_id = route.source_transport_media_id();
     let route_source = ensure_existing_route_source(
         state,
         consumer_session_key,
