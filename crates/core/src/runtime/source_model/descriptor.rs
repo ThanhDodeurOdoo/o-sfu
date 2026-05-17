@@ -47,8 +47,8 @@ impl PublishedSourceDescriptor {
     ///
     /// # Errors
     ///
-    /// Returns [`SourceModelError`] when the descriptor has no encodings or
-    /// when its encoding identities are duplicated.
+    /// Returns [`SourceModelError`] when the descriptor has no encodings, uses
+    /// a duplicate encoding id or contains an encoding owned by another source
     pub fn new(parts: PublishedSourceDescriptorParts) -> Result<Self, SourceModelError> {
         if parts.encodings.is_empty() {
             return Err(SourceModelError::SourceWithoutEncodings {
@@ -64,6 +64,12 @@ impl PublishedSourceDescriptor {
                 source_id: parts.source_id,
                 encoding_id: encoding.encoding_id(),
                 encoding_source_id: encoding.source_id(),
+            });
+        }
+        if let Some(encoding_id) = duplicate_encoding_id(&parts.encodings) {
+            return Err(SourceModelError::DuplicateEncodingId {
+                source_id: parts.source_id,
+                encoding_id,
             });
         }
         let selectable_encoding_indices = selectable_encoding_indices(&parts.encodings);
@@ -148,6 +154,17 @@ impl PublishedSourceDescriptor {
             .iter()
             .find(|encoding| encoding.encoding_id() == encoding_id)
     }
+}
+
+fn duplicate_encoding_id(encodings: &[SourceEncodingDescriptor]) -> Option<SourceEncodingId> {
+    encodings.iter().enumerate().find_map(|(index, encoding)| {
+        let encoding_id = encoding.encoding_id();
+        encodings
+            .iter()
+            .skip(index + 1)
+            .any(|other| other.encoding_id() == encoding_id)
+            .then_some(encoding_id)
+    })
 }
 
 fn selectable_encoding_indices(encodings: &[SourceEncodingDescriptor]) -> Vec<usize> {

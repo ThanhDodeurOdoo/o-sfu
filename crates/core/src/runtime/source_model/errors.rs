@@ -14,6 +14,11 @@ use super::{PublishedSourceId, SourceEncodingId};
 pub enum SourceModelError {
     #[error("published source {source_id} has no advertised encoding")]
     SourceWithoutEncodings { source_id: PublishedSourceId },
+    #[error("published source {source_id} has duplicate encoding {encoding_id}")]
+    DuplicateEncodingId {
+        source_id: PublishedSourceId,
+        encoding_id: SourceEncodingId,
+    },
     #[error(
         "encoding {encoding_id} belongs to {encoding_source_id}, not published source {source_id}"
     )]
