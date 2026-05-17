@@ -37,7 +37,8 @@ use super::{
 };
 use crate::runtime::{
     media_transport::{
-        TransportAdapterError, TransportMediaId, TransportResult, TransportSessionKey,
+        TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportResult,
+        TransportSessionKey,
     },
     rtc_engine::{
         commands::{ConsumerPacketGateCommand, RemoteSourceControl},
@@ -354,21 +355,11 @@ pub(super) fn worker_set_producer_active(
 /// destination is gone
 pub(super) fn worker_set_consumer_active(
     state: &mut PacketLoopState,
-    consumer_session_key: &TransportSessionKey,
-    consumer_transport_media_id: TransportMediaId,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    route: &TransportConsumerRoute,
     active: bool,
 ) -> Result<(), TransportAdapterError> {
-    if update_consumer_route(
-        state,
-        consumer_session_key,
-        consumer_transport_media_id,
-        source_session_key,
-        source_transport_media_id,
-        ConsumerRouteMutation::Active(active),
-    )? {
-        refresh_source_packet_gate(state, source_transport_media_id);
+    if update_consumer_route(state, route, ConsumerRouteMutation::Active(active))? {
+        refresh_source_packet_gate(state, route.source_transport_media_id());
     }
     Ok(())
 }
@@ -393,13 +384,10 @@ pub(super) fn worker_set_consumer_packet_gate(
 ) -> Result<(), TransportAdapterError> {
     if update_consumer_route(
         state,
-        request.consumer_session_key,
-        request.consumer_transport_media_id,
-        request.source_session_key,
-        request.source_transport_media_id,
+        request.route,
         ConsumerRouteMutation::PacketGate(request.packet_gate, now),
     )? {
-        refresh_source_packet_gate(state, request.source_transport_media_id);
+        refresh_source_packet_gate(state, request.route.source_transport_media_id());
     }
     Ok(())
 }
@@ -421,12 +409,15 @@ pub(super) fn worker_set_consumer_packet_gates(
     let mut results = Vec::with_capacity(updates.len());
     for update in updates {
         let (consumer_session_key, consumer_transport_media_id, packet_gate) = update.into_parts();
+        let route = TransportConsumerRoute::new(
+            consumer_session_key,
+            consumer_transport_media_id,
+            source_session_key.clone(),
+            source_transport_media_id,
+        );
         match update_consumer_route(
             state,
-            &consumer_session_key,
-            consumer_transport_media_id,
-            source_session_key,
-            source_transport_media_id,
+            &route,
             ConsumerRouteMutation::PacketGate(packet_gate, now),
         ) {
             Ok(changed) => {
@@ -475,12 +466,13 @@ enum ConsumerRouteMutation {
 /// destination has already been removed
 fn update_consumer_route(
     state: &mut PacketLoopState,
-    consumer_session_key: &TransportSessionKey,
-    consumer_transport_media_id: TransportMediaId,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    route: &TransportConsumerRoute,
     mutation: ConsumerRouteMutation,
 ) -> Result<bool, TransportAdapterError> {
+    let consumer_session_key = route.consumer_session_key();
+    let consumer_transport_media_id = route.consumer_transport_media_id();
+    let source_session_key = route.source_session_key();
+    let source_transport_media_id = route.source_transport_media_id();
     ensure_existing_route_source(
         state,
         consumer_session_key,

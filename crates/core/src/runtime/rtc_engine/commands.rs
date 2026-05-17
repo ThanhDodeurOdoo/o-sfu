@@ -21,7 +21,7 @@ use crate::runtime::{
     RoomInstanceId,
     media_transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, SessionOffer,
-        TransportMediaId, TransportResult, TransportSessionKey,
+        TransportConsumerRoute, TransportMediaId, TransportResult, TransportSessionKey,
     },
 };
 
@@ -373,10 +373,7 @@ pub(super) enum RtcWorkerCommand {
     /// that destination and refreshes the aggregate source packet gate when the
     /// effective route changed
     SetConsumerActive {
-        consumer_session_key: TransportSessionKey,
-        consumer_transport_media_id: TransportMediaId,
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        route: TransportConsumerRoute,
         active: bool,
         response: RtcWorkerResponse<()>,
     },
@@ -387,10 +384,7 @@ pub(super) enum RtcWorkerCommand {
     /// the route still remembers pending strict gates so a browser can switch
     /// layers once the target RID becomes decodable
     SetConsumerPacketGate {
-        consumer_session_key: TransportSessionKey,
-        consumer_transport_media_id: TransportMediaId,
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        route: TransportConsumerRoute,
         packet_gate: PacketLayerGate,
         response: RtcWorkerResponse<()>,
     },
@@ -412,10 +406,7 @@ pub(super) enum RtcWorkerCommand {
     /// route gate back to a producer RID when needed and either asks the local
     /// producer or forwards the request through remote-source control
     RequestConsumerKeyframe {
-        consumer_session_key: TransportSessionKey,
-        consumer_transport_media_id: TransportMediaId,
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        route: TransportConsumerRoute,
         response: RtcWorkerResponse<()>,
     },
 }

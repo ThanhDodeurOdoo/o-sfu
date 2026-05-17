@@ -22,9 +22,10 @@ use crate::runtime::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
         ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
         SourcePolicySignal, SourcePolicyUpdateSubscription, TransportAdapterError,
-        TransportBitrateSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
-        TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionHealth,
-        TransportSessionKey, TransportWorkerPressureSnapshot, config::RtcWorkerManagerConfig,
+        TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,
+        TransportPlacementPressureSnapshot, TransportRelayRouteAction, TransportRelayRouteEffect,
+        TransportSessionHealth, TransportSessionKey, TransportWorkerPressureSnapshot,
+        config::RtcWorkerManagerConfig,
     },
     rtc_engine::{RtcTransportWorker, client_rtp_capabilities_from_answer},
 };
@@ -239,22 +240,21 @@ impl RtcWorkerManager {
         let mut results = vec![Err(TransportAdapterError::TransportUnavailable); updates.len()];
         let mut batches = BTreeMap::<ConsumerPacketGateBatchKey, Vec<usize>>::new();
         for (index, update) in updates.iter().enumerate() {
-            if update.consumer_session_key().room_instance_id()
-                != update.source_session_key().room_instance_id()
-            {
+            let route = update.route();
+            if !route.is_single_room() {
                 if let Some(result) = results.get_mut(index) {
                     *result = Err(TransportAdapterError::InvalidInput);
                 }
                 continue;
             }
-            let Some(worker_index) = self.worker_index_for_user(update.consumer_session_key())
+            let Some(worker_index) = self.worker_index_for_user(route.consumer_session_key())
             else {
                 continue;
             };
             let key = ConsumerPacketGateBatchKey {
                 worker_index,
-                source_session_key: update.source_session_key().clone(),
-                source_transport_media_id: update.source_transport_media_id(),
+                source_session_key: route.source_session_key().clone(),
+                source_transport_media_id: route.source_transport_media_id(),
             };
             batches.entry(key).or_default().push(index);
         }
@@ -572,22 +572,13 @@ impl RtcWorkerManager {
     /// set validates that room boundary before mutating worker state.
     pub(super) async fn set_consumer_active(
         &self,
-        consumer_session_key: &TransportSessionKey,
-        consumer_transport_media_id: TransportMediaId,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        route: &TransportConsumerRoute,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        ensure_same_room_instance(consumer_session_key, source_session_key)?;
-        self.require_worker_for_user(consumer_session_key)?
+        ensure_same_room_instance(route.consumer_session_key(), route.source_session_key())?;
+        self.require_worker_for_user(route.consumer_session_key())?
             .media()
-            .set_consumer_active(
-                consumer_session_key,
-                consumer_transport_media_id,
-                source_session_key,
-                source_transport_media_id,
-                active,
-            )
+            .set_consumer_active(route, active)
             .await
     }
 
@@ -598,22 +589,13 @@ impl RtcWorkerManager {
     /// or subscription state.
     pub(super) async fn set_consumer_packet_gate(
         &self,
-        consumer_session_key: &TransportSessionKey,
-        consumer_transport_media_id: TransportMediaId,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        route: &TransportConsumerRoute,
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
-        ensure_same_room_instance(consumer_session_key, source_session_key)?;
-        self.require_worker_for_user(consumer_session_key)?
+        ensure_same_room_instance(route.consumer_session_key(), route.source_session_key())?;
+        self.require_worker_for_user(route.consumer_session_key())?
             .media()
-            .set_consumer_packet_gate(
-                consumer_session_key,
-                consumer_transport_media_id,
-                source_session_key,
-                source_transport_media_id,
-                packet_gate,
-            )
+            .set_consumer_packet_gate(route, packet_gate)
             .await
     }
 
@@ -623,20 +605,12 @@ impl RtcWorkerManager {
     /// the consumer worker knows how to forward feedback to the source worker.
     pub(super) async fn request_consumer_keyframe(
         &self,
-        consumer_session_key: &TransportSessionKey,
-        consumer_transport_media_id: TransportMediaId,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        route: &TransportConsumerRoute,
     ) -> Result<(), TransportAdapterError> {
-        ensure_same_room_instance(consumer_session_key, source_session_key)?;
-        self.require_worker_for_user(consumer_session_key)?
+        ensure_same_room_instance(route.consumer_session_key(), route.source_session_key())?;
+        self.require_worker_for_user(route.consumer_session_key())?
             .media()
-            .request_consumer_keyframe(
-                consumer_session_key,
-                consumer_transport_media_id,
-                source_session_key,
-                source_transport_media_id,
-            )
+            .request_consumer_keyframe(route)
             .await
     }
 

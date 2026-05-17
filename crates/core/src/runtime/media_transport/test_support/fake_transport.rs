@@ -39,9 +39,9 @@ use crate::{
             ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
             ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerPacketGateUpdate,
             ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate, SourcePolicySignal,
-            TransportAdapterError, TransportMediaId, TransportPlacementPressureSnapshot,
-            TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionKey,
-            TransportWorkerPressureSnapshot,
+            TransportAdapterError, TransportConsumerRoute, TransportMediaId,
+            TransportPlacementPressureSnapshot, TransportRelayRouteAction,
+            TransportRelayRouteEffect, TransportSessionKey, TransportWorkerPressureSnapshot,
         },
     },
 };
@@ -655,15 +655,12 @@ impl FakeMediaTransport {
     )]
     pub(crate) async fn set_consumer_active(
         &self,
-        consumer_session_key: &TransportSessionKey,
-        _consumer_transport_media_id: TransportMediaId,
-        source_session_key: &TransportSessionKey,
-        _source_transport_media_id: TransportMediaId,
+        route: &TransportConsumerRoute,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(FakeMediaTransportEvent::ConsumerActivityUpdated {
-            consumer_user_id: consumer_session_key.user_id().clone(),
-            source_user_id: source_session_key.user_id().clone(),
+            consumer_user_id: route.consumer_session_key().user_id().clone(),
+            source_user_id: route.source_session_key().user_id().clone(),
             active,
         });
         Ok(())
@@ -675,15 +672,12 @@ impl FakeMediaTransport {
     )]
     pub(crate) async fn set_consumer_packet_gate(
         &self,
-        consumer_session_key: &TransportSessionKey,
-        _consumer_transport_media_id: TransportMediaId,
-        source_session_key: &TransportSessionKey,
-        _source_transport_media_id: TransportMediaId,
+        route: &TransportConsumerRoute,
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(FakeMediaTransportEvent::ConsumerPacketGateUpdated {
-            consumer_user_id: consumer_session_key.user_id().clone(),
-            source_user_id: source_session_key.user_id().clone(),
+            consumer_user_id: route.consumer_session_key().user_id().clone(),
+            source_user_id: route.source_session_key().user_id().clone(),
             packet_gate,
         });
         Ok(())
@@ -696,14 +690,8 @@ impl FakeMediaTransport {
         let mut results = Vec::with_capacity(updates.len());
         for update in updates {
             results.push(
-                self.set_consumer_packet_gate(
-                    update.consumer_session_key(),
-                    update.consumer_transport_media_id(),
-                    update.source_session_key(),
-                    update.source_transport_media_id(),
-                    update.packet_gate().clone(),
-                )
-                .await,
+                self.set_consumer_packet_gate(update.route(), update.packet_gate().clone())
+                    .await,
             );
         }
         results
@@ -715,14 +703,11 @@ impl FakeMediaTransport {
     )]
     pub(crate) async fn request_consumer_keyframe(
         &self,
-        consumer_session_key: &TransportSessionKey,
-        _consumer_transport_media_id: TransportMediaId,
-        source_session_key: &TransportSessionKey,
-        _source_transport_media_id: TransportMediaId,
+        route: &TransportConsumerRoute,
     ) -> Result<(), TransportAdapterError> {
         self.record_event(FakeMediaTransportEvent::ConsumerKeyframeRequested {
-            consumer_user_id: consumer_session_key.user_id().clone(),
-            source_user_id: source_session_key.user_id().clone(),
+            consumer_user_id: route.consumer_session_key().user_id().clone(),
+            source_user_id: route.source_session_key().user_id().clone(),
         });
         Ok(())
     }

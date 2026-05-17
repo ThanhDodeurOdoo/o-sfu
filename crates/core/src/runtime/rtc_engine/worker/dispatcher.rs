@@ -342,21 +342,10 @@ fn handle_media_route_control_command(
             response,
         ),
         RtcWorkerCommand::SetConsumerActive {
-            consumer_session_key,
-            consumer_transport_media_id,
-            source_session_key,
-            source_transport_media_id,
+            route,
             active,
             response,
-        } => media::respond_set_consumer_active(
-            state,
-            &consumer_session_key,
-            consumer_transport_media_id,
-            &source_session_key,
-            source_transport_media_id,
-            active,
-            response,
-        ),
+        } => media::respond_set_consumer_active(state, &route, active, response),
         RtcWorkerCommand::SetConsumerPacketGate { .. } => {
             handle_consumer_packet_gate_update(state, command, now);
         }
@@ -420,10 +409,7 @@ fn handle_consumer_packet_gate_update(
     now: Instant,
 ) {
     if let RtcWorkerCommand::SetConsumerPacketGate {
-        consumer_session_key,
-        consumer_transport_media_id,
-        source_session_key,
-        source_transport_media_id,
+        route,
         packet_gate,
         response,
     } = command
@@ -431,10 +417,7 @@ fn handle_consumer_packet_gate_update(
         media::respond_set_consumer_packet_gate(
             state,
             media::ConsumerPacketGateRequest {
-                consumer_session_key: &consumer_session_key,
-                consumer_transport_media_id,
-                source_session_key: &source_session_key,
-                source_transport_media_id,
+                route: &route,
                 packet_gate,
             },
             now,
@@ -471,22 +454,7 @@ fn handle_consumer_keyframe_request(
     metrics: &RuntimeMetrics,
     command: RtcWorkerCommand,
 ) {
-    if let RtcWorkerCommand::RequestConsumerKeyframe {
-        consumer_session_key,
-        consumer_transport_media_id,
-        source_session_key,
-        source_transport_media_id,
-        response,
-    } = command
-    {
-        media::respond_request_consumer_keyframe(
-            state,
-            metrics,
-            &consumer_session_key,
-            consumer_transport_media_id,
-            &source_session_key,
-            source_transport_media_id,
-            response,
-        );
+    if let RtcWorkerCommand::RequestConsumerKeyframe { route, response } = command {
+        media::respond_request_consumer_keyframe(state, metrics, &route, response);
     }
 }

@@ -42,7 +42,7 @@ use super::{
     lifecycle::UserCloseReason,
     media_transaction::PendingPublishTransactions,
     placement::{RoomPlacementLedger, RoomPlacementUsageSnapshot, RoomWorkerLoadContribution},
-    state::{ConsumerRouteState, RemoteTrackBootstrap, RoomState},
+    state::{ConsumerRouteState, ConsumerRouteTransportRef, RemoteTrackBootstrap, RoomState},
 };
 use crate::{
     RoomWorkerPolicy, RuntimeFeatureFlags,
@@ -53,7 +53,8 @@ use crate::{
             DiagnosticsUserTransport, DiagnosticsUserView,
         },
         media_transport::{
-            ActiveSpeakerSourceDiagnostic, MediaTransport, TransportMediaId, TransportSessionKey,
+            ActiveSpeakerSourceDiagnostic, MediaTransport, TransportConsumerRoute,
+            TransportMediaId, TransportSessionKey,
         },
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -706,6 +707,19 @@ impl Room {
             self.definition.instance_id(),
             user_id,
             connection_id,
+        )
+    }
+
+    #[must_use]
+    pub(in crate::runtime::room) fn transport_consumer_route(
+        &self,
+        route: &ConsumerRouteTransportRef,
+    ) -> TransportConsumerRoute {
+        TransportConsumerRoute::new(
+            self.transport_user_key(route.consumer_user_id(), route.consumer_connection_id()),
+            route.consumer_media(),
+            self.transport_user_key(route.source_user_id(), route.source_connection_id()),
+            route.source_media(),
         )
     }
 

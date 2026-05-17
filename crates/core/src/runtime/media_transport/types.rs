@@ -434,30 +434,31 @@ pub enum TransportRelayRouteAction {
     SetActive(bool),
 }
 
+/// consumer-to-source route identity owned by the transport boundary
+///
+/// carrying these fields together keeps room code from passing source and
+/// receiver ids as adjacent positional arguments
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConsumerPacketGateUpdate {
+pub struct TransportConsumerRoute {
     consumer_session_key: TransportSessionKey,
     consumer_transport_media_id: TransportMediaId,
     source_session_key: TransportSessionKey,
     source_transport_media_id: TransportMediaId,
-    packet_gate: SourcePacketGate,
 }
 
-impl ConsumerPacketGateUpdate {
+impl TransportConsumerRoute {
     #[must_use]
     pub fn new(
         consumer_session_key: TransportSessionKey,
         consumer_transport_media_id: TransportMediaId,
         source_session_key: TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        packet_gate: SourcePacketGate,
     ) -> Self {
         Self {
             consumer_session_key,
             consumer_transport_media_id,
             source_session_key,
             source_transport_media_id,
-            packet_gate,
         }
     }
 
@@ -479,6 +480,29 @@ impl ConsumerPacketGateUpdate {
     #[must_use]
     pub const fn source_transport_media_id(&self) -> TransportMediaId {
         self.source_transport_media_id
+    }
+
+    #[must_use]
+    pub fn is_single_room(&self) -> bool {
+        self.consumer_session_key.room_instance_id() == self.source_session_key.room_instance_id()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumerPacketGateUpdate {
+    route: TransportConsumerRoute,
+    packet_gate: SourcePacketGate,
+}
+
+impl ConsumerPacketGateUpdate {
+    #[must_use]
+    pub fn new(route: TransportConsumerRoute, packet_gate: SourcePacketGate) -> Self {
+        Self { route, packet_gate }
+    }
+
+    #[must_use]
+    pub fn route(&self) -> &TransportConsumerRoute {
+        &self.route
     }
 
     #[must_use]

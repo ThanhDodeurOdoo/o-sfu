@@ -326,16 +326,16 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
         .expect("route entry should exist after consumer registration");
     assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
 
+    let route = transport_consumer_route(
+        &consumer_session_key,
+        consumer_media_id,
+        &producer_session_key,
+        source_media_id,
+    );
     assert!(
         adapter
             .media()
-            .set_consumer_packet_gate(
-                &consumer_session_key,
-                consumer_media_id,
-                &producer_session_key,
-                source_media_id,
-                SourcePacketGate::Rid("lo".into()),
-            )
+            .set_consumer_packet_gate(&route, SourcePacketGate::Rid("lo".into()))
             .await
             .is_ok()
     );
@@ -349,13 +349,7 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
     assert!(
         adapter
             .media()
-            .set_consumer_packet_gate(
-                &consumer_session_key,
-                consumer_media_id,
-                &producer_session_key,
-                source_media_id,
-                SourcePacketGate::Open,
-            )
+            .set_consumer_packet_gate(&route, SourcePacketGate::Open)
             .await
             .is_ok()
     );
@@ -413,10 +407,12 @@ async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
         adapter
             .media()
             .set_consumer_packet_gate(
-                &consumer_session_key,
-                consumer_media_id,
-                &stale_producer_session_key,
-                source_media_id,
+                &transport_consumer_route(
+                    &consumer_session_key,
+                    consumer_media_id,
+                    &stale_producer_session_key,
+                    source_media_id,
+                ),
                 SourcePacketGate::Rid("lo".into()),
             )
             .await
@@ -487,10 +483,12 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
         adapter
             .media()
             .set_consumer_active(
-                &consumer_session_key,
-                consumer_media_id,
-                &producer_session_key,
-                source_media_id,
+                &transport_consumer_route(
+                    &consumer_session_key,
+                    consumer_media_id,
+                    &producer_session_key,
+                    source_media_id,
+                ),
                 false,
             )
             .await

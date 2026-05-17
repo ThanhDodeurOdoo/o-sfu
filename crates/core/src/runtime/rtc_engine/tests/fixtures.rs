@@ -27,7 +27,10 @@ pub(super) use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags,
     runtime::{
         UserId,
-        media_transport::{ActiveSpeakerSource, TransportAdapterError, TransportSessionKey},
+        media_transport::{
+            ActiveSpeakerSource, TransportAdapterError, TransportConsumerRoute, TransportMediaId,
+            TransportSessionKey,
+        },
         metrics::test_support::RuntimeMetricsSnapshotTestExt,
     },
 };
@@ -47,6 +50,20 @@ pub(super) fn transport_key_on_worker(
     user_id: UserId,
 ) -> TransportSessionKey {
     test_transport_session_key(room_instance_id, media_worker_id, connection_id, user_id)
+}
+
+pub(super) fn transport_consumer_route(
+    consumer_session_key: &TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    source_session_key: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+) -> TransportConsumerRoute {
+    TransportConsumerRoute::new(
+        consumer_session_key.clone(),
+        consumer_transport_media_id,
+        source_session_key.clone(),
+        source_transport_media_id,
+    )
 }
 
 pub(super) fn sample_router_rtp_parameters(mid: &str, ssrc: u32) -> RouterRtpParameters {
