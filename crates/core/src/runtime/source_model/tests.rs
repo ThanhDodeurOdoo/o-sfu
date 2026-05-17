@@ -248,6 +248,32 @@ fn descriptor_rejects_encoding_from_another_source() {
 }
 
 #[test]
+fn descriptor_rejects_duplicate_encoding_ids() {
+    let source_id = PublishedSourceId::from_raw(7);
+    let encoding_id = SourceEncodingId::from_raw(1);
+    let result = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+        source_id,
+        owner: PublishedSourceOwner::new(UserId::Integer(42)),
+        stream_id: UserStreamId::new("main-video"),
+        media_kind: MediaKind::Video,
+        policy: SourcePolicy::hidden(),
+        mid: None,
+        encodings: vec![
+            source_encoding(source_id, encoding_id, "lo"),
+            source_encoding(source_id, encoding_id, "hi"),
+        ],
+    });
+
+    assert_eq!(
+        result.unwrap_err(),
+        SourceModelError::DuplicateEncodingId {
+            source_id,
+            encoding_id,
+        }
+    );
+}
+
+#[test]
 fn selector_targets_runtime_encoding_identity_not_transport_or_rid() {
     let encoding_id = SourceEncodingId::from_raw(3);
     let temporal_layer = SourceTemporalLayerId::new(2)
