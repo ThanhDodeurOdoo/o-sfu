@@ -27,14 +27,10 @@ impl RoomState {
         for update in updates {
             let route = update.route();
             let key = ConsumerKey::new(route.consumer_user_id(), update.source_id());
-            let Some(consumer_state) = self.media.consumer_index.get(&key) else {
+            let Some(current_route) = self.media.committed_consumer_route_for_key(&key) else {
                 continue;
             };
-            if consumer_state.consumer_connection_id != route.consumer_connection_id()
-                || consumer_state.source_connection_id != route.source_connection_id()
-                || consumer_state.source_media != route.source_media()
-                || consumer_state.consumer_media != route.consumer_media()
-            {
+            if !current_route.matches_transport_ref(route) {
                 continue;
             }
             let selection = self

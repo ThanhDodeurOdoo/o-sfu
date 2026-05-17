@@ -1,9 +1,6 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    time::Duration,
-};
+use std::{collections::BTreeMap, time::Duration};
 
-use super::shared::{ConsumerKey, RoomState};
+use super::shared::RoomState;
 use crate::{
     Bitrate,
     runtime::{
@@ -82,11 +79,7 @@ impl RoomState {
             .sources
             .values()
             .map(|source| {
-                let producer = self
-                    .media
-                    .producer_id_by_source_id
-                    .get(&source.source_id())
-                    .and_then(|producer_id| self.media.producers.get(producer_id));
+                let producer = self.media.producer_for_source(source.source_id());
                 let encodings = source
                     .encodings()
                     .map(diagnostics_source_encoding)
@@ -182,29 +175,22 @@ impl RoomState {
     ) -> Vec<DiagnosticsSubscription> {
         let mut subscriptions = self
             .media
-            .consumer_index
-            .iter()
-            .filter_map(|(key, consumer_state)| {
-                if key.consumer_user_id != *user_id
-                    || consumer_state.consumer_connection_id != connection_id
+            .live_consumer_routes()
+            .filter_map(|route| {
+                if route.consumer_user_id != *user_id
+                    || route.state.consumer_connection_id != connection_id
                 {
                     return None;
                 }
-                let source = self.media.sources.get(&key.source_id)?;
-                let selection = self
-                    .media
-                    .consumer_source_selections
-                    .get(key)
-                    .copied()
-                    .unwrap_or_else(|| ConsumerSourceSelection::open(true));
-                let route_state = self.consumer_route_state(
+                let source = route.source;
+                let selection = route.selection_or_open(self.desired_source_subscription_active(
                     user_id,
                     source.owner().user_id(),
                     source.stream_id(),
-                )?;
+                ));
                 let layout_intent = self.diagnostics_video_layout_intent(user_id, source);
                 Some(DiagnosticsSubscription {
-                    consumer_transport_media_id: Some(consumer_state.consumer_media.as_u64()),
+                    consumer_transport_media_id: Some(route.state.consumer_media.as_u64()),
                     layout_priority: layout_intent
                         .map(|intent| diagnostics_video_route_priority(intent.priority())),
                     layout_role: layout_intent
@@ -212,60 +198,44 @@ impl RoomState {
                     producer_user_id: source.owner().user_id().clone(),
                     selection: diagnostics_source_selection(source, selection),
                     source_id: source.source_id().as_u64(),
-                    source_transport_media_id: Some(consumer_state.source_media.as_u64()),
-                    state: match route_state {
-                        super::ConsumerRouteState::Active => DiagnosticsRouteState::Active,
-                        super::ConsumerRouteState::Inactive => DiagnosticsRouteState::Inactive,
-                        super::ConsumerRouteState::Absent => return None,
+                    source_transport_media_id: Some(route.state.source_media.as_u64()),
+                    state: if route.producer.active && selection.active() {
+                        DiagnosticsRouteState::Active
+                    } else {
+                        DiagnosticsRouteState::Inactive
                     },
                     stream_id: source.stream_id().to_string(),
                 })
             })
             .collect::<Vec<_>>();
 
-        let pending_keys = self
-            .media
-            .pending_consumer_bootstraps
-            .iter()
-            .filter(|key| key.consumer_user_id == *user_id)
-            .cloned()
-            .collect::<BTreeSet<ConsumerKey>>();
-        let existing_keys = self
-            .media
-            .consumer_index
-            .keys()
-            .filter(|key| key.consumer_user_id == *user_id)
-            .cloned()
-            .collect::<BTreeSet<ConsumerKey>>();
-        subscriptions.extend(pending_keys.difference(&existing_keys).filter_map(|key| {
-            let source = self.media.sources.get(&key.source_id)?;
-            let selection = self
-                .media
-                .consumer_source_selections
-                .get(key)
-                .copied()
-                .unwrap_or_else(|| ConsumerSourceSelection::open(true));
-            let layout_intent = self.diagnostics_video_layout_intent(user_id, source);
-            Some(DiagnosticsSubscription {
-                consumer_transport_media_id: None,
-                layout_priority: layout_intent
-                    .map(|intent| diagnostics_video_route_priority(intent.priority())),
-                layout_role: layout_intent
-                    .map(|intent| diagnostics_video_layout_role(intent.role())),
-                producer_user_id: source.owner().user_id().clone(),
-                selection: diagnostics_source_selection(source, selection),
-                source_id: source.source_id().as_u64(),
-                source_transport_media_id: self
-                    .media
-                    .producer_id_by_source_id
-                    .get(&key.source_id)
-                    .and_then(|producer_id| self.media.producers.get(producer_id))
-                    .and_then(|producer| producer.transport_media_id)
-                    .map(TransportMediaId::as_u64),
-                state: DiagnosticsRouteState::Pending,
-                stream_id: source.stream_id().to_string(),
-            })
-        }));
+        subscriptions.extend(
+            self.media
+                .pending_consumer_routes_for_user(user_id)
+                .map(|route| {
+                    let source = route.source;
+                    let selection = route
+                        .selection
+                        .unwrap_or_else(|| ConsumerSourceSelection::open(true));
+                    let layout_intent = self.diagnostics_video_layout_intent(user_id, source);
+                    DiagnosticsSubscription {
+                        consumer_transport_media_id: None,
+                        layout_priority: layout_intent
+                            .map(|intent| diagnostics_video_route_priority(intent.priority())),
+                        layout_role: layout_intent
+                            .map(|intent| diagnostics_video_layout_role(intent.role())),
+                        producer_user_id: source.owner().user_id().clone(),
+                        selection: diagnostics_source_selection(source, selection),
+                        source_id: source.source_id().as_u64(),
+                        source_transport_media_id: route
+                            .producer
+                            .and_then(|producer| producer.transport_media_id)
+                            .map(TransportMediaId::as_u64),
+                        state: DiagnosticsRouteState::Pending,
+                        stream_id: source.stream_id().to_string(),
+                    }
+                }),
+        );
         subscriptions
     }
 }
