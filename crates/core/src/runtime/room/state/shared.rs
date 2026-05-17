@@ -161,6 +161,49 @@ pub(in crate::runtime::room) struct ConsumerState {
     pub(super) consumer_media: TransportMediaId,
 }
 
+#[derive(Debug, Clone)]
+pub(in crate::runtime::room) struct ConsumerRouteView<'a> {
+    pub(super) consumer_user_id: UserId,
+    pub(super) state: ConsumerState,
+    pub(super) source: &'a PublishedSourceDescriptor,
+    pub(super) producer: &'a PublishedProducer,
+    pub(super) selection: Option<ConsumerSourceSelection>,
+}
+
+impl ConsumerRouteView<'_> {
+    pub(super) fn selection_or_open(&self, active: bool) -> ConsumerSourceSelection {
+        self.selection
+            .unwrap_or_else(|| ConsumerSourceSelection::open(active))
+    }
+
+    pub(super) fn transport_ref(&self) -> ConsumerRouteTransportRef {
+        ConsumerRouteTransportRef::from_parts(
+            self.consumer_user_id.clone(),
+            self.state.consumer_connection_id,
+            self.state.consumer_media,
+            self.source.owner().user_id().clone(),
+            self.state.source_connection_id,
+            self.state.source_media,
+        )
+    }
+
+    pub(super) fn matches_transport_ref(&self, route: &ConsumerRouteTransportRef) -> bool {
+        self.consumer_user_id == *route.consumer_user_id()
+            && self.state.consumer_connection_id == route.consumer_connection_id()
+            && self.state.consumer_media == route.consumer_media()
+            && self.source.owner().user_id() == route.source_user_id()
+            && self.state.source_connection_id == route.source_connection_id()
+            && self.state.source_media == route.source_media()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(in crate::runtime::room) struct PendingConsumerRouteView<'a> {
+    pub(super) source: &'a PublishedSourceDescriptor,
+    pub(super) producer: Option<&'a PublishedProducer>,
+    pub(super) selection: Option<ConsumerSourceSelection>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::room) struct ConsumerRouteTransportRef {
     consumer_user_id: UserId,
@@ -172,21 +215,6 @@ pub(in crate::runtime::room) struct ConsumerRouteTransportRef {
 }
 
 impl ConsumerRouteTransportRef {
-    pub(super) fn new(
-        consumer_key: &ConsumerKey,
-        consumer_state: ConsumerState,
-        source_user_id: &UserId,
-    ) -> Self {
-        Self::from_parts(
-            consumer_key.consumer_user_id.clone(),
-            consumer_state.consumer_connection_id,
-            consumer_state.consumer_media,
-            source_user_id.clone(),
-            consumer_state.source_connection_id,
-            consumer_state.source_media,
-        )
-    }
-
     pub(super) fn from_parts(
         consumer_user_id: UserId,
         consumer_connection_id: ConnectionId,
@@ -423,6 +451,15 @@ impl RoomState {
         self.users.len()
     }
 
+    pub(super) fn current_live_consumer_routes(
+        &self,
+    ) -> impl Iterator<Item = ConsumerRouteView<'_>> {
+        self.media.live_consumer_routes().filter(|route| {
+            self.user_connection_id(&route.consumer_user_id)
+                .is_some_and(|connection_id| connection_id == route.state.consumer_connection_id)
+        })
+    }
+
     pub fn publication_count(&self) -> usize {
         self.media.sources.len()
     }
@@ -618,6 +655,64 @@ impl RoomMediaGraph {
 
     pub(super) fn insert_consumer_route(&mut self, key: ConsumerKey, state: ConsumerState) {
         self.consumer_index.insert(key, state);
+    }
+
+    pub(super) fn live_consumer_routes(&self) -> impl Iterator<Item = ConsumerRouteView<'_>> {
+        self.consumer_index
+            .iter()
+            .filter_map(|(key, state)| self.consumer_route_for_key(key, *state))
+    }
+
+    pub(super) fn consumer_route_for_key(
+        &self,
+        key: &ConsumerKey,
+        state: ConsumerState,
+    ) -> Option<ConsumerRouteView<'_>> {
+        let source = self.sources.get(&key.source_id)?;
+        let producer = self.producer_for_source(key.source_id)?;
+        Some(ConsumerRouteView {
+            consumer_user_id: key.consumer_user_id.clone(),
+            state,
+            source,
+            producer,
+            selection: self.consumer_source_selections.get(key).copied(),
+        })
+    }
+
+    pub(super) fn committed_consumer_route_for_key(
+        &self,
+        key: &ConsumerKey,
+    ) -> Option<ConsumerRouteView<'_>> {
+        let state = *self.consumer_index.get(key)?;
+        self.consumer_route_for_key(key, state)
+    }
+
+    pub(super) fn pending_consumer_routes_for_user(
+        &self,
+        user_id: &UserId,
+    ) -> impl Iterator<Item = PendingConsumerRouteView<'_>> {
+        self.pending_consumer_bootstraps
+            .iter()
+            .filter(|key| {
+                key.consumer_user_id == *user_id && !self.consumer_index.contains_key(*key)
+            })
+            .filter_map(|key| {
+                let source = self.sources.get(&key.source_id)?;
+                Some(PendingConsumerRouteView {
+                    source,
+                    producer: self.producer_for_source(key.source_id),
+                    selection: self.consumer_source_selections.get(key).copied(),
+                })
+            })
+    }
+
+    pub(super) fn producer_for_source(
+        &self,
+        source_id: PublishedSourceId,
+    ) -> Option<&PublishedProducer> {
+        self.producer_id_by_source_id
+            .get(&source_id)
+            .and_then(|producer_id| self.producers.get(producer_id))
     }
 
     pub(super) fn prune_consumer_key_indexes_if_unused(&mut self, key: &ConsumerKey) {

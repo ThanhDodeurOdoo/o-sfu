@@ -91,52 +91,36 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
         let visible_scalable_route_counts =
             visible_scalable_route_counts_by_consumer(state, &featured_source_user_ids);
         let routes = state
-            .media
-            .consumer_index
-            .iter()
-            .filter_map(|(consumer_key, consumer_state)| {
-                let source = state.media.sources.get(&consumer_key.source_id)?;
+            .current_live_consumer_routes()
+            .filter_map(|route| {
+                let source = route.source;
                 if source.selectable_encoding_count() == 0 {
                     return None;
                 }
-                let producer_id = state
-                    .media
-                    .producer_id_by_source_id
-                    .get(&consumer_key.source_id)?;
-                let producer = state.media.producers.get(producer_id)?;
-                if !producer.active {
+                if !route.producer.active {
                     return None;
                 }
-                let current_selection = state
-                    .media
-                    .consumer_source_selections
-                    .get(consumer_key)
-                    .copied()
-                    .unwrap_or_else(|| ConsumerSourceSelection::open(true));
+                let current_selection = route.selection_or_open(true);
                 if !current_selection.active() {
                     return None;
                 }
                 let layout_intent = state.receiver_video_layout_intent(
-                    &consumer_key.consumer_user_id,
+                    &route.consumer_user_id,
                     source,
                     &featured_source_user_ids,
                 );
                 Some(ReceiverVideoRouteInput::new(ReceiverVideoRouteInputParts {
                     user_count: state.user_count(),
                     source,
-                    transport_ref: ConsumerRouteTransportRef::new(
-                        consumer_key,
-                        *consumer_state,
-                        source.owner().user_id(),
-                    ),
+                    transport_ref: route.transport_ref(),
                     current_selection,
                     layout_intent,
                     visible_scalable_route_count: visible_scalable_route_counts
-                        .get(&consumer_key.consumer_user_id)
+                        .get(&route.consumer_user_id)
                         .copied()
                         .unwrap_or(1),
                     receiver_bandwidth: receiver_bandwidth_by_user
-                        .get(&consumer_key.consumer_user_id)
+                        .get(&route.consumer_user_id)
                         .copied(),
                 }))
             })
@@ -327,48 +311,23 @@ fn visible_scalable_route_counts_by_consumer(
     featured_source_user_ids: &BTreeSet<UserId>,
 ) -> BTreeMap<UserId, usize> {
     let mut counts = BTreeMap::new();
-    for (consumer_key, consumer_state) in &state.media.consumer_index {
-        let Some(source) = state.media.sources.get(&consumer_key.source_id) else {
-            continue;
-        };
+    for route in state.current_live_consumer_routes() {
+        let source = route.source;
         if source.policy().adaptation() != SourceAdaptationPolicy::ScalableVideo {
             continue;
         }
-        let Some(producer_id) = state
-            .media
-            .producer_id_by_source_id
-            .get(&consumer_key.source_id)
-        else {
-            continue;
-        };
-        let Some(producer) = state.media.producers.get(producer_id) else {
-            continue;
-        };
-        let Some(consumer_connection_id) = state.user_connection_id(&consumer_key.consumer_user_id)
-        else {
-            continue;
-        };
-        if !producer.active
-            || consumer_state.consumer_connection_id != consumer_connection_id
-            || !state
-                .media
-                .consumer_source_selections
-                .get(consumer_key)
-                .is_none_or(|selection| selection.active())
-        {
+        if !route.producer.active || !route.selection_or_open(true).active() {
             continue;
         }
         let layout_intent = state.receiver_video_layout_intent(
-            &consumer_key.consumer_user_id,
+            &route.consumer_user_id,
             source,
             featured_source_user_ids,
         );
         if !layout_intent.counts_toward_visible_budget() {
             continue;
         }
-        *counts
-            .entry(consumer_key.consumer_user_id.clone())
-            .or_default() += 1;
+        *counts.entry(route.consumer_user_id.clone()).or_default() += 1;
     }
     counts
 }

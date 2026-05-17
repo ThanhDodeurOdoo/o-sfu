@@ -238,19 +238,17 @@ impl RoomState {
             let Some(source_id) = self.source_id_for_subscription(target_user_id, stream_id) else {
                 continue;
             };
-            let Some(source) = self.media.sources.get(&source_id) else {
-                continue;
-            };
-            let media_kind = source.media_kind();
-            let source_user_id = source.owner().user_id().clone();
             let key = ConsumerKey::new(user_id, source_id);
             self.set_consumer_source_selection(&key, active);
-            let Some(current_consumer_state) = self.media.consumer_index.get(&key).copied() else {
+            let Some(route) = self.media.committed_consumer_route_for_key(&key) else {
                 continue;
             };
-            if current_consumer_state.consumer_connection_id != connection_id {
+            if route.state.consumer_connection_id != connection_id {
                 continue;
             }
+            let routed_consumer_id = route.state.routed_consumer_id;
+            let route_ref = route.transport_ref();
+            let media_kind = route.source.media_kind();
             let route_state = if active {
                 RouterConsumerRouteState::Active
             } else {
@@ -258,7 +256,7 @@ impl RoomState {
             };
             if self
                 .topology
-                .set_consumer_route_state(current_consumer_state.routed_consumer_id, route_state)
+                .set_consumer_route_state(routed_consumer_id, route_state)
                 .is_err()
             {
                 error!(
@@ -270,11 +268,7 @@ impl RoomState {
                 continue;
             }
             accepted_updates.push(ConsumerRouteUpdate {
-                route: ConsumerRouteTransportRef::new(
-                    &key,
-                    current_consumer_state,
-                    &source_user_id,
-                ),
+                route: route_ref,
                 stream_id: stream_id.clone(),
                 media_kind,
                 active,
@@ -620,30 +614,20 @@ impl RoomState {
             return Some(ConsumerRouteState::Absent);
         };
         let consumer_key = ConsumerKey::new(consumer_user_id, source_id);
-        if !self.media.consumer_index.contains_key(&consumer_key) {
-            return Some(ConsumerRouteState::Absent);
-        }
-        let Some(producer_id) = self.media.producer_id_by_source_id.get(&source_id).copied() else {
+        let Some(route) = self.media.committed_consumer_route_for_key(&consumer_key) else {
             return Some(ConsumerRouteState::Absent);
         };
-        let Some(producer) = self.media.producers.get(&producer_id) else {
-            return Some(ConsumerRouteState::Absent);
-        };
-        let route_active = producer.active
-            && self
-                .media
-                .consumer_source_selections
-                .get(&consumer_key)
-                .map_or_else(
-                    || {
-                        self.desired_source_subscription_active(
-                            consumer_user_id,
-                            producer_user_id,
-                            stream_id,
-                        )
-                    },
-                    |selection| selection.active(),
-                );
+        let route_active = route.producer.active
+            && route.selection.map_or_else(
+                || {
+                    self.desired_source_subscription_active(
+                        consumer_user_id,
+                        producer_user_id,
+                        stream_id,
+                    )
+                },
+                ConsumerSourceSelection::active,
+            );
         Some(if route_active {
             ConsumerRouteState::Active
         } else {
@@ -661,34 +645,22 @@ impl RoomState {
             return None;
         }
         Some(
-            self.media
-                .consumer_keys_for_user(consumer_user_id)
-                .into_iter()
-                .filter_map(|key| {
-                    let consumer_state = self.media.consumer_index.get(&key)?;
-                    let source = self.media.sources.get(&key.source_id)?;
-                    if key.consumer_user_id != *consumer_user_id
-                        || consumer_state.consumer_connection_id != consumer_connection_id
-                        || source.media_kind() != RouterMediaKind::Video
+            self.current_live_consumer_routes()
+                .filter_map(|route| {
+                    if route.consumer_user_id != *consumer_user_id
+                        || route.state.consumer_connection_id != consumer_connection_id
+                        || route.source.media_kind() != RouterMediaKind::Video
                     {
                         return None;
                     }
-                    let producer_id = self.media.producer_id_by_source_id.get(&key.source_id)?;
-                    let producer = self.media.producers.get(producer_id)?;
-                    if !producer.active
-                        || !self
-                            .media
-                            .consumer_source_selections
-                            .get(&key)
-                            .is_none_or(|selection| selection.active())
-                    {
+                    if !route.producer.active || !route.selection_or_open(true).active() {
                         return None;
                     }
                     Some(ConsumerKeyframeRefreshTarget {
-                        consumer_media: consumer_state.consumer_media,
-                        producer_user_id: source.owner().user_id().clone(),
-                        producer_connection_id: consumer_state.source_connection_id,
-                        source_media: consumer_state.source_media,
+                        consumer_media: route.state.consumer_media,
+                        producer_user_id: route.source.owner().user_id().clone(),
+                        producer_connection_id: route.state.source_connection_id,
+                        source_media: route.state.source_media,
                     })
                 })
                 .collect(),
