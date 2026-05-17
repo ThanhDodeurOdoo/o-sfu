@@ -539,14 +539,14 @@ impl RtcWorkerManager {
                     )
                     .await
             }
-            TransportRelayRouteAction::SetActive(active) => {
+            TransportRelayRouteAction::SetActivity(activity) => {
                 source_worker
                     .media()
                     .apply_relay_target_activity(
                         &effect.source_session_key,
                         effect.source_transport_media_id,
                         target_worker.as_ref(),
-                        active,
+                        activity.is_active(),
                     )
                     .await
             }

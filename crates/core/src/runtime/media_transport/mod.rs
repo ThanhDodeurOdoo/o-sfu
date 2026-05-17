@@ -47,11 +47,12 @@ use tracing::warn;
 pub use types::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
     ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,
-    ConsumerPacketGateUpdate, ProducerActivity, ReceiverBandwidthSnapshot, SessionOffer,
-    SessionUploadEncoding, SessionUploadSlot, SourcePacketGate, SourcePacketOperatingPoint,
-    TransportAdapterError, TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,
-    TransportPlacementPressureSnapshot, TransportRelayRouteAction, TransportRelayRouteEffect,
-    TransportResult, TransportSessionHealth, TransportSessionKey, TransportWorkerPressureSnapshot,
+    ConsumerPacketGateUpdate, ProducerActivity, ReceiverBandwidthSnapshot, RelayRouteActivity,
+    SessionOffer, SessionUploadEncoding, SessionUploadSlot, SourcePacketGate,
+    SourcePacketOperatingPoint, TransportAdapterError, TransportBitrateSnapshot,
+    TransportConsumerRoute, TransportMediaId, TransportPlacementPressureSnapshot,
+    TransportRelayRouteAction, TransportRelayRouteEffect, TransportResult, TransportSessionHealth,
+    TransportSessionKey, TransportWorkerPressureSnapshot,
 };
 
 use crate::{CoreOptions, runtime::RoomInstanceId};

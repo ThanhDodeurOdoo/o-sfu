@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use super::subscription::PendingConsumerBootstrapTarget;
 use crate::runtime::{
     ConnectionId, UserId,
-    media_transport::{TransportMediaId, TransportRelayRouteAction},
+    media_transport::{RelayRouteActivity, TransportMediaId, TransportRelayRouteAction},
     source_model::PublishedSourceId,
 };
 
@@ -18,7 +18,7 @@ pub(in crate::runtime::room::state) struct RoomRelayRoutes {
     routes: BTreeMap<RelayRouteKey, RelayRouteOwners>,
 }
 
-type RelayRouteOwners = BTreeMap<RelayOwnerKey, bool>;
+type RelayRouteOwners = BTreeMap<RelayOwnerKey, RelayRouteActivity>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(in crate::runtime::room) struct RelayRouteKey {
@@ -49,7 +49,8 @@ impl RoomRelayRoutes {
         let owner_key = RelayOwnerKey::from_target(target);
         let owners = self.routes.entry(route_key.clone()).or_default();
         let before = aggregate(owners);
-        if owners.insert(owner_key, active) == Some(active) {
+        let activity = RelayRouteActivity::from_active(active);
+        if owners.insert(owner_key, activity) == Some(activity) {
             return Vec::new();
         }
         relay_effects_for(route_key, before, aggregate(owners))
@@ -70,13 +71,14 @@ impl RoomRelayRoutes {
             return Vec::new();
         };
         let before = aggregate(owners);
-        let Some(owner_active) = owners.get_mut(&owner_key) else {
+        let Some(owner_activity) = owners.get_mut(&owner_key) else {
             return Vec::new();
         };
-        if *owner_active == active {
+        let activity = RelayRouteActivity::from_active(active);
+        if *owner_activity == activity {
             return Vec::new();
         }
-        *owner_active = active;
+        *owner_activity = activity;
         relay_effects_for(route_key, before, aggregate(owners))
     }
 
@@ -115,7 +117,7 @@ impl RoomRelayRoutes {
         let before = aggregate(owners);
         owners.remove(owner_key);
         let after = aggregate(owners);
-        if after.0 {
+        if after.is_empty {
             self.routes.remove(&route_key);
         }
         relay_effects_for(route_key, before, after)
@@ -138,8 +140,19 @@ impl RelayOwnerKey {
     }
 }
 
-fn aggregate(owners: &RelayRouteOwners) -> (bool, bool) {
-    (owners.is_empty(), owners.values().any(|active| *active))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RelayRouteAggregate {
+    is_empty: bool,
+    activity: RelayRouteActivity,
+}
+
+fn aggregate(owners: &RelayRouteOwners) -> RelayRouteAggregate {
+    RelayRouteAggregate {
+        is_empty: owners.is_empty(),
+        activity: RelayRouteActivity::from_active(
+            owners.values().copied().any(RelayRouteActivity::is_active),
+        ),
+    }
 }
 
 fn relay_effect(route: RelayRouteKey, action: TransportRelayRouteAction) -> RelayRouteEffect {
@@ -148,23 +161,23 @@ fn relay_effect(route: RelayRouteKey, action: TransportRelayRouteAction) -> Rela
 
 fn relay_effects_for(
     route: RelayRouteKey,
-    before: (bool, bool),
-    after: (bool, bool),
+    before: RelayRouteAggregate,
+    after: RelayRouteAggregate,
 ) -> Vec<RelayRouteEffect> {
-    if after.0 {
+    if after.is_empty {
         return vec![relay_effect(route, TransportRelayRouteAction::Release)];
     }
     let mut effects = Vec::new();
-    if before.0 {
+    if before.is_empty {
         effects.push(relay_effect(
             route.clone(),
             TransportRelayRouteAction::Install,
         ));
     }
-    if before.1 != after.1 {
+    if before.activity != after.activity {
         effects.push(relay_effect(
             route,
-            TransportRelayRouteAction::SetActive(after.1),
+            TransportRelayRouteAction::SetActivity(after.activity),
         ));
     }
     effects
