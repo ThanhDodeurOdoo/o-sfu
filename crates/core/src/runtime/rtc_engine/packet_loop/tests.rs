@@ -52,6 +52,7 @@ use crate::{
             media_registry::RegisteredMediaHandle,
             relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayTargetId},
             route_control::{KeyframeRequestDecision, PacketLayerGate},
+            slots::ConsumerStreamHandle,
             state::{PacketLoopState, RtcSnapshotState},
             test_support::{
                 sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
@@ -122,6 +123,12 @@ impl IngressRoutingHarness {
             packet,
         );
     }
+}
+
+fn drain_ready_sessions(state: &mut PacketLoopState) -> Vec<TransportSessionKey> {
+    let mut ready_sessions = Vec::new();
+    state.collect_ready_sessions(Instant::now(), &mut ready_sessions);
+    ready_sessions
 }
 
 fn populate_forward_routes(
@@ -347,6 +354,10 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
 
     harness.route(&packet);
 
+    assert_eq!(
+        drain_ready_sessions(&mut harness.packet_loop_state),
+        vec![session_key.clone()]
+    );
     assert_eq!(harness.routing_state.fallback_attempts(), 0);
     assert_eq!(
         harness
@@ -622,6 +633,7 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() {
     let Some(consumer_session_state) = state.users.get_mut(&consumer_session) else {
         return;
     };
+    let consumer_stream = consumer_session_state.consumer_streams.allocate();
     let mut direct_api = consumer_session_state.rtc.direct_api();
     direct_api.declare_media(consumer_mid, MediaKind::Video);
     direct_api.declare_stream_tx(Ssrc::from(223_001_u32), None, consumer_mid, None);
@@ -636,6 +648,7 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() {
     route_entry.push_destination(MediaRouteDestination {
         dest_session: consumer_session.clone(),
         dest_transport_media_id: TransportMediaId::new(223),
+        dest_stream: consumer_stream,
         dest_mid: consumer_mid,
         dest_payload_type: None,
         nackable: true,
@@ -656,9 +669,72 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() {
 
     flush_forward_routes(&mut state, &metrics, &rtp_metrics, &mut buffers);
 
-    assert!(state.dirty_sessions.contains(&consumer_session));
+    assert_eq!(drain_ready_sessions(&mut state), vec![consumer_session]);
     assert!(buffers.relay_packet_idx.is_none());
     assert_eq!(metrics.snapshot().rtp_forwarded_packets_local_rtc(), 1);
+}
+
+#[test]
+fn flush_forward_routes_drops_stale_local_consumer_stream_handle() {
+    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_053));
+    let producer_session = test_transport_session_key(219, 0, 220, UserId::Integer(221));
+    let consumer_session = test_transport_session_key(219, 0, 222, UserId::Integer(223));
+    let consumer_mid = Mid::from("cam-down");
+    let mut state = PacketLoopState::default();
+    let mut buffers = PacketLoopBuffers::new();
+    let metrics = RuntimeMetrics::default();
+    let rtp_metrics = metrics.register_rtp_worker();
+
+    assert!(
+        bootstrap::ensure_session_rtc_state(
+            &mut state.users,
+            &consumer_session,
+            candidate_addr,
+            Bitrate::from_mbps(10),
+            MediaCodecFlags::default(),
+        )
+        .is_ok()
+    );
+    let Some(consumer_session_state) = state.users.get_mut(&consumer_session) else {
+        return;
+    };
+    let mut direct_api = consumer_session_state.rtc.direct_api();
+    direct_api.declare_media(consumer_mid, MediaKind::Video);
+    direct_api.declare_stream_tx(Ssrc::from(224_001_u32), None, consumer_mid, None);
+
+    buffers.pending_packets.push(sample_forwarded_packet(
+        producer_session,
+        "cam-up",
+        b"payload",
+    ));
+    let source_transport_media_id = TransportMediaId::new(225);
+    let mut route_entry = MediaRouteEntry::new(true);
+    route_entry.push_destination(MediaRouteDestination {
+        dest_session: consumer_session.clone(),
+        dest_transport_media_id: TransportMediaId::new(224),
+        dest_stream: ConsumerStreamHandle::default(),
+        dest_mid: consumer_mid,
+        dest_payload_type: None,
+        nackable: true,
+        active: true,
+        packet_gate: PacketLayerGate::Open,
+        pending_packet_gate: None,
+    });
+    state
+        .media_route_index
+        .insert(source_transport_media_id, route_entry);
+    buffers.forwards.push(
+        super::super::forwarding_destination::PacketForward::from_local_route_destination(
+            0,
+            source_transport_media_id,
+            0,
+        ),
+    );
+
+    flush_forward_routes(&mut state, &metrics, &rtp_metrics, &mut buffers);
+
+    assert!(drain_ready_sessions(&mut state).is_empty());
+    assert_eq!(metrics.snapshot().rtp_forwarded_packets_local_rtc(), 0);
 }
 
 #[test]
@@ -757,6 +833,7 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
     route_entry.push_destination(MediaRouteDestination {
         dest_session: consumer_session,
         dest_transport_media_id: consumer_transport_media_id,
+        dest_stream: ConsumerStreamHandle::default(),
         dest_mid: Mid::from("aud-down"),
         dest_payload_type: None,
         nackable: false,
@@ -948,7 +1025,10 @@ fn flush_pending_keyframe_requests_marks_local_source_sessions_dirty() {
 
     flush_pending_keyframe_requests(&mut state, &*rtc_metrics, &mut buffers);
 
-    assert!(state.dirty_sessions.contains(&source_session));
+    assert_eq!(
+        drain_ready_sessions(&mut state),
+        vec![source_session.clone()]
+    );
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
     assert_eq!(snapshot.rtc_route_control_absorbed(), 0);
@@ -1147,7 +1227,10 @@ fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_f
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
     assert_eq!(snapshot.rtc_route_control_absorbed(), 0);
-    assert!(state.dirty_sessions.contains(&source_session));
+    assert_eq!(
+        drain_ready_sessions(&mut state),
+        vec![source_session.clone()]
+    );
     assert_eq!(
         state
             .route_control

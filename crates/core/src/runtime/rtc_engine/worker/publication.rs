@@ -202,7 +202,7 @@ fn worker_resolve_negotiated_producer_parameters(
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
 ) -> Result<RouterRtpParameters, TransportAdapterError> {
-    let Some(handle) = state.mid_registry.get(&transport_media_id.as_u64()) else {
+    let Some(handle) = state.media_handle(transport_media_id) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
     let mid = match handle {

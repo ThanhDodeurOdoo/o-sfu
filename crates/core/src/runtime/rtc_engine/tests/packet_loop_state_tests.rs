@@ -20,6 +20,22 @@ fn insert_live_session(state: &mut PacketLoopState, session_key: &TransportSessi
     ));
 }
 
+fn replace_live_session(state: &mut PacketLoopState, session_key: &TransportSessionKey) {
+    let mut replacement_state = PacketLoopState::default();
+    insert_live_session(&mut replacement_state, session_key);
+    let replacement_session = replacement_state
+        .users
+        .remove(session_key)
+        .expect("replacement session should exist");
+
+    assert!(
+        state
+            .users
+            .insert(session_key.clone(), replacement_session)
+            .is_some()
+    );
+}
+
 #[test]
 fn packet_loop_state_reassigns_remote_addr_between_sessions() {
     let mut packet_loop_state = PacketLoopState::default();
@@ -139,4 +155,35 @@ fn packet_loop_state_clears_all_dirty_duplicates_for_removed_session() {
     let ready_sessions = collect_ready_sessions(&mut state, now);
 
     assert_eq!(ready_sessions, vec![retained_session_key]);
+}
+
+#[test]
+fn packet_loop_state_ignores_stale_dirty_handle_after_session_replacement() {
+    let mut state = PacketLoopState::default();
+    let session_key = transport_key_on_worker(1, 0, 37, UserId::Integer(37));
+    let now = Instant::now();
+
+    insert_live_session(&mut state, &session_key);
+    state.mark_session_dirty(&session_key);
+    replace_live_session(&mut state, &session_key);
+
+    let ready_sessions = collect_ready_sessions(&mut state, now);
+
+    assert!(ready_sessions.is_empty());
+}
+
+#[test]
+fn packet_loop_state_ignores_stale_timeout_handle_after_session_replacement() {
+    let mut state = PacketLoopState::default();
+    let session_key = transport_key_on_worker(1, 0, 38, UserId::Integer(38));
+    let now = Instant::now();
+
+    insert_live_session(&mut state, &session_key);
+    state.update_session_timeout(&session_key, Some(now + Duration::from_millis(10)));
+    replace_live_session(&mut state, &session_key);
+
+    let ready_sessions = collect_ready_sessions(&mut state, now + Duration::from_millis(11));
+
+    assert!(ready_sessions.is_empty());
+    assert_eq!(state.next_timeout_deadline(), None);
 }

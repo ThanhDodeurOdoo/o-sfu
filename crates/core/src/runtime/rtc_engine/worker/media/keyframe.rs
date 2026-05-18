@@ -123,10 +123,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn worker_request_consumer_key
         source_session_key,
         source_transport_media_id,
     )?;
-    match state
-        .mid_registry
-        .get(&consumer_transport_media_id.as_u64())
-    {
+    match state.media_handle(consumer_transport_media_id) {
         Some(RegisteredMediaHandle::Consumer {
             session_key,
             source_transport_media_id: consumer_source_transport_media_id,

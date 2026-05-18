@@ -48,6 +48,7 @@ mod route_control;
 mod routing_miss;
 mod shared_payload;
 mod simulcast;
+mod slots;
 mod state;
 #[cfg(any(test, feature = "testing-transport"))]
 pub mod test_support;

@@ -237,7 +237,7 @@ fn resolve_keyframe_route(
     source_transport_media_id: TransportMediaId,
 ) -> Option<ResolvedKeyframeRoute> {
     if let Some(RegisteredMediaHandle::Producer { session_key, .. }) =
-        state.mid_registry.get(&source_transport_media_id.as_u64())
+        state.media_handle(source_transport_media_id)
     {
         return Some(ResolvedKeyframeRoute::Local {
             source_session_key: session_key.clone(),

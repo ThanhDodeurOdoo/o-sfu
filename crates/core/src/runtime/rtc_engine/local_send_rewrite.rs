@@ -3,19 +3,11 @@
 //! jumps from the browser by mapping them into one continuous, monotonic stream.
 //! for vp8, it also handles the picture identifiers to prevent playback glitches.
 
-use std::collections::HashMap;
-
 use str0m::rtp::{SeqNo, Ssrc};
 
-use crate::runtime::media_transport::TransportMediaId;
+use super::slots::{ConsumerStreamHandle, ConsumerStreamSlot, SlotStore};
 
 const VP8_LONG_PICTURE_ID_MODULUS: u16 = 1 << 15;
-
-/// key for one consumer stream
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) struct ConsumerStreamKey {
-    transport_media_id: TransportMediaId,
-}
 
 /// state for one downstream video stream
 ///
@@ -39,6 +31,36 @@ pub(super) struct ConsumerStream {
     source_tl0_pic_idx_anchor: Option<u8>,
     projected_tl0_pic_idx_anchor: Option<u8>,
     last_projected_tl0_pic_idx: Option<u8>,
+}
+
+/// slot-backed ownership table for downstream RTP rewrite state
+///
+/// route destinations store `ConsumerStreamHandle` instead of replaying a
+/// consumer-stream key lookup for every forwarded packet
+/// releasing the handle on route teardown invalidates stale destinations before
+/// they can rewrite packets for a reused stream
+#[derive(Default)]
+pub(super) struct ConsumerStreamStore {
+    streams: SlotStore<ConsumerStream, ConsumerStreamSlot>,
+}
+
+impl ConsumerStreamStore {
+    /// allocate rewrite state for one route destination
+    pub(super) fn allocate(&mut self) -> ConsumerStreamHandle {
+        self.streams.insert(ConsumerStream::default())
+    }
+
+    /// release rewrite state when the route destination is removed
+    ///
+    /// `None` means the destination already held a stale or released handle
+    pub(super) fn release(&mut self, handle: ConsumerStreamHandle) -> Option<ConsumerStream> {
+        self.streams.remove(handle)
+    }
+
+    /// return rewrite state only while the destination handle is still live
+    fn get_mut(&mut self, handle: ConsumerStreamHandle) -> Option<&mut ConsumerStream> {
+        self.streams.get_mut(handle)
+    }
 }
 
 impl ConsumerStream {
@@ -214,46 +236,68 @@ impl ProjectedIdentity {
 /// is not aware of the publisher's history. it also ensures that switching
 /// between quality levels is invisible to the browser.
 pub(super) fn next_projected_rtp_identity(
-    streams: &mut HashMap<ConsumerStreamKey, ConsumerStream>,
-    transport_media_id: TransportMediaId,
+    streams: &mut ConsumerStreamStore,
+    stream_handle: ConsumerStreamHandle,
     source_ssrc: Ssrc,
     source_timestamp: u32,
     vp8_payload: Vp8PayloadIdentity,
-) -> ProjectedIdentity {
+) -> Option<ProjectedIdentity> {
     streams
-        .entry(ConsumerStreamKey { transport_media_id })
-        .or_default()
-        .project(source_ssrc, source_timestamp, vp8_payload)
+        .get_mut(stream_handle)
+        .map(|stream| stream.project(source_ssrc, source_timestamp, vp8_payload))
 }
 
-/// clears any stored stream state for a consumer
-pub(super) fn forget_transport_media_streams(
-    streams: &mut HashMap<ConsumerStreamKey, ConsumerStream>,
-    transport_media_id: TransportMediaId,
+pub(super) fn forget_transport_media_stream(
+    streams: &mut ConsumerStreamStore,
+    stream_handle: ConsumerStreamHandle,
 ) {
-    streams.retain(|key, _| key.transport_media_id != transport_media_id);
+    let _removed = streams.release(stream_handle);
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::panic,
+        reason = "local send rewrite tests use panic only for mandatory fixture setup failures"
+    )]
+
     use super::*;
+
+    fn projected(
+        streams: &mut ConsumerStreamStore,
+        stream_handle: ConsumerStreamHandle,
+        source_ssrc: Ssrc,
+        source_timestamp: u32,
+        vp8_payload: Vp8PayloadIdentity,
+    ) -> ProjectedIdentity {
+        let Some(identity) = next_projected_rtp_identity(
+            streams,
+            stream_handle,
+            source_ssrc,
+            source_timestamp,
+            vp8_payload,
+        ) else {
+            panic!("consumer stream handle should be live");
+        };
+        identity
+    }
 
     #[test]
     fn projected_sequence_numbers_start_in_initial_roc_and_increment_per_stream() {
         let source_seq: SeqNo = 131_072.into();
-        let transport_media_id = TransportMediaId::new(41);
-        let mut streams = HashMap::new();
+        let mut streams = ConsumerStreamStore::default();
+        let stream_handle = streams.allocate();
 
-        let first = next_projected_rtp_identity(
+        let first = projected(
             &mut streams,
-            transport_media_id,
+            stream_handle,
             Ssrc::from(111),
             1234,
             Vp8PayloadIdentity::default(),
         );
-        let second = next_projected_rtp_identity(
+        let second = projected(
             &mut streams,
-            transport_media_id,
+            stream_handle,
             Ssrc::from(111),
             1234,
             Vp8PayloadIdentity::default(),
@@ -266,26 +310,27 @@ mod tests {
 
     #[test]
     fn projected_sequence_numbers_are_scoped_by_consumer_stream() {
-        let transport_media_id = TransportMediaId::new(42);
-        let mut streams = HashMap::new();
+        let mut streams = ConsumerStreamStore::default();
+        let stream_handle = streams.allocate();
+        let other_stream_handle = streams.allocate();
 
-        let first = next_projected_rtp_identity(
+        let first = projected(
             &mut streams,
-            transport_media_id,
+            stream_handle,
             Ssrc::from(111),
             1234,
             Vp8PayloadIdentity::default(),
         );
-        let second = next_projected_rtp_identity(
+        let second = projected(
             &mut streams,
-            transport_media_id,
+            stream_handle,
             Ssrc::from(111),
             1234,
             Vp8PayloadIdentity::default(),
         );
-        let other = next_projected_rtp_identity(
+        let other = projected(
             &mut streams,
-            TransportMediaId::new(43),
+            other_stream_handle,
             Ssrc::from(111),
             1234,
             Vp8PayloadIdentity::default(),
@@ -298,29 +343,30 @@ mod tests {
 
     #[test]
     fn forgetting_transport_media_streams_drops_all_stream_state_for_that_consumer() {
-        let transport_media_id = TransportMediaId::new(44);
-        let mut streams = HashMap::new();
+        let mut streams = ConsumerStreamStore::default();
+        let stream_handle = streams.allocate();
 
-        let first = next_projected_rtp_identity(
+        let first = projected(
             &mut streams,
-            transport_media_id,
+            stream_handle,
             Ssrc::from(111),
             1234,
             Vp8PayloadIdentity::default(),
         );
-        let _ = next_projected_rtp_identity(
+        let _second = projected(
             &mut streams,
-            transport_media_id,
+            stream_handle,
             Ssrc::from(111),
             1234,
             Vp8PayloadIdentity::default(),
         );
 
-        forget_transport_media_streams(&mut streams, transport_media_id);
+        forget_transport_media_stream(&mut streams, stream_handle);
+        let replacement_stream_handle = streams.allocate();
 
-        let reset = next_projected_rtp_identity(
+        let reset = projected(
             &mut streams,
-            transport_media_id,
+            replacement_stream_handle,
             Ssrc::from(111),
             1234,
             Vp8PayloadIdentity::default(),
@@ -331,20 +377,39 @@ mod tests {
     }
 
     #[test]
-    fn projected_timestamps_preserve_source_deltas_on_one_ssrc() {
-        let transport_media_id = TransportMediaId::new(45);
-        let mut streams = HashMap::new();
+    fn released_consumer_stream_handle_is_ignored() {
+        let mut streams = ConsumerStreamStore::default();
+        let stream_handle = streams.allocate();
 
-        let first = next_projected_rtp_identity(
+        forget_transport_media_stream(&mut streams, stream_handle);
+
+        assert!(
+            next_projected_rtp_identity(
+                &mut streams,
+                stream_handle,
+                Ssrc::from(111),
+                1234,
+                Vp8PayloadIdentity::default(),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn projected_timestamps_preserve_source_deltas_on_one_ssrc() {
+        let mut streams = ConsumerStreamStore::default();
+        let stream_handle = streams.allocate();
+
+        let first = projected(
             &mut streams,
-            transport_media_id,
+            stream_handle,
             Ssrc::from(111),
             10_000,
             Vp8PayloadIdentity::default(),
         );
-        let second = next_projected_rtp_identity(
+        let second = projected(
             &mut streams,
-            transport_media_id,
+            stream_handle,
             Ssrc::from(111),
             13_000,
             Vp8PayloadIdentity::default(),
@@ -358,26 +423,26 @@ mod tests {
 
     #[test]
     fn projected_timestamps_stay_monotonic_across_simulcast_ssrc_switches() {
-        let transport_media_id = TransportMediaId::new(46);
-        let mut streams = HashMap::new();
+        let mut streams = ConsumerStreamStore::default();
+        let stream_handle = streams.allocate();
 
-        let low = next_projected_rtp_identity(
+        let low = projected(
             &mut streams,
-            transport_media_id,
+            stream_handle,
             Ssrc::from(111),
             90_000,
             Vp8PayloadIdentity::default(),
         );
-        let high = next_projected_rtp_identity(
+        let high = projected(
             &mut streams,
-            transport_media_id,
+            stream_handle,
             Ssrc::from(222),
             1_000,
             Vp8PayloadIdentity::default(),
         );
-        let high_next = next_projected_rtp_identity(
+        let high_next = projected(
             &mut streams,
-            transport_media_id,
+            stream_handle,
             Ssrc::from(222),
             4_000,
             Vp8PayloadIdentity::default(),
@@ -392,12 +457,12 @@ mod tests {
 
     #[test]
     fn projected_vp8_picture_ids_stay_continuous_across_simulcast_ssrc_switches() {
-        let transport_media_id = TransportMediaId::new(47);
-        let mut streams = HashMap::new();
+        let mut streams = ConsumerStreamStore::default();
+        let stream_handle = streams.allocate();
 
-        let low = next_projected_rtp_identity(
+        let low = projected(
             &mut streams,
-            transport_media_id,
+            stream_handle,
             Ssrc::from(111),
             90_000,
             Vp8PayloadIdentity {
@@ -405,9 +470,9 @@ mod tests {
                 tl0_pic_idx: Some(250),
             },
         );
-        let high = next_projected_rtp_identity(
+        let high = projected(
             &mut streams,
-            transport_media_id,
+            stream_handle,
             Ssrc::from(222),
             1_000,
             Vp8PayloadIdentity {
@@ -415,9 +480,9 @@ mod tests {
                 tl0_pic_idx: Some(4),
             },
         );
-        let high_next = next_projected_rtp_identity(
+        let high_next = projected(
             &mut streams,
-            transport_media_id,
+            stream_handle,
             Ssrc::from(222),
             4_000,
             Vp8PayloadIdentity {

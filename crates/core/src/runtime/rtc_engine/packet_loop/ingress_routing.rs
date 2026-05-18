@@ -247,12 +247,11 @@ fn route_packet_with_cached_session(
         let dirty_session_key = if session_state.packet_loop_dirty {
             None
         } else {
-            session_state.packet_loop_dirty = true;
             Some(session_key.clone())
         };
         let _ = session_state;
         if let Some(dirty_session_key) = dirty_session_key {
-            state.dirty_sessions.push(dirty_session_key);
+            state.mark_session_dirty(&dirty_session_key);
         }
     }
     CachedRouteOutcome::Routed

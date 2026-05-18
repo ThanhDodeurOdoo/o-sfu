@@ -43,9 +43,11 @@ use crate::runtime::{
     rtc_engine::{
         commands::{ConsumerPacketGateCommand, RemoteSourceControl},
         demux::{MediaRouteDestination, MediaRouteEntry},
+        local_send_rewrite::forget_transport_media_stream,
         media_registry::RegisteredMediaHandle,
         route_control::{PacketLayerGate, aggregate_packet_gates},
         simulcast,
+        slots::ConsumerStreamHandle,
         state::PacketLoopState,
     },
 };
@@ -79,6 +81,11 @@ pub(in crate::runtime::rtc_engine::worker::media) struct ConsumerRouteRegistrati
     pub consumer_session_key: &'a TransportSessionKey,
     /// registered consumer media handle that receives forwarded packets
     pub consumer_transport_media_id: TransportMediaId,
+    /// destination-local RTP rewrite handle allocated by the consumer session
+    ///
+    /// route registration moves this handle onto the destination entry
+    /// route or session teardown must release it before the slot can be reused
+    pub consumer_stream: ConsumerStreamHandle,
     /// consumer MID used when packets are rewritten for local egress
     pub consumer_mid: Mid,
     /// committed consumer media kind used to cache local egress nackability
@@ -197,6 +204,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn register_consumer_route(
     let ConsumerRouteRegistration {
         consumer_session_key,
         consumer_transport_media_id,
+        consumer_stream,
         consumer_mid,
         consumer_media_kind,
         source_transport_media_id,
@@ -217,6 +225,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn register_consumer_route(
         .push_destination(MediaRouteDestination {
             dest_session: consumer_session_key.clone(),
             dest_transport_media_id: consumer_transport_media_id,
+            dest_stream: consumer_stream,
             dest_mid: consumer_mid,
             dest_payload_type,
             nackable: !consumer_media_kind.is_audio(),
@@ -263,21 +272,52 @@ pub(in crate::runtime::rtc_engine::worker::media) fn remove_consumer_route(
         state.prune_remote_source_if_unrouted(source_transport_media_id);
         return;
     };
-    let remove_route_entry = {
+    let (removed_destination, remove_route_entry) = {
         let Some(position) = route_entry.destinations.iter().position(|destination| {
             destination.dest_session == *consumer_session_key
                 && destination.dest_transport_media_id == consumer_transport_media_id
         }) else {
             return;
         };
-        route_entry.remove_destination(position);
-        route_entry.destinations.is_empty()
+        let removed_destination = route_entry.remove_destination(position);
+        (removed_destination, route_entry.destinations.is_empty())
     };
+    release_destination_stream(state, &removed_destination);
     if remove_route_entry {
         state.media_route_index.remove(&source_transport_media_id);
     }
     refresh_source_packet_gate(state, source_transport_media_id);
     state.prune_remote_source_if_unrouted(source_transport_media_id);
+}
+
+/// removes the local fanout route for one source media id
+///
+/// producer teardown uses this before source media ownership disappears
+/// every destination stream handle is released because the rewrite state is
+/// owned by the receiving session, not by the producer route
+pub(in crate::runtime::rtc_engine::worker) fn remove_source_route(
+    state: &mut PacketLoopState,
+    source_transport_media_id: TransportMediaId,
+) {
+    let Some(route_entry) = state.media_route_index.remove(&source_transport_media_id) else {
+        return;
+    };
+    for destination in route_entry.destinations {
+        release_destination_stream(state, &destination);
+    }
+    refresh_source_packet_gate(state, source_transport_media_id);
+    state.prune_remote_source_if_unrouted(source_transport_media_id);
+}
+
+/// release rewrite state owned by one local route destination
+///
+/// a missing destination session is treated as already gone
+/// stale forwarding plans will fail generation validation if they still carry
+/// the released handle
+fn release_destination_stream(state: &mut PacketLoopState, destination: &MediaRouteDestination) {
+    if let Some(session_state) = state.users.get_mut(&destination.dest_session) {
+        forget_transport_media_stream(&mut session_state.consumer_streams, destination.dest_stream);
+    }
 }
 
 /// recomputes the effective packet gate for one source after route changes

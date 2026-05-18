@@ -19,13 +19,16 @@ use super::{
     forwarded_packet::PacketVp8Payload,
     local_send_rewrite::{ProjectedIdentity, next_projected_rtp_identity},
     shared_payload::SharedPayload,
+    slots::ConsumerStreamHandle,
     state::RtcSessionState,
 };
 use crate::runtime::media_transport::TransportMediaId;
 
 /// destination-local view of one routed RTP stream
 ///
-/// `transport_media_id` keys the receiver-local rewrite state
+/// `transport_media_id` identifies the consumer media line for logs and diagnostics
+/// `stream_handle` keys the receiver-local rewrite state inside the destination
+/// session
 /// `mid` and
 /// `payload_type` are the consumer-negotiated values that must replace the
 /// publisher-facing RTP identity before packets cross into str0m
@@ -34,6 +37,7 @@ use crate::runtime::media_transport::TransportMediaId;
 #[derive(Debug, Clone)]
 pub(super) struct LocalPacketDestination {
     transport_media_id: TransportMediaId,
+    stream_handle: ConsumerStreamHandle,
     mid: Mid,
     payload_type: Option<Pt>,
     nackable: bool,
@@ -89,12 +93,14 @@ impl<'a> LocalForwardedRtp<'a> {
 impl LocalPacketDestination {
     pub(super) fn new(
         transport_media_id: TransportMediaId,
+        stream_handle: ConsumerStreamHandle,
         mid: Mid,
         payload_type: Option<Pt>,
         nackable: bool,
     ) -> Self {
         Self {
             transport_media_id,
+            stream_handle,
             mid,
             payload_type,
             nackable,
@@ -137,13 +143,15 @@ impl LocalPacketDestination {
         let write_result = {
             let mut direct_api = rtc.direct_api();
             if let Some(stream_tx) = direct_api.stream_tx_by_mid(self.mid, None) {
-                let identity = next_projected_rtp_identity(
+                let Some(identity) = next_projected_rtp_identity(
                     local_send_streams,
-                    self.transport_media_id,
+                    self.stream_handle,
                     rtp.header().ssrc,
                     rtp.header().timestamp,
                     vp8_identity,
-                );
+                ) else {
+                    return Ok(None);
+                };
                 if identity.source_switched() {
                     debug!(
                         ?self.transport_media_id,

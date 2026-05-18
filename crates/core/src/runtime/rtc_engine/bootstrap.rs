@@ -12,7 +12,6 @@
 //! contracts
 
 use std::{
-    collections::{BTreeMap, HashMap},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket as StdUdpSocket},
     sync::Arc,
     time::Instant,
@@ -28,7 +27,11 @@ use str0m::{
 use tokio::net::UdpSocket;
 use tracing::info;
 
-use super::state::{RtcSessionState, SessionSdpNegotiationState, SharedRtcSocket};
+use super::{
+    local_send_rewrite::ConsumerStreamStore,
+    slots::SessionStore,
+    state::{RtcSessionState, SessionSdpNegotiationState, SharedRtcSocket},
+};
 use crate::{
     Bitrate, MediaCodecFlags, RtcPortRange,
     runtime::media_transport::{TransportAdapterError, TransportSessionKey},
@@ -112,7 +115,7 @@ fn bind_ip_for_public_ip(public_ip: IpAddr) -> IpAddr {
 /// returns `TransportUnavailable` if the local candidate cannot be represented
 /// by str0m or cannot be attached to the newly created rtc state
 pub(super) fn ensure_session_rtc_state(
-    users: &mut BTreeMap<TransportSessionKey, RtcSessionState>,
+    users: &mut SessionStore,
     session_key: &TransportSessionKey,
     candidate_addr: SocketAddr,
     max_bitrate_out: Bitrate,
@@ -147,7 +150,7 @@ pub(super) fn ensure_session_rtc_state(
             dtls_started: false,
             packet_loop_dirty: false,
             sdp_negotiation: SessionSdpNegotiationState::default(),
-            consumer_streams: HashMap::new(),
+            consumer_streams: ConsumerStreamStore::default(),
         },
     );
     Ok(true)

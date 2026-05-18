@@ -19,7 +19,7 @@ use super::{
         commands::{CloseSessionOutcome, CloseSessionState},
         state::{PacketLoopState, RtcSnapshotState},
     },
-    media::refresh_source_packet_gate,
+    media::{refresh_source_packet_gate, remove_source_route},
 };
 use crate::runtime::{
     media_transport::{TransportAdapterError, TransportSessionKey},
@@ -51,8 +51,8 @@ fn worker_close_session(
     session_key: &TransportSessionKey,
     metrics: &RuntimeMetrics,
 ) -> CloseSessionOutcome {
-    let removed_session = state.users.remove(session_key);
     state.clear_session_schedule(session_key);
+    let removed_session = state.users.remove(session_key);
     state.remove_egress_bitrate_counter(session_key);
     state
         .remote_addr_demux
@@ -69,11 +69,9 @@ fn worker_close_session(
         .map(|(transport_media_id, _handle)| *transport_media_id)
         .collect::<Vec<_>>();
     let mut affected_route_sources = BTreeSet::new();
-    state
-        .media_route_index
-        .retain(|source_transport_media_id, _| {
-            !removed_media_ids.contains(source_transport_media_id)
-        });
+    for source_transport_media_id in &removed_media_ids {
+        remove_source_route(state, *source_transport_media_id);
+    }
     state
         .media_route_index
         .retain(|source_transport_media_id, entry| {
@@ -82,6 +80,11 @@ fn worker_close_session(
                 .destinations
                 .retain(|destination| destination.dest_session != *session_key);
             if entry.destinations.len() != destination_count {
+                entry.active_destination_count = entry
+                    .destinations
+                    .iter()
+                    .filter(|destination| destination.active)
+                    .count();
                 affected_route_sources.insert(*source_transport_media_id);
             }
             !entry.destinations.is_empty()
