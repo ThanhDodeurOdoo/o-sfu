@@ -16,10 +16,11 @@ use o_sfu_rfc::rtp as rfc_rtp;
 
 use super::{
     CodecSetting, HeaderExtension, HeaderExtensionUri, MediaCapabilities, MediaCodec,
-    MediaCodecCapability, MediaFormat, MediaKind, MediaStream, ParseDiagnostic,
-    ParseDiagnosticKind, ParseDiagnosticSpec, PayloadType, RfcReference, RtcpFeedback,
+    MediaCodecCapability, MediaFormat, MediaKind, MediaStream, PayloadType, RtcpFeedback,
     RtcpFeedbackKind, StreamBinding,
 };
+#[cfg(any(test, feature = "test-support"))]
+use super::{ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, RfcReference};
 
 /// Failure raised while deriving or negotiating RTP parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,17 +40,20 @@ pub enum RtpNegotiationError {
     NoCompatibleConsumerCodec,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 const RFC_3264_SECTION_6: RfcReference = RfcReference::new(
     "RFC 3264",
     "section 6",
     "https://www.rfc-editor.org/rfc/rfc3264#section-6",
 );
+#[cfg(any(test, feature = "test-support"))]
 const RFC_4588_SECTION_8_1: RfcReference = RfcReference::new(
     "RFC 4588",
     "section 8.1",
     "https://www.rfc-editor.org/rfc/rfc4588#section-8.1",
 );
 
+#[cfg(any(test, feature = "test-support"))]
 impl ParseDiagnostic for RtpNegotiationError {
     fn diagnostic(&self) -> ParseDiagnosticSpec {
         match self {
