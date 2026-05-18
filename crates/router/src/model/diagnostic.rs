@@ -7,7 +7,7 @@ pub enum ParseDiagnosticKind {
     UnsupportedFeature,
 }
 
-/// A bit of a prototype, not sure if I will keep it but it's for mapping RFC citations directly to issues
+/// RFC rule cited by an internal parse diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RfcReference {
     document: &'static str,

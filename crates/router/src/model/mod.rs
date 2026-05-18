@@ -2,6 +2,7 @@
 //! RTP/domain models used at its boundary, and narrow test-support helpers.
 mod consumer;
 mod consumer_capability;
+#[cfg(any(test, feature = "test-support"))]
 mod diagnostic;
 mod error;
 mod ids;
@@ -21,10 +22,13 @@ pub mod test_support;
 mod tests;
 mod transport;
 
+#[cfg(any(test, feature = "test-support"))]
+pub use self::diagnostic::{
+    ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, RfcReference,
+};
 pub use self::{
     consumer::Consumer,
     consumer_capability::ConsumerCapability,
-    diagnostic::{ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, RfcReference},
     error::RouterError,
     ids::{ConsumerId, ProducerId, RouterId, SessionId, TransportId},
     media::MediaKind,
