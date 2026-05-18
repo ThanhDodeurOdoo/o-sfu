@@ -16,6 +16,7 @@ pub use catalog::RuntimeMetrics;
 pub use descriptor::MetricName;
 pub use labels::{
     BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
+    RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
     RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, SourceSelectionKind,
     TransportCleanupFailureKind, TransportHealthState, TransportIceState, WsSessionLoopExitReason,
 };

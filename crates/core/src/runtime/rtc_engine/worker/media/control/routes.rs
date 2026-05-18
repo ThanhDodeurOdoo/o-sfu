@@ -338,15 +338,7 @@ pub(in crate::runtime::rtc_engine::worker) fn refresh_source_packet_gate(
     state
         .route_control
         .set_local_packet_gate(source_transport_media_id, local_packet_gate);
-    if let Some(remote_source_registration) =
-        state.remote_source_registration(source_transport_media_id)
-    {
-        remote_source_registration.source_control().set_packet_gate(
-            remote_source_registration.source_session_key().clone(),
-            source_transport_media_id,
-            remote_packet_gate,
-        );
-    }
+    state.publish_remote_source_packet_gate(source_transport_media_id, remote_packet_gate);
 }
 
 /// returns the MID for a local producer when ownership still matches

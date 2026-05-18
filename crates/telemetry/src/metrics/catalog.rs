@@ -17,8 +17,9 @@ use super::{
     labels::{
         BudgetSolverOutcome, ControlPlaneDurationBucket, HttpDisconnectResponseStatus,
         HttpRoomResponseStatus, HttpRoute, RecordingActionOutcome, RtcDatagramDropReason,
-        RtcDatagramRoutePath, RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind,
-        SourceSelectionKind, TransportCleanupFailureKind, TransportHealthState,
+        RtcDatagramRoutePath, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
+        RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpForwardDestinationKind,
+        RtpRelayDropKind, SourceSelectionKind, TransportCleanupFailureKind, TransportHealthState,
         TransportHealthTransition, TransportIceState, TransportUserLifetimeBucket,
         WsBusClientFrameKind, WsBusDirection, WsBusFailureKind, WsConnectionStage,
         WsSessionLoopExitReason, WsStartupFailureKind,
@@ -449,6 +450,31 @@ impl RuntimeMetrics {
 
     pub fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome) {
         self.rtc_metrics.record_route_control(outcome);
+    }
+
+    pub fn record_rtc_relay_enqueue(&self, result: RtcRelayEnqueueResult) {
+        self.rtc_metrics.record_relay_enqueue(result);
+    }
+
+    pub fn record_rtc_relay_mailbox_depth(&self, depth: usize) {
+        self.rtc_metrics.record_relay_mailbox_depth(depth);
+    }
+
+    pub fn record_rtc_relay_drain_batch(&self, drained_packets: usize, cap_hit: bool) {
+        self.rtc_metrics
+            .record_relay_drain_batch(drained_packets, cap_hit);
+    }
+
+    pub fn record_rtc_remote_control_drop(&self, kind: RtcRemoteControlDropKind) {
+        self.rtc_metrics.record_remote_control_drop(kind);
+    }
+
+    pub fn record_rtc_remote_packet_gate_convergence(
+        &self,
+        outcome: RtcRemotePacketGateConvergence,
+    ) {
+        self.rtc_metrics
+            .record_remote_packet_gate_convergence(outcome);
     }
 
     pub fn record_source_selection_update(&self, selector: SourceSelectionKind) {

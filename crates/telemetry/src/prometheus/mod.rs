@@ -162,6 +162,7 @@ mod tests {
     use super::{PROMETHEUS_CONTENT_TYPE, render_prometheus};
     use crate::metrics::{
         BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
+        RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
         RtcRouteControlOutcome, RtpForwardDestinationKind, RuntimeMetrics, SourceSelectionKind,
         TransportCleanupFailureKind, TransportHealthState, TransportIceState,
         WsSessionLoopExitReason,
@@ -299,6 +300,15 @@ mod tests {
         metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
         metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
         metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
+        metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeEnqueued);
+        metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeOverloaded);
+        metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::InterNodeClosed);
+        metrics.record_rtc_relay_mailbox_depth(7);
+        metrics.record_rtc_relay_drain_batch(4, true);
+        metrics.record_rtc_remote_control_drop(RtcRemoteControlDropKind::Keyframe);
+        metrics.record_rtc_remote_control_drop(RtcRemoteControlDropKind::PacketGate);
+        metrics.record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Retry);
+        metrics.record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Flushed);
         metrics.record_source_selection_update(SourceSelectionKind::Encoding);
         metrics.record_budget_solver_outcome(BudgetSolverOutcome::Degraded);
         metrics.record_budget_solver_outcome(BudgetSolverOutcome::Paused);
@@ -374,5 +384,28 @@ mod tests {
         );
         assert!(rendered.contains("osfu_rtc_route_control_total{outcome=\"layer_allowed\"} 1"));
         assert!(rendered.contains("osfu_rtc_route_control_total{outcome=\"layer_dropped\"} 1"));
+        assert!(rendered.contains(
+            "osfu_rtc_relay_enqueues_total{target=\"intra_node_relay\",outcome=\"enqueued\"} 1"
+        ));
+        assert!(rendered.contains(
+            "osfu_rtc_relay_enqueues_total{target=\"intra_node_relay\",outcome=\"overloaded\"} 1"
+        ));
+        assert!(rendered.contains(
+            "osfu_rtc_relay_enqueues_total{target=\"inter_node_relay\",outcome=\"closed\"} 1"
+        ));
+        assert!(rendered.contains("osfu_rtc_relay_mailbox_depth_samples_total 1"));
+        assert!(rendered.contains("osfu_rtc_relay_mailbox_depth_observed_total 7"));
+        assert!(rendered.contains("osfu_rtc_relay_drain_batches_total 1"));
+        assert!(rendered.contains("osfu_rtc_relay_drained_packets_total 4"));
+        assert!(rendered.contains("osfu_rtc_relay_drain_cap_hits_total 1"));
+        assert!(rendered.contains("osfu_rtc_remote_control_drops_total{kind=\"keyframe\"} 1"));
+        assert!(rendered.contains("osfu_rtc_remote_control_drops_total{kind=\"packet_gate\"} 1"));
+        assert!(
+            rendered.contains("osfu_rtc_remote_packet_gate_convergence_total{outcome=\"retry\"} 1")
+        );
+        assert!(
+            rendered
+                .contains("osfu_rtc_remote_packet_gate_convergence_total{outcome=\"flushed\"} 1")
+        );
     }
 }

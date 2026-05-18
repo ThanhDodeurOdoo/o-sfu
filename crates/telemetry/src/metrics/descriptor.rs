@@ -8,8 +8,9 @@ use super::{
     },
     labels::{
         ControlPlaneDurationBucket, HttpRoute, RecordingActionOutcome, RtcDatagramDropReason,
-        RtcDatagramRoutePath, RtcRouteControlOutcome, RtpFlowDirection, RtpForwardDestinationKind,
-        TransportHealthTransition,
+        RtcDatagramRoutePath, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
+        RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpFlowDirection,
+        RtpForwardDestinationKind, TransportHealthTransition,
     },
     rtc::RtcMetricsSnapshot,
     rtp::{RtpMetricsSnapshot, RtpWorkerMetricsSnapshot},
@@ -523,6 +524,72 @@ metric_catalog! {
             RtcMetricsSnapshot::route_control
         )
     },
+    RtcRelayEnqueuesTotal {
+        name: "osfu_rtc_relay_enqueues_total",
+        help: "Total relay enqueue attempts by target kind and outcome.",
+        kind: Counter,
+        samples: |metrics| rtc_relay_enqueue_samples(&metrics.rtc_metrics.snapshot())
+    },
+    RtcRelayMailboxDepthSamplesTotal {
+        name: "osfu_rtc_relay_mailbox_depth_samples_total",
+        help: "Total sampled intra-node relay mailbox depth observations.",
+        kind: Counter,
+        samples: |metrics| vec![
+            unlabeled_counter(metrics.rtc_metrics.snapshot().relay_mailbox_depth_samples())
+        ]
+    },
+    RtcRelayMailboxDepthObservedTotal {
+        name: "osfu_rtc_relay_mailbox_depth_observed_total",
+        help: "Sum of sampled intra-node relay mailbox depths.",
+        kind: Counter,
+        samples: |metrics| vec![
+            unlabeled_counter(metrics.rtc_metrics.snapshot().relay_mailbox_depth_total())
+        ]
+    },
+    RtcRelayDrainBatchesTotal {
+        name: "osfu_rtc_relay_drain_batches_total",
+        help: "Total non-empty packet-loop relay drain batches.",
+        kind: Counter,
+        samples: |metrics| vec![
+            unlabeled_counter(metrics.rtc_metrics.snapshot().relay_drain_batches())
+        ]
+    },
+    RtcRelayDrainedPacketsTotal {
+        name: "osfu_rtc_relay_drained_packets_total",
+        help: "Total relay packets drained into packet-loop batches.",
+        kind: Counter,
+        samples: |metrics| vec![
+            unlabeled_counter(metrics.rtc_metrics.snapshot().relay_drained_packets())
+        ]
+    },
+    RtcRelayDrainCapHitsTotal {
+        name: "osfu_rtc_relay_drain_cap_hits_total",
+        help: "Total relay drain batches that left queued relay packets behind after hitting the per-turn cap.",
+        kind: Counter,
+        samples: |metrics| vec![
+            unlabeled_counter(metrics.rtc_metrics.snapshot().relay_drain_cap_hits())
+        ]
+    },
+    RtcRemoteControlDropsTotal {
+        name: "osfu_rtc_remote_control_drops_total",
+        help: "Total remote-source control commands dropped before enqueue by command kind.",
+        kind: Counter,
+        samples: |metrics| rtc_remote_control_drop_samples(
+            &metrics.rtc_metrics.snapshot(),
+            "kind",
+            RtcMetricsSnapshot::remote_control_drops
+        )
+    },
+    RtcRemotePacketGateConvergenceTotal {
+        name: "osfu_rtc_remote_packet_gate_convergence_total",
+        help: "Total remote packet-gate convergence retry attempts and successful pending flushes.",
+        kind: Counter,
+        samples: |metrics| rtc_remote_packet_gate_convergence_samples(
+            &metrics.rtc_metrics.snapshot(),
+            "outcome",
+            RtcMetricsSnapshot::remote_packet_gate_convergence
+        )
+    },
     SourceSelectionUpdatesTotal {
         name: "osfu_source_selection_updates_total",
         help: "Total room-owned source selector updates accepted by source policy.",
@@ -646,6 +713,43 @@ fn rtc_route_control_samples(
     read: fn(&RtcMetricsSnapshot, RtcRouteControlOutcome) -> u64,
 ) -> Vec<MetricSample> {
     <RtcRouteControlOutcome as MetricStorageLabel>::VARIANTS
+        .iter()
+        .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
+        .collect()
+}
+
+fn rtc_relay_enqueue_samples(snapshot: &RtcMetricsSnapshot) -> Vec<MetricSample> {
+    <RtcRelayEnqueueResult as MetricStorageLabel>::VARIANTS
+        .iter()
+        .map(|result| {
+            counter(
+                [
+                    ("target", result.target_label()),
+                    ("outcome", result.outcome_label()),
+                ],
+                snapshot.relay_enqueues(*result),
+            )
+        })
+        .collect()
+}
+
+fn rtc_remote_control_drop_samples(
+    snapshot: &RtcMetricsSnapshot,
+    label_name: &'static str,
+    read: fn(&RtcMetricsSnapshot, RtcRemoteControlDropKind) -> u64,
+) -> Vec<MetricSample> {
+    <RtcRemoteControlDropKind as MetricStorageLabel>::VARIANTS
+        .iter()
+        .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
+        .collect()
+}
+
+fn rtc_remote_packet_gate_convergence_samples(
+    snapshot: &RtcMetricsSnapshot,
+    label_name: &'static str,
+    read: fn(&RtcMetricsSnapshot, RtcRemotePacketGateConvergence) -> u64,
+) -> Vec<MetricSample> {
+    <RtcRemotePacketGateConvergence as MetricStorageLabel>::VARIANTS
         .iter()
         .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
         .collect()

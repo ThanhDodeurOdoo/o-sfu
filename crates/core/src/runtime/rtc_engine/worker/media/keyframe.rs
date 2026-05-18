@@ -181,7 +181,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn worker_request_consumer_key
             ) {
                 KeyframeRequestDecision::Forward => {
                     source_control.request_keyframe(
-                        source_session_key,
+                        &source_session_key,
                         source_transport_media_id,
                         destination_rid,
                         KeyframeRequestKind::Pli,

@@ -31,12 +31,14 @@ use crate::{
         media_transport::{
             TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportSessionKey,
         },
-        metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
+        metrics::{
+            RtcMetricsRecorder, RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt,
+        },
         rtc_engine::{
             bitrate::BitrateRegistry,
             bootstrap,
             commands::{ConsumerPacketGateCommand, RemoteSourceControl, RtcWorkerCommand},
-            media_registry::RegisteredMediaHandle,
+            media_registry::{RegisteredMediaHandle, RemoteSourceRegistration},
             relay_registry::{RelayPacketMailbox, RelayTargetId},
             route_control::{KeyframeRequestDecision, PacketLayerGate},
             state::PacketLoopState,
@@ -188,13 +190,59 @@ fn register_remote_source(
     source_session: &TransportSessionKey,
     target_id: RelayTargetId,
 ) -> mpsc::Receiver<RtcWorkerCommand> {
+    register_remote_source_with_metrics(
+        state,
+        source_transport_media_id,
+        source_session,
+        target_id,
+        Arc::new(RtcMetricsRecorder::default()),
+    )
+}
+
+fn register_remote_source_with_metrics(
+    state: &mut PacketLoopState,
+    source_transport_media_id: TransportMediaId,
+    source_session: &TransportSessionKey,
+    target_id: RelayTargetId,
+    rtc_metrics: Arc<RtcMetricsRecorder>,
+) -> mpsc::Receiver<RtcWorkerCommand> {
     let (control_tx, control_rx) = mpsc::channel(1);
     assert!(
         state
             .register_remote_source(
                 source_transport_media_id,
                 source_session,
-                RemoteSourceControl::new(control_tx, target_id),
+                RemoteSourceControl::with_metrics(control_tx, target_id, rtc_metrics),
+            )
+            .is_ok()
+    );
+    control_rx
+}
+
+fn register_saturated_remote_source(
+    state: &mut PacketLoopState,
+    source_transport_media_id: TransportMediaId,
+    source_session: &TransportSessionKey,
+    target_id: RelayTargetId,
+    rtc_metrics: Arc<RtcMetricsRecorder>,
+) -> mpsc::Receiver<RtcWorkerCommand> {
+    let (control_tx, control_rx) = mpsc::channel(1);
+    assert!(
+        control_tx
+            .try_send(RtcWorkerCommand::SetRemoteSourcePacketGate {
+                source_session_key: source_session.clone(),
+                source_transport_media_id,
+                target_id,
+                packet_gate: PacketLayerGate::Open,
+            })
+            .is_ok()
+    );
+    assert!(
+        state
+            .register_remote_source(
+                source_transport_media_id,
+                source_session,
+                RemoteSourceControl::with_metrics(control_tx, target_id, rtc_metrics),
             )
             .is_ok()
     );
@@ -1225,6 +1273,145 @@ fn selected_consumer_rid_keeps_remote_relay_open() {
             && target_id == RelayTargetId::new(18)
     ));
     assert!(command_rx.try_recv().is_err());
+}
+
+#[test]
+fn remote_packet_gate_updates_keep_latest_pending_state_under_mailbox_pressure() {
+    let source_session = test_transport_session_key(141, 0, 166, UserId::Integer(167));
+    let mut state = PacketLoopState::default();
+    let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
+    let source_transport_media_id = TransportMediaId::new(62);
+    let _command_rx = register_saturated_remote_source(
+        &mut state,
+        source_transport_media_id,
+        &source_session,
+        RelayTargetId::new(19),
+        Arc::clone(&rtc_metrics),
+    );
+
+    state.publish_remote_source_packet_gate(source_transport_media_id, PacketLayerGate::Block);
+    state.publish_remote_source_packet_gate(source_transport_media_id, PacketLayerGate::Open);
+
+    assert_eq!(
+        state
+            .remote_source_registration(source_transport_media_id)
+            .and_then(RemoteSourceRegistration::pending_packet_gate),
+        Some(PacketLayerGate::Open)
+    );
+    assert_eq!(metrics.snapshot().rtc_remote_control_packet_gate_drops(), 2);
+}
+
+#[test]
+fn pending_remote_packet_gate_flushes_after_mailbox_pressure_clears() {
+    let source_session = test_transport_session_key(141, 0, 168, UserId::Integer(169));
+    let mut state = PacketLoopState::default();
+    let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
+    let source_transport_media_id = TransportMediaId::new(63);
+    let target_id = RelayTargetId::new(20);
+    let mut command_rx = register_saturated_remote_source(
+        &mut state,
+        source_transport_media_id,
+        &source_session,
+        target_id,
+        Arc::clone(&rtc_metrics),
+    );
+
+    state.publish_remote_source_packet_gate(source_transport_media_id, PacketLayerGate::Block);
+    assert!(command_rx.try_recv().is_ok());
+    state.flush_pending_remote_source_packet_gates();
+
+    assert!(matches!(
+        command_rx.try_recv().ok(),
+        Some(RtcWorkerCommand::SetRemoteSourcePacketGate {
+            source_session_key,
+            source_transport_media_id: forwarded_source_transport_media_id,
+            target_id: forwarded_target_id,
+            packet_gate: PacketLayerGate::Block,
+        }) if source_session_key == source_session
+            && forwarded_source_transport_media_id == source_transport_media_id
+            && forwarded_target_id == target_id
+    ));
+    assert_eq!(
+        state
+            .remote_source_registration(source_transport_media_id)
+            .and_then(RemoteSourceRegistration::pending_packet_gate),
+        None
+    );
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.rtc_remote_control_packet_gate_drops(), 1);
+    assert_eq!(snapshot.rtc_remote_packet_gate_retries(), 1);
+    assert_eq!(snapshot.rtc_remote_packet_gate_flushes(), 1);
+}
+
+#[test]
+fn remote_source_teardown_drops_pending_packet_gate_state() {
+    let source_session = test_transport_session_key(141, 0, 170, UserId::Integer(171));
+    let mut state = PacketLoopState::default();
+    let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
+    let source_transport_media_id = TransportMediaId::new(64);
+    let _command_rx = register_saturated_remote_source(
+        &mut state,
+        source_transport_media_id,
+        &source_session,
+        RelayTargetId::new(21),
+        Arc::clone(&rtc_metrics),
+    );
+
+    state.publish_remote_source_packet_gate(source_transport_media_id, PacketLayerGate::Block);
+    assert!(
+        state
+            .remote_source_registration(source_transport_media_id)
+            .is_some_and(|registration| registration.pending_packet_gate().is_some())
+    );
+
+    state.prune_remote_source_if_unrouted(source_transport_media_id);
+
+    assert!(
+        state
+            .remote_source_registration(source_transport_media_id)
+            .is_none()
+    );
+    assert_eq!(metrics.snapshot().rtc_remote_control_packet_gate_drops(), 1);
+}
+
+#[test]
+fn remote_keyframe_command_drops_are_counted_under_mailbox_pressure() {
+    let source_session = test_transport_session_key(141, 0, 172, UserId::Integer(173));
+    let consumer_session = test_transport_session_key(141, 1, 174, UserId::Integer(175));
+    let consumer_mid = Mid::from("cam-down");
+    let mut state = PacketLoopState::default();
+    let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
+    let source_transport_media_id = TransportMediaId::new(65);
+    let _command_rx = register_saturated_remote_source(
+        &mut state,
+        source_transport_media_id,
+        &source_session,
+        RelayTargetId::new(22),
+        Arc::clone(&rtc_metrics),
+    );
+    let consumer_transport_media_id = install_video_route(
+        &mut state,
+        source_transport_media_id,
+        &consumer_session,
+        consumer_mid,
+    );
+
+    request_consumer_keyframe(
+        &mut state,
+        &metrics,
+        &consumer_session,
+        consumer_transport_media_id,
+        &source_session,
+        source_transport_media_id,
+    );
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.rtc_remote_control_keyframe_drops(), 1);
+    assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
 }
 
 #[test]

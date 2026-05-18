@@ -162,6 +162,51 @@ pub enum RtcRouteControlOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RtcRelayEnqueueResult {
+    IntraNodeEnqueued,
+    IntraNodeOverloaded,
+    IntraNodeClosed,
+    InterNodeEnqueued,
+    InterNodeOverloaded,
+    InterNodeClosed,
+}
+
+impl RtcRelayEnqueueResult {
+    #[must_use]
+    pub const fn target_label(self) -> &'static str {
+        match self {
+            Self::IntraNodeEnqueued | Self::IntraNodeOverloaded | Self::IntraNodeClosed => {
+                "intra_node_relay"
+            }
+            Self::InterNodeEnqueued | Self::InterNodeOverloaded | Self::InterNodeClosed => {
+                "inter_node_relay"
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn outcome_label(self) -> &'static str {
+        match self {
+            Self::IntraNodeEnqueued | Self::InterNodeEnqueued => "enqueued",
+            Self::IntraNodeOverloaded | Self::InterNodeOverloaded => "overloaded",
+            Self::IntraNodeClosed | Self::InterNodeClosed => "closed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RtcRemoteControlDropKind {
+    Keyframe,
+    PacketGate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RtcRemotePacketGateConvergence {
+    Retry,
+    Flushed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceSelectionKind {
     Open,
     Encoding,
@@ -396,6 +441,25 @@ impl_exported_metric_label!(RtcRouteControlOutcome {
     RouteGatedRelayDrop => (2, "route_gated_relay_drop"),
     LayerAllowed => (3, "layer_allowed"),
     LayerDropped => (4, "layer_dropped"),
+});
+
+impl_metric_label!(RtcRelayEnqueueResult {
+    IntraNodeEnqueued => 0,
+    IntraNodeOverloaded => 1,
+    IntraNodeClosed => 2,
+    InterNodeEnqueued => 3,
+    InterNodeOverloaded => 4,
+    InterNodeClosed => 5,
+});
+
+impl_exported_metric_label!(RtcRemoteControlDropKind {
+    Keyframe => (0, "keyframe"),
+    PacketGate => (1, "packet_gate"),
+});
+
+impl_exported_metric_label!(RtcRemotePacketGateConvergence {
+    Retry => (0, "retry"),
+    Flushed => (1, "flushed"),
 });
 
 impl_exported_metric_label!(SourceSelectionKind {

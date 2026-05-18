@@ -475,7 +475,9 @@ fn snapshot_and_pump(
         relay_rx,
         &mut turn.buffers.pending_packets,
         MAX_RELAY_PACKETS_PER_ITERATION,
+        &config.rtc_metrics,
     );
+    state.flush_pending_remote_source_packet_gates();
     drain_due_rid_keyframe_refreshes(state, &*config.rtc_metrics, now);
     flush_pending_keyframe_requests(state, &*config.rtc_metrics, &mut turn.buffers);
     // packet observations must run before fanout planning because layer gates
@@ -509,6 +511,7 @@ fn snapshot_and_pump(
         state,
         &config.metrics,
         &config.rtp_metrics,
+        &config.rtc_metrics,
         &mut turn.buffers,
     );
     Some(WaitPhaseSnapshot {

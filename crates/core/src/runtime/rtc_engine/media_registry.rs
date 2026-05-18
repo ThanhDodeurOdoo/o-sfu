@@ -30,7 +30,9 @@ use str0m::{
 };
 use tracing::{debug, warn};
 
-use super::{commands::RemoteSourceControl, state::PacketLoopState};
+use super::{
+    commands::RemoteSourceControl, route_control::PacketLayerGate, state::PacketLoopState,
+};
 use crate::runtime::{
     RoomInstanceId,
     media_transport::{
@@ -91,6 +93,8 @@ pub(super) struct RemoteSourceRegistration {
     source_session_key: TransportSessionKey,
     /// best-effort command path back to the producer worker
     source_control: RemoteSourceControl,
+    /// latest source gate still waiting for source-worker command acceptance
+    pending_packet_gate: Option<PacketLayerGate>,
 }
 
 /// codec class used for decoder-refresh detection on forwarded keyframes
@@ -138,6 +142,7 @@ impl RemoteSourceRegistration {
         Self {
             source_session_key,
             source_control,
+            pending_packet_gate: None,
         }
     }
 
@@ -149,6 +154,42 @@ impl RemoteSourceRegistration {
     /// returns the command handle used to reach the remote producer worker
     pub(super) fn source_control(&self) -> &RemoteSourceControl {
         &self.source_control
+    }
+
+    #[cfg(test)]
+    pub(super) const fn pending_packet_gate(&self) -> Option<PacketLayerGate> {
+        self.pending_packet_gate
+    }
+
+    fn publish_packet_gate(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: PacketLayerGate,
+    ) {
+        if self.source_control.set_packet_gate(
+            &self.source_session_key,
+            source_transport_media_id,
+            packet_gate,
+        ) {
+            self.pending_packet_gate = None;
+        } else {
+            self.pending_packet_gate = Some(packet_gate);
+        }
+    }
+
+    fn flush_pending_packet_gate(&mut self, source_transport_media_id: TransportMediaId) {
+        let Some(packet_gate) = self.pending_packet_gate else {
+            return;
+        };
+        self.source_control.record_packet_gate_retry();
+        if self.source_control.set_packet_gate(
+            &self.source_session_key,
+            source_transport_media_id,
+            packet_gate,
+        ) {
+            self.pending_packet_gate = None;
+            self.source_control.record_packet_gate_flushed();
+        }
     }
 }
 
@@ -413,6 +454,25 @@ impl PacketLoopState {
         source_transport_media_id: TransportMediaId,
     ) -> Option<&RemoteSourceRegistration> {
         self.remote_source_registry.get(&source_transport_media_id)
+    }
+
+    pub(super) fn publish_remote_source_packet_gate(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        packet_gate: PacketLayerGate,
+    ) {
+        if let Some(registration) = self
+            .remote_source_registry
+            .get_mut(&source_transport_media_id)
+        {
+            registration.publish_packet_gate(source_transport_media_id, packet_gate);
+        }
+    }
+
+    pub(super) fn flush_pending_remote_source_packet_gates(&mut self) {
+        for (source_transport_media_id, registration) in &mut self.remote_source_registry {
+            registration.flush_pending_packet_gate(*source_transport_media_id);
+        }
     }
 
     /// remove a remote-source placeholder when no local route still references it

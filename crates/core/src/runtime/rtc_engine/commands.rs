@@ -7,7 +7,7 @@
 //! may target a worker that has already torn down the corresponding relay or
 //! session
 
-use std::{collections::BTreeSet, time::Instant};
+use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
@@ -23,6 +23,7 @@ use crate::runtime::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, SessionOffer,
         TransportConsumerRoute, TransportMediaId, TransportResult, TransportSessionKey,
     },
+    metrics::{RtcMetricsRecorder, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence},
 };
 
 /// result class returned by a close-session command
@@ -70,12 +71,26 @@ impl CloseSessionOutcome {
 pub struct RemoteSourceControl {
     tx: mpsc::Sender<RtcWorkerCommand>,
     target_id: RelayTargetId,
+    metrics: Arc<RtcMetricsRecorder>,
 }
 
 impl RemoteSourceControl {
     /// creates a source-control handle for one relay target on a worker mailbox
+    #[cfg(test)]
     pub(super) fn new(tx: mpsc::Sender<RtcWorkerCommand>, target_id: RelayTargetId) -> Self {
-        Self { tx, target_id }
+        Self::with_metrics(tx, target_id, Arc::new(RtcMetricsRecorder::default()))
+    }
+
+    pub(super) fn with_metrics(
+        tx: mpsc::Sender<RtcWorkerCommand>,
+        target_id: RelayTargetId,
+        metrics: Arc<RtcMetricsRecorder>,
+    ) -> Self {
+        Self {
+            tx,
+            target_id,
+            metrics,
+        }
     }
 
     /// asks the source worker to request a keyframe for a remote consumer
@@ -83,40 +98,65 @@ impl RemoteSourceControl {
     /// this never waits for the source worker
     /// if the command cannot be queued, the caller has no stronger recovery
     /// action than future media or control traffic triggering another request
-    pub fn request_keyframe(
+    pub(super) fn request_keyframe(
         &self,
-        source_session_key: TransportSessionKey,
+        source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         rid: Option<Rid>,
         kind: KeyframeRequestKind,
-    ) {
-        let _ = self.tx.try_send(RtcWorkerCommand::RequestRemoteKeyframe {
-            source_session_key,
-            source_transport_media_id,
-            target_id: self.target_id,
-            rid,
-            kind,
-        });
+    ) -> bool {
+        self.send_command(
+            RtcWorkerCommand::RequestRemoteKeyframe {
+                source_session_key: source_session_key.clone(),
+                source_transport_media_id,
+                target_id: self.target_id,
+                rid,
+                kind,
+            },
+            RtcRemoteControlDropKind::Keyframe,
+        )
     }
 
     /// publishes the effective remote-source packet gate to the source worker
-    ///
-    /// the command is best-effort for the same reason as keyframe requests
-    /// route-control state is eventually refreshed by later route mutations
     pub(super) fn set_packet_gate(
         &self,
-        source_session_key: TransportSessionKey,
+        source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         packet_gate: PacketLayerGate,
-    ) {
-        let _ = self
-            .tx
-            .try_send(RtcWorkerCommand::SetRemoteSourcePacketGate {
-                source_session_key,
+    ) -> bool {
+        self.send_command(
+            RtcWorkerCommand::SetRemoteSourcePacketGate {
+                source_session_key: source_session_key.clone(),
                 source_transport_media_id,
                 target_id: self.target_id,
                 packet_gate,
-            });
+            },
+            RtcRemoteControlDropKind::PacketGate,
+        )
+    }
+
+    pub(super) fn record_packet_gate_retry(&self) {
+        self.metrics
+            .record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Retry);
+    }
+
+    pub(super) fn record_packet_gate_flushed(&self) {
+        self.metrics
+            .record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Flushed);
+    }
+
+    fn send_command(&self, command: RtcWorkerCommand, drop_kind: RtcRemoteControlDropKind) -> bool {
+        match self.tx.try_send(command) {
+            Ok(()) => true,
+            Err(mpsc::error::TrySendError::Full(_command)) => {
+                self.metrics.record_rtc_remote_control_drop(drop_kind);
+                false
+            }
+            Err(mpsc::error::TrySendError::Closed(_command)) => {
+                self.metrics.record_rtc_remote_control_drop(drop_kind);
+                false
+            }
+        }
     }
 }
 
