@@ -464,7 +464,7 @@ fn suspend_stale_destination_gate(
     if selected_rid == incoming_rid || ready_rids.contains(&selected_rid) {
         return;
     }
-    let selected_packet_gate = destination.packet_gate.clone();
+    let selected_packet_gate = destination.packet_gate;
     debug!(
         ?source_transport_media_id,
         consumer_session_key = ?destination.dest_session,

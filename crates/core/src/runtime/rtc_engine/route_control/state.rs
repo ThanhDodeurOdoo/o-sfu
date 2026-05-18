@@ -115,19 +115,16 @@ impl RouteControlState {
         let should_remove = if let Some(source_control) =
             self.sources.get_mut(&source_transport_media_id)
         {
-            source_control.local_packet_gate = packet_gate;
+            source_control.set_local_packet_gate(packet_gate);
             source_control.is_empty()
         } else {
             let Some(packet_gate) = packet_gate else {
                 return;
             };
-            self.sources.insert(
-                source_transport_media_id,
-                SourceRouteControl {
-                    local_packet_gate: Some(packet_gate),
-                    ..Default::default()
-                },
-            );
+            let mut source_control = SourceRouteControl::default();
+            source_control.set_local_packet_gate(Some(packet_gate));
+            self.sources
+                .insert(source_transport_media_id, source_control);
             debug!(
                 ?source_transport_media_id,
                 effective_packet_gate = ?self.effective_packet_gate_for_log(source_transport_media_id),
@@ -200,8 +197,7 @@ impl RouteControlState {
         self.sources
             .entry(source_transport_media_id)
             .or_default()
-            .relay_packet_gates
-            .insert(target_id, packet_gate);
+            .set_relay_packet_gate(target_id, packet_gate);
     }
 
     /// returns the relay-specific packet gate for destination planning
@@ -230,7 +226,7 @@ impl RouteControlState {
         let Some(source_control) = self.sources.get_mut(&source_transport_media_id) else {
             return;
         };
-        source_control.relay_packet_gates.remove(&target_id);
+        source_control.forget_relay_packet_gate(target_id);
         if source_control.is_empty() {
             self.sources.remove(&source_transport_media_id);
         }
@@ -382,6 +378,8 @@ struct SourceRouteControl {
     local_packet_gate: Option<PacketLayerGate>,
     /// target-specific gates installed for active relay targets
     relay_packet_gates: BTreeMap<RelayTargetId, PacketLayerGate>,
+    /// cached source-wide gate used before destination planning
+    effective_packet_gate: Option<PacketLayerGate>,
 }
 
 /// coalescing window for keyframe requests that share one source/rid scope
@@ -464,7 +462,29 @@ impl SourceRouteControl {
         };
         source_policy.observe_packet(voice_activity, audio_level_dbov, now);
         self.source_audio_policy = Some(source_policy);
-        self.source_audio_policy != previous
+        let changed = self.source_audio_policy != previous;
+        if changed {
+            self.recompute_effective_packet_gate();
+        }
+        changed
+    }
+
+    /// replaces the source gate derived from local destinations
+    fn set_local_packet_gate(&mut self, packet_gate: Option<PacketLayerGate>) {
+        self.local_packet_gate = packet_gate;
+        self.recompute_effective_packet_gate();
+    }
+
+    /// replaces the packet gate requested by one relay target
+    fn set_relay_packet_gate(&mut self, target_id: RelayTargetId, packet_gate: PacketLayerGate) {
+        self.relay_packet_gates.insert(target_id, packet_gate);
+        self.recompute_effective_packet_gate();
+    }
+
+    /// removes the packet gate requested by one relay target
+    fn forget_relay_packet_gate(&mut self, target_id: RelayTargetId) {
+        self.relay_packet_gates.remove(&target_id);
+        self.recompute_effective_packet_gate();
     }
 
     /// computes the source-wide packet gate used by early packet filtering
@@ -474,6 +494,16 @@ impl SourceRouteControl {
     /// the packet-level audio policy is then intersected so inactive audio can
     /// block all downstream fanout
     fn effective_packet_gate(&self) -> Option<PacketLayerGate> {
+        self.effective_packet_gate
+    }
+
+    /// refreshes the cached packet gate after a source policy mutation
+    fn recompute_effective_packet_gate(&mut self) {
+        self.effective_packet_gate = self.compute_effective_packet_gate();
+    }
+
+    /// computes the source-wide packet gate from source policy state
+    fn compute_effective_packet_gate(&self) -> Option<PacketLayerGate> {
         intersect_packet_gates(
             aggregate_packet_gates(
                 self.local_packet_gate

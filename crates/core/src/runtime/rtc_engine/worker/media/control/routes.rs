@@ -285,7 +285,7 @@ pub(in crate::runtime::rtc_engine::worker) fn refresh_source_packet_gate(
     let route_entry = state.media_route_index.get(&source_transport_media_id);
     let local_packet_gate = route_entry.and_then(local_source_packet_gate);
     let remote_packet_gate =
-        remote_source::remote_source_packet_gate_for_route(route_entry, local_packet_gate.clone());
+        remote_source::remote_source_packet_gate_for_route(route_entry, local_packet_gate);
     state
         .route_control
         .set_local_packet_gate(source_transport_media_id, local_packet_gate);
@@ -439,6 +439,7 @@ pub(super) fn worker_set_consumer_packet_gates(
 /// `media_route_index`
 /// this keeps late active-state and packet-gate commands from reaching a route
 /// after cleanup has removed or replaced either side of the binding
+#[derive(Clone, Copy)]
 enum ConsumerRouteMutation {
     /// replace the destination activity bit
     Active(bool),

@@ -65,7 +65,7 @@ impl SourceAudioPolicyState {
     }
 
     pub(super) fn packet_gate(&self) -> PacketLayerGate {
-        self.packet_gate.clone()
+        self.packet_gate
     }
 
     pub(super) fn active_speaker_observed_at(&self, now: Instant) -> Option<Instant> {
