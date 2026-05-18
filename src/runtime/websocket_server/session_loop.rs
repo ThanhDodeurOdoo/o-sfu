@@ -9,10 +9,14 @@ use o_sfu_protocol::{
         RecordingActionResult, RecordingOptions, RequestId, ServerResponse, WebSocketCloseCode,
     },
 };
-use tokio::time::{Instant, sleep_until, timeout};
+use tokio::time::{Instant, sleep_until};
 use tracing::{debug, info, warn};
 
-use super::{WsWriter, close_writer, controller::WsReader, io::send_user_output};
+use super::{
+    WsWriter,
+    controller::WsReader,
+    io::{close_writer_bounded, send_message_bounded, send_user_output_bounded},
+};
 use crate::{
     application::user_session::{User, UserError, UserOutput, UserSignal},
     core::server::room::{
@@ -35,8 +39,6 @@ enum LivenessState {
     Idle,
     WaitingForPong { deadline: Instant },
 }
-
-const OUTBOUND_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl LivenessState {
     const fn pong_deadline(self) -> Option<Instant> {
@@ -442,29 +444,7 @@ async fn handle_outbound_payload(
 }
 
 async fn send_ping_bounded(writer: &mut WsWriter) -> Result<(), WebSocketCloseCode> {
-    match timeout(
-        OUTBOUND_WRITE_TIMEOUT,
-        writer.send(Message::Ping(Vec::new().into())),
-    )
-    .await
-    {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(_)) | Err(_) => Err(WebSocketCloseCode::Error),
-    }
-}
-
-async fn send_user_output_bounded(
-    writer: &mut WsWriter,
-    output: UserOutput,
-) -> Result<usize, WebSocketCloseCode> {
-    match timeout(OUTBOUND_WRITE_TIMEOUT, send_user_output(writer, output)).await {
-        Ok(result) => result,
-        Err(_elapsed) => Err(WebSocketCloseCode::Error),
-    }
-}
-
-async fn close_writer_bounded(writer: &mut WsWriter, code: WebSocketCloseCode) {
-    let _closed = timeout(OUTBOUND_WRITE_TIMEOUT, close_writer(writer, code)).await;
+    send_message_bounded(writer, Message::Ping(Vec::new().into())).await
 }
 
 async fn dispatch_room_outbound(

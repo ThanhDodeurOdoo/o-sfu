@@ -1,16 +1,31 @@
-use axum::extract::ws::{Message, WebSocket};
+//! websocket socket I/O boundary
+//!
+//! this module owns client frame decoding and the shared outbound write budget
+//! so handshake startup and steady-state output cannot drift into different
+//! backpressure behavior
+
+use std::{future::Future, time::Duration};
+
+use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use futures_util::{SinkExt, stream::SplitSink};
 use o_sfu_protocol::signaling::{
     ClientEnvelope, Envelope, EnvelopeBatch, EnvelopeDecodeError, ServerEnvelope,
     WebSocketCloseCode,
 };
+use tokio::time::timeout;
 
 use crate::application::user_session::{UserOutput, UserSignal};
 
 pub(crate) type WsWriter = SplitSink<WebSocket, Message>;
 
+/// maximum accepted client text frame size before protocol rejection
 pub const MAX_CLIENT_FRAME_BYTES: usize = 256 * 1024;
+
+/// maximum envelopes accepted from one client websocket frame
 pub const MAX_CLIENT_BATCH_ENVELOPES: usize = 64;
+
+/// maximum time one outbound websocket operation may hold the task
+const OUTBOUND_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientBatchDecodeFailureKind {
@@ -80,6 +95,63 @@ pub(super) async fn send_user_output(
     send_user_signals(writer, output.into_signals()).await
 }
 
+/// flushes startup or loop output under the websocket writer budget
+///
+/// callers use this after admission so a stalled socket cannot keep room
+/// membership alive without making forward progress
+pub(super) async fn send_user_output_bounded(
+    writer: &mut WsWriter,
+    output: UserOutput,
+) -> Result<usize, WebSocketCloseCode> {
+    with_outbound_write_timeout(send_user_output(writer, output)).await
+}
+
+/// writes a protocol-level websocket message under the shared backpressure budget
+///
+/// this is for keepalive and control frames that must not wait behind a stalled
+/// peer indefinitely
+pub(super) async fn send_message_bounded(
+    writer: &mut WsWriter,
+    message: Message,
+) -> Result<(), WebSocketCloseCode> {
+    with_outbound_write_timeout(async {
+        writer
+            .send(message)
+            .await
+            .map_err(|_error| WebSocketCloseCode::Error)
+    })
+    .await
+}
+
+/// performs best-effort websocket close without its own timeout
+///
+/// callers use this when they already own the cancellation boundary or are
+/// leaving a session after the read half finished
+pub(crate) async fn close_writer(writer: &mut WsWriter, close_code: WebSocketCloseCode) {
+    let _result = writer
+        .send(Message::Close(Some(CloseFrame {
+            code: u16::from(close_code),
+            reason: "".into(),
+        })))
+        .await;
+}
+
+/// performs best-effort websocket close under the shared writer budget
+///
+/// this is for rejection and loop paths where a slow peer must not keep the
+/// task alive
+pub(super) async fn close_writer_bounded(writer: &mut WsWriter, code: WebSocketCloseCode) {
+    let _closed = with_outbound_write_timeout(async {
+        close_writer(writer, code).await;
+        Ok(())
+    })
+    .await;
+}
+
+/// serializes user-facing signals while preserving request and response ordering
+///
+/// plain messages are batched until a synchronous request or response has to
+/// cross the socket so control-flow envelopes stay in order
 pub(super) async fn send_user_signals(
     writer: &mut WsWriter,
     signals: Vec<UserSignal>,
@@ -166,6 +238,19 @@ async fn send_serialized_batch(
         .send(Message::Text(frame.into()))
         .await
         .map_err(|_error| WebSocketCloseCode::Error)
+}
+
+/// applies the websocket writer budget to one outbound operation
+///
+/// elapsed writes are reported as protocol errors because the transport can no
+/// longer make forward progress
+async fn with_outbound_write_timeout<T>(
+    operation: impl Future<Output = Result<T, WebSocketCloseCode>>,
+) -> Result<T, WebSocketCloseCode> {
+    match timeout(OUTBOUND_WRITE_TIMEOUT, operation).await {
+        Ok(result) => result,
+        Err(_elapsed) => Err(WebSocketCloseCode::Error),
+    }
 }
 
 #[cfg(test)]

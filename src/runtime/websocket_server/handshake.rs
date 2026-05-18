@@ -45,7 +45,7 @@ use super::{
     admission::PreAuthWebSocketPermit,
     close_writer,
     controller::{ConnectedUser, WsReader},
-    io::send_user_output,
+    io::send_user_output_bounded,
 };
 use crate::{
     application::user_session::User,
@@ -591,16 +591,16 @@ fn record_session_span(
     );
 }
 
+/// sends the startup payload that makes the accepted room user usable
+///
+/// `User::start` returns the welcome state and any initial offer
+/// if startup fails or the socket cannot receive output, this helper closes
+/// application state and removes accepted room membership before returning
+/// `None`
 #[o_sfu_telemetry::measure_duration(
     metrics = "state.metrics",
     record = "record_ws_user_initialize_duration"
 )]
-/// send the startup payload that makes the accepted room user usable
-///
-/// `User::start` returns the welcome state and any initial offer
-/// if startup fails or the socket cannot receive the output, this helper closes
-/// application state and removes the accepted room membership before returning
-/// `None`
 async fn initialize_user(
     state: &RuntimeState,
     writer: &mut WsWriter,
@@ -623,13 +623,11 @@ async fn initialize_user(
             );
             state.metrics.record_ws_user_initialize_failure();
             user.close().await;
-            // join already inserted this user into room state
-            // failed startup must remove the exact connection before returning
             cleanup_failed_session(state, room, user_id, connection_id).await;
             return None;
         }
     };
-    if send_user_output(writer, output).await.is_err() {
+    if send_user_output_bounded(writer, output).await.is_err() {
         debug!(
             ?user_id,
             connection_id = ?connection_id,
@@ -645,8 +643,6 @@ async fn initialize_user(
             "failed to send websocket user startup payload"
         );
         user.close().await;
-        // startup output is the handoff to steady state
-        // if the socket cannot receive it, room membership must be rolled back
         cleanup_failed_session(state, room, user_id, connection_id).await;
         return None;
     }

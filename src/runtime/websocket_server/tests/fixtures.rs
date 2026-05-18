@@ -44,8 +44,11 @@ pub(super) use crate::{
             test_support::{FakeMediaTransport, FakeMediaTransportEvent},
         },
         metrics::RuntimeMetrics,
-        room::{Room, RoomConfig, RoomManager},
-        test_support::{RuntimeMetricsSnapshotTestExt, RuntimeTestBuilder},
+        room::{
+            JoinUserRequest, Room, RoomConfig, RoomManager, UserOutboundQueueLimits,
+            UserOutboundReceiver, UserOutboundSender,
+        },
+        test_support::{RuntimeMetricsSnapshotTestExt, RuntimeTestBuilder, TEST_AUTH_KEY},
     },
 };
 
@@ -320,7 +323,7 @@ pub(super) async fn authenticate_with_room(
     Some(websocket)
 }
 
-fn encode_protocol_auth(auth_payload: AuthPayload) -> Option<String> {
+pub(super) fn encode_protocol_auth(auth_payload: AuthPayload) -> Option<String> {
     let envelope = ClientEnvelope::Message(ClientMessage::Auth(auth_payload))
         .into_envelope()
         .ok()?;
