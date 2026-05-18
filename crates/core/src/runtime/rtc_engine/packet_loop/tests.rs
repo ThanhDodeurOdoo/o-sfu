@@ -631,18 +631,26 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() {
         "cam-up",
         b"payload",
     ));
+    let source_transport_media_id = TransportMediaId::new(224);
+    let mut route_entry = MediaRouteEntry::new(true);
+    route_entry.push_destination(MediaRouteDestination {
+        dest_session: consumer_session.clone(),
+        dest_transport_media_id: TransportMediaId::new(223),
+        dest_mid: consumer_mid,
+        dest_payload_type: None,
+        nackable: true,
+        active: true,
+        packet_gate: PacketLayerGate::Open,
+        pending_packet_gate: None,
+    });
+    state
+        .media_route_index
+        .insert(source_transport_media_id, route_entry);
     buffers.forwards.push(
         super::super::forwarding_destination::PacketForward::from_local_route_destination(
             0,
-            &MediaRouteDestination {
-                dest_session: consumer_session.clone(),
-                dest_transport_media_id: TransportMediaId::new(223),
-                dest_mid: consumer_mid,
-                dest_payload_type: None,
-                active: true,
-                packet_gate: PacketLayerGate::Open,
-                pending_packet_gate: None,
-            },
+            source_transport_media_id,
+            0,
         ),
     );
 
@@ -745,21 +753,20 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
             mid: Mid::from("aud-down"),
             source_transport_media_id,
         });
-    state.media_route_index.insert(
-        source_transport_media_id,
-        MediaRouteEntry {
-            source_active: true,
-            destinations: vec![MediaRouteDestination {
-                dest_session: consumer_session,
-                dest_transport_media_id: consumer_transport_media_id,
-                dest_mid: Mid::from("aud-down"),
-                dest_payload_type: None,
-                active: true,
-                packet_gate: PacketLayerGate::Open,
-                pending_packet_gate: None,
-            }],
-        },
-    );
+    let mut route_entry = MediaRouteEntry::new(true);
+    route_entry.push_destination(MediaRouteDestination {
+        dest_session: consumer_session,
+        dest_transport_media_id: consumer_transport_media_id,
+        dest_mid: Mid::from("aud-down"),
+        dest_payload_type: None,
+        nackable: false,
+        active: true,
+        packet_gate: PacketLayerGate::Open,
+        pending_packet_gate: None,
+    });
+    state
+        .media_route_index
+        .insert(source_transport_media_id, route_entry);
     let mut buffers = PacketLoopBuffers::new();
     buffers
         .pending_packets

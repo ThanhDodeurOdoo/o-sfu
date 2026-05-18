@@ -41,6 +41,13 @@ pub(super) struct MediaRouteDestination {
     /// source payload types can differ from consumer payload types after router
     /// negotiation, so forwarding must not reuse the publisher value blindly
     pub(super) dest_payload_type: Option<Pt>,
+    /// stable retransmission policy for this consumer media line
+    ///
+    /// this is captured when the route is registered because the consumer
+    /// media kind is already known there
+    /// the packet loop can then write local RTP without asking `str0m` to
+    /// rediscover the media kind for every destination packet
+    pub(super) nackable: bool,
     /// destination-level activity gate controlled by consumer state
     pub(super) active: bool,
     /// effective transport gate used by the packet loop right now
@@ -57,12 +64,81 @@ pub(super) struct MediaRouteDestination {
 /// `source_active` is a source-wide route gate
 /// individual destinations still carry their own activity and layer gates so
 /// producer pause, consumer pause and selected-layer policy remain independent
+///
+/// callers must mutate `destinations` through this type's helpers
+/// `active_destination_count` is a cached admission invariant used by the hot
+/// planner before it walks the destination vector
 #[derive(Debug, Clone)]
 pub(super) struct MediaRouteEntry {
     /// source-wide activity gate applied before local destination fanout
     pub(super) source_active: bool,
+    /// active local destinations cached for source-route admission checks
+    pub(super) active_destination_count: usize,
     /// local consumer destinations reached from this source media id
     pub(super) destinations: Vec<MediaRouteDestination>,
+}
+
+impl MediaRouteEntry {
+    /// creates an empty route entry with no local destinations
+    ///
+    /// the active count starts at zero even when the source is active because
+    /// source activity and destination activity are independent gates
+    pub(super) fn new(source_active: bool) -> Self {
+        Self {
+            source_active,
+            active_destination_count: 0,
+            destinations: Vec::new(),
+        }
+    }
+
+    /// returns whether local fanout has any active destination work
+    ///
+    /// this is the O(1) route-admission check used before source packet gates
+    /// are evaluated
+    pub(super) const fn has_active_destinations(&self) -> bool {
+        self.active_destination_count > 0
+    }
+
+    /// appends one destination while preserving the active-count invariant
+    ///
+    /// route registration is the only caller that should add destinations
+    /// directly because it owns source validation and consumer media ownership
+    pub(super) fn push_destination(&mut self, destination: MediaRouteDestination) {
+        self.active_destination_count += usize::from(destination.active);
+        self.destinations.push(destination);
+    }
+
+    /// removes one destination while preserving the active-count invariant
+    ///
+    /// callers pass the index they found under the same mutable route borrow
+    /// this keeps teardown precise without scanning a second time inside the
+    /// helper
+    pub(super) fn remove_destination(&mut self, index: usize) -> MediaRouteDestination {
+        let destination = self.destinations.remove(index);
+        self.active_destination_count -= usize::from(destination.active);
+        destination
+    }
+
+    /// updates destination activity and reports whether the route changed
+    ///
+    /// a missing index is treated as unchanged because stale worker commands
+    /// are rejected by the caller's ownership checks before reaching the route
+    /// mutation
+    pub(super) fn set_destination_active(&mut self, index: usize, active: bool) -> bool {
+        let Some(destination) = self.destinations.get_mut(index) else {
+            return false;
+        };
+        if destination.active == active {
+            return false;
+        }
+        if active {
+            self.active_destination_count += 1;
+        } else {
+            self.active_destination_count -= 1;
+        }
+        destination.active = active;
+        true
+    }
 }
 
 /// source media id used as the packet-loop route index key

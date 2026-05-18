@@ -75,6 +75,19 @@ fn populate_forward_routes(
     }
 }
 
+fn local_destination_session<'a>(
+    state: &'a PacketLoopState,
+    destination: &ForwardingDestination,
+) -> Option<&'a TransportSessionKey> {
+    let local_route = destination.local_route()?;
+    state
+        .media_route_index
+        .get(&local_route.source_transport_media_id())?
+        .destinations
+        .get(local_route.destination_index())
+        .map(|destination| &destination.dest_session)
+}
+
 #[test]
 fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() {
     let producer_session = TransportSessionKey::new(
@@ -120,7 +133,7 @@ fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() 
     assert!(matches!(
         forwards.first().map(PacketForward::destination),
         Some(destination)
-            if destination.session_key() == Some(&consumer_session)
+            if local_destination_session(&state, destination) == Some(&consumer_session)
     ));
 }
 
@@ -480,12 +493,12 @@ fn populate_forward_routes_enforces_per_consumer_rid_gates_after_aggregate_admit
     assert_eq!(forwards.first().map(PacketForward::packet_idx), Some(0));
     assert!(matches!(
         forwards.first().map(PacketForward::destination),
-        Some(destination) if destination.session_key() == Some(&hi_consumer_session)
+        Some(destination) if local_destination_session(&state, destination) == Some(&hi_consumer_session)
     ));
     assert_eq!(forwards.get(1).map(PacketForward::packet_idx), Some(1));
     assert!(matches!(
         forwards.get(1).map(PacketForward::destination),
-        Some(destination) if destination.session_key() == Some(&lo_consumer_session)
+        Some(destination) if local_destination_session(&state, destination) == Some(&lo_consumer_session)
     ));
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_layer_allowed(), 2);
@@ -554,17 +567,17 @@ fn populate_forward_routes_enforces_per_consumer_temporal_ceilings_after_aggrega
     assert_eq!(forwards.first().map(PacketForward::packet_idx), Some(0));
     assert!(matches!(
         forwards.first().map(PacketForward::destination),
-        Some(destination) if destination.session_key() == Some(&high_consumer_session)
+        Some(destination) if local_destination_session(&state, destination) == Some(&high_consumer_session)
     ));
     assert_eq!(forwards.get(1).map(PacketForward::packet_idx), Some(1));
     assert!(matches!(
         forwards.get(1).map(PacketForward::destination),
-        Some(destination) if destination.session_key() == Some(&base_consumer_session)
+        Some(destination) if local_destination_session(&state, destination) == Some(&base_consumer_session)
     ));
     assert_eq!(forwards.get(2).map(PacketForward::packet_idx), Some(1));
     assert!(matches!(
         forwards.get(2).map(PacketForward::destination),
-        Some(destination) if destination.session_key() == Some(&high_consumer_session)
+        Some(destination) if local_destination_session(&state, destination) == Some(&high_consumer_session)
     ));
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_layer_allowed(), 2);
@@ -723,7 +736,7 @@ fn populate_forward_routes_gates_only_the_selected_source_media() {
     assert!(matches!(
         forwards.get(2).map(PacketForward::destination),
         Some(destination)
-            if destination.session_key() == Some(&open_consumer_session)
+            if local_destination_session(&state, destination) == Some(&open_consumer_session)
     ));
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_layer_dropped(), 1);
@@ -777,7 +790,7 @@ fn populate_forward_routes_applies_operating_point_packet_gates() {
     assert_eq!(forwards.len(), 1);
     assert!(matches!(
         forwards.first().map(PacketForward::destination),
-        Some(destination) if destination.session_key() == Some(&consumer_session)
+        Some(destination) if local_destination_session(&state, destination) == Some(&consumer_session)
     ));
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_layer_dropped(), 1);

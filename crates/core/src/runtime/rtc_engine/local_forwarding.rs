@@ -23,16 +23,20 @@ use super::{
 };
 use crate::runtime::media_transport::TransportMediaId;
 
-/// Destination-local view of one routed RTP stream.
+/// destination-local view of one routed RTP stream
 ///
-/// `transport_media_id` keys the receiver-local rewrite state. `mid` and
+/// `transport_media_id` keys the receiver-local rewrite state
+/// `mid` and
 /// `payload_type` are the consumer-negotiated values that must replace the
-/// publisher-facing RTP identity before packets cross into str0m.
+/// publisher-facing RTP identity before packets cross into str0m
+/// `nackable` is cached route state, so local egress does not consult `str0m`
+/// media metadata for every packet
 #[derive(Debug, Clone)]
 pub(super) struct LocalPacketDestination {
     transport_media_id: TransportMediaId,
     mid: Mid,
     payload_type: Option<Pt>,
+    nackable: bool,
 }
 
 pub(super) struct LocalForwardedRtp<'a> {
@@ -87,11 +91,13 @@ impl LocalPacketDestination {
         transport_media_id: TransportMediaId,
         mid: Mid,
         payload_type: Option<Pt>,
+        nackable: bool,
     ) -> Self {
         Self {
             transport_media_id,
             mid,
             payload_type,
+            nackable,
         }
     }
 
@@ -106,13 +112,14 @@ impl LocalPacketDestination {
         self.send_rtp(session_state, &mut rtp, vp8_payload, is_last_destination)
     }
 
-    /// Write one routed RTP packet into the destination user's local `StreamTx`.
+    /// writes one routed RTP packet into the destination user's local `StreamTx`
     ///
-    /// Payload bytes stay source-derived, but MID/RID extensions, sequence
-    /// numbers, and RTP timestamps are rewritten into the destination's single
-    /// consumer stream. A missing destination stream is treated as a no-op
-    /// because route updates and negotiated removal can race with packets
-    /// already buffered for forwarding.
+    /// payload bytes stay source-derived, but MID and RID extensions, sequence
+    /// numbers and RTP timestamps are rewritten into the destination's single
+    /// consumer stream
+    /// a missing destination stream is treated as a no-op because route updates
+    /// and negotiated removal can race with packets already buffered for
+    /// forwarding
     fn send_rtp(
         &self,
         session_state: &mut RtcSessionState,
@@ -120,10 +127,6 @@ impl LocalPacketDestination {
         vp8_payload: Option<PacketVp8Payload>,
         is_last_destination: bool,
     ) -> Result<Option<usize>, RtcError> {
-        let nackable = session_state
-            .rtc
-            .media(self.mid)
-            .is_some_and(|media| !media.kind().is_audio());
         let payload_len = rtp.payload.len();
         let vp8_payload = vp8_payload.or_else(|| vp8_payload_from_rtp(rtp));
         let vp8_identity = vp8_payload
@@ -156,7 +159,7 @@ impl LocalPacketDestination {
                 }
                 let write_context = RtpWriteContext {
                     identity,
-                    nackable,
+                    nackable: self.nackable,
                     is_last_destination,
                     mid: self.mid,
                     payload_type: self.payload_type,

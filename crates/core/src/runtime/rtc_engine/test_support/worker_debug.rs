@@ -427,6 +427,7 @@ fn build_debug_route_entry(
         .map(|entry| DebugRouteEntry {
             source_transport_media_id,
             source_active: entry.source_active,
+            active_destination_count: entry.active_destination_count,
             effective_packet_gate: state
                 .route_control
                 .effective_packet_gate(source_transport_media_id)

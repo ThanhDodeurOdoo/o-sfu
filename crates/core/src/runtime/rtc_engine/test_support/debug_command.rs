@@ -105,6 +105,7 @@ pub struct DebugRouteDestination {
 pub struct DebugRouteEntry {
     pub source_transport_media_id: TransportMediaId,
     pub source_active: bool,
+    pub active_destination_count: usize,
     pub effective_packet_gate: DebugPacketGate,
     pub destinations: Vec<DebugRouteDestination>,
 }

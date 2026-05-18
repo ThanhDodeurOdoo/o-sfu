@@ -191,6 +191,7 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
     };
     assert_eq!(route_entry.source_transport_media_id, source_media_id);
     assert!(route_entry.source_active);
+    assert_eq!(route_entry.active_destination_count, 1);
     assert!(route_entry.destinations.iter().any(|dest| {
         dest.dest_session == consumer_session_key
             && dest.dest_transport_media_id == consumer_media_id
@@ -502,6 +503,7 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
     };
     assert_eq!(route_entry.source_transport_media_id, source_media_id);
     assert!(!route_entry.source_active);
+    assert_eq!(route_entry.active_destination_count, 0);
     assert!(route_entry.destinations.iter().any(|destination| {
         destination.dest_session == consumer_session_key
             && destination.dest_transport_media_id == consumer_media_id
