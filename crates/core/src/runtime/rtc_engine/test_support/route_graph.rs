@@ -4,6 +4,7 @@ use super::super::{
     demux::{MediaRouteDestination, MediaRouteEntry},
     media_registry::RegisteredMediaHandle,
     route_control::PacketLayerGate,
+    slots::ConsumerStreamHandle,
     state::PacketLoopState,
 };
 use crate::runtime::media_transport::{TransportMediaId, TransportSessionKey};
@@ -106,6 +107,7 @@ impl<'a> MediaWorkerScenario<'a> {
             .push_destination(MediaRouteDestination {
                 dest_session: session_key,
                 dest_transport_media_id: transport_media_id,
+                dest_stream: ConsumerStreamHandle::default(),
                 dest_mid: mid,
                 dest_payload_type: None,
                 nackable: true,

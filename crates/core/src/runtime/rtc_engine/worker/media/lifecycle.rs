@@ -29,7 +29,6 @@ use super::{
         super::{
             bitrate::BitrateRegistry,
             commands::RtcWorkerResponse,
-            local_send_rewrite::forget_transport_media_streams,
             media_registry::{
                 DecoderRefreshCodec, RegisteredMediaHandle, RemoteSourceRegistration,
             },
@@ -40,7 +39,7 @@ use super::{
     },
     control::{
         ConsumerRouteRegistration, ensure_route_source_registered, register_consumer_route,
-        remove_consumer_route,
+        remove_consumer_route, remove_source_route,
     },
     types::{AddSendMediaRequest, RouteSourceKind},
 };
@@ -223,7 +222,7 @@ fn unregister_media_handle(
                     .negotiated_producer_parameters
                     .remove(&mid);
             }
-            state.media_route_index.remove(&transport_media_id);
+            remove_source_route(state, transport_media_id);
             state.mark_session_dirty(&session_key);
             Ok(())
         }
@@ -232,12 +231,6 @@ fn unregister_media_handle(
             source_transport_media_id,
             ..
         } => {
-            if let Some(session_state) = state.users.get_mut(&session_key) {
-                forget_transport_media_streams(
-                    &mut session_state.consumer_streams,
-                    transport_media_id,
-                );
-            }
             remove_consumer_route(
                 state,
                 &session_key,
@@ -305,11 +298,14 @@ fn session_has_other_mid_user(
     mid: Mid,
     excluded_transport_media_id: TransportMediaId,
 ) -> bool {
-    state.mid_registry.iter().any(|(raw_id, handle)| {
-        *raw_id != excluded_transport_media_id.as_u64()
-            && handle.session_key() == session_key
-            && handle.mid() == mid
-    })
+    state
+        .mid_registry
+        .iter()
+        .any(|(transport_media_id, handle)| {
+            *transport_media_id != excluded_transport_media_id
+                && handle.session_key() == session_key
+                && handle.mid() == mid
+        })
 }
 
 /// Returns whether the worker already handed out a local offer and is still
@@ -548,21 +544,30 @@ fn worker_add_send_media(
         remote_source_rollback.rollback(state);
         return Err(TransportAdapterError::TransportUnavailable);
     };
-    let mid = if session_state.sdp_negotiation.initial_offer_applied {
-        match worker_stage_native_send_media(session_state, media_kind) {
-            Ok(mid) => mid,
-            Err(error) => {
-                let _ = session_state;
-                remote_source_rollback.rollback(state);
-                return Err(error);
+    let (mid, consumer_stream, should_mark_dirty) = {
+        let mid = if session_state.sdp_negotiation.initial_offer_applied {
+            match worker_stage_native_send_media(session_state, media_kind) {
+                Ok(mid) => mid,
+                Err(error) => {
+                    let _ = session_state;
+                    remote_source_rollback.rollback(state);
+                    return Err(error);
+                }
             }
-        }
-    } else {
-        let mid = transport_mid(consumer_rtp_parameters).unwrap_or_default();
-        declare_direct_send_media(session_state, mid, media_kind, consumer_rtp_parameters);
-        state.mark_session_dirty(consumer_session_key);
-        mid
+        } else {
+            let mid = transport_mid(consumer_rtp_parameters).unwrap_or_default();
+            declare_direct_send_media(session_state, mid, media_kind, consumer_rtp_parameters);
+            mid
+        };
+        (
+            mid,
+            session_state.consumer_streams.allocate(),
+            !session_state.sdp_negotiation.initial_offer_applied,
+        )
     };
+    if should_mark_dirty {
+        state.mark_session_dirty(consumer_session_key);
+    }
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Consumer {
         session_key: consumer_session_key.clone(),
         mid,
@@ -573,6 +578,7 @@ fn worker_add_send_media(
         ConsumerRouteRegistration {
             consumer_session_key,
             consumer_transport_media_id: transport_media_id,
+            consumer_stream,
             consumer_mid: mid,
             consumer_media_kind: media_kind,
             source_transport_media_id,

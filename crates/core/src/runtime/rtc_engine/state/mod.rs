@@ -31,7 +31,7 @@ pub(in crate::runtime::rtc_engine) mod test_support;
 
 use std::{
     cmp::{Ordering as CmpOrdering, Reverse},
-    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap},
+    collections::{BTreeMap, BTreeSet, BinaryHeap},
     net::SocketAddr,
     sync::Arc,
     time::{Duration, Instant},
@@ -49,13 +49,11 @@ use tokio::net::UdpSocket;
 use super::{
     bitrate::MediaBitrateCounter,
     demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux},
-    local_send_rewrite::{ConsumerStream, ConsumerStreamKey},
-    media_registry::{
-        DecoderRefreshCodec, ProducerSsrcRegistry, ProducerSsrcRidRegistry, RegisteredMediaHandle,
-        RemoteSourceRegistration, SessionMidRegistry,
-    },
+    local_send_rewrite::ConsumerStreamStore,
+    media_registry::{DecoderRefreshCodec, RemoteSourceRegistration, SessionMediaRegistry},
     relay_registry::RelaySourceRegistration,
     route_control::RouteControlState,
+    slots::{MediaStore, SessionHandle, SessionStore},
 };
 pub use crate::runtime::media_transport::TransportSessionHealth;
 use crate::{
@@ -106,7 +104,7 @@ pub(super) struct RtcSessionState {
     /// this belongs to the destination session because the browser sees one
     /// local RTP stream per consumer route, independent from whichever
     /// publisher SSRC or RID currently feeds that route
-    pub(super) consumer_streams: HashMap<ConsumerStreamKey, ConsumerStream>,
+    pub(super) consumer_streams: ConsumerStreamStore,
 }
 
 /// offer and answer staging state for one worker-owned session
@@ -155,24 +153,20 @@ pub(super) struct PendingRecvStream {
 /// control commands, UDP ingress, `str0m` polling and relay fanout all pass
 /// through one mutable borrow so the media indexes can be updated together
 ///
-/// hot-path members are indexed by transport media ids or session keys so
-/// packet forwarding does not need room locks or signaling state
+/// command-facing APIs keep stable transport ids while hot queues use
+/// generation-checked handles
 #[derive(Default)]
 pub(super) struct PacketLoopState {
     /// lazily bound worker socket cleared when the last session leaves
     pub(super) shared_socket: Option<SharedRtcSocket>,
     /// live worker-owned RTC sessions
-    pub(super) users: BTreeMap<TransportSessionKey, RtcSessionState>,
+    pub(super) users: SessionStore,
     /// source media id to local consumer destinations for packet fanout
     pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
     /// packet-layer source policy already projected from room decisions
     pub(super) route_control: RouteControlState,
-    /// producer lookup by session and MID for packet source resolution
-    pub(super) producer_mid_registry: SessionMidRegistry,
-    /// producer lookup by session and SSRC after negotiation or dynamic discovery
-    pub(super) producer_ssrc_registry: ProducerSsrcRegistry,
-    /// producer RID learned for a session-scoped SSRC
-    pub(super) producer_ssrc_rid_registry: ProducerSsrcRidRegistry,
+    /// session-scoped media lookup vectors for packet source resolution
+    pub(super) session_media: SessionMediaRegistry,
     /// producer SSRC bindings owned by each media id for teardown
     pub(super) producer_ssrcs_by_media: BTreeMap<TransportMediaId, Vec<Ssrc>>,
     /// packet-level decoder-refresh classifier for local or remote sources
@@ -200,22 +194,20 @@ pub(super) struct PacketLoopState {
     pub(super) incoming_bitrate_counters: BTreeMap<TransportMediaId, Arc<MediaBitrateCounter>>,
     /// packet-loop write handles for per-session egress bitrate accounting
     pub(super) egress_bitrate_counters: BTreeMap<TransportSessionKey, Arc<MediaBitrateCounter>>,
-    /// consumer lookup by session and MID for RTCP feedback routing
-    pub(super) consumer_mid_registry: SessionMidRegistry,
     /// command path for source media owned by another worker
     pub(super) remote_source_registry: BTreeMap<TransportMediaId, RemoteSourceRegistration>,
     /// cross-worker relay destinations indexed by local source media id
     pub(super) relay_targets: BTreeMap<TransportMediaId, RelaySourceRegistration>,
     /// worker-local UDP ingress demux hints
     pub(super) remote_addr_demux: RemoteAddrDemux,
-    /// primary transport media handle table keyed by raw media id
-    pub(super) mid_registry: BTreeMap<u64, RegisteredMediaHandle>,
+    /// primary media handle table keyed by stable transport media id
+    pub(super) mid_registry: MediaStore,
     /// sessions that must be polled before the worker waits again
-    pub(super) dirty_sessions: Vec<TransportSessionKey>,
-    /// latest `str0m` timeout deadline per live session
-    pub(super) session_timeouts: BTreeMap<TransportSessionKey, Instant>,
+    pub(super) dirty_sessions: Vec<SessionHandle>,
+    /// latest `str0m` timeout deadline per live session handle
+    pub(super) session_timeouts: BTreeMap<SessionHandle, Instant>,
     /// timeout heap that may contain stale entries invalidated by `session_timeouts`
-    pub(super) timeout_queue: BinaryHeap<Reverse<(Instant, TransportSessionKey)>>,
+    pub(super) timeout_queue: BinaryHeap<Reverse<(Instant, SessionHandle)>>,
     /// next worker-local media id from the disjoint range assigned at boot
     pub(super) next_media_id: u64,
 }
@@ -228,6 +220,9 @@ impl PacketLoopState {
     /// each live session can appear at most once until
     /// [`Self::collect_ready_sessions`] clears its dirty bit
     pub(super) fn mark_session_dirty(&mut self, session_key: &TransportSessionKey) {
+        let Some(session_handle) = self.users.handle_for_key(session_key) else {
+            return;
+        };
         let Some(session_state) = self.users.get_mut(session_key) else {
             return;
         };
@@ -235,7 +230,7 @@ impl PacketLoopState {
             return;
         }
         session_state.packet_loop_dirty = true;
-        self.dirty_sessions.push(session_key.clone());
+        self.dirty_sessions.push(session_handle);
     }
 
     /// report whether the worker has session work that is due immediately
@@ -250,6 +245,8 @@ impl PacketLoopState {
     /// discards timeout heap entries whose deadline no longer matches
     /// [`Self::session_timeouts`]
     ///
+    /// stale handles are skipped before replacement sessions can be polled
+    ///
     /// the output is sorted and deduplicated so a session that is both dirty
     /// and timed out is polled once in the current turn
     pub(super) fn collect_ready_sessions(
@@ -257,21 +254,27 @@ impl PacketLoopState {
         now: Instant,
         ready_sessions: &mut Vec<TransportSessionKey>,
     ) {
-        for session_key in self.dirty_sessions.drain(..) {
-            if let Some(session_state) = self.users.get_mut(&session_key) {
+        for session_handle in self.dirty_sessions.drain(..) {
+            let Some(session_key) = self.users.key_for_handle(session_handle).cloned() else {
+                continue;
+            };
+            if let Some(session_state) = self.users.get_mut_by_handle(session_handle) {
                 session_state.packet_loop_dirty = false;
                 ready_sessions.push(session_key);
             }
         }
         let session_timeouts = &mut self.session_timeouts;
-        while let Some((deadline, session_key)) =
-            pop_due_deadline(&mut self.timeout_queue, now, |(deadline, _session_key)| {
-                *deadline
-            })
-        {
-            if session_timeouts.get(&session_key).copied() == Some(deadline) {
-                session_timeouts.remove(&session_key);
-                ready_sessions.push(session_key);
+        let users = &self.users;
+        while let Some((deadline, session_handle)) = pop_due_deadline(
+            &mut self.timeout_queue,
+            now,
+            |(deadline, _session_handle)| *deadline,
+        ) {
+            if session_timeouts.get(&session_handle).copied() == Some(deadline) {
+                session_timeouts.remove(&session_handle);
+                if let Some(ready_session_key) = users.key_for_handle(session_handle).cloned() {
+                    ready_sessions.push(ready_session_key);
+                }
             }
         }
         ready_sessions.sort_unstable();
@@ -288,25 +291,33 @@ impl PacketLoopState {
         session_key: &TransportSessionKey,
         next_timeout: Option<Instant>,
     ) {
-        self.session_timeouts.remove(session_key);
+        let Some(session_handle) = self.users.handle_for_key(session_key) else {
+            return;
+        };
+        self.session_timeouts.remove(&session_handle);
         if let Some(next_timeout) = next_timeout {
-            self.session_timeouts
-                .insert(session_key.clone(), next_timeout);
+            self.session_timeouts.insert(session_handle, next_timeout);
             self.timeout_queue
-                .push(Reverse((next_timeout, session_key.clone())));
+                .push(Reverse((next_timeout, session_handle)));
         }
     }
 
     /// return the earliest live `str0m` timeout deadline
     ///
     /// stale heap entries are removed while searching
+    /// this includes entries for handles whose slot generation no longer names
+    /// a live session
     /// callers may invoke this before awaiting because it does not borrow any
     /// session state after returning
     pub(super) fn next_timeout_deadline(&mut self) -> Option<Instant> {
         let session_timeouts = &self.session_timeouts;
+        let users = &self.users;
         next_live_deadline(
             &mut self.timeout_queue,
-            |(deadline, session_key)| session_timeouts.get(session_key).copied() == Some(*deadline),
+            |(deadline, session_key)| {
+                session_timeouts.get(session_key).copied() == Some(*deadline)
+                    && users.key_for_handle(*session_key).is_some()
+            },
             |(deadline, _session_key)| *deadline,
         )
     }
@@ -315,12 +326,16 @@ impl PacketLoopState {
     ///
     /// stale timeout heap entries can remain because the deadline map no longer
     /// validates them
+    /// stale handles are also rejected by generation checks before polling
     pub(super) fn clear_session_schedule(&mut self, session_key: &TransportSessionKey) {
-        self.dirty_sessions.retain(|dirty| dirty != session_key);
+        let Some(session_handle) = self.users.handle_for_key(session_key) else {
+            return;
+        };
+        self.dirty_sessions.retain(|dirty| *dirty != session_handle);
         if let Some(session_state) = self.users.get_mut(session_key) {
             session_state.packet_loop_dirty = false;
         }
-        self.session_timeouts.remove(session_key);
+        self.session_timeouts.remove(&session_handle);
     }
 
     /// record packet-path liveness for one producer RID

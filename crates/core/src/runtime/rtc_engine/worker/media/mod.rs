@@ -13,8 +13,8 @@ pub(in crate::runtime::rtc_engine) use control::{
     apply_source_rid_readiness, drain_due_rid_keyframe_refreshes,
 };
 pub(super) use control::{
-    refresh_source_packet_gate, respond_add_relay_target, respond_remove_relay_target,
-    respond_request_consumer_keyframe, respond_set_consumer_active,
+    refresh_source_packet_gate, remove_source_route, respond_add_relay_target,
+    respond_remove_relay_target, respond_request_consumer_keyframe, respond_set_consumer_active,
     respond_set_consumer_packet_gate, respond_set_consumer_packet_gates,
     respond_set_producer_active, respond_set_relay_target_active,
     respond_set_remote_source_packet_gate,

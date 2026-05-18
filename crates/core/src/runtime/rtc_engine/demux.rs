@@ -19,7 +19,7 @@ use std::{
 
 use str0m::media::{Mid, Pt};
 
-use super::route_control::PacketLayerGate;
+use super::{route_control::PacketLayerGate, slots::ConsumerStreamHandle};
 use crate::runtime::media_transport::{TransportMediaId, TransportSessionKey};
 
 /// forwarding destination selected for one source media route
@@ -34,6 +34,12 @@ pub(super) struct MediaRouteDestination {
     pub(super) dest_session: TransportSessionKey,
     /// consumer media id used by the destination session state
     pub(super) dest_transport_media_id: TransportMediaId,
+    /// destination-owned RTP rewrite handle for this consumer route
+    ///
+    /// the counters live in the destination session
+    /// this handle lets a route destination reach them without keying local
+    /// RTP projection by sparse transport media ids on the hot path
+    pub(super) dest_stream: ConsumerStreamHandle,
     /// consumer MID used when rewriting the packet for local egress
     pub(super) dest_mid: Mid,
     /// payload type negotiated for this consumer stream

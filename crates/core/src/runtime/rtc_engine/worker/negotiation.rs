@@ -37,7 +37,7 @@ use crate::{
     runtime::{
         media_transport::{
             AppliedProducer, AppliedSessionAnswer, SessionOffer, SessionUploadEncoding,
-            SessionUploadSlot, TransportAdapterError, TransportMediaId, TransportSessionKey,
+            SessionUploadSlot, TransportAdapterError, TransportSessionKey,
         },
         metrics::RuntimeMetrics,
     },
@@ -197,9 +197,7 @@ fn worker_apply_session_answer(
             super::super::media_registry::RegisteredMediaHandle::Producer {
                 session_key: owner_session_key,
                 mid,
-            } if owner_session_key == session_key => {
-                Some((TransportMediaId::new(*transport_media_id), *mid))
-            }
+            } if owner_session_key == session_key => Some((*transport_media_id, *mid)),
             _ => None,
         })
         .collect::<Vec<_>>();

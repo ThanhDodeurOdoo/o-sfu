@@ -45,11 +45,13 @@ pub(in crate::runtime::rtc_engine::worker) use responses::{
     respond_set_consumer_packet_gates, respond_set_producer_active,
     respond_set_relay_target_active, respond_set_remote_source_packet_gate,
 };
-pub(in crate::runtime::rtc_engine::worker) use routes::refresh_source_packet_gate;
 pub(super) use routes::{
     ConsumerRouteRegistration, consumer_payload_type, ensure_existing_route_source,
     ensure_route_source_registered, owned_local_producer_mid, packet_gate_rid,
     register_consumer_route, remove_consumer_route,
+};
+pub(in crate::runtime::rtc_engine::worker) use routes::{
+    refresh_source_packet_gate, remove_source_route,
 };
 #[cfg(test)]
 pub(in crate::runtime::rtc_engine::worker::media) use selected_rid::observe_source_rid_readiness;
