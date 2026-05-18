@@ -299,7 +299,7 @@ impl RoomManager {
     /// with no pending retry state
     ///
     /// the sweep is best effort. rooms removed or replaced while the directory
-    /// snapshot is being processed are skipped by [`Self::run_current_room_mutation`]
+    /// snapshot is being processed are skipped by `run_current_room_mutation`
     ///
     /// this is cold-path lifecycle work. it must not be called from packet
     /// forwarding or transport hot loops
