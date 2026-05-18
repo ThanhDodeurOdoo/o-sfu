@@ -11,14 +11,13 @@ use std::fmt;
 use str0m::RtcError;
 
 use super::{
-    demux::MediaRouteDestination,
     forwarded_packet::ForwardedPacket,
     local_forwarding::LocalPacketDestination,
     relay_registry::{RelayEnqueueOutcome, RelayTargetKind, RelayTargetTransport},
     state::PacketLoopState,
 };
 use crate::runtime::{
-    media_transport::{TransportMediaId, TransportSessionKey},
+    media_transport::TransportMediaId,
     metrics::{RtpForwardDestinationKind, RtpRelayDropKind},
     packet_sink_registry::RegisteredPacketSink,
 };
@@ -60,11 +59,22 @@ pub(super) enum ForwardSendOutcome {
     OverloadedRelay,
 }
 
-/// local rtc send target with the consumer session and rewrite identity
-#[derive(Debug, Clone)]
+/// turn-local handle for one local rtc route destination
+///
+/// the handle names a source route plus the destination index observed while
+/// planning the current packet-loop turn
+/// it deliberately does not clone the consumer session or RTP rewrite identity
+/// those route-stable facts are resolved during flush while `PacketLoopState`
+/// is borrowed mutably
+///
+/// callers must not persist this value beyond the flush that owns the matching
+/// `PacketForward`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct LocalRtcPacketDestination {
-    session_key: TransportSessionKey,
-    sender: LocalPacketDestination,
+    /// source route that owned the destination when planning ran
+    source_transport_media_id: TransportMediaId,
+    /// destination slot inside the route for this packet-loop turn
+    destination_index: usize,
 }
 
 /// packet sink destination tied to the source transport media id
@@ -82,20 +92,21 @@ pub(super) struct RelayPacketDestination {
 }
 
 impl PacketForward {
-    /// builds a local rtc destination from an already-authorized media route
+    /// builds a local rtc destination from an already-authorized route slot
+    ///
+    /// the caller must pass the destination index produced while walking the
+    /// current `MediaRouteEntry`
+    /// the index is resolved again during flush so planning can stay clone-free
     pub(super) fn from_local_route_destination(
         packet_idx: usize,
-        route_destination: &MediaRouteDestination,
+        source_transport_media_id: TransportMediaId,
+        destination_index: usize,
     ) -> Self {
         Self {
             packet_idx,
             destination: ForwardingDestination::LocalRtc(LocalRtcPacketDestination::new(
-                route_destination.dest_session.clone(),
-                LocalPacketDestination::new(
-                    route_destination.dest_transport_media_id,
-                    route_destination.dest_mid,
-                    route_destination.dest_payload_type,
-                ),
+                source_transport_media_id,
+                destination_index,
             )),
         }
     }
@@ -142,11 +153,11 @@ impl PacketForward {
 }
 
 impl ForwardingDestination {
-    /// exposes the local rtc session key for route-planner assertions
+    /// exposes the local rtc route handle for route-planner assertions
     #[cfg(test)]
-    pub(super) fn session_key(&self) -> Option<&TransportSessionKey> {
+    pub(super) fn local_route(&self) -> Option<LocalRtcPacketDestination> {
         match self {
-            Self::LocalRtc(destination) => Some(destination.session_key()),
+            Self::LocalRtc(destination) => Some(*destination),
             Self::PacketSink(_) | Self::Relay(_) => None,
         }
     }
@@ -192,49 +203,78 @@ impl ForwardingDestination {
 }
 
 impl LocalRtcPacketDestination {
-    /// stores the consumer session and rewrite target chosen by route planning
-    fn new(session_key: TransportSessionKey, sender: LocalPacketDestination) -> Self {
+    /// stores the compact route handle chosen by route planning
+    ///
+    /// this constructor is private so only the forwarding planner can create a
+    /// local rtc destination after route-control gates have already accepted
+    /// the packet
+    const fn new(source_transport_media_id: TransportMediaId, destination_index: usize) -> Self {
         Self {
-            session_key,
-            sender,
+            source_transport_media_id,
+            destination_index,
         }
     }
 
-    /// exposes the session key for route-planner assertions
     #[cfg(test)]
-    fn session_key(&self) -> &TransportSessionKey {
-        &self.session_key
+    pub(super) const fn source_transport_media_id(self) -> TransportMediaId {
+        self.source_transport_media_id
     }
 
-    /// writes one packet to the destination session when it is still live
+    #[cfg(test)]
+    pub(super) const fn destination_index(self) -> usize {
+        self.destination_index
+    }
+
+    /// writes one packet to the destination session when the route is still live
     ///
-    /// missing sessions are treated as a no-op because route cleanup and packet
-    /// flushing can interleave across packet-loop turns
-    /// a successful local write records egress bitrate and marks the destination
-    /// session dirty so str0m output is drained later
+    /// the compact handle is best-effort within the current flush
+    /// if the route slot or destination session disappeared, the send is a no-op
+    /// because cleanup already made the route non-authoritative
+    ///
+    /// successful writes clone the destination session key only after `str0m`
+    /// accepted the packet, so failed or stale local sends do not touch dirty
+    /// session scheduling
     fn send(
         &self,
         state: &mut PacketLoopState,
         packet: &mut ForwardedPacket,
         is_last_destination: bool,
     ) -> Result<ForwardSendOutcome, RtcError> {
-        let Some(session_state) = state.users.get_mut(&self.session_key) else {
-            return Ok(ForwardSendOutcome::LocalRtc {
-                payload_bytes: None,
-            });
+        let (payload_bytes, dirty_session_key) = {
+            let Some(route_destination) = state
+                .media_route_index
+                .get(&self.source_transport_media_id)
+                .and_then(|route_entry| route_entry.destinations.get(self.destination_index))
+            else {
+                return Ok(ForwardSendOutcome::LocalRtc {
+                    payload_bytes: None,
+                });
+            };
+            let session_key = &route_destination.dest_session;
+            let Some(session_state) = state.users.get_mut(session_key) else {
+                return Ok(ForwardSendOutcome::LocalRtc {
+                    payload_bytes: None,
+                });
+            };
+            let sender = LocalPacketDestination::new(
+                route_destination.dest_transport_media_id,
+                route_destination.dest_mid,
+                route_destination.dest_payload_type,
+                route_destination.nackable,
+            );
+            let vp8_payload = packet.local_vp8_payload();
+            let payload_bytes = sender.send(
+                session_state,
+                packet.local_send_packet(),
+                vp8_payload,
+                is_last_destination,
+            )?;
+            let dirty_session_key = payload_bytes.is_some().then(|| session_key.clone());
+            (payload_bytes, dirty_session_key)
         };
-        // capture cached VP8 facts before local_send_packet may consume the shared payload
-        let vp8_payload = packet.local_vp8_payload();
-        let payload_bytes = self.sender.send(
-            session_state,
-            packet.local_send_packet(),
-            vp8_payload,
-            is_last_destination,
-        )?;
-        if let Some(payload_bytes) = payload_bytes {
-            let _ =
-                state.record_egress_bitrate(&self.session_key, packet.received_at(), payload_bytes);
-            state.mark_session_dirty(&self.session_key);
+        if let (Some(payload_bytes), Some(session_key)) = (payload_bytes, dirty_session_key) {
+            let _ = state.record_egress_bitrate(&session_key, packet.received_at(), payload_bytes);
+            state.mark_session_dirty(&session_key);
         }
         Ok(ForwardSendOutcome::LocalRtc { payload_bytes })
     }
@@ -329,16 +369,13 @@ mod tests {
         time::Instant,
     };
 
-    use str0m::media::Mid;
-
     use super::*;
     use crate::runtime::{
         UserId,
-        media_transport::TransportMediaId,
+        media_transport::{TransportMediaId, TransportSessionKey},
         packet_sink_registry::PacketSink as MediaPacketSink,
         rtc_engine::{
             relay_registry::{InterNodeRelaySender, RelayPacketMailbox},
-            route_control::PacketLayerGate,
             test_support::{sample_forwarded_packet, test_transport_session_key},
         },
     };
@@ -369,24 +406,14 @@ mod tests {
 
     #[test]
     fn packet_forward_wraps_local_route_destinations_in_the_named_contract() {
-        let dest_session = test_transport_session_key(11, 0, 12, UserId::Integer(13));
-        let route_destination = MediaRouteDestination {
-            dest_session: dest_session.clone(),
-            dest_transport_media_id: TransportMediaId::default(),
-            dest_mid: Mid::from("aud-down"),
-            dest_payload_type: None,
-            active: true,
-            packet_gate: PacketLayerGate::Open,
-            pending_packet_gate: None,
-        };
-
-        let forward = PacketForward::from_local_route_destination(4, &route_destination);
+        let source_transport_media_id = TransportMediaId::new(7);
+        let forward = PacketForward::from_local_route_destination(4, source_transport_media_id, 3);
 
         assert_eq!(forward.packet_idx(), 4);
         assert!(matches!(
             forward.destination(),
             ForwardingDestination::LocalRtc(destination)
-                if destination.session_key == dest_session
+                if *destination == LocalRtcPacketDestination::new(source_transport_media_id, 3)
         ));
     }
 

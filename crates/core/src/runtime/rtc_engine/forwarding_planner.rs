@@ -225,6 +225,11 @@ fn push_relay_forward(
 /// Local fanout remains proportional to the number of writable receiver
 /// sessions. This planner can avoid avoidable allocation work, but it cannot
 /// collapse receiver-specific WebRTC egress into one broadcast operation.
+///
+/// planned local destinations are compact route handles
+/// the flush step resolves each handle against `media_route_index` before
+/// touching the destination session, so planning does not clone route-stable
+/// consumer identity
 fn populate_local_forwards(
     route_entry: &MediaRouteEntry,
     packet_idx: usize,
@@ -239,11 +244,12 @@ fn populate_local_forwards(
         );
         return;
     }
-    for destination in &route_entry.destinations {
+    for (destination_index, destination) in route_entry.destinations.iter().enumerate() {
         if destination_packet_gate_permits(source_transport_media_id, destination, metadata) {
             forwards.push(PacketForward::from_local_route_destination(
                 packet_idx,
-                destination,
+                source_transport_media_id,
+                destination_index,
             ));
         }
     }
@@ -301,11 +307,5 @@ fn has_routed_forward(
     route_entry: Option<&MediaRouteEntry>,
 ) -> bool {
     relay_targets.is_some_and(|targets| !targets.is_empty())
-        || route_entry.is_some_and(|entry| {
-            entry.source_active
-                && entry
-                    .destinations
-                    .iter()
-                    .any(|destination| destination.active)
-        })
+        || route_entry.is_some_and(|entry| entry.source_active && entry.has_active_destinations())
 }

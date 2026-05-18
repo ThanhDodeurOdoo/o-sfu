@@ -29,7 +29,7 @@
 use std::time::Instant;
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
-use str0m::media::{Mid, Pt, Rid};
+use str0m::media::{MediaKind, Mid, Pt, Rid};
 
 use super::{
     super::types::{ConsumerPacketGateRequest, RouteSourceKind},
@@ -81,6 +81,12 @@ pub(in crate::runtime::rtc_engine::worker::media) struct ConsumerRouteRegistrati
     pub consumer_transport_media_id: TransportMediaId,
     /// consumer MID used when packets are rewritten for local egress
     pub consumer_mid: Mid,
+    /// committed consumer media kind used to cache local egress nackability
+    ///
+    /// route registration is the point where consumer ownership and negotiated
+    /// media kind are both known, so the packet loop can later avoid a per-send
+    /// media lookup
+    pub consumer_media_kind: MediaKind,
     /// producer or remote-source media id that feeds this destination
     pub source_transport_media_id: TransportMediaId,
     /// router-negotiated consumer stream used for payload rewriting and the
@@ -171,6 +177,11 @@ pub(in crate::runtime::rtc_engine::worker::media) fn ensure_existing_route_sourc
 /// room policy may later replace the gate for this one consumer without
 /// changing other destinations on the same source
 ///
+/// local egress retransmission policy is captured here from the committed
+/// consumer media kind
+/// if a future renegotiation can change media kind without recreating the route,
+/// that path must refresh the route destination before packets are forwarded
+///
 /// a strict selected-rid route is not made effective until packet-path liveness
 /// proves that the rid exists for this producer
 /// the pending gate keeps the room-selected target attached to the destination
@@ -187,6 +198,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn register_consumer_route(
         consumer_session_key,
         consumer_transport_media_id,
         consumer_mid,
+        consumer_media_kind,
         source_transport_media_id,
         consumer_rtp_parameters,
         now,
@@ -201,16 +213,13 @@ pub(in crate::runtime::rtc_engine::worker::media) fn register_consumer_route(
     state
         .media_route_index
         .entry(source_transport_media_id)
-        .or_insert_with(|| MediaRouteEntry {
-            source_active: true,
-            destinations: Vec::new(),
-        })
-        .destinations
-        .push(MediaRouteDestination {
+        .or_insert_with(|| MediaRouteEntry::new(true))
+        .push_destination(MediaRouteDestination {
             dest_session: consumer_session_key.clone(),
             dest_transport_media_id: consumer_transport_media_id,
             dest_mid: consumer_mid,
             dest_payload_type,
+            nackable: !consumer_media_kind.is_audio(),
             active: true,
             packet_gate,
             pending_packet_gate,
@@ -261,7 +270,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn remove_consumer_route(
         }) else {
             return;
         };
-        route_entry.destinations.remove(position);
+        route_entry.remove_destination(position);
         route_entry.destinations.is_empty()
     };
     if remove_route_entry {
@@ -507,24 +516,25 @@ fn update_consumer_route(
     {
         return Err(TransportAdapterError::InvalidInput);
     }
-    let destination = state
+    let route_entry = state
         .media_route_index
         .get_mut(&source_transport_media_id)
-        .ok_or(TransportAdapterError::TransportUnavailable)?
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    let destination_index = route_entry
         .destinations
-        .iter_mut()
-        .find(|destination| {
+        .iter()
+        .position(|destination| {
             destination.dest_session == *consumer_session_key
                 && destination.dest_transport_media_id == consumer_transport_media_id
         })
         .ok_or(TransportAdapterError::TransportUnavailable)?;
     Ok(match (active, packet_gate_update) {
-        (Some(active), None) => {
-            let route_changed = destination.active != active;
-            destination.active = active;
-            route_changed
-        }
+        (Some(active), None) => route_entry.set_destination_active(destination_index, active),
         (None, Some((packet_gate, pending_packet_gate))) => {
+            let destination = route_entry
+                .destinations
+                .get_mut(destination_index)
+                .ok_or(TransportAdapterError::TransportUnavailable)?;
             let route_changed = destination.packet_gate != packet_gate
                 || destination.pending_packet_gate != pending_packet_gate;
             destination.packet_gate = packet_gate;
@@ -534,7 +544,6 @@ fn update_consumer_route(
         _ => false,
     })
 }
-
 /// extracts the rid restriction carried by a packet-layer gate
 ///
 /// keyframe routing and selected-rid readiness use this to map destination

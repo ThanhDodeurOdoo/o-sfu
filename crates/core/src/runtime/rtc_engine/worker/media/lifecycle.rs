@@ -574,6 +574,7 @@ fn worker_add_send_media(
             consumer_session_key,
             consumer_transport_media_id: transport_media_id,
             consumer_mid: mid,
+            consumer_media_kind: media_kind,
             source_transport_media_id,
             consumer_rtp_parameters,
             now,

@@ -81,10 +81,7 @@ impl<'a> MediaWorkerScenario<'a> {
             .media_route_index
             .entry(transport_media_id)
             .and_modify(|route_entry| route_entry.source_active = true)
-            .or_insert_with(|| MediaRouteEntry {
-                source_active: true,
-                destinations: Vec::new(),
-            });
+            .or_insert_with(|| MediaRouteEntry::new(true));
     }
 
     fn install_destination(
@@ -105,16 +102,13 @@ impl<'a> MediaWorkerScenario<'a> {
         self.state
             .media_route_index
             .entry(source_transport_media_id)
-            .or_insert_with(|| MediaRouteEntry {
-                source_active: true,
-                destinations: Vec::new(),
-            })
-            .destinations
-            .push(MediaRouteDestination {
+            .or_insert_with(|| MediaRouteEntry::new(true))
+            .push_destination(MediaRouteDestination {
                 dest_session: session_key,
                 dest_transport_media_id: transport_media_id,
                 dest_mid: mid,
                 dest_payload_type: None,
+                nackable: true,
                 active: true,
                 packet_gate,
                 pending_packet_gate,
