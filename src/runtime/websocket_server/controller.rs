@@ -25,17 +25,16 @@ use std::{net::SocketAddr, sync::Arc};
 use axum::{
     extract::{
         ConnectInfo, Extension, State,
-        ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
+        ws::{WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use futures_util::{SinkExt, StreamExt, stream::SplitStream};
-use o_sfu_protocol::{shared::UserId, signaling::WebSocketCloseCode};
+use futures_util::{StreamExt, stream::SplitStream};
+use o_sfu_protocol::shared::UserId;
 use tracing::{Instrument, Span, field, info, warn};
 
 use super::{
-    WsWriter,
     admission::{PreAuthWebSocketAdmissionRejection, PreAuthWebSocketPermit},
     io::MAX_CLIENT_FRAME_BYTES,
 };
@@ -189,13 +188,4 @@ async fn handle_socket(
     }
     .instrument(telemetry::ws_upgrade_span())
     .await;
-}
-
-pub(crate) async fn close_writer(writer: &mut WsWriter, close_code: WebSocketCloseCode) {
-    let _result = writer
-        .send(Message::Close(Some(CloseFrame {
-            code: u16::from(close_code),
-            reason: "".into(),
-        })))
-        .await;
 }

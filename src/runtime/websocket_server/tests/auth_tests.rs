@@ -1,7 +1,15 @@
+use std::iter::repeat_n;
+
+use tokio::net::TcpSocket;
 use tungstenite::http::StatusCode;
 
 use super::fixtures::*;
 use crate::runtime::auth::MAX_JWT_TOKEN_BYTES;
+
+// deliberately creates a startup snapshot large enough to exercise outbound backpressure
+const SLOW_READER_PEER_COUNT: usize = 48;
+const SLOW_READER_USER_ID_BYTES: usize = 512 * 1024;
+const SLOW_READER_RECV_BUFFER_BYTES: u32 = 1024;
 
 #[tokio::test]
 async fn websocket_rejects_pre_auth_connections_over_configured_capacity() {
@@ -306,6 +314,77 @@ async fn websocket_pre_auth_permit_is_released_after_auth_success() {
 }
 
 #[tokio::test]
+async fn websocket_startup_send_timeout_releases_room_membership() {
+    let server = TestServerBuilder::new()
+        .room_size(SLOW_READER_PEER_COUNT + 1)
+        .spawn()
+        .await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let room = create_room(
+        &server,
+        "issuer-startup-send-timeout",
+        Some(TEST_ROOM_KEY),
+        CreateRoomQuery::default(),
+    )
+    .await;
+    let mut peer_receivers = Vec::with_capacity(SLOW_READER_PEER_COUNT);
+    for index in 0..SLOW_READER_PEER_COUNT {
+        let joined = join_large_snapshot_peer(&server, &room, index, &mut peer_receivers).await;
+        assert!(joined.is_some(), "large startup snapshot peer should join");
+    }
+    assert_eq!(
+        server.state.metrics.snapshot().active_users(),
+        i64::try_from(SLOW_READER_PEER_COUNT).unwrap_or_default(),
+    );
+    let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(999));
+    assert!(token.is_some());
+    let Some(token) = token else {
+        return;
+    };
+    let auth_payload = encode_protocol_auth(AuthPayload {
+        jwt: token,
+        channel: Some(room.uuid().to_owned()),
+    });
+    assert!(auth_payload.is_some());
+    let Some(auth_payload) = auth_payload else {
+        return;
+    };
+    let slow_websocket = connect_slow_reader(&server).await;
+    assert!(slow_websocket.is_some());
+    let Some(mut slow_websocket) = slow_websocket else {
+        return;
+    };
+    let sent = slow_websocket
+        .send(tungstenite::Message::Text(auth_payload.into()))
+        .await;
+    assert!(sent.is_ok());
+
+    let cleaned = timeout(Duration::from_secs(8), async {
+        let expected_active_users = i64::try_from(SLOW_READER_PEER_COUNT).unwrap_or_default();
+        let mut saw_slow_user_join = false;
+        loop {
+            let metrics = server.state.metrics.snapshot();
+            saw_slow_user_join |= metrics.ws_users_joined() == 1;
+            if saw_slow_user_join && metrics.active_users() == expected_active_users {
+                return true;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert_eq!(
+        cleaned.ok(),
+        Some(true),
+        "startup send timeout should clean the admitted user"
+    );
+    let metrics = server.state.metrics.snapshot();
+    assert_eq!(metrics.ws_user_loops_started(), 0);
+}
+
+#[tokio::test]
 async fn websocket_authenticates_legacy_room_scoped_token_with_explicit_room_id() {
     let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
@@ -458,4 +537,60 @@ async fn websocket_rejects_non_auth_handshake_frame_with_protocol_metric() {
     assert_eq!(metrics.ws_handshake_credentials_received(), 0);
     assert_eq!(metrics.ws_handshake_rejected_protocol_error(), 1);
     assert_eq!(metrics.ws_handshake_rejected_error(), 0);
+}
+
+async fn connect_slow_reader(
+    server: &TestServer,
+) -> Option<tokio_tungstenite::WebSocketStream<TcpStream>> {
+    let socket = if server.addr.is_ipv4() {
+        TcpSocket::new_v4().ok()?
+    } else {
+        TcpSocket::new_v6().ok()?
+    };
+    socket
+        .set_recv_buffer_size(SLOW_READER_RECV_BUFFER_BYTES)
+        .ok()?;
+    let stream = socket.connect(server.addr).await.ok()?;
+    let websocket = tokio_tungstenite::client_async(server.url(), stream)
+        .await
+        .ok()?;
+    Some(websocket.0)
+}
+
+async fn join_large_snapshot_peer(
+    server: &TestServer,
+    room: &Arc<Room>,
+    index: usize,
+    peer_receivers: &mut Vec<UserOutboundReceiver>,
+) -> Option<()> {
+    let (sender, receiver) = UserOutboundSender::channel_with_limits(
+        UserOutboundQueueLimits::new(1, 1024),
+        Arc::clone(&server.state.metrics),
+    );
+    let result = server
+        .room_manager
+        .join_user(
+            room.uuid(),
+            JoinUserRequest {
+                user_id: large_user_id(index),
+                label: None,
+                permissions: UserPermissions::default(),
+                sender,
+            },
+            &server.media_transport,
+        )
+        .await
+        .ok()?;
+    let (_room, _connection_id) = result;
+    peer_receivers.push(receiver);
+    Some(())
+}
+
+fn large_user_id(index: usize) -> UserId {
+    let mut value = String::with_capacity(SLOW_READER_USER_ID_BYTES + 32);
+    value.push_str("slow-reader-peer-");
+    value.push_str(&index.to_string());
+    value.push('-');
+    value.extend(repeat_n('x', SLOW_READER_USER_ID_BYTES));
+    UserId::String(value)
 }

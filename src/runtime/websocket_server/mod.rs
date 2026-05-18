@@ -22,10 +22,10 @@ mod session_loop;
 mod tests;
 
 pub(crate) use admission::PreAuthWebSocketAdmission;
-pub(crate) use controller::{close_writer, upgrade};
+pub(crate) use controller::upgrade;
 pub use handshake::decode_auth_payload_text;
-pub(crate) use io::WsWriter;
 pub use io::{
     ClientBatchDecodeError, ClientBatchDecodeFailureKind, MAX_CLIENT_BATCH_ENVELOPES,
     MAX_CLIENT_FRAME_BYTES, decode_client_batch,
 };
+pub(crate) use io::{WsWriter, close_writer};
