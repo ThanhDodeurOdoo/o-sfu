@@ -19,7 +19,12 @@
 //! `- telemetry            -> tracing setup, schemas, diagnostics, metrics, and exporters
 //! ```
 
-use std::{future::Future, process, sync::Arc, time::Instant as StdInstant};
+use std::{
+    future::Future,
+    process,
+    sync::Arc,
+    time::{Duration, Instant as StdInstant},
+};
 
 use anyhow::Result;
 use tokio::{
@@ -62,6 +67,12 @@ use room::{
     rtp_capabilities,
 };
 use telemetry::{init_tracing, schema::event as telemetry_event};
+
+/// retry sweep cadence for retained rooms with pending transport cleanup
+///
+/// one second gives recoverable transport cleanup failures prompt progress
+/// without turning room teardown recovery into a busy poll
+const CLEANUP_RETRY_DRAIN_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Process-global shell for the server process.
 ///
@@ -205,6 +216,7 @@ impl Runtime {
 struct RuntimeTasks {
     shutdown_token: CancellationToken,
     source_packet_policy_sync: Option<JoinHandle<()>>,
+    cleanup_retry_drain: Option<JoinHandle<()>>,
 }
 
 impl RuntimeTasks {
@@ -217,9 +229,15 @@ impl RuntimeTasks {
             runtime.media_transport.clone(),
             shutdown_token.child_token(),
         );
+        let cleanup_retry_drain = spawn_cleanup_retry_drain_task(
+            Arc::clone(&runtime.room_manager),
+            runtime.media_transport.clone(),
+            shutdown_token.child_token(),
+        );
         Self {
             shutdown_token,
             source_packet_policy_sync: Some(source_packet_policy_sync),
+            cleanup_retry_drain: Some(cleanup_retry_drain),
         }
     }
 
@@ -231,15 +249,24 @@ impl RuntimeTasks {
     /// signals background tasks to stop and waits for their completion
     async fn shutdown(mut self) {
         self.shutdown_token.cancel();
-        if let Some(source_packet_policy_sync) = self.source_packet_policy_sync.take()
-            && let Err(error) = source_packet_policy_sync.await
-            && !error.is_cancelled()
-        {
-            warn!(
-                ?error,
-                "source packet policy update task stopped unexpectedly"
-            );
+        if let Some(source_packet_policy_sync) = self.source_packet_policy_sync.take() {
+            wait_for_runtime_task(source_packet_policy_sync, "source packet policy update").await;
         }
+        if let Some(cleanup_retry_drain) = self.cleanup_retry_drain.take() {
+            wait_for_runtime_task(cleanup_retry_drain, "cleanup retry drain").await;
+        }
+    }
+}
+
+async fn wait_for_runtime_task(task: JoinHandle<()>, name: &'static str) {
+    if let Err(error) = task.await
+        && !error.is_cancelled()
+    {
+        warn!(
+            ?error,
+            task = name,
+            "runtime background task stopped unexpectedly"
+        );
     }
 }
 
@@ -249,6 +276,9 @@ impl Drop for RuntimeTasks {
         self.shutdown_token.cancel();
         if let Some(source_packet_policy_sync) = self.source_packet_policy_sync.take() {
             source_packet_policy_sync.abort();
+        }
+        if let Some(cleanup_retry_drain) = self.cleanup_retry_drain.take() {
+            cleanup_retry_drain.abort();
         }
     }
 }
@@ -348,6 +378,36 @@ fn spawn_source_packet_policy_update_task(
     })
 }
 
+/// starts the process-owned driver for room cleanup retry progress
+///
+/// room cleanup retry state deliberately has no timer. this task supplies the
+/// wall-clock poll from the runtime shell, then exits through the shared
+/// shutdown token so retained rooms cannot keep the server future alive after
+/// cancellation
+///
+/// missed ticks are skipped because cleanup retry draining is recovery work
+/// rather than a backlog that should catch up under load
+fn spawn_cleanup_retry_drain_task(
+    rooms: Arc<RoomManager>,
+    media_transport: MediaTransport,
+    shutdown_token: CancellationToken,
+) -> JoinHandle<()> {
+    info!("booted cleanup retry drain task");
+    tokio::spawn(async move {
+        let mut retry_interval = time::interval(CLEANUP_RETRY_DRAIN_INTERVAL);
+        retry_interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                biased;
+                () = shutdown_token.cancelled() => return,
+                _ = retry_interval.tick() => {
+                    rooms.drain_cleanup_retries(&media_transport).await;
+                }
+            }
+        }
+    })
+}
+
 fn build_media_transport(
     options: &CoreOptions,
     services: &RuntimeServices,
@@ -434,7 +494,7 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn cancelling_serve_future_stops_source_packet_policy_task() {
+    async fn cancelling_serve_future_stops_runtime_background_tasks() {
         let runtime = Runtime::new(&test_config());
         assert!(runtime.is_ok());
         let Ok(runtime) = runtime else {
@@ -444,7 +504,7 @@ mod tests {
         let server = tokio::spawn(runtime.serve(|_shutdown_token| pending::<Result<()>>()));
 
         let task_started =
-            timeout(Duration::from_secs(1), wait_for_source_task_start(&rooms)).await;
+            timeout(Duration::from_secs(1), wait_for_runtime_task_start(&rooms)).await;
         assert!(task_started.is_ok());
 
         server.abort();
@@ -455,7 +515,7 @@ mod tests {
         assert!(room_manager_dropped.is_ok());
     }
 
-    async fn wait_for_source_task_start(rooms: &Weak<RoomManager>) {
+    async fn wait_for_runtime_task_start(rooms: &Weak<RoomManager>) {
         loop {
             if rooms.strong_count() > 1 {
                 return;

@@ -1071,6 +1071,66 @@ async fn manager_disconnect_users_removes_empty_room() {
 }
 
 #[tokio::test]
+async fn manager_retry_drain_removes_empty_room_after_cleanup_succeeds() {
+    let manager = RoomManager::for_test();
+    let (media_transport, fake) = fake_adapter();
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+    let room_id = room.uuid().to_owned();
+    let user_id = UserId::Integer(1);
+    let connection_id = manager_join_user(&manager, &room, 1, &media_transport).await;
+    let session_key = room.transport_user_key(&user_id, connection_id);
+    fake.fail_close_session_until_allowed(session_key.clone());
+
+    assert!(
+        manager
+            .close_session(&room_id, &user_id, connection_id, &media_transport)
+            .await
+    );
+    assert!(manager.get_by_uuid(&room_id).await.is_some());
+
+    fake.allow_close_session(&session_key);
+    for _ in 0..2 {
+        manager.drain_cleanup_retries(&media_transport).await;
+    }
+
+    assert!(manager.get_by_uuid(&room_id).await.is_none());
+    assert!(fake.snapshot_events().iter().any(|event| matches!(
+        event,
+        FakeMediaTransportEvent::SessionClosed { user_id: closed_user_id, .. }
+            if *closed_user_id == user_id
+    )));
+}
+
+#[tokio::test]
+async fn manager_retry_drain_removes_empty_room_after_cleanup_exhaustion() {
+    let manager = RoomManager::for_test();
+    let (media_transport, fake) = fake_adapter();
+    let room = manager
+        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .await;
+    let room_id = room.uuid().to_owned();
+    let user_id = UserId::Integer(1);
+    let connection_id = manager_join_user(&manager, &room, 1, &media_transport).await;
+    let session_key = room.transport_user_key(&user_id, connection_id);
+    fake.fail_close_session_until_allowed(session_key);
+
+    assert!(
+        manager
+            .close_session(&room_id, &user_id, connection_id, &media_transport)
+            .await
+    );
+    assert!(manager.get_by_uuid(&room_id).await.is_some());
+
+    for _ in 0..5 {
+        manager.drain_cleanup_retries(&media_transport).await;
+    }
+
+    assert!(manager.get_by_uuid(&room_id).await.is_none());
+}
+
+#[tokio::test]
 async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
     let metrics = Arc::new(RuntimeMetrics::default());
     let manager = Arc::new(RoomManager::new(
