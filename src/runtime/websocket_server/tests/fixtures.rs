@@ -48,7 +48,7 @@ pub(super) use crate::{
             JoinUserRequest, Room, RoomConfig, RoomManager, UserOutboundQueueLimits,
             UserOutboundReceiver, UserOutboundSender,
         },
-        test_support::{RuntimeMetricsSnapshotTestExt, RuntimeTestBuilder, TEST_AUTH_KEY},
+        test_support::{RuntimeMetricsSnapshotTestExt, RuntimeTestBuilder},
     },
 };
 

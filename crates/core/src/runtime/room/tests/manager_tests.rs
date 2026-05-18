@@ -1079,7 +1079,7 @@ async fn manager_retry_drain_removes_empty_room_after_cleanup_succeeds() {
     let manager = RoomManager::for_test();
     let (media_transport, fake) = fake_adapter();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let room_id = room.uuid().to_owned();
     let user_id = UserId::Integer(1);
@@ -1112,7 +1112,7 @@ async fn manager_retry_drain_removes_empty_room_after_cleanup_exhaustion() {
     let manager = RoomManager::for_test();
     let (media_transport, fake) = fake_adapter();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let room_id = room.uuid().to_owned();
     let user_id = UserId::Integer(1);

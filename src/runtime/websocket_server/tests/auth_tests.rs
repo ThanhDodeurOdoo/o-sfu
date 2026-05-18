@@ -326,7 +326,6 @@ async fn websocket_startup_send_timeout_releases_room_membership() {
     let room = create_room(
         &server,
         "issuer-startup-send-timeout",
-        Some(TEST_ROOM_KEY),
         CreateRoomQuery::default(),
     )
     .await;

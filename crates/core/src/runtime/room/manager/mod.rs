@@ -299,7 +299,7 @@ impl RoomManager {
     /// with no pending retry state
     ///
     /// the sweep is best effort. rooms removed or replaced while the directory
-    /// snapshot is being processed are skipped by [`Self::with_current_room`]
+    /// snapshot is being processed are skipped by [`Self::run_current_room_mutation`]
     ///
     /// this is cold-path lifecycle work. it must not be called from packet
     /// forwarding or transport hot loops
@@ -310,13 +310,14 @@ impl RoomManager {
                 continue;
             }
             let room_id = room.uuid().to_owned();
-            let removal_room_id = room_id.clone();
-            self.with_current_room(&room_id, |room| async move {
-                room.drain_cleanup_retries(media_transport).await;
-                if room.is_empty().await && !room.has_pending_cleanup_retries() {
-                    self.remove_entry_if_current(&removal_room_id, &room).await;
-                }
-            })
+            self.run_current_room_mutation(
+                &room_id,
+                |room| async move {
+                    room.drain_cleanup_retries(media_transport).await;
+                    room.is_empty().await && !room.has_pending_cleanup_retries()
+                },
+                |should_remove| *should_remove,
+            )
             .await;
         }
     }
