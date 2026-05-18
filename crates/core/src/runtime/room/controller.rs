@@ -558,8 +558,8 @@ pub struct RoomMediaCounts {
 ///
 /// `Room` owns immutable room definition plus the guarded mutable state needed to run
 /// membership, routing and recording for that room. Callers are expected to express
-/// room-level intents through this facade, while process-level lookup and lifecycle
-/// serialization stay in [`super::manager::RoomManager`].
+/// room-level intents through this facade, while process-level lookup and current-room
+/// liveness stay in [`super::manager::RoomManager`].
 ///
 /// The main invariant is that this facade keeps room state authoritative while
 /// transport work happens after the relevant locks are released. That is why it
@@ -884,11 +884,6 @@ impl Room {
             count,
             active_stream_counts,
         }
-    }
-
-    pub(crate) async fn media_counts(&self) -> RoomMediaCounts {
-        let state = self.state.read().await;
-        state.media_counts()
     }
 
     #[must_use]

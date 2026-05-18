@@ -1,9 +1,9 @@
-//! Process-global room lookup and per-room lifecycle serialization.
+//! Process-global room lookup and per-room lifecycle liveness.
 //!
 //! This module contain the boundary between "find or create the right room" and
-//! "run one room-level mutation at a time". It keeps the directory keyed by
-//! issuer, UUID, and instance id, and it re-checks pointer identity after
-//! taking each room's lifecycle lock so stale directory handles become no-ops.
+//! "run work only against a room that is still current". It keeps the directory
+//! keyed by issuer, UUID and instance id, and turns stale directory handles into
+//! no-ops before caller work runs.
 
 use std::{collections::BTreeSet, future::Future, sync::Arc};
 
@@ -12,8 +12,8 @@ use tokio::sync::RwLock;
 
 use super::{
     LocalRouterRuntimeContext, Room, RoomConfig, RoomJoinError, RoomManagerJoinError,
-    RoomMediaCounts, RoomRuntimePolicy, RoomUserStatsSnapshot, UserOutboundSender,
-    directory::{RoomDirectory, RoomDirectoryEntry},
+    RoomRuntimePolicy, RoomUserStatsSnapshot, UserOutboundSender,
+    directory::{RoomDirectory, RoomDirectoryEntry, RoomLifecycleLease},
     factory::{RoomCreationIntent, RoomFactory},
     placement::{RoomPlacementPlanner, WorkerLoadIndex},
 };
@@ -107,13 +107,15 @@ impl RuntimeRoomDirectorySnapshot {
     }
 }
 
-/// Process-global owner of live rooms keyed by issuer and UUID.
+/// process-global owner of live rooms keyed by issuer and UUID
 ///
-/// `RoomManager` keeps room creation idepotent by issuer and centralises
-/// room-level lifecycle serialization so concurrent HTTP and WebSocket tasks
-/// cannot overlap join, leave, disconnect and empty-room cleanup on the same
-/// room. Runtime entrypoints should go through this type instead of
-/// coordonating directory lookup and teardown themselves
+/// `RoomManager` keeps room creation idepotent by issuer and owns the current
+/// room directory
+/// lifecycle leases prevent empty-room removal from racing
+/// accepted work, while room state locks and transition methods own the actual
+/// membership ordering
+/// runtime entrypoints should go through this type instead
+/// of coordonating directory lookup and teardown themselves
 #[derive(Debug)]
 pub struct RoomManager {
     directory: RwLock<RoomDirectory>,
@@ -285,9 +287,9 @@ impl RoomManager {
 
     /// Joins a user through the current live room entry for `room_id`.
     ///
-    /// The join runs under the room lifecycle lock so it cannot overlap another
-    /// room-level mutation. On success this returns the locked room and its
-    /// new runtime connection id.
+    /// On success this returns the current room and its new runtime connection
+    /// id. The room state transition records live user and media deltas before
+    /// async transport effects run.
     ///
     /// # Errors
     ///
@@ -383,7 +385,7 @@ impl RoomManager {
         did_remove_active_session
     }
 
-    /// Disconnects a batch of users under one lifecycle lock acquisition.
+    /// Disconnects a batch of users through the current room entry.
     ///
     /// This is the bulk teardown path for room-level disconnects. The directory
     /// entry is removed afterward if the batch leaves the room empty.
@@ -407,25 +409,24 @@ impl RoomManager {
         };
     }
 
-    /// Runs `action` under the current entry's lifecycle lock.
+    /// Runs `action` only after acquiring a current-room lifecycle lease.
     ///
-    /// The helper snapshots the directory entry before locking, then checks
-    /// again after the lock is acquired that the same `Arc<Room>` is still
-    /// the current directory entry. That turns stale handles into `None`
-    /// instead of mutating a room that has already been removed or replaced.
+    /// The lease keeps empty-room removal from racing ahead of accepted work,
+    /// but no caller future runs while the lifecycle state is locked.
+    #[cfg(test)]
     pub(super) async fn with_current_room<T, F, Fut>(&self, room_id: &str, action: F) -> Option<T>
     where
         F: FnOnce(Arc<Room>) -> Fut,
         Fut: Future<Output = T>,
     {
-        let entry = self.entry(room_id).await?;
-        let room = entry.room();
-        let lifecycle_lock = entry.lifecycle_lock();
-        let _lifecycle_guard = lifecycle_lock.lock().await;
-        if !self.is_current_entry(room_id, &room).await {
-            return None;
+        let mutation = self.begin_current_room_mutation(room_id).await?;
+        let room = Arc::clone(&mutation.room);
+        let output = action(Arc::clone(&room)).await;
+        let room_can_be_removed = self.room_can_be_removed(&room).await;
+        if mutation.finish(false, room_can_be_removed) {
+            self.remove_entry_if_current(room_id, &room).await;
         }
-        Some(action(room).await)
+        Some(output)
     }
 
     async fn run_current_room_mutation<T, F, Fut, ShouldRemove>(
@@ -439,40 +440,41 @@ impl RoomManager {
         Fut: Future<Output = T>,
         ShouldRemove: FnOnce(&T) -> bool,
     {
-        self.with_current_room(room_id, |room| async move {
-            let user_count_before = room.user_count().await;
-            let media_counts_before = room.media_counts().await;
-            let output = action(Arc::clone(&room)).await;
-            self.finish_session_mutation(
-                room_id,
-                &room,
-                user_count_before,
-                media_counts_before,
-                should_remove_if_empty(&output),
-            )
+        let mutation = self.begin_current_room_mutation(room_id).await?;
+        let room = Arc::clone(&mutation.room);
+        let output = action(Arc::clone(&room)).await;
+        self.finish_session_mutation(room_id, mutation, should_remove_if_empty(&output))
             .await;
-            (room, output)
-        })
-        .await
+        Some((room, output))
     }
 
     async fn finish_session_mutation(
         &self,
         room_id: &str,
-        room: &Arc<Room>,
-        user_count_before: usize,
-        media_counts_before: RoomMediaCounts,
+        mutation: CurrentRoomMutation,
         remove_if_empty: bool,
     ) {
-        self.record_live_count_deltas(
-            user_count_before,
-            media_counts_before,
-            room.user_count().await,
-            room.media_counts().await,
-        );
-        if remove_if_empty && room.is_empty().await && !room.has_pending_cleanup_retries() {
-            self.remove_entry_if_current(room_id, room).await;
+        let room = Arc::clone(&mutation.room);
+        let room_can_be_removed = self.room_can_be_removed(&room).await;
+        if mutation.finish(remove_if_empty, room_can_be_removed) {
+            self.remove_entry_if_current(room_id, &room).await;
         }
+    }
+
+    async fn begin_current_room_mutation(&self, room_id: &str) -> Option<CurrentRoomMutation> {
+        let entry = self.entry(room_id).await?;
+        let lifecycle = entry.lifecycle();
+        let lease = lifecycle.begin()?;
+        let room = entry.room();
+        if self.is_current_entry(room_id, &room).await {
+            return Some(CurrentRoomMutation { room, lease });
+        }
+        lease.cancel();
+        None
+    }
+
+    async fn room_can_be_removed(&self, room: &Arc<Room>) -> bool {
+        room.is_empty().await && !room.has_pending_cleanup_retries()
     }
 
     async fn entry(&self, room_id: &str) -> Option<RoomDirectoryEntry> {
@@ -528,26 +530,26 @@ impl RoomManager {
             self.diagnostics.forget_room(room_id);
         }
     }
+}
 
-    fn record_live_count_deltas(
-        &self,
-        user_count_before: usize,
-        media_counts_before: RoomMediaCounts,
-        user_count_after: usize,
-        media_counts_after: RoomMediaCounts,
-    ) {
-        let before = i64::try_from(user_count_before).unwrap_or(i64::MAX);
-        let after = i64::try_from(user_count_after).unwrap_or(i64::MAX);
-        self.metrics.add_active_users(after.saturating_sub(before));
+/// accepted manager work against one current room entry
+///
+/// this bundles the room with the lease that must be finished after caller
+/// work runs, so removal coordination cannot be skipped by accident
+#[derive(Debug)]
+struct CurrentRoomMutation {
+    /// room pointer that was current when the lifecycle lease was accepted
+    room: Arc<Room>,
+    /// current-room lease that keeps empty-room removal waiting for this work
+    lease: RoomLifecycleLease,
+}
 
-        let before = i64::try_from(media_counts_before.publications).unwrap_or(i64::MAX);
-        let after = i64::try_from(media_counts_after.publications).unwrap_or(i64::MAX);
-        self.metrics
-            .add_active_publications(after.saturating_sub(before));
-
-        let before = i64::try_from(media_counts_before.subscriptions).unwrap_or(i64::MAX);
-        let after = i64::try_from(media_counts_after.subscriptions).unwrap_or(i64::MAX);
-        self.metrics
-            .add_active_subscriptions(after.saturating_sub(before));
+impl CurrentRoomMutation {
+    /// finish accepted room work and report whether this caller owns removal
+    ///
+    /// the caller computes `room_can_be_removed` after async effects finish so
+    /// cleanup retry state is observed at the final decision point
+    fn finish(self, remove_if_empty: bool, room_can_be_removed: bool) -> bool {
+        self.lease.finish(remove_if_empty, room_can_be_removed)
     }
 }
