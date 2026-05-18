@@ -110,9 +110,9 @@ pub(crate) async fn setup_fake_protocol_peers(
         .media_transport(MediaTransport::from_fake_transport(adapter))
         .spawn()
         .await?;
-    let room = create_room(&server, room_name, None, CreateRoomQuery::default()).await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), alice_user_id.clone())?;
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), bob_user_id.clone())?;
+    let room = create_room(&server, room_name, CreateRoomQuery::default()).await;
+    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), alice_user_id.clone())?;
+    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), bob_user_id.clone())?;
 
     let mut alice = ProtocolHarnessPeer::default();
     let mut bob = ProtocolHarnessPeer::default();
@@ -141,9 +141,9 @@ pub(crate) async fn setup_real_rtc_protocol_peers(
         .media_transport(build_real_rtc_media_transport())
         .spawn()
         .await?;
-    let room = create_room(&server, room_name, None, CreateRoomQuery::default()).await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), alice_user_id)?;
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), bob_user_id.clone())?;
+    let room = create_room(&server, room_name, CreateRoomQuery::default()).await;
+    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), alice_user_id)?;
+    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), bob_user_id.clone())?;
 
     let mut alice = ProtocolHarnessPeer::with_real_rtc_negotiation(alice_port)?;
     let mut bob = ProtocolHarnessPeer::with_real_rtc_negotiation(bob_port)?;
@@ -170,12 +170,11 @@ pub(crate) async fn setup_protocol_recovery_peers(
     let room = create_room(
         &server,
         "issuer-protocol-recovery",
-        None,
         CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), alice_user_id)?;
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), bob_user_id.clone())?;
+    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), alice_user_id)?;
+    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), bob_user_id.clone())?;
 
     let mut alice = ProtocolHarnessPeer::default();
     let mut bob = ProtocolHarnessPeer::default();

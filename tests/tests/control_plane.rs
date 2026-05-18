@@ -17,8 +17,7 @@ use o_sfu_protocol::{
     },
 };
 use o_sfu_tests::support::{
-    TEST_AUTH_KEY, TEST_ROOM_KEY, TestServer, create_room, disconnect_sessions_via_http,
-    metrics_text,
+    TEST_ROOM_KEY, TestServer, create_room, disconnect_sessions_via_http, metrics_text,
     protocol_harness::{
         ProtocolWebSocketClient, connect_protocol_pair, protocol_test_config,
         read_until_server_message,
@@ -39,7 +38,7 @@ async fn websocket_welcome_and_initial_offer_work_from_integration_test() {
     let Some(server) = server.ok() else {
         return;
     };
-    let room = create_room(&server, "issuer-a", Some(TEST_ROOM_KEY)).await;
+    let room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
     assert!(room.is_some());
     let Some(room) = room else {
         return;
@@ -79,7 +78,7 @@ async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details()
     let Some(server) = server.ok() else {
         return;
     };
-    let room = create_room(&server, "issuer-a", Some(TEST_ROOM_KEY)).await;
+    let room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
     assert!(room.is_some());
     let Some(room) = room else {
         return;
@@ -146,7 +145,7 @@ async fn websocket_offer_advertises_configured_public_ip_in_rtc_mode() {
     let Some(server) = server.ok() else {
         return;
     };
-    let room = create_room(&server, "issuer-public-ip", Some(TEST_ROOM_KEY)).await;
+    let room = create_room(&server, "issuer-public-ip", TEST_ROOM_KEY).await;
     assert!(room.is_some());
     let Some(room) = room else {
         return;
@@ -233,9 +232,9 @@ async fn room_creation_is_idempotent_by_issuer_from_integration_test() {
         return;
     };
 
-    let first = create_room(&server, "issuer-a", None).await;
-    let second = create_room(&server, "issuer-a", Some(TEST_ROOM_KEY)).await;
-    let third = create_room(&server, "issuer-b", None).await;
+    let first = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
+    let second = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
+    let third = create_room(&server, "issuer-b", TEST_ROOM_KEY).await;
     assert!(first.is_some());
     assert!(second.is_some());
     assert!(third.is_some());
@@ -289,13 +288,13 @@ async fn broadcast_reaches_other_user_from_integration_test() {
     let Some(server) = server.ok() else {
         return;
     };
-    let room = create_room(&server, "issuer-a", None).await;
+    let room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
     assert!(room.is_some());
     let Some(room) = room else {
         return;
     };
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(1));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(2));
+    let alice_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(1));
+    let bob_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(2));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -341,14 +340,14 @@ async fn websocket_slow_consumer_overflow_closes_only_slow_socket_from_integrati
     let Some(server) = server.ok() else {
         return;
     };
-    let room = create_room(&server, "issuer-slow-consumer-overflow", None).await;
+    let room = create_room(&server, "issuer-slow-consumer-overflow", TEST_ROOM_KEY).await;
     assert!(room.is_some());
     let Some(room) = room else {
         return;
     };
-    let slow_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(31));
-    let driver_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(32));
-    let witness_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(33));
+    let slow_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(31));
+    let driver_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(32));
+    let witness_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(33));
     assert!(slow_token.is_some());
     assert!(driver_token.is_some());
     assert!(witness_token.is_some());
@@ -415,13 +414,13 @@ async fn user_info_change_reaches_other_user_from_integration_test() {
     let Some(server) = server.ok() else {
         return;
     };
-    let room = create_room(&server, "issuer-a", None).await;
+    let room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
     assert!(room.is_some());
     let Some(room) = room else {
         return;
     };
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(1));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(2));
+    let alice_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(1));
+    let bob_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(2));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -461,13 +460,13 @@ async fn stats_reports_live_user_aggregates_from_integration_test() {
     let Some(server) = server.ok() else {
         return;
     };
-    let room = create_room(&server, "issuer-a", None).await;
+    let room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
     assert!(room.is_some());
     let Some(room) = room else {
         return;
     };
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(1));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(2));
+    let alice_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(1));
+    let bob_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(2));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -529,13 +528,13 @@ async fn room_full_and_last_disconnect_cleanup_are_observable_from_integration_t
     let Some(server) = server.ok() else {
         return;
     };
-    let first_room = create_room(&server, "issuer-a", None).await;
+    let first_room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
     assert!(first_room.is_some());
     let Some(first_room) = first_room else {
         return;
     };
-    let first_token = signed_connect_claims(TEST_AUTH_KEY, &first_room, UserId::Integer(1));
-    let second_token = signed_connect_claims(TEST_AUTH_KEY, &first_room, UserId::Integer(2));
+    let first_token = signed_connect_claims(TEST_ROOM_KEY, &first_room, UserId::Integer(1));
+    let second_token = signed_connect_claims(TEST_ROOM_KEY, &first_room, UserId::Integer(2));
     assert!(first_token.is_some());
     assert!(second_token.is_some());
     let (Some(first_token), Some(second_token)) = (first_token, second_token) else {
@@ -563,14 +562,14 @@ async fn room_full_and_last_disconnect_cleanup_are_observable_from_integration_t
     assert!(first_client.close().await.is_some());
     assert!(server.wait_for_room_absence(&first_room).await);
 
-    let second_room = create_room(&server, "issuer-a", None).await;
+    let second_room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
     assert!(second_room.is_some());
     let Some(second_room) = second_room else {
         return;
     };
     assert_ne!(first_room, second_room);
 
-    let third_token = signed_connect_claims(TEST_AUTH_KEY, &second_room, UserId::Integer(3));
+    let third_token = signed_connect_claims(TEST_ROOM_KEY, &second_room, UserId::Integer(3));
     assert!(third_token.is_some());
     let Some(third_token) = third_token else {
         return;
@@ -587,13 +586,13 @@ async fn disconnect_api_kicks_target_and_notifies_remaining_from_integration_tes
     let Some(server) = server.ok() else {
         return;
     };
-    let room = create_room(&server, "issuer-a", None).await;
+    let room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
     assert!(room.is_some());
     let Some(room) = room else {
         return;
     };
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(1));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(2));
+    let alice_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(1));
+    let bob_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(2));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -634,13 +633,13 @@ async fn replaced_socket_cannot_broadcast_or_change_info_from_integration_test()
     let Some(server) = server.ok() else {
         return;
     };
-    let room = create_room(&server, "issuer-replacement-guard", None).await;
+    let room = create_room(&server, "issuer-replacement-guard", TEST_ROOM_KEY).await;
     assert!(room.is_some());
     let Some(room) = room else {
         return;
     };
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(1));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(2));
+    let alice_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(1));
+    let bob_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(2));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -705,14 +704,19 @@ async fn numeric_string_user_ids_share_one_runtime_identity() {
     let Some(server) = server.ok() else {
         return;
     };
-    let room = create_room(&server, "issuer-runtime-user-id-normalization", None).await;
+    let room = create_room(
+        &server,
+        "issuer-runtime-user-id-normalization",
+        TEST_ROOM_KEY,
+    )
+    .await;
     assert!(room.is_some());
     let Some(room) = room else {
         return;
     };
-    let observer_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(7));
-    let numeric_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(42));
-    let string_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::String("42".to_owned()));
+    let observer_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(7));
+    let numeric_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(42));
+    let string_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::String("42".to_owned()));
     assert!(observer_token.is_some());
     assert!(numeric_token.is_some());
     assert!(string_token.is_some());
@@ -832,13 +836,13 @@ async fn replaced_socket_cannot_finish_a_queued_publish_negotiation_from_integra
     let Some(server) = server.ok() else {
         return;
     };
-    let room = create_room(&server, "issuer-replacement-queued-publish", None).await;
+    let room = create_room(&server, "issuer-replacement-queued-publish", TEST_ROOM_KEY).await;
     assert!(room.is_some());
     let Some(room) = room else {
         return;
     };
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(11));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(12));
+    let alice_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(11));
+    let bob_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(12));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -909,13 +913,13 @@ async fn bulk_disconnected_socket_cannot_broadcast_after_logical_removal() {
     let Some(server) = server.ok() else {
         return;
     };
-    let room = create_room(&server, "issuer-disconnect-guard", None).await;
+    let room = create_room(&server, "issuer-disconnect-guard", TEST_ROOM_KEY).await;
     assert!(room.is_some());
     let Some(room) = room else {
         return;
     };
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(21));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, &room, UserId::Integer(22));
+    let alice_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(21));
+    let bob_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(22));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -964,18 +968,18 @@ async fn bulk_disconnect_scopes_each_room_independently_from_integration_test() 
     let Some(server) = server.ok() else {
         return;
     };
-    let room_a = create_room(&server, "issuer-a", None).await;
-    let room_b = create_room(&server, "issuer-b", None).await;
+    let room_a = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
+    let room_b = create_room(&server, "issuer-b", TEST_ROOM_KEY).await;
     assert!(room_a.is_some());
     assert!(room_b.is_some());
     let (Some(room_a), Some(room_b)) = (room_a, room_b) else {
         return;
     };
 
-    let a_keep_token = signed_connect_claims(TEST_AUTH_KEY, &room_a, UserId::Integer(1));
-    let a_drop_token = signed_connect_claims(TEST_AUTH_KEY, &room_a, UserId::Integer(2));
-    let b_drop_token = signed_connect_claims(TEST_AUTH_KEY, &room_b, UserId::Integer(1));
-    let b_keep_token = signed_connect_claims(TEST_AUTH_KEY, &room_b, UserId::Integer(2));
+    let a_keep_token = signed_connect_claims(TEST_ROOM_KEY, &room_a, UserId::Integer(1));
+    let a_drop_token = signed_connect_claims(TEST_ROOM_KEY, &room_a, UserId::Integer(2));
+    let b_drop_token = signed_connect_claims(TEST_ROOM_KEY, &room_b, UserId::Integer(1));
+    let b_keep_token = signed_connect_claims(TEST_ROOM_KEY, &room_b, UserId::Integer(2));
     assert!(a_keep_token.is_some());
     assert!(a_drop_token.is_some());
     assert!(b_drop_token.is_some());
@@ -1064,14 +1068,14 @@ async fn mismatched_explicit_room_id_is_rejected_from_integration_test() {
     let Some(server) = server.ok() else {
         return;
     };
-    let first_room = create_room(&server, "issuer-a", None).await;
-    let second_room = create_room(&server, "issuer-b", None).await;
+    let first_room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
+    let second_room = create_room(&server, "issuer-b", TEST_ROOM_KEY).await;
     assert!(first_room.is_some());
     assert!(second_room.is_some());
     let (Some(first_room), Some(second_room)) = (first_room, second_room) else {
         return;
     };
-    let token = signed_connect_claims(TEST_AUTH_KEY, &first_room, UserId::Integer(3));
+    let token = signed_connect_claims(TEST_ROOM_KEY, &first_room, UserId::Integer(3));
     assert!(token.is_some());
     let Some(token) = token else {
         return;

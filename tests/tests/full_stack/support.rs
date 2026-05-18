@@ -794,8 +794,8 @@ pub(super) async fn connect_two_isolated_audio_flows(
     ProtocolFakePeer,
     ProtocolFakePeer,
 )> {
-    let room_a = create_room(server, "issuer-topology-a", Some(TEST_ROOM_KEY)).await?;
-    let room_b = create_room(server, "issuer-topology-b", Some(TEST_ROOM_KEY)).await?;
+    let room_a = create_room(server, "issuer-topology-a", TEST_ROOM_KEY).await?;
+    let room_b = create_room(server, "issuer-topology-b", TEST_ROOM_KEY).await?;
 
     let publisher_a =
         connect_fake_peer(server, &room_a, UserId::Integer(90), TEST_ROOM_KEY).await?;

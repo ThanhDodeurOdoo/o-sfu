@@ -29,11 +29,11 @@ pub(crate) struct RoomCreationIntent {
     /// Compatibility-facing room identity used by manager lookup and the
     /// room definition.
     issuer: String,
-    /// Optional room key captured from the first create request.
+    /// Room key captured from the first create request.
     ///
     /// Later calls for the same issuer reuse the already-created room, so
     /// this value is immutable for the room lifetime.
-    key: Option<String>,
+    key: String,
     /// Per-room compatibility knobs attached to the created room.
     ///
     /// This is copied into the room definition once. Repeated create calls
@@ -47,10 +47,10 @@ impl RoomCreationIntent {
     /// This is cold-path only. Cloning the small create parameters keeps the
     /// factory independent from HTTP or websocket request lifetimes.
     #[must_use]
-    pub(crate) fn new(issuer: &str, key: Option<&str>, config: &RoomConfig) -> Self {
+    pub(crate) fn new(issuer: &str, key: &str, config: &RoomConfig) -> Self {
         Self {
             issuer: issuer.to_owned(),
-            key: key.map(str::to_owned),
+            key: key.to_owned(),
             config: config.clone(),
         }
     }

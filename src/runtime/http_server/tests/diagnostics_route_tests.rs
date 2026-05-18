@@ -165,7 +165,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
         .room_manager
         .serve_room(
             "issuer-a",
-            None,
+            TEST_ROOM_KEY,
             &RoomConfig::default(),
             Some("203.0.113.10"),
         )
@@ -610,7 +610,7 @@ async fn diagnostics_user_lookup_reports_ambiguous_matches() {
         .room_manager
         .serve_room(
             "issuer-a",
-            None,
+            TEST_ROOM_KEY,
             &RoomConfig::default(),
             Some("203.0.113.10"),
         )
@@ -619,7 +619,7 @@ async fn diagnostics_user_lookup_reports_ambiguous_matches() {
         .room_manager
         .serve_room(
             "issuer-b",
-            None,
+            TEST_ROOM_KEY,
             &RoomConfig::default(),
             Some("203.0.113.11"),
         )
@@ -699,7 +699,7 @@ async fn diagnostics_user_lookup_survives_user_replacement_without_conflict() {
         .room_manager
         .serve_room(
             "issuer-replacement",
-            None,
+            TEST_ROOM_KEY,
             &RoomConfig::default(),
             Some("203.0.113.12"),
         )
@@ -754,7 +754,7 @@ async fn diagnostics_user_lookup_drops_room_teardown_entries() {
         .room_manager
         .serve_room(
             "issuer-teardown",
-            None,
+            TEST_ROOM_KEY,
             &RoomConfig::default(),
             Some("203.0.113.13"),
         )

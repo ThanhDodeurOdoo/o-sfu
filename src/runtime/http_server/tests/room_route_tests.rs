@@ -23,7 +23,7 @@ async fn room_requires_authorization_header() {
 
 #[tokio::test]
 async fn room_rejects_unknown_authorization_scheme() {
-    let token = signed_room_claims(Some("issuer-a"), None);
+    let token = signed_room_claims(Some("issuer-a"), Some(TEST_ROOM_KEY));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -130,18 +130,16 @@ async fn room_requires_issuer_claim() {
 }
 
 #[tokio::test]
-async fn room_rejects_recording_without_key() {
+async fn room_rejects_missing_key() {
     let token = signed_room_claims(Some("issuer-a"), None);
     assert!(token.is_some());
     let Some(token) = token else {
         return;
     };
     let request = build_request(
-        Request::get(format!(
-            "{CHANNEL_PATH}?recordingAddress=https://record.example.com"
-        ))
-        .header(header::HOST, "sfu.example.com")
-        .header(header::AUTHORIZATION, format!("Bearer {token}")),
+        Request::get(CHANNEL_PATH)
+            .header(header::HOST, "sfu.example.com")
+            .header(header::AUTHORIZATION, format!("Bearer {token}")),
         Body::empty(),
     );
     assert!(request.is_some());
@@ -196,7 +194,7 @@ async fn room_returns_uuid_and_request_base_url() {
 
 #[tokio::test]
 async fn room_ignores_forwarded_headers_when_proxy_trust_is_disabled() {
-    let token = signed_room_claims(Some("issuer-a"), None);
+    let token = signed_room_claims(Some("issuer-a"), Some(TEST_ROOM_KEY));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -258,7 +256,7 @@ async fn room_ignores_forwarded_headers_when_proxy_trust_is_disabled() {
 
 #[tokio::test]
 async fn room_uses_forwarded_headers_when_proxy_trust_is_enabled() {
-    let token = signed_room_claims(Some("issuer-a"), None);
+    let token = signed_room_claims(Some("issuer-a"), Some(TEST_ROOM_KEY));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -339,7 +337,7 @@ async fn room_route_updates_metrics_for_unauthorized_and_success_paths() {
     };
     assert_eq!(unauthorized_response.status(), StatusCode::UNAUTHORIZED);
 
-    let token = signed_room_claims(Some("issuer-a"), None);
+    let token = signed_room_claims(Some("issuer-a"), Some(TEST_ROOM_KEY));
     assert!(token.is_some());
     let Some(token) = token else {
         return;

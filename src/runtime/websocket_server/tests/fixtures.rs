@@ -45,7 +45,7 @@ pub(super) use crate::{
         },
         metrics::RuntimeMetrics,
         room::{Room, RoomConfig, RoomManager},
-        test_support::{RuntimeMetricsSnapshotTestExt, RuntimeTestBuilder, TEST_AUTH_KEY},
+        test_support::{RuntimeMetricsSnapshotTestExt, RuntimeTestBuilder},
     },
 };
 
@@ -279,12 +279,11 @@ pub(super) fn signed_legacy_channel_scoped_connect_claims(
 pub(super) async fn create_room(
     server: &TestServer,
     issuer: &str,
-    key: Option<&str>,
     config: RoomConfig,
 ) -> Arc<Room> {
     server
         .room_manager
-        .serve_room(issuer, key, &config, None)
+        .serve_room(issuer, TEST_ROOM_KEY, &config, None)
         .await
 }
 
@@ -350,7 +349,7 @@ pub(super) async fn setup_negotiated_session(
     room: &Arc<Room>,
     user_id: UserId,
 ) -> Option<TestWebSocket> {
-    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), user_id)?;
+    let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), user_id)?;
     let (mut websocket, _welcome) = authenticate_and_read_welcome(server, &token).await?;
     complete_initial_negotiation(&mut websocket, "v=0\r\ns=test-answer\r\n").await?;
     Some(websocket)

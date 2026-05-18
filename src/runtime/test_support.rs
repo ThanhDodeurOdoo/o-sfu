@@ -21,6 +21,7 @@ use crate::{
 };
 
 pub(super) const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
+pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
 
 #[derive(Default)]
 pub(super) struct DurationHistogramSnapshot {

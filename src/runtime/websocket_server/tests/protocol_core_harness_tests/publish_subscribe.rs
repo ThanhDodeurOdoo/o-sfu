@@ -10,12 +10,11 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
     let room = create_room(
         &server,
         "issuer-protocol-tracks",
-        None,
         CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(51));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(52));
+    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(51));
+    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(52));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -112,12 +111,11 @@ async fn protocol_core_publish_round_trips_through_real_server_user_protocol() {
     let room = create_room(
         &server,
         "issuer-protocol-publish",
-        None,
         CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(53));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(54));
+    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(53));
+    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(54));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -200,12 +198,11 @@ async fn protocol_core_publish_round_trips_through_real_rtc_server_user_protocol
     let room = create_room(
         &server,
         "issuer-protocol-rtc-publish",
-        None,
         CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(71));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(72));
+    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(71));
+    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(72));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -308,11 +305,10 @@ async fn protocol_handshake_uses_answer_derived_client_capabilities_for_user_sta
     let room = create_room(
         &server,
         "issuer-protocol-rtc-capabilities",
-        None,
         CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(75));
+    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(75));
     assert!(alice_token.is_some());
     let Some(alice_token) = alice_token else {
         return;

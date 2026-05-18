@@ -383,13 +383,13 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
 }
 
 pub async fn spawn_room_server(issuer: &str) -> Option<TestRoomServer> {
-    spawn_room_server_with_config(test_config(1_000, 10), issuer, Some(TEST_ROOM_KEY)).await
+    spawn_room_server_with_config(test_config(1_000, 10), issuer, TEST_ROOM_KEY).await
 }
 
 pub async fn spawn_room_server_with_config(
     config: Config,
     issuer: &str,
-    key: Option<&str>,
+    key: &str,
 ) -> Option<TestRoomServer> {
     let server = spawn_test_server(config).await.ok()?;
     let room_id = create_room(&server, issuer, key).await?;
@@ -450,14 +450,15 @@ pub fn signed_connect_claims(key: &str, room_id: &str, user_id: UserId) -> Optio
     .ok()
 }
 
-pub fn signed_room_claims(issuer: &str, key: Option<&str>) -> Option<String> {
+#[must_use]
+pub fn signed_room_claims(issuer: &str, key: &str) -> Option<String> {
     sign(
         &HttpRoomClaims {
             registered: RegisteredJwtClaims {
                 iss: Some(issuer.to_owned()),
                 ..RegisteredJwtClaims::default()
             },
-            key: key.map(str::to_owned),
+            key: Some(key.to_owned()),
         },
         TEST_AUTH_KEY,
     )
@@ -476,7 +477,7 @@ pub fn signed_disconnect_claims(user_ids_by_room: BTreeMap<String, Vec<UserId>>)
     .ok()
 }
 
-pub async fn create_room(server: &TestServer, issuer: &str, key: Option<&str>) -> Option<String> {
+pub async fn create_room(server: &TestServer, issuer: &str, key: &str) -> Option<String> {
     let token = signed_room_claims(issuer, key)?;
     let response = reqwest::Client::new()
         .get(format!("{}{CHANNEL_PATH}", server.http_base_url()))

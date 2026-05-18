@@ -29,7 +29,7 @@ pub(super) use crate::{
         room::{JoinUserRequest, RoomConfig},
         test_support::{
             RuntimeMetricsSnapshotTestExt, RuntimeTestBuilder, RuntimeTestState, TEST_AUTH_KEY,
-            test_outbound_sender,
+            TEST_ROOM_KEY, test_outbound_sender,
         },
     },
 };

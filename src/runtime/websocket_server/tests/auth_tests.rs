@@ -229,13 +229,7 @@ async fn websocket_authenticates_with_room_key_and_sends_welcome_payload() {
     let Some(server) = server else {
         return;
     };
-    let room = create_room(
-        &server,
-        "issuer-a",
-        Some(TEST_ROOM_KEY),
-        CreateRoomQuery::default(),
-    )
-    .await;
+    let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
     let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(7));
     assert!(token.is_some());
     let Some(token) = token else {
@@ -291,8 +285,8 @@ async fn websocket_pre_auth_permit_is_released_after_auth_success() {
     let Some(server) = server else {
         return;
     };
-    let room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
-    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(77));
+    let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
+    let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(77));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -318,13 +312,7 @@ async fn websocket_authenticates_legacy_room_scoped_token_with_explicit_room_id(
     let Some(server) = server else {
         return;
     };
-    let room = create_room(
-        &server,
-        "issuer-a",
-        Some(TEST_ROOM_KEY),
-        CreateRoomQuery::default(),
-    )
-    .await;
+    let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
     let token =
         signed_legacy_channel_scoped_connect_claims(TEST_ROOM_KEY, UserId::Integer(17), None);
     assert!(token.is_some());
@@ -348,14 +336,39 @@ async fn websocket_rejects_explicit_room_id_that_disagrees_with_claims() {
     let Some(server) = server else {
         return;
     };
-    let first_room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
-    let second_room = create_room(&server, "issuer-b", None, CreateRoomQuery::default()).await;
-    let token = signed_connect_claims(TEST_AUTH_KEY, first_room.uuid(), UserId::Integer(8));
+    let first_room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
+    let second_room = create_room(&server, "issuer-b", CreateRoomQuery::default()).await;
+    let token = signed_connect_claims(TEST_ROOM_KEY, first_room.uuid(), UserId::Integer(8));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
     };
     let authenticated = authenticate_with_room(&server, &token, Some(second_room.uuid())).await;
+    assert!(authenticated.is_some());
+    let Some(mut websocket) = authenticated else {
+        return;
+    };
+
+    assert_eq!(
+        read_close_code(&mut websocket).await,
+        Some(CloseCode::Library(4106)),
+    );
+}
+
+#[tokio::test]
+async fn websocket_rejects_explicit_room_token_signed_with_another_key() {
+    let server = TestServerBuilder::new().spawn().await;
+    assert!(server.is_some());
+    let Some(server) = server else {
+        return;
+    };
+    let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
+    let token = signed_connect_claims("b3RoZXItcm9vbS1rZXk=", room.uuid(), UserId::Integer(19));
+    assert!(token.is_some());
+    let Some(token) = token else {
+        return;
+    };
+    let authenticated = authenticate_with_room(&server, &token, Some(room.uuid())).await;
     assert!(authenticated.is_some());
     let Some(mut websocket) = authenticated else {
         return;
@@ -374,8 +387,9 @@ async fn websocket_rejects_oversized_auth_token_with_auth_failure() {
     let Some(server) = server else {
         return;
     };
+    let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
     let token = "a".repeat(MAX_JWT_TOKEN_BYTES + 1);
-    let authenticated = authenticate_with_jwt(&server, &token).await;
+    let authenticated = authenticate_with_room(&server, &token, Some(room.uuid())).await;
     assert!(authenticated.is_some());
     let Some(mut websocket) = authenticated else {
         return;
@@ -388,14 +402,14 @@ async fn websocket_rejects_oversized_auth_token_with_auth_failure() {
 }
 
 #[tokio::test]
-async fn websocket_accepts_global_key_without_explicit_room_id() {
+async fn websocket_authenticates_room_key_token_without_explicit_room_id() {
     let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
     };
-    let room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
-    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(9));
+    let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
+    let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(9));
     assert!(token.is_some());
     let Some(token) = token else {
         return;

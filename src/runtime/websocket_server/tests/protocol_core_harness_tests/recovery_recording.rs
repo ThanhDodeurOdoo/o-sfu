@@ -14,12 +14,11 @@ async fn protocol_core_subscribe_updates_consumer_activity() {
     let room = create_room(
         &server,
         "issuer-protocol-subscribe",
-        None,
         CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(61));
-    let bob_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(62));
+    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(61));
+    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(62));
     assert!(alice_token.is_some());
     assert!(bob_token.is_some());
     let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
@@ -366,7 +365,6 @@ async fn protocol_core_recording_requests_resolve_as_unsupported_without_backend
     let room = create_room(
         &server,
         "issuer-protocol-recording",
-        None,
         CreateRoomQuery {
             recording_address: Some("https://record.example.com".to_owned()),
             ..CreateRoomQuery::default()

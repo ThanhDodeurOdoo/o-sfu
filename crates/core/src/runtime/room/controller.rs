@@ -648,7 +648,7 @@ impl Room {
         runtime_context: &RoomRuntimeContext,
         runtime_policy: RoomRuntimePolicy,
         issuer: String,
-        key: Option<String>,
+        key: String,
         config: RoomConfig,
         diagnostics: Arc<DiagnosticsStore>,
         packet_sink_registry: Arc<RoomPacketSinkRegistry>,
@@ -787,13 +787,13 @@ impl Room {
     }
 
     #[must_use]
-    /// Optional room key configured at room creation time.
+    /// Room key configured at room creation time.
     ///
     /// This is preserved as immutable room metadata and can later be used by
     /// control-plane or permission flows that need room-scoped secrets
     ///
     /// The room itself does not reinterpret or rotate this value.
-    pub fn key(&self) -> Option<&str> {
+    pub fn key(&self) -> &str {
         self.definition.key()
     }
 

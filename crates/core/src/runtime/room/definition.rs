@@ -32,11 +32,11 @@ const fn persistent_recording_backend_available() -> bool {
 struct RoomIdentity {
     uuid: String,
     issuer: String,
-    key: Option<String>,
+    key: String,
 }
 
 impl RoomIdentity {
-    fn new(issuer: String, key: Option<String>) -> Self {
+    fn new(issuer: String, key: String) -> Self {
         Self {
             uuid: Uuid::new_v4().to_string(),
             issuer,
@@ -64,7 +64,7 @@ impl RoomDefinition {
         runtime_context: &RoomRuntimeContext,
         runtime_policy: &RoomRuntimePolicy,
         issuer: String,
-        key: Option<String>,
+        key: String,
         config: RoomConfig,
     ) -> Self {
         Self {
@@ -87,8 +87,8 @@ impl RoomDefinition {
     }
 
     #[must_use]
-    pub(crate) fn key(&self) -> Option<&str> {
-        self.identity.key.as_deref()
+    pub(crate) fn key(&self) -> &str {
+        &self.identity.key
     }
 
     #[must_use]
