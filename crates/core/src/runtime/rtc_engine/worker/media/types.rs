@@ -25,6 +25,7 @@ pub struct AddSendMediaRequest<'a> {
     pub consumer_rtp_parameters: &'a RouterRtpParameters,
 }
 
+#[derive(Clone, Copy)]
 pub struct ConsumerPacketGateRequest<'a> {
     pub route: &'a TransportConsumerRoute,
     pub packet_gate: PacketLayerGate,

@@ -25,7 +25,7 @@ use str0m::media::Rid;
 /// they do not carry room policy meaning
 /// by the time a gate reaches this file, "selected thumbnail quality" or
 /// "active speaker audio policy" has already been projected into layer facts
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(in crate::runtime::rtc_engine) enum PacketLayerGate {
     /// allow every packet layer for this route
     #[default]
@@ -183,8 +183,8 @@ pub(in crate::runtime::rtc_engine) fn aggregate_packet_gates<'a>(
     let mut aggregate = None;
     for packet_gate in packet_gates {
         aggregate = Some(aggregate.map_or_else(
-            || packet_gate.clone(),
-            |current| union_packet_gates(current, packet_gate.clone()),
+            || *packet_gate,
+            |current| union_packet_gates(current, *packet_gate),
         ));
         if matches!(aggregate.as_ref(), Some(PacketLayerGate::Open)) {
             return aggregate;

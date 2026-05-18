@@ -126,6 +126,73 @@ fn route_control_combines_local_and_remote_target_gates() {
 }
 
 #[test]
+fn route_control_refreshes_source_gate_after_relay_gate_removal() {
+    let mut state = RouteControlState::default();
+    let source_transport_media_id = TransportMediaId::new(121);
+    state.set_local_packet_gate(
+        source_transport_media_id,
+        Some(PacketLayerGate::Rid("hi".into())),
+    );
+    state.set_relay_packet_gate(
+        source_transport_media_id,
+        RelayTargetId::new(1),
+        PacketLayerGate::Rid("lo".into()),
+    );
+
+    assert_eq!(
+        state.effective_packet_gate(source_transport_media_id),
+        Some(PacketLayerGate::Open)
+    );
+
+    state.forget_relay_packet_gate(source_transport_media_id, RelayTargetId::new(1));
+
+    assert_eq!(
+        state.effective_packet_gate(source_transport_media_id),
+        Some(PacketLayerGate::Rid("hi".into()))
+    );
+    assert_eq!(
+        state.decide_packet_route(
+            source_transport_media_id,
+            PacketLayerMetadata::new(Some("lo".into()), None)
+        ),
+        PacketRouteDecision::Drop
+    );
+}
+
+#[test]
+fn route_control_refreshes_source_gate_after_local_gate_clear() {
+    let mut state = RouteControlState::default();
+    let source_transport_media_id = TransportMediaId::new(122);
+    state.set_local_packet_gate(
+        source_transport_media_id,
+        Some(PacketLayerGate::Rid("hi".into())),
+    );
+    state.set_relay_packet_gate(
+        source_transport_media_id,
+        RelayTargetId::new(1),
+        PacketLayerGate::Rid("hi".into()),
+    );
+
+    state.set_local_packet_gate(source_transport_media_id, None);
+
+    assert_eq!(
+        state.effective_packet_gate(source_transport_media_id),
+        Some(PacketLayerGate::Rid("hi".into()))
+    );
+
+    state.forget_relay_packet_gate(source_transport_media_id, RelayTargetId::new(1));
+
+    assert_eq!(state.effective_packet_gate(source_transport_media_id), None);
+    assert_eq!(
+        state.decide_packet_route(
+            source_transport_media_id,
+            PacketLayerMetadata::new(Some("lo".into()), None)
+        ),
+        PacketRouteDecision::Forward
+    );
+}
+
+#[test]
 fn route_control_transport_audio_policy_blocks_silent_sources() {
     let mut state = RouteControlState::default();
     let source_transport_media_id = TransportMediaId::new(22);
