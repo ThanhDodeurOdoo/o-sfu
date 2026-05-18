@@ -16,7 +16,7 @@ use crate::{
 async fn join_user_enforces_capacity() {
     let manager = RoomManager::for_test_with_admission_policy(RoomAdmissionPolicy::new(1));
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (tx1, _rx1) = test_sender();
     let result = room
@@ -39,7 +39,7 @@ async fn join_user_enforces_capacity() {
 async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
     let manager = RoomManager::for_test_with_admission_policy(RoomAdmissionPolicy::new(1));
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (tx1, mut rx1) = test_sender();
     let first_connection = room
@@ -105,7 +105,7 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
 async fn leave_user_sends_departure_to_remaining_peers() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (tx1, mut rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
@@ -133,7 +133,7 @@ async fn leave_user_sends_departure_to_remaining_peers() {
 async fn join_user_notifies_existing_peers_with_user_joined() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let media_transport = MediaTransport::fake_for_testing();
     let (tx1, mut rx1) = test_sender();
@@ -173,7 +173,7 @@ async fn join_user_notifies_existing_peers_with_user_joined() {
 async fn replacing_a_user_notifies_remaining_peers() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (tx1, mut alice_rx) = test_sender();
     let (tx2, mut bob_old_rx) = test_sender();
@@ -199,7 +199,7 @@ async fn replacing_a_user_notifies_remaining_peers() {
 async fn replacing_a_user_runtime_emits_departure_then_join_for_existing_peers() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let media_transport = MediaTransport::fake_for_testing();
     let (tx1, mut alice_rx) = test_sender();
@@ -456,7 +456,7 @@ async fn media_cleanup_failure_retries_until_success() {
 async fn user_close_failure_retries_until_success() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (media_transport, fake) = fake_adapter();
     let (tx, _rx) = test_sender();
@@ -540,7 +540,7 @@ async fn manager_keeps_empty_room_until_cleanup_retry_finishes() {
         },
     );
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (media_transport, fake) = fake_adapter();
     let (tx, _rx) = test_sender();
@@ -615,7 +615,7 @@ async fn state_only_cleanup_does_not_enqueue_transport_retry() {
 async fn stale_negotiation_callbacks_do_not_ready_a_replaced_user() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (media_transport, _fake) = fake_adapter();
     let (first_connection, second_connection) = join_same_user_twice(&room).await;
@@ -776,7 +776,7 @@ struct StaleRefreshScenario {
 async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (media_transport, fake) = fake_adapter();
     let (publisher_tx, mut publisher_rx) = test_sender();
@@ -849,7 +849,7 @@ async fn setup_stale_refresh_scenario() -> StaleRefreshScenario {
 async fn broadcast_reaches_all_except_sender() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (tx1, mut rx1) = test_sender();
     let (tx2, mut rx2) = test_sender();
@@ -912,7 +912,7 @@ async fn outbound_receiver_drains_queued_messages_before_closure() {
 async fn outbound_queue_overflow_marks_slow_consumer() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let metrics = Arc::new(RuntimeMetrics::default());
     let (slow_tx, mut slow_rx) = UserOutboundSender::channel(1, Arc::clone(&metrics));
@@ -967,7 +967,7 @@ async fn outbound_queue_overflow_marks_slow_consumer() {
 async fn outbound_queue_byte_overflow_marks_slow_consumer() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let metrics = Arc::new(RuntimeMetrics::default());
     let limits = UserOutboundQueueLimits::new(16, 1_300);
@@ -1027,7 +1027,7 @@ async fn outbound_queue_byte_overflow_marks_slow_consumer() {
 async fn broadcast_rejects_payloads_above_room_limit() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (sender_tx, _sender_rx) = test_sender();
     let (receiver_tx, mut receiver_rx) = test_sender();
@@ -1070,7 +1070,7 @@ async fn broadcast_rejects_payloads_above_room_limit() {
 async fn full_room_large_broadcast_reuses_shared_payload_storage() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let mut receivers = Vec::new();
     for user_index in 1..=100 {
@@ -1136,7 +1136,7 @@ async fn full_room_large_broadcast_reuses_shared_payload_storage() {
 async fn update_user_info_broadcasts_to_all() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let media_transport = MediaTransport::fake_for_testing();
     let (tx1, mut rx1) = test_sender();
@@ -1187,7 +1187,7 @@ async fn update_user_info_broadcasts_to_all() {
 async fn update_user_info_with_refresh_sends_full_snapshot() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let media_transport = MediaTransport::fake_for_testing();
     let (tx1, mut rx1) = test_sender();
@@ -1238,7 +1238,7 @@ async fn update_user_info_with_refresh_sends_full_snapshot() {
 async fn disconnect_users_kicks_targets_and_notifies_remaining() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (tx1, mut rx1) = test_sender();
     let (tx2, mut rx2) = test_sender();
@@ -1288,7 +1288,7 @@ async fn disconnect_users_kicks_targets_and_notifies_remaining() {
 async fn disconnect_users_target_only_the_active_replaced_user() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (tx1, mut rx1) = test_sender();
     let (tx2, mut rx2) = test_sender();
@@ -1326,7 +1326,7 @@ async fn disconnect_users_target_only_the_active_replaced_user() {
 async fn room_maps_string_user_ids_into_router_users() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (tx, _rx) = test_sender();
     let joined = room
@@ -1361,7 +1361,7 @@ async fn room_maps_string_user_ids_into_router_users() {
 async fn room_keeps_user_permissions_above_router_state() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let permissions = UserPermissions {
         transcription: Some(true),

@@ -215,7 +215,7 @@ test("load-triggered spillover relays VP8 camera between real browsers", async (
 
         await connectPeer(publisher, {
             channelUuid,
-            jwt: createConnectToken(channelUuid, PUBLISHER_SESSION_ID, server.authKey),
+            jwt: createConnectToken(channelUuid, PUBLISHER_SESSION_ID),
             url: server.wsUrl
         });
         await expect.poll(async () => (await peerSnapshot(publisher)).state).toBe("connected");
@@ -228,7 +228,7 @@ test("load-triggered spillover relays VP8 camera between real browsers", async (
 
         await connectPeer(subscriber, {
             channelUuid,
-            jwt: createConnectToken(channelUuid, SUBSCRIBER_SESSION_ID, server.authKey),
+            jwt: createConnectToken(channelUuid, SUBSCRIBER_SESSION_ID),
             url: server.wsUrl
         });
         await expect.poll(async () => (await peerSnapshot(subscriber)).state).toBe("connected");
@@ -298,12 +298,12 @@ test("H264-only live publish applies RID simulcast and renders when supported", 
 
         await connectPeer(publisher, {
             channelUuid,
-            jwt: createConnectToken(channelUuid, PUBLISHER_SESSION_ID, server.authKey),
+            jwt: createConnectToken(channelUuid, PUBLISHER_SESSION_ID),
             url: server.wsUrl
         });
         await connectPeer(subscriber, {
             channelUuid,
-            jwt: createConnectToken(channelUuid, SUBSCRIBER_SESSION_ID, server.authKey),
+            jwt: createConnectToken(channelUuid, SUBSCRIBER_SESSION_ID),
             url: server.wsUrl
         });
 
@@ -373,7 +373,7 @@ test("live browser negotiation keeps RTX pairs only for eligible optional codecs
         const peer = await createPeerPage(context);
         await connectPeer(peer, {
             channelUuid,
-            jwt: createConnectToken(channelUuid, 77, server.authKey),
+            jwt: createConnectToken(channelUuid, 77),
             url: server.wsUrl
         });
 

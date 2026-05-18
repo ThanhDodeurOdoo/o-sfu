@@ -149,7 +149,7 @@ impl RoomManager {
     pub async fn serve_room(
         &self,
         issuer: &str,
-        key: Option<&str>,
+        key: &str,
         config: &RoomConfig,
         remote_address: Option<&str>,
     ) -> Arc<Room> {

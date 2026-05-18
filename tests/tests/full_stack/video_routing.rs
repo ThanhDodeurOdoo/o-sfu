@@ -206,7 +206,7 @@ async fn fake_rtc_peers_forward_h264_high_rid_idr_without_browsers() {
     let mut config = test_config(1_000, 10);
     config.codecs.flags = MediaCodecFlags::default().with_vp8(false).with_h264(true);
     let room_server =
-        spawn_room_server_with_config(config, "issuer-h264-synthetic", Some(TEST_ROOM_KEY)).await;
+        spawn_room_server_with_config(config, "issuer-h264-synthetic", TEST_ROOM_KEY).await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
         return;
@@ -263,8 +263,7 @@ async fn fake_rtc_h264_selected_rid_requires_idr_before_forwarding() {
     let mut config = test_config(1_000, 10);
     config.codecs.flags = MediaCodecFlags::default().with_vp8(false).with_h264(true);
     let room_server =
-        spawn_room_server_with_config(config, "issuer-h264-selected-rid-idr", Some(TEST_ROOM_KEY))
-            .await;
+        spawn_room_server_with_config(config, "issuer-h264-selected-rid-idr", TEST_ROOM_KEY).await;
     assert!(room_server.is_some());
     let Some(room_server) = room_server else {
         return;

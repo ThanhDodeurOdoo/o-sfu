@@ -14,8 +14,8 @@ async fn websocket_sends_ping_frames_and_accepts_pongs() {
     let Some(server) = server else {
         return;
     };
-    let room = create_room(&server, "issuer-ping", None, CreateRoomQuery::default()).await;
-    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(410));
+    let room = create_room(&server, "issuer-ping", CreateRoomQuery::default()).await;
+    let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(410));
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -63,15 +63,9 @@ async fn websocket_closes_when_pong_times_out() {
     let Some(server) = server else {
         return;
     };
-    let room = create_room(
-        &server,
-        "issuer-ping-timeout",
-        None,
-        CreateRoomQuery::default(),
-    )
-    .await;
+    let room = create_room(&server, "issuer-ping-timeout", CreateRoomQuery::default()).await;
     let user_id = UserId::Integer(411);
-    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), user_id.clone());
+    let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), user_id.clone());
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -124,15 +118,9 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
     let Some(server) = server else {
         return;
     };
-    let room = create_room(
-        &server,
-        "issuer-rtc-disconnect",
-        None,
-        CreateRoomQuery::default(),
-    )
-    .await;
+    let room = create_room(&server, "issuer-rtc-disconnect", CreateRoomQuery::default()).await;
     let user_id = UserId::Integer(412);
-    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), user_id.clone());
+    let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), user_id.clone());
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -198,12 +186,11 @@ async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiat
     let room = create_room(
         &server,
         "issuer-rtc-disconnect-negotiating",
-        None,
         CreateRoomQuery::default(),
     )
     .await;
     let user_id = UserId::Integer(413);
-    let token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), user_id.clone());
+    let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), user_id.clone());
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -255,7 +242,6 @@ async fn websocket_finish_rolls_back_staged_publish_before_room_cleanup() {
     let room = create_room(
         &server,
         "issuer-staged-publish-finish",
-        None,
         CreateRoomQuery::default(),
     )
     .await;
@@ -343,7 +329,6 @@ async fn protocol_error_rolls_back_staged_publish_before_room_cleanup() {
     let room = create_room(
         &server,
         "issuer-staged-publish-protocol-error",
-        None,
         CreateRoomQuery::default(),
     )
     .await;
@@ -390,7 +375,6 @@ async fn replacement_close_rolls_back_staged_publish_before_room_cleanup() {
     let room = create_room(
         &server,
         "issuer-staged-publish-replacement",
-        None,
         CreateRoomQuery::default(),
     )
     .await;
@@ -437,7 +421,6 @@ async fn runtime_disconnect_rolls_back_staged_publish_before_room_cleanup() {
     let room = create_room(
         &server,
         "issuer-staged-publish-runtime-disconnect",
-        None,
         CreateRoomQuery::default(),
     )
     .await;
@@ -487,7 +470,7 @@ async fn websocket_closure_emits_fake_webrtc_user_closed_event() {
     let Some(server) = server else {
         return;
     };
-    let room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
+    let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
     let user_id = UserId::Integer(213);
     let websocket = setup_negotiated_session(&server, &room, user_id.clone()).await;
     assert!(websocket.is_some());
@@ -524,7 +507,7 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
     let Some(server) = server else {
         return;
     };
-    let room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
+    let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
     let user_id = UserId::Integer(260);
     let first_socket = setup_negotiated_session(&server, &room, user_id.clone()).await;
     assert!(first_socket.is_some());
@@ -585,7 +568,7 @@ async fn disconnect_cleanup_still_closes_media_transport_user_state() {
     let Some(server) = server else {
         return;
     };
-    let room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
+    let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
 
     let mut alice = setup_negotiated_session(&server, &room, UserId::Integer(1)).await;
     let mut bob = setup_negotiated_session(&server, &room, UserId::Integer(2)).await;
@@ -640,7 +623,7 @@ async fn disconnect_cleanup_closes_transport_user_before_empty_room_removal() {
     let Some(server) = server else {
         return;
     };
-    let room = create_room(&server, "issuer-a", None, CreateRoomQuery::default()).await;
+    let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
     let user_id = UserId::Integer(1);
 
     let socket = setup_negotiated_session(&server, &room, user_id.clone()).await;

@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 const TEST_AUTH_KEY = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
+const TEST_ROOM_KEY = "6me1UEeLIMqcygWGz1icMuVMVcPbZyVOF2LlZZPCCOw=";
 const TEST_SFU_HTTP_BASE_URL = "http://127.0.0.1:18080";
 export const TEST_SFU_WS_URL = "ws://127.0.0.1:18080/";
 const DIAGNOSTICS_ROOM_PATH = "/internal/diagnostics/rooms";
@@ -13,13 +14,15 @@ const HARNESS_URL = "/playwright/fixtures/harness.html";
 
 export async function createChannel({
     authKey = TEST_AUTH_KEY,
+    roomKey = TEST_ROOM_KEY,
     httpBaseUrl = TEST_SFU_HTTP_BASE_URL
 } = {}) {
     const response = await fetch(`${httpBaseUrl}/v1/channel`, {
         headers: {
             Authorization: `Bearer ${signJwt(
                 {
-                    iss: `playwright-${randomUUID()}`
+                    iss: `playwright-${randomUUID()}`,
+                    key: roomKey
                 },
                 authKey
             )}`
@@ -32,13 +35,13 @@ export async function createChannel({
     return payload.uuid;
 }
 
-export function createConnectToken(channelUuid, sessionId, authKey = TEST_AUTH_KEY) {
+export function createConnectToken(channelUuid, sessionId, roomKey = TEST_ROOM_KEY) {
     return signJwt(
         {
             sfu_channel_uuid: channelUuid,
             session_id: sessionId
         },
-        authKey
+        roomKey
     );
 }
 
@@ -575,6 +578,7 @@ function signJwt(payload, keyB64) {
     const encodedPayload = encodeJwtSegment(payload);
     const signedData = `${encodedHeader}.${encodedPayload}`;
     const signature = createHmac("sha256", Buffer.from(keyB64, "base64"))
+        // lgtm[js/insufficient-password-hash] HS256 signs a JWT, it does not store a password hash
         .update(signedData)
         .digest("base64url");
     return `${signedData}.${signature}`;

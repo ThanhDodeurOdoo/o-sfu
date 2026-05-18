@@ -63,7 +63,7 @@ async fn build_recording_room_with(
     let room = manager
         .serve_room(
             "issuer-recording",
-            None,
+            TEST_ROOM_KEY,
             &RoomConfig {
                 recording_address: recording_address.map(str::to_owned),
                 ..RoomConfig::default()

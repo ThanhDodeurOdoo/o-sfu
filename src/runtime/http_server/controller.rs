@@ -196,10 +196,10 @@ async fn room(
             state.metrics.record_http_room_forbidden();
             return StatusCode::FORBIDDEN.into_response();
         };
-        if query.recording_address.is_some() && claims.key.is_none() {
+        let Some(room_key) = claims.key.as_deref() else {
             state.metrics.record_http_room_bad_request();
             return StatusCode::BAD_REQUEST.into_response();
-        }
+        };
 
         let remote_address = resolve_remote_address(
             &headers,
@@ -214,7 +214,7 @@ async fn room(
             .room_manager
             .serve_room(
                 issuer,
-                claims.key.as_deref(),
+                room_key,
                 &room_config,
                 Some(remote_address.as_str()),
             )

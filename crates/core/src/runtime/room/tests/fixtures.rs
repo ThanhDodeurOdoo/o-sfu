@@ -38,6 +38,8 @@ pub(super) use crate::{
     },
 };
 
+pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
+
 /// Realistic client RTP capabilities (default codecs)
 pub(super) fn test_client_rtp_capabilities() -> MediaCapabilities {
     sample_client_rtp_capabilities()
@@ -454,7 +456,7 @@ impl ReadyRoomFixtureOptions {
 async fn setup_ready_room_fixture(options: ReadyRoomFixtureOptions) -> ReadyRoomFixture {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (first_tx, first_rx) = test_sender();
     let (second_tx, second_rx) = test_sender();
@@ -560,7 +562,7 @@ pub(super) async fn setup_ready_users_with_fake_receivers(
 ) {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (adapter, fake) = fake_adapter();
     let mut receivers = Vec::with_capacity(user_ids.len());

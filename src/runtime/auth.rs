@@ -158,6 +158,20 @@ where
     serde_json::from_slice(&claims_bytes).map_err(|_error| AuthenticationError::InvalidJsonPayload)
 }
 
+/// decode untrusted JWT claims for candidate room selection only
+///
+/// callers must verify the same token with the selected room key before using
+/// the decoded claims as authenticated identity or permission data
+pub(crate) fn decode_unverified_claims<T>(token: &str) -> Result<T, AuthenticationError>
+where
+    T: DeserializeOwned,
+{
+    validate_token_length(token)?;
+    let (_header_b64, claims_b64, _signature_b64) = split_token(token)?;
+    let claims_bytes = decode_jwt_segment(claims_b64)?;
+    serde_json::from_slice(&claims_bytes).map_err(|_error| AuthenticationError::InvalidJsonPayload)
+}
+
 fn validate_token_length(token: &str) -> Result<(), AuthenticationError> {
     if token.len() > MAX_JWT_TOKEN_BYTES {
         return Err(AuthenticationError::TokenTooLarge {

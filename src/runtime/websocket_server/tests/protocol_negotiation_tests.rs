@@ -76,12 +76,11 @@ async fn setup_negotiated_protocol_pair()
     let room = create_room(
         &server,
         "issuer-protocol-negotiation",
-        None,
         CreateRoomQuery::default(),
     )
     .await;
-    let publisher_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(81))?;
-    let subscriber_token = signed_connect_claims(TEST_AUTH_KEY, room.uuid(), UserId::Integer(82))?;
+    let publisher_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(81))?;
+    let subscriber_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(82))?;
     let mut publisher_socket = authenticate_with_jwt(&server, &publisher_token).await?;
     let mut subscriber_socket = authenticate_with_jwt(&server, &subscriber_token).await?;
 

@@ -6,7 +6,7 @@ async fn fake_rtc_cross_worker_vp8_selected_rid_survives_relay() {
     let room_server = spawn_room_server_with_config(
         cross_worker_test_config(),
         "issuer-cross-worker-vp8-selected-rid",
-        Some(TEST_ROOM_KEY),
+        TEST_ROOM_KEY,
     )
     .await;
     assert!(room_server.is_some());
@@ -103,7 +103,7 @@ async fn fake_rtc_cross_worker_h264_selected_rid_requires_idr_after_relay() {
     let room_server = spawn_room_server_with_config(
         config,
         "issuer-cross-worker-h264-selected-rid",
-        Some(TEST_ROOM_KEY),
+        TEST_ROOM_KEY,
     )
     .await;
     assert!(room_server.is_some());
@@ -177,7 +177,7 @@ async fn fake_rtc_load_triggered_spillover_relays_vp8_after_threshold() {
     let room_server = spawn_room_server_with_config(
         load_triggered_spillover_test_config(),
         "issuer-load-spillover-vp8-selected-rid",
-        Some(TEST_ROOM_KEY),
+        TEST_ROOM_KEY,
     )
     .await;
     assert!(room_server.is_some());
@@ -270,7 +270,7 @@ async fn fake_rtc_load_triggered_spillover_releases_remote_route_after_subscribe
     let room_server = spawn_room_server_with_config(
         load_triggered_spillover_test_config(),
         "issuer-load-spillover-release-route",
-        Some(TEST_ROOM_KEY),
+        TEST_ROOM_KEY,
     )
     .await;
     assert!(room_server.is_some());
@@ -313,7 +313,7 @@ async fn fake_rtc_load_triggered_spillover_preserves_download_mute_after_subscri
     let room_server = spawn_room_server_with_config(
         load_triggered_spillover_test_config(),
         "issuer-load-spillover-replacement-mute",
-        Some(TEST_ROOM_KEY),
+        TEST_ROOM_KEY,
     )
     .await;
     assert!(room_server.is_some());

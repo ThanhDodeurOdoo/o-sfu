@@ -1,23 +1,32 @@
-//! WebSocket Handshake and User Establishment
+//! websocket handshake admission boundary
 //!
-//! This module handles the transition from a raw, newly-upgraded WebSocket
-//! into an authenticated and fully established RTC user.
-//! (very similar flow that the odoo/sfu way)
+//! this module owns the cold path that turns an upgraded socket into a
+//! `ConnectedUser`
+//! the controller owns HTTP upgrade admission
+//! the steady-state session loop owns authenticated signaling
+//! this file only owns the narrow interval where the socket is open but not yet
+//! a room user
 //!
-//! 1. **Receive Authentication**: Waits for the very first frame from the client, which
-//!    must be a valid `auth` message.
+//! admission has four ordered steps:
 //!
-//! 2. **Authentication**: Validates the JWT against either
-//!    the global key or a room-specific key (like the old SFU),
-//!    to validate the  client's identity and permissions for the target room.
-//!    (the JWT is signed by the Odoo server that owns the room)
+//! - receive exactly one first-frame `auth` envelope before the configured auth timeout
+//! - select the candidate room from the explicit auth payload channel or from a JWT room id
+//! - verify the same JWT with the selected room key before trusting claims
+//! - join the room and send the startup output returned by `User::start`
 //!
-//! 3. **Room Admission**: Requests the core room manager to admit the client
-//!    into the room. This allocates a unique connection ID and sets up the
-//!    outbound message routing queues.
+//! the order is security-critical because decoded JWT contents can only select
+//! a candidate room
+//! identity, permissions and optional labels become trusted only after
+//! room-key verification succeeds
+//! current Odoo uses the explicit payload channel path and signs a legacy
+//! room-scoped token without a room id claim
 //!
-//! 4. **User Initialization**: the core user returns the initial welcome snapshot
-//!    and transport offer, and this edge serializes that output to the socket.
+//! rejection is terminal for the socket
+//! helpers that return `None` have already recorded metrics and sent any close
+//! frame that should reach the peer
+//!
+//! pre-auth capacity is released as soon as authentication succeeds and before
+//! room admission allocates post-auth user resources
 
 use std::{sync::Arc, time::Duration};
 
@@ -55,44 +64,67 @@ use crate::{
     },
 };
 
+/// legacy Odoo WebSocket claims scoped by the selected room key
+///
+/// current Odoo sends the room id as `AuthPayload.channel`, not as a signed JWT claim
+/// the JWT still authenticates the user because it is signed with the
+/// room key selected during channel creation
+/// this shape keeps that compatibility path explicit so the modern
+/// `WebSocketConnectClaims` verifier can stay room-id-bound
 #[derive(Deserialize)]
 struct RoomScopedConnectClaims {
+    /// registered JWT lifetime claims validated by the shared verifier
     #[serde(flatten)]
     registered: RegisteredJwtClaims,
+    /// odoo RTC session id before runtime normalization
     #[serde(rename = "user_id", alias = "session_id")]
     user_id: UserId,
+    /// optional display label forwarded into room membership
     #[serde(default)]
     label: Option<String>,
+    /// optional room permissions forwarded into room membership
     #[serde(default)]
     permissions: Option<UserPermissions>,
 }
 
-enum HandshakeRoomResolution {
-    ExplicitRoom(Arc<Room>),
-    GlobalClaims {
-        room: Arc<Room>,
-        claims: Box<WebSocketConnectClaims>,
-    },
-}
-
+/// post-auth handoff from the handshake to the steady-state session loop
+///
+/// the room manager has already accepted this user
+/// every failure after this point must either clean up the exact connection id
+/// or hand ownership to the caller
 struct JoinedUser {
+    /// room that accepted the user and owns connection cleanup
     room: Arc<Room>,
+    /// runtime-normalized user identity stored in room membership
     user_id: UserId,
+    /// room-local connection token used to reject stale sockets
     connection_id: ConnectionId,
+    /// bounded receiver for room events addressed to this user
     outbound_rx: UserOutboundReceiver,
+    /// application protocol facade that will own post-auth signaling
     user: User,
 }
 
-/// Admit one upgraded socket into an authenticated room user.
+/// admit one upgraded socket into an authenticated room user
 ///
-/// The first client frame must be exactly one `auth` envelope. On success this function
-/// authenticates the JWT, joins the target room, sends the initial welcome snapshot,
-/// and initializes the post-auth protocol state that will drive the first offer/answer
-/// exchange
+/// the caller must pass a raw socket that has not consumed any client frame
+/// this function owns every handshake outcome until either it returns a
+/// `ConnectedUser` or rejects the socket
+/// successful authentication drops the pre-auth permit before room join so
+/// authenticated users do not count against unauthenticated socket pressure
 ///
-/// Returning `None` means the caller should stop processing the socket imediately. In
-/// rejection cases this function is also responsible for sending the appropriate close
-/// frame so callrs do not duplicate handshake failure handling.
+/// failure returns `None`
+/// auth and join failures send a close frame when the peer can still receive one
+/// startup failures clean up the room user before returning
+///
+/// on success this function authenticates the JWT, joins the target room, sends
+/// the initial welcome snapshot and initializes the post-auth protocol state
+/// that will drive the first offer/answer exchange
+///
+/// the returned `ConnectedUser` owns the authenticated reader half from the
+/// caller plus the bounded room-event receiver created during join
+/// the steady-state session loop becomes responsible for final cleanup after
+/// this exchange
 #[o_sfu_telemetry::measure_duration(
     metrics = "state.metrics",
     record = "record_ws_handshake_duration"
@@ -106,6 +138,8 @@ pub(super) async fn establish_user(
 ) -> Option<ConnectedUser> {
     let (room, claims) =
         authenticate_handshake_session(state, writer, reader, remote_address.as_ref()).await?;
+    // authentication no longer counts against unauthenticated socket pressure
+    // room admission can fail without holding a pre-auth capacity slot
     drop(pre_auth_permit);
     let mut joined_user =
         join_user(state, writer, room, claims, Arc::clone(&remote_address)).await?;
@@ -143,6 +177,11 @@ pub(super) async fn establish_user(
     })
 }
 
+/// read the first client frame under the authentication timeout
+///
+/// `Ok(None)` means the peer closed before a frame was available
+/// error variants carry the close code that should be reported by
+/// `reject_handshake`
 async fn receive_auth(
     state: &RuntimeState,
     reader: &mut WsReader,
@@ -166,6 +205,12 @@ async fn receive_auth(
     }
 }
 
+/// receive first-frame auth and convert parse failures into socket rejection
+///
+/// this helper is the last point where malformed unauthenticated input can fail
+/// without room context
+/// once it returns an `AuthPayload`, later failures are authentication or
+/// room-admission failures
 async fn receive_auth_or_reject(
     state: &RuntimeState,
     writer: &mut WsWriter,
@@ -191,6 +236,10 @@ async fn receive_auth_or_reject(
     }
 }
 
+/// receive the auth frame and authenticate it against a room
+///
+/// the duration metric intentionally includes first-frame wait time plus JWT
+/// verification because both contribute to unauthenticated socket pressure
 #[o_sfu_telemetry::measure_duration(metrics = "state.metrics", record = "record_ws_auth_duration")]
 async fn authenticate_handshake_session(
     state: &RuntimeState,
@@ -202,11 +251,17 @@ async fn authenticate_handshake_session(
     authenticate_session(state, writer, &auth_payload, remote_address).await
 }
 
+/// extract the protocol auth payload from the first WebSocket message
 fn parse_auth_payload(message: Message) -> Result<AuthPayload, WebSocketCloseCode> {
     let payload = auth_payload_text(message)?;
     decode_auth_payload_text(&payload)
 }
 
+/// normalize the accepted first-frame wire shapes into UTF-8 JSON text
+///
+/// text and binary frames are accepted for compatibility with WebSocket clients
+/// control frames before authentication are protocol errors except close, which
+/// is treated as clean shutdown
 fn auth_payload_text(message: Message) -> Result<String, WebSocketCloseCode> {
     match message {
         Message::Text(payload) => {
@@ -226,6 +281,11 @@ fn auth_payload_text(message: Message) -> Result<String, WebSocketCloseCode> {
     }
 }
 
+/// decode the first-frame batch and enforce the one-envelope auth contract
+///
+/// steady-state signaling can batch envelopes
+/// auth cannot because no room user exists yet and any extra envelope would be
+/// unauthenticated work
 fn decode_auth_batch(payload: &str) -> Result<Vec<ClientEnvelope>, WebSocketCloseCode> {
     let batch = decode_client_batch(payload).map_err(|_error| WebSocketCloseCode::ProtocolError)?;
     if batch.len() != 1 {
@@ -238,21 +298,22 @@ fn decode_auth_batch(payload: &str) -> Result<Vec<ClientEnvelope>, WebSocketClos
     Ok(batch)
 }
 
-/// Decodes the first WebSocket authentication frame.
+/// decodes the first WebSocket authentication frame
 ///
-/// The frame must contain exactly one signaling envelope and that envelope must
-/// be an auth message. Steady-state client batches are decoded by
-/// [`decode_client_batch`](crate::websocket::decode_client_batch).
+/// the frame must contain exactly one signaling envelope and that envelope must
+/// be an auth message
+/// steady-state client batches are decoded by `decode_client_batch`
 ///
 /// # Errors
 ///
-/// Returns the close code that the WebSocket edge uses when the frame is not a
-/// valid authentication batch.
+/// returns the close code that the WebSocket edge uses when the frame is not a
+/// valid authentication batch
 pub fn decode_auth_payload_text(payload: &str) -> Result<AuthPayload, WebSocketCloseCode> {
     let batch = decode_auth_batch(payload)?;
     extract_auth_envelope(batch)
 }
 
+/// convert the single-envelope batch into the only message allowed pre-auth
 fn extract_auth_envelope(batch: Vec<ClientEnvelope>) -> Result<AuthPayload, WebSocketCloseCode> {
     let Some(envelope) = batch.into_iter().next() else {
         return Err(WebSocketCloseCode::ProtocolError);
@@ -268,52 +329,59 @@ fn extract_auth_envelope(batch: Vec<ClientEnvelope>) -> Result<AuthPayload, WebS
     }
 }
 
+/// resolve a room and verify the JWT with that room's key
+///
+/// room selection happens before verification so current Odoo can continue to
+/// send the room id in the auth payload
+/// untrusted token fields are used only for candidate room lookup when the
+/// payload has no channel
+/// the returned claims have passed room-key verification
 async fn authenticate(
     state: &RuntimeState,
     auth_payload: &AuthPayload,
     remote_address: &str,
 ) -> Result<(Arc<Room>, WebSocketConnectClaims), WebSocketCloseCode> {
-    match resolve_handshake_room(state, auth_payload, remote_address).await? {
-        HandshakeRoomResolution::ExplicitRoom(room) => {
-            let room_id = room.uuid();
-            let claims = authenticate_room_scoped_claims(
-                &auth_payload.jwt,
-                room.key().unwrap_or(&state.config.auth.key),
-                room_id,
-                remote_address,
-            )?;
-            Ok((room, claims))
-        }
-        HandshakeRoomResolution::GlobalClaims { room, claims } => Ok((room, *claims)),
-    }
+    let room = resolve_handshake_room(state, auth_payload).await?;
+    let claims = authenticate_room_scoped_claims(
+        &auth_payload.jwt,
+        room.key(),
+        room.uuid(),
+        remote_address,
+    )?;
+    Ok((room, claims))
 }
 
+/// select the candidate room without trusting user claims
+///
+/// explicit `AuthPayload.channel` is the current Odoo path
+/// an absent channel falls back to the token room-id claim shape by decoding
+/// the JWT payload only for room lookup
+/// the caller must still run room-key verification before using any claim data
 async fn resolve_handshake_room(
     state: &RuntimeState,
     auth_payload: &AuthPayload,
-    remote_address: &str,
-) -> Result<HandshakeRoomResolution, WebSocketCloseCode> {
+) -> Result<Arc<Room>, WebSocketCloseCode> {
     let Some(explicit_room_id) = auth_payload.channel.as_deref() else {
-        let mut claims =
-            auth::verify::<WebSocketConnectClaims>(&auth_payload.jwt, &state.config.auth.key)
-                .map_err(|_error| {
-                    warn!(
-                        remote_address,
-                        "failed to verify websocket auth token against the global key"
-                    );
-                    WebSocketCloseCode::AuthFailed
-                })?;
-        claims.normalize_runtime_user_id();
-        let room = resolve_global_claims_room(state, &claims, remote_address).await?;
-        return Ok(HandshakeRoomResolution::GlobalClaims {
-            room,
-            claims: Box::new(claims),
-        });
+        // this decode is only a room-directory lookup hint
+        // trust starts after the token verifies with the selected room key
+        let unverified_claims = auth::decode_unverified_claims::<WebSocketConnectClaims>(
+            &auth_payload.jwt,
+        )
+        .map_err(|_error| {
+            debug!("authentication payload did not select a room");
+            WebSocketCloseCode::AuthFailed
+        })?;
+        return resolve_explicit_room(state, &unverified_claims.room_id).await;
     };
     let room = resolve_explicit_room(state, explicit_room_id).await?;
-    Ok(HandshakeRoomResolution::ExplicitRoom(room))
+    Ok(room)
 }
 
+/// look up the selected room id in the live room directory
+///
+/// missing rooms are authentication failures because the client is trying to
+/// join an admission boundary that no longer exists or never existed in this
+/// process
 async fn resolve_explicit_room(
     state: &RuntimeState,
     room_id: &str,
@@ -331,28 +399,13 @@ async fn resolve_explicit_room(
         })
 }
 
-async fn resolve_global_claims_room(
-    state: &RuntimeState,
-    claims: &WebSocketConnectClaims,
-    _remote_address: &str,
-) -> Result<Arc<Room>, WebSocketCloseCode> {
-    let Some(room) = state.room_manager.get_by_uuid(&claims.room_id).await else {
-        debug!(
-            room_id = claims.room_id,
-            "verified websocket token referenced a missing room"
-        );
-        return Err(WebSocketCloseCode::AuthFailed);
-    };
-    if room.key().is_some() {
-        debug!(
-            room_id = claims.room_id,
-            "global-key websocket token targeted a room that requires a scoped key"
-        );
-        return Err(WebSocketCloseCode::AuthFailed);
-    }
-    Ok(room)
-}
-
+/// verify user claims with the selected room key
+///
+/// modern claims must contain the same room id that selected the room
+/// legacy Odoo claims omit a room id and are accepted only after the token
+/// verifies with the selected room key
+/// the legacy path constructs canonical `WebSocketConnectClaims` so the rest of
+/// the runtime sees one claim shape
 fn authenticate_room_scoped_claims(
     token: &str,
     key: &str,
@@ -372,6 +425,8 @@ fn authenticate_room_scoped_claims(
         return Ok(claims);
     }
 
+    // current Odoo signs user tokens with the room key but keeps the room id
+    // outside the token in `AuthPayload.channel`
     let claims = auth::verify::<RoomScopedConnectClaims>(token, key).map_err(|_error| {
         warn!(
             remote_address,
@@ -390,6 +445,7 @@ fn authenticate_room_scoped_claims(
     Ok(claims)
 }
 
+/// authenticate a parsed payload and turn auth failures into terminal rejection
 async fn authenticate_session(
     state: &RuntimeState,
     writer: &mut WsWriter,
@@ -422,6 +478,11 @@ async fn authenticate_session(
     skip_all,
     fields(room_id = %room.uuid(), user_id = ?claims.user_id)
 )]
+/// allocate room membership and the bounded outbound queue
+///
+/// after this succeeds the room owns a live user entry
+/// later startup failure must call `cleanup_failed_session` with the returned
+/// connection id before the socket is abandoned
 async fn join_user(
     state: &RuntimeState,
     writer: &mut WsWriter,
@@ -429,6 +490,8 @@ async fn join_user(
     claims: WebSocketConnectClaims,
     remote_address: Arc<str>,
 ) -> Option<JoinedUser> {
+    // the room must never accept a user without a bounded outbound sink
+    // create the queue before join so admission is atomic from the room view
     let (outbound_tx, outbound_rx) = UserOutboundSender::channel_with_limits(
         UserOutboundQueueLimits::new(
             state.config.user.outbound_queue_capacity,
@@ -501,6 +564,11 @@ async fn join_user(
     }
 }
 
+/// attach authenticated room identity to the active tracing span
+///
+/// the upgrade span starts before authentication knows the room or user
+/// this is the point where later logs can be correlated with the accepted room
+/// user
 fn record_session_span(
     room: &Room,
     user_id: &UserId,
@@ -527,6 +595,12 @@ fn record_session_span(
     metrics = "state.metrics",
     record = "record_ws_user_initialize_duration"
 )]
+/// send the startup payload that makes the accepted room user usable
+///
+/// `User::start` returns the welcome state and any initial offer
+/// if startup fails or the socket cannot receive the output, this helper closes
+/// application state and removes the accepted room membership before returning
+/// `None`
 async fn initialize_user(
     state: &RuntimeState,
     writer: &mut WsWriter,
@@ -549,6 +623,8 @@ async fn initialize_user(
             );
             state.metrics.record_ws_user_initialize_failure();
             user.close().await;
+            // join already inserted this user into room state
+            // failed startup must remove the exact connection before returning
             cleanup_failed_session(state, room, user_id, connection_id).await;
             return None;
         }
@@ -569,12 +645,19 @@ async fn initialize_user(
             "failed to send websocket user startup payload"
         );
         user.close().await;
+        // startup output is the handoff to steady state
+        // if the socket cannot receive it, room membership must be rolled back
         cleanup_failed_session(state, room, user_id, connection_id).await;
         return None;
     }
     Some(())
 }
 
+/// remove a user that joined the room but never reached steady state
+///
+/// cleanup is best effort here because the socket is already failing
+/// later room reconciliation still owns any transport retry work exposed by the
+/// close path
 async fn cleanup_failed_session(
     state: &RuntimeState,
     room: &Room,
@@ -587,6 +670,9 @@ async fn cleanup_failed_session(
         .await;
 }
 
+/// record terminal rejection and close the socket when there is a close code
+///
+/// returning `None` lets call sites use the helper directly in `Option` chains
 async fn reject_handshake<T>(
     state: &RuntimeState,
     writer: Option<&mut WsWriter>,

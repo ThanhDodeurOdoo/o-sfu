@@ -54,7 +54,7 @@ pub(crate) async fn connect_protocol_recording_peer(
     room: &Room,
 ) -> Option<ProtocolHarnessPeer> {
     let token = signed_connect_claims_with_permissions(
-        TEST_AUTH_KEY,
+        TEST_ROOM_KEY,
         room.uuid(),
         UserId::Integer(63),
         Some(recording_permissions()),

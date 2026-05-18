@@ -83,7 +83,7 @@ async fn stats_returns_live_room_data() {
         .room_manager
         .serve_room(
             "issuer-a",
-            None,
+            TEST_ROOM_KEY,
             &RoomConfig {
                 web_rtc_enabled: query.web_rtc_enabled(),
                 recording_address: query.recording_address.clone(),

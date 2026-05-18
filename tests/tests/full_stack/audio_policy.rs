@@ -56,7 +56,7 @@ async fn fake_rtc_cross_worker_opus_vad_true_forwards_and_drives_active_speaker(
     let room_server = spawn_room_server_with_config(
         cross_worker_test_config(),
         "issuer-cross-worker-opus-active-speaker",
-        Some(TEST_ROOM_KEY),
+        TEST_ROOM_KEY,
     )
     .await;
     assert!(room_server.is_some());
@@ -172,7 +172,7 @@ async fn fake_rtc_cross_worker_opus_vad_false_blocks_relay_fanout() {
     let room_server = spawn_room_server_with_config(
         cross_worker_test_config(),
         "issuer-cross-worker-opus-vad-false",
-        Some(TEST_ROOM_KEY),
+        TEST_ROOM_KEY,
     )
     .await;
     assert!(room_server.is_some());

@@ -252,11 +252,15 @@ fn joined_connection(users: &[(UserId, ConnectionId)], expected_user_id: &UserId
 async fn room_manager_is_idempotent_by_issuer() {
     let manager = RoomManager::for_test();
     let config = RoomConfig::default();
-    let first = manager.serve_room("issuer-a", None, &config, None).await;
-    let second = manager
-        .serve_room("issuer-a", Some("ignored"), &config, None)
+    let first = manager
+        .serve_room("issuer-a", TEST_ROOM_KEY, &config, None)
         .await;
-    let third = manager.serve_room("issuer-b", None, &config, None).await;
+    let second = manager
+        .serve_room("issuer-a", "ignored", &config, None)
+        .await;
+    let third = manager
+        .serve_room("issuer-b", TEST_ROOM_KEY, &config, None)
+        .await;
     assert_eq!(first.uuid(), second.uuid());
     assert_ne!(first.uuid(), third.uuid());
 }
@@ -282,8 +286,8 @@ async fn room_manager_concurrent_create_attempts_publish_one_live_room() {
     let config = RoomConfig::default();
 
     let (first, second) = tokio::join!(
-        manager.serve_room("issuer-a", None, &config, None),
-        manager.serve_room("issuer-a", None, &config, None),
+        manager.serve_room("issuer-a", TEST_ROOM_KEY, &config, None),
+        manager.serve_room("issuer-a", TEST_ROOM_KEY, &config, None),
     );
 
     assert_eq!(first.uuid(), second.uuid());
@@ -295,13 +299,13 @@ async fn room_manager_places_first_join_on_lowest_load_worker() {
     let manager = RoomManager::for_test_with_media_workers(2);
     let media_transport = MediaTransport::fake_for_testing();
     let first = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let second = manager
-        .serve_room("issuer-b", None, &RoomConfig::default(), None)
+        .serve_room("issuer-b", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let third = manager
-        .serve_room("issuer-c", None, &RoomConfig::default(), None)
+        .serve_room("issuer-c", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
 
     assert_eq!(first.test_api().inspect().media_worker_id(), 0);
@@ -337,7 +341,7 @@ async fn room_spillover_policy_places_user_transport_on_local_workers() {
     let manager = spillover_room_manager(2);
     let media_transport = MediaTransport::fake_for_testing();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
 
     let first_connection = manager_join_user(&manager, &room, 10, &media_transport).await;
@@ -353,7 +357,7 @@ async fn room_spillover_policy_places_user_transport_on_local_workers() {
 async fn strict_room_placement_keeps_topology_and_transport_on_primary_worker() {
     let manager = RoomManager::for_test_with_media_workers(3);
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
 
     join_users_for_placement(&room, &[10, 20, 30]).await;
@@ -367,7 +371,7 @@ async fn strict_room_placement_keeps_topology_and_transport_on_primary_worker() 
 async fn bounded_room_placement_keeps_topology_and_transport_aligned() {
     let manager = spillover_room_manager(3);
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
 
     join_users_for_placement(&room, &[10, 20, 30]).await;
@@ -399,7 +403,7 @@ async fn load_triggered_room_placement_keeps_topology_and_transport_aligned()
         })?,
     );
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
 
     join_users_for_placement(&room, &[10, 20, 30]).await;
@@ -432,7 +436,7 @@ async fn load_triggered_room_keeps_small_room_transport_on_primary_worker()
         })?,
     );
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
 
     for raw_user_id in [10_i64, 20] {
@@ -478,7 +482,7 @@ async fn load_triggered_room_uses_transport_pressure_for_new_placement()
     );
     let (media_transport, fake) = fake_adapter();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
 
     manager_join_user(&manager, &room, 10, &media_transport).await;
@@ -509,7 +513,7 @@ async fn load_triggered_room_places_new_receivers_on_spillover_worker_after_pres
         })?,
     );
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
 
     for raw_user_id in [10_i64, 20] {
@@ -571,7 +575,7 @@ async fn cleanup_retry_keeps_resolved_spillover_worker_after_unregister()
     );
     let (media_transport, fake) = fake_adapter();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
 
     let first_user_id = UserId::Integer(10);
@@ -636,7 +640,7 @@ async fn cleanup_retry_keeps_resolved_spillover_worker_after_unregister()
 async fn room_replacement_join_rehomes_topology_and_transport_together() {
     let manager = spillover_room_manager(2);
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let adapter = MediaTransport::fake_for_testing();
     let user_id = UserId::Integer(10);
@@ -704,7 +708,7 @@ async fn room_replacement_join_rehomes_topology_and_transport_together() {
 async fn room_spillover_diagnostics_reports_each_users_transport_worker() {
     let manager = spillover_room_manager(2);
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let first_user_id = UserId::Integer(10);
     let second_user_id = UserId::Integer(20);
@@ -738,7 +742,7 @@ async fn room_spillover_diagnostics_reports_each_users_transport_worker() {
 async fn room_spillover_publish_subscribe_and_leave_cleanup_stay_aligned() {
     let manager = spillover_room_manager(2);
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (adapter, fake) = fake_adapter();
     let publisher_id = UserId::Integer(10);
@@ -818,7 +822,7 @@ async fn room_spillover_publish_subscribe_and_leave_cleanup_stay_aligned() {
 async fn room_owned_relay_route_shares_remote_worker_lifecycle() {
     let manager = spillover_room_manager(2);
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (media_transport, fake) = fake_adapter();
     let users = join_ready_users(&room, &[10, 20, 30, 40]).await;
@@ -911,7 +915,7 @@ async fn room_owned_relay_route_shares_remote_worker_lifecycle() {
 async fn room_owned_relay_route_is_released_when_bootstrap_turns_stale() {
     let manager = spillover_room_manager(2);
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let (media_transport, fake) = fake_adapter();
     let users = join_ready_users(&room, &[10, 20]).await;
@@ -963,7 +967,7 @@ async fn room_owned_relay_route_is_released_when_bootstrap_turns_stale() {
 async fn room_manager_lookup_by_uuid() {
     let manager = RoomManager::for_test();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let fetched = manager.get_by_uuid(room.uuid()).await;
     assert!(fetched.is_some());
@@ -999,7 +1003,7 @@ async fn manager_leave_user_removes_empty_room() {
     let manager = RoomManager::for_test_with_admission_policy(RoomAdmissionPolicy::new(1));
     let media_transport = MediaTransport::fake_for_testing();
     let first_room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let room_id = first_room.uuid().to_owned();
     let (tx, _rx) = test_sender();
@@ -1031,7 +1035,7 @@ async fn manager_leave_user_removes_empty_room() {
 
     assert!(manager.get_by_uuid(&room_id).await.is_none());
     let replacement = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     assert_ne!(replacement.uuid(), room_id);
 }
@@ -1041,7 +1045,7 @@ async fn manager_disconnect_users_removes_empty_room() {
     let manager = RoomManager::for_test_with_admission_policy(RoomAdmissionPolicy::new(1));
     let media_transport = MediaTransport::fake_for_testing();
     let first_room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let room_id = first_room.uuid().to_owned();
     let (tx, _rx) = test_sender();
@@ -1065,7 +1069,7 @@ async fn manager_disconnect_users_removes_empty_room() {
 
     assert!(manager.get_by_uuid(&room_id).await.is_none());
     let replacement = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     assert_ne!(replacement.uuid(), room_id);
 }
@@ -1090,7 +1094,7 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
     ));
     let media_transport = MediaTransport::fake_for_testing();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let room_id = room.uuid().to_owned();
     let (tx, _rx) = test_sender();
@@ -1140,7 +1144,7 @@ async fn manager_concurrent_empty_cleanup_and_join_keep_directory_consistent() {
     ));
     let media_transport = MediaTransport::fake_for_testing();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let room_id = room.uuid().to_owned();
     let first_user = UserId::Integer(1);
@@ -1262,7 +1266,7 @@ async fn manager_metrics_track_live_rooms_and_users_without_replacement_drift() 
     );
     let media_transport = MediaTransport::fake_for_testing();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let room_id = room.uuid().to_owned();
     assert_eq!(metrics.snapshot().active_rooms(), 1);
@@ -1328,7 +1332,7 @@ async fn manager_metrics_track_live_media_totals_across_publish_and_disconnect()
     );
     let media_transport = MediaTransport::fake_for_testing();
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
     let room_id = room.uuid().to_owned();
 
@@ -1413,7 +1417,7 @@ async fn manager_metrics_track_receiver_source_selection_updates() {
     let room = manager
         .serve_room(
             "issuer-source-selection",
-            None,
+            TEST_ROOM_KEY,
             &RoomConfig::default(),
             None,
         )
@@ -1446,7 +1450,7 @@ async fn manager_syncs_active_speaker_camera_policy_without_room_mutations() {
         .as_fake_transport()
         .expect("test expects the fake media transport");
     let room = manager
-        .serve_room("issuer-a", None, &RoomConfig::default(), None)
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
 
     let mut receivers = Vec::new();
