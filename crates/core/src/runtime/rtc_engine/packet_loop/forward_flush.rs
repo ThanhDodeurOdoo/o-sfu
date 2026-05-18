@@ -53,7 +53,8 @@ pub(super) fn record_incoming_stats(
 ) {
     let mut pending_packets = take(&mut buffers.pending_packets);
     for packet in &mut pending_packets {
-        if let Some(transport_media_id) = packet.resolve_source_transport_media_id(state) {
+        if let Some(facts) = packet.resolve_facts(state) {
+            let transport_media_id = facts.source_transport_media_id;
             if packet.route_control_mid().is_some() {
                 // MID proves which producer this packet belongs to. Persist the
                 // SSRC before the browser stops sending MID/RID extensions.
@@ -64,41 +65,41 @@ pub(super) fn record_incoming_stats(
                     packet.route_control_rid_extension(),
                 );
             }
-            let payload_len = packet.payload_len();
-            let voice_activity = packet.route_control_voice_activity();
-            let audio_level = packet.route_control_audio_level();
             let audio_policy_changed = state.route_control.observe_audio_activity(
                 transport_media_id,
-                voice_activity,
-                audio_level,
+                facts.voice_activity,
+                facts.audio_level,
                 packet.received_at(),
             );
             if unlikely(audio_policy_changed) {
                 buffers
                     .dirty_source_policy_channel_ids
-                    .push(packet.source_session_key().room_instance_id());
+                    .push(facts.room_instance_id);
             }
-            let metadata = packet.resolve_route_control_layer_metadata(state);
+            let metadata = facts.layer_metadata;
             if let Some(rid) = metadata.rid() {
                 state.observe_producer_rid_packet(transport_media_id, rid, packet.received_at());
-                let is_keyframe = packet.route_control_decoder_refresh(state, transport_media_id);
                 buffers.push_rid_readiness(
                     packet.source_session_key(),
                     transport_media_id,
                     rid,
-                    is_keyframe,
+                    facts.decoder_refresh,
                     packet.received_at(),
                 );
             }
             let first_ingress = state
-                .record_incoming_bitrate(transport_media_id, packet.received_at(), payload_len)
+                .record_incoming_bitrate(
+                    transport_media_id,
+                    packet.received_at(),
+                    facts.payload_len,
+                )
                 .unwrap_or(false);
             if unlikely(first_ingress) {
                 debug!(
                     user_id = ?packet.source_session_key().user_id(),
                     media_worker_id = packet.source_session_key().media_worker_id(),
                     ?transport_media_id,
-                    payload_bytes = payload_len,
+                    payload_bytes = facts.payload_len,
                     "observed first RTP ingress for published media"
                 );
                 buffers.push_first_video_keyframe(
@@ -107,7 +108,7 @@ pub(super) fn record_incoming_stats(
                     packet.received_at(),
                 );
             }
-            rtp_metrics.record_ingress(payload_len);
+            rtp_metrics.record_ingress(facts.payload_len);
         }
     }
     buffers.pending_packets = pending_packets;

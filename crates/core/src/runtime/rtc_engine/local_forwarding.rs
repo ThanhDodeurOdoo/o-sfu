@@ -16,7 +16,8 @@ use str0m::{
 use tracing::debug;
 
 use super::{
-    local_send_rewrite::{ProjectedIdentity, Vp8PayloadIdentity, next_projected_rtp_identity},
+    forwarded_packet::PacketVp8Payload,
+    local_send_rewrite::{ProjectedIdentity, next_projected_rtp_identity},
     shared_payload::SharedPayload,
     state::RtcSessionState,
 };
@@ -98,10 +99,11 @@ impl LocalPacketDestination {
         &self,
         session_state: &mut RtcSessionState,
         packet: LocalForwardedRtp<'_>,
+        vp8_payload: Option<PacketVp8Payload>,
         is_last_destination: bool,
     ) -> Result<Option<usize>, RtcError> {
         let mut rtp = packet;
-        self.send_rtp(session_state, &mut rtp, is_last_destination)
+        self.send_rtp(session_state, &mut rtp, vp8_payload, is_last_destination)
     }
 
     /// Write one routed RTP packet into the destination user's local `StreamTx`.
@@ -115,6 +117,7 @@ impl LocalPacketDestination {
         &self,
         session_state: &mut RtcSessionState,
         rtp: &mut LocalForwardedRtp<'_>,
+        vp8_payload: Option<PacketVp8Payload>,
         is_last_destination: bool,
     ) -> Result<Option<usize>, RtcError> {
         let nackable = session_state
@@ -122,12 +125,9 @@ impl LocalPacketDestination {
             .media(self.mid)
             .is_some_and(|media| !media.kind().is_audio());
         let payload_len = rtp.payload.len();
-        let vp8_descriptor = vp8_payload_descriptor(rtp);
-        let vp8_payload = vp8_descriptor
-            .map(|descriptor| Vp8PayloadIdentity {
-                picture_id: descriptor.picture_id(),
-                tl0_pic_idx: descriptor.tl0_pic_idx(),
-            })
+        let vp8_payload = vp8_payload.or_else(|| vp8_payload_from_rtp(rtp));
+        let vp8_identity = vp8_payload
+            .map(|vp8_payload| vp8_payload.identity)
             .unwrap_or_default();
         let local_send_streams = &mut session_state.consumer_streams;
         let rtc = &mut session_state.rtc;
@@ -139,7 +139,7 @@ impl LocalPacketDestination {
                     self.transport_media_id,
                     rtp.header().ssrc,
                     rtp.header().timestamp,
-                    vp8_payload,
+                    vp8_identity,
                 );
                 if identity.source_switched() {
                     debug!(
@@ -149,7 +149,7 @@ impl LocalPacketDestination {
                         source_ssrc = ?rtp.header().ssrc,
                         source_rtp_timestamp = rtp.header().timestamp,
                         outbound_rtp_timestamp = identity.rtp_timestamp(),
-                        source_vp8_picture_id = ?vp8_payload.picture_id,
+                        source_vp8_picture_id = ?vp8_identity.picture_id,
                         outbound_vp8_picture_id = ?identity.vp8_payload().picture_id,
                         "projected consumer RTP identity after producer SSRC switch"
                     );
@@ -160,7 +160,7 @@ impl LocalPacketDestination {
                     is_last_destination,
                     mid: self.mid,
                     payload_type: self.payload_type,
-                    vp8_descriptor,
+                    vp8_payload,
                 };
                 write_rtp(stream_tx, rtp, write_context)
             } else {
@@ -179,7 +179,7 @@ struct RtpWriteContext {
     is_last_destination: bool,
     mid: Mid,
     payload_type: Option<Pt>,
-    vp8_descriptor: Option<vp8::PayloadDescriptor>,
+    vp8_payload: Option<PacketVp8Payload>,
 }
 
 /// Push one packet into str0m with a receiver-safe RTP identity.
@@ -195,14 +195,14 @@ fn write_rtp(
     let payload_type = outbound_payload_type(rtp.header(), context.payload_type);
     let ext_vals = outbound_extension_values(rtp.header(), context.mid);
     let mut payload = rtp.payload.take_write_payload(context.is_last_destination);
-    if let Some(descriptor) = context.vp8_descriptor {
-        let vp8_payload = context.identity.vp8_payload();
+    if let Some(packet_vp8_payload) = context.vp8_payload {
+        let identity_vp8_payload = context.identity.vp8_payload();
         vp8::rewrite_payload_descriptor(
             &mut payload,
-            descriptor,
+            packet_vp8_payload.descriptor,
             vp8::PayloadDescriptorRewrite {
-                picture_id: vp8_payload.picture_id,
-                tl0_pic_idx: vp8_payload.tl0_pic_idx,
+                picture_id: identity_vp8_payload.picture_id,
+                tl0_pic_idx: identity_vp8_payload.tl0_pic_idx,
             },
         );
     }
@@ -222,12 +222,12 @@ fn write_rtp(
         .map_err(|error| RtcError::Packet(context.mid, payload_type, error))
 }
 
-fn vp8_payload_descriptor(rtp: &LocalForwardedRtp<'_>) -> Option<vp8::PayloadDescriptor> {
+fn vp8_payload_from_rtp(rtp: &LocalForwardedRtp<'_>) -> Option<PacketVp8Payload> {
     rtp.header()
         .ext_vals
         .rid
         .or(rtp.header().ext_vals.rid_repair)?;
-    vp8::payload_descriptor(rtp.payload.as_slice())
+    vp8::payload_descriptor(rtp.payload.as_slice()).map(PacketVp8Payload::new)
 }
 
 fn outbound_payload_type(header: &RtpHeader, payload_type: Option<Pt>) -> Pt {

@@ -223,9 +223,12 @@ impl LocalRtcPacketDestination {
                 payload_bytes: None,
             });
         };
+        // capture cached VP8 facts before local_send_packet may consume the shared payload
+        let vp8_payload = packet.local_vp8_payload();
         let payload_bytes = self.sender.send(
             session_state,
             packet.local_send_packet(),
+            vp8_payload,
             is_last_destination,
         )?;
         if let Some(payload_bytes) = payload_bytes {

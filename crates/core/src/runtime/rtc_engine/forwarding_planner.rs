@@ -56,12 +56,13 @@ pub(super) fn populate_forward_routes_for_packet(
     packet: &mut ForwardedPacket,
     forwards: &mut Vec<PacketForward>,
 ) {
-    let Some(source_transport_media_id) = packet.resolve_source_transport_media_id(state) else {
+    let Some(facts) = packet.resolve_facts(state) else {
         return;
     };
+    let source_transport_media_id = facts.source_transport_media_id;
     let origin_sink = packet
         .visits_origin_sinks()
-        .then(|| packet_sinks.sink_for_room(packet.source_session_key().room_instance_id()))
+        .then(|| packet_sinks.sink_for_room(facts.room_instance_id))
         .flatten();
     let relay_targets = packet
         .visits_origin_sinks()
@@ -73,7 +74,7 @@ pub(super) fn populate_forward_routes_for_packet(
     if !has_routed_forward(relay_targets, route_entry) {
         return;
     }
-    let metadata = packet.resolve_route_control_layer_metadata(state);
+    let metadata = facts.layer_metadata;
     if !source_packet_gate_permits(state, metrics, source_transport_media_id, metadata) {
         return;
     }
