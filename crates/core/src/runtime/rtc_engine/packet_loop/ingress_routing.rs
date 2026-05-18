@@ -190,11 +190,10 @@ fn route_packet_with_cached_session(
     let Some(session_key) = state
         .remote_addr_demux
         .session_key_for_remote_addr(source_addr)
-        .cloned()
     else {
         return CachedRouteOutcome::NotMatched;
     };
-    let Some(session_state) = state.users.get_mut(&session_key) else {
+    let Some(session_state) = state.users.get_mut(session_key) else {
         state.remote_addr_demux.forget_remote_addr(source_addr);
         if let Ok(mut snapshot) = snapshot_state.lock() {
             // Stale pins must be cleared in the shared snapshot so that any
@@ -233,7 +232,6 @@ fn route_packet_with_cached_session(
         return CachedRouteOutcome::NotMatched;
     }
     let handle_result = session_state.rtc.handle_input(input);
-    let _ = session_state;
     if handle_result.is_err() {
         // NOTE: We still consider the packet "routed" even if `handle_input` fails.
         // Routing answers "which user owns this packet", not "was the packet valid".
@@ -244,8 +242,18 @@ fn route_packet_with_cached_session(
             media_worker_id = session_key.media_worker_id(),
             "failed to feed indexed UDP datagram into rtc user state"
         );
+        let _ = session_state;
     } else {
-        state.mark_session_dirty(&session_key);
+        let dirty_session_key = if session_state.packet_loop_dirty {
+            None
+        } else {
+            session_state.packet_loop_dirty = true;
+            Some(session_key.clone())
+        };
+        let _ = session_state;
+        if let Some(dirty_session_key) = dirty_session_key {
+            state.dirty_sessions.push(dirty_session_key);
+        }
     }
     CachedRouteOutcome::Routed
 }

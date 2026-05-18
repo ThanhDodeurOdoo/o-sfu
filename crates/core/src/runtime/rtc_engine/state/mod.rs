@@ -51,8 +51,8 @@ use super::{
     demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux},
     local_send_rewrite::{ConsumerStream, ConsumerStreamKey},
     media_registry::{
-        DecoderRefreshCodec, ProducerSsrcLookupKey, RegisteredMediaHandle,
-        RemoteSourceRegistration, SessionMidLookupKey,
+        DecoderRefreshCodec, ProducerSsrcRegistry, ProducerSsrcRidRegistry, RegisteredMediaHandle,
+        RemoteSourceRegistration, SessionMidRegistry,
     },
     relay_registry::RelaySourceRegistration,
     route_control::RouteControlState,
@@ -168,11 +168,11 @@ pub(super) struct PacketLoopState {
     /// packet-layer source policy already projected from room decisions
     pub(super) route_control: RouteControlState,
     /// producer lookup by session and MID for packet source resolution
-    pub(super) producer_mid_registry: BTreeMap<SessionMidLookupKey, TransportMediaId>,
+    pub(super) producer_mid_registry: SessionMidRegistry,
     /// producer lookup by session and SSRC after negotiation or dynamic discovery
-    pub(super) producer_ssrc_registry: BTreeMap<ProducerSsrcLookupKey, TransportMediaId>,
+    pub(super) producer_ssrc_registry: ProducerSsrcRegistry,
     /// producer RID learned for a session-scoped SSRC
-    pub(super) producer_ssrc_rid_registry: BTreeMap<ProducerSsrcLookupKey, Rid>,
+    pub(super) producer_ssrc_rid_registry: ProducerSsrcRidRegistry,
     /// producer SSRC bindings owned by each media id for teardown
     pub(super) producer_ssrcs_by_media: BTreeMap<TransportMediaId, Vec<Ssrc>>,
     /// packet-level decoder-refresh classifier for local or remote sources
@@ -201,7 +201,7 @@ pub(super) struct PacketLoopState {
     /// packet-loop write handles for per-session egress bitrate accounting
     pub(super) egress_bitrate_counters: BTreeMap<TransportSessionKey, Arc<MediaBitrateCounter>>,
     /// consumer lookup by session and MID for RTCP feedback routing
-    pub(super) consumer_mid_registry: BTreeMap<SessionMidLookupKey, TransportMediaId>,
+    pub(super) consumer_mid_registry: SessionMidRegistry,
     /// command path for source media owned by another worker
     pub(super) remote_source_registry: BTreeMap<TransportMediaId, RemoteSourceRegistration>,
     /// cross-worker relay destinations indexed by local source media id

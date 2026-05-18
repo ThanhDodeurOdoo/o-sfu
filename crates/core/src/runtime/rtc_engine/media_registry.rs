@@ -12,7 +12,7 @@
 //! and bitrate accounting point at the wrong source
 
 use std::{
-    collections::{BTreeSet, btree_map::Entry},
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
     time::Instant,
 };
 
@@ -145,34 +145,39 @@ impl RemoteSourceRegistration {
     }
 }
 
-/// reverse lookup key from browser session and MID to transport media id
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct SessionMidLookupKey {
-    session_key: TransportSessionKey,
-    mid: Mid,
+pub(super) type SessionMidRegistry = BTreeMap<TransportSessionKey, BTreeMap<Mid, TransportMediaId>>;
+pub(super) type ProducerSsrcRegistry =
+    BTreeMap<TransportSessionKey, BTreeMap<Ssrc, TransportMediaId>>;
+pub(super) type ProducerSsrcRidRegistry = BTreeMap<TransportSessionKey, BTreeMap<Ssrc, Rid>>;
+
+fn insert_session_lookup<K: Ord, V>(
+    registry: &mut BTreeMap<TransportSessionKey, BTreeMap<K, V>>,
+    session_key: &TransportSessionKey,
+    key: K,
+    value: V,
+) -> Option<V> {
+    registry
+        .entry(session_key.clone())
+        .or_default()
+        .insert(key, value)
 }
 
-impl SessionMidLookupKey {
-    fn new(session_key: &TransportSessionKey, mid: Mid) -> Self {
-        Self {
-            session_key: session_key.clone(),
-            mid,
+fn remove_session_lookup<K: Ord, V>(
+    registry: &mut BTreeMap<TransportSessionKey, BTreeMap<K, V>>,
+    session_key: &TransportSessionKey,
+    key: &K,
+) -> Option<V> {
+    let (removed, session_is_empty) = match registry.get_mut(session_key) {
+        Some(session_lookup) => {
+            let removed = session_lookup.remove(key);
+            (removed, session_lookup.is_empty())
         }
+        None => return None,
+    };
+    if session_is_empty {
+        registry.remove(session_key);
     }
-}
-
-/// reverse lookup key from producer session and SSRC to transport media id
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct ProducerSsrcLookupKey {
-    session_key: TransportSessionKey,
-    ssrc: Ssrc,
-}
-
-impl ProducerSsrcLookupKey {
-    /// build a producer SSRC lookup key with session scope
-    fn new(session_key: TransportSessionKey, ssrc: Ssrc) -> Self {
-        Self { session_key, ssrc }
-    }
+    removed
 }
 
 impl PacketLoopState {
@@ -189,8 +194,10 @@ impl PacketLoopState {
         let id = self.next_media_id;
         self.next_media_id = self.next_media_id.saturating_add(1);
         if let RegisteredMediaHandle::Producer { session_key, mid } = &handle {
-            self.producer_mid_registry.insert(
-                SessionMidLookupKey::new(session_key, *mid),
+            insert_session_lookup(
+                &mut self.producer_mid_registry,
+                session_key,
+                *mid,
                 TransportMediaId::new(id),
             );
             self.producer_ssrcs_by_media
@@ -201,8 +208,10 @@ impl PacketLoopState {
             source_transport_media_id,
         } = &handle
         {
-            self.consumer_mid_registry.insert(
-                SessionMidLookupKey::new(session_key, *mid),
+            insert_session_lookup(
+                &mut self.consumer_mid_registry,
+                session_key,
+                *mid,
                 *source_transport_media_id,
             );
         }
@@ -237,8 +246,7 @@ impl PacketLoopState {
     ) -> Option<RegisteredMediaHandle> {
         let handle = self.mid_registry.remove(&transport_media_id.as_u64())?;
         if let RegisteredMediaHandle::Producer { session_key, mid } = &handle {
-            self.producer_mid_registry
-                .remove(&SessionMidLookupKey::new(session_key, *mid));
+            remove_session_lookup(&mut self.producer_mid_registry, session_key, mid);
             self.clear_producer_ssrc_bindings(transport_media_id, session_key);
             self.forget_source_side_tables(transport_media_id);
             self.remove_incoming_bitrate_counter(transport_media_id);
@@ -246,8 +254,7 @@ impl PacketLoopState {
             session_key, mid, ..
         } = &handle
         {
-            self.consumer_mid_registry
-                .remove(&SessionMidLookupKey::new(session_key, *mid));
+            remove_session_lookup(&mut self.consumer_mid_registry, session_key, mid);
         }
         Some(handle)
     }
@@ -486,7 +493,8 @@ impl PacketLoopState {
         source_mid: Mid,
     ) -> Option<TransportMediaId> {
         self.producer_mid_registry
-            .get(&SessionMidLookupKey::new(source_session_key, source_mid))
+            .get(source_session_key)
+            .and_then(|source_lookup| source_lookup.get(&source_mid))
             .copied()
     }
 
@@ -500,10 +508,8 @@ impl PacketLoopState {
         source_ssrc: Ssrc,
     ) -> Option<TransportMediaId> {
         self.producer_ssrc_registry
-            .get(&ProducerSsrcLookupKey::new(
-                source_session_key.clone(),
-                source_ssrc,
-            ))
+            .get(source_session_key)
+            .and_then(|source_lookup| source_lookup.get(&source_ssrc))
             .copied()
     }
 
@@ -517,10 +523,8 @@ impl PacketLoopState {
         source_ssrc: Ssrc,
     ) -> Option<Rid> {
         self.producer_ssrc_rid_registry
-            .get(&ProducerSsrcLookupKey::new(
-                source_session_key.clone(),
-                source_ssrc,
-            ))
+            .get(source_session_key)
+            .and_then(|source_lookup| source_lookup.get(&source_ssrc))
             .copied()
     }
 
@@ -556,8 +560,8 @@ impl PacketLoopState {
             return;
         }
         let mid = *mid;
-        let key = ProducerSsrcLookupKey::new(session_key.clone(), ssrc);
-        if let Some(existing_transport_media_id) = self.producer_ssrc_registry.get(&key).copied()
+        if let Some(existing_transport_media_id) =
+            self.source_transport_media_id_for_ssrc(session_key, ssrc)
             && existing_transport_media_id != transport_media_id
         {
             warn!(
@@ -573,11 +577,16 @@ impl PacketLoopState {
             return;
         }
 
-        let inserted = self
-            .producer_ssrc_registry
-            .insert(key.clone(), transport_media_id)
-            .is_none();
-        let previous_rid = rid.and_then(|rid| self.producer_ssrc_rid_registry.insert(key, rid));
+        let inserted = insert_session_lookup(
+            &mut self.producer_ssrc_registry,
+            session_key,
+            ssrc,
+            transport_media_id,
+        )
+        .is_none();
+        let previous_rid = rid.and_then(|rid| {
+            insert_session_lookup(&mut self.producer_ssrc_rid_registry, session_key, ssrc, rid)
+        });
         let ssrcs = self
             .producer_ssrcs_by_media
             .entry(transport_media_id)
@@ -608,10 +617,8 @@ impl PacketLoopState {
         consumer_mid: Mid,
     ) -> Option<TransportMediaId> {
         self.consumer_mid_registry
-            .get(&SessionMidLookupKey::new(
-                consumer_session_key,
-                consumer_mid,
-            ))
+            .get(consumer_session_key)
+            .and_then(|consumer_lookup| consumer_lookup.get(&consumer_mid))
             .copied()
     }
 
@@ -666,7 +673,8 @@ impl PacketLoopState {
     ) {
         let Some(transport_media_id) = self
             .producer_mid_registry
-            .get(&SessionMidLookupKey::new(session_key, mid))
+            .get(session_key)
+            .and_then(|producer_lookup| producer_lookup.get(&mid))
             .copied()
         else {
             return;
@@ -691,11 +699,19 @@ impl PacketLoopState {
             return;
         }
         for (ssrc, rid) in &bindings {
-            let key = ProducerSsrcLookupKey::new(session_key.clone(), *ssrc);
-            self.producer_ssrc_registry
-                .insert(key.clone(), transport_media_id);
+            insert_session_lookup(
+                &mut self.producer_ssrc_registry,
+                session_key,
+                *ssrc,
+                transport_media_id,
+            );
             if let Some(rid) = rid {
-                self.producer_ssrc_rid_registry.insert(key, *rid);
+                insert_session_lookup(
+                    &mut self.producer_ssrc_rid_registry,
+                    session_key,
+                    *ssrc,
+                    *rid,
+                );
             }
         }
         self.producer_ssrcs_by_media
@@ -713,7 +729,8 @@ impl PacketLoopState {
     ) {
         let Some(transport_media_id) = self
             .producer_mid_registry
-            .get(&SessionMidLookupKey::new(session_key, mid))
+            .get(session_key)
+            .and_then(|producer_lookup| producer_lookup.get(&mid))
             .copied()
         else {
             return;
@@ -733,9 +750,8 @@ impl PacketLoopState {
     ) {
         if let Some(ssrcs) = self.producer_ssrcs_by_media.remove(&transport_media_id) {
             for ssrc in ssrcs {
-                let key = ProducerSsrcLookupKey::new(session_key.clone(), ssrc);
-                self.producer_ssrc_registry.remove(&key);
-                self.producer_ssrc_rid_registry.remove(&key);
+                remove_session_lookup(&mut self.producer_ssrc_registry, session_key, &ssrc);
+                remove_session_lookup(&mut self.producer_ssrc_rid_registry, session_key, &ssrc);
             }
         }
     }
@@ -807,6 +823,42 @@ mod tests {
     }
 
     #[test]
+    fn producer_media_lookup_is_session_scoped_by_mid() {
+        let mut state = PacketLoopState::default();
+        let first_session = test_transport_session_key(16, 0, 18, UserId::Integer(19));
+        let second_session = test_transport_session_key(17, 0, 18, UserId::Integer(19));
+        let shared_mid = Mid::from("cam-up");
+        let first_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: first_session.clone(),
+            mid: shared_mid,
+        });
+        let second_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: second_session.clone(),
+            mid: shared_mid,
+        });
+
+        assert_eq!(
+            state.source_transport_media_id_for_mid(&first_session, shared_mid),
+            Some(first_media_id)
+        );
+        assert_eq!(
+            state.source_transport_media_id_for_mid(&second_session, shared_mid),
+            Some(second_media_id)
+        );
+
+        let _removed_handle = state.remove_media_handle(first_media_id);
+
+        assert_eq!(
+            state.source_transport_media_id_for_mid(&first_session, shared_mid),
+            None
+        );
+        assert_eq!(
+            state.source_transport_media_id_for_mid(&second_session, shared_mid),
+            Some(second_media_id)
+        );
+    }
+
+    #[test]
     fn producer_media_lookup_falls_back_to_negotiated_ssrc() {
         let producer_session = test_transport_session_key(18, 0, 19, UserId::Integer(20));
         let producer_mid = Mid::from("cam-up");
@@ -830,6 +882,46 @@ mod tests {
         assert_eq!(
             state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(producer_ssrc)),
             Some(transport_media_id)
+        );
+    }
+
+    #[test]
+    fn dynamic_producer_ssrc_rid_lookup_clears_with_media_handle() {
+        let producer_session = test_transport_session_key(25, 0, 26, UserId::Integer(27));
+        let producer_mid = Mid::from("cam-up");
+        let producer_ssrc = Ssrc::from(99_999_u32);
+        let learned_rid = Rid::from("hi");
+        let mut state = PacketLoopState::default();
+        let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: producer_session.clone(),
+            mid: producer_mid,
+        });
+
+        state.learn_producer_ssrc_binding(
+            &producer_session,
+            transport_media_id,
+            producer_ssrc,
+            Some(learned_rid),
+        );
+
+        assert_eq!(
+            state.source_transport_media_id_for_ssrc(&producer_session, producer_ssrc),
+            Some(transport_media_id)
+        );
+        assert_eq!(
+            state.source_rid_for_ssrc(&producer_session, producer_ssrc),
+            Some(learned_rid)
+        );
+
+        let _removed_handle = state.remove_media_handle(transport_media_id);
+
+        assert_eq!(
+            state.source_transport_media_id_for_ssrc(&producer_session, producer_ssrc),
+            None
+        );
+        assert_eq!(
+            state.source_rid_for_ssrc(&producer_session, producer_ssrc),
+            None
         );
     }
 
