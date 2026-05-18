@@ -283,6 +283,42 @@ impl RoomManager {
         }
     }
 
+    /// drains due cleanup retries for rooms retained after teardown
+    ///
+    /// this is the runtime maintenance entrypoint for cleanup work captured
+    /// after room state has already forgotten users or media. callers should
+    /// pass the same [`MediaTransport`] used by normal room teardown so queued
+    /// operations keep targeting the resolved transport identities stored by
+    /// the room
+    ///
+    /// each room remains the owner of retry classification, backoff, metrics
+    /// and last-resort escalation. the manager only serializes the sweep with
+    /// the room lifecycle lock and removes a current room after it is empty
+    /// with no pending retry state
+    ///
+    /// the sweep is best effort. rooms removed or replaced while the directory
+    /// snapshot is being processed are skipped by [`Self::with_current_room`]
+    ///
+    /// this is cold-path lifecycle work. it must not be called from packet
+    /// forwarding or transport hot loops
+    pub async fn drain_cleanup_retries(&self, media_transport: &MediaTransport) {
+        for entry in self.directory_entries().await {
+            let room = entry.room();
+            if !room.has_pending_cleanup_retries() {
+                continue;
+            }
+            let room_id = room.uuid().to_owned();
+            let removal_room_id = room_id.clone();
+            self.with_current_room(&room_id, |room| async move {
+                room.drain_cleanup_retries(media_transport).await;
+                if room.is_empty().await && !room.has_pending_cleanup_retries() {
+                    self.remove_entry_if_current(&removal_room_id, &room).await;
+                }
+            })
+            .await;
+        }
+    }
+
     /// Joins a user through the current live room entry for `room_id`.
     ///
     /// The join runs under the room lifecycle lock so it cannot overlap another

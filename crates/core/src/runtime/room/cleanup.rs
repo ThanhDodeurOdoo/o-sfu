@@ -755,6 +755,23 @@ impl Room {
         }
     }
 
+    /// lets runtime maintenance poll this room's due cleanup work
+    ///
+    /// the room keeps retry ordering and failure classification inside the
+    /// reconciler. callers only decide when to poll and must not hold the room
+    /// state lock while invoking this method
+    ///
+    /// this method does not remove the room from the manager. the manager owns
+    /// directory lifetime after checking empty state and pending retry state
+    /// under the lifecycle lock
+    pub(in crate::runtime::room) async fn drain_cleanup_retries(
+        &self,
+        media_transport: &MediaTransport,
+    ) {
+        self.reconcile_transport_cleanup_retries(media_transport)
+            .await;
+    }
+
     /// Converts a retry outcome into metrics and final escalation.
     ///
     /// Requeued operations remain owned by the room. Exhausted or terminal media
