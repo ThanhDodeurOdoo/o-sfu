@@ -35,6 +35,19 @@ pub mod packet_sinks {
 pub mod room {
     //! Room orchestration facade used by HTTP, websocket, and application code.
 
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub mod test_support {
+        //! non-production room harness types for deterministic integration tests
+
+        pub use crate::runtime::{
+            room::{
+                NegotiatedPublish, RoomManagerTestApi, RoomTestApi, RoomTestInspect,
+                RoomTestLifecycle, RoomTestMedia,
+            },
+            source_model::test_support::TestSourceKind,
+        };
+    }
+
     pub use crate::runtime::room::{
         BroadcastPayload, BroadcastPayloadError, ConsumerRouteState,
         DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
@@ -47,11 +60,6 @@ pub mod room {
         RuntimeRoomStatsSnapshot, TrackBindingUpdate, UserCloseReason, UserOutbound,
         UserOutboundEvent, UserOutboundOverflow, UserOutboundOverflowKind, UserOutboundQueueLimits,
         UserOutboundReceiver, UserOutboundSendError, UserOutboundSender, rtp_capabilities,
-    };
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub use crate::runtime::room::{
-        NegotiatedPublish, RoomManagerTestApi, RoomTestApi, RoomTestInspect, RoomTestLifecycle,
-        RoomTestMedia,
     };
 }
 
@@ -84,6 +92,12 @@ pub mod transport {
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub mod test_support {
+        //! non-production media transport fakes and route inspectors
+        //!
+        //! this module exists only for deterministic tests and explicit
+        //! `testing-transport` builds. production code must use the opaque
+        //! `MediaTransport` facade plus the production `RtcTransport` backend
+
         pub use crate::runtime::{
             media_transport::test_support::{FakeMediaTransport, FakeMediaTransportEvent},
             rtc_engine::{ForwardedPacket, test_support::*},

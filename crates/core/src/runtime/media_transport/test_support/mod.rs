@@ -25,6 +25,11 @@ impl MediaTransport {
         dead_code,
         reason = "the fake transport remains available only for deterministic test and feature-gated development workflows"
     )]
+    /// creates a deterministic fake media transport for tests
+    ///
+    /// this constructor is compiled only for unit tests or the
+    /// `testing-transport` feature. it is not part of the production media
+    /// transport contract
     #[must_use]
     pub fn fake_for_testing() -> Self {
         Self::from_fake_transport(Arc::new(FakeMediaTransport::default()))
@@ -35,6 +40,11 @@ impl MediaTransport {
         dead_code,
         reason = "targeted tests still need to inject a preconfigured fake media transport instance"
     )]
+    /// wraps a preconfigured fake transport for deterministic tests
+    ///
+    /// this is a non-production constructor behind `testing-transport` so
+    /// integration tests can inspect and control transport behavior without
+    /// naming RTC worker internals
     #[must_use]
     pub fn from_fake_transport(transport: Arc<FakeMediaTransport>) -> Self {
         Self {
@@ -43,6 +53,9 @@ impl MediaTransport {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
+    /// returns the fake backend when this handle was built for tests
+    ///
+    /// production builds do not compile the fake backend variant
     #[must_use]
     pub const fn as_fake_transport(&self) -> Option<&Arc<FakeMediaTransport>> {
         match &self.backend {
@@ -84,6 +97,10 @@ impl MediaTransport {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
+    /// overrides a real RTC session health snapshot in test builds
+    ///
+    /// this is a route-test hook for failure injection and is not a production
+    /// control-plane operation
     pub fn debug_set_session_transport_health(
         &self,
         session_key: &TransportSessionKey,
@@ -114,6 +131,10 @@ impl MediaTransport {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
+    /// inspects a real RTC route by consumer mid in test builds
+    ///
+    /// this is exposed for integration assertions that need to prove routing
+    /// state without exposing worker internals to production callers
     pub async fn debug_route_entry_by_consumer_mid(
         &self,
         consumer_session_key: &TransportSessionKey,
