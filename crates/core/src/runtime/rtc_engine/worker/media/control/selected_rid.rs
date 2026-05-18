@@ -597,7 +597,7 @@ fn request_live_rid_keyframe(
     ) {
         KeyframeRequestDecision::Forward => {
             source_control.request_keyframe(
-                registered_source_session_key,
+                &registered_source_session_key,
                 source_transport_media_id,
                 Some(rid),
                 KeyframeRequestKind::Pli,

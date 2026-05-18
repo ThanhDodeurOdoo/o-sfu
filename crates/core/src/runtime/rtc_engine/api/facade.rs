@@ -659,9 +659,10 @@ impl RtcTransportMediaFacade<'_> {
         target: &RtcTransportWorker,
     ) -> Result<RemoteSourceControl, TransportAdapterError> {
         let worker_handle = self.worker.ensure_packet_loop_started()?;
-        Ok(RemoteSourceControl::new(
+        Ok(RemoteSourceControl::with_metrics(
             worker_handle.command_tx,
             target.relay_target_id,
+            Arc::clone(&target.rtc_metrics),
         ))
     }
 

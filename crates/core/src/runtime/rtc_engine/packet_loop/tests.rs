@@ -468,7 +468,13 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
         &mut buffers.pending_packets,
         &mut buffers.forwards,
     );
-    flush_forward_routes(&mut state, &metrics, &rtp_metrics, &mut buffers);
+    flush_forward_routes(
+        &mut state,
+        &metrics,
+        &rtp_metrics,
+        &rtc_packet_metrics,
+        &mut buffers,
+    );
 
     assert_eq!(buffers.forwards.len(), 1);
     assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
@@ -485,6 +491,7 @@ fn flush_forward_routes_writes_hot_rtp_metrics_only_to_the_worker_recorder() {
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
     let rtp_metrics = RtpMetricsRecorder::default();
+    let rtc_recorder = RtcMetricsRecorder::default();
     let packet = sample_forwarded_packet(source_session, "aud-up", b"payload");
 
     buffers.pending_packets.push(packet);
@@ -499,7 +506,13 @@ fn flush_forward_routes_writes_hot_rtp_metrics_only_to_the_worker_recorder() {
         ),
     );
 
-    flush_forward_routes(&mut state, &metrics, &rtp_metrics, &mut buffers);
+    flush_forward_routes(
+        &mut state,
+        &metrics,
+        &rtp_metrics,
+        &rtc_recorder,
+        &mut buffers,
+    );
 
     assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
     let snapshot = metrics.snapshot();
@@ -562,6 +575,7 @@ fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
     let rtp_metrics = metrics.register_rtp_worker();
+    let rtc_recorder = metrics.register_rtc_worker();
     let packet = sample_forwarded_packet(source_session, "aud-up", b"payload")
         .share_for_relay(source_transport_media_id);
 
@@ -591,7 +605,13 @@ fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
         ),
     );
 
-    flush_forward_routes(&mut state, &metrics, &rtp_metrics, &mut buffers);
+    flush_forward_routes(
+        &mut state,
+        &metrics,
+        &rtp_metrics,
+        &rtc_recorder,
+        &mut buffers,
+    );
 
     assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
     assert!(intra_node_rx.try_recv().is_ok());
@@ -607,6 +627,60 @@ fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
     assert_eq!(snapshot.rtp_forwarded_payload_bytes_intra_node_relay(), 7);
     assert_eq!(snapshot.rtp_forwarded_payload_bytes_inter_node_relay(), 7);
     assert_eq!(snapshot.rtp_payload_bytes_egress(), 0);
+    assert_eq!(snapshot.rtc_relay_enqueue_intra_node_enqueued(), 1);
+    assert_eq!(snapshot.rtc_relay_enqueue_inter_node_enqueued(), 1);
+    assert_eq!(snapshot.rtc_relay_mailbox_depth_samples(), 1);
+    assert_eq!(snapshot.rtc_relay_mailbox_depth_observed(), 1);
+}
+
+#[test]
+fn flush_forward_routes_records_closed_relays_and_keeps_later_destinations() {
+    let source_session = test_transport_session_key(119, 0, 120, UserId::Integer(121));
+    let source_transport_media_id = TransportMediaId::new(122);
+    let mut state = PacketLoopState::default();
+    let sink = Arc::new(CountingSink::new());
+    let (relay_mailbox, relay_rx) = RelayPacketMailbox::channel_for_test();
+    let mut buffers = PacketLoopBuffers::new();
+    let metrics = RuntimeMetrics::default();
+    let rtp_metrics = metrics.register_rtp_worker();
+    let rtc_recorder = metrics.register_rtc_worker();
+    let packet = sample_forwarded_packet(source_session, "aud-up", b"payload")
+        .share_for_relay(source_transport_media_id);
+
+    drop(relay_rx);
+    buffers.pending_packets.push(packet);
+    buffers.forwards.push(
+        super::super::forwarding_destination::PacketForward::from_relay_target(
+            0,
+            source_transport_media_id,
+            relay_mailbox.into(),
+        ),
+    );
+    buffers.forwards.push(
+        super::super::forwarding_destination::PacketForward::from_packet_sink(
+            0,
+            source_transport_media_id,
+            RegisteredPacketSink::new(
+                into_packet_sink(Arc::<CountingSink>::clone(&sink)),
+                RtpForwardDestinationKind::Recording,
+            ),
+        ),
+    );
+
+    flush_forward_routes(
+        &mut state,
+        &metrics,
+        &rtp_metrics,
+        &rtc_recorder,
+        &mut buffers,
+    );
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
+    assert_eq!(snapshot.rtc_relay_enqueue_intra_node_closed(), 1);
+    assert_eq!(snapshot.rtc_relay_mailbox_depth_samples(), 1);
+    assert_eq!(snapshot.rtp_forwarded_packets_intra_node_relay(), 0);
+    assert_eq!(snapshot.rtp_relay_overload_drops_intra_node_relay(), 0);
 }
 
 #[test]
@@ -619,6 +693,7 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() {
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
     let rtp_metrics = metrics.register_rtp_worker();
+    let rtc_recorder = RtcMetricsRecorder::default();
 
     assert!(
         bootstrap::ensure_session_rtc_state(
@@ -667,7 +742,13 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() {
         ),
     );
 
-    flush_forward_routes(&mut state, &metrics, &rtp_metrics, &mut buffers);
+    flush_forward_routes(
+        &mut state,
+        &metrics,
+        &rtp_metrics,
+        &rtc_recorder,
+        &mut buffers,
+    );
 
     assert_eq!(drain_ready_sessions(&mut state), vec![consumer_session]);
     assert!(buffers.relay_packet_idx.is_none());
@@ -684,6 +765,7 @@ fn flush_forward_routes_drops_stale_local_consumer_stream_handle() {
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
     let rtp_metrics = metrics.register_rtp_worker();
+    let rtc_recorder = RtcMetricsRecorder::default();
 
     assert!(
         bootstrap::ensure_session_rtc_state(
@@ -731,7 +813,13 @@ fn flush_forward_routes_drops_stale_local_consumer_stream_handle() {
         ),
     );
 
-    flush_forward_routes(&mut state, &metrics, &rtp_metrics, &mut buffers);
+    flush_forward_routes(
+        &mut state,
+        &metrics,
+        &rtp_metrics,
+        &rtc_recorder,
+        &mut buffers,
+    );
 
     assert!(drain_ready_sessions(&mut state).is_empty());
     assert_eq!(metrics.snapshot().rtp_forwarded_packets_local_rtc(), 0);
@@ -900,12 +988,15 @@ fn drain_relay_packets_ingests_owned_forwarded_packets_from_the_mailbox() {
     let packet = sample_forwarded_packet(source_session.clone(), "aud-up", b"payload");
     let (mailbox, mut relay_rx) = RelayPacketMailbox::channel_for_test();
     let mut pending_packets = Vec::new();
+    let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
 
     mailbox.forward_packet(&packet, TransportMediaId::new(17));
     drain_relay_packets(
         &mut relay_rx,
         &mut pending_packets,
         MAX_RELAY_PACKETS_PER_ITERATION,
+        &rtc_metrics,
     );
 
     assert_eq!(pending_packets.len(), 1);
@@ -920,6 +1011,7 @@ fn drain_relay_packets_ingests_owned_forwarded_packets_from_the_mailbox() {
         forwarded.resolve_source_transport_media_id(&PacketLoopState::default()),
         Some(TransportMediaId::new(17))
     );
+    assert_eq!(metrics.snapshot().rtc_relay_drained_packets(), 1);
 }
 
 #[test]
@@ -928,15 +1020,21 @@ fn drain_relay_packets_stops_at_the_configured_cap() {
     let packet = sample_forwarded_packet(source_session, "aud-up", b"payload");
     let (mailbox, mut relay_rx) = RelayPacketMailbox::channel_for_test();
     let mut pending_packets = Vec::new();
+    let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
 
     mailbox.forward_packet(&packet, TransportMediaId::new(18));
     mailbox.forward_packet(&packet, TransportMediaId::new(18));
 
-    let drained = drain_relay_packets(&mut relay_rx, &mut pending_packets, 1);
+    let drained = drain_relay_packets(&mut relay_rx, &mut pending_packets, 1, &rtc_metrics);
 
     assert_eq!(drained, 1);
     assert_eq!(pending_packets.len(), 1);
     assert!(relay_rx.try_recv().is_ok());
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.rtc_relay_drain_batches(), 1);
+    assert_eq!(snapshot.rtc_relay_drained_packets(), 1);
+    assert_eq!(snapshot.rtc_relay_drain_cap_hits(), 1);
 }
 
 #[test]
@@ -948,6 +1046,7 @@ fn flush_forward_routes_records_relay_overload_drops() {
     let mut buffers = PacketLoopBuffers::new();
     let metrics = RuntimeMetrics::default();
     let rtp_metrics = metrics.register_rtp_worker();
+    let rtc_recorder = metrics.register_rtc_worker();
     let packet = sample_forwarded_packet(source_session, "aud-up", b"payload")
         .share_for_relay(source_transport_media_id);
 
@@ -968,11 +1067,20 @@ fn flush_forward_routes_records_relay_overload_drops() {
         ),
     );
 
-    flush_forward_routes(&mut state, &metrics, &rtp_metrics, &mut buffers);
+    flush_forward_routes(
+        &mut state,
+        &metrics,
+        &rtp_metrics,
+        &rtc_recorder,
+        &mut buffers,
+    );
 
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtp_forwarded_packets_intra_node_relay(), 0);
     assert_eq!(snapshot.rtp_relay_overload_drops_intra_node_relay(), 1);
+    assert_eq!(snapshot.rtc_relay_enqueue_intra_node_overloaded(), 1);
+    assert_eq!(snapshot.rtc_relay_mailbox_depth_samples(), 1);
+    assert_eq!(snapshot.rtc_relay_mailbox_depth_observed(), 1);
 }
 
 #[test]

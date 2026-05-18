@@ -73,6 +73,10 @@ pub(super) enum PacketLoopControlInput {
 }
 
 /// Mailbox input that can wake the worker while it waits for external work.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "control input is cold and boxing would allocate every command wake"
+)]
 pub(super) enum PacketLoopMailboxInput {
     Control(PacketLoopControlInput),
     Relay,

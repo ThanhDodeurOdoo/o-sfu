@@ -17,6 +17,39 @@ pub(super) enum RelayEnqueueOutcome {
     Closed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RelayEnqueueReport {
+    target_kind: RelayTargetKind,
+    outcome: RelayEnqueueOutcome,
+    mailbox_depth: Option<usize>,
+}
+
+impl RelayEnqueueReport {
+    const fn new(
+        target_kind: RelayTargetKind,
+        outcome: RelayEnqueueOutcome,
+        mailbox_depth: Option<usize>,
+    ) -> Self {
+        Self {
+            target_kind,
+            outcome,
+            mailbox_depth,
+        }
+    }
+
+    pub(super) const fn target_kind(self) -> RelayTargetKind {
+        self.target_kind
+    }
+
+    pub(super) const fn outcome(self) -> RelayEnqueueOutcome {
+        self.outcome
+    }
+
+    pub(super) const fn mailbox_depth(self) -> Option<usize> {
+        self.mailbox_depth
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct RelayPacketMailbox {
     tx: mpsc::Sender<ForwardedPacket>,
@@ -104,14 +137,18 @@ impl RelayTargetTransport {
         &self,
         packet: &ForwardedPacket,
         source_transport_media_id: TransportMediaId,
-    ) -> RelayEnqueueOutcome {
+    ) -> RelayEnqueueReport {
         match self {
-            Self::IntraNodeMailbox(mailbox) => {
-                mailbox.forward_packet(packet, source_transport_media_id)
-            }
-            Self::InterNodeSender(sender) => {
-                sender.forward_packet(packet, source_transport_media_id)
-            }
+            Self::IntraNodeMailbox(mailbox) => RelayEnqueueReport::new(
+                RelayTargetKind::IntraNode,
+                mailbox.forward_packet(packet, source_transport_media_id),
+                Some(mailbox.backlog_depth()),
+            ),
+            Self::InterNodeSender(sender) => RelayEnqueueReport::new(
+                RelayTargetKind::InterNode,
+                sender.forward_packet(packet, source_transport_media_id),
+                None,
+            ),
         }
     }
 

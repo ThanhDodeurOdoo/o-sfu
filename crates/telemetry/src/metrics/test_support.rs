@@ -1,5 +1,6 @@
 use super::{
     BudgetSolverOutcome, HttpRoute, MetricName, RtcDatagramDropReason, RtcDatagramRoutePath,
+    RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
     RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetricsSnapshot,
     SourceSelectionKind, TransportCleanupFailureKind, TransportHealthState, TransportIceState,
     counter::ExportedMetricLabel,
@@ -193,6 +194,11 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
         transport_cleanup_retry_successes => TransportCleanupRetrySuccessesTotal &[],
         rtc_datagram_fallback_scans => RtcDatagramFallbackScansTotal &[],
         rtc_datagram_scan_users => RtcDatagramScanUsersTotal &[],
+        rtc_relay_mailbox_depth_samples => RtcRelayMailboxDepthSamplesTotal &[],
+        rtc_relay_mailbox_depth_observed => RtcRelayMailboxDepthObservedTotal &[],
+        rtc_relay_drain_batches => RtcRelayDrainBatchesTotal &[],
+        rtc_relay_drained_packets => RtcRelayDrainedPacketsTotal &[],
+        rtc_relay_drain_cap_hits => RtcRelayDrainCapHitsTotal &[],
     }
 
     snapshot_gauge_accessors! {
@@ -394,6 +400,70 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
 
     fn rtc_route_control_layer_dropped(&self) -> u64 {
         self.rtc_route_control(RtcRouteControlOutcome::LayerDropped)
+    }
+
+    fn rtc_relay_enqueue(&self, result: RtcRelayEnqueueResult) -> u64 {
+        self.counter_value(
+            MetricName::RtcRelayEnqueuesTotal,
+            &[
+                ("target", result.target_label()),
+                ("outcome", result.outcome_label()),
+            ],
+        )
+    }
+
+    fn rtc_relay_enqueue_intra_node_enqueued(&self) -> u64 {
+        self.rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeEnqueued)
+    }
+
+    fn rtc_relay_enqueue_intra_node_overloaded(&self) -> u64 {
+        self.rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeOverloaded)
+    }
+
+    fn rtc_relay_enqueue_intra_node_closed(&self) -> u64 {
+        self.rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeClosed)
+    }
+
+    fn rtc_relay_enqueue_inter_node_enqueued(&self) -> u64 {
+        self.rtc_relay_enqueue(RtcRelayEnqueueResult::InterNodeEnqueued)
+    }
+
+    fn rtc_relay_enqueue_inter_node_overloaded(&self) -> u64 {
+        self.rtc_relay_enqueue(RtcRelayEnqueueResult::InterNodeOverloaded)
+    }
+
+    fn rtc_relay_enqueue_inter_node_closed(&self) -> u64 {
+        self.rtc_relay_enqueue(RtcRelayEnqueueResult::InterNodeClosed)
+    }
+
+    fn rtc_remote_control_drops(&self, kind: RtcRemoteControlDropKind) -> u64 {
+        self.counter_value(
+            MetricName::RtcRemoteControlDropsTotal,
+            &[("kind", metric_label(kind))],
+        )
+    }
+
+    fn rtc_remote_control_keyframe_drops(&self) -> u64 {
+        self.rtc_remote_control_drops(RtcRemoteControlDropKind::Keyframe)
+    }
+
+    fn rtc_remote_control_packet_gate_drops(&self) -> u64 {
+        self.rtc_remote_control_drops(RtcRemoteControlDropKind::PacketGate)
+    }
+
+    fn rtc_remote_packet_gate_convergence(&self, outcome: RtcRemotePacketGateConvergence) -> u64 {
+        self.counter_value(
+            MetricName::RtcRemotePacketGateConvergenceTotal,
+            &[("outcome", metric_label(outcome))],
+        )
+    }
+
+    fn rtc_remote_packet_gate_retries(&self) -> u64 {
+        self.rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Retry)
+    }
+
+    fn rtc_remote_packet_gate_flushes(&self) -> u64 {
+        self.rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Flushed)
     }
 
     fn source_selection_updates(&self, selector: SourceSelectionKind) -> u64 {

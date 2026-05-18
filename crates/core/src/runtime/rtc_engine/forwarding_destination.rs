@@ -13,12 +13,14 @@ use str0m::RtcError;
 use super::{
     forwarded_packet::ForwardedPacket,
     local_forwarding::LocalPacketDestination,
-    relay_registry::{RelayEnqueueOutcome, RelayTargetKind, RelayTargetTransport},
+    relay_registry::{
+        RelayEnqueueOutcome, RelayEnqueueReport, RelayTargetKind, RelayTargetTransport,
+    },
     state::PacketLoopState,
 };
 use crate::runtime::{
     media_transport::TransportMediaId,
-    metrics::{RtpForwardDestinationKind, RtpRelayDropKind},
+    metrics::{RtcRelayEnqueueResult, RtpForwardDestinationKind, RtpRelayDropKind},
     packet_sink_registry::RegisteredPacketSink,
 };
 
@@ -55,8 +57,8 @@ pub(super) enum ForwardSendOutcome {
     LocalRtc { payload_bytes: Option<usize> },
     /// non-local side effect completed or had no stronger delivery signal
     SideEffect,
-    /// relay enqueue refused the packet because the target was overloaded
-    OverloadedRelay,
+    /// relay enqueue completed with a concrete target outcome
+    RelayEnqueue(RelayEnqueueReport),
 }
 
 /// turn-local handle for one local rtc route destination
@@ -312,11 +314,31 @@ impl RelayPacketDestination {
 
     /// enqueues a shared relay packet for another worker or node
     fn send(&self, packet: &ForwardedPacket) -> ForwardSendOutcome {
-        match self.target.forward_packet(packet, self.transport_media_id) {
-            RelayEnqueueOutcome::Overloaded => ForwardSendOutcome::OverloadedRelay,
-            RelayEnqueueOutcome::Enqueued | RelayEnqueueOutcome::Closed => {
-                ForwardSendOutcome::SideEffect
-            }
+        ForwardSendOutcome::RelayEnqueue(
+            self.target.forward_packet(packet, self.transport_media_id),
+        )
+    }
+}
+
+pub(super) const fn relay_enqueue_result(report: RelayEnqueueReport) -> RtcRelayEnqueueResult {
+    match (report.target_kind(), report.outcome()) {
+        (RelayTargetKind::IntraNode, RelayEnqueueOutcome::Enqueued) => {
+            RtcRelayEnqueueResult::IntraNodeEnqueued
+        }
+        (RelayTargetKind::IntraNode, RelayEnqueueOutcome::Overloaded) => {
+            RtcRelayEnqueueResult::IntraNodeOverloaded
+        }
+        (RelayTargetKind::IntraNode, RelayEnqueueOutcome::Closed) => {
+            RtcRelayEnqueueResult::IntraNodeClosed
+        }
+        (RelayTargetKind::InterNode, RelayEnqueueOutcome::Enqueued) => {
+            RtcRelayEnqueueResult::InterNodeEnqueued
+        }
+        (RelayTargetKind::InterNode, RelayEnqueueOutcome::Overloaded) => {
+            RtcRelayEnqueueResult::InterNodeOverloaded
+        }
+        (RelayTargetKind::InterNode, RelayEnqueueOutcome::Closed) => {
+            RtcRelayEnqueueResult::InterNodeClosed
         }
     }
 }

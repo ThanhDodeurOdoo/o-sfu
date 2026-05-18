@@ -25,8 +25,9 @@ use tracing::{debug, warn};
 use super::{
     super::{
         forwarded_packet::ForwardedPacket,
-        forwarding_destination::{ForwardSendOutcome, ForwardingDestination},
+        forwarding_destination::{ForwardSendOutcome, ForwardingDestination, relay_enqueue_result},
         media_registry::RegisteredMediaHandle,
+        relay_registry::RelayEnqueueOutcome,
         state::PacketLoopState,
         worker::{apply_source_rid_readiness, request_keyframe_for_source},
     },
@@ -35,7 +36,7 @@ use super::{
 use crate::runtime::{
     hot_path::unlikely,
     media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
-    metrics::{RtcRouteControlMetrics, RtpMetricsRecorder, RuntimeMetrics},
+    metrics::{RtcMetricsRecorder, RtcRouteControlMetrics, RtpMetricsRecorder, RuntimeMetrics},
 };
 
 /// Observe packet-path metadata before packets are forwarded.
@@ -218,6 +219,7 @@ pub(super) fn drain_relay_packets(
     relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
     pending_packets: &mut Vec<ForwardedPacket>,
     max_packets: usize,
+    metrics: &RtcMetricsRecorder,
 ) -> usize {
     let mut drained_packets = 0;
     while drained_packets < max_packets {
@@ -230,6 +232,10 @@ pub(super) fn drain_relay_packets(
                 break;
             }
         }
+    }
+    let cap_hit = max_packets > 0 && drained_packets == max_packets && !relay_rx.is_empty();
+    if drained_packets > 0 {
+        metrics.record_rtc_relay_drain_batch(drained_packets, cap_hit);
     }
     drained_packets
 }
@@ -254,6 +260,7 @@ pub(super) fn flush_forward_routes(
     state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
     rtp_metrics: &RtpMetricsRecorder,
+    rtc_recorder: &RtcMetricsRecorder,
     buffers: &mut PacketLoopBuffers,
 ) {
     let (forwards, pending_packets) = (&buffers.forwards, &mut buffers.pending_packets);
@@ -294,16 +301,25 @@ pub(super) fn flush_forward_routes(
                 rtp_metrics.record_forwarded(destination_kind, payload_len);
             }
             Ok(ForwardSendOutcome::SideEffect)
-                if matches!(
-                    destination,
-                    ForwardingDestination::PacketSink(_) | ForwardingDestination::Relay(_)
-                ) =>
+                if matches!(destination, ForwardingDestination::PacketSink(_)) =>
             {
                 rtp_metrics.record_forwarded(destination_kind, payload_len);
             }
-            Ok(ForwardSendOutcome::OverloadedRelay) => {
-                if let Some(destination_kind) = destination.relay_drop_kind() {
-                    metrics.record_rtp_relay_overload_drop(destination_kind);
+            Ok(ForwardSendOutcome::RelayEnqueue(report)) => {
+                rtc_recorder.record_rtc_relay_enqueue(relay_enqueue_result(report));
+                if let Some(depth) = report.mailbox_depth() {
+                    rtc_recorder.record_rtc_relay_mailbox_depth(depth);
+                }
+                match report.outcome() {
+                    RelayEnqueueOutcome::Enqueued => {
+                        rtp_metrics.record_forwarded(destination_kind, payload_len);
+                    }
+                    RelayEnqueueOutcome::Overloaded => {
+                        if let Some(destination_kind) = destination.relay_drop_kind() {
+                            metrics.record_rtp_relay_overload_drop(destination_kind);
+                        }
+                    }
+                    RelayEnqueueOutcome::Closed => {}
                 }
             }
             Ok(

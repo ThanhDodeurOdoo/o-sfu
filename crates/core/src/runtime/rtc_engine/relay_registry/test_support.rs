@@ -47,5 +47,6 @@ impl ActiveRelayTarget {
     ) -> RelayEnqueueOutcome {
         self.target()
             .forward_packet(packet, source_transport_media_id)
+            .outcome()
     }
 }

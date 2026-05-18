@@ -205,7 +205,7 @@ fn flush_coalesced_keyframe_request(
                         "forwarding remote keyframe request to source control"
                     );
                     source_control.request_keyframe(
-                        source_session_key,
+                        &source_session_key,
                         coalesced_request.source_transport_media_id,
                         coalesced_request.rid,
                         coalesced_request.kind,

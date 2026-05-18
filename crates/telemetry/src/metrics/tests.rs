@@ -4,6 +4,7 @@ use o_sfu_model::WebSocketCloseCode;
 
 use super::{
     BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
+    RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
     RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetrics,
     RuntimeMetricsSnapshot, SourceSelectionKind, TransportHealthState, TransportIceState,
     WsSessionLoopExitReason, test_support::RuntimeMetricsSnapshotTestExt,
@@ -92,6 +93,13 @@ fn assert_forwarding_volume_metrics(snapshot: &RuntimeMetricsSnapshot) {
 }
 
 fn assert_rtc_datagram_and_route_control_metrics(snapshot: &RuntimeMetricsSnapshot) {
+    assert_rtc_datagram_metrics(snapshot);
+    assert_rtc_route_control_metrics(snapshot);
+    assert_rtc_relay_pressure_metrics(snapshot);
+    assert_rtc_remote_control_metrics(snapshot);
+}
+
+fn assert_rtc_datagram_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.rtc_datagram_routes_indexed(), 1);
     assert_eq!(snapshot.rtc_datagram_routes_scan(), 1);
     assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache(), 1);
@@ -100,11 +108,32 @@ fn assert_rtc_datagram_and_route_control_metrics(snapshot: &RuntimeMetricsSnapsh
     assert_eq!(snapshot.rtc_datagram_drops_malformed(), 1);
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
     assert_eq!(snapshot.rtc_datagram_scan_users(), 3);
+}
+
+fn assert_rtc_route_control_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.rtc_route_control_absorbed(), 1);
     assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
     assert_eq!(snapshot.rtc_route_control_route_gated_relay_drops(), 1);
     assert_eq!(snapshot.rtc_route_control_layer_allowed(), 1);
     assert_eq!(snapshot.rtc_route_control_layer_dropped(), 1);
+}
+
+fn assert_rtc_relay_pressure_metrics(snapshot: &RuntimeMetricsSnapshot) {
+    assert_eq!(snapshot.rtc_relay_enqueue_intra_node_enqueued(), 1);
+    assert_eq!(snapshot.rtc_relay_enqueue_intra_node_overloaded(), 1);
+    assert_eq!(snapshot.rtc_relay_enqueue_inter_node_closed(), 1);
+    assert_eq!(snapshot.rtc_relay_mailbox_depth_samples(), 1);
+    assert_eq!(snapshot.rtc_relay_mailbox_depth_observed(), 7);
+    assert_eq!(snapshot.rtc_relay_drain_batches(), 1);
+    assert_eq!(snapshot.rtc_relay_drained_packets(), 4);
+    assert_eq!(snapshot.rtc_relay_drain_cap_hits(), 1);
+}
+
+fn assert_rtc_remote_control_metrics(snapshot: &RuntimeMetricsSnapshot) {
+    assert_eq!(snapshot.rtc_remote_control_keyframe_drops(), 1);
+    assert_eq!(snapshot.rtc_remote_control_packet_gate_drops(), 1);
+    assert_eq!(snapshot.rtc_remote_packet_gate_retries(), 1);
+    assert_eq!(snapshot.rtc_remote_packet_gate_flushes(), 1);
 }
 
 fn assert_source_selection_metrics(snapshot: &RuntimeMetricsSnapshot) {
@@ -246,6 +275,15 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
     metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
     metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
+    metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeEnqueued);
+    metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeOverloaded);
+    metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::InterNodeClosed);
+    metrics.record_rtc_relay_mailbox_depth(7);
+    metrics.record_rtc_relay_drain_batch(4, true);
+    metrics.record_rtc_remote_control_drop(RtcRemoteControlDropKind::Keyframe);
+    metrics.record_rtc_remote_control_drop(RtcRemoteControlDropKind::PacketGate);
+    metrics.record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Retry);
+    metrics.record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Flushed);
     metrics.record_source_selection_update(SourceSelectionKind::Encoding);
     metrics.record_budget_solver_outcome(BudgetSolverOutcome::Degraded);
     metrics.record_budget_solver_outcome(BudgetSolverOutcome::Paused);
@@ -315,8 +353,19 @@ fn metrics_snapshot_aggregates_worker_local_rtc_recorders() {
     first_worker.record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
     first_worker.record_rtc_datagram_fallback_scan(3);
     first_worker.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
+    first_worker.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeEnqueued);
+    first_worker.record_rtc_relay_mailbox_depth(3);
+    first_worker.record_rtc_relay_drain_batch(2, true);
+    first_worker.record_rtc_remote_control_drop(RtcRemoteControlDropKind::PacketGate);
+    first_worker.record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Retry);
     second_worker.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
     second_worker.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
+    second_worker.record_rtc_relay_enqueue(RtcRelayEnqueueResult::InterNodeClosed);
+    second_worker.record_rtc_relay_mailbox_depth(4);
+    second_worker.record_rtc_relay_drain_batch(3, false);
+    second_worker.record_rtc_remote_control_drop(RtcRemoteControlDropKind::Keyframe);
+    second_worker
+        .record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Flushed);
 
     let snapshot = metrics.snapshot();
 
@@ -328,6 +377,17 @@ fn metrics_snapshot_aggregates_worker_local_rtc_recorders() {
     assert_eq!(snapshot.rtc_datagram_scan_users(), 3);
     assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
     assert_eq!(snapshot.rtc_route_control_absorbed(), 1);
+    assert_eq!(snapshot.rtc_relay_enqueue_intra_node_enqueued(), 1);
+    assert_eq!(snapshot.rtc_relay_enqueue_inter_node_closed(), 1);
+    assert_eq!(snapshot.rtc_relay_mailbox_depth_samples(), 2);
+    assert_eq!(snapshot.rtc_relay_mailbox_depth_observed(), 7);
+    assert_eq!(snapshot.rtc_relay_drain_batches(), 2);
+    assert_eq!(snapshot.rtc_relay_drained_packets(), 5);
+    assert_eq!(snapshot.rtc_relay_drain_cap_hits(), 1);
+    assert_eq!(snapshot.rtc_remote_control_keyframe_drops(), 1);
+    assert_eq!(snapshot.rtc_remote_control_packet_gate_drops(), 1);
+    assert_eq!(snapshot.rtc_remote_packet_gate_retries(), 1);
+    assert_eq!(snapshot.rtc_remote_packet_gate_flushes(), 1);
 }
 
 #[test]
