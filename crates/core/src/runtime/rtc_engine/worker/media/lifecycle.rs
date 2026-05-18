@@ -284,17 +284,19 @@ fn can_unregister_unnegotiated_producer(
     state: &PacketLoopState,
     handle: &RegisteredMediaHandle,
 ) -> bool {
-    let RegisteredMediaHandle::Producer { session_key, mid } = handle else {
-        return false;
-    };
-    state.users.get(session_key).is_some_and(|session_state| {
-        session_state.sdp_negotiation.initial_offer_applied
-            && !offer_is_awaiting_answer(session_state)
-            && !session_state
-                .sdp_negotiation
-                .negotiated_producer_parameters
-                .contains_key(mid)
-    })
+    match handle {
+        RegisteredMediaHandle::Producer { session_key, mid }
+            if let Some(session_state) = state.users.get(session_key) =>
+        {
+            session_state.sdp_negotiation.initial_offer_applied
+                && !offer_is_awaiting_answer(session_state)
+                && !session_state
+                    .sdp_negotiation
+                    .negotiated_producer_parameters
+                    .contains_key(mid)
+        }
+        RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. } => false,
+    }
 }
 
 fn session_has_other_mid_user(

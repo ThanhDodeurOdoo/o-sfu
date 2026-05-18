@@ -119,21 +119,17 @@ fn observe_receiver_bandwidth(
     session_key: &TransportSessionKey,
     kind: &BweKind,
 ) {
-    let Some(estimate) = (match kind {
-        BweKind::Twcc(bitrate) | BweKind::Remb(_, bitrate) => {
-            Some(Bitrate::from_bps(bitrate.as_u64()))
+    match kind {
+        BweKind::Twcc(bitrate) | BweKind::Remb(_, bitrate)
+            if let Ok(mut snapshot_state) = snapshot_state.lock() =>
+        {
+            let estimate = Bitrate::from_bps(bitrate.as_u64());
+            if snapshot_state.set_receiver_bandwidth(session_key, estimate) != Some(estimate) {
+                source_policy_signal.mark_dirty(session_key.room_instance_id());
+            }
         }
-        _ => None,
-    }) else {
-        return;
-    };
-    let Ok(mut snapshot_state) = snapshot_state.lock() else {
-        return;
-    };
-    if snapshot_state.set_receiver_bandwidth(session_key, estimate) == Some(estimate) {
-        return;
+        _ => {}
     }
-    source_policy_signal.mark_dirty(session_key.room_instance_id());
 }
 
 /// Convert `str0m` ICE connection state into the metrics enum.

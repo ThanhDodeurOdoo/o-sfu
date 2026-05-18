@@ -346,14 +346,34 @@ fn handle_media_route_control_command(
             active,
             response,
         } => media::respond_set_consumer_active(state, &route, active, response),
-        RtcWorkerCommand::SetConsumerPacketGate { .. } => {
-            handle_consumer_packet_gate_update(state, command, now);
-        }
-        RtcWorkerCommand::SetConsumerPacketGateBatch { .. } => {
-            handle_consumer_packet_gate_batch_update(state, command, now);
-        }
-        RtcWorkerCommand::RequestConsumerKeyframe { .. } => {
-            handle_consumer_keyframe_request(state, metrics, command);
+        RtcWorkerCommand::SetConsumerPacketGate {
+            route,
+            packet_gate,
+            response,
+        } => media::respond_set_consumer_packet_gate(
+            state,
+            media::ConsumerPacketGateRequest {
+                route: &route,
+                packet_gate,
+            },
+            now,
+            response,
+        ),
+        RtcWorkerCommand::SetConsumerPacketGateBatch {
+            source_session_key,
+            source_transport_media_id,
+            updates,
+            response,
+        } => media::respond_set_consumer_packet_gates(
+            state,
+            &source_session_key,
+            source_transport_media_id,
+            updates,
+            now,
+            response,
+        ),
+        RtcWorkerCommand::RequestConsumerKeyframe { route, response } => {
+            media::respond_request_consumer_keyframe(state, metrics, &route, response);
         }
         _ => {}
     }
@@ -400,61 +420,5 @@ fn handle_relay_route_control_command(state: &mut PacketLoopState, command: RtcW
             response,
         ),
         _ => {}
-    }
-}
-
-fn handle_consumer_packet_gate_update(
-    state: &mut PacketLoopState,
-    command: RtcWorkerCommand,
-    now: Instant,
-) {
-    if let RtcWorkerCommand::SetConsumerPacketGate {
-        route,
-        packet_gate,
-        response,
-    } = command
-    {
-        media::respond_set_consumer_packet_gate(
-            state,
-            media::ConsumerPacketGateRequest {
-                route: &route,
-                packet_gate,
-            },
-            now,
-            response,
-        );
-    }
-}
-
-fn handle_consumer_packet_gate_batch_update(
-    state: &mut PacketLoopState,
-    command: RtcWorkerCommand,
-    now: Instant,
-) {
-    if let RtcWorkerCommand::SetConsumerPacketGateBatch {
-        source_session_key,
-        source_transport_media_id,
-        updates,
-        response,
-    } = command
-    {
-        media::respond_set_consumer_packet_gates(
-            state,
-            &source_session_key,
-            source_transport_media_id,
-            updates,
-            now,
-            response,
-        );
-    }
-}
-
-fn handle_consumer_keyframe_request(
-    state: &mut PacketLoopState,
-    metrics: &RuntimeMetrics,
-    command: RtcWorkerCommand,
-) {
-    if let RtcWorkerCommand::RequestConsumerKeyframe { route, response } = command {
-        media::respond_request_consumer_keyframe(state, metrics, &route, response);
     }
 }
