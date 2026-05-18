@@ -26,11 +26,13 @@ use tracing::warn;
 #[cfg(any(test, feature = "testing-transport"))]
 use super::placement::{RoomPlacementPlanner, WorkerLoadIndex};
 use super::{
-    BroadcastPayloadError, LocalRouterRuntimeContext, Room, RoomJoinError, RoomUserPermissions,
-    UserOutbound, UserOutboundSender,
+    BroadcastPayloadError, LocalRouterRuntimeContext, Room, RoomJoinError, RoomMediaCounts,
+    RoomUserPermissions, UserOutbound, UserOutboundSender,
     cleanup::UserCleanup,
     effects::execute_relay_route_effects,
-    state::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, LifecycleEffects},
+    state::{
+        DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, LifecycleEffects, RoomState,
+    },
     user_negotiation::UserNegotiationUpdate,
 };
 #[cfg(any(test, feature = "testing-transport"))]
@@ -112,7 +114,10 @@ enum UserTransitionResult {
 /// from rediscovering mutable room state after it has already advanced.
 enum UserTransitionOutcome {
     /// A successful join, including replacement cleanup and fan-out effects.
-    Join(JoinUserOutcome),
+    Join {
+        outcome: JoinUserOutcome,
+        count_delta: MembershipCountDelta,
+    },
     /// A close command with optional state output.
     ///
     /// The state output is missing when the connection is stale or already
@@ -122,9 +127,72 @@ enum UserTransitionOutcome {
         outcome: Option<LeaveUserOutcome>,
         user_id: UserId,
         connection_id: ConnectionId,
+        count_delta: MembershipCountDelta,
     },
     /// A bulk disconnect outcome for every user still present in state.
-    Disconnect(DisconnectUsersOutcome),
+    Disconnect {
+        outcome: DisconnectUsersOutcome,
+        count_delta: MembershipCountDelta,
+    },
+}
+
+impl UserTransitionOutcome {
+    const fn count_delta(&self) -> MembershipCountDelta {
+        match self {
+            Self::Join { count_delta, .. }
+            | Self::Close { count_delta, .. }
+            | Self::Disconnect { count_delta, .. } => *count_delta,
+        }
+    }
+}
+
+/// cheap live-count snapshot taken while [`RoomState`] is authoritative
+///
+/// the manager used to read these values around async cleanup work
+/// keeping the
+/// snapshot here ties metrics to the same write lock that accepted the
+/// membership transition
+#[derive(Debug, Clone, Copy)]
+struct MembershipCountSnapshot {
+    /// live users visible to room state at one committed instant
+    users: usize,
+    /// live publication and subscription totals visible at the same instant
+    media: RoomMediaCounts,
+}
+
+impl MembershipCountSnapshot {
+    fn from_state(state: &RoomState) -> Self {
+        Self {
+            users: state.user_count(),
+            media: state.media_counts(),
+        }
+    }
+
+    const fn delta_to(self, after: Self) -> MembershipCountDelta {
+        MembershipCountDelta {
+            users_before: self.users,
+            users_after: after.users,
+            media_before: self.media,
+            media_after: after.media,
+        }
+    }
+}
+
+/// live-count delta attached to one committed membership transition
+///
+/// metrics consume this before transport cleanup, diagnostics and fan-out run
+/// this keeps live gauges tied to room-state ownership instead of later
+/// best-effort effects
+#[derive(Debug, Clone, Copy)]
+struct MembershipCountDelta {
+    /// user count before the room state mutation
+    users_before: usize,
+    /// user count after the room state mutation
+    users_after: usize,
+    /// media totals before the room state mutation
+    media_before: RoomMediaCounts,
+    /// media totals after the room state mutation
+    media_after: RoomMediaCounts,
 }
 
 impl Room {
@@ -416,6 +484,7 @@ impl Room {
         let Some(outcome) = self.apply_state_transition(transition).await? else {
             return Ok(UserTransitionResult::Missing);
         };
+        self.record_membership_count_delta(outcome.count_delta());
         Ok(self.finalize_session_transition(outcome, cleanup).await)
     }
 
@@ -428,49 +497,56 @@ impl Room {
         &self,
         transition: UserTransition<'_>,
     ) -> Result<Option<UserTransitionOutcome>, RoomJoinError> {
-        let outcome = match transition {
-            UserTransition::Join {
-                user_id,
-                label,
-                permissions,
-                sender,
-                emit_joined_fanout,
-                home_placement,
-            } => {
-                let outcome = {
-                    let mut state = self.state.write().await;
-                    state.apply_join_on_placement(
+        let outcome = {
+            let mut state = self.state.write().await;
+            let counts_before = MembershipCountSnapshot::from_state(&state);
+            let outcome = match transition {
+                UserTransition::Join {
+                    user_id,
+                    label,
+                    permissions,
+                    sender,
+                    emit_joined_fanout,
+                    home_placement,
+                } => {
+                    let outcome = state.apply_join_on_placement(
                         user_id,
                         label,
                         permissions,
                         sender,
                         emit_joined_fanout,
                         home_placement,
-                    )?
-                };
-                UserTransitionOutcome::Join(outcome)
-            }
-            UserTransition::Close {
-                user_id,
-                connection_id,
-            } => {
-                let outcome = {
-                    let mut state = self.state.write().await;
-                    state.apply_leave(user_id, connection_id)
-                };
-                UserTransitionOutcome::Close {
-                    outcome,
-                    user_id: user_id.clone(),
-                    connection_id,
+                    )?;
+                    UserTransitionOutcome::Join {
+                        outcome,
+                        count_delta: counts_before
+                            .delta_to(MembershipCountSnapshot::from_state(&state)),
+                    }
                 }
-            }
-            UserTransition::Disconnect { user_ids } => {
-                let outcome = {
-                    let mut state = self.state.write().await;
-                    state.apply_disconnect_users(user_ids)
-                };
-                UserTransitionOutcome::Disconnect(outcome)
-            }
+                UserTransition::Close {
+                    user_id,
+                    connection_id,
+                } => {
+                    let outcome = state.apply_leave(user_id, connection_id);
+                    UserTransitionOutcome::Close {
+                        outcome,
+                        user_id: user_id.clone(),
+                        connection_id,
+                        count_delta: counts_before
+                            .delta_to(MembershipCountSnapshot::from_state(&state)),
+                    }
+                }
+                UserTransition::Disconnect { user_ids } => {
+                    let outcome = state.apply_disconnect_users(user_ids);
+                    UserTransitionOutcome::Disconnect {
+                        outcome,
+                        count_delta: counts_before
+                            .delta_to(MembershipCountSnapshot::from_state(&state)),
+                    }
+                }
+            };
+            drop(state);
+            outcome
         };
         Ok(Some(outcome))
     }
@@ -487,21 +563,33 @@ impl Room {
         cleanup: UserCleanup<'_>,
     ) -> UserTransitionResult {
         match outcome {
-            UserTransitionOutcome::Join(outcome) => {
+            UserTransitionOutcome::Join { outcome, .. } => {
                 self.finalize_join_transition(outcome, cleanup).await
             }
             UserTransitionOutcome::Close {
                 outcome,
                 user_id,
                 connection_id,
+                ..
             } => {
                 self.finalize_close_transition(outcome, user_id, connection_id, cleanup)
                     .await
             }
-            UserTransitionOutcome::Disconnect(outcome) => {
+            UserTransitionOutcome::Disconnect { outcome, .. } => {
                 self.finalize_disconnect_transition(outcome, cleanup).await
             }
         }
+    }
+
+    /// record live gauges from the state-owned transition delta
+    ///
+    /// this method deliberately runs before async finalization so metrics do
+    /// not depend on transport cleanup timing or websocket fan-out timing
+    fn record_membership_count_delta(&self, delta: MembershipCountDelta) {
+        let before = i64::try_from(delta.users_before).unwrap_or(i64::MAX);
+        let after = i64::try_from(delta.users_after).unwrap_or(i64::MAX);
+        self.metrics.add_active_users(after.saturating_sub(before));
+        self.record_media_count_delta(delta.media_before, delta.media_after);
     }
 
     /// Finalize a committed join after room state has allocated its connection.
@@ -790,6 +878,7 @@ impl Room {
     }
 
     /// Return the current authoritative number of live room users.
+    #[cfg(test)]
     pub(super) async fn user_count(&self) -> usize {
         self.state.read().await.user_count()
     }

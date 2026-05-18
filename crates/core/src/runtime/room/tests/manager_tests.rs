@@ -1198,7 +1198,7 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
 }
 
 #[tokio::test]
-async fn manager_concurrent_empty_cleanup_and_join_keep_directory_consistent() {
+async fn manager_lifecycle_future_does_not_block_empty_cleanup() {
     let manager = Arc::new(RoomManager::for_test_with_admission_policy(
         RoomAdmissionPolicy::new(2),
     ));
@@ -1257,25 +1257,30 @@ async fn manager_concurrent_empty_cleanup_and_join_keep_directory_consistent() {
     });
     yield_now().await;
 
-    let manager_for_join = Arc::clone(&manager);
-    let room_id_for_join = room_id.clone();
-    let second_user_for_join = second_user.clone();
-    let transport_for_join = media_transport.clone();
+    let did_close = timeout(Duration::from_secs(1), close_task)
+        .await
+        .expect("close should finish while another lifecycle future is parked")
+        .expect("close task should not panic");
+    assert!(did_close);
+    assert!(manager.get_by_uuid(&room_id).await.is_some());
+
     let (second_tx, _second_rx) = test_sender();
-    let join_task = tokio::spawn(async move {
-        manager_for_join
-            .join_user(
-                &room_id_for_join,
-                JoinUserRequest {
-                    user_id: second_user_for_join,
-                    label: None,
-                    permissions: UserPermissions::default(),
-                    sender: second_tx,
-                },
-                &transport_for_join,
-            )
-            .await
-    });
+    let join_result = manager
+        .join_user(
+            &room_id,
+            JoinUserRequest {
+                user_id: second_user.clone(),
+                label: None,
+                permissions: UserPermissions::default(),
+                sender: second_tx,
+            },
+            &media_transport,
+        )
+        .await;
+    assert!(matches!(
+        join_result,
+        Err(RoomManagerJoinError::MissingRoom)
+    ));
 
     release_lifecycle.notify_one();
 
@@ -1284,26 +1289,8 @@ async fn manager_concurrent_empty_cleanup_and_join_keep_directory_consistent() {
         .expect("lifecycle holder should finish")
         .expect("lifecycle holder task should not panic");
     assert!(held_room.is_some());
-    timeout(Duration::from_secs(1), close_task)
-        .await
-        .expect("close should finish")
-        .expect("close task should not panic");
-    let join_result = timeout(Duration::from_secs(1), join_task)
-        .await
-        .expect("join should finish")
-        .expect("join task should not panic");
-
-    match join_result {
-        Ok((_room, _connection_id)) => {
-            assert!(manager.get_by_uuid(&room_id).await.is_some());
-            assert!(manager.test_api().has_session(&room_id, &second_user).await);
-        }
-        Err(RoomManagerJoinError::MissingRoom) => {
-            assert!(manager.get_by_uuid(&room_id).await.is_none());
-            assert!(!room.test_api().inspect().has_session(&second_user).await);
-        }
-        Err(error) => panic!("unexpected join error: {error:?}"),
-    }
+    assert!(manager.get_by_uuid(&room_id).await.is_none());
+    assert!(!room.test_api().inspect().has_session(&second_user).await);
 }
 
 #[tokio::test]
