@@ -102,3 +102,10 @@ pub use event_observation::{transport_health_from_event, transport_ice_state};
 pub(in crate::runtime::rtc_engine) use input::PacketLoopInputReceivers;
 pub(in crate::runtime::rtc_engine) use lag::PacketLoopLagSnapshot;
 pub(in crate::runtime::rtc_engine) use loop_driver::{PacketLoopConfig, run_packet_loop};
+#[cfg(feature = "internal-benchmarks")]
+pub(in crate::runtime::rtc_engine) use {
+    buffers::PacketLoopBuffers,
+    forward_flush::flush_forward_routes,
+    ingress_routing::{PacketRouteDatagram, route_packet_to_matching_session_at},
+    keyframe_requests::{PendingKeyframeRequest, flush_pending_keyframe_requests_at},
+};
