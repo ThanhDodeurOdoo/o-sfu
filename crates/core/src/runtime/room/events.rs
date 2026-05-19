@@ -41,12 +41,6 @@ impl BroadcastPayload {
     pub fn to_json(&self) -> JsonPayload {
         self.message.as_ref().clone()
     }
-
-    #[must_use]
-    #[cfg(test)]
-    pub(in crate::runtime::room) fn shares_storage_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.message, &other.message)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

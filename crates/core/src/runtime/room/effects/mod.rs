@@ -17,8 +17,12 @@ use tracing::warn;
 use crate::{UnpublishOutcome, runtime::UserId};
 
 mod source_policy;
+mod transport;
 use o_sfu_telemetry::schema::event as telemetry_event;
 pub(super) use source_policy::SourcePolicyEffectPlan;
+pub(in crate::runtime::room) use transport::{
+    ConsumerCreationContinuation, PublishReservationContinuation, RoomTransportEffect,
+};
 
 use super::{
     Room, RoomMediaCounts,
@@ -52,7 +56,9 @@ pub(super) async fn execute_relay_route_effects(
             target_media_worker_id: effect.route.target_worker,
             action: effect.action,
         };
-        let result = media_port.apply_relay_route_effect(&transport_effect).await;
+        let result = RoomTransportEffect::RelayRoute(transport_effect)
+            .execute_unit(media_port)
+            .await;
         if let Err(error) = result {
             applied = false;
             if effect.action == TransportRelayRouteAction::Release {
@@ -232,16 +238,17 @@ impl SubscriptionEffectPlan {
         execute_relay_route_effects(room, media_port, &self.relay_ops).await;
         for transport_op in self.transport_ops {
             let route = &transport_op.route;
+            let transport_route = room.transport_consumer_route(route);
             // Transport activity is best-effort here because the room intent has
             // already been committed, so the failure path is to surface it to
             // operators instead of trying to rebuild the previous room state.
-            if media_port
-                .set_consumer_active(
-                    &room.transport_consumer_route(route),
-                    ConsumerActivity::from_active(transport_op.active),
-                )
-                .await
-                .is_err()
+            if (RoomTransportEffect::ConsumerActivity {
+                route: transport_route.clone(),
+                activity: ConsumerActivity::from_active(transport_op.active),
+            })
+            .execute_unit(media_port)
+            .await
+            .is_err()
             {
                 warn!(
                     ?route,
@@ -251,10 +258,12 @@ impl SubscriptionEffectPlan {
                 );
             } else if transport_op.active
                 && transport_op.media_kind == o_sfu_router::MediaKind::Video
-                && media_port
-                    .request_consumer_keyframe(&room.transport_consumer_route(route))
-                    .await
-                    .is_err()
+                && (RoomTransportEffect::KeyframeRequest {
+                    route: transport_route,
+                })
+                .execute_unit(media_port)
+                .await
+                .is_err()
             {
                 warn!(
                     ?route,
@@ -340,20 +349,22 @@ impl ConsumerBootstrapOp {
         room: &Room,
         media_port: &MediaTransport,
     ) -> Option<(TransportMediaId, Option<String>)> {
-        let consumer_session_key =
-            room.transport_user_key(target.consumer_user_id(), target.consumer_connection_id());
-        let consumer_transport_media_id = match media_port
-            .consume_media(
-                &consumer_session_key,
-                target.media_kind(),
-                &room
-                    .transport_user_key(target.producer_user_id(), target.producer_connection_id()),
-                target.transport_media_id(),
-                prepared.consumer_rtp_parameters(),
-            )
-            .await
-        {
-            Ok(transport_media_id) => transport_media_id,
+        let effect = RoomTransportEffect::ConsumerCreation {
+            continuation: ConsumerCreationContinuation {
+                user: target.consumer_user_id().clone(),
+                connection: target.consumer_connection_id(),
+                stream: target.stream_id().clone(),
+            },
+            consumer_session_key: room
+                .transport_user_key(target.consumer_user_id(), target.consumer_connection_id()),
+            media_kind: target.media_kind(),
+            producer_session_key: room
+                .transport_user_key(target.producer_user_id(), target.producer_connection_id()),
+            source_transport_media_id: target.transport_media_id(),
+            consumer_rtp_parameters: prepared.consumer_rtp_parameters().clone(),
+        };
+        match effect.execute_consumer_creation(media_port).await {
+            Ok(result) => Some(result),
             Err(error) => {
                 room.release_pending_consumer_bootstrap(target, media_port)
                     .await;
@@ -368,13 +379,9 @@ impl ConsumerBootstrapOp {
                     ?origin,
                     "media transport rejected consume media declaration"
                 );
-                return None;
+                None
             }
-        };
-        let consumer_mid = media_port
-            .transport_media_mid(&consumer_session_key, consumer_transport_media_id)
-            .await;
-        Some((consumer_transport_media_id, consumer_mid))
+        }
     }
 
     /// Finalize a prepared consumer bootstrap once the transport media exists.

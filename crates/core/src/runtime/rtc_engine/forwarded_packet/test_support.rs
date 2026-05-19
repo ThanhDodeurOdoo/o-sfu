@@ -16,9 +16,16 @@ pub fn sample_forwarded_packet(
     mid: &str,
     payload: &[u8],
 ) -> ForwardedPacket {
-    sample_forwarded_packet_with_rid(source_session_key, mid, None, payload)
+    sample_forwarded_packet_with_extensions(
+        source_session_key,
+        mid,
+        None,
+        ExtensionValues::default(),
+        payload,
+    )
 }
 
+#[cfg(test)]
 #[must_use]
 pub fn sample_forwarded_packet_with_rid(
     source_session_key: TransportSessionKey,
@@ -35,6 +42,7 @@ pub fn sample_forwarded_packet_with_rid(
     )
 }
 
+#[cfg(test)]
 #[must_use]
 pub fn sample_forwarded_packet_with_audio_activity(
     source_session_key: TransportSessionKey,
@@ -56,6 +64,7 @@ pub fn sample_forwarded_packet_with_audio_activity(
     )
 }
 
+#[cfg(test)]
 #[must_use]
 pub fn sample_forwarded_packet_with_frame_mark(
     source_session_key: TransportSessionKey,
@@ -115,6 +124,7 @@ fn sample_forwarded_packet_with_extensions(
     }
 }
 
+#[cfg(test)]
 #[must_use]
 pub fn sample_forwarded_packet_without_mid(
     source_session_key: TransportSessionKey,

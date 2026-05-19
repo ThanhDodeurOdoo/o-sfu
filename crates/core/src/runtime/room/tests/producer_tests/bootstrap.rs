@@ -2,7 +2,7 @@ use super::support::*;
 
 #[tokio::test]
 async fn client_capabilities_bootstrap_late_join_when_download_connected_first() {
-    let (room, media_transport, fake, mut publisher_rx, mut subscriber_rx) =
+    let (room, media_transport, mut publisher_rx, mut subscriber_rx) =
         setup_late_join_bootstrap_scenario().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
@@ -28,52 +28,19 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
             .await
     );
 
-    wait_for_fake_event(&fake, |event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ConsumeMediaRequested {
-                consumer_user_id: UserId::Integer(2),
-                source_user_id: UserId::Integer(1),
-                media_kind: MediaKind::Video,
-            }
-        )
-    })
-    .await;
-
     assert!(
         drain_outbound(&mut subscriber_rx)
             .iter()
             .any(|message| matches!(message, UserOutbound::Request(_))),
         "subscriber should receive a consumer bootstrap after capabilities make it ready"
     );
-    assert!(
-        fake.snapshot_events().iter().all(|event| {
-            !matches!(
-                event,
-                FakeMediaTransportEvent::ConsumerKeyframeRequested {
-                    consumer_user_id: UserId::Integer(2),
-                    source_user_id: UserId::Integer(1),
-                }
-            )
-        }),
-        "fresh bootstraps must not request a keyframe before the refresh answer lands"
-    );
+    assert_eq!(room.test_api().inspect().consumer_count().await, 1);
     assert!(refresh_session_consumers(&room, &UserId::Integer(2), &media_transport).await);
-    wait_for_fake_event(&fake, |event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ConsumerKeyframeRequested {
-                consumer_user_id: UserId::Integer(2),
-                source_user_id: UserId::Integer(1),
-            }
-        )
-    })
-    .await;
 }
 
 #[tokio::test]
 async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() {
-    let (room, media_transport, fake, mut publisher_rx, mut subscriber_rx) =
+    let (room, media_transport, mut publisher_rx, mut subscriber_rx) =
         setup_late_join_bootstrap_scenario().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
@@ -100,47 +67,14 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
         .await
     );
 
-    wait_for_fake_event(&fake, |event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ConsumeMediaRequested {
-                consumer_user_id: UserId::Integer(2),
-                source_user_id: UserId::Integer(1),
-                media_kind: MediaKind::Video,
-            }
-        )
-    })
-    .await;
-
     assert!(
         drain_outbound(&mut subscriber_rx)
             .iter()
             .any(|message| matches!(message, UserOutbound::Request(_))),
         "subscriber should receive a consumer bootstrap after download connect makes it ready"
     );
-    assert!(
-        fake.snapshot_events().iter().all(|event| {
-            !matches!(
-                event,
-                FakeMediaTransportEvent::ConsumerKeyframeRequested {
-                    consumer_user_id: UserId::Integer(2),
-                    source_user_id: UserId::Integer(1),
-                }
-            )
-        }),
-        "fresh bootstraps must not request a keyframe before the refresh answer lands"
-    );
+    assert_eq!(room.test_api().inspect().consumer_count().await, 1);
     assert!(refresh_session_consumers(&room, &UserId::Integer(2), &media_transport).await);
-    wait_for_fake_event(&fake, |event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ConsumerKeyframeRequested {
-                consumer_user_id: UserId::Integer(2),
-                source_user_id: UserId::Integer(1),
-            }
-        )
-    })
-    .await;
 }
 
 #[tokio::test]

@@ -197,48 +197,6 @@ struct MembershipCountDelta {
 }
 
 impl Room {
-    /// Join a user through the runtime membership boundary.
-    ///
-    /// This is the production join entrypoint used by the room manager after
-    /// admission has selected the current room. The returned `ConnectionId` is
-    /// runtime-local and must be paired with the same `UserId` for later room
-    /// operations.
-    ///
-    /// # Error handling
-    ///
-    /// `RoomFull` is an admission decision made by room state. `RouterState`
-    /// means the join could not be mirrored into routing topology, so callers
-    /// must treat the join as not committed.
-    #[cfg(test)]
-    pub(crate) async fn add_user(
-        &self,
-        user_id: UserId,
-        label: Option<String>,
-        permissions: UserPermissions,
-        sender: UserOutboundSender,
-        media_transport: &MediaTransport,
-    ) -> Result<ConnectionId, RoomJoinError> {
-        let home_placement = self.local_join_placement(media_transport).await;
-        self.add_user_on_placement(
-            user_id,
-            label,
-            permissions,
-            sender,
-            media_transport,
-            home_placement,
-        )
-        .await
-    }
-
-    #[cfg(test)]
-    async fn local_join_placement(
-        &self,
-        media_transport: &MediaTransport,
-    ) -> LocalRouterRuntimeContext {
-        self.local_join_placement_from_worker_pressure(media_transport.worker_pressure_snapshots())
-            .await
-    }
-
     #[cfg(any(test, feature = "testing-transport"))]
     pub(in crate::runtime::room) async fn local_join_placement_from_worker_pressure(
         &self,

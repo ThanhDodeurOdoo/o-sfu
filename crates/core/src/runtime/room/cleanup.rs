@@ -80,6 +80,7 @@ use tracing::warn;
 
 use super::{
     Room,
+    effects::RoomTransportEffect,
     state::{RelayRouteEffect, RelayRouteKey, TransportMediaRemoval},
 };
 use crate::{
@@ -643,12 +644,19 @@ impl Room {
                 transport_media_id,
                 ..
             } => {
-                media_transport
-                    .remove_media(session_key, *transport_media_id)
-                    .await
+                RoomTransportEffect::MediaRemoval {
+                    session_key: session_key.clone(),
+                    transport_media_id: *transport_media_id,
+                }
+                .execute_unit(media_transport)
+                .await
             }
             TransportCleanupOperation::CloseUser { session_key, .. } => {
-                media_transport.close_session(session_key).await
+                RoomTransportEffect::SessionClose {
+                    session_key: session_key.clone(),
+                }
+                .execute_unit(media_transport)
+                .await
             }
             TransportCleanupOperation::ReleaseRelayRoute {
                 source_session_key,
@@ -660,7 +668,9 @@ impl Room {
                     target_media_worker_id: route.target_worker,
                     action: TransportRelayRouteAction::Release,
                 };
-                media_transport.apply_relay_route_effect(&effect).await
+                RoomTransportEffect::RelayRoute(effect)
+                    .execute_unit(media_transport)
+                    .await
             }
         }
     }
@@ -842,7 +852,11 @@ impl Room {
         if !operation.needs_owner_drop() {
             return;
         }
-        let close_result = media_transport.close_session(operation.session_key()).await;
+        let close_result = RoomTransportEffect::SessionClose {
+            session_key: operation.session_key().clone(),
+        }
+        .execute_unit(media_transport)
+        .await;
         warn!(
             user_id = ?operation.user_id(),
             connection_id = ?operation.connection_id(),

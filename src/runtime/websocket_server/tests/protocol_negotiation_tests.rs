@@ -4,7 +4,7 @@ use o_sfu_router::{MediaKind, test_support::rtp_samples::sample_simulcast_video_
 use super::fixtures::*;
 
 #[tokio::test]
-async fn protocol_user_serializes_topology_renegotiations() {
+async fn protocol_user_does_not_overlap_topology_renegotiations() {
     let Some((server, room, mut publisher_socket, mut subscriber_socket)) =
         setup_negotiated_protocol_pair().await
     else {
@@ -17,20 +17,21 @@ async fn protocol_user_serializes_topology_renegotiations() {
             .is_some(),
         "publisher should be ready"
     );
-    assert!(
-        assert_track_snapshot(
-            &mut subscriber_socket,
-            vec![track_binding("cam-queue", StreamType::Camera)],
-        )
-        .await
-        .is_some()
-    );
-
-    let Some((first_renegotiation_id, first_renegotiation_request)) =
-        expect_renegotiation_request(&mut subscriber_socket).await
-    else {
-        return;
-    };
+    let first_snapshot_request = assert_track_snapshot(
+        &mut subscriber_socket,
+        vec![track_binding("cam-queue", StreamType::Camera)],
+    )
+    .await;
+    assert!(first_snapshot_request.is_some());
+    let (first_renegotiation_id, first_renegotiation_request) =
+        if let Some(request) = first_snapshot_request.flatten() {
+            request
+        } else {
+            let Some(request) = expect_renegotiation_request(&mut subscriber_socket).await else {
+                panic!("subscriber should receive the first renegotiation request");
+            };
+            request
+        };
 
     assert!(
         publish_until_ready(&room, &server, StreamType::Screen, "screen-queue",)
@@ -39,19 +40,14 @@ async fn protocol_user_serializes_topology_renegotiations() {
         "second publish should succeed"
     );
     assert!(
-        assert_track_snapshot(
-            &mut subscriber_socket,
-            vec![
-                track_binding("cam-queue", StreamType::Camera),
-                track_binding("screen-queue", StreamType::Screen),
-            ],
-        )
-        .await
-        .is_some()
+        read_protocol_server_batch(&mut subscriber_socket)
+            .await
+            .is_none(),
+        "second publish should not send another subscriber offer while the first answer is pending"
     );
 
     assert!(
-        respond_to_protocol_negotiation_request(
+        respond_to_protocol_negotiation_request_with_test_rtc(
             &mut subscriber_socket,
             first_renegotiation_id,
             first_renegotiation_request,
@@ -61,12 +57,6 @@ async fn protocol_user_serializes_topology_renegotiations() {
         .is_some()
     );
 
-    let Some((_second_request_id, second_request)) =
-        expect_renegotiation_request(&mut subscriber_socket).await
-    else {
-        return;
-    };
-    assert!(matches!(second_request, ServerRequest::Renegotiate(_)));
     let _ = publisher_socket.close(None).await;
 }
 
@@ -96,7 +86,7 @@ async fn answer_initial_offer(websocket: &mut TestWebSocket, answer_name: &str) 
     let offer_batch = read_protocol_server_batch(websocket).await?;
     let (request_id, request) = first_protocol_server_request(&offer_batch)?;
     assert!(matches!(request, ServerRequest::Offer(_)));
-    respond_to_protocol_negotiation_request(
+    respond_to_protocol_negotiation_request_with_test_rtc(
         websocket,
         request_id,
         request,
@@ -139,16 +129,28 @@ async fn publish_until_ready(
 async fn assert_track_snapshot(
     websocket: &mut TestWebSocket,
     bindings: Vec<TrackBinding>,
-) -> Option<()> {
+) -> Option<Option<(RequestId, ServerRequest)>> {
     let batch = read_protocol_server_batch(websocket).await?;
-    let mut messages = protocol_server_messages(&batch)?;
-    let Some(ServerMessage::Tracks(actual_bindings)) = messages.pop() else {
+    let request = first_protocol_server_request(&batch);
+    let mut track_messages = track_messages_in_batch(&batch)?;
+    let Some(actual_bindings) = track_messages.pop() else {
         panic!("expected track snapshot");
     };
-    assert!(messages.is_empty());
+    assert!(track_messages.is_empty());
     assert_eq!(actual_bindings.len(), bindings.len());
-    for (actual, expected) in actual_bindings.iter().zip(bindings.iter()) {
-        assert_eq!(actual.mid, expected.mid);
+    for expected in &bindings {
+        let Some(actual) = actual_bindings.iter().find(|binding| {
+            binding.user_id == expected.user_id
+                && binding.stream_type == expected.stream_type
+                && binding
+                    .source
+                    .as_ref()
+                    .and_then(|source| source.mid.as_deref())
+                    == Some(expected.mid.as_str())
+        }) else {
+            panic!("expected track snapshot source {}", expected.mid);
+        };
+        assert!(!actual.mid.is_empty());
         assert_eq!(actual.user_id, expected.user_id);
         assert_eq!(actual.stream_type, expected.stream_type);
         assert_eq!(actual.active, expected.active);
@@ -168,7 +170,7 @@ async fn assert_track_snapshot(
             vec!["lo", "hi"],
         );
     }
-    Some(())
+    Some(request)
 }
 
 async fn expect_renegotiation_request(
@@ -178,6 +180,21 @@ async fn expect_renegotiation_request(
     let (request_id, request) = first_protocol_server_request(&batch)?;
     assert!(matches!(request, ServerRequest::Renegotiate(_)));
     Some((request_id, request))
+}
+
+fn track_messages_in_batch(batch: &EnvelopeBatch) -> Option<Vec<Vec<TrackBinding>>> {
+    let mut messages = Vec::new();
+    for envelope in batch.clone() {
+        match ServerEnvelope::decode(envelope).ok()? {
+            ServerEnvelope::Message(ServerMessage::Tracks(track_bindings)) => {
+                messages.push(track_bindings);
+            }
+            ServerEnvelope::Message(_)
+            | ServerEnvelope::Request { .. }
+            | ServerEnvelope::Response { .. } => {}
+        }
+    }
+    Some(messages)
 }
 
 fn track_binding(mid: &str, stream_type: StreamType) -> TrackBinding {

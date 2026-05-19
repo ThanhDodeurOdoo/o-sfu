@@ -1,8 +1,6 @@
 use std::{
-    collections::BTreeSet,
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
-    time::Duration,
 };
 
 use o_sfu_router::{
@@ -10,7 +8,6 @@ use o_sfu_router::{
     MediaKind as RouterMediaKind, MediaStream, StreamBinding,
 };
 use str0m::media::Mid;
-use tokio::time::timeout;
 
 use super::{MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder};
 use crate::{
@@ -22,7 +19,6 @@ use crate::{
             ConsumerActivity, MediaTransportDeps, RelayRouteActivity, RtcTransportConfig,
             TransportAdapterError, TransportConsumerRoute, TransportMediaId,
             TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionKey,
-            test_support::FakeMediaTransport,
         },
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -347,59 +343,6 @@ fn rtc_transport_builder_rejects_invalid_port_split() {
     );
 }
 
-#[tokio::test]
-async fn fake_backend_failures_surface_through_media_transport_ports() {
-    let fake = Arc::new(FakeMediaTransport::default());
-    let adapter = MediaTransport::from_fake_transport(Arc::clone(&fake));
-    let session_key = test_session_key(17, 0, 3, UserId::Integer(41));
-    let offered = sample_router_capabilities();
-
-    let projected =
-        adapter.negotiated_client_rtp_capabilities("v=0\r\ns=fake-answer\r\n", &offered);
-
-    assert_eq!(projected, Ok(offered));
-
-    assert_eq!(
-        adapter.negotiated_client_rtp_capabilities("invalid-answer", &sample_router_capabilities()),
-        Err(TransportAdapterError::InvalidInput)
-    );
-    fake.fail_next_close_session(session_key.clone());
-    assert_eq!(
-        adapter.close_session(&session_key).await,
-        Err(TransportAdapterError::TransportUnavailable)
-    );
-
-    let media_id = adapter
-        .publish_media(
-            &session_key,
-            MediaKind::Audio,
-            &sample_audio_rtp_parameters("aud-up", 1234),
-        )
-        .await;
-    assert!(media_id.is_ok());
-    let Ok(media_id) = media_id else {
-        return;
-    };
-    assert_eq!(adapter.remove_media(&session_key, media_id).await, Ok(()));
-
-    let second_media_id = adapter
-        .publish_media(
-            &session_key,
-            MediaKind::Audio,
-            &sample_audio_rtp_parameters("aud-up-2", 1235),
-        )
-        .await;
-    assert!(second_media_id.is_ok());
-    let Ok(second_media_id) = second_media_id else {
-        return;
-    };
-    fake.fail_next_remove_media(second_media_id);
-    assert_eq!(
-        adapter.remove_media(&session_key, second_media_id).await,
-        Err(TransportAdapterError::TransportUnavailable)
-    );
-}
-
 async fn assert_remote_route_inactive(
     remote_consumer_worker: &RtcTransportWorker,
     source_media_id: TransportMediaId,
@@ -522,19 +465,6 @@ async fn rtc_engine_allocates_disjoint_media_ids_across_workers() {
 }
 
 #[tokio::test]
-async fn fake_transport_source_policy_subscription_wakes_on_active_speaker_updates() {
-    let fake = Arc::new(FakeMediaTransport::default());
-    let adapter = MediaTransport::from_fake_transport(Arc::clone(&fake));
-    let subscription = adapter.source_policy_subscription();
-    let dirty_room_instance_id = RoomInstanceId::from_raw(27);
-
-    fake.mark_source_policy_dirty(dirty_room_instance_id);
-
-    let updates = timeout(Duration::from_secs(1), subscription.wait_for_update()).await;
-    assert_eq!(updates.ok(), Some(BTreeSet::from([dirty_room_instance_id])));
-}
-
-#[tokio::test]
 async fn rtc_engine_rejects_stale_session_removal_without_dropping_consumer_handle() {
     let adapter = test_rtc_engine(1, RtcPortRange::new(46_600, 46_649));
     let source_session = test_session_key(35, 0, 1, UserId::Integer(1));
@@ -643,9 +573,7 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
         return;
     };
 
-    let Some(worker_manager) = adapter.as_rtc_worker_manager() else {
-        return;
-    };
+    let worker_manager = adapter.as_rtc_worker_manager();
     let (Some(source_worker), Some(remote_consumer_worker)) = (
         worker_manager.worker_for_user(&source_session),
         worker_manager.worker_for_user(&remote_consumer_session),

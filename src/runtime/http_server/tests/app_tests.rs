@@ -26,6 +26,11 @@ async fn publish_video_stream(
     ssrc: u64,
     media_transport: &MediaTransport,
 ) {
+    assert!(
+        create_transport_session_offer(room, user_id, media_transport)
+            .await
+            .is_some()
+    );
     assert_eq!(
         room.apply_session_negotiated(
             user_id,

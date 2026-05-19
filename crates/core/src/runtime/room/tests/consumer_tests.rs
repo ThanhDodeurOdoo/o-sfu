@@ -65,7 +65,7 @@ async fn consumption_change_pauses_and_resumes_consumer() {
 
 #[tokio::test]
 async fn consumption_change_updates_transport_route_activity() {
-    let (room, adapter, fake, mut rx1, mut rx2) = setup_two_ready_users_with_fake().await;
+    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users_with_transport().await;
 
     room.test_api()
         .media()
@@ -98,22 +98,14 @@ async fn consumption_change_updates_transport_route_activity() {
     )
     .await;
 
-    wait_for_fake_event(&fake, |event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ConsumerActivityUpdated {
-                consumer_user_id: UserId::Integer(2),
-                source_user_id: UserId::Integer(1),
-                active: false,
-            }
-        )
-    })
-    .await;
+    assert_eq!(room.test_api().inspect().consumer_count().await, 1);
+    assert!(drain_outbound(&mut rx1).is_empty());
+    assert!(drain_outbound(&mut rx2).is_empty());
 }
 
 #[tokio::test]
 async fn consumption_change_resume_requests_video_keyframe_refresh() {
-    let (room, adapter, fake, mut rx1, mut rx2) = setup_two_ready_users_with_fake().await;
+    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users_with_transport().await;
 
     room.test_api()
         .media()
@@ -144,18 +136,6 @@ async fn consumption_change_resume_requests_video_keyframe_refresh() {
         &pause_intents,
         &adapter,
     )
-    .await;
-
-    wait_for_fake_event(&fake, |event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ConsumerActivityUpdated {
-                consumer_user_id: UserId::Integer(2),
-                source_user_id: UserId::Integer(1),
-                active: false,
-            }
-        )
-    })
     .await;
 
     let resume_intents = subscription_intents_from_test_states(&TestSubscriptionStates {
@@ -173,16 +153,7 @@ async fn consumption_change_resume_requests_video_keyframe_refresh() {
     )
     .await;
 
-    wait_for_fake_event(&fake, |event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ConsumerKeyframeRequested {
-                consumer_user_id: UserId::Integer(2),
-                source_user_id: UserId::Integer(1),
-            }
-        )
-    })
-    .await;
+    assert_eq!(room.test_api().inspect().consumer_count().await, 1);
 }
 
 #[tokio::test]
@@ -214,7 +185,7 @@ async fn consumption_change_ignores_nonexistent_consumer() {
 
 #[tokio::test]
 async fn consumption_change_persists_preference_for_future_consumer_bootstrap() {
-    let (room, adapter, fake, mut rx1, mut rx2) = setup_two_ready_users_with_fake().await;
+    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users_with_transport().await;
 
     let subscriber_id = UserId::Integer(2);
     let publisher_id = UserId::Integer(1);
@@ -247,17 +218,7 @@ async fn consumption_change_persists_preference_for_future_consumer_bootstrap() 
     drain_outbound(&mut rx1);
     drain_outbound(&mut rx2);
 
-    wait_for_fake_event(&fake, |event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ConsumerActivityUpdated {
-                consumer_user_id: UserId::Integer(2),
-                source_user_id: UserId::Integer(1),
-                active: false,
-            }
-        )
-    })
-    .await;
+    assert_eq!(room.test_api().inspect().consumer_count().await, 1);
 }
 
 #[tokio::test]

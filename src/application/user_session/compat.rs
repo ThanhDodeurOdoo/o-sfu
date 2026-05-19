@@ -66,10 +66,9 @@ pub(super) fn negotiation_operation_name(action: &PendingUserAction) -> &'static
 /// and room rejections make the browser answer unusable for this session, so
 /// callers close the socket as a protocol failure.
 pub(super) fn map_core_negotiation_error(error: SfuCoreError) -> UserError {
-    match error {
-        SfuCoreError::Transport(_) => UserError::InternalError,
-        SfuCoreError::CapabilityProjection(_)
-        | SfuCoreError::SessionNegotiationRejected(_)
-        | SfuCoreError::SessionRefreshRejected(_) => UserError::ProtocolViolation,
+    if error.is_client_negotiation_error() {
+        UserError::ProtocolViolation
+    } else {
+        UserError::InternalError
     }
 }

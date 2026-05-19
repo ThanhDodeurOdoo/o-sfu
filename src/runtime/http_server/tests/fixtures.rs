@@ -10,27 +10,24 @@ pub(super) use serde::de::DeserializeOwned;
 pub(super) use tower::util::ServiceExt;
 
 pub(super) use super::super::app;
-pub(super) use crate::{
-    config::Bitrate,
-    runtime::{
-        ConnectionId, RuntimeState,
-        auth::{self, HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims},
-        diagnostics::types::{
-            DiagnosticsRoomDetail, DiagnosticsRoomSummary, DiagnosticsSourceSelectionReason,
-            DiagnosticsSummaryResponse, DiagnosticsUserDetail, DiagnosticsUserLookupConflict,
-            DiagnosticsUserSummary, DiagnosticsWorkerSummary,
-        },
-        http_server::contract::{
-            CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
-            DIAGNOSTICS_WORKERS_PATH, DISCONNECT_PATH, METRICS_PATH, NOOP_PATH, NoopResponse,
-            RoomResponse, STATS_PATH, StatsResponse,
-        },
-        media_transport::{MediaTransport, TransportPlacementPressureSnapshot},
-        room::{JoinUserRequest, RoomConfig},
-        test_support::{
-            RuntimeMetricsSnapshotTestExt, RuntimeTestBuilder, RuntimeTestState, TEST_AUTH_KEY,
-            TEST_ROOM_KEY, test_outbound_sender,
-        },
+pub(super) use crate::runtime::{
+    ConnectionId, RuntimeState,
+    auth::{self, HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims},
+    diagnostics::types::{
+        DiagnosticsRoomDetail, DiagnosticsRoomSummary, DiagnosticsSourceSelectionReason,
+        DiagnosticsSummaryResponse, DiagnosticsUserDetail, DiagnosticsUserLookupConflict,
+        DiagnosticsUserSummary, DiagnosticsWorkerSummary,
+    },
+    http_server::contract::{
+        CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
+        DIAGNOSTICS_WORKERS_PATH, DISCONNECT_PATH, METRICS_PATH, NOOP_PATH, NoopResponse,
+        RoomResponse, STATS_PATH, StatsResponse,
+    },
+    media_transport::MediaTransport,
+    room::{JoinUserRequest, Room, RoomConfig},
+    test_support::{
+        RuntimeMetricsSnapshotTestExt, RuntimeTestBuilder, RuntimeTestState, TEST_AUTH_KEY,
+        TEST_ROOM_KEY, test_outbound_sender,
     },
 };
 
@@ -84,4 +81,22 @@ where
 pub(super) async fn parse_text(response: AxumResponse) -> Option<String> {
     let bytes = to_bytes(response.into_body(), usize::MAX).await.ok()?;
     String::from_utf8(bytes.to_vec()).ok()
+}
+
+pub(super) async fn create_transport_session_offer(
+    room: &Room,
+    user_id: &UserId,
+    media_transport: &MediaTransport,
+) -> Option<()> {
+    let connection_id = room
+        .test_api()
+        .inspect()
+        .user_connection_id(user_id)
+        .await?;
+    let session_key = room.transport_user_key(user_id, connection_id);
+    media_transport
+        .create_initial_session_offer(&session_key)
+        .await
+        .ok()?;
+    Some(())
 }

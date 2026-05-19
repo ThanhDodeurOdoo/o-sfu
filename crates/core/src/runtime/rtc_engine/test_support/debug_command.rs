@@ -1,3 +1,6 @@
+#[cfg(all(not(test), feature = "testing-transport"))]
+use std::time::Instant;
+
 use str0m::media::Mid;
 use tokio::sync::oneshot;
 #[cfg(test)]
@@ -49,7 +52,7 @@ pub(in crate::runtime::rtc_engine) enum DebugRtcWorkerCommand {
         session_key: TransportSessionKey,
         response: oneshot::Sender<Option<Bitrate>>,
     },
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     RouteEntry {
         source_session_key: TransportSessionKey,
         source_mid: Mid,
@@ -60,7 +63,7 @@ pub(in crate::runtime::rtc_engine) enum DebugRtcWorkerCommand {
         consumer_mid: Mid,
         response: oneshot::Sender<Option<DebugRouteEntry>>,
     },
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     RouteEntryByMediaId {
         source_transport_media_id: TransportMediaId,
         response: oneshot::Sender<Option<DebugRouteEntry>>,
@@ -73,7 +76,7 @@ pub(in crate::runtime::rtc_engine) enum DebugRtcWorkerCommand {
         now: Instant,
         response: oneshot::Sender<()>,
     },
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     ObserveAudioActivity {
         transport_media_id: TransportMediaId,
         voice_activity: Option<bool>,

@@ -2,8 +2,7 @@
 //!
 //! This module contains the service surface that room, server plus [`crate::SfuCore`]
 //! code use when they need media work to happen outside the pure router. It is
-//! intentionally named after the capability it provides rather than the backend
-//! that currently implements it: callers ask the media transport to create SDP
+//! intentionally named after the capability it provides: callers ask the media transport to create SDP
 //! offers, apply answers, publish or consume media, close sessions, read
 //! diagnostics snapshots plus subscribe to source-policy wakeups.
 //!
@@ -13,11 +12,7 @@
 //!   inputs needed by the server runtime
 //! - expose transport operations directly on [`MediaTransport`] so higher
 //!   layers express intent without knowing about RTC workers, Str0m state, UDP
-//!   sockets, worker-local relay routing or deterministic test backends
-//! - select the active backend for the build. Production builds wrap the real
-//!   RTC engine through [`RtcTransport`], while test builds can also select a
-//!   deterministic fake transport through the same transport handle without
-//!   putting fake-only behavior on the production path.
+//!   sockets or worker-local relay routing
 //!
 //! Code above this module should depend on [`MediaTransport`]. Code below this
 //! module, especially the RTC engine, may deal with worker-local state machines
@@ -25,7 +20,6 @@
 //! signaling orchestration from growing knowledge of the concrete WebRTC
 //! implementation.
 
-mod backend;
 mod config;
 mod operation;
 mod rtc_transport;
@@ -37,7 +31,6 @@ mod worker_manager;
 
 use std::{collections::BTreeSet, time::Instant};
 
-use backend::Backend;
 pub use config::{MediaTransportDeps, RtcTransportConfig};
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
 use operation::TransportControlOperation;
@@ -56,22 +49,22 @@ pub use types::{
     TransportRelayRouteAction, TransportRelayRouteEffect, TransportResult, TransportSessionHealth,
     TransportSessionKey, TransportWorkerPressureSnapshot,
 };
+use worker_manager::RtcWorkerManager;
 
 use crate::{CoreOptions, runtime::RoomInstanceId};
 
 /// Opaque runtime media transport handle.
 ///
 /// `MediaTransport` is the type server orchestration and `SfuCore` should hold.
-/// It hides whether the active backend is production RTC or a deterministic
-/// test transport selected by cfg. Callers express intent through inherent
-/// methods and must not branch on concrete backend variants.
+/// It hides the production RTC worker topology. Callers express intent through
+/// inherent methods and must not branch on concrete worker internals.
 ///
 /// The handle also centralizes warning logs for failed transport effects. Inner
 /// backends return typed errors, while this boundary adds stable diagnostic
 /// context such as session keys, media ids and SDP lengths.
 #[derive(Debug, Clone)]
 pub struct MediaTransport {
-    backend: Backend,
+    transport: RtcTransport,
 }
 
 impl MediaTransport {
@@ -104,9 +97,7 @@ impl MediaTransport {
     /// the same type that production orchestration uses.
     #[must_use]
     pub const fn from_rtc_transport(transport: RtcTransport) -> Self {
-        Self {
-            backend: Backend::Rtc(transport),
-        }
+        Self { transport }
     }
     /// Creates the first SDP offer for a transport session.
     ///
@@ -122,7 +113,8 @@ impl MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        self.backend
+        self.transport
+            .worker_manager
             .create_initial_session_offer(session_key)
             .await
             .inspect_err(|error| {
@@ -148,7 +140,8 @@ impl MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        self.backend
+        self.transport
+            .worker_manager
             .create_session_renegotiation_offer(session_key)
             .await
             .inspect_err(|error| {
@@ -175,7 +168,8 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         answer_sdp: &str,
     ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-        self.backend
+        self.transport
+            .worker_manager
             .apply_session_answer(session_key, answer_sdp)
             .await
             .inspect_err(|error| {
@@ -203,15 +197,17 @@ impl MediaTransport {
         answer_sdp: &str,
         offered_router_capabilities: &MediaCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
-        self.backend
-            .negotiated_client_rtp_capabilities(answer_sdp, offered_router_capabilities)
-            .inspect_err(|error| {
-                warn!(
-                    answer_len = answer_sdp.len(),
-                    ?error,
-                    "media transport failed to derive client RTP capabilities from answer SDP"
-                );
-            })
+        RtcWorkerManager::negotiated_client_rtp_capabilities(
+            answer_sdp,
+            offered_router_capabilities,
+        )
+        .inspect_err(|error| {
+            warn!(
+                answer_len = answer_sdp.len(),
+                ?error,
+                "media transport failed to derive client RTP capabilities from answer SDP"
+            );
+        })
     }
     /// Closes all backend state owned by a transport session.
     ///
@@ -227,7 +223,8 @@ impl MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
-        self.backend
+        self.transport
+            .worker_manager
             .close_session(session_key)
             .await
             .inspect_err(|error| {
@@ -248,7 +245,8 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        self.backend
+        self.transport
+            .worker_manager
             .remove_media(session_key, transport_media_id)
             .await
             .inspect_err(|error| {
@@ -278,7 +276,8 @@ impl MediaTransport {
         media_kind: MediaKind,
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        self.backend
+        self.transport
+            .worker_manager
             .publish_media(session_key, media_kind, rtp_parameters)
             .await
             .inspect_err(|error| {
@@ -311,7 +310,8 @@ impl MediaTransport {
         source_media_id: TransportMediaId,
         consumer_rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        self.backend
+        self.transport
+            .worker_manager
             .consume_media(
                 consumer_session_key,
                 media_kind,
@@ -346,7 +346,8 @@ impl MediaTransport {
         &self,
         effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
-        self.backend
+        self.transport
+            .worker_manager
             .execute_control_operation(TransportControlOperation::RelayRouteEffect(effect.clone()))
             .await
             .inspect_err(|error| {
@@ -376,7 +377,8 @@ impl MediaTransport {
         transport_media_id: TransportMediaId,
         activity: ProducerActivity,
     ) -> Result<(), TransportAdapterError> {
-        self.backend
+        self.transport
+            .worker_manager
             .execute_control_operation(TransportControlOperation::SetProducerActivity {
                 session_key: session_key.clone(),
                 transport_media_id,
@@ -408,7 +410,8 @@ impl MediaTransport {
         route: &TransportConsumerRoute,
         activity: ConsumerActivity,
     ) -> Result<(), TransportAdapterError> {
-        self.backend
+        self.transport
+            .worker_manager
             .execute_control_operation(TransportControlOperation::SetConsumerActivity {
                 route: route.clone(),
                 activity,
@@ -440,7 +443,8 @@ impl MediaTransport {
         route: &TransportConsumerRoute,
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
-        self.backend
+        self.transport
+            .worker_manager
             .execute_control_operation(TransportControlOperation::SetConsumerPacketGate {
                 route: route.clone(),
                 packet_gate: packet_gate.clone(),
@@ -463,7 +467,8 @@ impl MediaTransport {
         updates: &[ConsumerPacketGateUpdate],
     ) -> Vec<Result<(), TransportAdapterError>> {
         let results = self
-            .backend
+            .transport
+            .worker_manager
             .execute_consumer_packet_gate_batch(updates)
             .await;
         for (update, result) in updates.iter().zip(results.iter()) {
@@ -493,7 +498,8 @@ impl MediaTransport {
         &self,
         route: &TransportConsumerRoute,
     ) -> Result<(), TransportAdapterError> {
-        self.backend
+        self.transport
+            .worker_manager
             .execute_control_operation(TransportControlOperation::RequestConsumerKeyframe {
                 route: route.clone(),
             })
@@ -516,7 +522,8 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Option<String> {
-        self.backend
+        self.transport
+            .worker_manager
             .transport_media_mid(session_key, transport_media_id)
             .await
     }
@@ -529,7 +536,9 @@ impl MediaTransport {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
-        self.backend.transport_bitrate_snapshot(session_keys)
+        self.transport
+            .worker_manager
+            .transport_bitrate_snapshot(session_keys)
     }
 
     /// Returns receiver-side bandwidth estimates for the requested sessions.
@@ -541,7 +550,9 @@ impl MediaTransport {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
-        self.backend.receiver_bandwidth_snapshot(session_keys)
+        self.transport
+            .worker_manager
+            .receiver_bandwidth_snapshot(session_keys)
     }
 
     /// Returns transport-worker pressure for the workers that own the sessions.
@@ -553,7 +564,9 @@ impl MediaTransport {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportPlacementPressureSnapshot {
-        self.backend.placement_pressure_snapshot(session_keys)
+        self.transport
+            .worker_manager
+            .placement_pressure_snapshot(session_keys)
     }
 
     /// Returns transport-worker pressure for every worker the backend can rank.
@@ -563,17 +576,23 @@ impl MediaTransport {
     /// race with worker startup and teardown.
     #[must_use]
     pub fn worker_pressure_snapshots(&self) -> Vec<TransportWorkerPressureSnapshot> {
-        self.backend.worker_pressure_snapshots()
+        self.transport.worker_manager.worker_pressure_snapshots()
     }
 
     /// Returns recent active-speaker sources observed by transport workers.
     pub async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
-        self.backend.active_speaker_source_snapshot().await
+        self.transport
+            .worker_manager
+            .active_speaker_source_snapshot()
+            .await
     }
 
     /// Returns diagnostic active-speaker state for operator-facing output.
     pub async fn active_speaker_diagnostic_snapshot(&self) -> Vec<ActiveSpeakerSourceDiagnostic> {
-        self.backend.active_speaker_diagnostic_snapshot().await
+        self.transport
+            .worker_manager
+            .active_speaker_diagnostic_snapshot()
+            .await
     }
 
     /// Returns the next known deadline for active-speaker expiry work.
@@ -581,7 +600,10 @@ impl MediaTransport {
     /// Runtimes use this to schedule source-policy wakeups without polling all
     /// rooms on a fixed cadence.
     pub async fn next_active_speaker_deadline(&self) -> Option<Instant> {
-        self.backend.next_active_speaker_deadline().await
+        self.transport
+            .worker_manager
+            .next_active_speaker_deadline()
+            .await
     }
 
     /// Returns rooms whose transport-observed active-speaker state expired by
@@ -593,7 +615,8 @@ impl MediaTransport {
         &self,
         now: Instant,
     ) -> BTreeSet<RoomInstanceId> {
-        self.backend
+        self.transport
+            .worker_manager
             .expired_active_speaker_room_instance_ids(now)
             .await
     }
@@ -607,13 +630,15 @@ impl MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
-        self.backend.session_transport_health(session_key)
+        self.transport
+            .worker_manager
+            .session_transport_health(session_key)
     }
     /// Subscribes to source-policy invalidation signals emitted by transport
     /// workers.
     #[must_use]
     pub fn source_policy_subscription(&self) -> SourcePolicyUpdateSubscription {
-        self.backend.source_policy_subscription()
+        self.transport.worker_manager.source_policy_subscription()
     }
 }
 
