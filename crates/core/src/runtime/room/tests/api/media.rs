@@ -42,7 +42,6 @@ impl RoomTestMedia<'_> {
             .commit_with_parameters(
                 self.room,
                 media_transport,
-                media_transport,
                 publish.consumable_rtp_parameters,
             )
             .await
@@ -117,12 +116,7 @@ impl RoomTestMedia<'_> {
             }
         };
         PendingPublishTransaction::new(validated_descriptor, transport_media_id)
-            .commit_with_parameters(
-                self.room,
-                media_transport,
-                media_transport,
-                consumable_rtp_parameters,
-            )
+            .commit_with_parameters(self.room, media_transport, consumable_rtp_parameters)
             .await
     }
 }

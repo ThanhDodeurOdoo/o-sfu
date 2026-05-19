@@ -292,8 +292,7 @@ impl PendingPublishTransaction {
         self,
         room: &Room,
         applied_answer: &AppliedSessionAnswer,
-        observability_port: &MediaTransport,
-        media_port: &MediaTransport,
+        media_transport: &MediaTransport,
     ) -> Option<UserStreamId> {
         let owner_user_id = self.descriptor.owner_user_id().clone();
         let owner_connection_id = self.descriptor.owner_connection_id();
@@ -305,7 +304,7 @@ impl PendingPublishTransaction {
         else {
             self.cleanup_reserved_media(
                 room,
-                media_port,
+                media_transport,
                 "media transport failed to remove staged publish media after answered negotiation omitted producer parameters",
             )
             .await;
@@ -323,8 +322,7 @@ impl PendingPublishTransaction {
             .to_vec();
         self.commit_with_parameters_and_upload_encodings(
             room,
-            observability_port,
-            media_port,
+            media_transport,
             negotiated_parameters,
             upload_encodings,
         )
@@ -345,14 +343,12 @@ impl PendingPublishTransaction {
     pub(super) async fn commit_with_parameters(
         self,
         room: &Room,
-        observability_port: &MediaTransport,
-        media_port: &MediaTransport,
+        media_transport: &MediaTransport,
         consumable_rtp_parameters: RouterRtpParameters,
     ) -> Option<UserStreamId> {
         self.commit_with_parameters_and_upload_encodings(
             room,
-            observability_port,
-            media_port,
+            media_transport,
             consumable_rtp_parameters,
             Vec::new(),
         )
@@ -362,8 +358,7 @@ impl PendingPublishTransaction {
     async fn commit_with_parameters_and_upload_encodings(
         self,
         room: &Room,
-        observability_port: &MediaTransport,
-        media_port: &MediaTransport,
+        media_transport: &MediaTransport,
         consumable_rtp_parameters: RouterRtpParameters,
         upload_encodings: Vec<SessionUploadEncoding>,
     ) -> Option<UserStreamId> {
@@ -408,7 +403,7 @@ impl PendingPublishTransaction {
             reservation
                 .cleanup(
                     room,
-                    media_port,
+                    media_transport,
                     "media transport failed to remove published transport media after room commit failed",
                 )
                 .await;
@@ -423,9 +418,7 @@ impl PendingPublishTransaction {
         };
         reservation.commit();
         let stream_id = committed_publish.stream_id.clone();
-        committed_publish
-            .finish(room, observability_port, media_port)
-            .await;
+        committed_publish.finish(room, media_transport).await;
         Some(stream_id)
     }
 
@@ -534,20 +527,15 @@ impl CommittedPublish {
     /// - consumers bootstrap before receiver-driven policy so the policy can
     ///   choose per-consumer simulcast layers
     /// - diagnostics happen last
-    async fn finish(
-        self,
-        room: &Room,
-        observability_port: &MediaTransport,
-        media_port: &MediaTransport,
-    ) {
+    async fn finish(self, room: &Room, media_transport: &MediaTransport) {
         room.record_media_count_delta(self.media_counts_before, self.media_counts_after);
         room.bootstrap_consumer_targets(
-            media_port,
+            media_transport,
             ConsumerBootstrapOrigin::Publish,
             self.consumer_targets,
         )
         .await;
-        room.sync_source_packet_selection_policy(Some(observability_port), media_port)
+        room.sync_source_packet_selection_policy(media_transport)
             .await;
         room.diagnostics.record(self.diagnostics);
     }
@@ -735,8 +723,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         applied_answer: &AppliedSessionAnswer,
-        observability_port: &MediaTransport,
-        media_port: &MediaTransport,
+        media_transport: &MediaTransport,
     ) -> Vec<UserStreamId> {
         let staged_publishes = self
             .pending_publish_transactions()
@@ -744,7 +731,7 @@ impl Room {
         let mut committed_stream_ids = Vec::new();
         for staged_publish in staged_publishes {
             if let Some(stream_id) = staged_publish
-                .commit(self, applied_answer, observability_port, media_port)
+                .commit(self, applied_answer, media_transport)
                 .await
             {
                 committed_stream_ids.push(stream_id);

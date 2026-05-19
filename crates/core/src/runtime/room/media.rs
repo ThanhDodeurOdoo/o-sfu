@@ -175,8 +175,7 @@ impl Room {
             )
         };
         effect_plan.execute(self, media_port).await;
-        self.sync_source_packet_selection_policy(Some(media_port), media_port)
-            .await;
+        self.sync_source_packet_selection_policy(media_port).await;
         SubscriptionUpdateOutcome::Applied
     }
 

@@ -262,8 +262,7 @@ impl RoomManager {
     pub async fn sync_source_packet_selection_policies_for_runtime_ids(
         &self,
         room_instance_ids: &BTreeSet<RoomInstanceId>,
-        observability_port: &MediaTransport,
-        media_port: &MediaTransport,
+        media_transport: &MediaTransport,
     ) {
         if room_instance_ids.is_empty() {
             return;
@@ -274,12 +273,11 @@ impl RoomManager {
         if rooms.is_empty() {
             return;
         }
-        let active_speaker_sources = observability_port.active_speaker_source_snapshot().await;
+        let active_speaker_sources = media_transport.active_speaker_source_snapshot().await;
         for room in rooms {
             room.sync_source_packet_selection_policy_from_observations(
                 &active_speaker_sources,
-                observability_port,
-                media_port,
+                media_transport,
             )
             .await;
         }
