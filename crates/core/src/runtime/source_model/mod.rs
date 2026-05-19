@@ -34,8 +34,6 @@ pub use descriptor::{
     PublishedSourceDescriptor, PublishedSourceDescriptorParts, SourceEncodingDescriptor,
     SourceEncodingDescriptorParts,
 };
-pub use diagnostics::{OverBudgetExceptionReason, ReceiverVideoBudgetDiagnostics};
-pub use errors::SourceModelError;
 pub use ids::{
     PublishedSourceId, PublishedSourceOwner, SourceEncodingId, SourceOperatingPoint,
     SourceTemporalLayerId, UserStreamId,
@@ -47,6 +45,11 @@ pub use policy::{
     SourceRoutePriority, UploadLayerPolicyRole,
 };
 pub use selection::{ConsumerSourceSelection, SourceSelector};
+
+pub use self::{
+    diagnostics::{OverBudgetExceptionReason, ReceiverVideoBudgetDiagnostics},
+    errors::SourceModelError,
+};
 
 #[cfg(any(test, feature = "testing-transport"))]
 pub mod test_support;

@@ -44,8 +44,6 @@ mod tests;
 mod topology;
 mod user_negotiation;
 
-#[cfg(any(test, feature = "testing-transport"))]
-pub(in crate::runtime::room) use cleanup::UserCleanup;
 pub use controller::{
     IncomingBitrateSnapshot, Room, RoomJoinError, RoomManagerJoinError, RoomMediaCounts,
     RoomUserStatsSnapshot,
@@ -59,8 +57,6 @@ pub use manager::{
     JoinUserRequest, RoomManager, RoomManagerConfig, RoomManagerDeps, RuntimeRoomDirectorySnapshot,
     RuntimeRoomStatsSnapshot,
 };
-#[cfg(any(test, feature = "testing-transport"))]
-pub(in crate::runtime::room) use membership::JoinSessionIntent;
 pub use outbound::{
     DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
     RoomEventRequest, TrackBindingUpdate, UserOutbound, UserOutboundEvent, UserOutboundOverflow,
@@ -77,3 +73,6 @@ pub use tests::api::{
     NegotiatedPublish, RoomManagerTestApi, RoomTestApi, RoomTestInspect, RoomTestLifecycle,
     RoomTestMedia,
 };
+
+#[cfg(any(test, feature = "testing-transport"))]
+pub(in crate::runtime::room) use self::{cleanup::UserCleanup, membership::JoinSessionIntent};

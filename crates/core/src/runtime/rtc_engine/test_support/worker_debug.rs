@@ -1,15 +1,16 @@
 use std::sync::{Arc, Mutex};
-#[cfg(test)]
-use std::{net::SocketAddr, time::Instant};
 
 use str0m::media::Mid;
 use tokio::sync::oneshot;
+#[cfg(test)]
+use {
+    crate::Bitrate,
+    std::{net::SocketAddr, time::Instant},
+};
 
 use super::debug_command::{
     DebugPacketGate, DebugRouteDestination, DebugRouteEntry, DebugRtcWorkerCommand,
 };
-#[cfg(test)]
-use crate::Bitrate;
 use crate::runtime::{
     media_transport::{TransportMediaId, TransportSessionKey},
     rtc_engine::{

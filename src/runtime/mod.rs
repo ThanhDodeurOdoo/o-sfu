@@ -50,23 +50,25 @@ pub(crate) mod request_origin;
 pub(super) mod test_support;
 pub(crate) mod websocket_server;
 
-pub(crate) use diagnostics::DiagnosticsStore;
 use http_server::{serve_http, serve_http_on};
-pub(crate) use media_transport::{MediaTransport, MediaTransportDeps};
-pub(crate) use metrics::RuntimeMetrics;
 pub(crate) use o_sfu_core::{
     ConnectionId, SessionBitrateLimits,
     server::{metrics, packet_sinks, room, transport as media_transport},
 };
-pub(crate) use o_sfu_telemetry as telemetry;
-pub(crate) use o_sfu_telemetry::prometheus;
+pub(crate) use o_sfu_telemetry::{self as telemetry, prometheus};
 use options::{RuntimeConfig, RuntimeOptions};
-pub(crate) use packet_sinks::RoomPacketSinkRegistry;
 use room::{
     RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy,
     rtp_capabilities,
 };
 use telemetry::{init_tracing, schema::event as telemetry_event};
+
+pub(crate) use self::{
+    diagnostics::DiagnosticsStore,
+    media_transport::{MediaTransport, MediaTransportDeps},
+    metrics::RuntimeMetrics,
+    packet_sinks::RoomPacketSinkRegistry,
+};
 
 /// retry sweep cadence for retained rooms with pending transport cleanup
 ///

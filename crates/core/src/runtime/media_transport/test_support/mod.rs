@@ -5,19 +5,18 @@ mod fake_transport;
 #[cfg(any(test, feature = "testing-transport"))]
 pub use fake_transport::{FakeMediaTransport, FakeMediaTransportEvent};
 #[cfg(test)]
-use o_sfu_router::MediaStream as RouterRtpParameters;
+use {
+    super::{TransportAdapterError, TransportMediaId},
+    o_sfu_router::MediaStream as RouterRtpParameters,
+};
 #[cfg(any(test, feature = "testing-transport"))]
-use str0m::media::Mid;
+use {
+    super::{TransportSessionHealth, TransportSessionKey, worker_manager::RtcWorkerManager},
+    crate::runtime::rtc_engine::test_support::DebugRouteEntry,
+    str0m::media::Mid,
+};
 
-#[cfg(any(test, feature = "testing-transport"))]
-use super::worker_manager::RtcWorkerManager;
 use super::{Backend, MediaTransport};
-#[cfg(test)]
-use super::{TransportAdapterError, TransportMediaId};
-#[cfg(any(test, feature = "testing-transport"))]
-use super::{TransportSessionHealth, TransportSessionKey};
-#[cfg(any(test, feature = "testing-transport"))]
-use crate::runtime::rtc_engine::test_support::DebugRouteEntry;
 
 impl MediaTransport {
     #[cfg(any(test, feature = "testing-transport"))]
