@@ -13,7 +13,7 @@
 //! - flush all staged UDP transmits outside any shared-state lock
 //! - wait for the next shutdown, command, relay, timeout or UDP datagram
 //! - try to route one received datagram into its owning `str0m::Rtc`
-//!
+//! ABCDEF
 //! shared observable state is updated through narrow side channels
 //! the packet loop owns authoritative media state while snapshots, metrics,
 //! diagnostics, packet sinks, relay target state and source-policy signals are
