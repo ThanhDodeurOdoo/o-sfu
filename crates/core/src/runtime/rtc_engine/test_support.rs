@@ -2,7 +2,7 @@
 mod debug_command;
 #[path = "test_support/debug_mailbox.rs"]
 mod debug_mailbox;
-#[cfg(test)]
+#[cfg(any(test, feature = "internal-benchmarks"))]
 #[path = "test_support/route_graph.rs"]
 mod route_graph;
 #[path = "test_support/worker_debug.rs"]
@@ -11,7 +11,7 @@ mod worker_debug;
 pub(super) use debug_command::DebugRtcWorkerCommand;
 pub use debug_command::{DebugPacketGate, DebugRouteDestination, DebugRouteEntry};
 pub(super) use debug_mailbox::{RtcWorkerDebugChannels, RtcWorkerDebugHandle};
-#[cfg(test)]
+#[cfg(any(test, feature = "internal-benchmarks"))]
 pub(in crate::runtime::rtc_engine) use route_graph::MediaWorkerScenario;
 pub(super) use worker_debug::handle_debug_worker_command;
 

@@ -31,6 +31,8 @@
 //! - `simulcast`: RTC-edge simulcast negotiation helpers.
 
 mod api;
+#[cfg(feature = "internal-benchmarks")]
+pub mod benchmark_support;
 mod bitrate;
 mod bootstrap;
 mod commands;
