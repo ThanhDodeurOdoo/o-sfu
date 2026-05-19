@@ -1,0 +1,245 @@
+name: Performance Comment
+
+on:
+  workflow_run:
+    workflows: [Performance]
+    types: [completed]
+
+# this workflow receives the write token, so it must only consume benchmark artifacts as data
+# the untrusted pull request code runs in .github/workflows/performance.yml with read-only access
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  packet-loop-callgrind-comment:
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+
+    env:
+      ARTIFACT_NAME: packet-loop-callgrind-${{ github.event.workflow_run.id }}
+      BENCHMARK_RESULT: ${{ github.event.workflow_run.conclusion }}
+      BENCHMARK_RUN_URL: ${{ github.event.workflow_run.html_url }}
+
+    steps:
+      - name: Download Callgrind artifacts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: performance-comment
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Update PR Callgrind summary comment
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require("fs");
+            const path = require("path");
+
+            // keep one bot-owned summary per pull request instead of creating a new comment on each run
+            const marker = "<!-- o-sfu-callgrind-summary -->";
+            const artifactName = process.env.ARTIFACT_NAME;
+            const benchmarkResult = process.env.BENCHMARK_RESULT;
+            const runUrl = process.env.BENCHMARK_RUN_URL;
+            const summaryPath = path.join(
+              "performance-comment",
+              "performance-artifacts",
+              "callgrind-summary.json",
+            );
+            const refsPath = path.join(
+              "performance-comment",
+              "performance-artifacts",
+              "callgrind-refs.env",
+            );
+
+            function readJsonArray(filePath) {
+              if (!fs.existsSync(filePath)) {
+                return [];
+              }
+              const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+              return Array.isArray(value) ? value : [value];
+            }
+
+            function readRefs(filePath) {
+              if (!fs.existsSync(filePath)) {
+                return {};
+              }
+              return Object.fromEntries(
+                fs.readFileSync(filePath, "utf8")
+                  .split(/\r?\n/)
+                  .filter(Boolean)
+                  .map((line) => {
+                    const separator = line.indexOf("=");
+                    if (separator === -1) {
+                      return [line, ""];
+                    }
+                    return [line.slice(0, separator), line.slice(separator + 1)];
+                  }),
+              );
+            }
+
+            function metricValue(metric) {
+              if (metric == null) {
+                return null;
+              }
+              if (typeof metric === "number") {
+                return metric;
+              }
+              if (typeof metric === "string") {
+                const parsed = Number(metric);
+                return Number.isFinite(parsed) ? parsed : null;
+              }
+              if (Object.prototype.hasOwnProperty.call(metric, "Int")) {
+                return Number(metric.Int);
+              }
+              if (Object.prototype.hasOwnProperty.call(metric, "Float")) {
+                return Number(metric.Float);
+              }
+              return null;
+            }
+
+            function formatInteger(value) {
+              return value == null || !Number.isFinite(value)
+                ? "n/a"
+                : Math.round(value).toLocaleString("en-US");
+            }
+
+            function formatDelta(value) {
+              const parsed = Number(value);
+              return Number.isFinite(parsed) ? `${parsed.toFixed(3)}%` : "n/a";
+            }
+
+            function escapeCell(value) {
+              return String(value ?? "n/a")
+                .replaceAll("|", "\\|")
+                .replaceAll("@", "@\u200b")
+                .replaceAll("\n", " ");
+            }
+
+            function benchmarkName(summary) {
+              return summary.id
+                ? `${summary.function_name}/${summary.id}`
+                : summary.function_name || summary.module_path || "unknown";
+            }
+
+            function callgrindProfile(summary) {
+              return (summary.profiles || []).find((profile) => profile.tool === "Callgrind");
+            }
+
+            function callgrindMetric(summary, metricName) {
+              const profile = callgrindProfile(summary);
+              return profile?.summaries?.total?.summary?.Callgrind?.[metricName] ?? null;
+            }
+
+            function regressions(summary) {
+              const profile = callgrindProfile(summary);
+              return profile?.summaries?.total?.regressions || [];
+            }
+
+            function hasIrRegression(summary) {
+              return regressions(summary).some((regression) => {
+                const payload = regression.Soft || regression.Hard || {};
+                return payload.metric?.Callgrind === "Ir";
+              });
+            }
+
+            function rowFromSummary(summary) {
+              const ir = callgrindMetric(summary, "Ir");
+              const metrics = ir?.metrics;
+              const both = metrics?.Both;
+              if (!Array.isArray(both) || both.length !== 2) {
+                return null;
+              }
+              // iai-callgrind reports comparison metrics as [head, base] for the Both variant
+              const head = metricValue(both[0]);
+              const base = metricValue(both[1]);
+              return {
+                name: benchmarkName(summary),
+                base,
+                head,
+                delta: ir?.diffs?.diff_pct,
+                result: hasIrRegression(summary) ? "regression" : "ok",
+              };
+            }
+
+            const refs = readRefs(refsPath);
+            const issueNumber = [
+              Number(context.payload.workflow_run.pull_requests?.[0]?.number),
+              Number(refs.pull_request_number),
+            ].find((value) => Number.isSafeInteger(value) && value > 0);
+            if (!issueNumber) {
+              core.info("performance run is not attached to a pull request");
+              return;
+            }
+
+            const rows = readJsonArray(summaryPath)
+              .map(rowFromSummary)
+              .filter(Boolean)
+              .sort((left, right) => left.name.localeCompare(right.name));
+            const regressionCount = rows.filter((row) => row.result === "regression").length;
+            const status = benchmarkResult === "success" && regressionCount === 0
+              ? "ok"
+              : "needs review";
+            const tableRows = rows.slice(0, 25).map((row) => [
+              escapeCell(row.name),
+              formatInteger(row.base),
+              formatInteger(row.head),
+              formatDelta(row.delta),
+              row.result,
+            ].join(" | "));
+            const table = rows.length
+              ? [
+                "| benchmark | base Ir | head Ir | delta | result |",
+                "| --- | ---: | ---: | ---: | --- |",
+                ...tableRows.map((row) => `| ${row} |`),
+              ].join("\n")
+              : "no comparable Callgrind summary rows were produced";
+            const omitted = rows.length > 25
+              ? `\n\n${rows.length - 25} additional benchmark rows are in the artifact`
+              : "";
+            const body = [
+              marker,
+              "## packet-loop Callgrind",
+              "",
+              `status: ${status}`,
+              `benchmark job: ${benchmarkResult}`,
+              `base ref: ${refs.base_ref || "n/a"}`,
+              `head ref: ${refs.head_ref || "n/a"}`,
+              "",
+              table,
+              omitted,
+              "",
+              `artifact: \`${artifactName}\``,
+              `[workflow run](${runUrl})`,
+            ].filter(Boolean).join("\n");
+
+            const { owner, repo } = context.repo;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: issueNumber,
+              per_page: 100,
+            });
+            const previous = comments.find((comment) =>
+              comment.user.type === "Bot" && comment.body.includes(marker)
+            );
+
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: previous.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body,
+              });
+            }
