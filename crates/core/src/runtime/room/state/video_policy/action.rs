@@ -5,7 +5,7 @@
 //! subscription intact while withholding RTP delivery for a policy-owned reason.
 
 use super::{
-    super::shared::ConsumerRouteTransportRef, input::ReceiverVideoRouteInput,
+    super::media::ConsumerRouteTransportRef, input::ReceiverVideoRouteInput,
     projection::source_packet_gate_for_selector,
 };
 use crate::runtime::{

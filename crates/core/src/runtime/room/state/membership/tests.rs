@@ -24,7 +24,10 @@ use crate::{
             rtp_capabilities::router_rtp_capabilities,
             state::{
                 ids::ProducerRuntimeId,
-                shared::{ConsumerKey, ConsumerState, SourceKey, SourceTransportMediaIndexEntry},
+                media::{
+                    ConsumerKey, ConsumerState, PublishedProducer, SourceKey,
+                    SourceTransportMediaIndexEntry,
+                },
             },
             topology::{RoutedConsumerId, RoutedProducerId},
         },
@@ -111,7 +114,7 @@ fn install_test_published_producer(
     state.media.register_source_owner(user_id, source_id);
     state.media.producers.insert(
         producer_id,
-        super::super::shared::PublishedProducer {
+        PublishedProducer {
             source_id,
             owner_user_id: user_id.clone(),
             owner_connection_id: connection_id,

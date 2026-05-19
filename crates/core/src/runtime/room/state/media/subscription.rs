@@ -23,11 +23,9 @@ use super::{
     super::{
         super::{RoomEventRequest, outbound::OutboundSender, topology::RoutedProducerId},
         ids::{ConsumerRuntimeId, ProducerRuntimeId},
-        shared::{
-            ConsumerKey, ConsumerRouteTransportRef, ConsumerState, PublishedProducer, RoomState,
-            SourceKey,
-        },
+        shared::RoomState,
     },
+    ConsumerKey, ConsumerRouteTransportRef, ConsumerState, PublishedProducer, SourceKey,
     relay::RelayRouteEffect,
 };
 use crate::runtime::{
@@ -414,8 +412,7 @@ impl RoomState {
             &consumer_key,
             ConsumerSourceSelection::open(consumer_active),
         );
-        self.media
-            .reserve_pending_consumer_bootstrap(consumer_key.clone());
+        self.media.reserve_consumer_bootstrap(consumer_key.clone());
         let consumer_id = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
         let relay_effects = self.reserve_relay_route(target, consumer_active);
         Some(PlannedConsumerBootstrap {
@@ -529,10 +526,6 @@ impl RoomState {
         {
             return None;
         }
-        self.media.ensure_consumer_source_selection(
-            &pending.consumer_key,
-            ConsumerSourceSelection::open(pending.consumer_active),
-        );
         let initial_route_state = if pending.consumer_active {
             RouterConsumerRouteState::Active
         } else {
@@ -560,7 +553,7 @@ impl RoomState {
             pending.bootstrap.mid = consumer_mid;
         }
         let consumer_key = pending.consumer_key;
-        self.media.insert_consumer_route(
+        if !self.media.commit_consumer(
             consumer_key,
             ConsumerState {
                 routed_consumer_id,
@@ -569,7 +562,10 @@ impl RoomState {
                 source_media: target.transport_media_id(),
                 consumer_media: consumer_transport_media_id,
             },
-        );
+            ConsumerSourceSelection::open(pending.consumer_active),
+        ) {
+            return None;
+        }
         Some((pending.sender, pending.bootstrap, pending.consumer_active))
     }
 
