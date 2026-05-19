@@ -26,6 +26,7 @@ mod directory;
 mod effects;
 mod events;
 mod factory;
+mod init;
 mod lifecycle;
 mod manager;
 mod media;
@@ -46,14 +47,13 @@ mod user_negotiation;
 #[cfg(any(test, feature = "testing-transport"))]
 pub(in crate::runtime::room) use cleanup::UserCleanup;
 pub use controller::{
-    IncomingBitrateSnapshot, LocalRoomRouterPlacements, LocalRoomRouterPlacementsError,
-    LocalRouterRuntimeContext, Room, RoomAdmissionPolicy, RoomConfig, RoomEventRequest,
-    RoomJoinError, RoomManagerJoinError, RoomMediaCounts, RoomRuntimeContext, RoomRuntimePolicy,
-    RoomUserStatsSnapshot, TrackBindingUpdate, UserOutbound,
+    IncomingBitrateSnapshot, Room, RoomJoinError, RoomManagerJoinError, RoomMediaCounts,
+    RoomUserStatsSnapshot,
 };
 pub use events::{
     BroadcastPayload, BroadcastPayloadError, MAX_BROADCAST_PAYLOAD_BYTES, RoomEventMessage,
 };
+pub use init::{RoomAdmissionPolicy, RoomConfig, RoomRuntimePolicy};
 pub use lifecycle::{RoomUserPermissions, UserCloseReason};
 pub use manager::{
     JoinUserRequest, RoomManager, RoomManagerConfig, RoomManagerDeps, RuntimeRoomDirectorySnapshot,
@@ -63,8 +63,13 @@ pub use manager::{
 pub(in crate::runtime::room) use membership::JoinSessionIntent;
 pub use outbound::{
     DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
-    UserOutboundEvent, UserOutboundOverflow, UserOutboundOverflowKind, UserOutboundQueueLimits,
-    UserOutboundReceiver, UserOutboundSendError, UserOutboundSender,
+    RoomEventRequest, TrackBindingUpdate, UserOutbound, UserOutboundEvent, UserOutboundOverflow,
+    UserOutboundOverflowKind, UserOutboundQueueLimits, UserOutboundReceiver, UserOutboundSendError,
+    UserOutboundSender,
+};
+pub use placement::{
+    LocalRoomRouterPlacements, LocalRoomRouterPlacementsError, LocalRouterRuntimeContext,
+    RoomRuntimeContext,
 };
 pub use state::{ConsumerRouteState, RemoteTrackBootstrap};
 #[cfg(any(test, feature = "testing-transport"))]

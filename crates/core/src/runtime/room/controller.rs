@@ -13,9 +13,9 @@
 //!   browser codec baseline RTP capabilities, negotiated parameters and track bootstrap data
 //!
 //! `controller.rs` is the public face of the runtime `room/` domain. It
-//! defines the room facade itself (`Room`) plus the small set of types that
-//! callers need to create a room, join it, query it, or project its outbound
-//! work into websocket-user handling.
+//! defines the room facade itself (`Room`) plus room-facing query and error
+//! types. construction inputs live in `init`, placement inputs live in
+//! `placement` and websocket-user handoff types live in `outbound`.
 //!
 //! The file exists to keep one clear contract at the room boundary:
 //!
@@ -28,21 +28,19 @@
 
 use std::{
     collections::BTreeMap,
-    fmt, iter,
+    fmt,
     sync::{Arc, Mutex as StdMutex},
 };
 
-use o_sfu_router::RouterId;
 use tokio::sync::RwLock;
 
 use super::{
     cleanup::CleanupReconciler,
     definition::RoomDefinition,
-    events::RoomEventMessage,
-    lifecycle::UserCloseReason,
+    init::RoomInit,
     media_transaction::PendingPublishTransactions,
     placement::{RoomPlacementLedger, RoomPlacementUsageSnapshot, RoomWorkerLoadContribution},
-    state::{ConsumerRouteState, ConsumerRouteTransportRef, RemoteTrackBootstrap, RoomState},
+    state::{ConsumerRouteState, ConsumerRouteTransportRef, RoomState},
 };
 use crate::{
     RoomWorkerPolicy, RuntimeFeatureFlags,
@@ -57,103 +55,11 @@ use crate::{
             TransportMediaId, TransportSessionKey,
         },
         metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
         recording::RecordingService,
         router_events::RoomRouterEventSink,
         source_model::UserStreamId,
     },
 };
-
-/// Delta sent from room state to one post-auth user's wire track state.
-///
-/// This keeps the room boundary independent from wire `mid` assignment. The
-/// websocket user applies the update to its own current track bindings.
-/// The room only talks in terms of publisher user ids and orchestration stream
-/// ids, which keeps room state independent from renegotiation details.
-#[derive(Debug, Clone)]
-pub struct TrackBindingUpdate {
-    /// Publisher whose wire track set changed.
-    ///
-    /// The receiver uses this together with `stream_id` to find its current
-    /// browser-side binding for that remote track.
-    pub user_id: UserId,
-    /// Which logical stream changed for that publisher.
-    ///
-    /// The room never exposes transport media ids here because bindings are
-    /// assigned per user after negotiation.
-    pub stream_id: UserStreamId,
-    /// `Some(active)` updates an existing binding. `None` removes it
-    ///
-    /// `None` is used for unpublish or teardown paths where the receiver must
-    /// drop the binding entirely and may need renegotiation.
-    pub active: Option<bool>,
-}
-
-/// Outbound work the room wants one websocket user to perform
-///
-/// The room stays protocol-neutral here. Post-auth user code maps
-/// each variant into the wire messages or local actions the socket needs.
-///
-/// This enum is the main handoff from room-owned state transitions to
-/// user-owned protocol handling. It is intentionally small: the room says
-/// what changed, while the websocket user decides how to express that over
-/// the current connection.
-///
-/// # Design note
-///
-/// `UserOutbound` exists so the room can stay focused on membership and
-/// media semantics instead of websocket mechanics. The room never writes a
-/// close frame, never serializes a JSON envelope and never mutates browser
-/// track bindings directly. It emits one of these values and leaves the
-/// user-local wire state to post-auth websocket code.
-#[derive(Debug, Clone)]
-pub enum UserOutbound {
-    /// Fan-out payload that maps directly to server messages.
-    ///
-    /// This is the common path for user joins, leaves, user-info updates,
-    /// recording state fan-out and other room-level notifications.
-    Message(RoomEventMessage),
-    /// Imperative request that needs user-local bootstrap or renegotiation work.
-    ///
-    /// The room uses this when pure fan-out is not enough and the targeted
-    /// user must do extra local work such as bootstrapping a new remote
-    /// track on its own transport user.
-    Request(Box<RoomEventRequest>),
-    /// Minimal track-binding delta for the user's wire track state.
-    ///
-    /// This lets the websocket user update its track bindings without
-    /// rebuilding the whole user snapshot for every small media change.
-    TrackBindingUpdate(TrackBindingUpdate),
-    /// Ask the user owner to close the websocket with the mapped reason.
-    ///
-    /// The room decides that the user must stop, but the websocket edge
-    /// still owns the actual close-frame mapping and socket shutdown.
-    Close(UserCloseReason),
-}
-
-/// User-local work requested by the room after a room-state transition.
-///
-/// These requests are more specific than `RoomEventMessage`. They represent
-/// work that must run in the context of one live websocket user because it
-/// depends on that user's transport state, negotiation state, or browser
-/// track binding state.
-///
-/// # Why this is a separate enum
-///
-/// A plain fan-out message is enough for room notifications such as "user
-/// joined" or "recording state changed". It is not enough for flows where the
-/// targeted user must execute a local protocol step. Those flows go through
-/// `RoomEventRequest` so the room can ask for a concrete action without
-/// taking over websocket-user orchestration.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RoomEventRequest {
-    /// Bootstrap one newly visible remote track on the targeted user.
-    ///
-    /// The room has already decided that the consumer route should exist.
-    /// The user now has to materialize the matching remote track details in
-    /// its own post-auth flow.
-    BootstrapRemoteTrack(RemoteTrackBootstrap),
-}
 
 /// Join failures produced by one live room instance.
 ///
@@ -197,306 +103,6 @@ pub enum RoomManagerJoinError {
     RoomFull,
     /// The targeted room failed to apply the join to its router-backed state.
     RouterState,
-}
-
-/// Admission limits that stay fixed for one room lifetime.
-///
-/// This is kept separate from the wider runtime policy because admission is a
-/// narrow concern with its own tests and state checks.
-///
-/// The policy is passed into `RoomState` at construction time and then
-/// treated as immutable room configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RoomAdmissionPolicy {
-    /// Maximum number of live users the room accepts at once.
-    ///
-    /// Replaced connections still consume this budget until the room transition
-    /// finishes and the old live user has been removed
-    pub max_sessions: usize,
-}
-
-impl RoomAdmissionPolicy {
-    #[must_use]
-    pub const fn new(max_sessions: usize) -> Self {
-        Self { max_sessions }
-    }
-}
-
-/// Stable runtime placement chosen when the room is created.
-///
-/// These values identify where the room lives inside the current process.
-/// Unlike room identity, they are runtime-local and mainly matter for routing,
-/// transport ownership, diagnostics correlation and teardown.
-///
-/// Callers outside the runtime should generally care more about `issuer` and
-/// `uuid` than about this placement data.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoomRuntimeContext {
-    /// Unique live instance id used to correlate runtime events and health.
-    ///
-    /// A recreated room with the same issuer still gets a fresh instance id.
-    instance: RoomInstanceId,
-    /// Local router and worker placements already known for this room.
-    ///
-    /// The placement bundle is non-empty by construction. Rooms start with the
-    /// primary router and add spillover placements when sessions are placed.
-    local_routers: LocalRoomRouterPlacements,
-}
-
-/// One room-local router placement and its owning media worker.
-///
-/// This is runtime-local metadata. It is never sent to clients and it is not
-/// a distributed owner identity. A placement says which pure router can model
-/// routing state for a subset of users and which local media worker owns those
-/// users' transport sessions.
-///
-/// The room factory creates the primary router. The room manager adds
-/// spillover placements when live load makes them necessary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LocalRouterRuntimeContext {
-    /// Pure router id used inside the room topology.
-    pub router: RouterId,
-    /// Local RTC media worker that owns transport sessions placed here.
-    pub media_worker: usize,
-}
-
-/// Non-empty router placement set assigned to one live room.
-///
-/// This is the shared placement contract consumed by both `RoomDefinition` and
-/// `RoomTopology`. Keeping the primary placement inside this validated value
-/// avoids a public API where one field can disagree with the placement list.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalRoomRouterPlacements {
-    primary: LocalRouterRuntimeContext,
-    spillover: Vec<LocalRouterRuntimeContext>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalRoomRouterPlacementsError {
-    Empty,
-}
-
-impl LocalRoomRouterPlacements {
-    #[must_use]
-    pub fn new(
-        primary: LocalRouterRuntimeContext,
-        spillover: Vec<LocalRouterRuntimeContext>,
-    ) -> Self {
-        Self { primary, spillover }
-    }
-
-    /// Builds a placement set from the primary-first runtime placement list.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LocalRoomRouterPlacementsError::Empty`] when no primary
-    /// placement is supplied.
-    pub fn try_from_vec(
-        placements: Vec<LocalRouterRuntimeContext>,
-    ) -> Result<Self, LocalRoomRouterPlacementsError> {
-        let mut placements = placements.into_iter();
-        let Some(primary) = placements.next() else {
-            return Err(LocalRoomRouterPlacementsError::Empty);
-        };
-        Ok(Self::new(primary, placements.collect()))
-    }
-
-    #[must_use]
-    pub const fn primary(&self) -> LocalRouterRuntimeContext {
-        self.primary
-    }
-
-    pub(in crate::runtime::room) fn upsert(&mut self, placement: LocalRouterRuntimeContext) {
-        if self.primary.router == placement.router {
-            self.primary = placement;
-            return;
-        }
-        if let Some(existing) = self
-            .spillover
-            .iter_mut()
-            .find(|existing| existing.router == placement.router)
-        {
-            *existing = placement;
-            return;
-        }
-        self.spillover.push(placement);
-    }
-
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.spillover.len().saturating_add(1)
-    }
-
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        false
-    }
-
-    #[must_use]
-    pub fn get(&self, index: usize) -> Option<LocalRouterRuntimeContext> {
-        if index == 0 {
-            return Some(self.primary);
-        }
-        self.spillover.get(index.checked_sub(1)?).copied()
-    }
-
-    #[must_use]
-    pub fn contains_router(&self, router_id: RouterId) -> bool {
-        self.primary.router == router_id
-            || self
-                .spillover
-                .iter()
-                .any(|placement| placement.router == router_id)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = LocalRouterRuntimeContext> + '_ {
-        iter::once(self.primary).chain(self.spillover.iter().copied())
-    }
-}
-
-impl RoomRuntimeContext {
-    #[must_use]
-    pub fn new(
-        instance: RoomInstanceId,
-        primary: LocalRouterRuntimeContext,
-        spillover: Vec<LocalRouterRuntimeContext>,
-    ) -> Self {
-        Self {
-            instance,
-            local_routers: LocalRoomRouterPlacements::new(primary, spillover),
-        }
-    }
-
-    /// Builds a runtime context from an explicit instance id and placements.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LocalRoomRouterPlacementsError::Empty`] when the placement
-    /// list has no primary router.
-    pub fn try_from_placements(
-        instance: RoomInstanceId,
-        placements: Vec<LocalRouterRuntimeContext>,
-    ) -> Result<Self, LocalRoomRouterPlacementsError> {
-        Ok(Self {
-            instance,
-            local_routers: LocalRoomRouterPlacements::try_from_vec(placements)?,
-        })
-    }
-
-    #[must_use]
-    pub const fn instance(&self) -> RoomInstanceId {
-        self.instance
-    }
-
-    #[must_use]
-    pub const fn media_worker(&self) -> usize {
-        self.local_routers.primary().media_worker
-    }
-
-    #[must_use]
-    pub const fn primary_router(&self) -> RouterId {
-        self.local_routers.primary().router
-    }
-
-    #[must_use]
-    pub const fn local_routers(&self) -> &LocalRoomRouterPlacements {
-        &self.local_routers
-    }
-}
-
-/// Stable runtime policy bundle shared by the room and its state model.
-///
-/// This groups the room rules that are fixed for the room lifetime and read by
-/// more than one boundary during join, negotiation and observability work.
-///
-/// `RoomRuntimeContext` says where the room lives. `RoomRuntimePolicy`
-/// says which rules and capabilities apply once it lives there.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoomRuntimePolicy {
-    /// Room-level admission limits enforced by room state.
-    pub admission_policy: RoomAdmissionPolicy,
-    /// Feature surface the room advertises to clients.
-    ///
-    /// This is part of the observable room contract and feeds
-    /// `available_features()` on the public `Room` facade.
-    pub feature_flags: RuntimeFeatureFlags,
-    /// Router-native capability baseline used for negotiation and bootstrap.
-    ///
-    /// The room consumes router-native capabilities here so signaling code
-    /// does not have to leak wire-shaped capability bags into room state.
-    pub router_rtp_capabilities: o_sfu_router::MediaCapabilities,
-    /// Same-room local worker-placement policy selected at runtime boot.
-    ///
-    /// The room manager reads this when planning joins for the room. It is a
-    /// cold-path placement policy, not a packet-loop routing rule.
-    pub room_worker_policy: RoomWorkerPolicy,
-}
-
-impl RoomRuntimePolicy {
-    #[must_use]
-    pub fn new(
-        admission_policy: RoomAdmissionPolicy,
-        feature_flags: RuntimeFeatureFlags,
-        router_rtp_capabilities: o_sfu_router::MediaCapabilities,
-    ) -> Self {
-        Self {
-            admission_policy,
-            feature_flags,
-            router_rtp_capabilities,
-            room_worker_policy: RoomWorkerPolicy::strict_single_router(),
-        }
-    }
-
-    /// Return a room policy that uses the provided same-room worker policy.
-    ///
-    /// This is used by server startup after config validation. Tests can also
-    /// use it to build a room with explicit spillover behavior while keeping
-    /// admission, features and RTP capabilities unchanged.
-    #[must_use]
-    pub fn with_room_worker_policy(mut self, room_worker_policy: RoomWorkerPolicy) -> Self {
-        self.room_worker_policy = room_worker_policy;
-        self
-    }
-}
-
-/// External room config passed in from the HTTP/runtime edge.
-///
-/// This type exists to keep room identity separate from operator-facing knobs
-/// and compatibility toggles that may be chosen per room at creation time.
-///
-/// Unlike `RoomRuntimePolicy`, this config is part of the per-room create
-/// request shape rather than one validated runtime-wide policy bundle.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoomConfig {
-    /// Whether this room should expose WebRTC to clients at all.
-    ///
-    /// When false, the room still exists as a room identity but advertises
-    /// that RTC is unavailable to clients.
-    pub web_rtc_enabled: bool,
-    /// Compatibility recording address from `/v1/channel`.
-    ///
-    /// The current room runtime preserves this value for the HTTP contract.
-    /// Recording stays unavailable until persistent output exists.
-    pub recording_address: Option<String>,
-}
-
-impl Default for RoomConfig {
-    fn default() -> Self {
-        Self {
-            web_rtc_enabled: true,
-            recording_address: None,
-        }
-    }
-}
-
-impl UserOutbound {
-    #[must_use]
-    pub(super) fn queued_bytes(&self) -> usize {
-        match self {
-            Self::Message(message) => message.queued_bytes(),
-            Self::Request(_) | Self::TrackBindingUpdate(_) | Self::Close(_) => 1024,
-        }
-    }
 }
 
 /// Best-effort inbound bitrate totals grouped by orchestration stream id.
@@ -627,51 +233,44 @@ pub struct Room {
 }
 
 impl Room {
-    /// Build one live room from stable runtime placement, policy and shared services.
+    /// Build one live room from semantic initialization input.
     ///
     /// Construction wires the immutable room definition, the room-owned state
     /// model and the recording observer surface together once. After that,
     /// higher-level runtime code should interact with the room through intent
     /// methods such as join, leave, publish, subscribe and stats queries.
-    ///
-    /// This constructor is intentionally explicit because the room boundary has
-    /// three distinct input categories:
-    ///
-    /// - runtime placement in [`RoomRuntimeContext`]
-    /// - stable room rules in [`RoomRuntimePolicy`]
-    /// - room identity and compatibility config from the edge
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "room construction keeps runtime identity, policy and shared services explicit at the boundary"
-    )]
-    pub(crate) fn new(
-        runtime_context: &RoomRuntimeContext,
-        runtime_policy: RoomRuntimePolicy,
-        issuer: String,
-        key: String,
-        config: RoomConfig,
-        diagnostics: Arc<DiagnosticsStore>,
-        packet_sink_registry: Arc<RoomPacketSinkRegistry>,
-        metrics: Arc<RuntimeMetrics>,
-    ) -> Self {
-        let definition = RoomDefinition::new(runtime_context, &runtime_policy, issuer, key, config);
+    pub(crate) fn new(init: RoomInit) -> Self {
+        let RoomInit {
+            runtime_context,
+            runtime_policy,
+            identity,
+            config,
+            services,
+        } = init;
+        let definition = RoomDefinition::new(
+            &runtime_context,
+            &runtime_policy,
+            identity.issuer,
+            identity.key,
+            config,
+        );
         let recording_service = Arc::new(RecordingService::new(
             definition.instance_id(),
-            packet_sink_registry,
-            Arc::clone(&metrics),
+            services.packet_sink_registry,
+            Arc::clone(&services.metrics),
         ));
         let recording_event_sink = Arc::<RecordingService>::clone(&recording_service);
         let router_event_sink: Arc<dyn RoomRouterEventSink> = recording_event_sink;
         Self {
-            diagnostics,
+            diagnostics: services.diagnostics,
             definition,
             placement_ledger: RoomPlacementLedger::new(runtime_context.local_routers().primary()),
             recording_service: Arc::clone(&recording_service),
-            metrics,
+            metrics: services.metrics,
             cleanup_reconciler: StdMutex::new(CleanupReconciler::default()),
             pending_publish_transactions: StdMutex::new(PendingPublishTransactions::default()),
             state: RwLock::new(RoomState::new(
-                runtime_context,
+                &runtime_context,
                 runtime_policy.admission_policy,
                 runtime_policy.router_rtp_capabilities,
                 router_event_sink,
