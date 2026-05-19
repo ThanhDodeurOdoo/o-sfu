@@ -17,7 +17,9 @@ use tracing::warn;
 
 use super::{
     Room,
-    effects::{SubscriptionEffectContext, SubscriptionEffectPlan, UnpublishEffectPlan},
+    effects::{
+        RoomTransportEffect, SubscriptionEffectContext, SubscriptionEffectPlan, UnpublishEffectPlan,
+    },
     state::ConsumerBootstrapOrigin,
 };
 use crate::{
@@ -106,14 +108,14 @@ impl Room {
         }) else {
             return PublicationActivityOutcome::StalePublication;
         };
-        let transport_update = if media_port
-            .set_producer_active(
-                &transport_user_key,
-                outcome.transport_media_id,
-                ProducerActivity::from_active(outcome.active),
-            )
-            .await
-            .is_err()
+        let transport_update = if (RoomTransportEffect::ProducerActivity {
+            session_key: transport_user_key,
+            transport_media_id: outcome.transport_media_id,
+            activity: ProducerActivity::from_active(outcome.active),
+        })
+        .execute_unit(media_port)
+        .await
+        .is_err()
         {
             warn!(
                 ?user_id,

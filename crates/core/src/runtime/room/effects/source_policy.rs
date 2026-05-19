@@ -10,9 +10,12 @@ use std::collections::BTreeSet;
 
 use tracing::{debug, warn};
 
-use super::super::{
-    Room,
-    state::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate, RoomState},
+use super::{
+    super::{
+        Room,
+        state::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate, RoomState},
+    },
+    RoomTransportEffect,
 };
 use crate::runtime::{
     media_transport::{
@@ -188,13 +191,13 @@ impl SourcePolicyEffectPlan {
             return true;
         }
         let route = update.route();
-        media_port
-            .set_consumer_active(
-                &room.transport_consumer_route(route),
-                ConsumerActivity::from_active(update.route_active()),
-            )
-            .await
-            .is_ok()
+        RoomTransportEffect::ConsumerActivity {
+            route: room.transport_consumer_route(route),
+            activity: ConsumerActivity::from_active(update.route_active()),
+        }
+        .execute_unit(media_port)
+        .await
+        .is_ok()
     }
 
     async fn rejected_packet_gate_updates(
@@ -202,8 +205,8 @@ impl SourcePolicyEffectPlan {
         packet_gate_updates: &[ConsumerPacketGateUpdate],
     ) -> BTreeSet<usize> {
         let mut rejected_updates = BTreeSet::new();
-        let results = media_port
-            .set_consumer_packet_gates(packet_gate_updates)
+        let results = RoomTransportEffect::PacketGateBatch(packet_gate_updates.to_vec())
+            .execute_packet_gate_batch(media_port)
             .await;
         for index in 0..packet_gate_updates.len() {
             if !matches!(results.get(index), Some(Ok(()))) {
@@ -227,10 +230,12 @@ impl SourcePolicyEffectPlan {
             return true;
         }
         debug!(?route, "requesting adaptation keyframe refresh");
-        let accepted = media_port
-            .request_consumer_keyframe(&room.transport_consumer_route(route))
-            .await
-            .is_ok();
+        let accepted = RoomTransportEffect::KeyframeRequest {
+            route: room.transport_consumer_route(route),
+        }
+        .execute_unit(media_port)
+        .await
+        .is_ok();
         if accepted {
             debug!(
                 ?route,

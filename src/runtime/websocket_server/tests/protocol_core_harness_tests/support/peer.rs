@@ -1,4 +1,7 @@
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    sync::atomic::{AtomicU16, Ordering},
+};
 
 use futures_util::SinkExt;
 use o_sfu_protocol::{
@@ -14,6 +17,8 @@ use super::{
     TestWebSocket, read_text_message,
     rtc::{ProtocolHarnessRtcPeer, ProtocolHarnessRtcPeerFactory, default_protocol_harness_rtc},
 };
+
+static NEXT_PROTOCOL_HARNESS_PORT: AtomicU16 = AtomicU16::new(59_000);
 
 #[derive(Debug, Clone)]
 pub(crate) struct PendingHarnessNegotiation {
@@ -37,12 +42,16 @@ pub(crate) struct ProtocolHarnessPeer {
 
 impl Default for ProtocolHarnessPeer {
     fn default() -> Self {
+        let rtc_peer_factory = ProtocolHarnessRtcPeerFactory::new(
+            NEXT_PROTOCOL_HARNESS_PORT.fetch_add(1, Ordering::Relaxed),
+            default_protocol_harness_rtc,
+        );
         Self {
             core: ProtocolCore::default(),
             pending_request_commands: Vec::new(),
             pending_negotiations: VecDeque::new(),
-            rtc_peer_factory: None,
-            rtc_peer: None,
+            rtc_peer_factory: Some(rtc_peer_factory),
+            rtc_peer: rtc_peer_factory.build_peer(),
             state_changes: Vec::new(),
             timers: BTreeMap::new(),
             updates: Vec::new(),

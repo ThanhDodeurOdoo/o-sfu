@@ -35,7 +35,7 @@ use crate::runtime::{
     media_transport::{TransportMediaId, TransportSessionKey},
 };
 
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(any(test, feature = "internal-benchmarks"))]
 pub mod test_support;
 
 /// one RTP packet staged for packet-loop observation and forwarding

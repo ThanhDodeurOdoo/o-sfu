@@ -1,7 +1,10 @@
 pub(super) use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::Arc,
-    time::Duration,
+    sync::{
+        Arc,
+        atomic::{AtomicU16, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 pub(super) use futures_util::{SinkExt, StreamExt};
@@ -13,6 +16,7 @@ pub(super) use o_sfu_protocol::{
         StreamIntentPayload, WelcomePayload,
     },
 };
+use str0m::{Candidate, Rtc, change::SdpOffer};
 pub(super) use tokio::{
     net::{TcpListener, TcpStream},
     task::JoinHandle,
@@ -41,7 +45,6 @@ pub(super) use crate::{
         media_transport::{
             MediaTransport, MediaTransportDeps, RtcTransport, RtcTransportConfig,
             SessionBitrateLimits,
-            test_support::{FakeMediaTransport, FakeMediaTransportEvent},
         },
         metrics::RuntimeMetrics,
         room::{
@@ -53,6 +56,8 @@ pub(super) use crate::{
 };
 
 pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
+static NEXT_WEBSOCKET_TEST_RTC_PORT: AtomicU16 = AtomicU16::new(49_000);
+static NEXT_WEBSOCKET_TEST_PEER_PORT: AtomicU16 = AtomicU16::new(58_000);
 pub(super) type TestWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
 pub(super) type CreateRoomQuery = RoomConfig;
@@ -167,6 +172,7 @@ impl Default for TestServerBuilder {
     reason = "the test fixture builds a constant valid RTC transport and failing here means the fixture itself is invalid"
 )]
 pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
+    let rtc_port_range = next_websocket_test_rtc_port_range();
     match RtcTransport::builder()
         .transport_config(RtcTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -175,7 +181,7 @@ pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
                 Bitrate::from_mbps(10),
             ),
             video_bitrate_limits: VideoBitrateLimits::default(),
-            rtc_port_range: RtcPortRange::new(47_200, 47_299),
+            rtc_port_range,
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: CodecPreferences::default(),
         })
@@ -192,21 +198,16 @@ pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
     }
 }
 
-pub(super) async fn wait_for_fake_webrtc_events(
-    adapter: &FakeMediaTransport,
-    event_count: usize,
-) -> Option<Vec<FakeMediaTransportEvent>> {
-    timeout(Duration::from_secs(1), async {
-        loop {
-            let events = adapter.snapshot_events();
-            if events.len() >= event_count {
-                return events;
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .ok()
+fn next_websocket_test_rtc_port_range() -> RtcPortRange {
+    let port_start = NEXT_WEBSOCKET_TEST_RTC_PORT.fetch_add(100, Ordering::Relaxed);
+    RtcPortRange::new(port_start, port_start.saturating_add(99))
+}
+
+fn next_websocket_test_peer_addr() -> SocketAddr {
+    SocketAddr::from((
+        [127, 0, 0, 1],
+        NEXT_WEBSOCKET_TEST_PEER_PORT.fetch_add(1, Ordering::Relaxed),
+    ))
 }
 
 pub(super) async fn connect_websocket(server: &TestServer) -> Option<TestWebSocket> {
@@ -344,7 +345,7 @@ pub(super) async fn complete_initial_negotiation(
     sdp: &str,
 ) -> Option<()> {
     let (request_id, request) = wait_for_protocol_server_request(websocket).await?;
-    respond_to_protocol_negotiation_request(websocket, request_id, request, sdp).await
+    respond_to_protocol_negotiation_request_with_test_rtc(websocket, request_id, request, sdp).await
 }
 
 pub(super) async fn setup_negotiated_session(
@@ -377,7 +378,9 @@ fn decode_protocol_welcome_batch(payload: &str) -> Option<WelcomePayload> {
 pub(super) async fn read_protocol_server_batch(
     websocket: &mut TestWebSocket,
 ) -> Option<EnvelopeBatch> {
-    let payload = read_text_message(websocket).await?;
+    let payload = timeout(Duration::from_secs(1), read_text_message(websocket))
+        .await
+        .ok()??;
     serde_json::from_str(&payload).ok()
 }
 
@@ -395,14 +398,16 @@ pub(super) async fn wait_for_protocol_server_request(
 pub(super) fn first_protocol_server_request(
     batch: &EnvelopeBatch,
 ) -> Option<(RequestId, ServerRequest)> {
-    let envelope = batch.first()?.clone();
-    match ServerEnvelope::decode(envelope).ok()? {
-        ServerEnvelope::Request {
+    for envelope in batch.clone() {
+        if let ServerEnvelope::Request {
             request_id,
             request,
-        } => Some((request_id, request)),
-        ServerEnvelope::Message(_) | ServerEnvelope::Response { .. } => None,
+        } = ServerEnvelope::decode(envelope).ok()?
+        {
+            return Some((request_id, request));
+        }
     }
+    None
 }
 
 pub(super) fn protocol_server_messages(batch: &EnvelopeBatch) -> Option<Vec<ServerMessage>> {
@@ -446,6 +451,29 @@ pub(super) async fn respond_to_protocol_negotiation_request(
         .await
         .ok()?;
     Some(())
+}
+
+pub(super) async fn respond_to_protocol_negotiation_request_with_test_rtc(
+    websocket: &mut TestWebSocket,
+    response_to: RequestId,
+    request: ServerRequest,
+    fallback_sdp: &str,
+) -> Option<()> {
+    let sdp = test_rtc_answer_sdp(&request).unwrap_or_else(|| fallback_sdp.to_owned());
+    respond_to_protocol_negotiation_request(websocket, response_to, request, &sdp).await
+}
+
+fn test_rtc_answer_sdp(request: &ServerRequest) -> Option<String> {
+    let offer_sdp = match request {
+        ServerRequest::Offer(payload) | ServerRequest::Renegotiate(payload) => &payload.sdp,
+    };
+    let mut rtc = Rtc::new(Instant::now());
+    rtc.add_local_candidate(Candidate::host(next_websocket_test_peer_addr(), "udp").ok()?)?;
+    let answer = rtc
+        .sdp_api()
+        .accept_offer(SdpOffer::from_sdp_string(offer_sdp).ok()?)
+        .ok()?;
+    Some(answer.to_sdp_string())
 }
 
 pub(super) async fn read_message(

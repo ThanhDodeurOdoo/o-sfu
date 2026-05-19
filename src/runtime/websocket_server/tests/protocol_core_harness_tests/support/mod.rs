@@ -19,10 +19,7 @@ pub(super) use tokio::time::{sleep, timeout};
 pub(super) use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 pub(super) use super::super::fixtures::*;
-pub(super) use crate::{
-    config::RuntimeFeatureFlags,
-    runtime::{media_transport::MediaTransport, room::Room},
-};
+pub(super) use crate::{config::RuntimeFeatureFlags, runtime::room::Room};
 
 mod assertions;
 mod frames;
@@ -48,7 +45,7 @@ pub(super) use scenarios::{
     bob_update_info_and_deliver, close_peer_and_observe_recovery,
     close_peer_and_wait_for_room_cleanup, consume_camera_publish_bootstrap,
     publish_camera_and_bootstrap_subscriber, recover_peer_with_latest_info,
-    recover_subscriber_and_replay_track, setup_fake_protocol_peers, setup_protocol_recovery_peers,
+    recover_subscriber_and_replay_track, setup_protocol_recovery_peers,
     setup_real_rtc_protocol_peers,
 };
 

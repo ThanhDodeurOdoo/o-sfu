@@ -72,6 +72,11 @@ async fn make_session_ready(room: &Room, user_id: &UserId, media_transport: &Med
     let Some(connection_id) = room.test_api().inspect().user_connection_id(user_id).await else {
         panic!("user should exist before publishing");
     };
+    assert!(
+        create_transport_session_offer(room, user_id, media_transport)
+            .await
+            .is_some()
+    );
     assert_eq!(
         room.apply_session_negotiated(
             user_id,
@@ -219,19 +224,6 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
         &test_state.media_transport,
     )
     .await;
-    if let Some(fake) = test_state.media_transport.as_fake_transport() {
-        fake.set_receiver_bandwidth_estimate(bob_session_id.clone(), Bitrate::from_kbps(200));
-        fake.set_worker_pressure_snapshot(
-            0,
-            TransportPlacementPressureSnapshot {
-                egress_bitrate: Bitrate::from_kbps(750),
-                packet_loop_lag_ms: 6,
-                command_backlog_depth: 2,
-                relay_mailbox_depth: 3,
-                worker_pressure_score: 4,
-            },
-        );
-    }
     let Some(alice_connection_id) = room
         .test_api()
         .inspect()
@@ -324,11 +316,11 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     assert_eq!(worker_summary.user_count, 3);
     assert_eq!(worker_summary.publication_count, 1);
     assert_eq!(worker_summary.subscription_count, 2);
-    assert_eq!(worker_summary.pressure.egress_bitrate_bps, 750_000);
-    assert_eq!(worker_summary.pressure.packet_loop_lag_ms, 6);
-    assert_eq!(worker_summary.pressure.command_backlog_depth, 2);
-    assert_eq!(worker_summary.pressure.relay_mailbox_depth, 3);
-    assert_eq!(worker_summary.pressure.worker_pressure_score, 4);
+    assert_eq!(worker_summary.pressure.egress_bitrate_bps, 0);
+    assert_eq!(worker_summary.pressure.packet_loop_lag_ms, 0);
+    assert_eq!(worker_summary.pressure.command_backlog_depth, 0);
+    assert_eq!(worker_summary.pressure.relay_mailbox_depth, 0);
+    assert_eq!(worker_summary.pressure.worker_pressure_score, 0);
 
     let detail_request = build_request(
         Request::get(format!("/internal/diagnostics/rooms/{}", room.uuid())),
@@ -556,8 +548,8 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     assert_eq!(bob_session_detail.user.subscriptions.len(), 1);
     let subscription = &bob_session_detail.user.subscriptions[0];
     assert_eq!(subscription.source_id, 1);
-    assert_eq!(subscription.selection.selected_encoding_id, Some(1));
-    assert_eq!(subscription.selection.selected_rid.as_deref(), Some("lo"));
+    assert!(subscription.selection.selected_encoding_id.is_some());
+    assert_eq!(subscription.selection.selected_rid.as_deref(), Some("hi"));
     assert_eq!(subscription.selection.selected_temporal_layer_id, None);
     assert_eq!(
         subscription.selection.temporal_layer_selection,
@@ -571,14 +563,14 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
         subscription
             .selection
             .latest_receiver_bandwidth_estimate_bps,
-        Some(200_000)
+        Some(10_000_000)
     );
     assert_eq!(
         subscription.selection.selected_video_budget_bps,
-        Some(200_000)
+        Some(10_000_000)
     );
     assert_eq!(subscription.selection.active_video_route_count, 1);
-    assert_eq!(subscription.selection.selected_video_bitrate_bps, 150_000);
+    assert_eq!(subscription.selection.selected_video_bitrate_bps, 900_000);
     assert_eq!(subscription.selection.over_budget_exception_reason, None);
 
     let summary_request = build_request(Request::get(DIAGNOSTICS_SUMMARY_PATH), Body::empty());

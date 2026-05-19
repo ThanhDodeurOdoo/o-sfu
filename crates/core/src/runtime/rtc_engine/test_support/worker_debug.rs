@@ -1,4 +1,6 @@
 use std::sync::{Arc, Mutex};
+#[cfg(all(not(test), feature = "testing-transport"))]
+use std::time::Instant;
 
 use str0m::media::Mid;
 use tokio::sync::oneshot;
@@ -35,9 +37,9 @@ pub(in crate::runtime::rtc_engine) fn handle_debug_worker_command(
     );
 }
 
-#[cfg(not(test))]
+#[cfg(all(not(test), feature = "testing-transport"))]
 pub(in crate::runtime::rtc_engine) fn handle_debug_worker_command(
-    state: &PacketLoopState,
+    state: &mut PacketLoopState,
     context: &WorkerCommandContext<'_>,
     command: DebugRtcWorkerCommand,
 ) {
@@ -87,19 +89,50 @@ fn handle_debug_command(
     }
 }
 
-#[cfg(not(test))]
+#[cfg(all(not(test), feature = "testing-transport"))]
 fn handle_debug_command(
-    state: &PacketLoopState,
+    state: &mut PacketLoopState,
     _bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     _snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     command: DebugRtcWorkerCommand,
 ) {
-    let DebugRtcWorkerCommand::RouteEntryByConsumerMid {
-        consumer_session_key,
-        consumer_mid,
-        response,
-    } = command;
-    respond_debug_route_entry_by_consumer_mid(state, &consumer_session_key, consumer_mid, response);
+    match command {
+        DebugRtcWorkerCommand::RouteEntry {
+            source_session_key,
+            source_mid,
+            response,
+        } => respond_debug_route_entry(state, &source_session_key, source_mid, response),
+        DebugRtcWorkerCommand::RouteEntryByConsumerMid {
+            consumer_session_key,
+            consumer_mid,
+            response,
+        } => {
+            respond_debug_route_entry_by_consumer_mid(
+                state,
+                &consumer_session_key,
+                consumer_mid,
+                response,
+            );
+        }
+        DebugRtcWorkerCommand::RouteEntryByMediaId {
+            source_transport_media_id,
+            response,
+        } => respond_debug_route_entry_by_media_id(state, source_transport_media_id, response),
+        DebugRtcWorkerCommand::ObserveAudioActivity {
+            transport_media_id,
+            voice_activity,
+            audio_level_dbov,
+            now,
+            response,
+        } => respond_debug_observe_audio_activity(
+            state,
+            transport_media_id,
+            voice_activity,
+            audio_level_dbov,
+            now,
+            response,
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -380,7 +413,7 @@ fn respond_debug_session_max_bitrate_out(
     let _ = response.send(value);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 fn respond_debug_route_entry(
     state: &PacketLoopState,
     source_session_key: &TransportSessionKey,
@@ -409,7 +442,7 @@ fn respond_debug_route_entry_by_consumer_mid(
     let _ = response.send(value);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 fn respond_debug_route_entry_by_media_id(
     state: &PacketLoopState,
     source_transport_media_id: TransportMediaId,
@@ -481,7 +514,7 @@ fn respond_debug_record_incoming_media(
     let _ = response.send(());
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 fn respond_debug_observe_audio_activity(
     state: &mut PacketLoopState,
     transport_media_id: TransportMediaId,

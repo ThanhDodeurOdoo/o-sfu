@@ -52,7 +52,7 @@ mod shared_payload;
 mod simulcast;
 mod slots;
 mod state;
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(any(test, feature = "testing-transport", feature = "internal-benchmarks"))]
 pub mod test_support;
 #[cfg(test)]
 mod tests;

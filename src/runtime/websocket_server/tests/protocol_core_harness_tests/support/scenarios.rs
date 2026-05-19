@@ -95,36 +95,6 @@ pub(crate) async fn recover_subscriber_and_replay_track(
     Some(replayed_track.clone())
 }
 
-pub(crate) async fn setup_fake_protocol_peers(
-    adapter: Arc<FakeMediaTransport>,
-    room_name: &str,
-    alice_user_id: UserId,
-    bob_user_id: UserId,
-) -> Option<(
-    TestServer,
-    Arc<Room>,
-    ProtocolHarnessPeer,
-    ProtocolHarnessPeer,
-)> {
-    let server = TestServerBuilder::new()
-        .media_transport(MediaTransport::from_fake_transport(adapter))
-        .spawn()
-        .await?;
-    let room = create_room(&server, room_name, CreateRoomQuery::default()).await;
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), alice_user_id.clone())?;
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), bob_user_id.clone())?;
-
-    let mut alice = ProtocolHarnessPeer::default();
-    let mut bob = ProtocolHarnessPeer::default();
-    alice
-        .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
-        .await?;
-    bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
-        .await?;
-    consume_peer_joined_update(&mut alice, bob_user_id.clone()).await?;
-    Some((server, room, alice, bob))
-}
-
 pub(crate) async fn setup_real_rtc_protocol_peers(
     room_name: &str,
     alice_user_id: UserId,

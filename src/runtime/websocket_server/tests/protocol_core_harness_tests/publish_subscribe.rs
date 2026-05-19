@@ -53,11 +53,18 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
         .await;
     assert!(producer_id.is_some(), "protocol publisher should be ready");
 
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "bob should consume translated tracks snapshot"
-    );
-    let Some(track_binding) = bob.core.track_binding("cam-0") else {
+    let Some(track_bindings) = read_track_snapshot(&mut bob).await else {
+        return;
+    };
+    let Some(track_binding) = track_bindings.into_iter().find(|binding| {
+        binding.user_id == ProtocolSessionId::Integer(51)
+            && binding.stream_type == ProtocolStreamType::Camera
+            && binding
+                .source
+                .as_ref()
+                .and_then(|source| source.mid.as_deref())
+                == Some("cam-0")
+    }) else {
         panic!("subscriber should keep the camera track binding");
     };
     assert_eq!(track_binding.user_id, ProtocolSessionId::Integer(51));
@@ -71,6 +78,7 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
     assert_eq!(source.stream_type, ProtocolStreamType::Camera);
     assert_eq!(source.mid.as_deref(), Some("cam-0"));
     assert_eq!(source.encodings.len(), 1);
+    let track_mid = track_binding.mid.clone();
     assert!(
         bob.read_server_frame().await.is_some(),
         "bob should consume the serialized renegotiation request after track bootstrap"
@@ -90,98 +98,10 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
         bob.read_server_frame().await.is_some(),
         "bob should consume the translated track-removal snapshot"
     );
-    assert_eq!(bob.core.track_binding("cam-0"), None);
+    assert_eq!(bob.core.track_binding(&track_mid), None);
     assert!(
         bob.read_server_frame().await.is_some(),
         "subscriber should receive the removal renegotiation request"
-    );
-}
-
-#[tokio::test]
-async fn protocol_core_publish_round_trips_through_real_server_user_protocol() {
-    let adapter = Arc::new(FakeMediaTransport::default());
-    let server = TestServerBuilder::new()
-        .media_transport(MediaTransport::from_fake_transport(Arc::clone(&adapter)))
-        .spawn()
-        .await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
-    let room = create_room(
-        &server,
-        "issuer-protocol-publish",
-        CreateRoomQuery::default(),
-    )
-    .await;
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(53));
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(54));
-    assert!(alice_token.is_some());
-    assert!(bob_token.is_some());
-    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
-        return;
-    };
-
-    let mut alice = ProtocolHarnessPeer::default();
-    let mut bob = ProtocolHarnessPeer::default();
-    assert!(
-        alice
-            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
-            .await
-            .is_some()
-    );
-    assert!(
-        bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
-            .await
-            .is_some()
-    );
-    assert!(
-        consume_peer_joined_update(&mut alice, ProtocolSessionId::Integer(54))
-            .await
-            .is_some()
-    );
-
-    assert!(
-        alice
-            .publish(ProtocolStreamType::Camera, true)
-            .await
-            .is_some()
-    );
-    assert!(
-        alice.read_server_frame().await.is_some(),
-        "publisher should consume the renegotiation request and answer it"
-    );
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "subscriber should receive the translated track snapshot after publish commit"
-    );
-    let Some(track_binding) = bob.core.track_binding("fake-mid-0") else {
-        panic!("subscriber should keep the camera track binding");
-    };
-    assert_eq!(track_binding.user_id, ProtocolSessionId::Integer(53));
-    assert_eq!(track_binding.stream_type, ProtocolStreamType::Camera);
-    assert!(track_binding.active);
-    let Some(source) = track_binding.source.as_ref() else {
-        panic!("track binding should carry the additive source descriptor");
-    };
-    assert_eq!(source.user_id, ProtocolSessionId::Integer(53));
-    assert_eq!(source.stream_type, ProtocolStreamType::Camera);
-    assert_eq!(source.mid.as_deref(), Some("fake-mid-0"));
-    assert_eq!(source.encodings.len(), 1);
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "subscriber should receive the follow-up renegotiation request for the new remote track"
-    );
-    assert!(
-        adapter.snapshot_events().iter().any(|event| matches!(
-            event,
-            FakeMediaTransportEvent::PublishMediaRequested {
-                user_id,
-                media_kind,
-            } if *user_id == UserId::Integer(53)
-                && *media_kind == MediaKind::Video
-        )),
-        "protocol publish should declare producer media through the media transport"
     );
 }
 

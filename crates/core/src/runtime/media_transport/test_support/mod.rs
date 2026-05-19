@@ -1,175 +1,103 @@
-use std::sync::Arc;
-
-mod fake_transport;
-
-#[cfg(any(test, feature = "testing-transport"))]
-pub use fake_transport::{FakeMediaTransport, FakeMediaTransportEvent};
 #[cfg(test)]
-use {
-    super::{TransportAdapterError, TransportMediaId},
-    o_sfu_router::MediaStream as RouterRtpParameters,
-};
-#[cfg(any(test, feature = "testing-transport"))]
-use {
-    super::{TransportSessionHealth, TransportSessionKey, worker_manager::RtcWorkerManager},
-    crate::runtime::rtc_engine::test_support::DebugRouteEntry,
-    str0m::media::Mid,
-};
+use std::sync::Arc;
+use std::time::Instant;
 
-use super::{Backend, MediaTransport};
+#[cfg(test)]
+use o_sfu_router::MediaStream as RouterRtpParameters;
+use str0m::media::Mid;
+
+#[cfg(test)]
+use super::TransportAdapterError;
+use super::{
+    MediaTransport, TransportMediaId, TransportSessionHealth, TransportSessionKey,
+    worker_manager::RtcWorkerManager,
+};
+use crate::runtime::rtc_engine::test_support::DebugRouteEntry;
 
 impl MediaTransport {
-    #[cfg(any(test, feature = "testing-transport"))]
-    #[allow(
-        dead_code,
-        reason = "the fake transport remains available only for deterministic test and feature-gated development workflows"
-    )]
-    /// creates a deterministic fake media transport for tests
-    ///
-    /// this constructor is compiled only for unit tests or the
-    /// `testing-transport` feature. it is not part of the production media
-    /// transport contract
-    #[must_use]
-    pub fn fake_for_testing() -> Self {
-        Self::from_fake_transport(Arc::new(FakeMediaTransport::default()))
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    #[allow(
-        dead_code,
-        reason = "targeted tests still need to inject a preconfigured fake media transport instance"
-    )]
-    /// wraps a preconfigured fake transport for deterministic tests
-    ///
-    /// this is a non-production constructor behind `testing-transport` so
-    /// integration tests can inspect and control transport behavior without
-    /// naming RTC worker internals
-    #[must_use]
-    pub fn from_fake_transport(transport: Arc<FakeMediaTransport>) -> Self {
-        Self {
-            backend: Backend::Fake(transport),
-        }
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    /// returns the fake backend when this handle was built for tests
-    ///
-    /// production builds do not compile the fake backend variant
-    #[must_use]
-    pub const fn as_fake_transport(&self) -> Option<&Arc<FakeMediaTransport>> {
-        match &self.backend {
-            Backend::Rtc(_) => None,
-            Backend::Fake(transport) => Some(transport),
-        }
-    }
-
     #[cfg(test)]
     pub(crate) async fn negotiated_producer_parameters(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<RouterRtpParameters, TransportAdapterError> {
-        match &self.backend {
-            Backend::Rtc(transport) => {
-                transport
-                    .worker_manager()
-                    .worker_for_user(session_key)
-                    .ok_or(TransportAdapterError::TransportUnavailable)?
-                    .media()
-                    .negotiated_producer_parameters(session_key, transport_media_id)
-                    .await
-            }
-            Backend::Fake(transport) => {
-                transport
-                    .negotiated_producer_parameters(session_key, transport_media_id)
-                    .await
-            }
-        }
+        self.transport
+            .worker_manager()
+            .worker_for_user(session_key)
+            .ok_or(TransportAdapterError::TransportUnavailable)?
+            .media()
+            .negotiated_producer_parameters(session_key, transport_media_id)
+            .await
     }
 
     #[cfg(test)]
-    pub(super) fn as_rtc_worker_manager(&self) -> Option<&Arc<RtcWorkerManager>> {
-        match &self.backend {
-            Backend::Rtc(transport) => Some(transport.worker_manager()),
-            Backend::Fake(_) => None,
-        }
+    pub(super) fn as_rtc_worker_manager(&self) -> &Arc<RtcWorkerManager> {
+        self.transport.worker_manager()
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
-    /// overrides a real RTC session health snapshot in test builds
+    /// Overrides a real RTC session health snapshot in test builds.
     ///
-    /// this is a route-test hook for failure injection and is not a production
-    /// control-plane operation
+    /// This is a route-test hook for failure injection and is not a production
+    /// control-plane operation.
     pub fn debug_set_session_transport_health(
         &self,
         session_key: &TransportSessionKey,
         health: TransportSessionHealth,
     ) {
-        if let Backend::Rtc(adapter) = &self.backend
-            && let Some(worker) = adapter.worker_manager().worker_for_user(session_key)
-        {
+        if let Some(worker) = self.transport.worker_manager().worker_for_user(session_key) {
             worker.debug_set_session_transport_health(session_key, health);
         }
     }
 
-    #[cfg(test)]
     pub async fn debug_route_entry(
         &self,
         source_session_key: &TransportSessionKey,
         source_mid: Mid,
     ) -> Option<DebugRouteEntry> {
-        match &self.backend {
-            Backend::Fake(_) => None,
-            Backend::Rtc(adapter) => {
-                adapter
-                    .worker_manager()
-                    .debug_route_entry(source_session_key, source_mid)
-                    .await
-            }
-        }
+        self.transport
+            .worker_manager()
+            .debug_route_entry(source_session_key, source_mid)
+            .await
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
-    /// inspects a real RTC route by consumer mid in test builds
+    /// Inspects a real RTC route by consumer mid in test builds.
     ///
-    /// this is exposed for integration assertions that need to prove routing
-    /// state without exposing worker internals to production callers
+    /// This is exposed for integration assertions that need to prove routing
+    /// state without exposing worker internals to production callers.
     pub async fn debug_route_entry_by_consumer_mid(
         &self,
         consumer_session_key: &TransportSessionKey,
         consumer_mid: Mid,
     ) -> Option<DebugRouteEntry> {
-        match &self.backend {
-            Backend::Fake(_) => None,
-            Backend::Rtc(adapter) => {
-                adapter
-                    .worker_manager()
-                    .debug_route_entry_by_consumer_mid(consumer_session_key, consumer_mid)
-                    .await
-            }
-        }
+        self.transport
+            .worker_manager()
+            .debug_route_entry_by_consumer_mid(consumer_session_key, consumer_mid)
+            .await
     }
 
-    #[cfg(test)]
     pub async fn debug_route_entry_by_media_id(
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> Option<DebugRouteEntry> {
-        match &self.backend {
-            Backend::Fake(_) => None,
-            Backend::Rtc(adapter) => {
-                adapter
-                    .worker_manager()
-                    .debug_route_entry_by_media_id(source_transport_media_id)
-                    .await
-            }
-        }
+        self.transport
+            .worker_manager()
+            .debug_route_entry_by_media_id(source_transport_media_id)
+            .await
+    }
+
+    pub async fn debug_observe_audio_activity(
+        &self,
+        transport_media_id: TransportMediaId,
+        now: Instant,
+    ) {
+        self.transport
+            .worker_manager()
+            .debug_observe_audio_activity(transport_media_id, now)
+            .await;
     }
 }
 
-#[cfg(any(test, feature = "testing-transport"))]
 impl RtcWorkerManager {
-    #[cfg(test)]
     pub(super) async fn debug_route_entry(
         &self,
         source_session_key: &TransportSessionKey,
@@ -196,7 +124,6 @@ impl RtcWorkerManager {
         None
     }
 
-    #[cfg(test)]
     pub(super) async fn debug_route_entry_by_media_id(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -210,5 +137,17 @@ impl RtcWorkerManager {
             }
         }
         None
+    }
+
+    async fn debug_observe_audio_activity(
+        &self,
+        transport_media_id: TransportMediaId,
+        now: Instant,
+    ) {
+        for worker in self.all_workers() {
+            worker
+                .debug_observe_audio_activity(transport_media_id, Some(true), Some(-20), now)
+                .await;
+        }
     }
 }

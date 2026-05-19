@@ -90,18 +90,15 @@ pub mod transport {
     //! construction inputs and transport DTOs from here. RTC
     //! worker internals stay below the media transport boundary.
 
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub mod test_support {
-        //! non-production media transport fakes and route inspectors
+        //! non-production media transport route inspectors
         //!
-        //! this module exists only for deterministic tests and explicit
-        //! `testing-transport` builds. production code must use the opaque
-        //! `MediaTransport` facade plus the production `RtcTransport` backend
+        //! this module exists only for deterministic tests. production code
+        //! must use the opaque `MediaTransport` facade plus the production
+        //! `RtcTransport` backend
 
-        pub use crate::runtime::{
-            media_transport::test_support::{FakeMediaTransport, FakeMediaTransportEvent},
-            rtc_engine::{ForwardedPacket, test_support::*},
-        };
+        pub use crate::runtime::rtc_engine::{ForwardedPacket, test_support::*};
     }
 
     #[cfg(feature = "internal-benchmarks")]

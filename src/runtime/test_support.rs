@@ -1,6 +1,9 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU16, Ordering},
+    },
 };
 
 use crate::{
@@ -11,6 +14,9 @@ use crate::{
     },
     runtime::{
         DiagnosticsStore, MediaTransport, RoomPacketSinkRegistry, RuntimeMetrics, RuntimeState,
+        media_transport::{
+            MediaTransportDeps, RtcTransport, RtcTransportConfig, SessionBitrateLimits,
+        },
         metrics::{MetricName, RuntimeMetricsSnapshot, test_support::RuntimeMetricsSnapshotLookup},
         room::{
             DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
@@ -22,6 +28,7 @@ use crate::{
 
 pub(super) const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
+static NEXT_RUNTIME_TEST_RTC_PORT: AtomicU16 = AtomicU16::new(52_000);
 
 #[derive(Default)]
 pub(super) struct DurationHistogramSnapshot {
@@ -252,11 +259,12 @@ pub(super) struct RuntimeTestState {
 
 pub(super) struct RuntimeTestBuilder {
     config: Config,
-    media_transport: MediaTransport,
+    media_transport: Option<MediaTransport>,
 }
 
 impl RuntimeTestBuilder {
     pub(super) fn new() -> Self {
+        let rtc_port_range = next_runtime_test_rtc_port_range();
         Self {
             config: Config {
                 auth: AuthConfig {
@@ -278,7 +286,7 @@ impl RuntimeTestBuilder {
                 },
                 transport: TransportConfig {
                     public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-                    rtc_port_range: RtcPortRange::new(40_000, 49_999),
+                    rtc_port_range,
                     max_bitrate_in: Bitrate::from_mbps(8),
                     max_bitrate_out: Bitrate::from_mbps(10),
                     video_bitrate_limits: VideoBitrateLimits::default(),
@@ -293,7 +301,7 @@ impl RuntimeTestBuilder {
                 telemetry: TelemetryConfig::default(),
                 diagnostics: DiagnosticsConfig::default(),
             },
-            media_transport: MediaTransport::fake_for_testing(),
+            media_transport: None,
         }
     }
 
@@ -338,13 +346,22 @@ impl RuntimeTestBuilder {
     }
 
     pub(super) fn media_transport(mut self, value: MediaTransport) -> Self {
-        self.media_transport = value;
+        self.media_transport = Some(value);
         self
     }
 
     pub(super) fn build_state(self) -> RuntimeTestState {
         let diagnostics = Arc::new(DiagnosticsStore::default());
         let metrics = Arc::new(RuntimeMetrics::default());
+        let packet_sink_registry = Arc::new(RoomPacketSinkRegistry::default());
+        let media_transport = self.media_transport.unwrap_or_else(|| {
+            build_real_media_transport_for_test_config(
+                &self.config,
+                Arc::clone(&diagnostics),
+                Arc::clone(&metrics),
+                Arc::clone(&packet_sink_registry),
+            )
+        });
         let room_manager = Arc::new(RoomManager::new(
             RoomManagerConfig::new(
                 self.config.transport.rtc_media_worker_count,
@@ -359,7 +376,7 @@ impl RuntimeTestBuilder {
                 .with_room_worker_policy(self.config.transport.room_worker_policy),
             ),
             RoomManagerDeps {
-                packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
+                packet_sink_registry,
                 diagnostics: Arc::clone(&diagnostics),
                 metrics: Arc::clone(&metrics),
             },
@@ -369,17 +386,57 @@ impl RuntimeTestBuilder {
             Arc::clone(&room_manager),
             diagnostics,
             metrics,
-            self.media_transport.clone(),
+            media_transport.clone(),
         );
         RuntimeTestState {
             state,
             room_manager,
-            media_transport: self.media_transport,
+            media_transport,
         }
     }
 
     pub(super) fn build_runtime_state(self) -> RuntimeState {
         self.build_state().state
+    }
+}
+
+fn next_runtime_test_rtc_port_range() -> RtcPortRange {
+    let port_start = NEXT_RUNTIME_TEST_RTC_PORT.fetch_add(100, Ordering::Relaxed);
+    RtcPortRange::new(port_start, port_start.saturating_add(99))
+}
+
+#[allow(
+    clippy::panic,
+    reason = "runtime tests use validated in-process RTC fixtures and should fail loudly if construction becomes invalid"
+)]
+fn build_real_media_transport_for_test_config(
+    config: &Config,
+    diagnostics: Arc<DiagnosticsStore>,
+    metrics: Arc<RuntimeMetrics>,
+    packet_sink_registry: Arc<RoomPacketSinkRegistry>,
+) -> MediaTransport {
+    match RtcTransport::builder()
+        .transport_config(RtcTransportConfig {
+            public_ip: config.transport.public_ip,
+            bitrate_limits: SessionBitrateLimits::new(
+                config.transport.max_bitrate_in,
+                config.transport.max_bitrate_out,
+            ),
+            video_bitrate_limits: config.transport.video_bitrate_limits,
+            rtc_port_range: config.transport.rtc_port_range,
+            codec_flags: config.codecs.flags,
+            codec_preferences: config.codecs.preferences,
+        })
+        .deps(MediaTransportDeps {
+            diagnostics,
+            packet_sink_registry,
+            metrics,
+        })
+        .worker_count(config.transport.rtc_media_worker_count)
+        .build()
+    {
+        Ok(transport) => MediaTransport::from_rtc_transport(transport),
+        Err(error) => panic!("runtime test RTC transport config should be valid: {error}"),
     }
 }
 

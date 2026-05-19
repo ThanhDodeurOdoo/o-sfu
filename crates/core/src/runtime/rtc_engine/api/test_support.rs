@@ -1,9 +1,8 @@
 #[cfg(test)]
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::Arc,
-    time::Instant,
-};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+#[cfg(test)]
+use std::sync::Arc;
+use std::time::Instant;
 
 use str0m::media::Mid;
 use tokio::sync::oneshot;
@@ -15,7 +14,7 @@ use super::{
     },
     facade::RtcTransportWorker,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::media_transport::TransportMediaId;
 use crate::runtime::{media_transport::TransportSessionKey, metrics};
 #[cfg(test)]
@@ -165,7 +164,7 @@ impl RtcTransportWorker {
         .flatten()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     pub async fn debug_route_entry(
         &self,
         source_session_key: &TransportSessionKey,
@@ -194,7 +193,7 @@ impl RtcTransportWorker {
         .flatten()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     pub async fn debug_route_entry_by_media_id(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -226,7 +225,7 @@ impl RtcTransportWorker {
             .await;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     pub async fn debug_observe_audio_activity(
         &self,
         transport_media_id: TransportMediaId,

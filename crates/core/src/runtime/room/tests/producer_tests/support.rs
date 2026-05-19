@@ -1,6 +1,6 @@
 pub(super) use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 pub(super) use o_sfu_router::{
@@ -14,12 +14,12 @@ pub(super) use crate::{
     Bitrate, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
     runtime::{
         diagnostics::{
-            DiagnosticsPolicyPauseReason, DiagnosticsStore, DiagnosticsVideoLayoutRole,
+            DiagnosticsSourceSelector, DiagnosticsStore, DiagnosticsVideoLayoutRole,
             DiagnosticsVideoRoutePriority,
         },
         media_transport::{
             MediaTransportDeps, RtcTransport, RtcTransportConfig, SessionOffer, TransportMediaId,
-            TransportSessionKey, test_support::FakeMediaTransportEvent,
+            TransportSessionKey,
         },
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -114,6 +114,35 @@ pub(super) async fn assert_subscription_layout(
         "diagnostics should expose the subscription layout role and priority"
     );
 }
+
+pub(super) async fn assert_subscription_selected_rid(
+    room: &Arc<Room>,
+    adapter: &MediaTransport,
+    consumer_user_id: &UserId,
+    producer_user_id: &UserId,
+    stream_type: TestSourceKind,
+    expected_rid: &str,
+) {
+    let diagnostics = room.diagnostics_user_views(adapter).await;
+    let Some(user) = diagnostics
+        .iter()
+        .find(|view| &view.user_id == consumer_user_id)
+    else {
+        panic!("diagnostics should include the consumer user");
+    };
+    assert!(
+        user.subscriptions.iter().any(|subscription| {
+            subscription.producer_user_id == *producer_user_id
+                && subscription.stream_id == stream_id_for_source(stream_type).to_string()
+                && subscription.selection.selector == DiagnosticsSourceSelector::Encoding
+                && subscription.selection.selected_rid.as_deref() == Some(expected_rid)
+                && subscription.selection.policy_allows_delivery
+        }),
+        "diagnostics should expose the selected RID for the subscription: {:?}",
+        user.subscriptions
+    );
+}
+
 pub(super) struct RealRtcRefreshScenario {
     pub(super) room: Arc<Room>,
     pub(super) media_transport: MediaTransport,

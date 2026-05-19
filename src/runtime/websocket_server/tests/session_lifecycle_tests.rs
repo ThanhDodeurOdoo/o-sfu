@@ -138,7 +138,7 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
         panic!("initial protocol frame should be an offer request");
     };
     assert!(
-        respond_to_protocol_negotiation_request(
+        respond_to_protocol_negotiation_request_with_test_rtc(
             &mut websocket,
             request_id,
             request,
@@ -231,10 +231,7 @@ async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiat
 
 #[tokio::test]
 async fn websocket_finish_rolls_back_staged_publish_before_room_cleanup() {
-    let server = TestServerBuilder::new()
-        .media_transport(MediaTransport::fake_for_testing())
-        .spawn()
-        .await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -318,10 +315,7 @@ async fn websocket_finish_rolls_back_staged_publish_before_room_cleanup() {
 
 #[tokio::test]
 async fn protocol_error_rolls_back_staged_publish_before_room_cleanup() {
-    let server = TestServerBuilder::new()
-        .media_transport(MediaTransport::fake_for_testing())
-        .spawn()
-        .await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -364,10 +358,7 @@ async fn protocol_error_rolls_back_staged_publish_before_room_cleanup() {
 
 #[tokio::test]
 async fn replacement_close_rolls_back_staged_publish_before_room_cleanup() {
-    let server = TestServerBuilder::new()
-        .media_transport(MediaTransport::fake_for_testing())
-        .spawn()
-        .await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -410,10 +401,7 @@ async fn replacement_close_rolls_back_staged_publish_before_room_cleanup() {
 
 #[tokio::test]
 async fn runtime_disconnect_rolls_back_staged_publish_before_room_cleanup() {
-    let server = TestServerBuilder::new()
-        .media_transport(MediaTransport::fake_for_testing())
-        .spawn()
-        .await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -458,14 +446,8 @@ async fn runtime_disconnect_rolls_back_staged_publish_before_room_cleanup() {
 }
 
 #[tokio::test]
-async fn websocket_closure_emits_fake_webrtc_user_closed_event() {
-    let adapter = Arc::new(FakeMediaTransport::default());
-    let media_transport =
-        MediaTransport::from_fake_transport(Arc::<FakeMediaTransport>::clone(&adapter));
-    let server = TestServerBuilder::new()
-        .media_transport(media_transport)
-        .spawn()
-        .await;
+async fn websocket_closure_removes_room_session_state() {
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -480,29 +462,15 @@ async fn websocket_closure_emits_fake_webrtc_user_closed_event() {
     let close_result = websocket.close(None).await;
     assert!(close_result.is_ok());
 
-    let events = wait_for_fake_webrtc_events(&adapter, 1).await;
-    assert!(events.is_some());
-    let Some(events) = events else {
-        return;
-    };
-    assert_eq!(
-        events.last(),
-        Some(&FakeMediaTransportEvent::SessionClosed {
-            user_id: user_id.clone(),
-            media_worker_id: 0,
-        })
+    assert!(
+        wait_for_session_cleanup(&room, &user_id).await.is_some(),
+        "websocket closure should remove the room session"
     );
 }
 
 #[tokio::test]
 async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
-    let adapter = Arc::new(FakeMediaTransport::default());
-    let media_transport =
-        MediaTransport::from_fake_transport(Arc::<FakeMediaTransport>::clone(&adapter));
-    let server = TestServerBuilder::new()
-        .media_transport(media_transport)
-        .spawn()
-        .await;
+    let server = TestServerBuilder::new().spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -524,46 +492,22 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
         read_close_code(&mut first_socket).await,
         Some(CloseCode::Library(4108))
     );
-
-    let events = wait_for_fake_webrtc_events(&adapter, 1).await;
-    assert!(events.is_some());
-    let Some(events) = events else {
-        return;
-    };
-    assert_eq!(
-        events.last(),
-        Some(&FakeMediaTransportEvent::SessionClosed {
-            user_id: user_id.clone(),
-            media_worker_id: 0,
-        })
+    assert!(
+        room.test_api().inspect().has_session(&user_id).await,
+        "replacement session should stay live after stale socket cleanup"
     );
 
     let close_result = second_socket.close(None).await;
     assert!(close_result.is_ok());
-    let events = wait_for_fake_webrtc_events(&adapter, 2).await;
-    assert!(events.is_some());
-    let Some(events) = events else {
-        return;
-    };
-    assert_eq!(
-        events.last(),
-        Some(&FakeMediaTransportEvent::SessionClosed {
-            user_id: user_id.clone(),
-            media_worker_id: 0,
-        })
+    assert!(
+        wait_for_session_cleanup(&room, &user_id).await.is_some(),
+        "closing the replacement socket should remove the final session"
     );
 }
 
 #[tokio::test]
 async fn disconnect_cleanup_still_closes_media_transport_user_state() {
-    let adapter = Arc::new(FakeMediaTransport::default());
-    let media_transport =
-        MediaTransport::from_fake_transport(Arc::<FakeMediaTransport>::clone(&adapter));
-    let server = TestServerBuilder::new()
-        .room_size(10)
-        .media_transport(media_transport)
-        .spawn()
-        .await;
+    let server = TestServerBuilder::new().room_size(10).spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -595,30 +539,17 @@ async fn disconnect_cleanup_still_closes_media_transport_user_state() {
         "remaining peer should receive user departure after disconnect: {peer_message:?}"
     );
 
-    let events = wait_for_fake_webrtc_events(&adapter, 1).await;
-    assert!(events.is_some());
-    let Some(events) = events else {
-        return;
-    };
-    assert_eq!(
-        events.last(),
-        Some(&FakeMediaTransportEvent::SessionClosed {
-            user_id: UserId::Integer(1),
-            media_worker_id: 0,
-        })
+    assert!(
+        wait_for_session_cleanup(&room, &UserId::Integer(1))
+            .await
+            .is_some(),
+        "disconnect cleanup should remove the target room session"
     );
 }
 
 #[tokio::test]
 async fn disconnect_cleanup_closes_transport_user_before_empty_room_removal() {
-    let adapter = Arc::new(FakeMediaTransport::default());
-    let media_transport =
-        MediaTransport::from_fake_transport(Arc::<FakeMediaTransport>::clone(&adapter));
-    let server = TestServerBuilder::new()
-        .room_size(10)
-        .media_transport(media_transport)
-        .spawn()
-        .await;
+    let server = TestServerBuilder::new().room_size(10).spawn().await;
     assert!(server.is_some());
     let Some(server) = server else {
         return;
@@ -648,18 +579,8 @@ async fn disconnect_cleanup_closes_transport_user_before_empty_room_removal() {
         Some(CloseCode::Library(4108))
     );
 
-    let events = wait_for_fake_webrtc_events(&adapter, 1).await;
-    assert!(events.is_some());
-    let Some(events) = events else {
-        return;
-    };
-    assert_eq!(
-        events.last(),
-        Some(&FakeMediaTransportEvent::SessionClosed {
-            user_id: core_user_id,
-            media_worker_id: 0,
-        })
-    );
+    let metrics = server.state.metrics.snapshot();
+    assert_eq!(metrics.active_transport_users(), 0);
 }
 
 async fn stage_camera_publish(
@@ -711,6 +632,19 @@ async fn wait_for_staged_publish_cleanup(
                 connection_id,
                 &stream_id_for_stream_type(StreamType::Camera),
             ) {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .ok()
+}
+
+async fn wait_for_session_cleanup(room: &Room, user_id: &UserId) -> Option<()> {
+    timeout(Duration::from_secs(1), async {
+        loop {
+            if !room.test_api().inspect().has_session(user_id).await {
                 break;
             }
             sleep(Duration::from_millis(10)).await;

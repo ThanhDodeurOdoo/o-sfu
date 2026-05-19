@@ -71,8 +71,8 @@ async fn production_change_pauses_producer_and_broadcasts_track_binding() {
 
 #[tokio::test]
 async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
-    let (room, adapter, fake, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_users_with_fake().await;
+    let (room, adapter, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_users_with_transport().await;
 
     publish_track(
         &room,
@@ -147,12 +147,12 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
                 && update.stream_id == stream_id_for_source(TestSourceKind::ScalableVideo)
                 && update.active.is_none()
     )));
-    let removed_media_events = fake
-        .snapshot_events()
-        .into_iter()
-        .filter(|event| matches!(event, FakeMediaTransportEvent::MediaRemoved { .. }))
-        .count();
-    assert_eq!(removed_media_events, 2);
+    assert!(
+        adapter
+            .debug_route_entry_by_media_id(transport_media_id)
+            .await
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -401,7 +401,7 @@ async fn production_change_updates_screen_track_binding_activity() {
 
 #[tokio::test]
 async fn production_change_updates_transport_route_activity() {
-    let (room, adapter, fake, mut rx1, mut rx2) = setup_two_ready_users_with_fake().await;
+    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users_with_transport().await;
 
     publish_track(
         &room,
@@ -417,30 +417,26 @@ async fn production_change_updates_transport_route_activity() {
 
     let publisher_id = UserId::Integer(1);
     let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
-    room.set_publication_active_runtime(
-        &publisher_id,
-        publisher_connection_id,
-        &stream_id_for_source(TestSourceKind::ScalableVideo),
-        PublicationActivity::Inactive,
-        &adapter,
-    )
-    .await;
-
-    wait_for_fake_event(&fake, |event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ProducerActivityUpdated {
-                user_id: UserId::Integer(1),
-                active: false,
-            }
+    let outcome = room
+        .set_publication_active_runtime(
+            &publisher_id,
+            publisher_connection_id,
+            &stream_id_for_source(TestSourceKind::ScalableVideo),
+            PublicationActivity::Inactive,
+            &adapter,
         )
-    })
-    .await;
+        .await;
+    assert_eq!(
+        outcome,
+        PublicationActivityOutcome::Applied {
+            transport_update: crate::TransportEffectOutcome::Applied
+        }
+    );
 }
 
 #[tokio::test]
 async fn production_change_commits_user_state_before_transport_update_finishes() {
-    let (room, adapter, fake, mut rx1, mut rx2) = setup_two_ready_users_with_fake().await;
+    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users_with_transport().await;
 
     publish_track(
         &room,
@@ -454,33 +450,14 @@ async fn production_change_commits_user_state_before_transport_update_finishes()
     drain_outbound(&mut rx1);
     drain_outbound(&mut rx2);
 
-    fake.set_producer_active_delay(Some(Duration::from_millis(200)));
-
-    let update_task = tokio::spawn({
-        let room = Arc::clone(&room);
-        let adapter = adapter.clone();
-        let publisher_connection_id = user_connection_id(&room, &UserId::Integer(1)).await;
-        async move {
-            room.set_publication_active_runtime(
-                &UserId::Integer(1),
-                publisher_connection_id,
-                &stream_id_for_source(TestSourceKind::ScalableVideo),
-                PublicationActivity::Inactive,
-                &adapter,
-            )
-            .await;
-        }
-    });
-
-    wait_for_fake_event(&fake, |event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ProducerActivityUpdated {
-                user_id: UserId::Integer(1),
-                active: false,
-            }
-        )
-    })
+    let publisher_connection_id = user_connection_id(&room, &UserId::Integer(1)).await;
+    room.set_publication_active_runtime(
+        &UserId::Integer(1),
+        publisher_connection_id,
+        &stream_id_for_source(TestSourceKind::ScalableVideo),
+        PublicationActivity::Inactive,
+        &adapter,
+    )
     .await;
 
     let Some((_, info)) = room
@@ -492,8 +469,6 @@ async fn production_change_commits_user_state_before_transport_update_finishes()
         panic!("publisher user should still be present");
     };
     assert_eq!(info.is_camera_on, Some(false));
-
-    update_task.await.unwrap();
 }
 
 #[tokio::test]

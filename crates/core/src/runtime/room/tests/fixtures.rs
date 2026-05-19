@@ -1,5 +1,9 @@
-use std::time::Instant;
-pub(super) use std::{sync::Arc, time::Duration};
+use std::sync::atomic::{AtomicU16, Ordering};
+pub(super) use std::{
+    net::{IpAddr, Ipv4Addr},
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use o_sfu_router::test_support::rtp_samples::{
     sample_audio_rtp_parameters, sample_client_rtp_capabilities,
@@ -10,24 +14,27 @@ pub(super) use o_sfu_router::{
     ConsumerCapability, MediaCapabilities, MediaKind, MediaKind as RouterMediaKind, MediaStream,
     RouterId,
 };
-pub(super) use tokio::{task::yield_now, time::timeout};
+pub(super) use tokio::time::timeout;
 
 pub(super) use super::super::{
     JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomEventMessage, RoomEventRequest,
     RoomJoinError, RoomManager, RoomManagerJoinError, UserCleanup, UserCloseReason, UserOutbound,
-    UserOutboundEvent, UserOutboundReceiver, UserOutboundSender, topology::RoomTopology,
+    UserOutboundReceiver, UserOutboundSender, topology::RoomTopology,
 };
 use crate::runtime::room::user_negotiation::{UserNegotiationUpdate, UserTransportReady};
 pub(super) use crate::{
-    Bitrate, PublicationActivity, PublishStageOutcome, RollbackStagedPublishOutcome,
-    SessionNegotiationOutcome, SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
+    Bitrate, MediaCodecFlags, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
+    RollbackStagedPublishOutcome, RtcPortRange, SessionBitrateLimits, SessionNegotiationOutcome,
+    SubscriptionUpdateOutcome, UnpublishOutcome,
     runtime::{
-        ConnectionId, TestSourceKind, UserId, UserInfo, UserPermissions, VideoLayoutIntent,
+        ConnectionId, TestSourceKind, UserId, UserPermissions, VideoLayoutIntent,
+        diagnostics::DiagnosticsStore,
         media_transport::{
-            ActiveSpeakerSource, MediaTransport, SourcePacketGate, TransportMediaId,
-            test_support::{FakeMediaTransport, FakeMediaTransportEvent},
+            AppliedSessionAnswer, MediaTransport, MediaTransportDeps, RtcTransport,
+            RtcTransportConfig, TransportMediaId,
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
+        packet_sink_registry::RoomPacketSinkRegistry,
         source_model::{
             UserStreamId,
             test_support::{
@@ -39,6 +46,7 @@ pub(super) use crate::{
 };
 
 pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
+static NEXT_RTC_TEST_PORT: AtomicU16 = AtomicU16::new(47_000);
 
 /// Realistic client RTP capabilities (default codecs)
 pub(super) fn test_client_rtp_capabilities() -> MediaCapabilities {
@@ -65,12 +73,36 @@ pub(super) fn test_sender() -> (UserOutboundSender, UserOutboundReceiver) {
     UserOutboundSender::channel(1024, Arc::new(RuntimeMetrics::default()))
 }
 
-pub(super) fn fake_adapter() -> (MediaTransport, Arc<FakeMediaTransport>) {
-    let adapter = Arc::new(FakeMediaTransport::default());
-    (
-        MediaTransport::from_fake_transport(Arc::clone(&adapter)),
-        adapter,
-    )
+#[allow(
+    clippy::panic,
+    reason = "the room test fixture uses a fixed-valid RTC config and should fail loudly if it stops being valid"
+)]
+pub(super) fn real_adapter() -> MediaTransport {
+    let port_start = NEXT_RTC_TEST_PORT.fetch_add(100, Ordering::Relaxed);
+    let port_end = port_start.saturating_add(99);
+    match RtcTransport::builder()
+        .transport_config(RtcTransportConfig {
+            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            bitrate_limits: SessionBitrateLimits::new(
+                Bitrate::from_mbps(8),
+                Bitrate::from_mbps(10),
+            ),
+            video_bitrate_limits: crate::VideoBitrateLimits::default(),
+            rtc_port_range: RtcPortRange::new(port_start, port_end),
+            codec_flags: MediaCodecFlags::default(),
+            codec_preferences: crate::CodecPreferences::default(),
+        })
+        .deps(MediaTransportDeps {
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
+            metrics: Arc::new(RuntimeMetrics::default()),
+        })
+        .worker_count(4)
+        .build()
+    {
+        Ok(transport) => MediaTransport::from_rtc_transport(transport),
+        Err(error) => panic!("constant RTC room test transport config should be valid: {error}"),
+    }
 }
 
 pub(super) fn test_connection_id(raw: u64) -> ConnectionId {
@@ -89,7 +121,7 @@ pub(super) async fn join_user_with_sender(
         .expect("user should join")
 }
 
-pub(super) async fn join_user_with_fake_cleanup(
+pub(super) async fn join_user_without_transport_cleanup(
     room: &Arc<super::super::Room>,
     adapter: &MediaTransport,
     user_id: UserId,
@@ -119,13 +151,6 @@ pub(super) async fn user_connection_id(
         .expect("test fixture requires a live user connection")
 }
 
-pub(super) async fn set_publish_transport_ready(
-    room: &super::super::Room,
-    user_id: &UserId,
-) -> UserNegotiationUpdate {
-    set_transport_ready(room, user_id, UserTransportReady::Publish).await
-}
-
 pub(super) async fn set_consume_transport_ready(
     room: &super::super::Room,
     user_id: &UserId,
@@ -151,22 +176,6 @@ pub(super) async fn set_client_rtp_capabilities(
     let connection_id = user_connection_id(room, user_id).await;
     let mut state = room.state.write().await;
     state.set_client_rtp_capabilities_for_test(user_id, connection_id, &capabilities)
-}
-
-pub(super) async fn apply_publish_transport_ready(
-    room: &super::super::Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    media_transport: &MediaTransport,
-) -> bool {
-    apply_transport_ready(
-        room,
-        user_id,
-        connection_id,
-        UserTransportReady::Publish,
-        media_transport,
-    )
-    .await
 }
 
 pub(super) async fn apply_consume_transport_ready(
@@ -231,10 +240,36 @@ async fn apply_negotiation_update(
     true
 }
 
-pub(super) async fn make_session_ready(room: &super::super::Room, user_id: &UserId) {
-    let _ = set_publish_transport_ready(room, user_id).await;
-    let _ = set_consume_transport_ready(room, user_id).await;
-    let _ = set_client_rtp_capabilities(room, user_id, test_client_rtp_capabilities()).await;
+pub(super) async fn make_session_ready_with_transport(
+    room: &super::super::Room,
+    user_id: &UserId,
+    media_transport: &MediaTransport,
+) {
+    let connection_id = user_connection_id(room, user_id).await;
+    create_transport_session_offer(room, user_id, media_transport).await;
+    assert_eq!(
+        room.apply_session_negotiated(
+            user_id,
+            connection_id,
+            test_client_rtp_capabilities(),
+            media_transport,
+        )
+        .await,
+        SessionNegotiationOutcome::Applied
+    );
+}
+
+pub(super) async fn create_transport_session_offer(
+    room: &super::super::Room,
+    user_id: &UserId,
+    media_transport: &MediaTransport,
+) {
+    let connection_id = user_connection_id(room, user_id).await;
+    let session_key = room.transport_user_key(user_id, connection_id);
+    media_transport
+        .create_initial_session_offer(&session_key)
+        .await
+        .expect("real RTC test user should create an initial offer");
 }
 
 pub(super) async fn refresh_session_consumers(
@@ -254,7 +289,6 @@ pub(super) async fn refresh_session_consumers(
 pub(super) struct StagedPublishScenario {
     pub(super) room: Arc<super::super::Room>,
     pub(super) adapter: MediaTransport,
-    pub(super) fake: Arc<FakeMediaTransport>,
     pub(super) user_id: UserId,
     pub(super) connection_id: ConnectionId,
     publisher_rx: UserOutboundReceiver,
@@ -263,14 +297,12 @@ pub(super) struct StagedPublishScenario {
 
 impl StagedPublishScenario {
     pub(super) async fn new() -> Self {
-        let (room, adapter, fake, publisher_rx, subscriber_rx) =
-            setup_two_ready_users_with_fake().await;
+        let (room, adapter, publisher_rx, subscriber_rx) = setup_two_ready_users().await;
         let user_id = UserId::Integer(1);
         let connection_id = user_connection_id(&room, &user_id).await;
         Self {
             room,
             adapter,
-            fake,
             user_id,
             connection_id,
             publisher_rx,
@@ -317,14 +349,13 @@ impl StagedPublishScenario {
     }
 
     pub(super) async fn commit(&self) {
-        let session_key = self
-            .room
-            .transport_user_key(&self.user_id, self.connection_id);
-        let applied_answer = self
-            .adapter
-            .apply_session_answer(&session_key, "")
-            .await
-            .unwrap_or_default();
+        let staged_transport_media_id = self
+            .staged_transport_media_id(TestSourceKind::ScalableVideo)
+            .await;
+        let applied_answer = AppliedSessionAnswer::from_negotiated_producers([(
+            staged_transport_media_id,
+            test_simulcast_video_rtp_parameters(),
+        )]);
         self.room
             .commit_staged_publishes(
                 &self.user_id,
@@ -374,57 +405,25 @@ impl StagedPublishScenario {
         assert!(self.drain_subscriber().is_empty());
     }
 
-    pub(super) fn publish_media_requested_count(&self) -> usize {
-        self.fake
-            .snapshot_events()
-            .iter()
-            .filter(|event| {
-                matches!(
-                    event,
-                    FakeMediaTransportEvent::PublishMediaRequested { user_id, .. }
-                        if user_id == &self.user_id
-                )
-            })
-            .count()
-    }
-
-    pub(super) fn removed_media_count(&self) -> usize {
-        self.fake
-            .snapshot_events()
-            .iter()
-            .filter(|event| {
-                matches!(
-                    event,
-                    FakeMediaTransportEvent::MediaRemoved { user_id, .. }
-                        if user_id == &self.user_id
-                )
-            })
-            .count()
-    }
-
-    pub(super) fn has_removed_media(&self, transport_media_id: TransportMediaId) -> bool {
-        self.fake.snapshot_events().iter().any(|event| {
-            matches!(
-                event,
-                FakeMediaTransportEvent::MediaRemoved {
-                    user_id,
-                    transport_media_id: removed_media_id,
-                } if user_id == &self.user_id && *removed_media_id == transport_media_id
-            )
-        })
+    pub(super) async fn route_for_staged_media_exists(
+        &self,
+        transport_media_id: TransportMediaId,
+    ) -> bool {
+        self.adapter
+            .debug_route_entry_by_media_id(transport_media_id)
+            .await
+            .is_some()
     }
 }
 
 #[derive(Clone, Copy)]
 struct ReadyRoomFixtureOptions {
-    include_fake_adapter: bool,
     publish_camera_before_subscriber_ready: bool,
 }
 
 pub(super) struct ReadyRoomFixture {
     room: Arc<super::super::Room>,
     adapter: MediaTransport,
-    fake: Option<Arc<FakeMediaTransport>>,
     first_rx: UserOutboundReceiver,
     second_rx: UserOutboundReceiver,
 }
@@ -432,21 +431,12 @@ pub(super) struct ReadyRoomFixture {
 impl ReadyRoomFixtureOptions {
     const fn two_ready_users() -> Self {
         Self {
-            include_fake_adapter: false,
-            publish_camera_before_subscriber_ready: false,
-        }
-    }
-
-    const fn two_ready_users_with_fake() -> Self {
-        Self {
-            include_fake_adapter: true,
             publish_camera_before_subscriber_ready: false,
         }
     }
 
     const fn late_join_bootstrap() -> Self {
         Self {
-            include_fake_adapter: true,
             publish_camera_before_subscriber_ready: true,
         }
     }
@@ -462,27 +452,22 @@ async fn setup_ready_room_fixture(options: ReadyRoomFixtureOptions) -> ReadyRoom
     join_user_with_sender(&room, UserId::Integer(1), first_tx).await;
     join_user_with_sender(&room, UserId::Integer(2), second_tx).await;
 
-    let (adapter, fake) = if options.include_fake_adapter {
-        let (adapter, fake) = fake_adapter();
-        (adapter, Some(fake))
-    } else {
-        (MediaTransport::fake_for_testing(), None)
-    };
+    let adapter = real_adapter();
 
-    make_session_ready(&room, &UserId::Integer(1)).await;
+    make_session_ready_with_transport(&room, &UserId::Integer(1), &adapter).await;
 
     if options.publish_camera_before_subscriber_ready {
         try_publish_camera(&room, &UserId::Integer(1), &adapter).await;
+        create_transport_session_offer(&room, &UserId::Integer(2), &adapter).await;
     }
 
     if !options.publish_camera_before_subscriber_ready {
-        make_session_ready(&room, &UserId::Integer(2)).await;
+        make_session_ready_with_transport(&room, &UserId::Integer(2), &adapter).await;
     }
 
     ReadyRoomFixture {
         room,
         adapter,
-        fake,
         first_rx,
         second_rx,
     }
@@ -505,19 +490,16 @@ pub(super) async fn setup_two_ready_users() -> (
     )
 }
 
-pub(super) async fn setup_two_ready_users_with_fake() -> (
+pub(super) async fn setup_two_ready_users_with_transport() -> (
     Arc<super::super::Room>,
     MediaTransport,
-    Arc<FakeMediaTransport>,
     UserOutboundReceiver,
     UserOutboundReceiver,
 ) {
-    let fixture =
-        setup_ready_room_fixture(ReadyRoomFixtureOptions::two_ready_users_with_fake()).await;
+    let fixture = setup_ready_room_fixture(ReadyRoomFixtureOptions::two_ready_users()).await;
     (
         fixture.room,
         fixture.adapter,
-        fixture.fake.unwrap(),
         fixture.first_rx,
         fixture.second_rx,
     )
@@ -526,7 +508,6 @@ pub(super) async fn setup_two_ready_users_with_fake() -> (
 pub(super) async fn setup_late_join_bootstrap_scenario() -> (
     Arc<super::super::Room>,
     MediaTransport,
-    Arc<FakeMediaTransport>,
     UserOutboundReceiver,
     UserOutboundReceiver,
 ) {
@@ -534,69 +515,55 @@ pub(super) async fn setup_late_join_bootstrap_scenario() -> (
     (
         fixture.room,
         fixture.adapter,
-        fixture.fake.unwrap(),
         fixture.first_rx,
         fixture.second_rx,
     )
 }
 
-pub(super) async fn setup_ready_users_with_fake(
+pub(super) async fn setup_ready_users_with_transport(
     user_ids: &[i64],
-) -> (
-    Arc<super::super::Room>,
-    MediaTransport,
-    Arc<FakeMediaTransport>,
-) {
-    let (room, adapter, fake, _receivers) = setup_ready_users_with_fake_receivers(user_ids).await;
-    (room, adapter, fake)
+) -> (Arc<super::super::Room>, MediaTransport) {
+    let (room, adapter, _receivers) = setup_ready_users_with_transport_receivers(user_ids).await;
+    (room, adapter)
 }
 
-pub(super) async fn setup_ready_users_with_fake_receivers(
+pub(super) async fn setup_ready_users_with_transport_receivers(
     user_ids: &[i64],
 ) -> (
     Arc<super::super::Room>,
     MediaTransport,
-    Arc<FakeMediaTransport>,
     Vec<UserOutboundReceiver>,
 ) {
     let manager = RoomManager::for_test();
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
-    let (adapter, fake) = fake_adapter();
+    let adapter = real_adapter();
     let mut receivers = Vec::with_capacity(user_ids.len());
     for &raw_user_id in user_ids {
         let (sender, receiver) = test_sender();
         receivers.push(receiver);
         let user_id = UserId::Integer(raw_user_id);
-        join_user_with_fake_cleanup(&room, &adapter, user_id.clone(), sender).await;
-        make_session_ready(&room, &user_id).await;
+        join_user_without_transport_cleanup(&room, &adapter, user_id.clone(), sender).await;
+        make_session_ready_with_transport(&room, &user_id, &adapter).await;
     }
-    (room, adapter, fake, receivers)
+    (room, adapter, receivers)
 }
 
-pub(super) async fn setup_three_ready_users_with_fake() -> (
-    Arc<super::super::Room>,
-    MediaTransport,
-    Arc<FakeMediaTransport>,
-) {
-    setup_ready_users_with_fake(&[1, 2, 3]).await
+pub(super) async fn setup_three_ready_users_with_transport()
+-> (Arc<super::super::Room>, MediaTransport) {
+    setup_ready_users_with_transport(&[1, 2, 3]).await
 }
 
 pub(super) struct SourcePolicyScenario {
     pub(super) room: Arc<super::super::Room>,
     pub(super) adapter: MediaTransport,
-    pub(super) fake: Arc<FakeMediaTransport>,
 }
 
 impl SourcePolicyScenario {
     pub(super) async fn with_ready_users(user_ids: &[i64]) -> Self {
-        let (room, adapter, fake) = setup_ready_users_with_fake(user_ids).await;
-        Self {
-            room,
-            adapter,
-            fake,
-        }
+        let (room, adapter) = setup_ready_users_with_transport(user_ids).await;
+        Self { room, adapter }
     }
 
     pub(super) async fn three_ready_users() -> Self {
@@ -613,72 +580,26 @@ impl SourcePolicyScenario {
         }
     }
 
-    pub(super) async fn publish_simulcast_camera(&self, raw_user_id: i64) {
-        publish_simulcast_camera(&self.room, &UserId::Integer(raw_user_id), &self.adapter).await;
-    }
-
-    pub(super) async fn publish_simulcast_cameras(&self, user_ids: &[i64]) {
-        for raw_user_id in user_ids {
-            self.publish_simulcast_camera(*raw_user_id).await;
-        }
-    }
-
     pub(super) async fn audio_media_id(&self, raw_user_id: i64) -> TransportMediaId {
         let (audio_media_id, _camera_media_id) =
             source_media_ids(&self.room, &UserId::Integer(raw_user_id)).await;
         audio_media_id
     }
 
-    pub(super) async fn audio_media_ids(&self, user_ids: &[i64]) -> Vec<TransportMediaId> {
-        let mut media_ids = Vec::with_capacity(user_ids.len());
-        for raw_user_id in user_ids {
-            media_ids.push(self.audio_media_id(*raw_user_id).await);
-        }
-        media_ids
+    pub(super) async fn mark_active_speaker(&self, transport_media_id: TransportMediaId) {
+        self.mark_active_speakers([transport_media_id]).await;
     }
 
-    pub(super) fn mark_active_speaker(&self, transport_media_id: TransportMediaId) {
-        self.mark_active_speakers([transport_media_id]);
-    }
-
-    pub(super) fn mark_active_speakers(
+    pub(super) async fn mark_active_speakers(
         &self,
         transport_media_ids: impl IntoIterator<Item = TransportMediaId>,
     ) {
         let observed_at = Instant::now();
-        self.fake.set_active_speaker_source_snapshot(
-            transport_media_ids
-                .into_iter()
-                .map(|transport_media_id| ActiveSpeakerSource::new(transport_media_id, observed_at))
-                .collect(),
-        );
-    }
-
-    pub(super) async fn mark_user_active_speaker(&self, raw_user_id: i64) {
-        self.mark_active_speaker(self.audio_media_id(raw_user_id).await);
-    }
-
-    pub(super) fn set_receiver_budget(&self, raw_user_id: i64, estimate_bps: u64) {
-        self.fake.set_receiver_bandwidth_estimate(
-            UserId::Integer(raw_user_id),
-            Bitrate::from_bps(estimate_bps),
-        );
-    }
-
-    pub(super) fn event_cursor(&self) -> usize {
-        self.fake.snapshot_events().len()
-    }
-
-    pub(super) fn events(&self) -> Vec<FakeMediaTransportEvent> {
-        self.fake.snapshot_events()
-    }
-
-    pub(super) fn events_since(&self, cursor: usize) -> Vec<FakeMediaTransportEvent> {
-        self.fake
-            .snapshot_events()
-            .into_iter()
-            .skip(cursor)
-            .collect()
+        for transport_media_id in transport_media_ids {
+            self.adapter
+                .debug_observe_audio_activity(transport_media_id, observed_at)
+                .await;
+        }
     }
 
     pub(super) async fn refresh_policy(&self) {
@@ -687,8 +608,8 @@ impl SourcePolicyScenario {
             .await;
     }
 
-    pub(super) async fn refresh_policy_times(&self, count: usize) {
-        for _ in 0..count {
+    pub(super) async fn refresh_policy_until_upgrades_settle(&self) {
+        for _ in 0..3 {
             self.refresh_policy().await;
         }
     }
@@ -735,26 +656,6 @@ pub(super) async fn try_publish_camera(
             media_transport,
         )
         .await
-}
-
-pub(super) async fn published_camera_media_id(
-    room: &Arc<super::super::Room>,
-    user_id: &UserId,
-    media_transport: &MediaTransport,
-) -> (ConnectionId, TransportMediaId) {
-    assert!(
-        try_publish_camera(room, user_id, media_transport)
-            .await
-            .is_some()
-    );
-    let connection_id = user_connection_id(room, user_id).await;
-    let transport_media_id = room
-        .test_api()
-        .inspect()
-        .producer_transport_media_id(user_id, connection_id, TestSourceKind::ScalableVideo)
-        .await
-        .expect("published camera should expose a transport media id");
-    (connection_id, transport_media_id)
 }
 
 pub(super) async fn publish_simulcast_camera(
@@ -815,97 +716,28 @@ pub(super) async fn source_media_ids(
     room: &Arc<super::super::Room>,
     user_id: &UserId,
 ) -> (TransportMediaId, TransportMediaId) {
-    let Some(connection_id) = room.test_api().inspect().user_connection_id(user_id).await else {
-        panic!("user should exist");
-    };
-    let Some(audio_media_id) = room
-        .test_api()
-        .inspect()
-        .producer_transport_media_id(user_id, connection_id, TestSourceKind::AudioDetector)
-        .await
-    else {
-        panic!("audio producer should expose a transport media id");
-    };
-    let Some(camera_media_id) = room
-        .test_api()
-        .inspect()
-        .producer_transport_media_id(user_id, connection_id, TestSourceKind::ScalableVideo)
-        .await
-    else {
-        panic!("camera producer should expose a transport media id");
-    };
+    let audio_media_id = source_media_id(room, user_id, TestSourceKind::AudioDetector).await;
+    let camera_media_id = source_media_id(room, user_id, TestSourceKind::ScalableVideo).await;
     (audio_media_id, camera_media_id)
 }
 
-pub(super) fn assert_consumer_packet_selection_update(
-    events: &[FakeMediaTransportEvent],
-    consumer_user_id: &UserId,
-    source_user_id: &UserId,
-    expected_rid: &str,
-) {
-    assert!(events.iter().any(|event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ConsumerPacketGateUpdated {
-                consumer_user_id: updated_consumer_user_id,
-                source_user_id: updated_source_user_id,
-                packet_gate: SourcePacketGate::Rid(rid),
-            } if updated_consumer_user_id == consumer_user_id
-                && updated_source_user_id == source_user_id
-                && rid == expected_rid
-        )
-    }));
-}
-
-pub(super) fn assert_consumer_keyframe_request(
-    events: &[FakeMediaTransportEvent],
-    expected_consumer_user_id: &UserId,
-    expected_source_user_id: &UserId,
-) {
-    assert!(events.iter().any(|event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ConsumerKeyframeRequested {
-                consumer_user_id,
-                source_user_id,
-            } if consumer_user_id == expected_consumer_user_id
-                && source_user_id == expected_source_user_id
-        )
-    }));
-}
-
-pub(super) fn assert_consumer_activity_update(
-    events: &[FakeMediaTransportEvent],
-    expected_consumer_user_id: &UserId,
-    expected_source_user_id: &UserId,
-    expected_active: bool,
-) {
-    assert!(events.iter().any(|event| {
-        matches!(
-            event,
-            FakeMediaTransportEvent::ConsumerActivityUpdated {
-                consumer_user_id,
-                source_user_id,
-                active,
-            } if consumer_user_id == expected_consumer_user_id
-                && source_user_id == expected_source_user_id
-                && *active == expected_active
-        )
-    }));
-}
-
-pub(super) fn assert_featured_snapshot_update(
-    messages: &[UserOutbound],
+pub(super) async fn source_media_id(
+    room: &Arc<super::super::Room>,
     user_id: &UserId,
-    is_featured: bool,
-) {
-    assert!(messages.iter().any(|message| {
-        matches!(
-            message,
-            UserOutbound::Message(RoomEventMessage::UserInfoChanged(snapshot))
-                if snapshot.get(user_id).is_some_and(|info| info.is_featured == Some(is_featured))
-        )
-    }));
+    stream_type: TestSourceKind,
+) -> TransportMediaId {
+    let Some(connection_id) = room.test_api().inspect().user_connection_id(user_id).await else {
+        panic!("user should exist");
+    };
+    let Some(transport_media_id) = room
+        .test_api()
+        .inspect()
+        .producer_transport_media_id(user_id, connection_id, stream_type)
+        .await
+    else {
+        panic!("{stream_type:?} producer should expose a transport media id");
+    };
+    transport_media_id
 }
 
 pub(super) fn drain_outbound(rx: &mut UserOutboundReceiver) -> Vec<UserOutbound> {
@@ -914,23 +746,4 @@ pub(super) fn drain_outbound(rx: &mut UserOutboundReceiver) -> Vec<UserOutbound>
         msgs.push(msg);
     }
     msgs
-}
-
-pub(super) async fn wait_for_fake_event(
-    adapter: &FakeMediaTransport,
-    predicate: impl Fn(&FakeMediaTransportEvent) -> bool,
-) {
-    let wait_result = timeout(Duration::from_secs(1), async {
-        loop {
-            if adapter.snapshot_events().iter().any(&predicate) {
-                break;
-            }
-            yield_now().await;
-        }
-    })
-    .await;
-    assert!(
-        wait_result.is_ok(),
-        "timed out waiting for fake transport event"
-    );
 }

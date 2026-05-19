@@ -118,6 +118,20 @@ pub enum SfuCoreError {
     SessionRefreshRejected(SessionNegotiationOutcome),
 }
 
+impl SfuCoreError {
+    /// Returns true when the browser answer is unusable for this session.
+    #[must_use]
+    pub const fn is_client_negotiation_error(self) -> bool {
+        matches!(
+            self,
+            Self::Transport(TransportAdapterError::InvalidInput)
+                | Self::CapabilityProjection(_)
+                | Self::SessionNegotiationRejected(_)
+                | Self::SessionRefreshRejected(_)
+        )
+    }
+}
+
 /// Process-wide media facade.
 ///
 /// [`SfuCore`] is the main entry point for the media-core library. It owns the
