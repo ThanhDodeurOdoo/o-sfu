@@ -53,9 +53,9 @@ pub struct MediaTransportConfig {
 impl MediaTransportConfig {
     /// Returns a copy scoped to one worker-owned UDP port range.
     ///
-    /// This is used only by worker-manager construction. Callers outside the worker
-    /// manager should validate the original range once through the media transport
-    /// builder instead of slicing it themselves.
+    /// This is used only during media transport construction. Callers should
+    /// validate the original range once through the media transport builder
+    /// instead of slicing it themselves.
     #[must_use]
     pub(super) fn with_rtc_port_range(&self, rtc_port_range: RtcPortRange) -> Self {
         Self {
@@ -139,62 +139,5 @@ impl MediaTransportDeps {
     #[must_use]
     pub fn metrics(&self) -> Arc<RuntimeMetrics> {
         Arc::clone(&self.metrics)
-    }
-}
-
-/// Internal worker-manager construction input.
-///
-/// # Design note
-///
-/// Public runtime construction goes through `MediaTransport::from_core_options`
-/// or `MediaTransport::builder()`, which validate worker and port policy before
-/// creating transport state. This struct remains as the narrow handoff from the
-/// builder to the worker manager, where worker-local RTC workers are actually
-/// created.
-#[derive(Debug, Clone)]
-pub(in crate::runtime::media_transport) struct RtcWorkerManagerConfig {
-    /// Number of media workers that should receive transport workers.
-    worker_count: usize,
-    /// Shared operator policy before worker-local port splitting.
-    transport: MediaTransportConfig,
-    /// Shared process services cloned into each worker.
-    deps: MediaTransportDeps,
-}
-
-impl RtcWorkerManagerConfig {
-    #[must_use]
-    pub fn new(
-        transport: MediaTransportConfig,
-        deps: MediaTransportDeps,
-        worker_count: usize,
-    ) -> Self {
-        Self {
-            worker_count,
-            transport,
-            deps,
-        }
-    }
-
-    #[must_use]
-    pub fn worker_count(&self) -> usize {
-        self.worker_count
-    }
-
-    #[must_use]
-    pub fn transport_config(&self) -> &MediaTransportConfig {
-        &self.transport
-    }
-
-    #[must_use]
-    pub fn transport_deps(&self) -> &MediaTransportDeps {
-        &self.deps
-    }
-
-    #[must_use]
-    pub fn worker_config_with_port_range(
-        &self,
-        rtc_port_range: RtcPortRange,
-    ) -> MediaTransportConfig {
-        self.transport.with_rtc_port_range(rtc_port_range)
     }
 }
