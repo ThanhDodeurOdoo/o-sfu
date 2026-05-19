@@ -88,7 +88,7 @@ impl RtcWorkerManager {
     /// Builds RTC workers and installs one shared source-policy signal.
     ///
     /// Invalid worker or port-range combinations should already be rejected by
-    /// `RtcTransportBuilder`. If a transitional caller bypasses that builder
+    /// `MediaTransportBuilder`. If a transitional caller bypasses that builder
     /// this constructor falls back to a single worker, preserving availability
     /// rather than panicking during startup.
     pub(super) fn new(config: &RtcWorkerManagerConfig) -> Self {

@@ -17,9 +17,8 @@
 //! - semantic media intent and outcome types such as [`PublicationActivity`],
 //!   [`PublishStageOutcome`], [`UnpublishOutcome`] and [`UserInfoRefresh`] for
 //!   caller-facing control decisions.
-//! - [`MediaTransport`] as the runtime media transport facade, with
-//!   [`RtcTransport`] and [`RtcTransportBuilder`] kept as RTC construction
-//!   handles below that facade.
+//! - [`MediaTransport`] as the runtime media transport handle and construction
+//!   facade for the server.
 //! - server-integration DTOs and facades under [`server`], including
 //!   diagnostics, metrics, room orchestration, recording taps, source
 //!   descriptors, and current transport construction seams.
@@ -65,10 +64,10 @@
 //! }
 //! ```
 //!
-//! `o-sfu-core` keeps backend selection behind [`MediaTransport`], while the
+//! `o-sfu-core` keeps worker topology behind [`MediaTransport`], while the
 //! session facade targets the runtime [`server::room::Room`] implementation.
 //! Normal server application code should use [`SfuCore`] and should not name
-//! concrete RTC workers or fake transport variants.
+//! concrete RTC workers.
 use std::fmt::{self, Display, Formatter};
 
 mod options;
@@ -90,8 +89,7 @@ pub use room::{
 };
 pub use runtime::{
     media_transport::{
-        MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,
-        TransportSessionHealth,
+        MediaTransport, MediaTransportBuildError, MediaTransportBuilder, TransportSessionHealth,
     },
     source_model::{
         ActiveSpeakerGroup, ActiveSpeakerPolicy, ActiveSpeakerSourceRole, SourceAdaptationPolicy,

@@ -70,13 +70,14 @@ async fn websocket_closes_when_pong_times_out() {
     let Some(token) = token else {
         return;
     };
-    let authenticated = authenticate_and_read_welcome(&server, &token).await;
+    let authenticated = authenticate_silent_with_jwt(&server, &token).await;
     assert!(authenticated.is_some());
-    let Some((mut websocket, _welcome)) = authenticated else {
+    let Some(mut websocket) = authenticated else {
         return;
     };
+    assert!(read_silent_welcome(&mut websocket).await.is_some());
     assert!(
-        complete_initial_negotiation(&mut websocket, "v=0\r\ns=ping-timeout-answer\r\n")
+        wait_for_silent_protocol_server_request(&mut websocket)
             .await
             .is_some()
     );
@@ -85,7 +86,7 @@ async fn websocket_closes_when_pong_times_out() {
 
     let close_code = timeout(
         Duration::from_secs(1),
-        read_close_code_without_answering_ping(&mut websocket),
+        read_silent_close_code(&mut websocket),
     )
     .await;
     assert!(

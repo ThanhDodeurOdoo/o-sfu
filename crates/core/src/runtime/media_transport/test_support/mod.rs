@@ -21,8 +21,7 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<RouterRtpParameters, TransportAdapterError> {
-        self.transport
-            .worker_manager()
+        self.worker_manager()
             .worker_for_user(session_key)
             .ok_or(TransportAdapterError::TransportUnavailable)?
             .media()
@@ -32,7 +31,7 @@ impl MediaTransport {
 
     #[cfg(test)]
     pub(super) fn as_rtc_worker_manager(&self) -> &Arc<RtcWorkerManager> {
-        self.transport.worker_manager()
+        self.worker_manager()
     }
 
     /// Overrides a real RTC session health snapshot in test builds.
@@ -44,7 +43,7 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         health: TransportSessionHealth,
     ) {
-        if let Some(worker) = self.transport.worker_manager().worker_for_user(session_key) {
+        if let Some(worker) = self.worker_manager().worker_for_user(session_key) {
             worker.debug_set_session_transport_health(session_key, health);
         }
     }
@@ -54,8 +53,7 @@ impl MediaTransport {
         source_session_key: &TransportSessionKey,
         source_mid: Mid,
     ) -> Option<DebugRouteEntry> {
-        self.transport
-            .worker_manager()
+        self.worker_manager()
             .debug_route_entry(source_session_key, source_mid)
             .await
     }
@@ -69,8 +67,7 @@ impl MediaTransport {
         consumer_session_key: &TransportSessionKey,
         consumer_mid: Mid,
     ) -> Option<DebugRouteEntry> {
-        self.transport
-            .worker_manager()
+        self.worker_manager()
             .debug_route_entry_by_consumer_mid(consumer_session_key, consumer_mid)
             .await
     }
@@ -79,8 +76,7 @@ impl MediaTransport {
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> Option<DebugRouteEntry> {
-        self.transport
-            .worker_manager()
+        self.worker_manager()
             .debug_route_entry_by_media_id(source_transport_media_id)
             .await
     }
@@ -90,8 +86,7 @@ impl MediaTransport {
         transport_media_id: TransportMediaId,
         now: Instant,
     ) {
-        self.transport
-            .worker_manager()
+        self.worker_manager()
             .debug_observe_audio_activity(transport_media_id, now)
             .await;
     }

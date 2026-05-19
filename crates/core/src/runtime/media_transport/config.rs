@@ -29,7 +29,7 @@ use crate::{
 /// smaller configs from this one without changing bitrate, codec or public IP
 /// policy.
 #[derive(Debug, Clone)]
-pub struct RtcTransportConfig {
+pub struct MediaTransportConfig {
     /// Public address advertised in ICE candidates.
     ///
     /// This is deployment policy, not a local bind address. A wrong value can
@@ -50,7 +50,7 @@ pub struct RtcTransportConfig {
     pub codec_preferences: CodecPreferences,
 }
 
-impl RtcTransportConfig {
+impl MediaTransportConfig {
     /// Returns a copy scoped to one worker-owned UDP port range.
     ///
     /// This is used only by worker-manager construction. Callers outside the worker
@@ -147,7 +147,7 @@ impl MediaTransportDeps {
 /// # Design note
 ///
 /// Public runtime construction goes through `MediaTransport::from_core_options`
-/// or `RtcTransport::builder()`, which validate worker and port policy before
+/// or `MediaTransport::builder()`, which validate worker and port policy before
 /// creating transport state. This struct remains as the narrow handoff from the
 /// builder to the worker manager, where worker-local RTC workers are actually
 /// created.
@@ -156,7 +156,7 @@ pub(in crate::runtime::media_transport) struct RtcWorkerManagerConfig {
     /// Number of media workers that should receive transport workers.
     worker_count: usize,
     /// Shared operator policy before worker-local port splitting.
-    transport: RtcTransportConfig,
+    transport: MediaTransportConfig,
     /// Shared process services cloned into each worker.
     deps: MediaTransportDeps,
 }
@@ -164,7 +164,7 @@ pub(in crate::runtime::media_transport) struct RtcWorkerManagerConfig {
 impl RtcWorkerManagerConfig {
     #[must_use]
     pub fn new(
-        transport: RtcTransportConfig,
+        transport: MediaTransportConfig,
         deps: MediaTransportDeps,
         worker_count: usize,
     ) -> Self {
@@ -181,7 +181,7 @@ impl RtcWorkerManagerConfig {
     }
 
     #[must_use]
-    pub fn transport_config(&self) -> &RtcTransportConfig {
+    pub fn transport_config(&self) -> &MediaTransportConfig {
         &self.transport
     }
 
@@ -194,7 +194,7 @@ impl RtcWorkerManagerConfig {
     pub fn worker_config_with_port_range(
         &self,
         rtc_port_range: RtcPortRange,
-    ) -> RtcTransportConfig {
+    ) -> MediaTransportConfig {
         self.transport.with_rtc_port_range(rtc_port_range)
     }
 }

@@ -9,14 +9,14 @@ use o_sfu_router::{
 };
 use str0m::media::Mid;
 
-use super::{MediaTransport, RtcTransport, RtcTransportBuildError, RtcTransportBuilder};
+use super::{MediaTransport, MediaTransportBuildError, MediaTransportBuilder};
 use crate::{
     Bitrate, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
     runtime::{
         ConnectionId, RoomInstanceId, UserId,
         diagnostics::DiagnosticsStore,
         media_transport::{
-            ConsumerActivity, MediaTransportDeps, RelayRouteActivity, RtcTransportConfig,
+            ConsumerActivity, MediaTransportConfig, MediaTransportDeps, RelayRouteActivity,
             TransportAdapterError, TransportConsumerRoute, TransportMediaId,
             TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionKey,
         },
@@ -40,9 +40,9 @@ fn test_session_key(
     )
 }
 
-fn test_rtc_builder(rtc_port_range: RtcPortRange) -> RtcTransportBuilder {
-    RtcTransport::builder()
-        .transport_config(RtcTransportConfig {
+fn test_media_transport_builder(rtc_port_range: RtcPortRange) -> MediaTransportBuilder {
+    MediaTransport::builder()
+        .transport_config(MediaTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(
                 Bitrate::from_mbps(8),
@@ -291,12 +291,12 @@ async fn assert_remote_route_activity(
     clippy::panic,
     reason = "media transport tests use fixed valid RTC ranges and should fail immediately if their fixture is invalid"
 )]
-fn test_rtc_engine(worker_count: usize, rtc_port_range: RtcPortRange) -> MediaTransport {
-    match test_rtc_builder(rtc_port_range)
+fn test_media_transport(worker_count: usize, rtc_port_range: RtcPortRange) -> MediaTransport {
+    match test_media_transport_builder(rtc_port_range)
         .worker_count(worker_count)
         .build()
     {
-        Ok(transport) => MediaTransport::from_rtc_transport(transport),
+        Ok(transport) => transport,
         Err(error) => panic!("fixed RTC transport test config should be valid: {error}"),
     }
 }
@@ -310,33 +310,33 @@ fn first_candidate_port(offer_sdp: &str) -> Option<u16> {
 }
 
 #[test]
-fn rtc_transport_builder_uses_one_worker_by_default() {
-    let result = test_rtc_builder(RtcPortRange::new(46_200, 46_200)).build();
+fn media_transport_builder_uses_one_worker_by_default() {
+    let result = test_media_transport_builder(RtcPortRange::new(46_200, 46_200)).build();
 
     assert!(result.is_ok());
 }
 
 #[test]
-fn rtc_transport_builder_rejects_invalid_worker_count() {
-    let result = test_rtc_builder(RtcPortRange::new(46_210, 46_211))
+fn media_transport_builder_rejects_invalid_worker_count() {
+    let result = test_media_transport_builder(RtcPortRange::new(46_210, 46_211))
         .worker_count(0)
         .build();
 
     assert_eq!(
         result.err(),
-        Some(RtcTransportBuildError::InvalidWorkerCount)
+        Some(MediaTransportBuildError::InvalidWorkerCount)
     );
 }
 
 #[test]
-fn rtc_transport_builder_rejects_invalid_port_split() {
-    let result = test_rtc_builder(RtcPortRange::new(46_220, 46_221))
+fn media_transport_builder_rejects_invalid_port_split() {
+    let result = test_media_transport_builder(RtcPortRange::new(46_220, 46_221))
         .worker_count(3)
         .build();
 
     assert_eq!(
         result.err(),
-        Some(RtcTransportBuildError::InvalidPortSplit {
+        Some(MediaTransportBuildError::InvalidPortSplit {
             worker_count: 3,
             port_count: 2,
         })
@@ -385,7 +385,7 @@ async fn assert_local_active_and_remote_inactive(
 
 #[test]
 fn rtc_engine_rejects_answers_without_projectable_client_capabilities() {
-    let adapter = test_rtc_engine(1, RtcPortRange::new(46_100, 46_199));
+    let adapter = test_media_transport(1, RtcPortRange::new(46_100, 46_199));
 
     let projected = adapter.negotiated_client_rtp_capabilities(
         "v=0\r\ns=invalid-answer\r\n",
@@ -397,7 +397,7 @@ fn rtc_engine_rejects_answers_without_projectable_client_capabilities() {
 
 #[tokio::test]
 async fn rtc_engine_workers_room_bootstrap_by_explicit_media_worker() {
-    let adapter = test_rtc_engine(2, RtcPortRange::new(46_000, 46_003));
+    let adapter = test_media_transport(2, RtcPortRange::new(46_000, 46_003));
     let first_room_session = test_session_key(10, 0, 1, UserId::Integer(1));
     let second_room_session = test_session_key(11, 1, 1, UserId::Integer(2));
     let same_worker_session = test_session_key(12, 0, 1, UserId::Integer(3));
@@ -441,7 +441,7 @@ async fn rtc_engine_workers_room_bootstrap_by_explicit_media_worker() {
 
 #[tokio::test]
 async fn rtc_engine_allocates_disjoint_media_ids_across_workers() {
-    let adapter = test_rtc_engine(2, RtcPortRange::new(46_700, 46_799));
+    let adapter = test_media_transport(2, RtcPortRange::new(46_700, 46_799));
     let first_source = test_session_key(50, 0, 1, UserId::Integer(1));
     let second_source = test_session_key(50, 1, 2, UserId::Integer(2));
     let first_rtp_parameters = sample_audio_rtp_parameters("first-aud-up", 71_000);
@@ -466,7 +466,7 @@ async fn rtc_engine_allocates_disjoint_media_ids_across_workers() {
 
 #[tokio::test]
 async fn rtc_engine_rejects_stale_session_removal_without_dropping_consumer_handle() {
-    let adapter = test_rtc_engine(1, RtcPortRange::new(46_600, 46_649));
+    let adapter = test_media_transport(1, RtcPortRange::new(46_600, 46_649));
     let source_session = test_session_key(35, 0, 1, UserId::Integer(1));
     let consumer_session = test_session_key(35, 0, 2, UserId::Integer(2));
     let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 54_000);
@@ -523,7 +523,7 @@ async fn rtc_engine_rejects_stale_session_removal_without_dropping_consumer_hand
 
 #[tokio::test]
 async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes() {
-    let adapter = test_rtc_engine(2, RtcPortRange::new(46_600, 46_699));
+    let adapter = test_media_transport(2, RtcPortRange::new(46_600, 46_699));
     let source_session = test_session_key(40, 0, 1, UserId::Integer(1));
     let local_consumer_session = test_session_key(40, 0, 2, UserId::Integer(2));
     let remote_consumer_session = test_session_key(40, 1, 3, UserId::Integer(3));

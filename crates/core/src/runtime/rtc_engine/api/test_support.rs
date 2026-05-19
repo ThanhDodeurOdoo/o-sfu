@@ -22,7 +22,7 @@ use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
     runtime::{
         diagnostics::DiagnosticsStore,
-        media_transport::{MediaTransportDeps, RtcTransportConfig, SourcePolicySignal},
+        media_transport::{MediaTransportConfig, MediaTransportDeps, SourcePolicySignal},
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
     },
@@ -319,7 +319,7 @@ impl RtcTransportWorkerTestBuilder {
     #[must_use]
     pub(crate) fn build(self) -> RtcTransportWorker {
         RtcTransportWorker::new(
-            &RtcTransportConfig {
+            &MediaTransportConfig {
                 public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
                 bitrate_limits: SessionBitrateLimits::new(
                     self.max_bitrate_in,

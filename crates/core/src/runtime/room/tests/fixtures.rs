@@ -30,8 +30,8 @@ pub(super) use crate::{
         ConnectionId, TestSourceKind, UserId, UserPermissions, VideoLayoutIntent,
         diagnostics::DiagnosticsStore,
         media_transport::{
-            AppliedSessionAnswer, MediaTransport, MediaTransportDeps, RtcTransport,
-            RtcTransportConfig, TransportMediaId,
+            AppliedSessionAnswer, MediaTransport, MediaTransportConfig, MediaTransportDeps,
+            TransportMediaId,
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -80,8 +80,8 @@ pub(super) fn test_sender() -> (UserOutboundSender, UserOutboundReceiver) {
 pub(super) fn real_adapter() -> MediaTransport {
     let port_start = NEXT_RTC_TEST_PORT.fetch_add(100, Ordering::Relaxed);
     let port_end = port_start.saturating_add(99);
-    match RtcTransport::builder()
-        .transport_config(RtcTransportConfig {
+    match MediaTransport::builder()
+        .transport_config(MediaTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(
                 Bitrate::from_mbps(8),
@@ -100,7 +100,7 @@ pub(super) fn real_adapter() -> MediaTransport {
         .worker_count(4)
         .build()
     {
-        Ok(transport) => MediaTransport::from_rtc_transport(transport),
+        Ok(transport) => transport,
         Err(error) => panic!("constant RTC room test transport config should be valid: {error}"),
     }
 }
