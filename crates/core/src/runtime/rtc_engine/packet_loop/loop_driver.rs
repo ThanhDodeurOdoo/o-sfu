@@ -58,7 +58,7 @@ use crate::{
 
 /// immutable configuration and shared side channels for one packet-loop worker
 ///
-/// the config is built by `RtcTransportWorker` when the worker is booted
+/// the config is built by `RtcWorker` when the worker is booted
 /// values copied into session creation are immutable worker settings
 /// `Arc` fields are shared services that the packet loop may update or query
 /// without exposing direct access to `PacketLoopState`

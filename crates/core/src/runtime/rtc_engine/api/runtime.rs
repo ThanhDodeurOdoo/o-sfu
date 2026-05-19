@@ -54,7 +54,7 @@ use super::{
         relay_registry::{RELAY_MAILBOX_CAPACITY, RelayPacketMailbox, sender_backlog_depth},
         state::TransportSessionHealth,
     },
-    facade::{RtcTransportObservabilityFacade, RtcTransportWorker, RtcWorkerHandle},
+    facade::{RtcTransportObservabilityFacade, RtcWorker, RtcWorkerHandle},
 };
 use crate::{
     Bitrate,
@@ -112,7 +112,7 @@ impl<T: Clone> WorkerHandleSlot<T> {
     }
 }
 
-impl RtcTransportWorker {
+impl RtcWorker {
     /// clones the current worker handle if the packet loop has been started
     ///
     /// this method never starts the worker
@@ -609,7 +609,7 @@ mod tests {
 
     #[test]
     fn placement_pressure_reads_packet_loop_lag_from_atomic_snapshot() -> Result<(), &'static str> {
-        let adapter = RtcTransportWorker::default();
+        let adapter = RtcWorker::default();
         let now = Instant::now();
         let started_at = now.checked_sub(Duration::from_millis(200)).unwrap_or(now);
         let packet_loop_lag = Arc::new(packet_loop::PacketLoopLagSnapshot::new(started_at));

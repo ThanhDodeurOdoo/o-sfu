@@ -22,7 +22,7 @@ use crate::{
         },
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
-        rtc_engine::RtcTransportWorker,
+        rtc_engine::RtcWorker,
     },
 };
 
@@ -178,7 +178,7 @@ async fn remove_consumer_media(
 
 async fn apply_release_effect_and_assert_counts(
     adapter: &MediaTransport,
-    source_worker: &RtcTransportWorker,
+    source_worker: &RtcWorker,
     source_session_key: &TransportSessionKey,
     source_media_id: TransportMediaId,
     target_session_key: &TransportSessionKey,
@@ -227,7 +227,7 @@ async fn set_remote_relay_and_consumer_active(
 }
 
 async fn assert_relay_target_counts(
-    source_worker: &RtcTransportWorker,
+    source_worker: &RtcWorker,
     source_media_id: TransportMediaId,
     total: usize,
     active: usize,
@@ -247,7 +247,7 @@ async fn assert_relay_target_counts(
 }
 
 async fn assert_local_route_active(
-    source_worker: &RtcTransportWorker,
+    source_worker: &RtcWorker,
     source_session: &TransportSessionKey,
     local_consumer_session: &TransportSessionKey,
     local_consumer_media_id: TransportMediaId,
@@ -267,7 +267,7 @@ async fn assert_local_route_active(
 }
 
 async fn assert_remote_route_activity(
-    consumer_worker: &RtcTransportWorker,
+    consumer_worker: &RtcWorker,
     source_media_id: TransportMediaId,
     remote_consumer_session: &TransportSessionKey,
     remote_consumer_media_id: TransportMediaId,
@@ -344,7 +344,7 @@ fn media_transport_builder_rejects_invalid_port_split() {
 }
 
 async fn assert_remote_route_inactive(
-    remote_consumer_worker: &RtcTransportWorker,
+    remote_consumer_worker: &RtcWorker,
     source_media_id: TransportMediaId,
     remote_consumer_session: &TransportSessionKey,
     remote_consumer_media_id: TransportMediaId,
@@ -360,8 +360,8 @@ async fn assert_remote_route_inactive(
 }
 
 async fn assert_local_active_and_remote_inactive(
-    source_worker: &RtcTransportWorker,
-    remote_consumer_worker: &RtcTransportWorker,
+    source_worker: &RtcWorker,
+    remote_consumer_worker: &RtcWorker,
     source_session: &TransportSessionKey,
     source_media_id: TransportMediaId,
     local_consumer: (&TransportSessionKey, TransportMediaId),

@@ -1,7 +1,7 @@
 //! Worker-local media packet loop.
 //!
 //! The packet loop is the RTC engine's transport hot path. Each
-//! `RtcTransportWorker` starts one Tokio task that owns one mutable
+//! `RtcWorker` starts one Tokio task that owns one mutable
 //! `PacketLoopState`, drives all `str0m::Rtc` instances for that worker and
 //! performs the UDP reads and writes for the shared worker socket.
 //!

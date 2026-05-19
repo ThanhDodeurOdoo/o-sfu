@@ -12,7 +12,7 @@ use super::{
         state::TransportSessionHealth,
         test_support::{DebugRouteEntry, DebugRtcWorkerCommand},
     },
-    facade::RtcTransportWorker,
+    facade::RtcWorker,
 };
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::media_transport::TransportMediaId;
@@ -28,11 +28,11 @@ use crate::{
     },
 };
 
-impl RtcTransportWorker {
+impl RtcWorker {
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn test_builder() -> RtcTransportWorkerTestBuilder {
-        RtcTransportWorkerTestBuilder::default()
+    pub(crate) fn test_builder() -> RtcWorkerTestBuilder {
+        RtcWorkerTestBuilder::default()
     }
 
     pub fn debug_set_session_transport_health(
@@ -272,7 +272,7 @@ impl RtcTransportWorker {
 }
 
 #[cfg(test)]
-pub(crate) struct RtcTransportWorkerTestBuilder {
+pub(crate) struct RtcWorkerTestBuilder {
     max_bitrate_in: Bitrate,
     max_bitrate_out: Bitrate,
     rtc_port_range: RtcPortRange,
@@ -281,7 +281,7 @@ pub(crate) struct RtcTransportWorkerTestBuilder {
 }
 
 #[cfg(test)]
-impl RtcTransportWorkerTestBuilder {
+impl RtcWorkerTestBuilder {
     #[must_use]
     pub(crate) fn bitrate_limits(
         mut self,
@@ -317,8 +317,8 @@ impl RtcTransportWorkerTestBuilder {
     }
 
     #[must_use]
-    pub(crate) fn build(self) -> RtcTransportWorker {
-        RtcTransportWorker::new(
+    pub(crate) fn build(self) -> RtcWorker {
+        RtcWorker::new(
             &MediaTransportConfig {
                 public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
                 bitrate_limits: SessionBitrateLimits::new(
@@ -343,7 +343,7 @@ impl RtcTransportWorkerTestBuilder {
 }
 
 #[cfg(test)]
-impl Default for RtcTransportWorkerTestBuilder {
+impl Default for RtcWorkerTestBuilder {
     fn default() -> Self {
         Self {
             max_bitrate_in: Bitrate::from_mbps(8),
@@ -356,7 +356,7 @@ impl Default for RtcTransportWorkerTestBuilder {
 }
 
 #[cfg(test)]
-impl Default for RtcTransportWorker {
+impl Default for RtcWorker {
     fn default() -> Self {
         Self::test_builder()
             .port_range(RtcPortRange::new(40_000, 49_999))

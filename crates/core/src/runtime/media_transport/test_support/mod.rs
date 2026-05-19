@@ -10,7 +10,7 @@ use str0m::media::Mid;
 use super::TransportAdapterError;
 use super::{MediaTransport, TransportMediaId, TransportSessionHealth, TransportSessionKey};
 #[cfg(test)]
-use crate::runtime::rtc_engine::RtcTransportWorker;
+use crate::runtime::rtc_engine::RtcWorker;
 use crate::runtime::rtc_engine::test_support::DebugRouteEntry;
 
 impl MediaTransport {
@@ -31,7 +31,7 @@ impl MediaTransport {
     pub(super) fn debug_worker_for_user(
         &self,
         session_key: &TransportSessionKey,
-    ) -> Option<Arc<RtcTransportWorker>> {
+    ) -> Option<Arc<RtcWorker>> {
         self.worker_for_user(session_key)
     }
 

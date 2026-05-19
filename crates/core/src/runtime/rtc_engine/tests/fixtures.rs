@@ -19,7 +19,7 @@ pub(super) use str0m::media::{MediaKind as Str0mMediaKind, Mid};
 pub(super) use tokio::time::sleep;
 
 pub(super) use super::super::{
-    RtcMediaOperation, RtcTransportWorker,
+    RtcMediaOperation, RtcWorker,
     shared_payload::SharedPayload,
     test_support::{DebugPacketGate, test_transport_session_key},
 };
@@ -91,23 +91,21 @@ pub(super) fn sample_router_rtp_parameters_with_rid(
 pub(super) fn rtc_engine_with_bitrate_limits(
     max_bitrate_in: Bitrate,
     max_bitrate_out: Bitrate,
-) -> RtcTransportWorker {
-    RtcTransportWorker::test_builder()
+) -> RtcWorker {
+    RtcWorker::test_builder()
         .bitrate_limits(max_bitrate_in, max_bitrate_out)
         .build()
 }
 
-pub(super) fn rtc_engine_with_codec_flags(codec_flags: MediaCodecFlags) -> RtcTransportWorker {
-    RtcTransportWorker::test_builder()
-        .codec_flags(codec_flags)
-        .build()
+pub(super) fn rtc_engine_with_codec_flags(codec_flags: MediaCodecFlags) -> RtcWorker {
+    RtcWorker::test_builder().codec_flags(codec_flags).build()
 }
 
 pub(super) fn rtc_engine_with_codec_policy(
     codec_flags: MediaCodecFlags,
     codec_preferences: CodecPreferences,
-) -> RtcTransportWorker {
-    RtcTransportWorker::test_builder()
+) -> RtcWorker {
+    RtcWorker::test_builder()
         .codec_policy(codec_flags, codec_preferences)
         .build()
 }

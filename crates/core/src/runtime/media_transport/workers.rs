@@ -26,7 +26,7 @@ use crate::runtime::{
         TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey,
         TransportWorkerPressureSnapshot, operation::TransportControlOperation,
     },
-    rtc_engine::{RtcMediaOperation, RtcTransportWorker, client_rtp_capabilities_from_answer},
+    rtc_engine::{RtcMediaOperation, RtcWorker, client_rtp_capabilities_from_answer},
 };
 
 /// Distance between two worker media-id allocation ranges.
@@ -37,7 +37,7 @@ use crate::runtime::{
 /// key while still avoiding collisions between spillover workers.
 const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
 
-type RelayRegistrationWorkers = Option<(Arc<RtcTransportWorker>, Arc<RtcTransportWorker>)>;
+type RelayRegistrationWorkers = Option<(Arc<RtcWorker>, Arc<RtcWorker>)>;
 
 impl MediaTransport {
     /// Builds RTC workers and installs one shared source-policy signal.
@@ -51,7 +51,7 @@ impl MediaTransport {
             .into_iter()
             .enumerate()
             .map(|(media_worker_id, range)| {
-                Arc::new(RtcTransportWorker::new(
+                Arc::new(RtcWorker::new(
                     &transport.with_rtc_port_range(range),
                     deps,
                     Arc::clone(&source_policy_signal),
@@ -75,7 +75,7 @@ impl MediaTransport {
     pub(super) fn worker_for_user(
         &self,
         session_key: &TransportSessionKey,
-    ) -> Option<Arc<RtcTransportWorker>> {
+    ) -> Option<Arc<RtcWorker>> {
         self.worker_for_media_worker_id(session_key.media_worker_id())
     }
 
@@ -582,7 +582,7 @@ impl MediaTransport {
     fn require_worker_for_user(
         &self,
         session_key: &TransportSessionKey,
-    ) -> Result<Arc<RtcTransportWorker>, TransportAdapterError> {
+    ) -> Result<Arc<RtcWorker>, TransportAdapterError> {
         self.worker_for_user(session_key)
             .ok_or(TransportAdapterError::TransportUnavailable)
     }
@@ -590,7 +590,7 @@ impl MediaTransport {
     fn require_worker_for_media_worker_id(
         &self,
         media_worker_id: usize,
-    ) -> Result<Arc<RtcTransportWorker>, TransportAdapterError> {
+    ) -> Result<Arc<RtcWorker>, TransportAdapterError> {
         self.worker_for_media_worker_id(media_worker_id)
             .ok_or(TransportAdapterError::TransportUnavailable)
     }
@@ -611,10 +611,7 @@ impl MediaTransport {
         keys_by_worker
     }
 
-    fn worker_for_media_worker_id(
-        &self,
-        media_worker_id: usize,
-    ) -> Option<Arc<RtcTransportWorker>> {
+    fn worker_for_media_worker_id(&self, media_worker_id: usize) -> Option<Arc<RtcWorker>> {
         self.worker_index_for_media_worker_id(media_worker_id)
             .and_then(|worker_index| self.worker_for_index(worker_index))
     }
@@ -627,12 +624,12 @@ impl MediaTransport {
         Some(media_worker_id % worker_count)
     }
 
-    fn worker_for_index(&self, worker_index: usize) -> Option<Arc<RtcTransportWorker>> {
+    fn worker_for_index(&self, worker_index: usize) -> Option<Arc<RtcWorker>> {
         self.workers.get(worker_index).map(Arc::clone)
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(super) fn all_workers(&self) -> impl Iterator<Item = &Arc<RtcTransportWorker>> {
+    pub(super) fn all_workers(&self) -> impl Iterator<Item = &Arc<RtcWorker>> {
         self.workers.iter()
     }
 }
