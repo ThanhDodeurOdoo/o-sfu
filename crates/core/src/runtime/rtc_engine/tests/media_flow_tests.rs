@@ -336,7 +336,10 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
     assert!(
         adapter
             .media()
-            .set_consumer_packet_gate(&route, SourcePacketGate::Rid("lo".into()))
+            .execute(RtcMediaOperation::SetConsumerPacketGate {
+                route: &route,
+                packet_gate: SourcePacketGate::Rid("lo".into()),
+            })
             .await
             .is_ok()
     );
@@ -350,7 +353,10 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
     assert!(
         adapter
             .media()
-            .set_consumer_packet_gate(&route, SourcePacketGate::Open)
+            .execute(RtcMediaOperation::SetConsumerPacketGate {
+                route: &route,
+                packet_gate: SourcePacketGate::Open,
+            })
             .await
             .is_ok()
     );
@@ -407,15 +413,15 @@ async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
     assert!(
         adapter
             .media()
-            .set_consumer_packet_gate(
-                &transport_consumer_route(
+            .execute(RtcMediaOperation::SetConsumerPacketGate {
+                route: &transport_consumer_route(
                     &consumer_session_key,
                     consumer_media_id,
                     &stale_producer_session_key,
                     source_media_id,
                 ),
-                SourcePacketGate::Rid("lo".into()),
-            )
+                packet_gate: SourcePacketGate::Rid("lo".into()),
+            })
             .await
             .is_err()
     );
@@ -476,22 +482,26 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
     assert!(
         adapter
             .media()
-            .set_producer_active(&producer_session_key, source_media_id, false)
+            .execute(RtcMediaOperation::SetProducerActive {
+                session_key: &producer_session_key,
+                transport_media_id: source_media_id,
+                active: false,
+            })
             .await
             .is_ok()
     );
     assert!(
         adapter
             .media()
-            .set_consumer_active(
-                &transport_consumer_route(
+            .execute(RtcMediaOperation::SetConsumerActive {
+                route: &transport_consumer_route(
                     &consumer_session_key,
                     consumer_media_id,
                     &producer_session_key,
                     source_media_id,
                 ),
-                false,
-            )
+                active: false,
+            })
             .await
             .is_ok()
     );
@@ -750,7 +760,11 @@ async fn rtc_relay_route_facade_registers_and_removes_target_mailboxes() {
     assert!(
         source_adapter
             .media()
-            .activate_relay_route(&source_session, source_transport_media_id, &target_adapter)
+            .execute(RtcMediaOperation::ActivateRelayRoute {
+                source_session_key: &source_session,
+                source_transport_media_id,
+                target: &target_adapter,
+            })
             .await
             .is_ok()
     );
@@ -770,12 +784,12 @@ async fn rtc_relay_route_facade_registers_and_removes_target_mailboxes() {
     assert!(
         source_adapter
             .media()
-            .apply_relay_target_activity(
-                &source_session,
+            .execute(RtcMediaOperation::ApplyRelayTargetActivity {
+                source_session_key: &source_session,
                 source_transport_media_id,
-                &target_adapter,
-                true,
-            )
+                target: &target_adapter,
+                active: true,
+            })
             .await
             .is_ok()
     );
@@ -789,7 +803,10 @@ async fn rtc_relay_route_facade_registers_and_removes_target_mailboxes() {
     assert!(
         source_adapter
             .media()
-            .deactivate_relay_route(source_transport_media_id, &target_adapter)
+            .execute(RtcMediaOperation::DeactivateRelayRoute {
+                source_transport_media_id,
+                target: &target_adapter,
+            })
             .await
             .is_ok()
     );

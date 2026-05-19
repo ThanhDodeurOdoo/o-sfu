@@ -106,13 +106,13 @@ impl RemoteSourceControl {
         kind: KeyframeRequestKind,
     ) -> bool {
         self.send_command(
-            RtcWorkerCommand::RequestRemoteKeyframe {
+            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::RequestRemoteKeyframe {
                 source_session_key: source_session_key.clone(),
                 source_transport_media_id,
                 target_id: self.target_id,
                 rid,
                 kind,
-            },
+            }),
             RtcRemoteControlDropKind::Keyframe,
         )
     }
@@ -125,12 +125,12 @@ impl RemoteSourceControl {
         packet_gate: PacketLayerGate,
     ) -> bool {
         self.send_command(
-            RtcWorkerCommand::SetRemoteSourcePacketGate {
+            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetRemoteSourcePacketGate {
                 source_session_key: source_session_key.clone(),
                 source_transport_media_id,
                 target_id: self.target_id,
                 packet_gate,
-            },
+            }),
             RtcRemoteControlDropKind::PacketGate,
         )
     }
@@ -199,6 +199,67 @@ impl ConsumerPacketGateCommand {
             self.packet_gate,
         )
     }
+}
+
+pub(super) enum RtcMediaControlCommand {
+    AddRelayTarget {
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
+        target: RelayTargetTransport,
+        response: RtcWorkerResponse<()>,
+    },
+    RemoveRelayTarget {
+        source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
+        response: RtcWorkerResponse<()>,
+    },
+    SetRelayTargetActive {
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
+        active: bool,
+        response: RtcWorkerResponse<()>,
+    },
+    RequestRemoteKeyframe {
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
+        rid: Option<Rid>,
+        kind: KeyframeRequestKind,
+    },
+    SetRemoteSourcePacketGate {
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        target_id: RelayTargetId,
+        packet_gate: PacketLayerGate,
+    },
+    SetProducerActive {
+        session_key: TransportSessionKey,
+        transport_media_id: TransportMediaId,
+        active: bool,
+        response: RtcWorkerResponse<()>,
+    },
+    SetConsumerActive {
+        route: TransportConsumerRoute,
+        active: bool,
+        response: RtcWorkerResponse<()>,
+    },
+    SetConsumerPacketGate {
+        route: TransportConsumerRoute,
+        packet_gate: PacketLayerGate,
+        response: RtcWorkerResponse<()>,
+    },
+    SetConsumerPacketGateBatch {
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        updates: Vec<ConsumerPacketGateCommand>,
+        response: RtcWorkerResponse<Vec<TransportResult<()>>>,
+    },
+    RequestConsumerKeyframe {
+        route: TransportConsumerRoute,
+        response: RtcWorkerResponse<()>,
+    },
 }
 
 /// production command handled by the rtc packet-loop task
@@ -338,115 +399,5 @@ pub(super) enum RtcWorkerCommand {
         consumer_rtp_parameters: RouterRtpParameters,
         response: RtcWorkerResponse<TransportMediaId>,
     },
-    /// attach a relay target for a source media stream
-    ///
-    /// the source worker validates producer ownership and records the target in
-    /// packet-loop relay state
-    /// later route planning can then include the target when the source-wide
-    /// gate permits forwarding
-    AddRelayTarget {
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        target_id: RelayTargetId,
-        target: RelayTargetTransport,
-        response: RtcWorkerResponse<()>,
-    },
-    /// detach a relay target from a source media stream
-    ///
-    /// this removes the target from relay fanout for the source and answers
-    /// success even when the target was already gone, which makes teardown
-    /// idempotent for callers
-    RemoveRelayTarget {
-        source_transport_media_id: TransportMediaId,
-        target_id: RelayTargetId,
-        response: RtcWorkerResponse<()>,
-    },
-    /// toggle whether one relay target receives packets for a source media stream
-    ///
-    /// activity is separate from target registration
-    /// inactive targets keep their identity and transport handle but stop
-    /// receiving packets and remote keyframe requests for the source
-    SetRelayTargetActive {
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        target_id: RelayTargetId,
-        active: bool,
-        response: RtcWorkerResponse<()>,
-    },
-    /// request a keyframe from a remote source worker for one relay target
-    ///
-    /// this is sent by `RemoteSourceControl` without a response channel
-    /// the source worker first checks that the relay target is still active,
-    /// then applies normal RID selection and keyframe throttling
-    RequestRemoteKeyframe {
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        target_id: RelayTargetId,
-        rid: Option<Rid>,
-        kind: KeyframeRequestKind,
-    },
-    /// update the source-worker packet gate derived from remote consumers
-    ///
-    /// this is the cross-worker layer-selection feedback path
-    /// the source worker stores the target gate in relay route-control so remote
-    /// demand influences which producer layers leave the source worker
-    SetRemoteSourcePacketGate {
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        target_id: RelayTargetId,
-        packet_gate: PacketLayerGate,
-    },
-    /// toggle source-wide fanout for one producer media id
-    ///
-    /// this preserves the producer media handle and its consumer routes while
-    /// room policy pauses or resumes forwarding from the source
-    /// it does not renegotiate SDP
-    SetProducerActive {
-        session_key: TransportSessionKey,
-        transport_media_id: TransportMediaId,
-        active: bool,
-        response: RtcWorkerResponse<()>,
-    },
-    /// toggle one consumer destination without changing other routes
-    ///
-    /// the worker revalidates the consumer handle and source route, mutates only
-    /// that destination and refreshes the aggregate source packet gate when the
-    /// effective route changed
-    SetConsumerActive {
-        route: TransportConsumerRoute,
-        active: bool,
-        response: RtcWorkerResponse<()>,
-    },
-    /// replace one consumer destination layer gate
-    ///
-    /// selected-RID gates are checked against packet-path liveness before they
-    /// become effective
-    /// the route still remembers pending strict gates so a browser can switch
-    /// layers once the target RID becomes decodable
-    SetConsumerPacketGate {
-        route: TransportConsumerRoute,
-        packet_gate: PacketLayerGate,
-        response: RtcWorkerResponse<()>,
-    },
-    /// replace several consumer layer gates for one source media id
-    ///
-    /// batching keeps dense-room layer updates in one worker turn and one
-    /// source-gate refresh
-    /// the outer result reports command handling while the inner results
-    /// preserve per-consumer validation errors
-    SetConsumerPacketGateBatch {
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        updates: Vec<ConsumerPacketGateCommand>,
-        response: RtcWorkerResponse<Vec<TransportResult<()>>>,
-    },
-    /// request a keyframe for a local consumer route
-    ///
-    /// the worker revalidates consumer and source ownership, maps the consumer
-    /// route gate back to a producer RID when needed and either asks the local
-    /// producer or forwards the request through remote-source control
-    RequestConsumerKeyframe {
-        route: TransportConsumerRoute,
-        response: RtcWorkerResponse<()>,
-    },
+    MediaControl(RtcMediaControlCommand),
 }

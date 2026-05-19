@@ -19,7 +19,7 @@ use super::publication;
 use super::{
     super::{
         bitrate::BitrateRegistry,
-        commands::RtcWorkerCommand,
+        commands::{RtcMediaControlCommand, RtcWorkerCommand},
         state::{PacketLoopState, RtcSnapshotState},
     },
     media,
@@ -99,16 +99,7 @@ pub fn handle_worker_command(
         RtcWorkerCommand::RemoveMedia { .. }
         | RtcWorkerCommand::AddRecvMedia { .. }
         | RtcWorkerCommand::AddSendMedia { .. }
-        | RtcWorkerCommand::AddRelayTarget { .. }
-        | RtcWorkerCommand::RemoveRelayTarget { .. }
-        | RtcWorkerCommand::SetRelayTargetActive { .. }
-        | RtcWorkerCommand::RequestRemoteKeyframe { .. }
-        | RtcWorkerCommand::SetRemoteSourcePacketGate { .. }
-        | RtcWorkerCommand::SetProducerActive { .. }
-        | RtcWorkerCommand::SetConsumerActive { .. }
-        | RtcWorkerCommand::SetConsumerPacketGate { .. }
-        | RtcWorkerCommand::SetConsumerPacketGateBatch { .. }
-        | RtcWorkerCommand::RequestConsumerKeyframe { .. } => {
+        | RtcWorkerCommand::MediaControl(_) => {
             handle_media_command(
                 state,
                 context.bitrate_registry,
@@ -272,16 +263,7 @@ fn handle_media_command(
             now,
             response,
         ),
-        RtcWorkerCommand::AddRelayTarget { .. }
-        | RtcWorkerCommand::RemoveRelayTarget { .. }
-        | RtcWorkerCommand::SetRelayTargetActive { .. }
-        | RtcWorkerCommand::RequestRemoteKeyframe { .. }
-        | RtcWorkerCommand::SetRemoteSourcePacketGate { .. }
-        | RtcWorkerCommand::SetProducerActive { .. }
-        | RtcWorkerCommand::SetConsumerActive { .. }
-        | RtcWorkerCommand::SetConsumerPacketGate { .. }
-        | RtcWorkerCommand::SetConsumerPacketGateBatch { .. }
-        | RtcWorkerCommand::RequestConsumerKeyframe { .. } => {
+        RtcWorkerCommand::MediaControl(command) => {
             handle_media_route_control_command(state, metrics, now, command);
         }
         _ => {}
@@ -292,15 +274,15 @@ fn handle_media_route_control_command(
     state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
     now: Instant,
-    command: RtcWorkerCommand,
+    command: RtcMediaControlCommand,
 ) {
     match command {
-        RtcWorkerCommand::AddRelayTarget { .. }
-        | RtcWorkerCommand::RemoveRelayTarget { .. }
-        | RtcWorkerCommand::SetRelayTargetActive { .. } => {
+        RtcMediaControlCommand::AddRelayTarget { .. }
+        | RtcMediaControlCommand::RemoveRelayTarget { .. }
+        | RtcMediaControlCommand::SetRelayTargetActive { .. } => {
             handle_relay_route_control_command(state, command);
         }
-        RtcWorkerCommand::RequestRemoteKeyframe {
+        RtcMediaControlCommand::RequestRemoteKeyframe {
             source_session_key,
             source_transport_media_id,
             target_id,
@@ -317,7 +299,7 @@ fn handle_media_route_control_command(
                 kind,
             },
         ),
-        RtcWorkerCommand::SetRemoteSourcePacketGate {
+        RtcMediaControlCommand::SetRemoteSourcePacketGate {
             source_session_key,
             source_transport_media_id,
             target_id,
@@ -329,7 +311,7 @@ fn handle_media_route_control_command(
             target_id,
             packet_gate,
         ),
-        RtcWorkerCommand::SetProducerActive {
+        RtcMediaControlCommand::SetProducerActive {
             session_key,
             transport_media_id,
             active,
@@ -341,12 +323,12 @@ fn handle_media_route_control_command(
             active,
             response,
         ),
-        RtcWorkerCommand::SetConsumerActive {
+        RtcMediaControlCommand::SetConsumerActive {
             route,
             active,
             response,
         } => media::respond_set_consumer_active(state, &route, active, response),
-        RtcWorkerCommand::SetConsumerPacketGate {
+        RtcMediaControlCommand::SetConsumerPacketGate {
             route,
             packet_gate,
             response,
@@ -359,7 +341,7 @@ fn handle_media_route_control_command(
             now,
             response,
         ),
-        RtcWorkerCommand::SetConsumerPacketGateBatch {
+        RtcMediaControlCommand::SetConsumerPacketGateBatch {
             source_session_key,
             source_transport_media_id,
             updates,
@@ -372,16 +354,18 @@ fn handle_media_route_control_command(
             now,
             response,
         ),
-        RtcWorkerCommand::RequestConsumerKeyframe { route, response } => {
+        RtcMediaControlCommand::RequestConsumerKeyframe { route, response } => {
             media::respond_request_consumer_keyframe(state, metrics, &route, response);
         }
-        _ => {}
     }
 }
 
-fn handle_relay_route_control_command(state: &mut PacketLoopState, command: RtcWorkerCommand) {
+fn handle_relay_route_control_command(
+    state: &mut PacketLoopState,
+    command: RtcMediaControlCommand,
+) {
     match command {
-        RtcWorkerCommand::AddRelayTarget {
+        RtcMediaControlCommand::AddRelayTarget {
             source_session_key,
             source_transport_media_id,
             target_id,
@@ -395,7 +379,7 @@ fn handle_relay_route_control_command(state: &mut PacketLoopState, command: RtcW
             target,
             response,
         ),
-        RtcWorkerCommand::RemoveRelayTarget {
+        RtcMediaControlCommand::RemoveRelayTarget {
             source_transport_media_id,
             target_id,
             response,
@@ -405,7 +389,7 @@ fn handle_relay_route_control_command(state: &mut PacketLoopState, command: RtcW
             target_id,
             response,
         ),
-        RtcWorkerCommand::SetRelayTargetActive {
+        RtcMediaControlCommand::SetRelayTargetActive {
             source_session_key,
             source_transport_media_id,
             target_id,

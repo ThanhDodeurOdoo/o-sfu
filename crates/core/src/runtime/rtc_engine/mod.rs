@@ -58,7 +58,7 @@ pub mod test_support;
 mod tests;
 mod worker;
 
-pub use api::RtcTransportWorker;
+pub(in crate::runtime) use api::{RtcMediaOperation, RtcTransportWorker};
 #[cfg(any(test, feature = "testing-transport"))]
 pub use forwarded_packet::ForwardedPacket;
 pub use negotiated_capabilities::client_rtp_capabilities_from_answer;

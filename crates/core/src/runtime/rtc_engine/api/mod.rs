@@ -32,4 +32,4 @@ mod runtime;
 #[cfg(any(test, feature = "testing-transport"))]
 mod test_support;
 
-pub use facade::RtcTransportWorker;
+pub(in crate::runtime) use facade::{RtcMediaOperation, RtcTransportWorker};
