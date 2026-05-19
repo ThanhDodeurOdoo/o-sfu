@@ -1,15 +1,31 @@
-//! worker-local generation slots for packet-loop identities
+//! worker-local slots for packet-loop identities
 //!
-//! this module separates public transport identity from the storage identity used
-//! by one RTC worker
-//! public ids like [`TransportSessionKey`] and
-//! [`TransportMediaId`] stay stable at command, room and diagnostic boundaries
-//! while packet-loop queues keep small generation-checked handles
+//! slots solve the mismatch between stable transport ids and packet-loop work
 //!
-//! a slot handle is valid only while its slot generation still matches the entry
-//! in the store
-//! removing an entry increments the generation before the index is
-//! reused, so delayed dirty work or timeout work becomes a no-op
+//! ```text
+//! room commands, diagnostics and teardown
+//!   use stable public keys such as TransportSessionKey or TransportMediaId
+//!   those keys are meaningful outside one media worker
+//!
+//! packet-loop queues, timeout heaps and route destinations
+//!   use tiny copy handles
+//!   those handles are only meaningful inside the store that created them
+//! ```
+//!
+//! the worker must accept that some work is already queued when a session,
+//! media entry or consumer route is removed
+//! a bare index would let that delayed work reach a replacement occupant after
+//! the index is recycled
+//! [`SlotHandle`] prevents that by pairing the index with the generation that was
+//! current when the handle was created
+//! removal advances the generation before reuse, so stale dirty-session marks,
+//! timeout heap entries and route destinations become ordinary no-ops instead
+//! of touching new state
+//!
+//! the tag parameter is part of the contract
+//! it keeps session handles, media handles and consumer stream handles in
+//! separate type namespaces even though every handle is represented by the same
+//! compact index plus generation pair
 
 use std::{collections::BTreeMap, marker::PhantomData};
 
@@ -17,34 +33,48 @@ use super::{media_registry::RegisteredMediaHandle, state::RtcSessionState};
 use crate::runtime::media_transport::{TransportMediaId, TransportSessionKey};
 
 /// handle namespace for live `RtcSessionState` entries
+///
+/// session handles are allowed to live in scheduler queues after the public
+/// session key has been removed
+/// the store validates the generation before the packet loop polls a session
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct SessionSlot;
 
 /// handle namespace for registered media entries
+///
+/// media slots keep transport media lookup state worker-local while room and
+/// diagnostics paths continue to name media by [`TransportMediaId`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct MediaSlot;
 
 /// handle namespace for downstream RTP rewrite state
+///
+/// route destinations carry these handles so per-packet local forwarding can
+/// reach receiver-local rewrite state without rebuilding a lookup key
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct ConsumerStreamSlot;
 
-/// copy handle used by packet-loop queues to reach session state
+/// generation-checked session handle used by packet-loop scheduler queues
 pub(super) type SessionHandle = SlotHandle<SessionSlot>;
 
-/// copy handle stored on route destinations for local RTP rewrite state
+/// generation-checked handle stored on route destinations for local RTP rewrite state
 pub(super) type ConsumerStreamHandle = SlotHandle<ConsumerStreamSlot>;
 
 /// session table keyed by the public session identity at the worker boundary
+///
+/// commands enter through [`TransportSessionKey`]
+/// the packet loop converts that key into [`SessionHandle`] only for queued work
 pub(super) type SessionStore = KeyedSlotStore<TransportSessionKey, RtcSessionState, SessionSlot>;
 
 /// media table keyed by the stable transport media id exposed outside the worker
 pub(super) type MediaStore = KeyedSlotStore<TransportMediaId, RegisteredMediaHandle, MediaSlot>;
 
-/// copy identity for one reusable slot
+/// copy identity for one reusable worker-local slot
 ///
-/// callers may queue, copy and compare handles, but every access must go through
-/// the owning store so generation checks can reject stale work after teardown or
-/// replacement
+/// callers may queue, copy and compare handles freely because the value is only
+/// an access token
+/// every read, write or removal must still go through the owning store so stale
+/// generations are rejected at the point where state would be touched
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct SlotHandle<Tag> {
     index: usize,
@@ -73,8 +103,12 @@ impl<Tag> Default for SlotHandle<Tag> {
 
 /// dense reusable storage for one worker-local identity class
 ///
-/// indices are recycled after removal to keep handles small
-/// generation checks make recycled indices safe for delayed packet-loop work
+/// this is the raw slot table for state that only needs worker-local identity
+/// callers keep generation-checked handles while the store keeps ownership of
+/// the values and their reuse policy
+///
+/// indices are recycled after removal to keep handles small and cache-friendly
+/// generation checks make that reuse compatible with delayed packet-loop work
 pub(super) struct SlotStore<T, Tag> {
     entries: Vec<SlotEntry<T>>,
     free: Vec<usize>,
@@ -151,9 +185,14 @@ impl<T, Tag> SlotStore<T, Tag> {
 
 /// public-key index backed by generation slots
 ///
-/// use the key API at worker boundaries and convert to handles for queued work
-/// the key is stored inside the slot so a live handle can be translated back when
-/// the packet loop must report ready public sessions
+/// use the key API at worker boundaries where callers speak in transport ids
+/// convert to handles only for work that must survive in packet-loop queues,
+/// heaps or route-local state
+///
+/// the key is stored inside the slot so a live handle can be translated back
+/// when the packet loop must report ready public sessions
+/// if translation fails, the handle is stale and the queued work is already
+/// obsolete
 pub(super) struct KeyedSlotStore<K, V, Tag> {
     by_key: BTreeMap<K, SlotHandle<Tag>>,
     slots: SlotStore<KeyedSlot<K, V>, Tag>,
