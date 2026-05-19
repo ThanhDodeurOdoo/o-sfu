@@ -11,7 +11,7 @@ permissions:
   actions: read
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   packet-loop-callgrind-comment:
@@ -217,29 +217,46 @@ jobs:
               `[workflow run](${runUrl})`,
             ].filter(Boolean).join("\n");
 
-            const { owner, repo } = context.repo;
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner,
-              repo,
-              issue_number: issueNumber,
-              per_page: 100,
-            });
-            const previous = comments.find((comment) =>
-              comment.user.type === "Bot" && comment.body.includes(marker)
-            );
+            async function writeSummaryFallback(error) {
+              if (
+                error.status !== 403
+                || !String(error.message).includes("Resource not accessible by integration")
+              ) {
+                throw error;
+              }
+              core.warning(
+                "GITHUB_TOKEN cannot write a PR comment for this run, writing the Callgrind report to the workflow summary instead",
+              );
+              await core.summary.addRaw(body).write();
+            }
 
-            if (previous) {
-              await github.rest.issues.updateComment({
-                owner,
-                repo,
-                comment_id: previous.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
+            const { owner, repo } = context.repo;
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, {
                 owner,
                 repo,
                 issue_number: issueNumber,
-                body,
+                per_page: 100,
               });
+              const previous = comments.find((comment) =>
+                comment.user.type === "Bot" && comment.body.includes(marker)
+              );
+
+              if (previous) {
+                await github.rest.issues.updateComment({
+                  owner,
+                  repo,
+                  comment_id: previous.id,
+                  body,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  body,
+                });
+              }
+            } catch (error) {
+              await writeSummaryFallback(error);
             }
