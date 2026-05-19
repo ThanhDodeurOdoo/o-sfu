@@ -159,6 +159,12 @@ impl Bitrate {
     }
 }
 
+/// unique identifier for a user's transport connection within the server process
+///
+/// this separates the ephemeral transport lifecycle from the persistent logical
+/// user identity. a single user might create multiple connections over time due to
+/// network drops or handovers. this identifier ensures media operations only apply
+/// to the specific transport they were negotiated against
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ConnectionId(u64);
 
@@ -187,6 +193,11 @@ impl Display for ConnectionId {
     }
 }
 
+/// unique identifier for a running room instance within the server process
+///
+/// this separates a specific runtime allocation from the overarching application
+/// room identity. it helps telemetry, logging, and underlying components distinguish
+/// between consecutive lifecycles of the same room if it is torn down and recreated
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RoomInstanceId(u64);
 

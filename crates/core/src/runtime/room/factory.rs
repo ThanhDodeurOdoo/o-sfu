@@ -79,18 +79,6 @@ struct RoomRuntimeAllocator {
 /// publication. Each call to [`Self::create`] returns an unpublished
 /// [`Room`] with fresh process-local placement. The caller must insert it in
 /// the directory before exposing it to other runtime entrypoints.
-///
-/// # Concurrency
-///
-/// The factory is shared by async request tasks, but creation does not await. A
-/// small mutex protects the placement counters. The lock is held only while ids
-/// are reserved, then room construction continues without it.
-///
-/// # Performance
-///
-/// Room creation is a cold-path operation. It may clone small request
-/// strings and `Arc` service handles, but it must not participate in media
-/// packet forwarding.
 #[derive(Debug)]
 pub(crate) struct RoomFactory {
     /// Runtime-wide room rules cloned into each room.
@@ -121,9 +109,7 @@ pub(crate) struct RoomFactory {
 }
 
 impl RoomFactory {
-    /// Builds the factory for one [`RoomManager`](super::RoomManager)
-    /// lifetime.
-    ///
+    /// Builds the factory for one [`RoomManager`](super::RoomManager) lifetime.
     #[must_use]
     pub(crate) fn new(
         runtime_policy: RoomRuntimePolicy,
@@ -188,6 +174,12 @@ impl RoomFactory {
         RoomRuntimeContext::new(room_instance_id, primary, Vec::new())
     }
 
+    /// reserve a new process-unique identifier for a spillover router
+    ///
+    /// this provides the room engine with a thread-safe way to allocate new router
+    /// identities on the fly when media load exceeds the primary worker capacity.
+    /// the allocator lock is held only long enough to increment the counter, keeping
+    /// the cold-path creation from blocking active request loops
     pub(super) fn allocate_spillover_router(&self) -> RouterId {
         let mut allocator = lock_unpoisoned(&self.allocator);
         let router = RouterId(allocator.next_router_id);

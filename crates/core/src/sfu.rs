@@ -519,6 +519,16 @@ impl MediaSession<'_> {
             .await
     }
 
+    /// apply the browser sdp answer to the media transport before updating room state
+    ///
+    /// this helper isolates the transport-specific phase of answer processing
+    /// it verifies and integrates the negotiated parameters without touching room state
+    /// this ensures that if the transport rejects the sdp, the overarching session remains unmodified
+    ///
+    /// # Errors
+    ///
+    /// returns [`SfuCoreError::Transport`] if the backend cannot interpret or accept the
+    /// answer, allowing the caller to fail the operation cleanly
     async fn apply_transport_answer(
         &self,
         answer_sdp: &str,
@@ -530,6 +540,12 @@ impl MediaSession<'_> {
             .map_err(SfuCoreError::Transport)
     }
 
+    /// convert pending publish reservations into live room tracks
+    ///
+    /// this acts as the final phase of answer application where the validated upload
+    /// parameters are bound to the user's staged intents
+    /// it must only be called after both the transport and the room state have agreed
+    /// on the updated connection
     async fn commit_staged_publishes(
         &self,
         applied_answer: &AppliedSessionAnswer,
