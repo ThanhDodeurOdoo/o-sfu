@@ -21,6 +21,32 @@ cargo test --workspace --release
 npm --prefix crates/client run verify
 ```
 
+## Packet-loop Callgrind benchmarks
+
+ uses `iai-callgrind` for deterministic instruction-count checks of
+packet-loop hot-path slices.
+
+Build the target without running Valgrind:
+
+```bash
+cargo bench -p o-sfu-tests --bench packet_loop_callgrind --no-run
+```
+
+Save a local baseline on a Valgrind-supported host:
+
+```bash
+cargo bench -p o-sfu-tests --bench packet_loop_callgrind -- --save-baseline=local --save-summary=json
+```
+
+Compare local changes against that baseline:
+
+```bash
+cargo bench -p o-sfu-tests --bench packet_loop_callgrind -- --baseline=local --save-summary=json
+```
+
+pofiles and summaries are written under `target/iai`. The first scenarios
+cover local route-planning fanout and relay-mailbox enqueue pressure
+
 ## CI tests
 
 The default CI test workflow uses `cargo nextest` for `o-sfu-cluster`,

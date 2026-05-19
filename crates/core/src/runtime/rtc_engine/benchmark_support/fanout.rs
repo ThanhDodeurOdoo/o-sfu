@@ -1,0 +1,95 @@
+use str0m::media::Mid;
+
+use super::super::{
+    forwarded_packet::ForwardedPacket,
+    forwarding_destination::PacketForward,
+    forwarding_planner::populate_forward_routes_for_packet,
+    state::PacketLoopState,
+    test_support::{MediaWorkerScenario, sample_forwarded_packet, test_transport_session_key},
+};
+use crate::runtime::{
+    UserId, metrics::RuntimeMetrics, packet_sink_registry::RoomPacketSinkRegistry,
+};
+
+pub const ROUTE_PLANNING_TURNS: usize = 1024;
+
+/// fixed local-fanout topology for packet-loop route-planning benchmarks
+///
+/// setup registers one producer, a caller-selected number of local consumers,
+/// one prebuilt RTP packet and warmed source facts
+/// the measured method clears
+/// and reuses the destination buffer across fixed turns so Callgrind sees the
+/// production planner work instead of fixture allocation
+pub struct FanoutBenchTopology {
+    state: PacketLoopState,
+    packet_sinks: RoomPacketSinkRegistry,
+    metrics: RuntimeMetrics,
+    pending_packets: Vec<ForwardedPacket>,
+    forwards: Vec<PacketForward>,
+}
+
+impl FanoutBenchTopology {
+    #[must_use]
+    pub fn with_local_destinations(destination_count: usize) -> Self {
+        let destination_count = destination_count.max(1);
+        let producer_session = test_transport_session_key(1, 0, 1, UserId::Integer(1));
+        let consumer_session = test_transport_session_key(1, 0, 2, UserId::Integer(2));
+        let mut state = PacketLoopState::default();
+        let mut scenario = MediaWorkerScenario::new(&mut state);
+        let source_transport_media_id =
+            scenario.source(producer_session.clone(), Mid::from("cam-up"));
+        for _ in 0..destination_count {
+            scenario.destination(
+                source_transport_media_id,
+                consumer_session.clone(),
+                Mid::from("cam-down"),
+            );
+        }
+        let pending_packets = vec![sample_forwarded_packet(
+            producer_session,
+            "cam-up",
+            b"payload",
+        )];
+        let mut topology = Self {
+            state,
+            packet_sinks: RoomPacketSinkRegistry::default(),
+            metrics: RuntimeMetrics::default(),
+            pending_packets,
+            forwards: Vec::with_capacity(destination_count),
+        };
+        topology.warm_route_facts();
+        topology.plan_single_turn();
+        topology.forwards.clear();
+        topology
+    }
+
+    #[must_use]
+    pub fn plan_route_turns(&mut self) -> usize {
+        let mut planned_forwards = 0;
+        for _ in 0..ROUTE_PLANNING_TURNS {
+            self.forwards.clear();
+            planned_forwards += self.plan_single_turn();
+        }
+        planned_forwards
+    }
+
+    fn warm_route_facts(&mut self) {
+        for packet in &mut self.pending_packets {
+            let _ = packet.resolve_facts(&self.state);
+        }
+    }
+
+    fn plan_single_turn(&mut self) -> usize {
+        for (packet_idx, packet) in self.pending_packets.iter_mut().enumerate() {
+            populate_forward_routes_for_packet(
+                &self.state,
+                &self.packet_sinks,
+                &self.metrics,
+                packet_idx,
+                packet,
+                &mut self.forwards,
+            );
+        }
+        self.forwards.len()
+    }
+}

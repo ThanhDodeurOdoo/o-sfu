@@ -104,6 +104,18 @@ pub mod transport {
         };
     }
 
+    #[cfg(feature = "internal-benchmarks")]
+    pub mod benchmark_support {
+        //! feature-gated packet-loop benchmark fixtures
+        //!
+        //! this module exists only for deterministic benchmark targets
+        //! the
+        //! fixtures prepare fixed transport scenarios while the measured calls
+        //! still execute production RTC-engine helpers
+
+        pub use crate::runtime::rtc_engine::benchmark_support::*;
+    }
+
     #[cfg(any(test, feature = "fuzzing"))]
     pub mod fuzz_support {
         //! Fuzz-only RTC answer projection seam.
