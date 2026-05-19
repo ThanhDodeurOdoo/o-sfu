@@ -49,7 +49,7 @@ use crate::{
     },
 };
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 mod test_support;
 
 /// Registry for publish transactions that reserved transport media but are not
@@ -325,32 +325,6 @@ impl PendingPublishTransaction {
             media_transport,
             negotiated_parameters,
             upload_encodings,
-        )
-        .await
-    }
-
-    /// Commits a staged publish when the caller already has router native
-    /// producer parameters.
-    ///
-    /// This is the narrow test and helper entrypoint for flows that already
-    /// resolved transport negotiation. It has the same ownership contract as
-    /// `commit`: success transfers transport media to the live producer and
-    /// rejection consumes the reservation through cleanup.
-    #[allow(
-        dead_code,
-        reason = "room media test harnesses use this narrow entrypoint to commit pre-negotiated RTP parameters"
-    )]
-    pub(super) async fn commit_with_parameters(
-        self,
-        room: &Room,
-        media_transport: &MediaTransport,
-        consumable_rtp_parameters: RouterRtpParameters,
-    ) -> Option<UserStreamId> {
-        self.commit_with_parameters_and_upload_encodings(
-            room,
-            media_transport,
-            consumable_rtp_parameters,
-            Vec::new(),
         )
         .await
     }

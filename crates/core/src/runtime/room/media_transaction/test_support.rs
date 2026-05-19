@@ -1,9 +1,33 @@
-use super::{PendingPublishTransactions, Room};
+use o_sfu_router::MediaStream as RouterRtpParameters;
+
+#[cfg(test)]
+use super::PendingPublishTransactions;
+use super::{PendingPublishTransaction, Room};
+#[cfg(test)]
 use crate::runtime::{
     ConnectionId, TestSourceKind, UserId, media_transport::TransportMediaId,
     source_model::test_support::stream_id_for_source, sync::lock_unpoisoned,
 };
+use crate::runtime::{media_transport::MediaTransport, source_model::UserStreamId};
 
+impl PendingPublishTransaction {
+    pub(in crate::runtime::room) async fn commit_with_parameters(
+        self,
+        room: &Room,
+        media_transport: &MediaTransport,
+        consumable_rtp_parameters: RouterRtpParameters,
+    ) -> Option<UserStreamId> {
+        self.commit_with_parameters_and_upload_encodings(
+            room,
+            media_transport,
+            consumable_rtp_parameters,
+            Vec::new(),
+        )
+        .await
+    }
+}
+
+#[cfg(test)]
 impl PendingPublishTransactions {
     pub fn staged_count_for_connection(
         &self,
@@ -32,6 +56,7 @@ impl PendingPublishTransactions {
     }
 }
 
+#[cfg(test)]
 impl Room {
     #[allow(
         clippy::unused_async,
