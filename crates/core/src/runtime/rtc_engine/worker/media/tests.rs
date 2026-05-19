@@ -37,7 +37,10 @@ use crate::{
         rtc_engine::{
             bitrate::BitrateRegistry,
             bootstrap,
-            commands::{ConsumerPacketGateCommand, RemoteSourceControl, RtcWorkerCommand},
+            commands::{
+                ConsumerPacketGateCommand, RemoteSourceControl, RtcMediaControlCommand,
+                RtcWorkerCommand,
+            },
             media_registry::{RegisteredMediaHandle, RemoteSourceRegistration},
             relay_registry::{RelayPacketMailbox, RelayTargetId},
             route_control::{KeyframeRequestDecision, PacketLayerGate},
@@ -229,12 +232,14 @@ fn register_saturated_remote_source(
     let (control_tx, control_rx) = mpsc::channel(1);
     assert!(
         control_tx
-            .try_send(RtcWorkerCommand::SetRemoteSourcePacketGate {
-                source_session_key: source_session.clone(),
-                source_transport_media_id,
-                target_id,
-                packet_gate: PacketLayerGate::Open,
-            })
+            .try_send(RtcWorkerCommand::MediaControl(
+                RtcMediaControlCommand::SetRemoteSourcePacketGate {
+                    source_session_key: source_session.clone(),
+                    source_transport_media_id,
+                    target_id,
+                    packet_gate: PacketLayerGate::Open,
+                },
+            ))
             .is_ok()
     );
     assert!(
@@ -258,13 +263,13 @@ fn assert_remote_keyframe_command(
 ) {
     assert!(matches!(
         control_rx.try_recv().ok(),
-        Some(RtcWorkerCommand::RequestRemoteKeyframe {
+        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::RequestRemoteKeyframe {
             source_session_key,
             source_transport_media_id: forwarded_transport_media_id,
             target_id: forwarded_target_id,
             rid: forwarded_rid,
             kind: KeyframeRequestKind::Pli,
-        }) if source_session_key == *source_session
+        })) if source_session_key == *source_session
             && forwarded_transport_media_id == source_transport_media_id
             && forwarded_target_id == target_id
             && forwarded_rid == rid
@@ -1179,12 +1184,12 @@ fn batched_consumer_packet_gates_keep_remote_relay_open_during_rid_bootstrap() {
     assert_eq!(response_rx.blocking_recv(), Ok(Ok(vec![Ok(()), Ok(())])));
     assert!(matches!(
         command_rx.try_recv().ok(),
-        Some(RtcWorkerCommand::SetRemoteSourcePacketGate {
+        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetRemoteSourcePacketGate {
             source_session_key,
             source_transport_media_id: forwarded_source_transport_media_id,
             target_id,
             packet_gate: PacketLayerGate::Open,
-        }) if source_session_key == source_session
+        })) if source_session_key == source_session
             && forwarded_source_transport_media_id == source_transport_media_id
             && target_id == RelayTargetId::new(16)
     ));
@@ -1221,12 +1226,12 @@ fn explicit_consumer_block_still_blocks_remote_relay() {
 
     assert!(matches!(
         command_rx.try_recv().ok(),
-        Some(RtcWorkerCommand::SetRemoteSourcePacketGate {
+        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetRemoteSourcePacketGate {
             source_session_key,
             source_transport_media_id: forwarded_source_transport_media_id,
             target_id,
             packet_gate: PacketLayerGate::Block,
-        }) if source_session_key == source_session
+        })) if source_session_key == source_session
             && forwarded_source_transport_media_id == source_transport_media_id
             && target_id == RelayTargetId::new(17)
     ));
@@ -1263,12 +1268,12 @@ fn selected_consumer_rid_keeps_remote_relay_open() {
 
     assert!(matches!(
         command_rx.try_recv().ok(),
-        Some(RtcWorkerCommand::SetRemoteSourcePacketGate {
+        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetRemoteSourcePacketGate {
             source_session_key,
             source_transport_media_id: forwarded_source_transport_media_id,
             target_id,
             packet_gate: PacketLayerGate::Open,
-        }) if source_session_key == source_session
+        })) if source_session_key == source_session
             && forwarded_source_transport_media_id == source_transport_media_id
             && target_id == RelayTargetId::new(18)
     ));
@@ -1324,12 +1329,12 @@ fn pending_remote_packet_gate_flushes_after_mailbox_pressure_clears() {
 
     assert!(matches!(
         command_rx.try_recv().ok(),
-        Some(RtcWorkerCommand::SetRemoteSourcePacketGate {
+        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetRemoteSourcePacketGate {
             source_session_key,
             source_transport_media_id: forwarded_source_transport_media_id,
             target_id: forwarded_target_id,
             packet_gate: PacketLayerGate::Block,
-        }) if source_session_key == source_session
+        })) if source_session_key == source_session
             && forwarded_source_transport_media_id == source_transport_media_id
             && forwarded_target_id == target_id
     ));

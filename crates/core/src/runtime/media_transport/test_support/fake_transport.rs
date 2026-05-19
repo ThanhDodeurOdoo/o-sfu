@@ -39,9 +39,9 @@ use crate::{
             ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
             ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerPacketGateUpdate,
             ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate, SourcePolicySignal,
-            TransportAdapterError, TransportConsumerRoute, TransportMediaId,
-            TransportPlacementPressureSnapshot, TransportRelayRouteAction,
-            TransportRelayRouteEffect, TransportSessionKey, TransportWorkerPressureSnapshot,
+            TransportAdapterError, TransportMediaId, TransportPlacementPressureSnapshot,
+            TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionKey,
+            TransportWorkerPressureSnapshot, operation::TransportControlOperation,
         },
     },
 };
@@ -604,7 +604,72 @@ impl FakeMediaTransport {
         clippy::unused_async,
         reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
     )]
-    pub(crate) async fn apply_relay_route_effect(
+    pub(in crate::runtime::media_transport) async fn execute_control_operation(
+        &self,
+        operation: TransportControlOperation,
+    ) -> Result<(), TransportAdapterError> {
+        match operation {
+            TransportControlOperation::RelayRouteEffect(effect) => {
+                self.apply_relay_route_effect(&effect)
+            }
+            TransportControlOperation::SetProducerActivity {
+                session_key,
+                transport_media_id: _,
+                activity,
+            } => {
+                self.record_event(FakeMediaTransportEvent::ProducerActivityUpdated {
+                    user_id: session_key.user_id().clone(),
+                    active: activity.is_active(),
+                });
+                if let Some(delay) = self.delay_for_producer_activity() {
+                    sleep(delay).await;
+                }
+                Ok(())
+            }
+            TransportControlOperation::SetConsumerActivity { route, activity } => {
+                self.record_event(FakeMediaTransportEvent::ConsumerActivityUpdated {
+                    consumer_user_id: route.consumer_session_key().user_id().clone(),
+                    source_user_id: route.source_session_key().user_id().clone(),
+                    active: activity.is_active(),
+                });
+                Ok(())
+            }
+            TransportControlOperation::SetConsumerPacketGate { route, packet_gate } => {
+                self.record_event(FakeMediaTransportEvent::ConsumerPacketGateUpdated {
+                    consumer_user_id: route.consumer_session_key().user_id().clone(),
+                    source_user_id: route.source_session_key().user_id().clone(),
+                    packet_gate,
+                });
+                Ok(())
+            }
+            TransportControlOperation::RequestConsumerKeyframe { route } => {
+                self.record_event(FakeMediaTransportEvent::ConsumerKeyframeRequested {
+                    consumer_user_id: route.consumer_session_key().user_id().clone(),
+                    source_user_id: route.source_session_key().user_id().clone(),
+                });
+                Ok(())
+            }
+        }
+    }
+
+    pub(in crate::runtime::media_transport) async fn execute_consumer_packet_gate_batch(
+        &self,
+        updates: &[ConsumerPacketGateUpdate],
+    ) -> Vec<Result<(), TransportAdapterError>> {
+        let mut results = Vec::with_capacity(updates.len());
+        for update in updates {
+            results.push(
+                self.execute_control_operation(TransportControlOperation::SetConsumerPacketGate {
+                    route: update.route().clone(),
+                    packet_gate: update.packet_gate().clone(),
+                })
+                .await,
+            );
+        }
+        results
+    }
+
+    fn apply_relay_route_effect(
         &self,
         effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
@@ -625,89 +690,6 @@ impl FakeMediaTransport {
             source_transport_media_id: effect.source_transport_media_id,
             target_media_worker_id: effect.target_media_worker_id,
             action: effect.action,
-        });
-        Ok(())
-    }
-
-    #[allow(
-        clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
-    )]
-    pub(crate) async fn set_producer_active(
-        &self,
-        session_key: &TransportSessionKey,
-        _transport_media_id: TransportMediaId,
-        active: bool,
-    ) -> Result<(), TransportAdapterError> {
-        self.record_event(FakeMediaTransportEvent::ProducerActivityUpdated {
-            user_id: session_key.user_id().clone(),
-            active,
-        });
-        if let Some(delay) = self.delay_for_producer_activity() {
-            sleep(delay).await;
-        }
-        Ok(())
-    }
-
-    #[allow(
-        clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
-    )]
-    pub(crate) async fn set_consumer_active(
-        &self,
-        route: &TransportConsumerRoute,
-        active: bool,
-    ) -> Result<(), TransportAdapterError> {
-        self.record_event(FakeMediaTransportEvent::ConsumerActivityUpdated {
-            consumer_user_id: route.consumer_session_key().user_id().clone(),
-            source_user_id: route.source_session_key().user_id().clone(),
-            active,
-        });
-        Ok(())
-    }
-
-    #[allow(
-        clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
-    )]
-    pub(crate) async fn set_consumer_packet_gate(
-        &self,
-        route: &TransportConsumerRoute,
-        packet_gate: SourcePacketGate,
-    ) -> Result<(), TransportAdapterError> {
-        self.record_event(FakeMediaTransportEvent::ConsumerPacketGateUpdated {
-            consumer_user_id: route.consumer_session_key().user_id().clone(),
-            source_user_id: route.source_session_key().user_id().clone(),
-            packet_gate,
-        });
-        Ok(())
-    }
-
-    pub(crate) async fn set_consumer_packet_gates(
-        &self,
-        updates: &[ConsumerPacketGateUpdate],
-    ) -> Vec<Result<(), TransportAdapterError>> {
-        let mut results = Vec::with_capacity(updates.len());
-        for update in updates {
-            results.push(
-                self.set_consumer_packet_gate(update.route(), update.packet_gate().clone())
-                    .await,
-            );
-        }
-        results
-    }
-
-    #[allow(
-        clippy::unused_async,
-        reason = "fake transport keeps the same async boundary as the RTC worker and runtime call sites"
-    )]
-    pub(crate) async fn request_consumer_keyframe(
-        &self,
-        route: &TransportConsumerRoute,
-    ) -> Result<(), TransportAdapterError> {
-        self.record_event(FakeMediaTransportEvent::ConsumerKeyframeRequested {
-            consumer_user_id: route.consumer_session_key().user_id().clone(),
-            source_user_id: route.source_session_key().user_id().clone(),
         });
         Ok(())
     }

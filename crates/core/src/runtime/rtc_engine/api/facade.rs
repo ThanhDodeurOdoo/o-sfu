@@ -51,7 +51,7 @@ use super::super::{
     bitrate::BitrateRegistry,
     commands::{
         CloseSessionOutcome, CloseSessionState, ConsumerPacketGateCommand, RemoteSourceControl,
-        RtcWorkerCommand,
+        RtcMediaControlCommand, RtcWorkerCommand,
     },
     packet_loop::PacketLoopLagSnapshot,
     relay_registry::{RelayPacketMailbox, RelayTargetId, RelayTargetTransport},
@@ -158,6 +158,40 @@ pub struct RtcTransportNegotiationFacade<'a> {
 #[derive(Clone, Copy)]
 pub struct RtcTransportMediaFacade<'a> {
     worker: &'a RtcTransportWorker,
+}
+
+pub(in crate::runtime) enum RtcMediaOperation<'a> {
+    ActivateRelayRoute {
+        source_session_key: &'a TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        target: &'a RtcTransportWorker,
+    },
+    DeactivateRelayRoute {
+        source_transport_media_id: TransportMediaId,
+        target: &'a RtcTransportWorker,
+    },
+    ApplyRelayTargetActivity {
+        source_session_key: &'a TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        target: &'a RtcTransportWorker,
+        active: bool,
+    },
+    SetProducerActive {
+        session_key: &'a TransportSessionKey,
+        transport_media_id: TransportMediaId,
+        active: bool,
+    },
+    SetConsumerActive {
+        route: &'a TransportConsumerRoute,
+        active: bool,
+    },
+    SetConsumerPacketGate {
+        route: &'a TransportConsumerRoute,
+        packet_gate: SourcePacketGate,
+    },
+    RequestConsumerKeyframe {
+        route: &'a TransportConsumerRoute,
+    },
 }
 
 /// facade for session lifecycle operations
@@ -487,77 +521,148 @@ impl RtcTransportMediaFacade<'_> {
             .await
     }
 
-    /// toggles packet fanout from one producer media handle
-    ///
-    /// this preserves producer registration and consumer routes
-    /// it only changes whether packets from the source can leave the worker
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the worker cannot validate or
-    /// mutate the producer route
-    pub async fn set_producer_active(
+    pub async fn execute(
         self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-        active: bool,
+        operation: RtcMediaOperation<'_>,
     ) -> Result<(), TransportAdapterError> {
-        self.worker
-            .request_worker(|response| RtcWorkerCommand::SetProducerActive {
-                session_key: session_key.clone(),
+        match operation {
+            RtcMediaOperation::ActivateRelayRoute {
+                source_session_key,
+                source_transport_media_id,
+                target,
+            } => {
+                self.activate_relay_route(source_session_key, source_transport_media_id, target)
+                    .await
+            }
+            RtcMediaOperation::DeactivateRelayRoute {
+                source_transport_media_id,
+                target,
+            } => {
+                self.deactivate_relay_route(source_transport_media_id, target)
+                    .await
+            }
+            RtcMediaOperation::ApplyRelayTargetActivity {
+                source_session_key,
+                source_transport_media_id,
+                target,
+                active,
+            } => {
+                self.apply_relay_target_activity(
+                    source_session_key,
+                    source_transport_media_id,
+                    target,
+                    active,
+                )
+                .await
+            }
+            RtcMediaOperation::SetProducerActive {
+                session_key,
                 transport_media_id,
                 active,
-                response,
+            } => {
+                self.worker
+                    .request_worker(|response| {
+                        RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetProducerActive {
+                            session_key: session_key.clone(),
+                            transport_media_id,
+                            active,
+                            response,
+                        })
+                    })
+                    .await
+            }
+            RtcMediaOperation::SetConsumerActive { route, active } => {
+                self.worker
+                    .request_worker(|response| {
+                        RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetConsumerActive {
+                            route: route.clone(),
+                            active,
+                            response,
+                        })
+                    })
+                    .await
+            }
+            RtcMediaOperation::SetConsumerPacketGate { route, packet_gate } => {
+                let packet_gate = packet_layer_gate(packet_gate);
+                self.worker
+                    .request_worker(|response| {
+                        RtcWorkerCommand::MediaControl(
+                            RtcMediaControlCommand::SetConsumerPacketGate {
+                                route: route.clone(),
+                                packet_gate,
+                                response,
+                            },
+                        )
+                    })
+                    .await
+            }
+            RtcMediaOperation::RequestConsumerKeyframe { route } => {
+                self.worker
+                    .request_worker(|response| {
+                        RtcWorkerCommand::MediaControl(
+                            RtcMediaControlCommand::RequestConsumerKeyframe {
+                                route: route.clone(),
+                                response,
+                            },
+                        )
+                    })
+                    .await
+            }
+        }
+    }
+
+    async fn activate_relay_route(
+        self,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        target: &RtcTransportWorker,
+    ) -> Result<(), TransportAdapterError> {
+        let mailbox = target.ensure_packet_loop_started()?.relay_mailbox;
+        self.worker
+            .request_worker(|response| {
+                RtcWorkerCommand::MediaControl(RtcMediaControlCommand::AddRelayTarget {
+                    source_session_key: source_session_key.clone(),
+                    source_transport_media_id,
+                    target_id: target.relay_target_id,
+                    target: RelayTargetTransport::from(mailbox),
+                    response,
+                })
             })
             .await
     }
 
-    /// toggles packet fanout to one consumer route
-    ///
-    /// the route must already have been validated by the worker manager for
-    /// room ownership
-    /// the worker revalidates route state before changing the destination
-    /// activity flag
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the consumer route cannot be found
-    /// or cannot be updated
-    pub async fn set_consumer_active(
+    async fn deactivate_relay_route(
         self,
-        route: &TransportConsumerRoute,
+        source_transport_media_id: TransportMediaId,
+        target: &RtcTransportWorker,
+    ) -> Result<(), TransportAdapterError> {
+        self.worker
+            .request_worker(|response| {
+                RtcWorkerCommand::MediaControl(RtcMediaControlCommand::RemoveRelayTarget {
+                    source_transport_media_id,
+                    target_id: target.relay_target_id,
+                    response,
+                })
+            })
+            .await
+    }
+
+    async fn apply_relay_target_activity(
+        self,
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+        target: &RtcTransportWorker,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         self.worker
-            .request_worker(|response| RtcWorkerCommand::SetConsumerActive {
-                route: route.clone(),
-                active,
-                response,
-            })
-            .await
-    }
-
-    /// applies one source-selection packet gate to a consumer route
-    ///
-    /// packet gates are room-owned policy projected into transport execution
-    /// the facade translates the public transport gate into the worker
-    /// route-control vocabulary before the command enters the packet loop
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the route cannot be validated or
-    /// the gate cannot become effective for the current source state
-    pub async fn set_consumer_packet_gate(
-        self,
-        route: &TransportConsumerRoute,
-        packet_gate: SourcePacketGate,
-    ) -> Result<(), TransportAdapterError> {
-        let packet_gate = packet_layer_gate(packet_gate);
-        self.worker
-            .request_worker(|response| RtcWorkerCommand::SetConsumerPacketGate {
-                route: route.clone(),
-                packet_gate,
-                response,
+            .request_worker(|response| {
+                RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetRelayTargetActive {
+                    source_session_key: source_session_key.clone(),
+                    source_transport_media_id,
+                    target_id: target.relay_target_id,
+                    active,
+                    response,
+                })
             })
             .await
     }
@@ -590,33 +695,13 @@ impl RtcTransportMediaFacade<'_> {
             })
             .collect();
         self.worker
-            .request_worker(|response| RtcWorkerCommand::SetConsumerPacketGateBatch {
-                source_session_key: source_session_key.clone(),
-                source_transport_media_id,
-                updates,
-                response,
-            })
-            .await
-    }
-
-    /// asks the worker to request a keyframe for one consumer route
-    ///
-    /// the worker maps the consumer route back to the producer source
-    /// local sources are requested directly, remote sources are forwarded
-    /// through their [`RemoteSourceControl`]
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the route cannot be validated or
-    /// the source worker cannot be reached
-    pub async fn request_consumer_keyframe(
-        self,
-        route: &TransportConsumerRoute,
-    ) -> Result<(), TransportAdapterError> {
-        self.worker
-            .request_worker(|response| RtcWorkerCommand::RequestConsumerKeyframe {
-                route: route.clone(),
-                response,
+            .request_worker(|response| {
+                RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetConsumerPacketGateBatch {
+                    source_session_key: source_session_key.clone(),
+                    source_transport_media_id,
+                    updates,
+                    response,
+                })
             })
             .await
     }
@@ -664,84 +749,6 @@ impl RtcTransportMediaFacade<'_> {
             target.relay_target_id,
             Arc::clone(&target.rtc_metrics),
         ))
-    }
-
-    /// installs cross-worker relay delivery from this source worker to a target
-    ///
-    /// the target worker is booted first so its relay mailbox can be registered
-    /// on the source worker before packets need to flow
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when either worker cannot be booted or
-    /// the source worker rejects the relay target
-    pub async fn activate_relay_route(
-        self,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        target: &RtcTransportWorker,
-    ) -> Result<(), TransportAdapterError> {
-        let mailbox = target.ensure_packet_loop_started()?.relay_mailbox;
-        self.worker
-            .request_worker(|response| RtcWorkerCommand::AddRelayTarget {
-                source_session_key: source_session_key.clone(),
-                source_transport_media_id,
-                target_id: target.relay_target_id,
-                target: RelayTargetTransport::from(mailbox),
-                response,
-            })
-            .await
-    }
-
-    /// removes cross-worker relay delivery from this source worker to a target
-    ///
-    /// relay removal is part of room-owned cleanup and should be safe to retry
-    /// when the target was already removed by earlier teardown
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the source worker cannot receive
-    /// or answer the removal command
-    pub async fn deactivate_relay_route(
-        self,
-        source_transport_media_id: TransportMediaId,
-        target: &RtcTransportWorker,
-    ) -> Result<(), TransportAdapterError> {
-        self.worker
-            .request_worker(|response| RtcWorkerCommand::RemoveRelayTarget {
-                source_transport_media_id,
-                target_id: target.relay_target_id,
-                response,
-            })
-            .await
-    }
-
-    /// applies the active state of one cross-worker relay target
-    ///
-    /// relay target activity is separate from relay target registration
-    /// inactive targets keep their mailbox identity but source fanout stops
-    /// selecting them
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the source worker cannot validate
-    /// or update the relay target
-    pub async fn apply_relay_target_activity(
-        self,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        target: &RtcTransportWorker,
-        active: bool,
-    ) -> Result<(), TransportAdapterError> {
-        self.worker
-            .request_worker(|response| RtcWorkerCommand::SetRelayTargetActive {
-                source_session_key: source_session_key.clone(),
-                source_transport_media_id,
-                target_id: target.relay_target_id,
-                active,
-                response,
-            })
-            .await
     }
 }
 

@@ -7,10 +7,10 @@ use {super::test_support::FakeMediaTransport, std::sync::Arc};
 use super::{
     ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
     ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, RtcTransport, SessionOffer,
-    SourcePacketGate, SourcePolicyUpdateSubscription, TransportBitrateSnapshot,
-    TransportConsumerRoute, TransportMediaId, TransportPlacementPressureSnapshot,
-    TransportRelayRouteEffect, TransportResult, TransportSessionHealth, TransportSessionKey,
-    TransportWorkerPressureSnapshot, worker_manager::RtcWorkerManager,
+    SourcePolicyUpdateSubscription, TransportBitrateSnapshot, TransportMediaId,
+    TransportPlacementPressureSnapshot, TransportResult, TransportSessionHealth,
+    TransportSessionKey, TransportWorkerPressureSnapshot, operation::TransportControlOperation,
+    worker_manager::RtcWorkerManager,
 };
 use crate::runtime::RoomInstanceId;
 
@@ -136,40 +136,29 @@ impl Backend {
             consumer_rtp_parameters: &RouterRtpParameters,
         ) -> TransportResult<TransportMediaId>
     );
-    backend_async_method!(
-        fn apply_relay_route_effect(
-            effect: &TransportRelayRouteEffect,
-        ) -> TransportResult<()>
-    );
-    backend_async_method!(
-        fn set_producer_active(
-            session_key: &TransportSessionKey,
-            transport_media_id: TransportMediaId,
-            active: bool,
-        ) -> TransportResult<()>
-    );
-    backend_async_method!(
-        fn set_consumer_active(
-            route: &TransportConsumerRoute,
-            active: bool,
-        ) -> TransportResult<()>
-    );
-    backend_async_method!(
-        fn set_consumer_packet_gate(
-            route: &TransportConsumerRoute,
-            packet_gate: SourcePacketGate,
-        ) -> TransportResult<()>
-    );
-    backend_async_method!(
-        fn set_consumer_packet_gates(
-            updates: &[ConsumerPacketGateUpdate],
-        ) -> Vec<TransportResult<()>>
-    );
-    backend_async_method!(
-        fn request_consumer_keyframe(
-            route: &TransportConsumerRoute,
-        ) -> TransportResult<()>
-    );
+
+    pub(super) async fn execute_control_operation(
+        &self,
+        operation: TransportControlOperation,
+    ) -> TransportResult<()> {
+        match self {
+            Self::Rtc(transport) => {
+                transport
+                    .worker_manager
+                    .execute_control_operation(operation)
+                    .await
+            }
+            #[cfg(any(test, feature = "testing-transport"))]
+            Self::Fake(transport) => transport.execute_control_operation(operation).await,
+        }
+    }
+
+    pub(super) async fn execute_consumer_packet_gate_batch(
+        &self,
+        updates: &[ConsumerPacketGateUpdate],
+    ) -> Vec<TransportResult<()>> {
+        worker_or_fake_async!(self, execute_consumer_packet_gate_batch(updates))
+    }
 
     pub(super) async fn transport_media_mid(
         &self,

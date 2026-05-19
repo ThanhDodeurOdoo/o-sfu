@@ -27,6 +27,7 @@
 
 mod backend;
 mod config;
+mod operation;
 mod rtc_transport;
 mod source_policy;
 #[cfg(any(test, feature = "testing-transport"))]
@@ -39,6 +40,7 @@ use std::{collections::BTreeSet, time::Instant};
 use backend::Backend;
 pub use config::{MediaTransportDeps, RtcTransportConfig};
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
+use operation::TransportControlOperation;
 pub use rtc_transport::{RtcTransport, RtcTransportBuildError, RtcTransportBuilder};
 pub use source_policy::{
     SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
@@ -345,7 +347,7 @@ impl MediaTransport {
         effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
         self.backend
-            .apply_relay_route_effect(effect)
+            .execute_control_operation(TransportControlOperation::RelayRouteEffect(effect.clone()))
             .await
             .inspect_err(|error| {
                 warn!(
@@ -374,15 +376,18 @@ impl MediaTransport {
         transport_media_id: TransportMediaId,
         activity: ProducerActivity,
     ) -> Result<(), TransportAdapterError> {
-        let active = activity.is_active();
         self.backend
-            .set_producer_active(session_key, transport_media_id, active)
+            .execute_control_operation(TransportControlOperation::SetProducerActivity {
+                session_key: session_key.clone(),
+                transport_media_id,
+                activity,
+            })
             .await
             .inspect_err(|error| {
                 warn!(
                     ?session_key,
                     ?transport_media_id,
-                    active,
+                    active = activity.is_active(),
                     ?error,
                     "media transport failed to update producer activity"
                 );
@@ -403,14 +408,16 @@ impl MediaTransport {
         route: &TransportConsumerRoute,
         activity: ConsumerActivity,
     ) -> Result<(), TransportAdapterError> {
-        let active = activity.is_active();
         self.backend
-            .set_consumer_active(route, active)
+            .execute_control_operation(TransportControlOperation::SetConsumerActivity {
+                route: route.clone(),
+                activity,
+            })
             .await
             .inspect_err(|error| {
                 warn!(
                     ?route,
-                    active,
+                    active = activity.is_active(),
                     ?error,
                     "media transport failed to update consumer activity"
                 );
@@ -434,7 +441,10 @@ impl MediaTransport {
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
         self.backend
-            .set_consumer_packet_gate(route, packet_gate.clone())
+            .execute_control_operation(TransportControlOperation::SetConsumerPacketGate {
+                route: route.clone(),
+                packet_gate: packet_gate.clone(),
+            })
             .await
             .inspect_err(|error| {
                 warn!(
@@ -452,7 +462,10 @@ impl MediaTransport {
         &self,
         updates: &[ConsumerPacketGateUpdate],
     ) -> Vec<Result<(), TransportAdapterError>> {
-        let results = self.backend.set_consumer_packet_gates(updates).await;
+        let results = self
+            .backend
+            .execute_consumer_packet_gate_batch(updates)
+            .await;
         for (update, result) in updates.iter().zip(results.iter()) {
             if let Err(error) = result {
                 warn!(
@@ -481,7 +494,9 @@ impl MediaTransport {
         route: &TransportConsumerRoute,
     ) -> Result<(), TransportAdapterError> {
         self.backend
-            .request_consumer_keyframe(route)
+            .execute_control_operation(TransportControlOperation::RequestConsumerKeyframe {
+                route: route.clone(),
+            })
             .await
             .inspect_err(|error| {
                 warn!(

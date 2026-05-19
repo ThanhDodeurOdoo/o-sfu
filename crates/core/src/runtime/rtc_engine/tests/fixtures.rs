@@ -19,7 +19,7 @@ pub(super) use str0m::media::{MediaKind as Str0mMediaKind, Mid};
 pub(super) use tokio::time::sleep;
 
 pub(super) use super::super::{
-    RtcTransportWorker,
+    RtcMediaOperation, RtcTransportWorker,
     shared_payload::SharedPayload,
     test_support::{DebugPacketGate, test_transport_session_key},
 };

@@ -47,7 +47,7 @@ use crate::{
         },
         rtc_engine::{
             bootstrap,
-            commands::{RemoteSourceControl, RtcWorkerCommand},
+            commands::{RemoteSourceControl, RtcMediaControlCommand, RtcWorkerCommand},
             demux::{MediaRouteDestination, MediaRouteEntry},
             media_registry::RegisteredMediaHandle,
             relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayTargetId},
@@ -1183,13 +1183,13 @@ fn flush_pending_keyframe_requests_forwards_remote_sources_by_transport_media_id
     let command = control_rx.try_recv().ok();
     assert!(matches!(
         command,
-        Some(RtcWorkerCommand::RequestRemoteKeyframe {
+        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::RequestRemoteKeyframe {
             source_session_key,
             source_transport_media_id: forwarded_transport_media_id,
             target_id,
             rid: None,
             kind: KeyframeRequestKind::Fir,
-        }) if source_session_key == source_session
+        })) if source_session_key == source_session
             && target_id == RelayTargetId::new(1)
             && forwarded_transport_media_id == source_transport_media_id
     ));
@@ -1252,13 +1252,13 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
     let command = control_rx.try_recv().ok();
     assert!(matches!(
         command,
-        Some(RtcWorkerCommand::RequestRemoteKeyframe {
+        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::RequestRemoteKeyframe {
             source_session_key,
             source_transport_media_id: forwarded_transport_media_id,
             target_id,
             rid: None,
             kind: KeyframeRequestKind::Fir,
-        }) if source_session_key == source_session
+        })) if source_session_key == source_session
             && target_id == RelayTargetId::new(4)
             && forwarded_transport_media_id == source_transport_media_id
     ));
