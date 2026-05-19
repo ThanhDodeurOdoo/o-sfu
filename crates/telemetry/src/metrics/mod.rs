@@ -12,17 +12,20 @@ pub mod test_support;
 #[cfg(test)]
 mod tests;
 
-pub use catalog::RuntimeMetrics;
-pub use descriptor::MetricName;
-pub use labels::{
-    BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
-    RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
-    RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, SourceSelectionKind,
-    TransportCleanupFailureKind, TransportHealthState, TransportIceState, WsSessionLoopExitReason,
-};
-pub use rtc::{RtcMetricsRecorder, RtcRouteControlMetrics};
-pub use rtp::RtpMetricsRecorder;
-pub use snapshot::{
-    MetricFamilySnapshot, MetricHistogramBucketSnapshot, MetricHistogramSnapshot, MetricKind,
-    MetricLabel, MetricSample, MetricValue, RuntimeMetricsSnapshot,
+pub use self::{
+    catalog::RuntimeMetrics,
+    descriptor::MetricName,
+    labels::{
+        BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
+        RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
+        RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, SourceSelectionKind,
+        TransportCleanupFailureKind, TransportHealthState, TransportIceState,
+        WsSessionLoopExitReason,
+    },
+    rtc::{RtcMetricsRecorder, RtcRouteControlMetrics},
+    rtp::RtpMetricsRecorder,
+    snapshot::{
+        MetricFamilySnapshot, MetricHistogramBucketSnapshot, MetricHistogramSnapshot, MetricKind,
+        MetricLabel, MetricSample, MetricValue, RuntimeMetricsSnapshot,
+    },
 };

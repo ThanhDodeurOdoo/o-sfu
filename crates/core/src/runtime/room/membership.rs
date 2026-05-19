@@ -22,9 +22,12 @@
 use o_sfu_router::MediaCapabilities;
 use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
-
 #[cfg(any(test, feature = "testing-transport"))]
-use super::placement::{RoomPlacementPlanner, WorkerLoadIndex};
+use {
+    super::placement::{RoomPlacementPlanner, WorkerLoadIndex},
+    crate::runtime::media_transport::TransportWorkerPressureSnapshot,
+};
+
 use super::{
     BroadcastPayloadError, LocalRouterRuntimeContext, Room, RoomJoinError, RoomMediaCounts,
     RoomUserPermissions, UserOutbound, UserOutboundSender,
@@ -35,8 +38,6 @@ use super::{
     },
     user_negotiation::UserNegotiationUpdate,
 };
-#[cfg(any(test, feature = "testing-transport"))]
-use crate::runtime::media_transport::TransportWorkerPressureSnapshot;
 use crate::{
     SessionNegotiationOutcome, UserInfoRefresh,
     runtime::{

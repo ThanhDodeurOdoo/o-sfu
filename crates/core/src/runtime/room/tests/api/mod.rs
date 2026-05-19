@@ -5,9 +5,11 @@ mod inspect;
 mod lifecycle;
 mod media;
 
-pub use inspect::RoomTestInspect;
-pub use lifecycle::RoomTestLifecycle;
-pub use media::{NegotiatedPublish, RoomTestMedia};
+pub use self::{
+    inspect::RoomTestInspect,
+    lifecycle::RoomTestLifecycle,
+    media::{NegotiatedPublish, RoomTestMedia},
+};
 
 #[derive(Clone, Copy)]
 pub struct RoomTestApi<'a> {

@@ -1,11 +1,9 @@
-#[cfg(any(test, feature = "testing-transport"))]
-use std::sync::Arc;
 use std::{collections::BTreeSet, time::Instant};
 
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
-
 #[cfg(any(test, feature = "testing-transport"))]
-use super::test_support::FakeMediaTransport;
+use {super::test_support::FakeMediaTransport, std::sync::Arc};
+
 use super::{
     ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
     ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, RtcTransport, SessionOffer,

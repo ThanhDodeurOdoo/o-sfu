@@ -21,11 +21,11 @@ mod session_loop;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use admission::PreAuthWebSocketAdmission;
-pub(crate) use controller::upgrade;
 pub use handshake::decode_auth_payload_text;
 pub use io::{
     ClientBatchDecodeError, ClientBatchDecodeFailureKind, MAX_CLIENT_BATCH_ENVELOPES,
     MAX_CLIENT_FRAME_BYTES, decode_client_batch,
 };
 pub(crate) use io::{WsWriter, close_writer};
+
+pub(crate) use self::{admission::PreAuthWebSocketAdmission, controller::upgrade};

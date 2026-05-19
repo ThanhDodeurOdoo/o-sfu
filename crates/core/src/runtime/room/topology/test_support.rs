@@ -1,26 +1,25 @@
-#[cfg(test)]
-use std::sync::Arc;
-
 use o_sfu_router::RouterId;
-
 #[cfg(test)]
-use super::RoomRouterStateFactory;
-use super::RoomTopology;
-use crate::runtime::UserId;
-#[cfg(test)]
-use crate::{
-    MediaCodecFlags,
-    runtime::{
-        RoomInstanceId,
-        metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
-        recording::RecordingService,
-        room::{
-            LocalRoomRouterPlacements, LocalRouterRuntimeContext,
-            rtp_capabilities::router_rtp_capabilities,
+use {
+    super::RoomRouterStateFactory,
+    crate::{
+        MediaCodecFlags,
+        runtime::{
+            RoomInstanceId,
+            metrics::RuntimeMetrics,
+            packet_sink_registry::RoomPacketSinkRegistry,
+            recording::RecordingService,
+            room::{
+                LocalRoomRouterPlacements, LocalRouterRuntimeContext,
+                rtp_capabilities::router_rtp_capabilities,
+            },
         },
     },
+    std::sync::Arc,
 };
+
+use super::RoomTopology;
+use crate::runtime::UserId;
 
 impl RoomTopology {
     #[cfg(test)]

@@ -21,18 +21,17 @@ use str0m::{
     rtp::Extension,
 };
 #[cfg(test)]
-use tokio::sync::oneshot;
-#[cfg(test)]
-use tracing::warn;
+use {
+    super::super::media_registry::RegisteredMediaHandle,
+    crate::runtime::media_transport::{TransportAdapterError, TransportMediaId},
+    tokio::sync::oneshot,
+    tracing::warn,
+};
 
-#[cfg(test)]
-use super::super::media_registry::RegisteredMediaHandle;
 use super::super::{
     simulcast,
     state::{PacketLoopState, RtcSessionState},
 };
-#[cfg(test)]
-use crate::runtime::media_transport::{TransportAdapterError, TransportMediaId};
 use crate::{Bitrate, runtime::media_transport::TransportSessionKey};
 
 #[cfg(test)]

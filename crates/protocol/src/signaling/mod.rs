@@ -15,8 +15,11 @@ pub use catalog::{
     SessionDescriptionPayload, SourceDescriptor, SourceEncodingDescriptor, StreamIntentPayload,
     SubscribePayload, TrackBinding, UploadLayerPolicyRole, WelcomePayload,
 };
-pub use codec::{ClientEnvelope, EnvelopeDecodeError, ServerEnvelope};
-pub use envelope::{Envelope, EnvelopeBatch, RequestId};
 pub use o_sfu_model::{PeerSnapshot, RecordingOptions, WebSocketCloseCode};
-pub use request::{ClientMessage, ClientRequest, ServerRequest};
-pub use response::{ClientResponse, ServerMessage, ServerResponse};
+
+pub use self::{
+    codec::{ClientEnvelope, EnvelopeDecodeError, ServerEnvelope},
+    envelope::{Envelope, EnvelopeBatch, RequestId},
+    request::{ClientMessage, ClientRequest, ServerRequest},
+    response::{ClientResponse, ServerMessage, ServerResponse},
+};

@@ -1,35 +1,12 @@
 use std::{error::Error as StdError, fmt};
 
 use anyhow::{Result, anyhow};
-#[cfg(feature = "otel-tracing")]
-use opentelemetry::KeyValue;
-#[cfg(feature = "otel-tracing")]
-use opentelemetry::global;
-#[cfg(feature = "otel-tracing")]
-use opentelemetry::trace::{TraceContextExt, TracerProvider as _};
-#[cfg(feature = "otel-tracing")]
-use opentelemetry_otlp::{Protocol, WithExportConfig};
-#[cfg(feature = "otel-tracing")]
-use opentelemetry_sdk::{
-    Resource,
-    trace::{RandomIdGenerator, Sampler, SdkTracerProvider},
-};
 use serde_json::{Map, Number, Value};
 use time::format_description::well_known::Rfc3339;
-#[cfg(feature = "otel-tracing")]
-use tracing::dispatcher;
 use tracing::{
     Span, Subscriber, field,
     field::{Field, Visit},
 };
-#[cfg(feature = "otel-tracing")]
-use tracing_opentelemetry::OpenTelemetrySpanExt;
-#[cfg(feature = "otel-tracing")]
-use tracing_opentelemetry::OtelData;
-#[cfg(feature = "otel-tracing")]
-use tracing_opentelemetry::get_otel_context;
-#[cfg(feature = "otel-tracing")]
-use tracing_subscriber::registry::SpanRef;
 use tracing_subscriber::{
     EnvFilter, Registry,
     fmt::{
@@ -40,6 +17,21 @@ use tracing_subscriber::{
     layer::SubscriberExt,
     registry::LookupSpan,
     util::SubscriberInitExt,
+};
+#[cfg(feature = "otel-tracing")]
+use {
+    opentelemetry::{
+        KeyValue, global,
+        trace::{TraceContextExt, TracerProvider as _},
+    },
+    opentelemetry_otlp::{Protocol, WithExportConfig},
+    opentelemetry_sdk::{
+        Resource,
+        trace::{RandomIdGenerator, Sampler, SdkTracerProvider},
+    },
+    tracing::dispatcher,
+    tracing_opentelemetry::{OpenTelemetrySpanExt, OtelData, get_otel_context},
+    tracing_subscriber::registry::SpanRef,
 };
 
 use crate::{TelemetryConfig, TelemetryLogFormat, schema};

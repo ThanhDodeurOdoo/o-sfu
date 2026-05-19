@@ -39,8 +39,6 @@ pub(super) use assertions::{
 pub(super) use frames::{
     no_server_frame, read_single_protocol_server_message, read_track_snapshot,
 };
-pub(super) use peer::ProtocolHarnessPeer;
-pub(super) use recording::{assert_recording_request_rejected, connect_protocol_recording_peer};
 pub(super) use routes::{
     RealRtcRouteActivity, assert_real_rtc_subscribe_activity, real_rtc_route_activity,
     sample_video_rtp_parameters,
@@ -52,6 +50,11 @@ pub(super) use scenarios::{
     publish_camera_and_bootstrap_subscriber, recover_peer_with_latest_info,
     recover_subscriber_and_replay_track, setup_fake_protocol_peers, setup_protocol_recovery_peers,
     setup_real_rtc_protocol_peers,
+};
+
+pub(super) use self::{
+    peer::ProtocolHarnessPeer,
+    recording::{assert_recording_request_rejected, connect_protocol_recording_peer},
 };
 
 pub(super) const BATCH_FLUSH_DELAY_MS: u32 = 100;
