@@ -88,6 +88,31 @@ impl fmt::Display for PacketIndexProbe<'_> {
     }
 }
 
+/// fixture-owned datagram input for deterministic ingress benchmarks
+#[derive(Clone, Copy)]
+pub(in crate::runtime::rtc_engine) struct PacketRouteDatagram<'a> {
+    source_addr: SocketAddr,
+    candidate_addr: SocketAddr,
+    packet: &'a [u8],
+    now: Instant,
+}
+
+impl<'a> PacketRouteDatagram<'a> {
+    pub(in crate::runtime::rtc_engine) const fn new(
+        source_addr: SocketAddr,
+        candidate_addr: SocketAddr,
+        packet: &'a [u8],
+        now: Instant,
+    ) -> Self {
+        Self {
+            source_addr,
+            candidate_addr,
+            packet,
+            now,
+        }
+    }
+}
+
 enum CandidateSessionKeys<'a> {
     Single(Option<&'a TransportSessionKey>),
     Slice(Iter<'a, TransportSessionKey>),
@@ -122,12 +147,29 @@ pub(super) fn route_packet_to_matching_session(
     candidate_addr: SocketAddr,
     packet: &[u8],
 ) {
+    route_packet_to_matching_session_at(
+        state,
+        snapshot_state,
+        routing_state,
+        metrics,
+        PacketRouteDatagram::new(source_addr, candidate_addr, packet, Instant::now()),
+    );
+}
+
+pub(in crate::runtime::rtc_engine) fn route_packet_to_matching_session_at(
+    state: &mut PacketLoopState,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    routing_state: &mut PacketLoopRoutingState,
+    metrics: &RtcMetricsRecorder,
+    datagram: PacketRouteDatagram<'_>,
+) {
     match route_packet_with_cached_session(
         state,
         snapshot_state,
-        source_addr,
-        candidate_addr,
-        packet,
+        datagram.source_addr,
+        datagram.candidate_addr,
+        datagram.packet,
+        datagram.now,
     ) {
         CachedRouteOutcome::Routed => {
             metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
@@ -139,19 +181,22 @@ pub(super) fn route_packet_to_matching_session(
         }
         CachedRouteOutcome::NotMatched => {}
     }
-    let now = Instant::now();
-    if routing_state.source_is_blocked(source_addr, now) {
+    if routing_state.source_is_blocked(datagram.source_addr, datagram.now) {
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
         return;
     }
-    let miss_key = PacketLoopRoutingMissKey::new(source_addr, candidate_addr, packet);
+    let miss_key = PacketLoopRoutingMissKey::new(
+        datagram.source_addr,
+        datagram.candidate_addr,
+        datagram.packet,
+    );
     // The recent-miss cache proves that no session accepted an identical packet
     // from this source recently. It must be cleared on topology or ICE changes
     // or a stale negative result could hide a newly valid route.
-    if routing_state.should_skip_scan(miss_key, packet) {
+    if routing_state.should_skip_scan(miss_key, datagram.packet) {
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::RecentMissCache);
         trace!(
-            source = %source_addr,
+            source = %datagram.source_addr,
             "dropping UDP datagram because a recent cache miss already proved no rtc user accepted it"
         );
         return;
@@ -159,17 +204,17 @@ pub(super) fn route_packet_to_matching_session(
     // This is purely a defensive mechanism against unknown-source traffic.
     // It is not part of ICE or RTP correctness.
     // Legitimate traffic should have been learned via STUN before hitting this path.
-    if routing_state.should_rate_limit_source(source_addr, now) {
+    if routing_state.should_rate_limit_source(datagram.source_addr, datagram.now) {
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
         return;
     }
     let route = PacketRouteContext {
         snapshot_state,
         metrics,
-        source_addr,
-        candidate_addr,
-        packet,
-        now,
+        source_addr: datagram.source_addr,
+        candidate_addr: datagram.candidate_addr,
+        packet: datagram.packet,
+        now: datagram.now,
     };
     // With one live session, routing degenerates to one `accepts()` check.
     // No recovery index is needed to narrow the candidate set.
@@ -186,6 +231,7 @@ fn route_packet_with_cached_session(
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet: &[u8],
+    now: Instant,
 ) -> CachedRouteOutcome {
     let Some(session_key) = state
         .remote_addr_demux
@@ -207,7 +253,6 @@ fn route_packet_with_cached_session(
         log_malformed_datagram(source_addr);
         return CachedRouteOutcome::Malformed;
     };
-    let now = Instant::now();
     let input = Input::Receive(now, receive);
     // Cached source-address pins are not authoritative. ICE nomination,
     // credentials or remote candidates may have changed, so every packet is

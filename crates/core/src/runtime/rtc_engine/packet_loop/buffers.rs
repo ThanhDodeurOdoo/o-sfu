@@ -78,13 +78,13 @@ pub(super) struct PendingFirstVideoKeyframe {
 /// authoritative after the turn is flushed. New reusable collections should be
 /// added here only when they replace repeated hot-path allocation or preserve a
 /// bounded batch between two packet-loop phases.
-pub(super) struct PacketLoopBuffers {
+pub(in crate::runtime::rtc_engine) struct PacketLoopBuffers {
     /// Reusable UDP transmit slots produced by `str0m::Output::Transmit`.
     pub(super) pending_transmits: Vec<PendingTransmit>,
     /// Logical length of [`Self::pending_transmits`] for the current turn.
     pub(super) pending_transmit_count: usize,
     /// Media packets produced by local adapter sessions or inbound relays.
-    pub(super) pending_packets: Vec<ForwardedPacket>,
+    pub(in crate::runtime::rtc_engine) pending_packets: Vec<ForwardedPacket>,
     /// Shared relay packet cache for the current planned packet.
     ///
     /// Relay flush can have multiple relay destinations for one packet. The
@@ -93,7 +93,8 @@ pub(super) struct PacketLoopBuffers {
     pub(super) relay_packet: Option<ForwardedPacket>,
     pub(super) relay_packet_idx: Option<usize>,
     /// Raw keyframe feedback emitted by consumer sessions before source lookup.
-    pub(super) pending_keyframe_requests: Vec<(TransportSessionKey, PendingKeyframeRequest)>,
+    pub(in crate::runtime::rtc_engine) pending_keyframe_requests:
+        Vec<(TransportSessionKey, PendingKeyframeRequest)>,
     /// Sessions ready for polling after dirty and timeout scheduling is merged.
     pub(super) ready_sessions: Vec<TransportSessionKey>,
     /// Source-keyed feedback after duplicate requests are merged.
@@ -107,7 +108,7 @@ pub(super) struct PacketLoopBuffers {
     /// Rooms whose source policy must be recomputed after packet observations.
     pub(super) dirty_source_policy_channel_ids: Vec<RoomInstanceId>,
     /// Concrete forwarding destinations planned for `pending_packets`.
-    pub(super) forwards: Vec<PacketForward>,
+    pub(in crate::runtime::rtc_engine) forwards: Vec<PacketForward>,
 }
 
 impl PacketLoopBuffers {
@@ -116,7 +117,7 @@ impl PacketLoopBuffers {
     /// The capacities are only starting points. Dense rooms may grow them once,
     /// after which normal `.clear()` calls keep the larger allocation for later
     /// turns.
-    pub(super) fn new() -> Self {
+    pub(in crate::runtime::rtc_engine) fn new() -> Self {
         Self {
             pending_transmits: Vec::with_capacity(64),
             pending_transmit_count: 0,
@@ -139,7 +140,7 @@ impl PacketLoopBuffers {
     /// This must run before a new packet-loop turn starts. It intentionally
     /// leaves `pending_transmits` slots allocated because each slot owns a byte
     /// buffer that is cheaper to overwrite than recreate.
-    pub(super) fn clear(&mut self) {
+    pub(in crate::runtime::rtc_engine) fn clear(&mut self) {
         self.pending_transmit_count = 0;
         self.pending_packets.clear();
         self.relay_packet = None;

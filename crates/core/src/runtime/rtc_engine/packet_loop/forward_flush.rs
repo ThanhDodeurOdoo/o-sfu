@@ -256,7 +256,7 @@ pub(super) fn drain_relay_packets(
 /// can change while packets are already batched. Relay overload is counted and
 /// dropped. Other destination errors are logged and the loop continues flushing
 /// the remaining planned destinations.
-pub(super) fn flush_forward_routes(
+pub(in crate::runtime::rtc_engine) fn flush_forward_routes(
     state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
     rtp_metrics: &RtpMetricsRecorder,

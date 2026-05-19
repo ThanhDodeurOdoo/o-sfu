@@ -37,7 +37,7 @@ use crate::runtime::{
 /// worker route state before the packet loop knows which producer source owns
 /// the requested media.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct PendingKeyframeRequest {
+pub(in crate::runtime::rtc_engine) struct PendingKeyframeRequest {
     pub(super) consumer_mid: Mid,
     pub(super) consumer_rid: Option<Rid>,
     pub(super) kind: KeyframeRequestKind,
@@ -49,6 +49,19 @@ impl PendingKeyframeRequest {
             consumer_mid: request.mid,
             consumer_rid: request.rid,
             kind: request.kind,
+        }
+    }
+
+    #[cfg(feature = "internal-benchmarks")]
+    pub(in crate::runtime::rtc_engine) const fn benchmark_request(
+        mid: Mid,
+        rid: Option<Rid>,
+        kind: KeyframeRequestKind,
+    ) -> Self {
+        Self {
+            consumer_mid: mid,
+            consumer_rid: rid,
+            kind,
         }
     }
 }
@@ -110,6 +123,15 @@ pub(super) fn flush_pending_keyframe_requests(
     metrics: &impl RtcRouteControlMetrics,
     buffers: &mut PacketLoopBuffers,
 ) {
+    flush_pending_keyframe_requests_at(state, metrics, buffers, Instant::now());
+}
+
+pub(in crate::runtime::rtc_engine) fn flush_pending_keyframe_requests_at(
+    state: &mut PacketLoopState,
+    metrics: &impl RtcRouteControlMetrics,
+    buffers: &mut PacketLoopBuffers,
+    now: Instant,
+) {
     let pending_keyframe_requests = &mut buffers.pending_keyframe_requests;
     let coalesced_requests = &mut buffers.coalesced_keyframe_requests;
     coalesced_requests.clear();
@@ -127,7 +149,6 @@ pub(super) fn flush_pending_keyframe_requests(
         ));
     }
     coalesced_requests.sort_by_key(|request| request.source_transport_media_id);
-    let now = Instant::now();
     let mut current_request: Option<CoalescedKeyframeRequest> = None;
     for coalesced_request in coalesced_requests.drain(..) {
         match &mut current_request {

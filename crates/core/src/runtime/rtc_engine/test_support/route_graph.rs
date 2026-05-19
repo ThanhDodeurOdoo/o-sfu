@@ -26,7 +26,7 @@ impl<'a> MediaWorkerScenario<'a> {
         transport_media_id
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "internal-benchmarks"))]
     pub fn existing_source(&mut self, transport_media_id: TransportMediaId) -> TransportMediaId {
         self.install_source_route(transport_media_id);
         transport_media_id
@@ -62,7 +62,7 @@ impl<'a> MediaWorkerScenario<'a> {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "internal-benchmarks"))]
     pub fn destination_with_pending_gate(
         &mut self,
         source_transport_media_id: TransportMediaId,

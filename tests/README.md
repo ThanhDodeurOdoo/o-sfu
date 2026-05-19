@@ -23,8 +23,8 @@ npm --prefix crates/client run verify
 
 ## Packet-loop Callgrind benchmarks
 
- uses `iai-callgrind` for deterministic instruction-count checks of
-packet-loop hot-path slices.
+uses `iai-callgrind` for deterministic instruction-count checks of
+packet-loop hot-path slices
 
 Build the target without running Valgrind:
 
@@ -44,8 +44,14 @@ Compare local changes against that baseline:
 cargo bench -p o-sfu-tests --bench packet_loop_callgrind -- --baseline=local --save-summary=json
 ```
 
-pofiles and summaries are written under `target/iai`. The first scenarios
-cover local route-planning fanout and relay-mailbox enqueue pressure
+profiles and summaries are written under `target/iai`. the current scenarios
+cover local route-planning fanout, relay-mailbox enqueue pressure, cached
+ingress demux, repeated unknown-source misses, packet-sink fanout, selected-RID
+readiness and keyframe-request coalescing
+
+local Callgrind execution requires `iai-callgrind-runner` plus Valgrind. on
+hosts without Valgrind support, use `--no-run` as the local build check and run
+the baseline comparison on Linux
 
 ## CI tests
 
