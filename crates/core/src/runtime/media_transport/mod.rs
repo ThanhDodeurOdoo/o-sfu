@@ -50,7 +50,7 @@ pub use types::{
     TransportSessionKey, TransportWorkerPressureSnapshot,
 };
 
-use crate::runtime::{RoomInstanceId, rtc_engine::RtcTransportWorker};
+use crate::runtime::{RoomInstanceId, rtc_engine::RtcWorker};
 
 /// Opaque runtime media transport handle.
 ///
@@ -64,7 +64,7 @@ use crate::runtime::{RoomInstanceId, rtc_engine::RtcTransportWorker};
 #[derive(Debug, Clone)]
 pub struct MediaTransport {
     /// RTC workers addressed by media-worker id modulo worker count.
-    workers: Arc<[Arc<RtcTransportWorker>]>,
+    workers: Arc<[Arc<RtcWorker>]>,
     /// Shared wakeup signal used by every worker to notify room-level source
     /// policy tasks about transport-observed changes without polling every room.
     source_policy_signal: Arc<SourcePolicySignal>,

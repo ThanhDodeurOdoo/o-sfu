@@ -47,15 +47,18 @@ use str0m::media::MediaKind;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::super::{
-    bitrate::BitrateRegistry,
-    commands::{
-        CloseSessionOutcome, CloseSessionState, ConsumerPacketGateCommand, RemoteSourceControl,
-        RtcMediaControlCommand, RtcWorkerCommand,
+use super::{
+    super::{
+        bitrate::BitrateRegistry,
+        commands::{
+            CloseSessionOutcome, CloseSessionState, ConsumerPacketGateCommand, RemoteSourceControl,
+            RtcMediaControlCommand, RtcWorkerCommand,
+        },
+        packet_loop::PacketLoopLagSnapshot,
+        relay_registry::{RelayPacketMailbox, RelayTargetId, RelayTargetTransport},
+        state::RtcSnapshotState,
     },
-    packet_loop::PacketLoopLagSnapshot,
-    relay_registry::{RelayPacketMailbox, RelayTargetId, RelayTargetTransport},
-    state::RtcSnapshotState,
+    runtime::WorkerHandleSlot,
 };
 use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
@@ -121,7 +124,7 @@ impl fmt::Debug for RtcWorkerHandle {
 /// observability reads are best-effort by design
 /// snapshots may race with packet processing or teardown and must not be used
 /// as room-membership authority
-pub struct RtcTransportWorker {
+pub struct RtcWorker {
     pub(super) relay_target_id: RelayTargetId,
     /// first transport media id reserved for this worker's packet loop
     pub(super) media_id_base: u64,
@@ -138,7 +141,7 @@ pub struct RtcTransportWorker {
     pub metrics: Arc<RuntimeMetrics>,
     pub(super) rtp_metrics: Arc<RtpMetricsRecorder>,
     pub(super) rtc_metrics: Arc<RtcMetricsRecorder>,
-    pub(super) worker_handle: Mutex<super::runtime::WorkerHandleSlot<RtcWorkerHandle>>,
+    pub(super) worker_handle: Mutex<WorkerHandleSlot<RtcWorkerHandle>>,
 }
 
 /// facade for offer and answer operations on one worker
@@ -148,7 +151,7 @@ pub struct RtcTransportWorker {
 /// the worker enforces SDP state such as the one-outstanding-offer rule
 #[derive(Clone, Copy)]
 pub struct RtcTransportNegotiationFacade<'a> {
-    worker: &'a RtcTransportWorker,
+    worker: &'a RtcWorker,
 }
 
 /// facade for producer, consumer, packet-gate and relay mutations
@@ -158,23 +161,23 @@ pub struct RtcTransportNegotiationFacade<'a> {
 /// commands have installed the needed state
 #[derive(Clone, Copy)]
 pub struct RtcTransportMediaFacade<'a> {
-    worker: &'a RtcTransportWorker,
+    worker: &'a RtcWorker,
 }
 
 pub(in crate::runtime) enum RtcMediaOperation<'a> {
     ActivateRelayRoute {
         source_session_key: &'a TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        target: &'a RtcTransportWorker,
+        target: &'a RtcWorker,
     },
     DeactivateRelayRoute {
         source_transport_media_id: TransportMediaId,
-        target: &'a RtcTransportWorker,
+        target: &'a RtcWorker,
     },
     ApplyRelayTargetActivity {
         source_session_key: &'a TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        target: &'a RtcTransportWorker,
+        target: &'a RtcWorker,
         active: bool,
     },
     SetProducerActive {
@@ -202,7 +205,7 @@ pub(in crate::runtime) enum RtcMediaOperation<'a> {
 /// requests packet-loop shutdown once no session state remains
 #[derive(Clone, Copy)]
 pub struct RtcTransportSessionFacade<'a> {
-    worker: &'a RtcTransportWorker,
+    worker: &'a RtcWorker,
 }
 
 /// facade for read-only transport observations
@@ -213,10 +216,10 @@ pub struct RtcTransportSessionFacade<'a> {
 /// observation rather than authoritative room state
 #[derive(Clone, Copy)]
 pub struct RtcTransportObservabilityFacade<'a> {
-    pub(super) worker: &'a RtcTransportWorker,
+    pub(super) worker: &'a RtcWorker,
 }
 
-impl RtcTransportWorker {
+impl RtcWorker {
     /// builds one worker facade from validated RTC transport config
     ///
     /// construction does not start sockets or spawn the packet loop
@@ -252,7 +255,7 @@ impl RtcTransportWorker {
             metrics: Arc::clone(&metrics),
             rtp_metrics: metrics.register_rtp_worker_for_media_worker(media_worker_id),
             rtc_metrics: metrics.register_rtc_worker(),
-            worker_handle: Mutex::new(super::runtime::WorkerHandleSlot::default()),
+            worker_handle: Mutex::new(WorkerHandleSlot::default()),
         }
     }
 
@@ -616,7 +619,7 @@ impl RtcTransportMediaFacade<'_> {
         self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        target: &RtcTransportWorker,
+        target: &RtcWorker,
     ) -> Result<(), TransportAdapterError> {
         let mailbox = target.ensure_packet_loop_started()?.relay_mailbox;
         self.worker
@@ -635,7 +638,7 @@ impl RtcTransportMediaFacade<'_> {
     async fn deactivate_relay_route(
         self,
         source_transport_media_id: TransportMediaId,
-        target: &RtcTransportWorker,
+        target: &RtcWorker,
     ) -> Result<(), TransportAdapterError> {
         self.worker
             .request_worker(|response| {
@@ -652,7 +655,7 @@ impl RtcTransportMediaFacade<'_> {
         self,
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-        target: &RtcTransportWorker,
+        target: &RtcWorker,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
         self.worker
@@ -742,7 +745,7 @@ impl RtcTransportMediaFacade<'_> {
     /// worker cannot be booted
     pub fn remote_source_control(
         self,
-        target: &RtcTransportWorker,
+        target: &RtcWorker,
     ) -> Result<RemoteSourceControl, TransportAdapterError> {
         let worker_handle = self.worker.ensure_packet_loop_started()?;
         Ok(RemoteSourceControl::with_metrics(
@@ -776,10 +779,10 @@ fn packet_layer_gate(
     }
 }
 
-impl fmt::Debug for RtcTransportWorker {
+impl fmt::Debug for RtcWorker {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RtcTransportWorker")
+            .debug_struct("RtcWorker")
             .field("public_ip", &self.public_ip)
             .field("rtc_port_range", &self.rtc_port_range)
             .finish_non_exhaustive()

@@ -20,7 +20,7 @@
 //!
 //! ### Sub-Modules
 //!
-//! * [`facade`]: Defines the public `RtcTransportWorker` struct plus the
+//! * [`facade`]: Defines the public `RtcWorker` struct plus the
 //!   concern-scoped backend methods that sit directly above the worker mailbox.
 //! * [`runtime`]: Implement the worker communication logic, lazy-boot orchestration,
 //!   and command-dispatching helpers.
@@ -32,4 +32,4 @@ mod runtime;
 #[cfg(any(test, feature = "testing-transport"))]
 mod test_support;
 
-pub(in crate::runtime) use facade::{RtcMediaOperation, RtcTransportWorker};
+pub(in crate::runtime) use facade::{RtcMediaOperation, RtcWorker};

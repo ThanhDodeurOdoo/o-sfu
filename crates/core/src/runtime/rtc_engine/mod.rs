@@ -6,7 +6,7 @@
 //! module to create offers, publish media, or inspect transport state unless
 //! they are writing focused RTC-engine tests or backend integration code.
 //!
-//! The engine is worker-oriented. Each [`RtcTransportWorker`] owns one lazy
+//! The engine is worker-oriented. Each [`RtcWorker`] owns one lazy
 //! packet loop, command and relay mailboxes, worker-local relay target state,
 //! diagnostics hooks, packet-sink fanout, bitrate snapshots, and the state machines
 //! needed to drive Str0m. The surrounding media transport worker manager decides
@@ -58,7 +58,7 @@ pub mod test_support;
 mod tests;
 mod worker;
 
-pub(in crate::runtime) use api::{RtcMediaOperation, RtcTransportWorker};
+pub(in crate::runtime) use api::{RtcMediaOperation, RtcWorker};
 #[cfg(any(test, feature = "testing-transport"))]
 pub use forwarded_packet::ForwardedPacket;
 pub use negotiated_capabilities::client_rtp_capabilities_from_answer;
