@@ -8,10 +8,9 @@ use str0m::media::Mid;
 
 #[cfg(test)]
 use super::TransportAdapterError;
-use super::{
-    MediaTransport, TransportMediaId, TransportSessionHealth, TransportSessionKey,
-    worker_manager::RtcWorkerManager,
-};
+use super::{MediaTransport, TransportMediaId, TransportSessionHealth, TransportSessionKey};
+#[cfg(test)]
+use crate::runtime::rtc_engine::RtcTransportWorker;
 use crate::runtime::rtc_engine::test_support::DebugRouteEntry;
 
 impl MediaTransport {
@@ -21,8 +20,7 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<RouterRtpParameters, TransportAdapterError> {
-        self.worker_manager()
-            .worker_for_user(session_key)
+        self.worker_for_user(session_key)
             .ok_or(TransportAdapterError::TransportUnavailable)?
             .media()
             .negotiated_producer_parameters(session_key, transport_media_id)
@@ -30,8 +28,11 @@ impl MediaTransport {
     }
 
     #[cfg(test)]
-    pub(super) fn as_rtc_worker_manager(&self) -> &Arc<RtcWorkerManager> {
-        self.worker_manager()
+    pub(super) fn debug_worker_for_user(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Option<Arc<RtcTransportWorker>> {
+        self.worker_for_user(session_key)
     }
 
     /// Overrides a real RTC session health snapshot in test builds.
@@ -43,7 +44,7 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         health: TransportSessionHealth,
     ) {
-        if let Some(worker) = self.worker_manager().worker_for_user(session_key) {
+        if let Some(worker) = self.worker_for_user(session_key) {
             worker.debug_set_session_transport_health(session_key, health);
         }
     }
@@ -53,7 +54,7 @@ impl MediaTransport {
         source_session_key: &TransportSessionKey,
         source_mid: Mid,
     ) -> Option<DebugRouteEntry> {
-        self.worker_manager()
+        self.worker_for_user(source_session_key)?
             .debug_route_entry(source_session_key, source_mid)
             .await
     }
@@ -63,47 +64,6 @@ impl MediaTransport {
     /// This is exposed for integration assertions that need to prove routing
     /// state without exposing worker internals to production callers.
     pub async fn debug_route_entry_by_consumer_mid(
-        &self,
-        consumer_session_key: &TransportSessionKey,
-        consumer_mid: Mid,
-    ) -> Option<DebugRouteEntry> {
-        self.worker_manager()
-            .debug_route_entry_by_consumer_mid(consumer_session_key, consumer_mid)
-            .await
-    }
-
-    pub async fn debug_route_entry_by_media_id(
-        &self,
-        source_transport_media_id: TransportMediaId,
-    ) -> Option<DebugRouteEntry> {
-        self.worker_manager()
-            .debug_route_entry_by_media_id(source_transport_media_id)
-            .await
-    }
-
-    pub async fn debug_observe_audio_activity(
-        &self,
-        transport_media_id: TransportMediaId,
-        now: Instant,
-    ) {
-        self.worker_manager()
-            .debug_observe_audio_activity(transport_media_id, now)
-            .await;
-    }
-}
-
-impl RtcWorkerManager {
-    pub(super) async fn debug_route_entry(
-        &self,
-        source_session_key: &TransportSessionKey,
-        source_mid: Mid,
-    ) -> Option<DebugRouteEntry> {
-        self.worker_for_user(source_session_key)?
-            .debug_route_entry(source_session_key, source_mid)
-            .await
-    }
-
-    pub(super) async fn debug_route_entry_by_consumer_mid(
         &self,
         consumer_session_key: &TransportSessionKey,
         consumer_mid: Mid,
@@ -119,7 +79,7 @@ impl RtcWorkerManager {
         None
     }
 
-    pub(super) async fn debug_route_entry_by_media_id(
+    pub async fn debug_route_entry_by_media_id(
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> Option<DebugRouteEntry> {
@@ -134,7 +94,7 @@ impl RtcWorkerManager {
         None
     }
 
-    async fn debug_observe_audio_activity(
+    pub async fn debug_observe_audio_activity(
         &self,
         transport_media_id: TransportMediaId,
         now: Instant,

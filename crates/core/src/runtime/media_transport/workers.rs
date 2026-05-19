@@ -1,10 +1,9 @@
-//! RTC worker management below the media transport boundary.
+//! RTC worker ownership below the media transport boundary.
 //!
-//! `MediaTransport` hides this module from server orchestration. The worker manager
-//! owns the process-local RTC worker topology, maps each transport session to
-//! the worker selected by its media-worker id and coordinates cross-worker
-//! relay cleanup. It is still cold-path orchestration around worker services.
-//! Packet-loop hot paths live inside `runtime::rtc_engine`.
+//! `MediaTransport` owns the process-local RTC worker topology, maps each
+//! transport session to the worker selected by its media-worker id and
+//! coordinates cross-worker relay cleanup. Packet-loop hot paths live inside
+//! `runtime::rtc_engine`.
 
 use std::{
     cmp::Reverse,
@@ -20,12 +19,12 @@ use crate::runtime::{
     RoomInstanceId,
     media_transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
-        ConsumerPacketGateUpdate, ReceiverBandwidthSnapshot, SessionOffer, SourcePolicySignal,
+        ConsumerPacketGateUpdate, MediaTransport, MediaTransportConfig, MediaTransportDeps,
+        ReceiverBandwidthSnapshot, SessionOffer, SourcePolicySignal,
         SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
         TransportMediaId, TransportPlacementPressureSnapshot, TransportRelayRouteAction,
         TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey,
-        TransportWorkerPressureSnapshot, config::RtcWorkerManagerConfig,
-        operation::TransportControlOperation,
+        TransportWorkerPressureSnapshot, operation::TransportControlOperation,
     },
     rtc_engine::{RtcMediaOperation, RtcTransportWorker, client_rtp_capabilities_from_answer},
 };
@@ -40,90 +39,28 @@ const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
 
 type RelayRegistrationWorkers = Option<(Arc<RtcTransportWorker>, Arc<RtcTransportWorker>)>;
 
-/// Process-local manager for RTC transport workers keyed by media-worker id.
-///
-/// The worker manager is the last transport layer that knows about worker
-/// distribution. Above it, callers express media intent through transport
-/// ports. Below it, each [`RtcTransportWorker`] owns one worker-local RTC
-/// state machine and packet loop.
-///
-/// # Concurrency
-///
-/// Cloning worker handles is cheap because each worker is stored in an `Arc`.
-/// Operations route to the selected worker and await the worker-owned async work.
-/// The worker manager does not hold a global lock across those awaits.
-///
-/// Cross-worker subscriptions use source-to-consumer relay. The pure room
-/// router decides that a consumer route exists; this worker manager installs the
-/// worker-local packet bridge that makes the route deliver media:
-///
-/// ```text
-/// Same worker:
-///
-///   producer session W0
-///          |
-///          v
-///   W0 packet loop -> consumer session W0
-///
-/// Cross worker:
-///
-///   producer session W0
-///          |
-///          v
-///   W0 packet loop -> worker-local relay targets -> W1 RelayPacketMailbox
-///          |                                      |
-///          |                                      v
-///          +---------------------------> W1 packet loop -> consumer session W1
-/// ```
-#[derive(Debug)]
-pub struct RtcWorkerManager {
-    /// RTC workers addressed by media-worker id modulo worker count.
-    workers: Vec<Arc<RtcTransportWorker>>,
-    /// Shared wakeup signal used by every worker to notify room-level source
-    /// policy tasks about transport-observed changes without polling every room
-    source_policy_signal: Arc<SourcePolicySignal>,
-}
-
-impl RtcWorkerManager {
+impl MediaTransport {
     /// Builds RTC workers and installs one shared source-policy signal.
-    ///
-    /// Invalid worker or port-range combinations should already be rejected by
-    /// `MediaTransportBuilder`. If a transitional caller bypasses that builder
-    /// this constructor falls back to a single worker, preserving availability
-    /// rather than panicking during startup.
-    pub(super) fn new(config: &RtcWorkerManagerConfig) -> Self {
+    pub(in crate::runtime::media_transport) fn new(
+        transport: &MediaTransportConfig,
+        deps: &MediaTransportDeps,
+        worker_ranges: Vec<crate::RtcPortRange>,
+    ) -> Self {
         let source_policy_signal = Arc::new(SourcePolicySignal::default());
-        let workers = config
-            .transport_config()
-            .rtc_port_range()
-            .split_for_workers(config.worker_count())
-            .filter(|worker_ranges| !worker_ranges.is_empty())
-            .map_or_else(
-                || {
-                    vec![Arc::new(RtcTransportWorker::new(
-                        config.transport_config(),
-                        config.transport_deps(),
-                        Arc::clone(&source_policy_signal),
-                        media_id_base_for_worker_index(0),
-                        0,
-                    ))]
-                },
-                |worker_ranges| {
-                    worker_ranges
-                        .into_iter()
-                        .enumerate()
-                        .map(|(media_worker_id, range)| {
-                            Arc::new(RtcTransportWorker::new(
-                                &config.worker_config_with_port_range(range),
-                                config.transport_deps(),
-                                Arc::clone(&source_policy_signal),
-                                media_id_base_for_worker_index(media_worker_id),
-                                media_worker_id,
-                            ))
-                        })
-                        .collect()
-                },
-            );
+        let workers = worker_ranges
+            .into_iter()
+            .enumerate()
+            .map(|(media_worker_id, range)| {
+                Arc::new(RtcTransportWorker::new(
+                    &transport.with_rtc_port_range(range),
+                    deps,
+                    Arc::clone(&source_policy_signal),
+                    media_id_base_for_worker_index(media_worker_id),
+                    media_worker_id,
+                ))
+            })
+            .collect::<Vec<_>>()
+            .into();
         Self {
             workers,
             source_policy_signal,
@@ -166,7 +103,7 @@ impl RtcWorkerManager {
     ///
     /// The snapshot is observability data, not authoritative room state. It may
     /// race with packet-loop updates and session cleanup.
-    pub(super) fn transport_bitrate_snapshot(
+    pub(super) fn transport_bitrate_snapshot_from_workers(
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
@@ -185,7 +122,7 @@ impl RtcWorkerManager {
     ///
     /// Room policy uses this as an input to source selection. Missing entries
     /// mean the transport has no current estimate for that session.
-    pub(super) fn receiver_bandwidth_snapshot(
+    pub(super) fn receiver_bandwidth_snapshot_from_workers(
         &self,
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
@@ -204,7 +141,7 @@ impl RtcWorkerManager {
     /// Egress bitrate is additive across selected sessions. Saturation signals
     /// use the hottest owning worker so one overloaded worker can activate
     /// spillover.
-    pub(super) fn placement_pressure_snapshot(
+    pub(super) fn placement_pressure_snapshot_from_workers(
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportPlacementPressureSnapshot {
@@ -219,7 +156,9 @@ impl RtcWorkerManager {
     }
 
     /// Builds best-effort pressure snapshots for every local RTC worker.
-    pub(super) fn worker_pressure_snapshots(&self) -> Vec<TransportWorkerPressureSnapshot> {
+    pub(super) fn worker_pressure_snapshots_from_workers(
+        &self,
+    ) -> Vec<TransportWorkerPressureSnapshot> {
         self.workers
             .iter()
             .enumerate()
@@ -286,9 +225,11 @@ impl RtcWorkerManager {
     /// This is a transport-observed snapshot. It is sorted newest first and
     /// deduplicated by transport media id so room policy can consume it without
     /// learning which worker observed the packet.
-    pub(super) async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
+    pub(super) async fn active_speaker_source_snapshot_from_workers(
+        &self,
+    ) -> Vec<ActiveSpeakerSource> {
         let mut snapshot = Vec::new();
-        for worker in &self.workers {
+        for worker in self.workers.iter() {
             snapshot.extend(worker.active_speaker_source_snapshot().await);
         }
         snapshot.sort_by_key(|source| {
@@ -305,11 +246,11 @@ impl RtcWorkerManager {
     ///
     /// The ordering is stable for operator output. Like other diagnostics this
     /// is best-effort and can race with packet processing.
-    pub(super) async fn active_speaker_diagnostic_snapshot(
+    pub(super) async fn active_speaker_diagnostic_snapshot_from_workers(
         &self,
     ) -> Vec<ActiveSpeakerSourceDiagnostic> {
         let mut snapshot = Vec::new();
-        for worker in &self.workers {
+        for worker in self.workers.iter() {
             snapshot.extend(worker.active_speaker_diagnostic_snapshot().await);
         }
         snapshot.sort_by_key(|source| source.transport_media_id().as_u64());
@@ -321,9 +262,9 @@ impl RtcWorkerManager {
     ///
     /// The runtime uses this to wake room source-policy sync without polling
     /// every room on a fixed interval.
-    pub(super) async fn next_active_speaker_deadline(&self) -> Option<Instant> {
+    pub(super) async fn next_active_speaker_deadline_from_workers(&self) -> Option<Instant> {
         let mut next_deadline: Option<Instant> = None;
-        for worker in &self.workers {
+        for worker in self.workers.iter() {
             let worker_deadline = worker.next_active_speaker_deadline().await;
             next_deadline = match (next_deadline, worker_deadline) {
                 (Some(current), Some(candidate)) => Some(current.min(candidate)),
@@ -340,18 +281,18 @@ impl RtcWorkerManager {
     ///
     /// This bridges packet-loop observations back into room-owned policy. The
     /// room remains authoritative for layout and subscription decisions.
-    pub(super) async fn expired_active_speaker_room_instance_ids(
+    pub(super) async fn expired_active_speaker_room_instance_ids_from_workers(
         &self,
         now: Instant,
     ) -> BTreeSet<RoomInstanceId> {
         let mut room_instance_ids = BTreeSet::new();
-        for worker in &self.workers {
+        for worker in self.workers.iter() {
             room_instance_ids.extend(worker.expired_active_speaker_room_instance_ids(now).await);
         }
         room_instance_ids
     }
 
-    pub(super) fn source_policy_subscription(&self) -> SourcePolicyUpdateSubscription {
+    pub(super) fn source_policy_subscription_from_workers(&self) -> SourcePolicyUpdateSubscription {
         self.source_policy_signal.subscribe()
     }
 
@@ -359,7 +300,7 @@ impl RtcWorkerManager {
     ///
     /// Offer state remains worker-local. The worker manager only applies the
     /// deterministic session-to-worker mapping.
-    pub(super) async fn create_initial_session_offer(
+    pub(super) async fn create_initial_session_offer_on_worker(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
@@ -373,7 +314,7 @@ impl RtcWorkerManager {
     ///
     /// The worker enforces whether renegotiation is legal for the current RTC
     /// state.
-    pub(super) async fn create_session_renegotiation_offer(
+    pub(super) async fn create_session_renegotiation_offer_on_worker(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
@@ -387,7 +328,7 @@ impl RtcWorkerManager {
     ///
     /// The returned producer parameters are transport-derived facts used by the
     /// room to commit staged publications.
-    pub(super) async fn apply_session_answer(
+    pub(super) async fn apply_session_answer_on_worker(
         &self,
         session_key: &TransportSessionKey,
         answer_sdp: &str,
@@ -402,7 +343,7 @@ impl RtcWorkerManager {
     ///
     /// This is a pure parsing/projection helper. It does not depend on worker
     /// state and returns `InvalidInput` when the answer cannot be projected.
-    pub(super) fn negotiated_client_rtp_capabilities(
+    pub(super) fn project_client_rtp_capabilities(
         answer_sdp: &str,
         _offered_router_capabilities: &MediaCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
@@ -415,7 +356,7 @@ impl RtcWorkerManager {
     /// Session cleanup starts on the owning worker. Any relay cleanup emitted by
     /// that worker is then replayed on source workers so no remote worker keeps
     /// forwarding to a closed target.
-    pub(super) async fn close_session(
+    pub(super) async fn close_session_on_worker(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
@@ -427,7 +368,7 @@ impl RtcWorkerManager {
     }
 
     /// Removes one transport media handle from the owning worker.
-    pub(super) async fn remove_media(
+    pub(super) async fn remove_media_on_worker(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
@@ -442,7 +383,7 @@ impl RtcWorkerManager {
     ///
     /// The transport media id returned here is a local transport realization.
     /// Room state remains responsible for mapping it back to a published source.
-    pub(super) async fn publish_media(
+    pub(super) async fn publish_media_on_worker(
         &self,
         session_key: &TransportSessionKey,
         media_kind: MediaKind,
@@ -475,7 +416,7 @@ impl RtcWorkerManager {
     ///   source_media_id -> remote source control for W0
     ///   consumer media  -> local WebRTC send stream
     /// ```
-    pub(super) async fn consume_media(
+    pub(super) async fn consume_media_on_worker(
         &self,
         consumer_session_key: &TransportSessionKey,
         media_kind: MediaKind,
@@ -606,7 +547,7 @@ impl RtcWorkerManager {
     /// This is a best-effort observation used by diagnostics and compatibility
     /// projections. `None` can mean the media no longer exists or that the
     /// worker has not negotiated a MID for it.
-    pub(super) async fn transport_media_mid(
+    pub(super) async fn transport_media_mid_from_worker(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
@@ -625,7 +566,7 @@ impl RtcWorkerManager {
     /// Health is transport-observed and may lag room cleanup. Callers should use
     /// it to decide whether media connectivity appears alive, not as membership
     /// authority.
-    pub(super) fn session_transport_health(
+    pub(super) fn session_transport_health_from_worker(
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {

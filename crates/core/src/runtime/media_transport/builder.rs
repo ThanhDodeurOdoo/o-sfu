@@ -3,14 +3,11 @@
 //! owns the builder and startup validation that protect worker construction
 //! from invalid worker or port-range topology
 
-use std::sync::Arc;
-
 use thiserror::Error;
 
 use super::{
     MediaTransport,
-    config::{MediaTransportConfig, MediaTransportDeps, RtcWorkerManagerConfig},
-    worker_manager::RtcWorkerManager,
+    config::{MediaTransportConfig, MediaTransportDeps},
 };
 use crate::CoreOptions;
 
@@ -55,34 +52,13 @@ impl MediaTransport {
     ) -> Result<Self, MediaTransportBuildError> {
         Self::builder().core_options(options).deps(deps).build()
     }
-
-    fn from_worker_manager_config(
-        config: &RtcWorkerManagerConfig,
-    ) -> Result<Self, MediaTransportBuildError> {
-        validate_worker_split(
-            config.transport_config().rtc_port_range(),
-            config.worker_count(),
-        )?;
-        Ok(Self::from_unchecked_worker_manager_config(config))
-    }
-
-    fn from_unchecked_worker_manager_config(config: &RtcWorkerManagerConfig) -> Self {
-        Self {
-            worker_manager: Arc::new(RtcWorkerManager::new(config)),
-        }
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub(super) fn worker_manager(&self) -> &Arc<RtcWorkerManager> {
-        &self.worker_manager
-    }
 }
 
 /// Named construction input for the media transport.
 ///
 /// Building the RTC transport needs operator policy, process services and
 /// worker topology. The builder keeps those inputs named so the runtime does
-/// not have to assemble positional worker-manager plumbing or know that one shared
+/// not have to assemble positional worker plumbing or know that one shared
 /// source-policy signal will be installed into every worker.
 ///
 /// # Validation
@@ -162,7 +138,7 @@ impl MediaTransportBuilder {
     /// Creates the media transport and validates worker topology.
     ///
     /// The method is cold-path only. It allocates worker state, creates one
-    /// shared source-policy signal for the worker manager and does no packet-loop
+    /// shared source-policy signal for the transport workers and does no packet-loop
     /// work by itself.
     ///
     /// # Errors
@@ -174,11 +150,8 @@ impl MediaTransportBuilder {
             .transport
             .ok_or(MediaTransportBuildError::MissingTransportConfig)?;
         let deps = self.deps.ok_or(MediaTransportBuildError::MissingDeps)?;
-        MediaTransport::from_worker_manager_config(&RtcWorkerManagerConfig::new(
-            transport,
-            deps,
-            self.worker_count,
-        ))
+        let worker_ranges = split_worker_ranges(transport.rtc_port_range(), self.worker_count)?;
+        Ok(MediaTransport::new(&transport, &deps, worker_ranges))
     }
 }
 
@@ -215,18 +188,17 @@ pub enum MediaTransportBuildError {
     },
 }
 
-fn validate_worker_split(
+fn split_worker_ranges(
     rtc_port_range: crate::RtcPortRange,
     worker_count: usize,
-) -> Result<(), MediaTransportBuildError> {
+) -> Result<Vec<crate::RtcPortRange>, MediaTransportBuildError> {
     if worker_count == 0 {
         return Err(MediaTransportBuildError::InvalidWorkerCount);
     }
-    if worker_count > usize::from(rtc_port_range.port_count()) {
-        return Err(MediaTransportBuildError::InvalidPortSplit {
+    rtc_port_range.split_for_workers(worker_count).ok_or(
+        MediaTransportBuildError::InvalidPortSplit {
             worker_count,
             port_count: rtc_port_range.port_count(),
-        });
-    }
-    Ok(())
+        },
+    )
 }

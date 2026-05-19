@@ -573,10 +573,9 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
         return;
     };
 
-    let worker_manager = adapter.as_rtc_worker_manager();
     let (Some(source_worker), Some(remote_consumer_worker)) = (
-        worker_manager.worker_for_user(&source_session),
-        worker_manager.worker_for_user(&remote_consumer_session),
+        adapter.debug_worker_for_user(&source_session),
+        adapter.debug_worker_for_user(&remote_consumer_session),
     ) else {
         return;
     };
