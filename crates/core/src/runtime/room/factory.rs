@@ -18,7 +18,10 @@ use std::sync::{Arc, Mutex};
 
 use o_sfu_router::RouterId;
 
-use super::{LocalRouterRuntimeContext, Room, RoomConfig, RoomRuntimeContext, RoomRuntimePolicy};
+use super::{
+    LocalRouterRuntimeContext, Room, RoomConfig, RoomRuntimeContext, RoomRuntimePolicy,
+    init::{RoomInit, RoomInitIdentity, RoomServices},
+};
 use crate::runtime::{
     RoomInstanceId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
     packet_sink_registry::RoomPacketSinkRegistry, sync::lock_unpoisoned,
@@ -86,21 +89,8 @@ pub(crate) struct RoomFactory {
     /// Keeping the policy here makes every room start from the validated
     /// boot-time policy while still letting the room own its copy.
     runtime_policy: RoomRuntimePolicy,
-    /// Shared diagnostics sink passed into every room.
-    ///
-    /// Room creation events are emitted by the manager after directory
-    /// publication, not by this factory.
-    diagnostics: Arc<DiagnosticsStore>,
-    /// Shared packet-sink registry used by room-owned recording services.
-    ///
-    /// The factory wires the service dependency, while each room decides
-    /// when recording state should subscribe to its instance id.
-    packet_sink_registry: Arc<RoomPacketSinkRegistry>,
-    /// Process metrics handle passed into room-owned services.
-    ///
-    /// Keeping this as an injected dependency avoids global metric lookup
-    /// during room construction.
-    metrics: Arc<RuntimeMetrics>,
+    /// Shared room services cloned into each room.
+    services: RoomServices,
     /// Serialized allocator for process-local placement ids.
     ///
     /// This keeps concurrent create requests from receiving the same runtime
@@ -119,9 +109,7 @@ impl RoomFactory {
     ) -> Self {
         Self {
             runtime_policy,
-            diagnostics,
-            packet_sink_registry,
-            metrics,
+            services: RoomServices::new(diagnostics, packet_sink_registry, metrics),
             allocator: Mutex::new(RoomRuntimeAllocator {
                 next_room_instance_id: 0,
                 next_router_id: 0,
@@ -137,17 +125,16 @@ impl RoomFactory {
     /// keeps publication and observability in one place.
     #[must_use]
     pub(crate) fn create(&self, intent: RoomCreationIntent) -> Arc<Room> {
-        let runtime_context = self.allocate_runtime_context();
-        Arc::new(Room::new(
-            &runtime_context,
-            self.runtime_policy.clone(),
-            intent.issuer,
-            intent.key,
-            intent.config,
-            Arc::clone(&self.diagnostics),
-            Arc::clone(&self.packet_sink_registry),
-            Arc::clone(&self.metrics),
-        ))
+        Arc::new(Room::new(RoomInit {
+            runtime_context: self.allocate_runtime_context(),
+            runtime_policy: self.runtime_policy.clone(),
+            identity: RoomInitIdentity {
+                issuer: intent.issuer,
+                key: intent.key,
+            },
+            config: intent.config,
+            services: self.services.clone(),
+        }))
     }
 
     /// Reserves runtime-local placement for one new room.

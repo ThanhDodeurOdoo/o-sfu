@@ -11,11 +11,10 @@
 //! the packet loop only sees the resolved transport keys after the join has
 //! committed
 
-use std::{collections::BTreeMap, sync::Mutex};
+use std::{collections::BTreeMap, iter, sync::Mutex};
 
 use o_sfu_router::RouterId;
 
-use super::LocalRouterRuntimeContext;
 use crate::{
     LocalSpilloverPolicy, RoomSpilloverMode, RoomWorkerPolicy,
     runtime::{
@@ -27,6 +26,176 @@ use crate::{
         sync::lock_unpoisoned,
     },
 };
+
+/// stable runtime placement chosen when the room is created
+///
+/// these values identify where the room lives inside the current process.
+/// unlike room identity, they are runtime-local and mainly matter for routing,
+/// transport ownership, diagnostics correlation and teardown
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoomRuntimeContext {
+    /// unique live instance id used to correlate runtime events and health
+    instance: RoomInstanceId,
+    /// local router and worker placements already known for this room
+    local_routers: LocalRoomRouterPlacements,
+}
+
+/// one room-local router placement and its owning media worker
+///
+/// this is runtime-local metadata. it is never sent to clients and it is not a
+/// distributed owner identity. the room factory creates the primary router and
+/// the room manager adds spillover placements when live load needs them
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalRouterRuntimeContext {
+    /// pure router id used inside the room topology
+    pub router: RouterId,
+    /// local rtc media worker that owns transport sessions placed here
+    pub media_worker: usize,
+}
+
+/// non-empty router placement set assigned to one live room
+///
+/// this is the shared placement contract consumed by `RoomDefinition` and
+/// `RoomTopology`. keeping the primary placement inside this validated value
+/// avoids an api where one field can disagree with the placement list
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalRoomRouterPlacements {
+    primary: LocalRouterRuntimeContext,
+    spillover: Vec<LocalRouterRuntimeContext>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalRoomRouterPlacementsError {
+    Empty,
+}
+
+impl LocalRoomRouterPlacements {
+    #[must_use]
+    pub fn new(
+        primary: LocalRouterRuntimeContext,
+        spillover: Vec<LocalRouterRuntimeContext>,
+    ) -> Self {
+        Self { primary, spillover }
+    }
+
+    /// builds a placement set from the primary-first runtime placement list
+    ///
+    /// # Errors
+    ///
+    /// returns [`LocalRoomRouterPlacementsError::Empty`] when no primary
+    /// placement is supplied
+    pub fn try_from_vec(
+        placements: Vec<LocalRouterRuntimeContext>,
+    ) -> Result<Self, LocalRoomRouterPlacementsError> {
+        let mut placements = placements.into_iter();
+        let Some(primary) = placements.next() else {
+            return Err(LocalRoomRouterPlacementsError::Empty);
+        };
+        Ok(Self::new(primary, placements.collect()))
+    }
+
+    #[must_use]
+    pub const fn primary(&self) -> LocalRouterRuntimeContext {
+        self.primary
+    }
+
+    pub(in crate::runtime::room) fn upsert(&mut self, placement: LocalRouterRuntimeContext) {
+        if self.primary.router == placement.router {
+            self.primary = placement;
+            return;
+        }
+        if let Some(existing) = self
+            .spillover
+            .iter_mut()
+            .find(|existing| existing.router == placement.router)
+        {
+            *existing = placement;
+            return;
+        }
+        self.spillover.push(placement);
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.spillover.len().saturating_add(1)
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<LocalRouterRuntimeContext> {
+        if index == 0 {
+            return Some(self.primary);
+        }
+        self.spillover.get(index.checked_sub(1)?).copied()
+    }
+
+    #[must_use]
+    pub fn contains_router(&self, router_id: RouterId) -> bool {
+        self.primary.router == router_id
+            || self
+                .spillover
+                .iter()
+                .any(|placement| placement.router == router_id)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = LocalRouterRuntimeContext> + '_ {
+        iter::once(self.primary).chain(self.spillover.iter().copied())
+    }
+}
+
+impl RoomRuntimeContext {
+    #[must_use]
+    pub fn new(
+        instance: RoomInstanceId,
+        primary: LocalRouterRuntimeContext,
+        spillover: Vec<LocalRouterRuntimeContext>,
+    ) -> Self {
+        Self {
+            instance,
+            local_routers: LocalRoomRouterPlacements::new(primary, spillover),
+        }
+    }
+
+    /// builds a runtime context from an explicit instance id and placements
+    ///
+    /// # Errors
+    ///
+    /// returns [`LocalRoomRouterPlacementsError::Empty`] when the placement
+    /// list has no primary router
+    pub fn try_from_placements(
+        instance: RoomInstanceId,
+        placements: Vec<LocalRouterRuntimeContext>,
+    ) -> Result<Self, LocalRoomRouterPlacementsError> {
+        Ok(Self {
+            instance,
+            local_routers: LocalRoomRouterPlacements::try_from_vec(placements)?,
+        })
+    }
+
+    #[must_use]
+    pub const fn instance(&self) -> RoomInstanceId {
+        self.instance
+    }
+
+    #[must_use]
+    pub const fn media_worker(&self) -> usize {
+        self.local_routers.primary().media_worker
+    }
+
+    #[must_use]
+    pub const fn primary_router(&self) -> RouterId {
+        self.local_routers.primary().router
+    }
+
+    #[must_use]
+    pub const fn local_routers(&self) -> &LocalRoomRouterPlacements {
+        &self.local_routers
+    }
+}
 
 /// room-local committed placement ledger
 ///

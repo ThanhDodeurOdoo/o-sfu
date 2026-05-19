@@ -11,14 +11,71 @@ use tokio::sync::{
     watch,
 };
 
-use super::{RoomEventMessage, UserOutbound, events::MAX_BROADCAST_PAYLOAD_BYTES};
-use crate::runtime::metrics::RuntimeMetrics;
+use super::{
+    events::{MAX_BROADCAST_PAYLOAD_BYTES, RoomEventMessage},
+    lifecycle::UserCloseReason,
+    state::RemoteTrackBootstrap,
+};
+use crate::runtime::{UserId, metrics::RuntimeMetrics, source_model::UserStreamId};
 
 pub const DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY: usize = 128;
 pub const DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY: usize =
     DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY * MAX_BROADCAST_PAYLOAD_BYTES;
 
 pub(super) type OutboundSender = UserOutboundSender;
+
+/// delta sent from room state to one post-auth user's wire track state
+///
+/// the room only names the publisher and orchestration stream. the websocket
+/// user maps that pair onto its own current browser-side binding so room state
+/// stays independent from wire `mid` assignment and renegotiation details
+#[derive(Debug, Clone)]
+pub struct TrackBindingUpdate {
+    /// publisher whose wire track set changed
+    pub user_id: UserId,
+    /// logical stream changed for that publisher
+    pub stream_id: UserStreamId,
+    /// active update for an existing binding or `None` when the binding ends
+    pub active: Option<bool>,
+}
+
+/// outbound work the room wants one websocket user to perform
+///
+/// this is the main handoff from room-owned state transitions to user-owned
+/// protocol handling. the room never writes websocket frames or serializes
+/// protocol envelopes. it emits these values and leaves user-local wire state
+/// to post-auth websocket code
+#[derive(Debug, Clone)]
+pub enum UserOutbound {
+    /// fan-out payload that maps directly to server messages
+    Message(RoomEventMessage),
+    /// targeted bootstrap or renegotiation work for one live user
+    Request(Box<RoomEventRequest>),
+    /// minimal track-binding delta for the user's wire track state
+    TrackBindingUpdate(TrackBindingUpdate),
+    /// ask the user owner to close the websocket with the mapped reason
+    Close(UserCloseReason),
+}
+
+/// user-local work requested by the room after a room-state transition
+///
+/// these requests are more specific than `RoomEventMessage` because they must
+/// run in the context of one live websocket user
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RoomEventRequest {
+    /// bootstrap one newly visible remote track on the targeted user
+    BootstrapRemoteTrack(RemoteTrackBootstrap),
+}
+
+impl UserOutbound {
+    #[must_use]
+    pub(super) fn queued_bytes(&self) -> usize {
+        match self {
+            Self::Message(message) => message.queued_bytes(),
+            Self::Request(_) | Self::TrackBindingUpdate(_) | Self::Close(_) => 1024,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UserOutboundOverflow {
