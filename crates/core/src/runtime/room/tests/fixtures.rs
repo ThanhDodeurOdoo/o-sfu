@@ -331,7 +331,6 @@ impl StagedPublishScenario {
                 self.connection_id,
                 &applied_answer,
                 &self.adapter,
-                &self.adapter,
             )
             .await;
     }
@@ -684,7 +683,7 @@ impl SourcePolicyScenario {
 
     pub(super) async fn refresh_policy(&self) {
         self.room
-            .sync_source_packet_selection_policy(Some(&self.adapter), &self.adapter)
+            .sync_source_packet_selection_policy(&self.adapter)
             .await;
     }
 

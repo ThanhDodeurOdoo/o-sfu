@@ -556,7 +556,6 @@ impl MediaSession<'_> {
                 self.context.connection_id(),
                 applied_answer,
                 &self.core.media_transport,
-                &self.core.media_transport,
             )
             .await
     }

@@ -427,7 +427,7 @@ impl Room {
             state.apply_presence_update(user_id, connection_id, &info, need_refresh)
         };
         if let Some(outcome) = outcome {
-            self.sync_source_packet_selection_policy(Some(media_transport), media_transport)
+            self.sync_source_packet_selection_policy(media_transport)
                 .await;
             outcome.emit();
         } else {
@@ -611,7 +611,7 @@ impl Room {
         self.cleanup_transport_removals(cleanup, &outcome.transport_removals)
             .await;
         if let Some(media_transport) = cleanup.media_transport() {
-            self.sync_source_packet_selection_policy(Some(media_transport), media_transport)
+            self.sync_source_packet_selection_policy(media_transport)
                 .await;
         }
         let user_id = outcome.user_id.clone();
@@ -684,7 +684,7 @@ impl Room {
         );
         self.diagnostics.forget_user(self.uuid(), user_id);
         if let Some(media_transport) = cleanup.media_transport() {
-            self.sync_source_packet_selection_policy(Some(media_transport), media_transport)
+            self.sync_source_packet_selection_policy(media_transport)
                 .await;
         }
     }
@@ -719,7 +719,7 @@ impl Room {
             );
         }
         if let Some(media_transport) = cleanup.media_transport() {
-            self.sync_source_packet_selection_policy(Some(media_transport), media_transport)
+            self.sync_source_packet_selection_policy(media_transport)
                 .await;
         }
         Self::emit_lifecycle_effects(outcome.effects);

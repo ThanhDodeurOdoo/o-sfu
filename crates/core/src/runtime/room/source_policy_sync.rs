@@ -12,7 +12,7 @@
 //!
 //! # Concurrency
 //!
-//! This module must not hold a room lock across observability or media-port
+//! This module must not hold a room lock across media transport
 //! awaits. It takes short state snapshots, builds a cold-path effect plan and
 //! lets the effect layer revalidate connection and media handles before any
 //! selector state is stored.
@@ -24,22 +24,15 @@ impl Room {
     /// Refreshes source packet policy from live transport observability.
     ///
     /// Normal room transitions call this after publish, subscribe or user
-    /// membership changes may have altered route pressure. If no observability
-    /// port exists, the runtime has no active-speaker or receiver-bandwidth
-    /// signal to consume, so the refresh is intentionally a no-op.
+    /// membership changes may have altered route pressure.
     pub(super) async fn sync_source_packet_selection_policy(
         &self,
-        observability_port: Option<&MediaTransport>,
-        media_port: &MediaTransport,
+        media_transport: &MediaTransport,
     ) {
-        let Some(observability_port) = observability_port else {
-            return;
-        };
-        let active_speaker_sources = observability_port.active_speaker_source_snapshot().await;
+        let active_speaker_sources = media_transport.active_speaker_source_snapshot().await;
         self.sync_source_packet_selection_policy_from_observations(
             &active_speaker_sources,
-            observability_port,
-            media_port,
+            media_transport,
         )
         .await;
     }
@@ -48,7 +41,7 @@ impl Room {
     ///
     /// This variant exists so manager-level fanout and tests can reuse the same
     /// policy path after they already have an active-speaker observation. The
-    /// method still asks `MediaTransport` for receiver bandwidth using the
+    /// method still asks the same `MediaTransport` for receiver bandwidth using the
     /// current transport users, because bandwidth estimates must be
     /// scoped to the users that are still attached to this room
     ///
@@ -60,8 +53,7 @@ impl Room {
     pub(super) async fn sync_source_packet_selection_policy_from_observations(
         &self,
         active_speaker_sources: &[ActiveSpeakerSource],
-        observability_port: &MediaTransport,
-        media_port: &MediaTransport,
+        media_transport: &MediaTransport,
     ) {
         let session_keys = {
             let state = self.state.read().await;
@@ -72,7 +64,7 @@ impl Room {
                 .collect::<Vec<_>>()
         };
         let receiver_bandwidth_snapshot =
-            observability_port.receiver_bandwidth_snapshot(&session_keys);
+            media_transport.receiver_bandwidth_snapshot(&session_keys);
         let effect_plan = {
             let state = self.state.read().await;
             SourcePolicyEffectPlan::from_state(
@@ -84,6 +76,6 @@ impl Room {
         if effect_plan.is_empty() {
             return;
         }
-        effect_plan.execute(self, media_port).await;
+        effect_plan.execute(self, media_transport).await;
     }
 }

@@ -226,7 +226,6 @@ impl RuntimeTasks {
             Arc::clone(&runtime.room_manager),
             runtime.media_transport.clone(),
             runtime.media_transport.source_policy_subscription(),
-            runtime.media_transport.clone(),
             shutdown_token.child_token(),
         );
         let cleanup_retry_drain = spawn_cleanup_retry_drain_task(
@@ -333,15 +332,14 @@ impl RuntimeState {
 /// deadline instead of polling the whole process on a fixed interval.
 fn spawn_source_packet_policy_update_task(
     rooms: Arc<RoomManager>,
-    observability_port: MediaTransport,
+    media_transport: MediaTransport,
     updates: media_transport::SourcePolicyUpdateSubscription,
-    media_port: MediaTransport,
     shutdown_token: CancellationToken,
 ) -> JoinHandle<()> {
     info!("booted source packet policy update task");
     tokio::spawn(async move {
         loop {
-            let next_deadline = observability_port.next_active_speaker_deadline().await;
+            let next_deadline = media_transport.next_active_speaker_deadline().await;
             let mut dirty_room_instance_ids = match next_deadline {
                 Some(next_deadline) => {
                     tokio::select! {
@@ -349,7 +347,7 @@ fn spawn_source_packet_policy_update_task(
                         () = shutdown_token.cancelled() => return,
                         dirty_room_instance_ids = updates.wait_for_update() => dirty_room_instance_ids,
                         () = time::sleep_until(Instant::from_std(next_deadline)) => {
-                            observability_port
+                            media_transport
                                 .expired_active_speaker_room_instance_ids(StdInstant::now())
                                 .await
                         }
@@ -370,8 +368,7 @@ fn spawn_source_packet_policy_update_task(
             rooms
                 .sync_source_packet_selection_policies_for_runtime_ids(
                     &dirty_room_instance_ids,
-                    &observability_port,
-                    &media_port,
+                    &media_transport,
                 )
                 .await;
         }
