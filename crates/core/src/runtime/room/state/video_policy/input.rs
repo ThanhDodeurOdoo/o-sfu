@@ -24,7 +24,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    super::shared::{ConsumerRouteTransportRef, RoomState},
+    super::{media::ConsumerRouteTransportRef, shared::RoomState},
     layout::{ReceiverVideoLayoutIntent, featured_source_user_ids_for_active_speakers},
 };
 use crate::{

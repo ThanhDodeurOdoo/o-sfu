@@ -22,11 +22,10 @@ use super::{
             TrackBindingUpdate, UserOutbound, outbound::OutboundSender, topology::RoutedProducerId,
         },
         ids::ProducerRuntimeId,
-        shared::{
-            ConsumerKey, PublishedProducer, PublishedSourceInstall, RoomState, SourceKey,
-            SourceTransportMediaIndexEntry, TransportMediaRemoval,
-        },
+        shared::{RoomState, TransportMediaRemoval},
     },
+    ConsumerKey, PublishedProducer, PublishedSourceInstall, SourceKey,
+    SourceTransportMediaIndexEntry,
     relay::RelayRouteEffect,
     subscription::{ConsumerBootstrapProducerSnapshot, PendingConsumerBootstrapTarget},
 };
@@ -208,7 +207,7 @@ impl RoomState {
         let media_kind = pending.media_kind;
         let source_id = source_descriptor.source_id();
 
-        self.media.install_published_source(PublishedSourceInstall {
+        self.media.install_source(PublishedSourceInstall {
             source_key,
             source_descriptor,
             source_encoding_ids,
@@ -498,9 +497,7 @@ impl RoomState {
                 "repaired published track room state after router producer teardown failed"
             );
         }
-        let (_producer, relay_effects) = self
-            .media
-            .remove_source_registry_entry(producer_target.source_id)?;
+        let (_producer, relay_effects) = self.media.remove_source(producer_target.source_id)?;
         Some(UnpublishTrackOutcome {
             recipients: self
                 .users

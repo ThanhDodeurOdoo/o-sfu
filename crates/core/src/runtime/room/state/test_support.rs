@@ -1,6 +1,9 @@
 use o_sfu_router::RouterId;
 
-use super::shared::{RoomState, SourceKey};
+use super::{
+    media::{SourceKey, SourceTransportMediaIndexEntry},
+    shared::RoomState,
+};
 #[cfg(test)]
 use crate::runtime::source_model::PublishedSourceId;
 use crate::runtime::{
@@ -114,6 +117,6 @@ impl RoomState {
         transport_media_id: TransportMediaId,
     ) -> Option<ConnectionId> {
         self.source_transport_media_entry(transport_media_id)
-            .map(super::shared::SourceTransportMediaIndexEntry::owner_connection_id)
+            .map(SourceTransportMediaIndexEntry::owner_connection_id)
     }
 }

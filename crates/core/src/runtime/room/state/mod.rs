@@ -7,9 +7,9 @@
 //! `recording` owns room recording-control state updates and fan-out.
 //! `user_info_projection` owns outward-facing user projection.
 //! `video_policy` owns room-level source selection input, planning, projection, and commit.
-//! `shared` owns the in-memory state and bookkeeping types.
+//! `shared` owns the room state shell.
 //! `membership` owns user lifecycle, presence fan-out, and negotiation readiness.
-//! `media` owns producer/consumer bootstrap and routing-side media bookkeeping.
+//! `media` owns producer/consumer workflows and the media graph indexes.
 //! `test_support` owns read-only state inspectors used only by tests.
 
 mod diagnostics;
@@ -29,11 +29,12 @@ mod video_policy;
 pub use self::media::{ConsumerRouteState, RemoteTrackBootstrap};
 pub(in crate::runtime::room) use self::{
     media::{
-        ConsumerBootstrapOrigin, ConsumerRouteUpdate, PendingConsumerBootstrap,
-        PendingConsumerBootstrapTarget, PlannedConsumerBootstrap, PlannedSubscriptionChange,
-        PreparedConsumerBootstrap, RelayRouteEffect, RelayRouteKey, ValidatedPublishDescriptor,
+        ConsumerBootstrapOrigin, ConsumerRouteTransportRef, ConsumerRouteUpdate,
+        PendingConsumerBootstrap, PendingConsumerBootstrapTarget, PlannedConsumerBootstrap,
+        PlannedSubscriptionChange, PreparedConsumerBootstrap, RelayRouteEffect, RelayRouteKey,
+        ValidatedPublishDescriptor,
     },
     membership::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, LifecycleEffects},
-    shared::{ConsumerRouteTransportRef, RoomState, TransportMediaRemoval},
+    shared::{RoomState, TransportMediaRemoval},
     video_policy::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
 };

@@ -17,12 +17,9 @@ use o_sfu_router::{
     },
 };
 
-use super::super::{
-    ids::ProducerRuntimeId,
-    shared::{
-        ConsumerKey, ConsumerState, PublishedProducer, RoomState, SourceKey,
-        SourceTransportMediaIndexEntry,
-    },
+use super::{
+    super::{ids::ProducerRuntimeId, shared::RoomState},
+    ConsumerKey, ConsumerState, PublishedProducer, SourceKey, SourceTransportMediaIndexEntry,
 };
 use crate::{
     Bitrate, MediaCodecFlags,

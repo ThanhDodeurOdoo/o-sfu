@@ -8,7 +8,8 @@
 use super::{
     super::{
         super::{RoomEventMessage, outbound::MessageFanout},
-        shared::{ConsumerKey, RoomState},
+        media::ConsumerKey,
+        shared::RoomState,
     },
     action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
 };
