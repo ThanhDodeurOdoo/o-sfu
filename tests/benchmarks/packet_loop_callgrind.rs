@@ -40,26 +40,6 @@ fn callgrind_config(ir_soft_limit: f64) -> LibraryBenchmarkConfig {
     config
 }
 
-fn route_planning_config() -> LibraryBenchmarkConfig {
-    callgrind_config(0.5)
-}
-
-fn relay_mailbox_config() -> LibraryBenchmarkConfig {
-    callgrind_config(1.0)
-}
-
-fn ingress_demux_config() -> LibraryBenchmarkConfig {
-    callgrind_config(1.0)
-}
-
-fn packet_sink_config() -> LibraryBenchmarkConfig {
-    callgrind_config(1.0)
-}
-
-fn route_control_config() -> LibraryBenchmarkConfig {
-    callgrind_config(0.5)
-}
-
 fn fanout_topology(destination_count: usize) -> FanoutBenchTopology {
     FanoutBenchTopology::with_local_destinations(destination_count)
 }
@@ -71,12 +51,12 @@ fn fanout_topology(destination_count: usize) -> FanoutBenchTopology {
 // real work, so the useful info is if buffer reuse and route lookup stay
 // proportional to the required fanout rather than adding allocator churn or
 // unrelated scans
-#[library_benchmark(config = route_planning_config())]
-#[benches::fanout(
-    args = [1usize, 8, 32, 64],
-    setup = fanout_topology
-)]
-fn route_planning_1024_turns(mut topology: FanoutBenchTopology) -> usize {
+#[library_benchmark(config = callgrind_config(0.5))]
+#[bench::fanout_1(args = (1usize), setup = fanout_topology)]
+#[bench::fanout_8(args = (8usize), setup = fanout_topology)]
+#[bench::fanout_32(args = (32usize), setup = fanout_topology)]
+#[bench::fanout_64(args = (64usize), setup = fanout_topology)]
+fn route_plan_1024(mut topology: FanoutBenchTopology) -> usize {
     black_box(topology.plan_route_turns())
 }
 
@@ -86,10 +66,10 @@ fn route_planning_1024_turns(mut topology: FanoutBenchTopology) -> usize {
 // the open and overloaded cases have different expected outcomes but both are
 // packet-loop work that can run for every relayed packet
 // keeping them cheap preserves cross-worker forwarding under bursty rooms
-#[library_benchmark(config = relay_mailbox_config())]
-#[bench::enqueue_256_attempts(RelayPressureBenchFixture::open_mailbox())]
-#[bench::overloaded_256_attempts(RelayPressureBenchFixture::full_mailbox())]
-fn relay_mailbox_256_attempts(fixture: RelayPressureBenchFixture) -> usize {
+#[library_benchmark(config = callgrind_config(1.0))]
+#[bench::enqueue(RelayPressureBenchFixture::open_mailbox())]
+#[bench::overloaded(RelayPressureBenchFixture::full_mailbox())]
+fn relay_mailbox_256(fixture: RelayPressureBenchFixture) -> usize {
     black_box(fixture.run_attempts())
 }
 
@@ -100,12 +80,10 @@ fn relay_mailbox_256_attempts(fixture: RelayPressureBenchFixture) -> usize {
 // remote address has been learned
 // repeated misses protect the defensive path that must stay bounded when noise
 // or stale peers send datagrams that do not belong to a live RTC session
-#[library_benchmark(config = ingress_demux_config())]
-#[bench::cached_accepted_route_256_datagrams(IngressRoutingBenchFixture::cached_accepted_route())]
-#[bench::unknown_source_miss_256_datagrams(
-    IngressRoutingBenchFixture::repeated_unknown_source_miss()
-)]
-fn ingress_demux_256_datagrams(mut fixture: IngressRoutingBenchFixture) -> usize {
+#[library_benchmark(config = callgrind_config(1.0))]
+#[bench::cached_route(IngressRoutingBenchFixture::cached_accepted_route())]
+#[bench::unknown_source(IngressRoutingBenchFixture::repeated_unknown_source_miss())]
+fn ingress_demux_256(mut fixture: IngressRoutingBenchFixture) -> usize {
     black_box(fixture.route_datagrams())
 }
 
@@ -115,9 +93,9 @@ fn ingress_demux_256_datagrams(mut fixture: IngressRoutingBenchFixture) -> usize
 // recording sinks share the packet-loop origin side with media forwarding
 // this benchmark keeps that adjacent path visible so recording support cannot
 // quietly add per-packet cost to rooms that are already forwarding media
-#[library_benchmark(config = packet_sink_config())]
-#[bench::recording_sink_512_turns(PacketSinkFanoutBenchFixture::recording_sink())]
-fn packet_sink_fanout_512_turns(mut fixture: PacketSinkFanoutBenchFixture) -> usize {
+#[library_benchmark(config = callgrind_config(1.0))]
+#[bench::recording(PacketSinkFanoutBenchFixture::recording_sink())]
+fn packet_sink_512(mut fixture: PacketSinkFanoutBenchFixture) -> usize {
     black_box(fixture.route_sink_turns())
 }
 
@@ -127,9 +105,9 @@ fn packet_sink_fanout_512_turns(mut fixture: PacketSinkFanoutBenchFixture) -> us
 // this protects video route-control updates from becoming proportional to
 // repeated packets or duplicate readiness events instead of the unique source
 // and destination work that must actually change
-#[library_benchmark(config = route_control_config())]
-#[bench::selected_rid_256_destinations(RidReadinessBenchFixture::pending_selected_rid())]
-fn selected_rid_readiness_256_destinations(mut fixture: RidReadinessBenchFixture) -> usize {
+#[library_benchmark(config = callgrind_config(0.5))]
+#[bench::selected(RidReadinessBenchFixture::pending_selected_rid())]
+fn rid_readiness_256(mut fixture: RidReadinessBenchFixture) -> usize {
     black_box(fixture.activate_selected_rid())
 }
 
@@ -140,21 +118,21 @@ fn selected_rid_readiness_256_destinations(mut fixture: RidReadinessBenchFixture
 // source command per consumer
 // this benchmark checks the sorted flush path that collapses many requests into
 // the single producer-side signal the packet loop should emit
-#[library_benchmark(config = route_control_config())]
-#[bench::remote_source_512_requests(KeyframeCoalescingBenchFixture::remote_source_requests())]
-fn keyframe_coalescing_512_requests(mut fixture: KeyframeCoalescingBenchFixture) -> usize {
+#[library_benchmark(config = callgrind_config(0.5))]
+#[bench::remote_source(KeyframeCoalescingBenchFixture::remote_source_requests())]
+fn keyframe_coalesce_512(mut fixture: KeyframeCoalescingBenchFixture) -> usize {
     black_box(fixture.flush_requests())
 }
 
 library_benchmark_group!(
     name = packet_loop_callgrind;
     benchmarks =
-        route_planning_1024_turns,
-        relay_mailbox_256_attempts,
-        ingress_demux_256_datagrams,
-        packet_sink_fanout_512_turns,
-        selected_rid_readiness_256_destinations,
-        keyframe_coalescing_512_requests
+        route_plan_1024,
+        relay_mailbox_256,
+        ingress_demux_256,
+        packet_sink_512,
+        rid_readiness_256,
+        keyframe_coalesce_512
 );
 
 main!(library_benchmark_groups = packet_loop_callgrind);
