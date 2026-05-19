@@ -14,9 +14,7 @@ use crate::{
     },
     runtime::{
         DiagnosticsStore, MediaTransport, RoomPacketSinkRegistry, RuntimeMetrics, RuntimeState,
-        media_transport::{
-            MediaTransportDeps, RtcTransport, RtcTransportConfig, SessionBitrateLimits,
-        },
+        media_transport::{MediaTransportConfig, MediaTransportDeps, SessionBitrateLimits},
         metrics::{MetricName, RuntimeMetricsSnapshot, test_support::RuntimeMetricsSnapshotLookup},
         room::{
             DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
@@ -415,8 +413,8 @@ fn build_real_media_transport_for_test_config(
     metrics: Arc<RuntimeMetrics>,
     packet_sink_registry: Arc<RoomPacketSinkRegistry>,
 ) -> MediaTransport {
-    match RtcTransport::builder()
-        .transport_config(RtcTransportConfig {
+    match MediaTransport::builder()
+        .transport_config(MediaTransportConfig {
             public_ip: config.transport.public_ip,
             bitrate_limits: SessionBitrateLimits::new(
                 config.transport.max_bitrate_in,
@@ -435,7 +433,7 @@ fn build_real_media_transport_for_test_config(
         .worker_count(config.transport.rtc_media_worker_count)
         .build()
     {
-        Ok(transport) => MediaTransport::from_rtc_transport(transport),
+        Ok(transport) => transport,
         Err(error) => panic!("runtime test RTC transport config should be valid: {error}"),
     }
 }

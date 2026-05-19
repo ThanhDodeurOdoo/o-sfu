@@ -95,8 +95,7 @@ pub mod transport {
         //! non-production media transport route inspectors
         //!
         //! this module exists only for deterministic tests. production code
-        //! must use the opaque `MediaTransport` facade plus the production
-        //! `RtcTransport` backend
+        //! must use the opaque `MediaTransport` facade
 
         pub use crate::runtime::rtc_engine::{ForwardedPacket, test_support::*};
     }
@@ -125,9 +124,9 @@ pub mod transport {
         runtime::media_transport::{
             ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
             ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,
-            ConsumerPacketGateUpdate, MediaTransport, MediaTransportDeps, ProducerActivity,
-            ReceiverBandwidthSnapshot, RtcTransport, RtcTransportBuildError, RtcTransportBuilder,
-            RtcTransportConfig, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
+            ConsumerPacketGateUpdate, MediaTransport, MediaTransportBuildError,
+            MediaTransportBuilder, MediaTransportConfig, MediaTransportDeps, ProducerActivity,
+            ReceiverBandwidthSnapshot, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
             SourcePacketGate, SourcePacketOperatingPoint, SourcePolicyDirtyState,
             SourcePolicySignal, SourcePolicyUpdateSubscription, TransportAdapterError,
             TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,

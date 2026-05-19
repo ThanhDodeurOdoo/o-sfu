@@ -18,6 +18,7 @@ pub(super) use o_sfu_protocol::{
 };
 use str0m::{Candidate, Rtc, change::SdpOffer};
 pub(super) use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     task::JoinHandle,
     time::{sleep, timeout},
@@ -43,8 +44,7 @@ pub(super) use crate::{
         diagnostics::DiagnosticsStore,
         http_server::app,
         media_transport::{
-            MediaTransport, MediaTransportDeps, RtcTransport, RtcTransportConfig,
-            SessionBitrateLimits,
+            MediaTransport, MediaTransportConfig, MediaTransportDeps, SessionBitrateLimits,
         },
         metrics::RuntimeMetrics,
         room::{
@@ -61,6 +61,44 @@ static NEXT_WEBSOCKET_TEST_PEER_PORT: AtomicU16 = AtomicU16::new(58_000);
 pub(super) type TestWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
 pub(super) type CreateRoomQuery = RoomConfig;
+
+/// raw websocket peer for tests that must prove the server handles a silent client
+///
+/// `tokio_tungstenite` is the right fixture for normal client behavior, but it
+/// queues automatic pong replies when reads observe ping frames, so timeout
+/// tests need a peer that can authenticate and read server frames without ever
+/// acknowledging liveness probes
+pub(super) struct SilentWebSocket {
+    stream: TcpStream,
+}
+
+/// server-frame subset needed by the silent peer
+///
+/// the fixture decodes only text frames, pings and close frames because those
+/// are enough to authenticate, reach steady state and observe timeout shutdown
+enum RawWebSocketFrame {
+    /// JSON protocol batch from the server
+    Text(String),
+    /// server liveness probe that this fixture deliberately ignores
+    Ping,
+    /// server close frame plus optional RFC close code
+    Close(Option<CloseCode>),
+    /// any frame that has no value for the timeout assertions
+    Other,
+}
+
+/// server text frame opcode used while reading welcome and offer batches
+const RAW_TEXT_FRAME_OPCODE: u8 = 0x1;
+/// server close frame opcode used to assert the timeout close code
+const RAW_CLOSE_FRAME_OPCODE: u8 = 0x8;
+/// server ping frame opcode that must not trigger a pong in this fixture
+const RAW_PING_FRAME_OPCODE: u8 = 0x9;
+/// client-to-server websocket frames must be masked
+const RAW_FRAME_MASK_BIT: u8 = 0x80;
+/// websocket payload marker for two-byte extended lengths
+const RAW_EXTENDED_16_BIT_LENGTH: u8 = 0x7e;
+/// websocket payload marker for eight-byte extended lengths
+const RAW_EXTENDED_64_BIT_LENGTH: u8 = 0x7f;
 
 /// App-level WebSocket subsystem fixture.
 ///
@@ -173,8 +211,8 @@ impl Default for TestServerBuilder {
 )]
 pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
     let rtc_port_range = next_websocket_test_rtc_port_range();
-    match RtcTransport::builder()
-        .transport_config(RtcTransportConfig {
+    match MediaTransport::builder()
+        .transport_config(MediaTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(
                 Bitrate::from_mbps(8),
@@ -193,7 +231,7 @@ pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
         .worker_count(1)
         .build()
     {
-        Ok(transport) => MediaTransport::from_rtc_transport(transport),
+        Ok(transport) => transport,
         Err(error) => panic!("constant RTC test transport config should be valid: {error}"),
     }
 }
@@ -226,6 +264,62 @@ pub(super) async fn connect_websocket_with_forwarded_for(
         .insert("x-forwarded-for", forwarded_for);
     let websocket = connect_async(request).await.ok()?;
     Some(websocket.0)
+}
+
+/// opens a real upgraded websocket while keeping direct control of raw frames
+///
+/// this keeps the test on the actual Axum upgrade path but avoids handing
+/// liveness frames to a client library that would answer them automatically
+pub(super) async fn connect_silent_websocket(server: &TestServer) -> Option<SilentWebSocket> {
+    let mut stream = TcpStream::connect(server.addr).await.ok()?;
+    let request = format!(
+        "GET / HTTP/1.1\r\n\
+         Host: {}\r\n\
+         Upgrade: websocket\r\n\
+         Connection: Upgrade\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Sec-WebSocket-Version: 13\r\n\
+         \r\n",
+        server.addr
+    );
+    stream.write_all(request.as_bytes()).await.ok()?;
+    read_raw_upgrade_response(&mut stream).await?;
+    Some(SilentWebSocket { stream })
+}
+
+/// verifies the HTTP upgrade without installing websocket client behavior
+///
+/// the silent fixture only needs to know that the server accepted the upgrade
+/// before it starts writing raw masked frames
+async fn read_raw_upgrade_response(stream: &mut TcpStream) -> Option<()> {
+    let mut response = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !response.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut byte).await.ok()?;
+        response.push(byte[0]);
+        if response.len() > 8192 {
+            return None;
+        }
+    }
+    let response = String::from_utf8(response).ok()?;
+    response.starts_with("HTTP/1.1 101").then_some(())
+}
+
+/// authenticates through the normal protocol envelope on the raw peer
+///
+/// this keeps auth and room admission identical to regular websocket tests
+/// while preserving the silent behavior needed after startup
+pub(super) async fn authenticate_silent_with_jwt(
+    server: &TestServer,
+    token: &str,
+) -> Option<SilentWebSocket> {
+    let mut websocket = connect_silent_websocket(server).await?;
+    let payload = encode_protocol_auth(AuthPayload {
+        jwt: token.to_owned(),
+        channel: None,
+    })?;
+    websocket.send_text(&payload).await?;
+    Some(websocket)
 }
 
 pub(super) fn signed_connect_claims(key: &str, room_id: &str, user_id: UserId) -> Option<String> {
@@ -364,6 +458,15 @@ pub(super) async fn read_welcome(websocket: &mut TestWebSocket) -> Option<Welcom
     decode_protocol_welcome_batch(&payload)
 }
 
+/// reads the welcome batch through the shared protocol decoder
+///
+/// this proves the raw peer reached the same authenticated state as a normal
+/// test websocket before the liveness-specific assertions begin
+pub(super) async fn read_silent_welcome(websocket: &mut SilentWebSocket) -> Option<WelcomePayload> {
+    let payload = websocket.read_text().await?;
+    decode_protocol_welcome_batch(&payload)
+}
+
 fn decode_protocol_welcome_batch(payload: &str) -> Option<WelcomePayload> {
     let batch = serde_json::from_str::<EnvelopeBatch>(payload).ok()?;
     let envelope = batch.first()?.clone();
@@ -389,6 +492,24 @@ pub(super) async fn wait_for_protocol_server_request(
 ) -> Option<(RequestId, ServerRequest)> {
     loop {
         let batch = read_protocol_server_batch(websocket).await?;
+        if let Some(request) = first_protocol_server_request(&batch) {
+            return Some(request);
+        }
+    }
+}
+
+/// waits for the first server request without enabling automatic pong behavior
+///
+/// the ping-timeout test needs the session to reach steady state before the
+/// peer goes silent, otherwise it would cover startup failure instead
+pub(super) async fn wait_for_silent_protocol_server_request(
+    websocket: &mut SilentWebSocket,
+) -> Option<(RequestId, ServerRequest)> {
+    loop {
+        let payload = timeout(Duration::from_secs(1), websocket.read_text())
+            .await
+            .ok()??;
+        let batch = serde_json::from_str::<EnvelopeBatch>(&payload).ok()?;
         if let Some(request) = first_protocol_server_request(&batch) {
             return Some(request);
         }
@@ -545,18 +666,109 @@ pub(super) async fn read_close_code(websocket: &mut TestWebSocket) -> Option<Clo
     }
 }
 
-pub(super) async fn read_close_code_without_answering_ping(
-    websocket: &mut TestWebSocket,
-) -> Option<CloseCode> {
+/// reads until the timeout close frame arrives without answering ping frames
+///
+/// this is the assertion boundary that the old tungstenite helper could not
+/// provide because its reads could queue automatic pong replies
+pub(super) async fn read_silent_close_code(websocket: &mut SilentWebSocket) -> Option<CloseCode> {
     loop {
-        let message = read_message(websocket).await?;
-        match message.ok()? {
-            tungstenite::Message::Close(frame) => return frame.map(|frame| frame.code),
-            tungstenite::Message::Ping(_)
-            | tungstenite::Message::Pong(_)
-            | tungstenite::Message::Text(_)
-            | tungstenite::Message::Binary(_)
-            | tungstenite::Message::Frame(_) => {}
+        match websocket.read_frame().await? {
+            RawWebSocketFrame::Close(code) => return code,
+            RawWebSocketFrame::Ping | RawWebSocketFrame::Text(_) | RawWebSocketFrame::Other => {}
         }
     }
+}
+
+impl SilentWebSocket {
+    /// writes one masked client text frame
+    ///
+    /// client masking is required by the websocket protocol, so the raw peer
+    /// must perform it explicitly when sending auth and protocol responses
+    async fn send_text(&mut self, payload: &str) -> Option<()> {
+        let payload = payload.as_bytes();
+        let mut frame = Vec::with_capacity(payload.len().saturating_add(8));
+        frame.push(0x81);
+        if payload.len() < 126 {
+            frame.push(RAW_FRAME_MASK_BIT | u8::try_from(payload.len()).ok()?);
+        } else {
+            frame.push(RAW_FRAME_MASK_BIT | RAW_EXTENDED_16_BIT_LENGTH);
+            frame.extend_from_slice(&u16::try_from(payload.len()).ok()?.to_be_bytes());
+        }
+        let mask = [1_u8, 2, 3, 4];
+        frame.extend_from_slice(&mask);
+        frame.extend(
+            payload
+                .iter()
+                .zip(mask.iter().copied().cycle())
+                .map(|(byte, mask_byte)| byte ^ mask_byte),
+        );
+        self.stream.write_all(&frame).await.ok()?;
+        Some(())
+    }
+
+    /// reads server text frames while deliberately ignoring pings
+    ///
+    /// this lets startup use normal JSON batches without changing the fixture
+    /// into an active liveness participant
+    async fn read_text(&mut self) -> Option<String> {
+        loop {
+            match self.read_frame().await? {
+                RawWebSocketFrame::Text(payload) => return Some(payload),
+                RawWebSocketFrame::Ping | RawWebSocketFrame::Other => {}
+                RawWebSocketFrame::Close(_) => return None,
+            }
+        }
+    }
+
+    /// decodes the minimal server-to-client websocket frame shape used by tests
+    ///
+    /// keeping this parser local avoids expanding the production websocket
+    /// surface just to model one intentionally silent test peer
+    async fn read_frame(&mut self) -> Option<RawWebSocketFrame> {
+        let mut header = [0_u8; 2];
+        self.stream.read_exact(&mut header).await.ok()?;
+        let opcode = header[0] & 0x0f;
+        let masked = header[1] & RAW_FRAME_MASK_BIT != 0;
+        let mut payload_len = u64::from(header[1] & 0x7f);
+        if payload_len == u64::from(RAW_EXTENDED_16_BIT_LENGTH) {
+            let mut extended = [0_u8; 2];
+            self.stream.read_exact(&mut extended).await.ok()?;
+            payload_len = u64::from(u16::from_be_bytes(extended));
+        } else if payload_len == u64::from(RAW_EXTENDED_64_BIT_LENGTH) {
+            let mut extended = [0_u8; 8];
+            self.stream.read_exact(&mut extended).await.ok()?;
+            payload_len = u64::from_be_bytes(extended);
+        }
+        let mask = if masked {
+            let mut mask = [0_u8; 4];
+            self.stream.read_exact(&mut mask).await.ok()?;
+            Some(mask)
+        } else {
+            None
+        };
+        let mut payload = vec![0_u8; usize::try_from(payload_len).ok()?];
+        self.stream.read_exact(&mut payload).await.ok()?;
+        if let Some(mask) = mask {
+            for (byte, mask_byte) in payload.iter_mut().zip(mask.iter().copied().cycle()) {
+                *byte ^= mask_byte;
+            }
+        }
+        match opcode {
+            RAW_TEXT_FRAME_OPCODE => {
+                Some(RawWebSocketFrame::Text(String::from_utf8(payload).ok()?))
+            }
+            RAW_CLOSE_FRAME_OPCODE => Some(RawWebSocketFrame::Close(raw_close_code(&payload))),
+            RAW_PING_FRAME_OPCODE => Some(RawWebSocketFrame::Ping),
+            _ => Some(RawWebSocketFrame::Other),
+        }
+    }
+}
+
+/// extracts the optional close code from a raw close payload
+///
+/// empty close payloads are valid, but the ping-timeout assertion expects the
+/// server to send the explicit internal-error code
+fn raw_close_code(payload: &[u8]) -> Option<CloseCode> {
+    let bytes = payload.get(0..2)?.try_into().ok()?;
+    Some(CloseCode::from(u16::from_be_bytes(bytes)))
 }

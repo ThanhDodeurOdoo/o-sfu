@@ -18,7 +18,7 @@ pub(super) use crate::{
             DiagnosticsVideoRoutePriority,
         },
         media_transport::{
-            MediaTransportDeps, RtcTransport, RtcTransportConfig, SessionOffer, TransportMediaId,
+            MediaTransportConfig, MediaTransportDeps, SessionOffer, TransportMediaId,
             TransportSessionKey,
         },
         metrics::RuntimeMetrics,
@@ -265,8 +265,8 @@ pub(super) async fn settle_refresh_offer(
     reason = "the RTC room test fixture uses a fixed valid configuration and should fail loudly if it stops being valid"
 )]
 pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
-    match RtcTransport::builder()
-        .transport_config(RtcTransportConfig {
+    match MediaTransport::builder()
+        .transport_config(MediaTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(
                 Bitrate::from_mbps(8),
@@ -285,7 +285,7 @@ pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
         .worker_count(1)
         .build()
     {
-        Ok(transport) => MediaTransport::from_rtc_transport(transport),
+        Ok(transport) => transport,
         Err(error) => panic!("constant RTC room test transport config should be valid: {error}"),
     }
 }

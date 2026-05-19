@@ -62,9 +62,10 @@ use crate::{
     runtime::{
         diagnostics::DiagnosticsStore,
         media_transport::{
-            AppliedSessionAnswer, ConsumerPacketGateUpdate, MediaTransportDeps, RtcTransportConfig,
-            SessionOffer, SourcePacketGate, SourcePolicySignal, TransportAdapterError,
-            TransportConsumerRoute, TransportMediaId, TransportResult, TransportSessionKey,
+            AppliedSessionAnswer, ConsumerPacketGateUpdate, MediaTransportConfig,
+            MediaTransportDeps, SessionOffer, SourcePacketGate, SourcePolicySignal,
+            TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportResult,
+            TransportSessionKey,
         },
         metrics::{RtcMetricsRecorder, RtpMetricsRecorder, RuntimeMetrics},
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -226,7 +227,7 @@ impl RtcTransportWorker {
     /// callers get that value from the worker manager so media ids remain
     /// process-wide unique across local relay routes
     pub fn new(
-        config: &RtcTransportConfig,
+        config: &MediaTransportConfig,
         deps: &MediaTransportDeps,
         source_policy_signal: Arc<SourcePolicySignal>,
         media_id_base: u64,

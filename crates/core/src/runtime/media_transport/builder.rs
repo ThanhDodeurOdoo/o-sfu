@@ -1,62 +1,64 @@
-//! production RTC transport construction for the media transport boundary
+//! media transport construction
 //!
-//! owns the concrete RTC transport handle, its builder and the startup
-//! validation that protects worker construction from invalid worker or
-//! port-range topology
+//! owns the builder and startup validation that protect worker construction
+//! from invalid worker or port-range topology
 
 use std::sync::Arc;
 
 use thiserror::Error;
 
 use super::{
-    config::{MediaTransportDeps, RtcTransportConfig, RtcWorkerManagerConfig},
+    MediaTransport,
+    config::{MediaTransportConfig, MediaTransportDeps, RtcWorkerManagerConfig},
     worker_manager::RtcWorkerManager,
 };
 use crate::CoreOptions;
 
-/// Production media transport backed by the process-local RTC worker manager.
-///
-/// `RtcTransport` owns the actual RTC worker collection. It is a core-owned
-/// implementation detail for production media, not the type the server runtime
-/// should name in orchestration code. Use [`super::MediaTransport::from_core_options`]
-/// at the runtime boundary unless a targeted transport test needs to construct
-/// a real RTC backend directly.
-///
-/// Cloning this handle is cheap. Clones share the same worker manager and therefore
-/// the same packet loops, diagnostics state, source-policy signal and relay
-/// registrations.
-#[derive(Debug, Clone)]
-pub struct RtcTransport {
-    pub(super) worker_manager: Arc<RtcWorkerManager>,
-}
-
-impl RtcTransport {
-    /// Starts named RTC transport construction.
+impl MediaTransport {
+    /// Starts named media transport construction.
     ///
     /// The builder validates cold-path topology choices such as worker count
     /// and UDP port splitting before the first worker is created.
     #[must_use]
-    pub const fn builder() -> RtcTransportBuilder {
-        RtcTransportBuilder::new()
+    pub const fn builder() -> MediaTransportBuilder {
+        MediaTransportBuilder::new()
     }
 
-    /// Builds a production RTC transport from a prepared builder.
+    /// Builds a media transport from a prepared builder.
     ///
     /// This associated function exists for call sites that prefer passing the
     /// builder as one value. Normal fluent construction can call
-    /// [`RtcTransportBuilder::build`] directly.
+    /// [`MediaTransportBuilder::build`] directly.
     ///
     /// # Errors
     ///
-    /// Returns [`RtcTransportBuildError`] when the builder is missing required
+    /// Returns [`MediaTransportBuildError`] when the builder is missing required
     /// inputs or describes an invalid worker topology.
-    pub fn build(builder: RtcTransportBuilder) -> Result<Self, RtcTransportBuildError> {
+    pub fn build(builder: MediaTransportBuilder) -> Result<Self, MediaTransportBuildError> {
         builder.build()
+    }
+
+    /// Builds the runtime media transport from neutral core options and process
+    /// dependencies.
+    ///
+    /// This is the production server construction path. It returns the same
+    /// transport handle the runtime uses everywhere else, so there is no second
+    /// RTC-specific wrapper to reason about.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MediaTransportBuildError`] when the derived transport cannot be
+    /// built from the supplied options and dependencies.
+    pub fn from_core_options(
+        options: &CoreOptions,
+        deps: MediaTransportDeps,
+    ) -> Result<Self, MediaTransportBuildError> {
+        Self::builder().core_options(options).deps(deps).build()
     }
 
     fn from_worker_manager_config(
         config: &RtcWorkerManagerConfig,
-    ) -> Result<Self, RtcTransportBuildError> {
+    ) -> Result<Self, MediaTransportBuildError> {
         validate_worker_split(
             config.transport_config().rtc_port_range(),
             config.worker_count(),
@@ -76,7 +78,7 @@ impl RtcTransport {
     }
 }
 
-/// Named construction input for the production RTC transport.
+/// Named construction input for the media transport.
 ///
 /// Building the RTC transport needs operator policy, process services and
 /// worker topology. The builder keeps those inputs named so the runtime does
@@ -89,10 +91,10 @@ impl RtcTransport {
 /// worker counts that cannot receive at least one UDP port from the configured
 /// range.
 #[derive(Debug, Clone)]
-pub struct RtcTransportBuilder {
+pub struct MediaTransportBuilder {
     /// RTC-specific operator policy collected from runtime core options or a
     /// test fixture.
-    transport: Option<RtcTransportConfig>,
+    transport: Option<MediaTransportConfig>,
     /// Process services needed by the transport while it emits diagnostics,
     /// metrics and packet-sink fanout.
     deps: Option<MediaTransportDeps>,
@@ -100,7 +102,7 @@ pub struct RtcTransportBuilder {
     worker_count: usize,
 }
 
-impl RtcTransportBuilder {
+impl MediaTransportBuilder {
     /// Creates a builder with one media worker and no required inputs.
     #[must_use]
     pub const fn new() -> Self {
@@ -118,7 +120,7 @@ impl RtcTransportBuilder {
     /// internals.
     #[must_use]
     pub fn core_options(mut self, options: &CoreOptions) -> Self {
-        self.transport = Some(RtcTransportConfig {
+        self.transport = Some(MediaTransportConfig {
             public_ip: options.media.public_ip,
             bitrate_limits: options.media.bitrate_limits,
             video_bitrate_limits: options.media.video_bitrate_limits,
@@ -135,7 +137,7 @@ impl RtcTransportBuilder {
     /// This is mainly useful for targeted tests that need a narrow port range
     /// or codec policy without constructing a full server config.
     #[must_use]
-    pub fn transport_config(mut self, config: RtcTransportConfig) -> Self {
+    pub fn transport_config(mut self, config: MediaTransportConfig) -> Self {
         self.transport = Some(config);
         self
     }
@@ -157,7 +159,7 @@ impl RtcTransportBuilder {
         self
     }
 
-    /// Creates the RTC transport and validates worker topology.
+    /// Creates the media transport and validates worker topology.
     ///
     /// The method is cold-path only. It allocates worker state, creates one
     /// shared source-policy signal for the worker manager and does no packet-loop
@@ -165,14 +167,14 @@ impl RtcTransportBuilder {
     ///
     /// # Errors
     ///
-    /// Returns [`RtcTransportBuildError`] when transport config or dependency
+    /// Returns [`MediaTransportBuildError`] when transport config or dependency
     /// inputs are missing or when worker placement cannot fit the port range.
-    pub fn build(self) -> Result<RtcTransport, RtcTransportBuildError> {
+    pub fn build(self) -> Result<MediaTransport, MediaTransportBuildError> {
         let transport = self
             .transport
-            .ok_or(RtcTransportBuildError::MissingTransportConfig)?;
-        let deps = self.deps.ok_or(RtcTransportBuildError::MissingDeps)?;
-        RtcTransport::from_worker_manager_config(&RtcWorkerManagerConfig::new(
+            .ok_or(MediaTransportBuildError::MissingTransportConfig)?;
+        let deps = self.deps.ok_or(MediaTransportBuildError::MissingDeps)?;
+        MediaTransport::from_worker_manager_config(&RtcWorkerManagerConfig::new(
             transport,
             deps,
             self.worker_count,
@@ -180,32 +182,32 @@ impl RtcTransportBuilder {
     }
 }
 
-impl Default for RtcTransportBuilder {
+impl Default for MediaTransportBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// Invalid construction inputs for the production RTC transport.
+/// Invalid construction inputs for the media transport.
 ///
 /// These errors are configuration failures. They should surface during startup
 /// or test fixture creation before any media session is admitted.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
-pub enum RtcTransportBuildError {
-    /// The caller did not provide RTC transport policy.
-    #[error("RTC transport configuration is missing")]
+pub enum MediaTransportBuildError {
+    /// The caller did not provide media transport policy.
+    #[error("media transport configuration is missing")]
     MissingTransportConfig,
     /// The caller did not provide the shared diagnostics, metrics and
     /// packet-sink services needed by the transport.
-    #[error("RTC transport dependencies are missing")]
+    #[error("media transport dependencies are missing")]
     MissingDeps,
     /// A transport cannot be built without at least one RTC worker.
-    #[error("RTC transport worker count must be at least one")]
+    #[error("media transport worker count must be at least one")]
     InvalidWorkerCount,
     /// The configured UDP range cannot be split so every requested worker owns
     /// at least one port.
     #[error(
-        "RTC transport cannot split {port_count} UDP ports across {worker_count} media workers"
+        "media transport cannot split {port_count} UDP ports across {worker_count} media workers"
     )]
     InvalidPortSplit {
         worker_count: usize,
@@ -216,12 +218,12 @@ pub enum RtcTransportBuildError {
 fn validate_worker_split(
     rtc_port_range: crate::RtcPortRange,
     worker_count: usize,
-) -> Result<(), RtcTransportBuildError> {
+) -> Result<(), MediaTransportBuildError> {
     if worker_count == 0 {
-        return Err(RtcTransportBuildError::InvalidWorkerCount);
+        return Err(MediaTransportBuildError::InvalidWorkerCount);
     }
     if worker_count > usize::from(rtc_port_range.port_count()) {
-        return Err(RtcTransportBuildError::InvalidPortSplit {
+        return Err(MediaTransportBuildError::InvalidPortSplit {
             worker_count,
             port_count: rtc_port_range.port_count(),
         });
