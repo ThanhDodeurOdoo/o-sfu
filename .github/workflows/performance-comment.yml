@@ -120,10 +120,11 @@ jobs:
                 .replaceAll("\n", " ");
             }
 
-            function benchmarkName(summary) {
-              return summary.id
-                ? `${summary.function_name}/${summary.id}`
-                : summary.function_name || summary.module_path || "unknown";
+            function benchmarkLabels(summary) {
+              return {
+                scope: summary.function_name || summary.module_path || "unknown",
+                caseName: summary.id || "default",
+              };
             }
 
             function callgrindProfile(summary) {
@@ -157,8 +158,10 @@ jobs:
               // iai-callgrind reports comparison metrics as [head, base] for the Both variant
               const head = metricValue(both[0]);
               const base = metricValue(both[1]);
+              const labels = benchmarkLabels(summary);
               return {
-                name: benchmarkName(summary),
+                ...labels,
+                sortKey: `${labels.scope}/${labels.caseName}`,
                 base,
                 head,
                 delta: ir?.diffs?.diff_pct,
@@ -179,13 +182,14 @@ jobs:
             const rows = readJsonArray(summaryPath)
               .map(rowFromSummary)
               .filter(Boolean)
-              .sort((left, right) => left.name.localeCompare(right.name));
+              .sort((left, right) => left.sortKey.localeCompare(right.sortKey));
             const regressionCount = rows.filter((row) => row.result === "regression").length;
             const status = benchmarkResult === "success" && regressionCount === 0
               ? "ok"
               : "needs review";
             const tableRows = rows.slice(0, 25).map((row) => [
-              escapeCell(row.name),
+              escapeCell(row.scope),
+              escapeCell(row.caseName),
               formatInteger(row.base),
               formatInteger(row.head),
               formatDelta(row.delta),
@@ -193,8 +197,8 @@ jobs:
             ].join(" | "));
             const table = rows.length
               ? [
-                "| benchmark | base Ir | head Ir | delta | result |",
-                "| --- | ---: | ---: | ---: | --- |",
+                "| scope | case | base Ir | head Ir | delta | result |",
+                "| --- | --- | ---: | ---: | ---: | --- |",
                 ...tableRows.map((row) => `| ${row} |`),
               ].join("\n")
               : "no comparable Callgrind summary rows were produced";
