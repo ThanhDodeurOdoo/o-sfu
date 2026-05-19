@@ -79,6 +79,7 @@ impl FanoutBenchTopology {
         }
     }
 
+    #[inline(never)]
     fn plan_single_turn(&mut self) -> usize {
         for (packet_idx, packet) in self.pending_packets.iter_mut().enumerate() {
             populate_forward_routes_for_packet(
