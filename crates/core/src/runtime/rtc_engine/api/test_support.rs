@@ -5,12 +5,21 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use str0m::media::Mid;
-use tokio::sync::oneshot;
 
+#[cfg(test)]
+use super::super::test_support::{
+    ActiveRelayTargetCountProbe, HasAnyRemoteAddrSessionProbe, RecordIncomingMediaProbe,
+    RelayTargetCountProbe, RememberRemoteAddrProbe, RemoteAddrOwnerProbe, ResolveMidProbe,
+    SessionMaxBitrateInProbe, SessionMaxBitrateOutProbe, SessionStreamRxSsrcProbe,
+    SessionStreamTxSsrcProbe,
+};
 use super::{
     super::{
         state::TransportSessionHealth,
-        test_support::{DebugRouteEntry, DebugRtcWorkerCommand},
+        test_support::{
+            DebugProbe, DebugRouteEntry, ObserveAudioActivityProbe, RouteEntryByConsumerMidProbe,
+            RouteEntryByMediaIdProbe, RouteEntryProbe,
+        },
     },
     facade::RtcWorker,
 };
@@ -53,22 +62,19 @@ impl RtcWorker {
         );
     }
 
-    async fn request_debug_worker<T, F>(&self, build_command: F) -> Option<T>
+    async fn probe_debug_worker<P>(&self, probe: P) -> Option<P::Output>
     where
-        F: FnOnce(oneshot::Sender<T>) -> DebugRtcWorkerCommand,
+        P: DebugProbe,
     {
         let worker_handle = self.ensure_packet_loop_started().ok()?;
-        worker_handle.debug_handle.request(build_command).await
+        worker_handle.debug_handle.probe(probe).await
     }
 
     #[cfg(test)]
     pub async fn debug_resolve_mid(&self, transport_media_id: TransportMediaId) -> Option<Mid> {
-        self.request_debug_worker(|response| DebugRtcWorkerCommand::ResolveMid {
-            transport_media_id,
-            response,
-        })
-        .await
-        .flatten()
+        self.probe_debug_worker(ResolveMidProbe { transport_media_id })
+            .await
+            .flatten()
     }
 
     #[cfg(test)]
@@ -76,21 +82,16 @@ impl RtcWorker {
         &self,
         source_addr: SocketAddr,
     ) -> Option<TransportSessionKey> {
-        self.request_debug_worker(|response| DebugRtcWorkerCommand::RemoteAddrOwner {
-            source_addr,
-            response,
-        })
-        .await
-        .flatten()
+        self.probe_debug_worker(RemoteAddrOwnerProbe { source_addr })
+            .await
+            .flatten()
     }
 
     #[cfg(test)]
     pub async fn debug_has_any_remote_addr_session(&self) -> bool {
-        self.request_debug_worker(|response| DebugRtcWorkerCommand::HasAnyRemoteAddrSession {
-            response,
-        })
-        .await
-        .unwrap_or(false)
+        self.probe_debug_worker(HasAnyRemoteAddrSessionProbe)
+            .await
+            .unwrap_or(false)
     }
 
     #[cfg(test)]
@@ -100,10 +101,9 @@ impl RtcWorker {
         session_key: &TransportSessionKey,
     ) {
         let _ = self
-            .request_debug_worker(|response| DebugRtcWorkerCommand::RememberRemoteAddr {
+            .probe_debug_worker(RememberRemoteAddrProbe {
                 source_addr,
                 session_key: session_key.clone(),
-                response,
             })
             .await;
     }
@@ -114,10 +114,9 @@ impl RtcWorker {
         session_key: &TransportSessionKey,
         mid: Mid,
     ) -> Option<u32> {
-        self.request_debug_worker(|response| DebugRtcWorkerCommand::SessionStreamRxSsrc {
+        self.probe_debug_worker(SessionStreamRxSsrcProbe {
             session_key: session_key.clone(),
             mid,
-            response,
         })
         .await
         .flatten()
@@ -129,10 +128,9 @@ impl RtcWorker {
         session_key: &TransportSessionKey,
         mid: Mid,
     ) -> Option<u32> {
-        self.request_debug_worker(|response| DebugRtcWorkerCommand::SessionStreamTxSsrc {
+        self.probe_debug_worker(SessionStreamTxSsrcProbe {
             session_key: session_key.clone(),
             mid,
-            response,
         })
         .await
         .flatten()
@@ -143,9 +141,8 @@ impl RtcWorker {
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<Bitrate> {
-        self.request_debug_worker(|response| DebugRtcWorkerCommand::SessionMaxBitrateIn {
+        self.probe_debug_worker(SessionMaxBitrateInProbe {
             session_key: session_key.clone(),
-            response,
         })
         .await
         .flatten()
@@ -156,9 +153,8 @@ impl RtcWorker {
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<Bitrate> {
-        self.request_debug_worker(|response| DebugRtcWorkerCommand::SessionMaxBitrateOut {
+        self.probe_debug_worker(SessionMaxBitrateOutProbe {
             session_key: session_key.clone(),
-            response,
         })
         .await
         .flatten()
@@ -170,10 +166,9 @@ impl RtcWorker {
         source_session_key: &TransportSessionKey,
         source_mid: Mid,
     ) -> Option<DebugRouteEntry> {
-        self.request_debug_worker(|response| DebugRtcWorkerCommand::RouteEntry {
+        self.probe_debug_worker(RouteEntryProbe {
             source_session_key: source_session_key.clone(),
             source_mid,
-            response,
         })
         .await
         .flatten()
@@ -184,10 +179,9 @@ impl RtcWorker {
         consumer_session_key: &TransportSessionKey,
         consumer_mid: Mid,
     ) -> Option<DebugRouteEntry> {
-        self.request_debug_worker(|response| DebugRtcWorkerCommand::RouteEntryByConsumerMid {
+        self.probe_debug_worker(RouteEntryByConsumerMidProbe {
             consumer_session_key: consumer_session_key.clone(),
             consumer_mid,
-            response,
         })
         .await
         .flatten()
@@ -198,9 +192,8 @@ impl RtcWorker {
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> Option<DebugRouteEntry> {
-        self.request_debug_worker(|response| DebugRtcWorkerCommand::RouteEntryByMediaId {
+        self.probe_debug_worker(RouteEntryByMediaIdProbe {
             source_transport_media_id,
-            response,
         })
         .await
         .flatten()
@@ -215,12 +208,11 @@ impl RtcWorker {
         now: Instant,
     ) {
         let _ = self
-            .request_debug_worker(|response| DebugRtcWorkerCommand::RecordIncomingMedia {
+            .probe_debug_worker(RecordIncomingMediaProbe {
                 session_key: session_key.clone(),
                 transport_media_id,
                 payload_bytes,
                 now,
-                response,
             })
             .await;
     }
@@ -234,12 +226,11 @@ impl RtcWorker {
         now: Instant,
     ) {
         let _ = self
-            .request_debug_worker(|response| DebugRtcWorkerCommand::ObserveAudioActivity {
+            .probe_debug_worker(ObserveAudioActivityProbe {
                 transport_media_id,
                 voice_activity,
                 audio_level_dbov,
                 now,
-                response,
             })
             .await;
     }
@@ -249,9 +240,8 @@ impl RtcWorker {
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> usize {
-        self.request_debug_worker(|response| DebugRtcWorkerCommand::RelayTargetCount {
+        self.probe_debug_worker(RelayTargetCountProbe {
             source_transport_media_id,
-            response,
         })
         .await
         .unwrap_or(0)
@@ -262,9 +252,8 @@ impl RtcWorker {
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> usize {
-        self.request_debug_worker(|response| DebugRtcWorkerCommand::ActiveRelayTargetCount {
+        self.probe_debug_worker(ActiveRelayTargetCountProbe {
             source_transport_media_id,
-            response,
         })
         .await
         .unwrap_or(0)
