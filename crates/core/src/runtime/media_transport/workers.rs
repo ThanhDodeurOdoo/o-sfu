@@ -26,7 +26,7 @@ use crate::runtime::{
         TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey,
         TransportWorkerPressureSnapshot, operation::TransportControlOperation,
     },
-    rtc_engine::{RtcMediaOperation, RtcWorker, client_rtp_capabilities_from_answer},
+    rtc_engine::{RtcWorker, client_rtp_capabilities_from_answer},
 };
 
 /// Distance between two worker media-id allocation ranges.
@@ -203,7 +203,6 @@ impl MediaTransport {
             };
             let update_count = batch.len();
             let batch_results = worker
-                .media()
                 .set_consumer_packet_gates(
                     &key.source_session_key,
                     key.source_transport_media_id,
@@ -305,7 +304,6 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
         self.require_worker_for_user(session_key)?
-            .negotiation()
             .create_initial_session_offer(session_key)
             .await
     }
@@ -319,7 +317,6 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
         self.require_worker_for_user(session_key)?
-            .negotiation()
             .create_session_renegotiation_offer(session_key)
             .await
     }
@@ -334,7 +331,6 @@ impl MediaTransport {
         answer_sdp: &str,
     ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
         self.require_worker_for_user(session_key)?
-            .negotiation()
             .apply_session_answer(session_key, answer_sdp)
             .await
     }
@@ -361,7 +357,6 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
         self.require_worker_for_user(session_key)?
-            .users()
             .close_session_with_outcome(session_key)
             .await
             .map(|_outcome| ())
@@ -374,7 +369,6 @@ impl MediaTransport {
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
         self.require_worker_for_user(session_key)?
-            .media()
             .remove_media(session_key, transport_media_id)
             .await
     }
@@ -390,7 +384,6 @@ impl MediaTransport {
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.require_worker_for_user(session_key)?
-            .media()
             .add_recv_media(
                 session_key,
                 signaling_to_str0m_media_kind(media_kind),
@@ -430,14 +423,11 @@ impl MediaTransport {
         let remote_source_control = relay_route
             .as_ref()
             .map(|(source_worker, consumer_worker)| {
-                source_worker
-                    .media()
-                    .remote_source_control(consumer_worker.as_ref())
+                source_worker.remote_source_control(consumer_worker.as_ref())
             })
             .transpose()?;
         let consumer_worker = self.require_worker_for_user(consumer_session_key)?;
         consumer_worker
-            .media()
             .add_send_media(
                 consumer_session_key,
                 signaling_to_str0m_media_kind(media_kind),
@@ -463,12 +453,7 @@ impl MediaTransport {
                 activity,
             } => {
                 self.require_worker_for_user(&session_key)?
-                    .media()
-                    .execute(RtcMediaOperation::SetProducerActive {
-                        session_key: &session_key,
-                        transport_media_id,
-                        active: activity.is_active(),
-                    })
+                    .set_producer_active(&session_key, transport_media_id, activity.is_active())
                     .await
             }
             TransportControlOperation::SetConsumerActivity { route, activity } => {
@@ -477,11 +462,7 @@ impl MediaTransport {
                     route.source_session_key(),
                 )?;
                 self.require_worker_for_user(route.consumer_session_key())?
-                    .media()
-                    .execute(RtcMediaOperation::SetConsumerActive {
-                        route: &route,
-                        active: activity.is_active(),
-                    })
+                    .set_consumer_active(&route, activity.is_active())
                     .await
             }
             TransportControlOperation::SetConsumerPacketGate { route, packet_gate } => {
@@ -490,11 +471,7 @@ impl MediaTransport {
                     route.source_session_key(),
                 )?;
                 self.require_worker_for_user(route.consumer_session_key())?
-                    .media()
-                    .execute(RtcMediaOperation::SetConsumerPacketGate {
-                        route: &route,
-                        packet_gate,
-                    })
+                    .set_consumer_packet_gate(&route, packet_gate)
                     .await
             }
             TransportControlOperation::RequestConsumerKeyframe { route } => {
@@ -503,8 +480,7 @@ impl MediaTransport {
                     route.source_session_key(),
                 )?;
                 self.require_worker_for_user(route.consumer_session_key())?
-                    .media()
-                    .execute(RtcMediaOperation::RequestConsumerKeyframe { route: &route })
+                    .request_consumer_keyframe(&route)
                     .await
             }
         }
@@ -520,26 +496,35 @@ impl MediaTransport {
         if Arc::ptr_eq(&source_worker, &target_worker) {
             return Ok(());
         }
-        let operation = match effect.action {
-            TransportRelayRouteAction::Install => RtcMediaOperation::ActivateRelayRoute {
-                source_session_key: &effect.source_session_key,
-                source_transport_media_id: effect.source_transport_media_id,
-                target: target_worker.as_ref(),
-            },
-            TransportRelayRouteAction::Release => RtcMediaOperation::DeactivateRelayRoute {
-                source_transport_media_id: effect.source_transport_media_id,
-                target: target_worker.as_ref(),
-            },
-            TransportRelayRouteAction::SetActivity(activity) => {
-                RtcMediaOperation::ApplyRelayTargetActivity {
-                    source_session_key: &effect.source_session_key,
-                    source_transport_media_id: effect.source_transport_media_id,
-                    target: target_worker.as_ref(),
-                    active: activity.is_active(),
-                }
+        match effect.action {
+            TransportRelayRouteAction::Install => {
+                source_worker
+                    .activate_relay_route(
+                        &effect.source_session_key,
+                        effect.source_transport_media_id,
+                        target_worker.as_ref(),
+                    )
+                    .await
             }
-        };
-        source_worker.media().execute(operation).await
+            TransportRelayRouteAction::Release => {
+                source_worker
+                    .deactivate_relay_route(
+                        effect.source_transport_media_id,
+                        target_worker.as_ref(),
+                    )
+                    .await
+            }
+            TransportRelayRouteAction::SetActivity(activity) => {
+                source_worker
+                    .apply_relay_target_activity(
+                        &effect.source_session_key,
+                        effect.source_transport_media_id,
+                        target_worker.as_ref(),
+                        activity.is_active(),
+                    )
+                    .await
+            }
+        }
     }
 
     /// Looks up the negotiated MID for a transport media handle.
@@ -554,7 +539,6 @@ impl MediaTransport {
     ) -> Option<String> {
         let worker = self.worker_for_user(session_key)?;
         worker
-            .media()
             .transport_media_mid(transport_media_id)
             .await
             .ok()
@@ -571,7 +555,6 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
         self.worker_for_user(session_key)?
-            .observability()
             .session_transport_health(session_key)
     }
 

@@ -54,7 +54,7 @@ pub(in crate::runtime::rtc_engine::worker) use routes::{
     refresh_source_packet_gate, remove_source_route,
 };
 #[cfg(test)]
-pub(in crate::runtime::rtc_engine::worker::media) use selected_rid::observe_source_rid_readiness;
+pub(in crate::runtime::rtc_engine::worker::handlers::media) use selected_rid::observe_source_rid_readiness;
 pub(in crate::runtime::rtc_engine) use selected_rid::{
     apply_source_rid_readiness, drain_due_rid_keyframe_refreshes,
 };

@@ -10,7 +10,7 @@ use str0m::media::{KeyframeRequestKind, Mid, Rid};
 use tracing::debug;
 
 use super::{
-    super::super::{
+    super::super::super::{
         demux::MediaRouteDestination, media_registry::RegisteredMediaHandle,
         route_control::KeyframeRequestDecision, state::PacketLoopState,
     },
@@ -108,7 +108,7 @@ pub fn request_keyframe_for_source(
 /// RID-gated destinations are mapped back into the keyframe target before the
 /// local source is marked dirty or the remote keyframe request is forwarded with
 /// the normal coalescing rules.
-pub(in crate::runtime::rtc_engine::worker::media) fn worker_request_consumer_keyframe(
+pub(in crate::runtime::rtc_engine::worker::handlers::media) fn worker_request_consumer_keyframe(
     state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
     route: &TransportConsumerRoute,

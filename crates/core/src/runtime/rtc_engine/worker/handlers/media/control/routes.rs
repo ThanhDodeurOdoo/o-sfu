@@ -76,7 +76,7 @@ enum RouteSourceAccess {
 /// the values stay borrowed so route setup cannot outlive the command state or
 /// copy negotiated RTP parameters just to pass them across this boundary
 #[derive(Clone, Copy)]
-pub(in crate::runtime::rtc_engine::worker::media) struct ConsumerRouteRegistration<'a> {
+pub(in crate::runtime::rtc_engine::worker::handlers::media) struct ConsumerRouteRegistration<'a> {
     /// session that owns the destination `Rtc`
     pub consumer_session_key: &'a TransportSessionKey,
     /// registered consumer media handle that receives forwarded packets
@@ -133,7 +133,7 @@ fn consumer_packet_gate_for_source(
 /// returns `InvalidInput` when a source id belongs to another owner, when the
 /// media id names a consumer or when a remote source is missing its control path
 /// returns `TransportUnavailable` when the local source media id does not exist
-pub(in crate::runtime::rtc_engine::worker::media) fn ensure_route_source_registered(
+pub(in crate::runtime::rtc_engine::worker::handlers::media) fn ensure_route_source_registered(
     state: &mut PacketLoopState,
     route_owner_session_key: &TransportSessionKey,
     source_session_key: &TransportSessionKey,
@@ -161,7 +161,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn ensure_route_source_registe
 /// source owner or is not a producer source for a local route
 /// returns `TransportUnavailable` when the expected local producer or remote
 /// source registration is gone
-pub(in crate::runtime::rtc_engine::worker::media) fn ensure_existing_route_source(
+pub(in crate::runtime::rtc_engine::worker::handlers::media) fn ensure_existing_route_source(
     state: &mut PacketLoopState,
     route_owner_session_key: &TransportSessionKey,
     source_session_key: &TransportSessionKey,
@@ -197,7 +197,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn ensure_existing_route_sourc
 ///
 /// callers must validate the source with [`ensure_route_source_registered`] and
 /// register the consumer media handle before calling this function
-pub(in crate::runtime::rtc_engine::worker::media) fn register_consumer_route(
+pub(in crate::runtime::rtc_engine::worker::handlers::media) fn register_consumer_route(
     state: &mut PacketLoopState,
     registration: ConsumerRouteRegistration<'_>,
 ) {
@@ -242,7 +242,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn register_consumer_route(
 /// specific negotiated value
 /// when encodings do not carry one, the first primary codec supplies the
 /// rewrite target
-pub(in crate::runtime::rtc_engine::worker::media) fn consumer_payload_type(
+pub(in crate::runtime::rtc_engine::worker::handlers::media) fn consumer_payload_type(
     consumer_rtp_parameters: &RouterRtpParameters,
 ) -> Option<Pt> {
     consumer_rtp_parameters
@@ -262,7 +262,7 @@ pub(in crate::runtime::rtc_engine::worker::media) fn consumer_payload_type(
 /// treated as already removed
 /// when the last destination disappears, remote-source placeholders and their
 /// packet-loop side tables are pruned with the route
-pub(in crate::runtime::rtc_engine::worker::media) fn remove_consumer_route(
+pub(in crate::runtime::rtc_engine::worker::handlers::media) fn remove_consumer_route(
     state: &mut PacketLoopState,
     consumer_session_key: &TransportSessionKey,
     consumer_transport_media_id: TransportMediaId,
@@ -346,7 +346,7 @@ pub(in crate::runtime::rtc_engine::worker) fn refresh_source_packet_gate(
 /// this is the best-effort form of [`ensure_owned_local_producer_mid`]
 /// callers use it when teardown or feedback should ignore a source that already
 /// disappeared
-pub(in crate::runtime::rtc_engine::worker::media) fn owned_local_producer_mid(
+pub(in crate::runtime::rtc_engine::worker::handlers::media) fn owned_local_producer_mid(
     state: &PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
@@ -580,7 +580,7 @@ fn update_consumer_route(
 ///
 /// keyframe routing and selected-rid readiness use this to map destination
 /// policy back to producer-side refresh targets
-pub(in crate::runtime::rtc_engine::worker::media) fn packet_gate_rid(
+pub(in crate::runtime::rtc_engine::worker::handlers::media) fn packet_gate_rid(
     packet_gate: &PacketLayerGate,
 ) -> Option<Rid> {
     match packet_gate {

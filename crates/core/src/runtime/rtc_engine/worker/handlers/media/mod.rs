@@ -19,7 +19,7 @@ pub(super) use control::{
     respond_set_producer_active, respond_set_relay_target_active,
     respond_set_remote_source_packet_gate,
 };
-pub use keyframe::request_keyframe_for_source;
+pub(in crate::runtime::rtc_engine) use keyframe::request_keyframe_for_source;
 pub(super) use keyframe::respond_request_remote_keyframe;
 pub(super) use lifecycle::{
     RecvMediaPolicy, respond_add_recv_media, respond_add_send_media, respond_remove_media,

@@ -22,13 +22,13 @@ use str0m::{
 };
 #[cfg(test)]
 use {
-    super::super::media_registry::RegisteredMediaHandle,
+    super::super::super::media_registry::RegisteredMediaHandle,
     crate::runtime::media_transport::{TransportAdapterError, TransportMediaId},
     tokio::sync::oneshot,
     tracing::warn,
 };
 
-use super::super::{
+use super::super::super::{
     simulcast,
     state::{PacketLoopState, RtcSessionState},
 };

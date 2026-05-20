@@ -21,7 +21,7 @@ use super::{
             RouteEntryByMediaIdProbe, RouteEntryProbe,
         },
     },
-    facade::RtcWorker,
+    RtcWorker,
 };
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::media_transport::TransportMediaId;

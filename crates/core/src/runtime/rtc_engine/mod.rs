@@ -15,10 +15,10 @@
 //!
 //! Internal ownership is split by the kind of RTC work being performed:
 //!
-//! - `api`: worker facade, lazy worker lifecycle, command dispatch, and
+//! - `worker`: worker API, lazy lifecycle, command handlers and
 //!   production/test support entry points;
-//! - `bootstrap`, `commands`, `worker`, and `state`: offer/answer bootstrap,
-//!   mailbox contracts, worker-local mutations, and pure RTC session state;
+//! - `bootstrap`, `commands`, and `state`: offer/answer bootstrap, mailbox
+//!   contracts and pure RTC session state;
 //! - `packet_loop`, `demux`, `forwarded_packet`, `forwarding_destination`,
 //!   `forwarding_planner`, `local_forwarding`, and `shared_payload`: UDP/RTP
 //!   ingress, routing, fanout planning, local sends, recording packet sinks,
@@ -30,7 +30,6 @@
 //!   capability projection;
 //! - `simulcast`: RTC-edge simulcast negotiation helpers.
 
-mod api;
 #[cfg(feature = "internal-benchmarks")]
 pub mod benchmark_support;
 mod bitrate;
@@ -58,9 +57,9 @@ pub mod test_support;
 mod tests;
 mod worker;
 
-pub(in crate::runtime) use api::{RtcMediaOperation, RtcWorker};
 #[cfg(any(test, feature = "testing-transport"))]
 pub use forwarded_packet::ForwardedPacket;
 pub use negotiated_capabilities::client_rtp_capabilities_from_answer;
+pub(in crate::runtime) use worker::RtcWorker;
 
 pub use crate::runtime::media_transport::TransportSessionHealth;

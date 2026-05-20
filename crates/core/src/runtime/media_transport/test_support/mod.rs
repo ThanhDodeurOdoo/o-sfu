@@ -22,7 +22,6 @@ impl MediaTransport {
     ) -> Result<RouterRtpParameters, TransportAdapterError> {
         self.worker_for_user(session_key)
             .ok_or(TransportAdapterError::TransportUnavailable)?
-            .media()
             .negotiated_producer_parameters(session_key, transport_media_id)
             .await
     }

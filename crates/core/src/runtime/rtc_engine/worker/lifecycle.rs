@@ -1,8 +1,8 @@
 //! lazy lifecycle and mailbox runtime for one RTC transport worker
 //!
 //! this module owns the publication contract for the worker handle and the
-//! request-response helpers used by the facade methods in [`super::facade`]
-//! it is the only place where facade calls boot the packet loop, publish its
+//! request-response helpers used by the worker methods in [`super`]
+//! it is the only place where worker calls boot the packet loop, publish its
 //! mailboxes and translate a closed worker into [`TransportAdapterError`]
 //!
 //! the packet loop is started lazily so unused RTC workers do not bind sockets
@@ -15,7 +15,7 @@
 //! command dispatch follows one pattern:
 //!
 //! ```text
-//! facade method
+//! worker method
 //!   |
 //!   v
 //! ensure worker handle exists
@@ -54,7 +54,7 @@ use super::{
         relay_registry::{RELAY_MAILBOX_CAPACITY, RelayPacketMailbox, sender_backlog_depth},
         state::TransportSessionHealth,
     },
-    facade::{RtcTransportObservabilityFacade, RtcWorker, RtcWorkerHandle},
+    RtcWorker, RtcWorkerHandle,
 };
 use crate::{
     Bitrate,
@@ -101,7 +101,7 @@ impl<T: Clone> WorkerHandleSlot<T> {
 
     /// clears the published handle after the worker reports it has drained
     ///
-    /// this makes the next mutating facade call start a fresh packet loop
+    /// this makes the next mutating worker call start a fresh packet loop
     pub fn clear(&mut self) {
         self.handle = None;
     }
@@ -144,7 +144,7 @@ impl RtcWorker {
 
     /// lazily boots the worker-local packet loop and returns its published handle
     ///
-    /// this method is the publication boundary between cold-path facade calls
+    /// this method is the publication boundary between cold-path worker calls
     /// and the hot packet loop
     /// it must publish exactly one complete handle before any caller can send
     /// commands, then move the receiver halves into the spawned packet-loop
@@ -262,7 +262,7 @@ impl RtcWorker {
 
     /// sends a request command to the worker after starting it if needed
     ///
-    /// use this for mutating facade operations where the absence of a worker
+    /// use this for mutating worker operations where the absence of a worker
     /// means transport state must be created before the command can run
     ///
     /// # Errors
@@ -309,72 +309,9 @@ impl RtcWorker {
             .await
             .map_err(|_error| TransportAdapterError::TransportUnavailable)?
     }
-
-    pub fn transport_bitrate_snapshot(
-        &self,
-        session_keys: &[TransportSessionKey],
-    ) -> TransportBitrateSnapshot {
-        self.observability()
-            .transport_bitrate_snapshot(session_keys)
-    }
-
-    pub fn receiver_bandwidth_snapshot(
-        &self,
-        session_keys: &[TransportSessionKey],
-    ) -> ReceiverBandwidthSnapshot {
-        self.observability()
-            .receiver_bandwidth_snapshot(session_keys)
-    }
-
-    pub fn placement_pressure_snapshot(
-        &self,
-        session_keys: &[TransportSessionKey],
-    ) -> TransportPlacementPressureSnapshot {
-        self.observability()
-            .placement_pressure_snapshot(session_keys)
-    }
-
-    pub fn worker_pressure_snapshot(
-        &self,
-        media_worker_id: usize,
-    ) -> TransportWorkerPressureSnapshot {
-        self.observability()
-            .worker_pressure_snapshot(media_worker_id)
-    }
-
-    #[cfg(test)]
-    pub fn session_transport_health(
-        &self,
-        session_key: &TransportSessionKey,
-    ) -> Option<TransportSessionHealth> {
-        self.observability().session_transport_health(session_key)
-    }
-
-    pub async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
-        self.observability().active_speaker_source_snapshot().await
-    }
-
-    pub async fn active_speaker_diagnostic_snapshot(&self) -> Vec<ActiveSpeakerSourceDiagnostic> {
-        self.observability()
-            .active_speaker_diagnostic_snapshot()
-            .await
-    }
-
-    pub async fn next_active_speaker_deadline(&self) -> Option<Instant> {
-        self.observability().next_active_speaker_deadline().await
-    }
-
-    pub async fn expired_active_speaker_room_instance_ids(
-        &self,
-        now: Instant,
-    ) -> BTreeSet<RoomInstanceId> {
-        self.observability()
-            .expired_active_speaker_room_instance_ids(now)
-            .await
-    }
 }
 
-impl RtcTransportObservabilityFacade<'_> {
+impl RtcWorker {
     /// reads bitrate counters for the requested sessions without booting worker state
     ///
     /// a missing worker, unavailable registry or missing session contributes no
@@ -382,10 +319,10 @@ impl RtcTransportObservabilityFacade<'_> {
     /// callers must treat the result as a recent transport observation rather
     /// than an accounting source of truth
     pub fn transport_bitrate_snapshot(
-        self,
+        &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
-        let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
+        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
             return TransportBitrateSnapshot::default();
         };
         let Ok(bitrate_registry) = worker_handle.bitrate_registry.lock() else {
@@ -400,10 +337,10 @@ impl RtcTransportObservabilityFacade<'_> {
     /// side channel is unavailable
     /// it does not mean the room has no receivers
     pub fn receiver_bandwidth_snapshot(
-        self,
+        &self,
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
-        let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
+        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
             return ReceiverBandwidthSnapshot::default();
         };
         let Ok(snapshot_state) = worker_handle.snapshot_state.lock() else {
@@ -418,10 +355,10 @@ impl RtcTransportObservabilityFacade<'_> {
     /// and mailbox backlogs describe the whole worker because those resources
     /// are shared by every session on the packet loop
     pub fn placement_pressure_snapshot(
-        self,
+        &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportPlacementPressureSnapshot {
-        let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
+        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
             return TransportPlacementPressureSnapshot::default();
         };
         let now = Instant::now();
@@ -452,10 +389,10 @@ impl RtcTransportObservabilityFacade<'_> {
     /// the result is still best-effort and falls back to zero pressure when the
     /// worker has not started
     pub fn worker_pressure_snapshot(
-        self,
+        &self,
         media_worker_id: usize,
     ) -> TransportWorkerPressureSnapshot {
-        let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
+        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
             return TransportWorkerPressureSnapshot::new(
                 media_worker_id,
                 TransportPlacementPressureSnapshot::default(),
@@ -491,10 +428,10 @@ impl RtcTransportObservabilityFacade<'_> {
     /// `None` means the worker is missing, the snapshot lock is unavailable or
     /// no health event has been observed for the session
     pub fn session_transport_health(
-        self,
+        &self,
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
-        let worker_handle = self.worker.worker_handle().ok().flatten()?;
+        let worker_handle = self.worker_handle().ok().flatten()?;
         let Ok(snapshot_state) = worker_handle.snapshot_state.lock() else {
             return None;
         };
@@ -506,16 +443,15 @@ impl RtcTransportObservabilityFacade<'_> {
     /// this command is read-only but still enters the worker mailbox because
     /// the source activity ordering lives beside route-control state
     /// dispatch failures return an empty snapshot
-    pub async fn active_speaker_source_snapshot(self) -> Vec<ActiveSpeakerSource> {
-        let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
+    pub async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
+        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
             return Vec::new();
         };
-        self.worker
-            .send_worker_command(&worker_handle, |response| {
-                RtcWorkerCommand::ActiveSpeakerSourceSnapshot { response }
-            })
-            .await
-            .unwrap_or_default()
+        self.send_worker_command(&worker_handle, |response| {
+            RtcWorkerCommand::ActiveSpeakerSourceSnapshot { response }
+        })
+        .await
+        .unwrap_or_default()
     }
 
     /// asks the packet loop for detailed active-speaker diagnostics
@@ -523,31 +459,29 @@ impl RtcTransportObservabilityFacade<'_> {
     /// diagnostics are read through the mailbox for the same ownership reason
     /// as source snapshots
     /// dispatch failures return an empty diagnostic set
-    pub async fn active_speaker_diagnostic_snapshot(self) -> Vec<ActiveSpeakerSourceDiagnostic> {
-        let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
+    pub async fn active_speaker_diagnostic_snapshot(&self) -> Vec<ActiveSpeakerSourceDiagnostic> {
+        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
             return Vec::new();
         };
-        self.worker
-            .send_worker_command(&worker_handle, |response| {
-                RtcWorkerCommand::ActiveSpeakerDiagnosticSnapshot { response }
-            })
-            .await
-            .unwrap_or_default()
+        self.send_worker_command(&worker_handle, |response| {
+            RtcWorkerCommand::ActiveSpeakerDiagnosticSnapshot { response }
+        })
+        .await
+        .unwrap_or_default()
     }
 
     /// reads the next active-speaker expiry deadline from the packet loop
     ///
     /// `None` means no worker is running, no source has an expiry deadline or
     /// the worker could not answer the read command
-    pub async fn next_active_speaker_deadline(self) -> Option<Instant> {
-        let worker_handle = self.worker.worker_handle().ok().flatten()?;
-        self.worker
-            .send_worker_command(&worker_handle, |response| {
-                RtcWorkerCommand::NextActiveSpeakerDeadline { response }
-            })
-            .await
-            .ok()
-            .flatten()
+    pub async fn next_active_speaker_deadline(&self) -> Option<Instant> {
+        let worker_handle = self.worker_handle().ok().flatten()?;
+        self.send_worker_command(&worker_handle, |response| {
+            RtcWorkerCommand::NextActiveSpeakerDeadline { response }
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     /// reads room ids whose transport-observed source activity expired by `now`
@@ -557,18 +491,17 @@ impl RtcTransportObservabilityFacade<'_> {
     /// dispatch failures return an empty set so schedulers can retry on the
     /// next wakeup
     pub async fn expired_active_speaker_room_instance_ids(
-        self,
+        &self,
         now: Instant,
     ) -> BTreeSet<RoomInstanceId> {
-        let Some(worker_handle) = self.worker.worker_handle().ok().flatten() else {
+        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
             return BTreeSet::new();
         };
-        self.worker
-            .send_worker_command(&worker_handle, |response| {
-                RtcWorkerCommand::ExpiredActiveSpeakerRoomInstanceIds { now, response }
-            })
-            .await
-            .unwrap_or_default()
+        self.send_worker_command(&worker_handle, |response| {
+            RtcWorkerCommand::ExpiredActiveSpeakerRoomInstanceIds { now, response }
+        })
+        .await
+        .unwrap_or_default()
     }
 }
 

@@ -1,6 +1,6 @@
 //! mailbox command contract for the worker-owned rtc engine
 //!
-//! public facades translate transport API calls into these values before the
+//! worker API methods translate transport API calls into these values before the
 //! packet-loop task dispatches them while it owns mutable rtc state
 //! request commands carry a oneshot response
 //! fire-and-forget route controls are intentionally best-effort because they
@@ -29,7 +29,7 @@ use crate::runtime::{
 /// result class returned by a close-session command
 ///
 /// close requests can remove only one session or drain the whole worker
-/// the facade uses this distinction to decide whether the lazy worker handle
+/// the worker lifecycle uses this distinction to decide whether the lazy handle
 /// must be cleared after the command completes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseSessionState {
@@ -39,7 +39,7 @@ pub enum CloseSessionState {
     WorkerDrained,
 }
 
-/// close-session response shared with the transport facade
+/// close-session response shared with the worker lifecycle
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CloseSessionOutcome {
     state: CloseSessionState,
@@ -51,7 +51,7 @@ impl CloseSessionOutcome {
         Self { state }
     }
 
-    /// returns the lifecycle state that the facade must apply after close
+    /// returns the lifecycle state that the worker must apply after close
     pub const fn state(&self) -> CloseSessionState {
         self.state
     }
@@ -62,7 +62,7 @@ impl CloseSessionOutcome {
 /// a route that consumes media from another worker keeps this handle beside the
 /// remote-source registration
 /// later keyframe or layer-gate requests can then reach the worker that owns
-/// the producer without exposing its full facade
+/// the producer without exposing the source worker internals
 ///
 /// sends are deliberately best-effort
 /// stale remote routes, closed workers and full mailboxes are normal during
@@ -162,7 +162,7 @@ impl RemoteSourceControl {
 
 /// response channel used by request commands that complete on the packet loop
 ///
-/// dropping the receiver cancels the facade wait but does not cancel the worker
+/// dropping the receiver cancels the API wait but does not cancel the worker
 /// mutation that is already being handled
 pub type RtcWorkerResponse<T> = oneshot::Sender<TransportResult<T>>;
 
@@ -284,7 +284,7 @@ pub(super) enum RtcWorkerCommand {
     ///
     /// media add and remove commands stage the SDP work before this command
     /// runs
-    /// this command hands the staged offer to the facade and preserves the
+    /// this command hands the staged offer to the worker API and preserves the
     /// one-outstanding-offer rule owned by the worker
     CreateSessionRenegotiationOffer {
         session_key: TransportSessionKey,
@@ -334,7 +334,7 @@ pub(super) enum RtcWorkerCommand {
     ///
     /// cleanup removes rtc state, media handles, route destinations, demux
     /// indexes, bitrate counters and snapshot entries owned by the session
-    /// `WorkerDrained` tells the facade to clear the lazy worker handle
+    /// `WorkerDrained` tells the worker lifecycle to clear the lazy handle
     CloseSession {
         session_key: TransportSessionKey,
         response: RtcWorkerResponse<CloseSessionOutcome>,
@@ -363,7 +363,7 @@ pub(super) enum RtcWorkerCommand {
     },
     /// resolve the negotiated MID for one transport media id when it is known
     ///
-    /// this is a best-effort lookup for facade code that needs to relate public
+    /// this is a best-effort lookup for worker API code that relates public
     /// transport ids back to browser-visible SDP identity
     /// it returns `None` before negotiation commits or after media removal
     ResolveMediaMid {

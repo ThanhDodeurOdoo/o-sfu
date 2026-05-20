@@ -6,7 +6,7 @@
 //!
 //! use a probe when a test needs worker-owned route, demux, session, bitrate,
 //! relay or route-control state
-//! keep the readable helper method in `api/test_support.rs`
+//! keep the readable helper method in `worker/test_support.rs`
 //! implement one small [`DebugProbe`] type here with its request fields and
 //! exact [`DebugProbe::Output`] type
 //!
@@ -21,7 +21,7 @@
 //! prefer read-only probes
 //! a mutating probe is only appropriate when the test
 //! needs deterministic packet-loop setup that cannot be expressed through the
-//! production transport facade, such as seeding demux state or injecting an
+//! production transport API, such as seeding demux state or injecting an
 //! audio activity observation
 
 use std::fmt;

@@ -17,7 +17,7 @@ use tokio::sync::oneshot;
 #[cfg(test)]
 use super::publication;
 use super::{
-    super::{
+    super::super::{
         bitrate::BitrateRegistry,
         commands::{RtcMediaControlCommand, RtcWorkerCommand},
         state::{PacketLoopState, RtcSnapshotState},
