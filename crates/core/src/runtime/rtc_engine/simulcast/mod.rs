@@ -342,8 +342,18 @@ mod tests {
                 ))
                 .collect::<Vec<_>>(),
             vec![
-                (common::DEFAULT_LOW_RID, None, None, None),
-                (common::DEFAULT_HIGH_RID, None, None, None),
+                (
+                    common::DEFAULT_LOW_RID,
+                    Some(common::DEFAULT_LOW_MAX_BITRATE),
+                    None,
+                    None,
+                ),
+                (
+                    common::DEFAULT_HIGH_RID,
+                    Some(VideoBitrateLimits::default().max_video_bitrate()),
+                    None,
+                    None,
+                ),
             ]
         );
     }

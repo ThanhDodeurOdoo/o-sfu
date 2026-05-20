@@ -123,8 +123,9 @@ impl PublishedSourceDescriptor {
     ///
     /// Encodings without complete RID coverage are excluded because the
     /// packet-gate projection cannot address them. Sources with bitrate hints
-    /// use ascending bitrate order. Sources without bitrate hints keep the
-    /// publisher-declared order.
+    /// use ascending bitrate order. Sources without bitrate hints use upload
+    /// layer policy role order when available, then keep the publisher-declared
+    /// order.
     pub fn selectable_encodings(&self) -> impl Iterator<Item = &SourceEncodingDescriptor> {
         self.selectable_encoding_indices
             .iter()
@@ -182,8 +183,26 @@ fn selectable_encoding_indices(encodings: &[SourceEncodingDescriptor]) -> Vec<us
                 .and_then(SourceEncodingDescriptor::max_bitrate)
                 .unwrap_or(Bitrate::from_bps(u64::MAX))
         });
+    } else if encodings
+        .iter()
+        .any(|encoding| encoding.policy_role().is_some())
+    {
+        indices.sort_by_key(|index| {
+            encodings
+                .get(*index)
+                .and_then(SourceEncodingDescriptor::policy_role)
+                .map_or(u8::MAX, upload_layer_policy_role_rank)
+        });
     }
     indices
+}
+
+const fn upload_layer_policy_role_rank(role: UploadLayerPolicyRole) -> u8 {
+    match role {
+        UploadLayerPolicyRole::DegradedThumbnail => 0,
+        UploadLayerPolicyRole::Thumbnail => 1,
+        UploadLayerPolicyRole::Featured => 2,
+    }
 }
 
 /// Construction input for [`PublishedSourceDescriptor`].

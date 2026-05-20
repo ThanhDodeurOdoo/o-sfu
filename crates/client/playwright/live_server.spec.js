@@ -318,13 +318,13 @@ test("H264-only live publish applies RID simulcast and renders when supported", 
             .toEqual([
                 {
                     active: true,
-                    maxBitrate: undefined,
+                    maxBitrate: 150000,
                     rid: "lo",
                     scaleResolutionDownBy: undefined
                 },
                 {
                     active: true,
-                    maxBitrate: undefined,
+                    maxBitrate: 4000000,
                     rid: "hi",
                     scaleResolutionDownBy: undefined
                 }

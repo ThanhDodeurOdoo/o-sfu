@@ -60,7 +60,7 @@ impl H264SimulcastProfile {
             .iter()
             .map(|layer| SessionUploadEncoding {
                 rid: layer.rid.to_owned(),
-                max_bitrate: None,
+                max_bitrate: layer.max_bitrate,
                 resolution_scale: None,
                 max_framerate: None,
             })
