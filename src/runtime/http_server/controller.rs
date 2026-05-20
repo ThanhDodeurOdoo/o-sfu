@@ -1,11 +1,10 @@
-use std::{net::SocketAddr, str};
+use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
 use axum::{
-    Extension, Router,
-    body::Bytes,
-    extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State},
-    http::{HeaderMap, StatusCode, header},
+    Router,
+    extract::{DefaultBodyLimit, Path, Request, State},
+    http::{StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -17,22 +16,24 @@ use tracing::{Instrument, info};
 
 use crate::{
     application::stream_catalog::value_for_stream_type,
-    config::{DiagnosticsConfig, HttpConfig},
     runtime::{
-        RuntimeState,
-        auth::{self, HttpDisconnectClaims, HttpRoomClaims},
-        diagnostics,
+        RuntimeState, diagnostics,
         diagnostics::DiagnosticsUserLookup,
-        http_server::contract::{
-            CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
-            DIAGNOSTICS_WORKERS_PATH, DISCONNECT_PATH, IncomingBitRateStatsResponse, METRICS_PATH,
-            NOOP_PATH, NoopResponse, RoomResponse, RoomStatsResponse, STATS_PATH,
-            UsersStatsResponse,
+        http_server::{
+            contract::{
+                CHANNEL_PATH, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
+                DIAGNOSTICS_WORKERS_PATH, DISCONNECT_PATH, IncomingBitRateStatsResponse,
+                METRICS_PATH, NOOP_PATH, NoopResponse, RoomResponse, RoomStatsResponse, STATS_PATH,
+                UsersStatsResponse,
+            },
+            extractors::{
+                DiagnosticsAccess, DiagnosticsServices, RoomServices, VerifiedDisconnectClaims,
+                VerifiedRoomRequest,
+            },
         },
-        metrics::HttpRoute,
+        metrics::{HttpRoute, RuntimeMetrics},
         prometheus::{PROMETHEUS_CONTENT_TYPE, render_prometheus},
-        request_origin::{request_base_url, resolve_remote_address},
-        room::{RoomConfig, RuntimeRoomStatsSnapshot},
+        room::RuntimeRoomStatsSnapshot,
         telemetry::{self, schema::event as telemetry_event},
         websocket_server,
     },
@@ -118,27 +119,27 @@ fn diagnostics_router(state: RuntimeState) -> Router<RuntimeState> {
 }
 
 #[o_sfu_telemetry::measure_http_request(
-    metrics = "state.metrics",
+    metrics = "metrics",
     request = "record_http_noop_request",
     route = "HttpRoute::Noop"
 )]
-async fn noop(State(state): State<RuntimeState>) -> impl IntoResponse {
+async fn noop(State(metrics): State<Arc<RuntimeMetrics>>) -> impl IntoResponse {
     async { axum::Json(NoopResponse::ok()) }
         .instrument(telemetry::http_request_span("noop"))
         .await
 }
 
 #[o_sfu_telemetry::measure_http_request(
-    metrics = "state.metrics",
+    metrics = "services.metrics",
     request = "record_http_stats_request",
     route = "HttpRoute::Stats"
 )]
-async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
+async fn stats(State(services): State<RoomServices>) -> impl IntoResponse {
     async {
         axum::Json(
-            state
+            services
                 .room_manager
-                .stats_snapshots(&state.media_transport)
+                .stats_snapshots(&services.media_transport)
                 .await
                 .into_iter()
                 .map(http_room_stats)
@@ -150,15 +151,15 @@ async fn stats(State(state): State<RuntimeState>) -> impl IntoResponse {
 }
 
 #[o_sfu_telemetry::measure_http_request(
-    metrics = "state.metrics",
+    metrics = "metrics",
     request = "record_http_metrics_request",
     route = "HttpRoute::Metrics"
 )]
-async fn metrics(State(state): State<RuntimeState>) -> impl IntoResponse {
+async fn metrics(State(metrics): State<Arc<RuntimeMetrics>>) -> impl IntoResponse {
     async {
         (
             [(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)],
-            render_prometheus(&state.metrics),
+            render_prometheus(&metrics),
         )
     }
     .instrument(telemetry::http_request_span("metrics"))
@@ -170,65 +171,30 @@ async fn metrics(State(state): State<RuntimeState>) -> impl IntoResponse {
 /// The bearer token is decoded through `auth::verify`, so JWT header, payload, and signature
 /// segments must use the JOSE base64url alphabet without padding.
 ///
-/// Query parameters (defined in [`CreateRoomQuery`]) specify whether the room
-/// should have WebRTC enabled and optional webhook endpoints for recordings.
+/// Query parameters specify whether the room should have WebRTC enabled and
+/// optional webhook endpoints for recordings.
 #[o_sfu_telemetry::measure_http_request(
-    metrics = "state.metrics",
+    metrics = "services.metrics",
     request = "record_http_room_request",
     route = "HttpRoute::Room"
 )]
-async fn room(
-    State(state): State<RuntimeState>,
-    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
-    headers: HeaderMap,
-    Query(query): Query<CreateRoomQuery>,
-) -> Response {
+async fn room(State(services): State<RoomServices>, request: VerifiedRoomRequest) -> Response {
     async {
-        let Some(token) = room_authorization_token(&headers) else {
-            state.metrics.record_http_room_unauthorized();
-            return StatusCode::UNAUTHORIZED.into_response();
-        };
-        let Ok(claims) = auth::verify::<HttpRoomClaims>(token, &state.config.auth.key) else {
-            state.metrics.record_http_room_unauthorized();
-            return StatusCode::UNAUTHORIZED.into_response();
-        };
-        let Some(issuer) = claims.registered.iss.as_deref() else {
-            state.metrics.record_http_room_forbidden();
-            return StatusCode::FORBIDDEN.into_response();
-        };
-        let Some(room_key) = claims.key.as_deref() else {
-            state.metrics.record_http_room_bad_request();
-            return StatusCode::BAD_REQUEST.into_response();
-        };
-
-        let remote_address = resolve_remote_address(
-            &headers,
-            state.config.http.trust_proxy_headers,
-            connect_info.map(|Extension(ConnectInfo(addr))| addr),
-        );
-        let room_config = RoomConfig {
-            web_rtc_enabled: query.web_rtc_enabled(),
-            recording_address: query.recording_address,
-        };
-        let room = state
+        let room = services
             .room_manager
             .serve_room(
-                issuer,
-                room_key,
-                &room_config,
-                Some(remote_address.as_str()),
+                &request.issuer,
+                &request.room_key,
+                &request.config,
+                Some(request.origin.remote_address.as_str()),
             )
             .await;
-        state.metrics.record_http_room_success();
+        services.metrics.record_http_room_success();
         (
             StatusCode::OK,
             axum::Json(RoomResponse {
                 uuid: room.uuid().to_owned(),
-                url: request_base_url(
-                    &headers,
-                    state.config.http.trust_proxy_headers,
-                    state.config.http.bind_address,
-                ),
+                url: request.origin.base_url,
             }),
         )
             .into_response()
@@ -245,68 +211,35 @@ async fn room(
 /// The request body is decoded through `auth::verify`, so JWT header, payload, and signature
 /// segments must use the JOSE base64url alphabet without padding.
 #[o_sfu_telemetry::measure_http_request(
-    metrics = "state.metrics",
+    metrics = "services.metrics",
     request = "record_http_disconnect_request",
     route = "HttpRoute::Disconnect"
 )]
-async fn disconnect(State(state): State<RuntimeState>, body: Bytes) -> Response {
+async fn disconnect(
+    State(services): State<RoomServices>,
+    VerifiedDisconnectClaims(claims): VerifiedDisconnectClaims,
+) -> Response {
     async {
-        let Ok(token) = str::from_utf8(&body) else {
-            state.metrics.record_http_disconnect_bad_request();
-            return StatusCode::BAD_REQUEST.into_response();
-        };
-        let Ok(mut claims) = auth::verify::<HttpDisconnectClaims>(token, &state.config.auth.key)
-        else {
-            state.metrics.record_http_disconnect_unprocessable_entity();
-            return StatusCode::UNPROCESSABLE_ENTITY.into_response();
-        };
-        claims.normalize_runtime_user_ids();
         for (room_id, user_ids) in &claims.user_ids_by_room {
-            state
+            services
                 .room_manager
-                .disconnect_users(room_id, user_ids, &state.media_transport)
+                .disconnect_users(room_id, user_ids, &services.media_transport)
                 .await;
         }
-        state.metrics.record_http_disconnect_success();
+        services.metrics.record_http_disconnect_success();
         StatusCode::OK.into_response()
     }
     .instrument(telemetry::http_request_span("disconnect"))
     .await
 }
 
-fn room_authorization_token(headers: &HeaderMap) -> Option<&str> {
-    authorization_token(headers, &["Bearer", "jwt"])
-}
-
-fn bearer_authorization_token(headers: &HeaderMap) -> Option<&str> {
-    authorization_token(headers, &["Bearer"])
-}
-
-fn authorization_token<'a>(headers: &'a HeaderMap, accepted_schemes: &[&str]) -> Option<&'a str> {
-    let value = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())?;
-    let (scheme, token) = value.split_once(' ')?;
-    if !accepted_schemes
-        .iter()
-        .any(|accepted_scheme| scheme.eq_ignore_ascii_case(accepted_scheme))
-    {
-        return None;
-    }
-    let token = token.trim_start();
-    if token.is_empty() {
-        return None;
-    }
-    Some(token)
-}
-
-async fn diagnostics_summary(State(state): State<RuntimeState>) -> Response {
+async fn diagnostics_summary(State(services): State<DiagnosticsServices>) -> Response {
     async {
         axum::Json(
             diagnostics::summary_response(
-                &state.room_manager,
-                &state.media_transport,
-                &state.diagnostics,
+                &services.room_manager,
+                &services.media_transport,
+                &services.diagnostics,
             )
             .await,
         )
@@ -315,13 +248,13 @@ async fn diagnostics_summary(State(state): State<RuntimeState>) -> Response {
     .await
 }
 
-async fn diagnostics_rooms(State(state): State<RuntimeState>) -> Response {
+async fn diagnostics_rooms(State(services): State<DiagnosticsServices>) -> Response {
     async {
         axum::Json(
             diagnostics::rooms_response(
-                &state.room_manager,
-                &state.media_transport,
-                &state.diagnostics,
+                &services.room_manager,
+                &services.media_transport,
+                &services.diagnostics,
             )
             .await,
         )
@@ -330,23 +263,25 @@ async fn diagnostics_rooms(State(state): State<RuntimeState>) -> Response {
     .await
 }
 
-async fn diagnostics_workers(State(state): State<RuntimeState>) -> Response {
+async fn diagnostics_workers(State(services): State<DiagnosticsServices>) -> Response {
     async {
-        axum::Json(diagnostics::workers_response(&state.room_manager, &state.media_transport).await)
-            .into_response()
+        axum::Json(
+            diagnostics::workers_response(&services.room_manager, &services.media_transport).await,
+        )
+        .into_response()
     }
     .await
 }
 
 async fn diagnostics_room_detail(
-    State(state): State<RuntimeState>,
+    State(services): State<DiagnosticsServices>,
     Path(room_id): Path<String>,
 ) -> Response {
     async {
         let Some(payload) = diagnostics::room_detail_response(
-            &state.room_manager,
-            &state.media_transport,
-            &state.diagnostics,
+            &services.room_manager,
+            &services.media_transport,
+            &services.diagnostics,
             &room_id,
         )
         .await
@@ -359,14 +294,14 @@ async fn diagnostics_room_detail(
 }
 
 async fn diagnostics_room_users(
-    State(state): State<RuntimeState>,
+    State(services): State<DiagnosticsServices>,
     Path(room_id): Path<String>,
 ) -> Response {
     async {
         let Some(payload) = diagnostics::room_users_response(
-            &state.room_manager,
-            &state.media_transport,
-            &state.diagnostics,
+            &services.room_manager,
+            &services.media_transport,
+            &services.diagnostics,
             &room_id,
         )
         .await
@@ -379,14 +314,14 @@ async fn diagnostics_room_users(
 }
 
 async fn diagnostics_room_graph(
-    State(state): State<RuntimeState>,
+    State(services): State<DiagnosticsServices>,
     Path(room_id): Path<String>,
 ) -> Response {
     async {
         let Some(payload) = diagnostics::room_detail_response(
-            &state.room_manager,
-            &state.media_transport,
-            &state.diagnostics,
+            &services.room_manager,
+            &services.media_transport,
+            &services.diagnostics,
             &room_id,
         )
         .await
@@ -400,14 +335,14 @@ async fn diagnostics_room_graph(
 }
 
 async fn diagnostics_user_graph(
-    State(state): State<RuntimeState>,
+    State(services): State<DiagnosticsServices>,
     Path((room_id, user_id)): Path<(String, String)>,
 ) -> Response {
     async {
         let Some(payload) = diagnostics::room_detail_response(
-            &state.room_manager,
-            &state.media_transport,
-            &state.diagnostics,
+            &services.room_manager,
+            &services.media_transport,
+            &services.diagnostics,
             &room_id,
         )
         .await
@@ -423,14 +358,14 @@ async fn diagnostics_user_graph(
 }
 
 async fn diagnostics_user_detail(
-    State(state): State<RuntimeState>,
+    State(services): State<DiagnosticsServices>,
     Path(user_id): Path<String>,
 ) -> Response {
     async {
         match diagnostics::user_detail_response(
-            &state.room_manager,
-            &state.media_transport,
-            &state.diagnostics,
+            &services.room_manager,
+            &services.media_transport,
+            &services.diagnostics,
             &user_id,
         )
         .await
@@ -446,56 +381,11 @@ async fn diagnostics_user_detail(
 }
 
 async fn require_diagnostics_access(
-    State(state): State<RuntimeState>,
+    _access: DiagnosticsAccess,
     request: Request,
     next: Next,
 ) -> Response {
-    match ensure_diagnostics_access(
-        request.headers(),
-        &state.config.http,
-        &state.config.diagnostics,
-    ) {
-        DiagnosticsAccess::Allowed => next.run(request).await,
-        DiagnosticsAccess::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
-        DiagnosticsAccess::Disabled => StatusCode::FORBIDDEN.into_response(),
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DiagnosticsAccess {
-    Allowed,
-    Unauthorized,
-    Disabled,
-}
-
-fn ensure_diagnostics_access(
-    headers: &HeaderMap,
-    http: &HttpConfig,
-    diagnostics: &DiagnosticsConfig,
-) -> DiagnosticsAccess {
-    if let Some(expected_token) = diagnostics.auth_token.as_deref() {
-        return match bearer_authorization_token(headers) {
-            Some(actual_token) if tokens_match(actual_token, expected_token) => {
-                DiagnosticsAccess::Allowed
-            }
-            _ => DiagnosticsAccess::Unauthorized,
-        };
-    }
-    // Without an explicit token we only allow diagnostics on loopback listeners.
-    // for example if a reverse proxy is the network boundary we expect it handle that
-    if http.bind_address.ip().is_loopback() {
-        DiagnosticsAccess::Allowed
-    } else {
-        DiagnosticsAccess::Disabled
-    }
-}
-
-fn tokens_match(actual: &str, expected: &str) -> bool {
-    let mut diff = actual.len() ^ expected.len();
-    for (actual, expected) in actual.bytes().zip(expected.bytes()) {
-        diff |= usize::from(actual ^ expected);
-    }
-    diff == 0
+    next.run(request).await
 }
 
 fn http_room_stats(snapshot: RuntimeRoomStatsSnapshot) -> RoomStatsResponse {

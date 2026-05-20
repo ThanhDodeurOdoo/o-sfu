@@ -20,14 +20,14 @@
 //!    protocol error), the connection is cleaned up through the core room manager,
 //!    which removes the user from the room and tears down associated media resources.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     extract::{
-        ConnectInfo, Extension, State,
+        FromRef, State,
         ws::{WebSocket, WebSocketUpgrade},
     },
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use futures_util::{StreamExt, stream::SplitStream};
@@ -40,10 +40,15 @@ use super::{
 };
 use crate::{
     application::user_session::User,
-    core::server::room::{Room, UserOutboundReceiver},
+    config::{AuthConfig, UserConfig},
+    core::{
+        prelude::SfuCore,
+        server::room::{Room, UserOutboundReceiver},
+    },
     runtime::{
-        ConnectionId, RuntimeState,
-        request_origin::resolve_remote_address,
+        ConnectionId, MediaTransport, RuntimeMetrics, RuntimeState,
+        request_origin::ResolvedRequestOrigin,
+        room::RoomManager,
         telemetry::{
             self,
             schema::{event as telemetry_event, field as telemetry_field},
@@ -52,6 +57,17 @@ use crate::{
 };
 
 pub(super) type WsReader = SplitStream<WebSocket>;
+
+#[derive(Debug, Clone)]
+pub(crate) struct WebSocketServices {
+    pub(super) auth: AuthConfig,
+    pub(super) user: UserConfig,
+    pub(super) room_manager: Arc<RoomManager>,
+    pub(super) media_transport: MediaTransport,
+    pub(super) sfu_core: SfuCore,
+    pub(super) metrics: Arc<RuntimeMetrics>,
+    pre_auth_websocket_admission: super::PreAuthWebSocketAdmission,
+}
 
 pub(super) struct ConnectedUser {
     pub(super) room: Arc<Room>,
@@ -62,35 +78,44 @@ pub(super) struct ConnectedUser {
     pub(super) user: User,
 }
 
+impl FromRef<RuntimeState> for WebSocketServices {
+    fn from_ref(state: &RuntimeState) -> Self {
+        Self {
+            auth: state.config.auth.clone(),
+            user: state.config.user,
+            room_manager: Arc::clone(&state.room_manager),
+            media_transport: state.media_transport.clone(),
+            sfu_core: state.sfu_core.clone(),
+            metrics: Arc::clone(&state.metrics),
+            pre_auth_websocket_admission: state.pre_auth_websocket_admission.clone(),
+        }
+    }
+}
+
 pub(crate) async fn upgrade(
-    State(state): State<RuntimeState>,
-    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
-    headers: HeaderMap,
+    State(services): State<WebSocketServices>,
+    ResolvedRequestOrigin(origin): ResolvedRequestOrigin,
     websocket: WebSocketUpgrade,
 ) -> Response {
-    let remote_address = Arc::<str>::from(resolve_remote_address(
-        &headers,
-        state.config.http.trust_proxy_headers,
-        connect_info.map(|Extension(ConnectInfo(addr))| addr),
-    ));
-    let pre_auth_permit = match state
+    let remote_address = Arc::<str>::from(origin.remote_address);
+    let pre_auth_permit = match services
         .pre_auth_websocket_admission
         .try_acquire(remote_address.as_ref())
     {
         Ok(permit) => permit,
         Err(rejection) => {
-            reject_pre_auth_admission(&state, remote_address.as_ref(), rejection);
+            reject_pre_auth_admission(&services, remote_address.as_ref(), rejection);
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
     websocket
         .max_message_size(MAX_CLIENT_FRAME_BYTES)
         .max_frame_size(MAX_CLIENT_FRAME_BYTES)
-        .on_upgrade(move |socket| handle_socket(socket, state, remote_address, pre_auth_permit))
+        .on_upgrade(move |socket| handle_socket(socket, services, remote_address, pre_auth_permit))
 }
 
 fn reject_pre_auth_admission(
-    state: &RuntimeState,
+    services: &WebSocketServices,
     remote_address: &str,
     rejection: PreAuthWebSocketAdmissionRejection,
 ) {
@@ -99,7 +124,7 @@ fn reject_pre_auth_admission(
             warn!(
                 event = telemetry_event::WS_HANDSHAKE_REJECTED,
                 remote_address,
-                max_pre_auth_websocket_sessions = state.config.auth.max_pre_auth_websocket_sessions,
+                max_pre_auth_websocket_sessions = services.auth.max_pre_auth_websocket_sessions,
                 "rejecting websocket upgrade because global pre-auth admission is full"
             );
         }
@@ -108,7 +133,7 @@ fn reject_pre_auth_admission(
                 event = telemetry_event::WS_HANDSHAKE_REJECTED,
                 remote_address,
                 max_pre_auth_websocket_sessions_per_origin =
-                    state.config.auth.max_pre_auth_websocket_sessions_per_origin,
+                    services.auth.max_pre_auth_websocket_sessions_per_origin,
                 "rejecting websocket upgrade because origin pre-auth admission is full"
             );
         }
@@ -124,7 +149,7 @@ fn reject_pre_auth_admission(
 /// clean up the same room user.
 async fn handle_socket(
     socket: WebSocket,
-    state: RuntimeState,
+    services: WebSocketServices,
     remote_address: Arc<str>,
     pre_auth_permit: PreAuthWebSocketPermit,
 ) {
@@ -135,7 +160,7 @@ async fn handle_socket(
             field::display(remote_address.as_ref()),
         );
         let (mut ws_writer, mut ws_reader) = socket.split();
-        state.metrics.record_ws_connection_accepted();
+        services.metrics.record_ws_connection_accepted();
         info!(
             event = telemetry_event::WS_CONNECTION_ACCEPTED,
             remote_address = remote_address.as_ref(),
@@ -147,7 +172,7 @@ async fn handle_socket(
             field::display(remote_address.as_ref()),
         );
         let Some(mut user_session) = super::handshake::establish_user(
-            &state,
+            &services,
             &mut ws_writer,
             &mut ws_reader,
             Arc::clone(&remote_address),
@@ -161,23 +186,23 @@ async fn handle_socket(
         current_span.record("room_id", field::display(user_session.room.uuid()));
         current_span.record("user_id", field::debug(&user_session.user_id));
         current_span.record("connection_id", field::debug(user_session.connection_id));
-        state.metrics.record_ws_user_loop_started();
+        services.metrics.record_ws_user_loop_started();
         let exit_reason = super::session_loop::run(super::session_loop::UserLoop {
             writer: &mut ws_writer,
             reader: &mut ws_reader,
-            room_manager: state.room_manager.as_ref(),
+            room_manager: services.room_manager.as_ref(),
             room: user_session.room.as_ref(),
             user_id: &user_session.user_id,
             connection_id: user_session.connection_id,
             outbound_rx: &mut user_session.outbound_rx,
             user: &mut user_session.user,
-            media_transport: &state.media_transport,
-            user_timeout_ms: state.config.user.timeout_ms,
-            ping_interval_ms: state.config.user.ping_interval_ms,
-            metrics: &state.metrics,
+            media_transport: &services.media_transport,
+            user_timeout_ms: services.user.timeout_ms,
+            ping_interval_ms: services.user.ping_interval_ms,
+            metrics: &services.metrics,
         })
         .await;
-        state.metrics.record_ws_user_loop_exit(exit_reason);
+        services.metrics.record_ws_user_loop_exit(exit_reason);
         info!(
             event = telemetry_event::WS_CONNECTION_CLOSED,
             connection_id = ?user_session.connection_id,

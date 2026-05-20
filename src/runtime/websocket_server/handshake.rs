@@ -44,7 +44,7 @@ use super::{
     WsWriter,
     admission::PreAuthWebSocketPermit,
     close_writer,
-    controller::{ConnectedUser, WsReader},
+    controller::{ConnectedUser, WebSocketServices, WsReader},
     io::send_user_output_bounded,
 };
 use crate::{
@@ -54,7 +54,7 @@ use crate::{
         UserOutboundSender,
     },
     runtime::{
-        ConnectionId, RuntimeState,
+        ConnectionId,
         auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},
         telemetry::{
             self,
@@ -130,7 +130,7 @@ struct JoinedUser {
     record = "record_ws_handshake_duration"
 )]
 pub(super) async fn establish_user(
-    state: &RuntimeState,
+    state: &WebSocketServices,
     writer: &mut WsWriter,
     reader: &mut WsReader,
     remote_address: Arc<str>,
@@ -183,11 +183,11 @@ pub(super) async fn establish_user(
 /// error variants carry the close code that should be reported by
 /// `reject_handshake`
 async fn receive_auth(
-    state: &RuntimeState,
+    state: &WebSocketServices,
     reader: &mut WsReader,
 ) -> Result<Option<AuthPayload>, Option<WebSocketCloseCode>> {
     match timeout(
-        Duration::from_millis(state.config.auth.authentication_timeout_ms),
+        Duration::from_millis(state.auth.authentication_timeout_ms),
         reader.next(),
     )
     .await
@@ -212,7 +212,7 @@ async fn receive_auth(
 /// once it returns an `AuthPayload`, later failures are authentication or
 /// room-admission failures
 async fn receive_auth_or_reject(
-    state: &RuntimeState,
+    state: &WebSocketServices,
     writer: &mut WsWriter,
     reader: &mut WsReader,
     remote_address: &str,
@@ -242,7 +242,7 @@ async fn receive_auth_or_reject(
 /// verification because both contribute to unauthenticated socket pressure
 #[o_sfu_telemetry::measure_duration(metrics = "state.metrics", record = "record_ws_auth_duration")]
 async fn authenticate_handshake_session(
-    state: &RuntimeState,
+    state: &WebSocketServices,
     writer: &mut WsWriter,
     reader: &mut WsReader,
     remote_address: &str,
@@ -337,7 +337,7 @@ fn extract_auth_envelope(batch: Vec<ClientEnvelope>) -> Result<AuthPayload, WebS
 /// payload has no channel
 /// the returned claims have passed room-key verification
 async fn authenticate(
-    state: &RuntimeState,
+    state: &WebSocketServices,
     auth_payload: &AuthPayload,
     remote_address: &str,
 ) -> Result<(Arc<Room>, WebSocketConnectClaims), WebSocketCloseCode> {
@@ -358,7 +358,7 @@ async fn authenticate(
 /// the JWT payload only for room lookup
 /// the caller must still run room-key verification before using any claim data
 async fn resolve_handshake_room(
-    state: &RuntimeState,
+    state: &WebSocketServices,
     auth_payload: &AuthPayload,
 ) -> Result<Arc<Room>, WebSocketCloseCode> {
     let Some(explicit_room_id) = auth_payload.channel.as_deref() else {
@@ -383,7 +383,7 @@ async fn resolve_handshake_room(
 /// join an admission boundary that no longer exists or never existed in this
 /// process
 async fn resolve_explicit_room(
-    state: &RuntimeState,
+    state: &WebSocketServices,
     room_id: &str,
 ) -> Result<Arc<Room>, WebSocketCloseCode> {
     state
@@ -447,7 +447,7 @@ fn authenticate_room_scoped_claims(
 
 /// authenticate a parsed payload and turn auth failures into terminal rejection
 async fn authenticate_session(
-    state: &RuntimeState,
+    state: &WebSocketServices,
     writer: &mut WsWriter,
     auth_payload: &AuthPayload,
     remote_address: &str,
@@ -484,7 +484,7 @@ async fn authenticate_session(
 /// later startup failure must call `cleanup_failed_session` with the returned
 /// connection id before the socket is abandoned
 async fn join_user(
-    state: &RuntimeState,
+    state: &WebSocketServices,
     writer: &mut WsWriter,
     room: Arc<Room>,
     claims: WebSocketConnectClaims,
@@ -494,8 +494,8 @@ async fn join_user(
     // create the queue before join so admission is atomic from the room view
     let (outbound_tx, outbound_rx) = UserOutboundSender::channel_with_limits(
         UserOutboundQueueLimits::new(
-            state.config.user.outbound_queue_capacity,
-            state.config.user.outbound_queue_byte_capacity,
+            state.user.outbound_queue_capacity,
+            state.user.outbound_queue_byte_capacity,
         ),
         Arc::clone(&state.metrics),
     );
@@ -602,7 +602,7 @@ fn record_session_span(
     record = "record_ws_user_initialize_duration"
 )]
 async fn initialize_user(
-    state: &RuntimeState,
+    state: &WebSocketServices,
     writer: &mut WsWriter,
     room: &Room,
     user_id: &UserId,
@@ -655,7 +655,7 @@ async fn initialize_user(
 /// later room reconciliation still owns any transport retry work exposed by the
 /// close path
 async fn cleanup_failed_session(
-    state: &RuntimeState,
+    state: &WebSocketServices,
     room: &Room,
     user_id: &UserId,
     connection_id: ConnectionId,
@@ -670,7 +670,7 @@ async fn cleanup_failed_session(
 ///
 /// returning `None` lets call sites use the helper directly in `Option` chains
 async fn reject_handshake<T>(
-    state: &RuntimeState,
+    state: &WebSocketServices,
     writer: Option<&mut WsWriter>,
     close_code: Option<WebSocketCloseCode>,
     remote_address: &str,

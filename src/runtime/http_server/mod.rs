@@ -4,7 +4,8 @@
 //!
 //! ```text
 //! http_server
-//! |- controller -> Axum app construction plus route-level parsing/response shaping
+//! |- controller -> Axum app construction plus route wiring and response shaping
+//! |- extractors -> typed request extraction and verified route inputs
 //! ```
 //!
 //! Read this node before the WebSocket path when you need the server's non-streaming
@@ -12,6 +13,7 @@
 
 pub(crate) mod contract;
 mod controller;
+mod extractors;
 #[cfg(test)]
 mod tests;
 
