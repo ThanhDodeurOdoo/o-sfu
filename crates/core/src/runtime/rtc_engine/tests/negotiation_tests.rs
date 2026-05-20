@@ -25,10 +25,7 @@ async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 34, UserId::Integer(34));
 
-    let offer = adapter
-        .negotiation()
-        .create_initial_session_offer(&session_key)
-        .await;
+    let offer = adapter.create_initial_session_offer(&session_key).await;
     assert!(offer.is_ok());
     let Some(offer) = offer.ok() else {
         return;
@@ -57,16 +54,12 @@ async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
 
     assert!(
         adapter
-            .negotiation()
             .apply_session_answer(&session_key, &answer.to_sdp_string())
             .await
             .is_ok()
     );
     assert_eq!(
-        adapter
-            .negotiation()
-            .create_initial_session_offer(&session_key)
-            .await,
+        adapter.create_initial_session_offer(&session_key).await,
         Err(TransportAdapterError::UnsupportedFeature)
     );
 }
@@ -77,7 +70,6 @@ async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
     let session_key = transport_key(1, 134, UserId::Integer(134));
 
     let (offer_sdp, upload_slots) = adapter
-        .negotiation()
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed")
@@ -151,7 +143,6 @@ async fn rtc_initial_session_offer_advertises_h264_simulcast_when_vp8_is_disable
     let session_key = transport_key(1, 136, UserId::Integer(136));
 
     let (offer_sdp, upload_slots) = adapter
-        .negotiation()
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed")
@@ -206,7 +197,6 @@ async fn rtc_initial_session_offer_reports_configured_codec_preferences() {
     let session_key = transport_key(1, 137, UserId::Integer(137));
 
     let (_offer_sdp, upload_slots) = adapter
-        .negotiation()
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed")
@@ -233,7 +223,6 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
     let session_key = transport_key(1, 38, UserId::Integer(38));
 
     let offer_sdp = adapter
-        .negotiation()
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed")
@@ -285,7 +274,6 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
 
     let mut remote = build_remote_rtc(55_135);
     let initial_offer = adapter
-        .negotiation()
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed");
@@ -298,7 +286,6 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
     .await;
 
     let transport_media_id = adapter
-        .media()
         .add_recv_media(
             &session_key,
             Str0mMediaKind::Video,
@@ -312,7 +299,6 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
         .expect("simulcast publish should expose the staged mid");
 
     let renegotiation_offer = adapter
-        .negotiation()
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("staged simulcast renegotiation offer should be available")
@@ -354,7 +340,6 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
         &[("lo", Some(150_000)), ("hi", Some(900_000))],
     );
     let applied_answer = adapter
-        .negotiation()
         .apply_session_answer(&session_key, &answer_sdp)
         .await
         .expect("simulcast answer should apply");
@@ -366,7 +351,6 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
     );
 
     let negotiated_parameters = adapter
-        .media()
         .negotiated_producer_parameters(&session_key, transport_media_id)
         .await
         .expect("answered simulcast publish should project router RTP parameters");
@@ -389,16 +373,12 @@ async fn rtc_initial_session_offer_rejects_overlapping_pending_offer() {
 
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(&session_key)
             .await
             .is_ok()
     );
     assert_eq!(
-        adapter
-            .negotiation()
-            .create_initial_session_offer(&session_key)
-            .await,
+        adapter.create_initial_session_offer(&session_key).await,
         Err(TransportAdapterError::InvalidInput)
     );
 }
@@ -411,7 +391,6 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
 
     let mut remote = build_remote_rtc(55_006);
     let initial_offer = adapter
-        .negotiation()
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed");
@@ -424,7 +403,6 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
     .await;
 
     let transport_media_id = adapter
-        .media()
         .add_recv_media(
             &session_key,
             Str0mMediaKind::Video,
@@ -434,7 +412,6 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
         .expect("protocol producer media should stage a renegotiation offer");
 
     let renegotiation_offer = adapter
-        .negotiation()
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("staged renegotiation offer should be available");
@@ -463,7 +440,6 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
     );
 
     let negotiated_parameters = adapter
-        .media()
         .negotiated_producer_parameters(&session_key, transport_media_id)
         .await
         .expect("answered producer negotiation should project router RTP parameters");
@@ -489,7 +465,6 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
 
     let mut remote = build_remote_rtc(55_007);
     let initial_offer = adapter
-        .negotiation()
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed");
@@ -502,7 +477,6 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
     .await;
 
     let transport_media_id = adapter
-        .media()
         .add_recv_media(
             &session_key,
             Str0mMediaKind::Video,
@@ -511,7 +485,6 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
         .await
         .expect("protocol publish intent should stage a recv-only media line");
     let (renegotiation_sdp, upload_slots) = adapter
-        .negotiation()
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("protocol publish should stage a follow-up offer")
@@ -543,7 +516,6 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
     );
 
     adapter
-        .negotiation()
         .apply_session_answer(&session_key, &answer_sdp)
         .await
         .expect("default simulcast answer should apply");
@@ -556,7 +528,6 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
         "answered protocol publish should recover the recv expectation from the negotiated SDP"
     );
     let negotiated_parameters = adapter
-        .media()
         .negotiated_producer_parameters(&session_key, transport_media_id)
         .await
         .expect("protocol publish should project negotiated RTP parameters");
@@ -573,7 +544,6 @@ async fn rtc_session_renegotiation_projects_multiple_protocol_producers_from_one
 
     let mut remote = build_remote_rtc(55_048);
     let initial_offer = adapter
-        .negotiation()
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed");
@@ -586,7 +556,6 @@ async fn rtc_session_renegotiation_projects_multiple_protocol_producers_from_one
     .await;
 
     let audio_media_id = adapter
-        .media()
         .add_recv_media(
             &session_key,
             Str0mMediaKind::Audio,
@@ -595,7 +564,6 @@ async fn rtc_session_renegotiation_projects_multiple_protocol_producers_from_one
         .await
         .expect("audio publish intent should stage a renegotiation offer");
     let video_media_id = adapter
-        .media()
         .add_recv_media(
             &session_key,
             Str0mMediaKind::Video,
@@ -605,7 +573,6 @@ async fn rtc_session_renegotiation_projects_multiple_protocol_producers_from_one
         .expect("video publish intent should merge into the same renegotiation offer");
 
     let renegotiation_offer = adapter
-        .negotiation()
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("staged renegotiation offer should be available");
@@ -618,7 +585,6 @@ async fn rtc_session_renegotiation_projects_multiple_protocol_producers_from_one
     .await;
 
     let audio_parameters = adapter
-        .media()
         .negotiated_producer_parameters(&session_key, audio_media_id)
         .await;
     assert!(
@@ -626,7 +592,6 @@ async fn rtc_session_renegotiation_projects_multiple_protocol_producers_from_one
         "audio publish should project negotiated RTP parameters after a shared answer, got {audio_parameters:?}"
     );
     let video_parameters = adapter
-        .media()
         .negotiated_producer_parameters(&session_key, video_media_id)
         .await;
     assert!(
@@ -643,13 +608,11 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
 
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(&source_session_key)
             .await
             .is_ok()
     );
     let source_media_id = adapter
-        .media()
         .add_recv_media(
             &source_session_key,
             Str0mMediaKind::Video,
@@ -660,7 +623,6 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
 
     let mut remote = build_remote_rtc(55_002);
     let initial_offer = adapter
-        .negotiation()
         .create_initial_session_offer(&consumer_session_key)
         .await
         .expect("initial offer should succeed");
@@ -673,7 +635,6 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
     .await;
 
     let consumer_media_id = adapter
-        .media()
         .add_send_media(
             &consumer_session_key,
             Str0mMediaKind::Video,
@@ -686,7 +647,6 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
         .expect("protocol consumer media should stage a renegotiation offer");
 
     let renegotiation_offer = adapter
-        .negotiation()
         .create_session_renegotiation_offer(&consumer_session_key)
         .await
         .expect("staged renegotiation offer should be available");
@@ -724,13 +684,11 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
 
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(&source_session_key)
             .await
             .is_ok()
     );
     let source_media_id = adapter
-        .media()
         .add_recv_media(
             &source_session_key,
             Str0mMediaKind::Video,
@@ -741,7 +699,6 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
 
     let mut remote = build_remote_rtc(55_004);
     let initial_offer = adapter
-        .negotiation()
         .create_initial_session_offer(&consumer_session_key)
         .await
         .expect("initial offer should succeed");
@@ -754,7 +711,6 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
     .await;
 
     let consumer_media_id = adapter
-        .media()
         .add_send_media(
             &consumer_session_key,
             Str0mMediaKind::Video,
@@ -771,7 +727,6 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
         .expect("consumer media should expose its staged mid");
 
     let addition_offer = adapter
-        .negotiation()
         .create_session_renegotiation_offer(&consumer_session_key)
         .await
         .expect("staged addition offer should be available");
@@ -785,7 +740,6 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
 
     assert!(
         adapter
-            .media()
             .remove_media(&consumer_session_key, consumer_media_id)
             .await
             .is_ok()
@@ -796,7 +750,6 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
     );
 
     let removal_offer = adapter
-        .negotiation()
         .create_session_renegotiation_offer(&consumer_session_key)
         .await
         .expect("removal should stage a renegotiation offer");
@@ -808,7 +761,6 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
     apply_offer_answer(&adapter, &consumer_session_key, &mut remote, removal_sdp).await;
     assert_eq!(
         adapter
-            .negotiation()
             .create_session_renegotiation_offer(&consumer_session_key)
             .await,
         Err(TransportAdapterError::UnsupportedFeature)
@@ -822,7 +774,6 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_producer_removal() {
 
     let mut remote = build_remote_rtc(55_007);
     let initial_offer = adapter
-        .negotiation()
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed");
@@ -845,14 +796,12 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_producer_removal() {
 
     assert!(
         adapter
-            .media()
             .remove_media(&session_key, producer_media_id)
             .await
             .is_ok()
     );
 
     let removal_offer = adapter
-        .negotiation()
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("removal should stage a renegotiation offer");
@@ -864,14 +813,12 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_producer_removal() {
     apply_offer_answer(&adapter, &session_key, &mut remote, removal_sdp).await;
     assert_eq!(
         adapter
-            .media()
             .negotiated_producer_parameters(&session_key, producer_media_id)
             .await,
         Err(TransportAdapterError::TransportUnavailable)
     );
     assert_eq!(
         adapter
-            .negotiation()
             .create_session_renegotiation_offer(&session_key)
             .await,
         Err(TransportAdapterError::UnsupportedFeature)
@@ -885,7 +832,6 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
 
     let mut remote = build_remote_rtc(55_008);
     let initial_offer = adapter
-        .negotiation()
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed");
@@ -898,7 +844,6 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
     .await;
 
     let producer_media_id = adapter
-        .media()
         .add_recv_media(
             &session_key,
             Str0mMediaKind::Video,
@@ -911,7 +856,6 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
         .await
         .expect("producer media should expose its staged mid");
     let addition_offer = adapter
-        .negotiation()
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("addition offer should be available");
@@ -919,14 +863,12 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
 
     assert!(
         adapter
-            .media()
             .remove_media(&session_key, producer_media_id)
             .await
             .is_ok()
     );
     assert_eq!(
         adapter
-            .negotiation()
             .create_session_renegotiation_offer(&session_key)
             .await,
         Err(TransportAdapterError::InvalidInput)
@@ -935,7 +877,6 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
     apply_offer_answer(&adapter, &session_key, &mut remote, addition_sdp).await;
 
     let removal_offer = adapter
-        .negotiation()
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("cancelled pending producer should stage a follow-up removal offer");
@@ -945,7 +886,6 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
     assert!(removal_section.contains("a=inactive"));
     assert_eq!(
         adapter
-            .media()
             .negotiated_producer_parameters(&session_key, producer_media_id)
             .await,
         Err(TransportAdapterError::TransportUnavailable)
@@ -954,7 +894,6 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
     apply_offer_answer(&adapter, &session_key, &mut remote, removal_sdp).await;
     assert_eq!(
         adapter
-            .negotiation()
             .create_session_renegotiation_offer(&session_key)
             .await,
         Err(TransportAdapterError::UnsupportedFeature)
@@ -968,7 +907,6 @@ async fn rtc_session_cleanup_releases_declined_staged_producer_without_follow_up
 
     let mut remote = build_remote_rtc(55_009);
     let initial_offer = adapter
-        .negotiation()
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed");
@@ -981,7 +919,6 @@ async fn rtc_session_cleanup_releases_declined_staged_producer_without_follow_up
     .await;
 
     let producer_media_id = adapter
-        .media()
         .add_recv_media(
             &session_key,
             Str0mMediaKind::Video,
@@ -994,7 +931,6 @@ async fn rtc_session_cleanup_releases_declined_staged_producer_without_follow_up
         .await
         .expect("producer media should expose its staged mid");
     let addition_offer = adapter
-        .negotiation()
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("addition offer should be available");
@@ -1009,7 +945,6 @@ async fn rtc_session_cleanup_releases_declined_staged_producer_without_follow_up
     let declined_answer = answer_with_mid_direction(&answer, &producer_mid.to_string(), "inactive");
 
     let applied_answer = adapter
-        .negotiation()
         .apply_session_answer(&session_key, &declined_answer)
         .await
         .expect("declined producer answer should apply");
@@ -1020,22 +955,17 @@ async fn rtc_session_cleanup_releases_declined_staged_producer_without_follow_up
             .is_none()
     );
     assert_eq!(
-        adapter
-            .media()
-            .remove_media(&session_key, producer_media_id)
-            .await,
+        adapter.remove_media(&session_key, producer_media_id).await,
         Ok(())
     );
     assert_eq!(
         adapter
-            .media()
             .negotiated_producer_parameters(&session_key, producer_media_id)
             .await,
         Err(TransportAdapterError::TransportUnavailable)
     );
     assert_eq!(
         adapter
-            .negotiation()
             .create_session_renegotiation_offer(&session_key)
             .await,
         Err(TransportAdapterError::UnsupportedFeature)
@@ -1053,7 +983,6 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
 
     let mut remote = build_remote_rtc(55_005);
     let initial_offer = adapter
-        .negotiation()
         .create_initial_session_offer(&consumer_session_key)
         .await
         .expect("initial offer should succeed");
@@ -1077,7 +1006,6 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
     .await;
 
     let _second_consumer_media_id = adapter
-        .media()
         .add_send_media(
             &consumer_session_key,
             Str0mMediaKind::Video,
@@ -1089,7 +1017,6 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
         .await
         .expect("second protocol consumer media should stage an addition offer");
     let second_addition_offer = adapter
-        .negotiation()
         .create_session_renegotiation_offer(&consumer_session_key)
         .await
         .expect("second addition offer should be available");
@@ -1097,7 +1024,6 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
 
     assert!(
         adapter
-            .media()
             .remove_media(&consumer_session_key, first_consumer_media_id)
             .await
             .is_ok()
@@ -1110,7 +1036,6 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
     );
     assert_eq!(
         adapter
-            .negotiation()
             .create_session_renegotiation_offer(&consumer_session_key)
             .await,
         Err(TransportAdapterError::InvalidInput)
@@ -1125,7 +1050,6 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
     .await;
 
     let queued_removal_offer = adapter
-        .negotiation()
         .create_session_renegotiation_offer(&consumer_session_key)
         .await
         .expect("queued removal should stage after the in-flight answer lands");
@@ -1144,7 +1068,6 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
     .await;
     assert_eq!(
         adapter
-            .negotiation()
             .create_session_renegotiation_offer(&consumer_session_key)
             .await,
         Err(TransportAdapterError::UnsupportedFeature)
@@ -1157,7 +1080,6 @@ async fn rtc_session_renegotiation_offer_stays_blocked_after_initial_answer() {
     let session_key = transport_key(1, 41, UserId::Integer(41));
 
     let offer = adapter
-        .negotiation()
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed");
@@ -1165,7 +1087,6 @@ async fn rtc_session_renegotiation_offer_stays_blocked_after_initial_answer() {
     apply_offer_answer(&adapter, &session_key, &mut remote, offer.into_sdp()).await;
     assert_eq!(
         adapter
-            .negotiation()
             .create_session_renegotiation_offer(&session_key)
             .await,
         Err(TransportAdapterError::UnsupportedFeature)
@@ -1328,7 +1249,6 @@ async fn apply_offer_answer(
         .expect("remote answer should build");
     assert!(
         adapter
-            .negotiation()
             .apply_session_answer(session_key, &answer.to_sdp_string())
             .await
             .is_ok()
@@ -1341,13 +1261,11 @@ async fn setup_queued_removal_sources(
 ) -> (TransportMediaId, TransportMediaId) {
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(source_session_key)
             .await
             .is_ok()
     );
     let first_source_media_id = adapter
-        .media()
         .add_recv_media(
             source_session_key,
             Str0mMediaKind::Video,
@@ -1356,7 +1274,6 @@ async fn setup_queued_removal_sources(
         .await
         .expect("first source media should register");
     let second_source_media_id = adapter
-        .media()
         .add_recv_media(
             source_session_key,
             Str0mMediaKind::Video,
@@ -1377,7 +1294,6 @@ async fn add_negotiated_consumer_media(
     remote: &mut Rtc,
 ) -> (TransportMediaId, Mid) {
     let consumer_media_id = adapter
-        .media()
         .add_send_media(
             consumer_session_key,
             Str0mMediaKind::Video,
@@ -1393,7 +1309,6 @@ async fn add_negotiated_consumer_media(
         .await
         .expect("consumer media should expose its staged mid");
     let addition_offer = adapter
-        .negotiation()
         .create_session_renegotiation_offer(consumer_session_key)
         .await
         .expect("addition offer should be available");
@@ -1415,7 +1330,6 @@ async fn add_negotiated_producer_media(
     remote: &mut Rtc,
 ) -> (TransportMediaId, Mid) {
     let producer_media_id = adapter
-        .media()
         .add_recv_media(
             session_key,
             Str0mMediaKind::Video,
@@ -1428,7 +1342,6 @@ async fn add_negotiated_producer_media(
         .await
         .expect("producer media should expose its staged mid");
     let addition_offer = adapter
-        .negotiation()
         .create_session_renegotiation_offer(session_key)
         .await
         .expect("addition offer should be available");

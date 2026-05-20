@@ -108,11 +108,9 @@ impl WorkerLoopBenchFixture {
         reason = "benchmark setup must fail loudly when the worker cannot create its bootstrap offer"
     )]
     fn bootstrap_worker(&self) {
-        let result = self.runtime.block_on(
-            self.worker
-                .negotiation()
-                .create_initial_session_offer(&self.session_key),
-        );
+        let result = self
+            .runtime
+            .block_on(self.worker.create_initial_session_offer(&self.session_key));
         assert!(
             result.is_ok(),
             "failed to bootstrap current-thread benchmark worker"
@@ -122,11 +120,9 @@ impl WorkerLoopBenchFixture {
 
 impl Drop for WorkerLoopBenchFixture {
     fn drop(&mut self) {
-        let _ = self.runtime.block_on(
-            self.worker
-                .users()
-                .close_session_with_outcome(&self.session_key),
-        );
+        let _ = self
+            .runtime
+            .block_on(self.worker.close_session_with_outcome(&self.session_key));
     }
 }
 

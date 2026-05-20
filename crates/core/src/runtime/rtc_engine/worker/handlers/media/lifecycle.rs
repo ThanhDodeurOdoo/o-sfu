@@ -3,7 +3,7 @@
 //! This module contain producer and consumer media declaration plus transport-handle
 //! teardown inside `PacketLoopState`. Route ownership and relay tracking
 //! stay in `control/`, while offer/answer transitions remain in
-//! `worker/negotiation.rs`.
+//! `worker/handlers/negotiation.rs`.
 //!
 //! The helpers here rely on two invariants:
 //! - worker commands are serialized through one mutable `PacketLoopState`
@@ -26,7 +26,7 @@ use tracing::{debug, warn};
 
 use super::{
     super::{
-        super::{
+        super::super::{
             bitrate::BitrateRegistry,
             commands::RtcWorkerResponse,
             media_registry::{

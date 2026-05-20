@@ -672,7 +672,7 @@ impl PartialOrd for PendingRidKeyframeRefresh {
 
 /// read-side RTC transport snapshot shared outside the packet loop
 ///
-/// this state mirrors facts that diagnostics, placement and transport facades
+/// this state mirrors facts that diagnostics, placement and transport policy
 /// need without exposing mutable [`PacketLoopState`]
 /// it is protected by a cold-path mutex while packet-path state remains
 /// worker-owned and single-threaded

@@ -20,7 +20,6 @@ async fn rtc_initial_session_offer_starts_packet_loop() {
     assert!(!adapter.packet_loop_started());
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(&session_key)
             .await
             .is_ok()
@@ -35,7 +34,6 @@ async fn rtc_initial_session_offer_contains_real_ice_and_dtls_parameters() {
     let session_key = transport_key(1, 13, UserId::Integer(13));
 
     let offer_sdp = adapter
-        .negotiation()
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed")
@@ -111,21 +109,18 @@ async fn rtc_transport_close_session_allows_recreating_the_initial_offer() {
 
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(&session_key)
             .await
             .is_ok()
     );
     assert!(
         adapter
-            .users()
             .close_session_with_outcome(&session_key)
             .await
             .is_ok()
     );
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(&session_key)
             .await
             .is_ok()
@@ -138,7 +133,6 @@ async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
     let session_key = transport_key(1, 143, UserId::Integer(143));
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(&session_key)
             .await
             .is_ok()
@@ -158,7 +152,6 @@ async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
 
     assert!(
         adapter
-            .users()
             .close_session_with_outcome(&session_key)
             .await
             .is_ok()
@@ -175,7 +168,6 @@ async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
     let session_key = transport_key(1, 140, UserId::Integer(140));
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(&session_key)
             .await
             .is_ok()
@@ -192,7 +184,6 @@ async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
 
     assert!(
         adapter
-            .users()
             .close_session_with_outcome(&session_key)
             .await
             .is_ok()
@@ -208,7 +199,6 @@ async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
     let first_session_key = transport_key(1, 141, UserId::Integer(141));
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(&first_session_key)
             .await
             .is_ok()
@@ -218,7 +208,6 @@ async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
 
     assert!(
         adapter
-            .users()
             .close_session_with_outcome(&first_session_key)
             .await
             .is_ok()
@@ -229,7 +218,6 @@ async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
     let second_session_key = transport_key(1, 142, UserId::Integer(142));
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(&second_session_key)
             .await
             .is_ok()
@@ -246,14 +234,12 @@ async fn rtc_transport_distinguishes_same_session_id_across_channels() {
 
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(&first_session_key)
             .await
             .is_ok()
     );
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(&second_session_key)
             .await
             .is_ok()
@@ -265,7 +251,6 @@ async fn rtc_transport_distinguishes_same_session_id_across_channels() {
     );
     assert!(
         adapter
-            .users()
             .close_session_with_outcome(&first_session_key)
             .await
             .is_ok()
@@ -294,12 +279,7 @@ async fn rtc_transport_concurrent_initial_offers_deliver_all_worker_responses() 
         Duration::from_secs(1),
         join_all(session_keys.into_iter().map(|session_key| {
             let adapter = Arc::clone(&adapter);
-            async move {
-                adapter
-                    .negotiation()
-                    .create_initial_session_offer(&session_key)
-                    .await
-            }
+            async move { adapter.create_initial_session_offer(&session_key).await }
         })),
     )
     .await;
@@ -324,14 +304,12 @@ async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() 
 
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(&first_session_key)
             .await
             .is_ok()
     );
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(&second_session_key)
             .await
             .is_ok()
@@ -341,12 +319,8 @@ async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() 
 
     let close_results = timeout(Duration::from_secs(1), async {
         tokio::join!(
-            adapter
-                .users()
-                .close_session_with_outcome(&first_session_key),
-            adapter
-                .users()
-                .close_session_with_outcome(&second_session_key),
+            adapter.close_session_with_outcome(&first_session_key),
+            adapter.close_session_with_outcome(&second_session_key),
         )
     })
     .await;
@@ -364,7 +338,6 @@ async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() 
     let next_session_key = transport_key(4, 303, UserId::Integer(303));
     assert!(
         adapter
-            .negotiation()
             .create_initial_session_offer(&next_session_key)
             .await
             .is_ok()

@@ -25,7 +25,7 @@ use tokio::sync::oneshot;
 use tracing::debug;
 
 use super::{
-    super::{
+    super::super::{
         bitrate::BitrateRegistry,
         bootstrap, simulcast,
         state::{PacketLoopState, RtcSnapshotState},
@@ -194,7 +194,7 @@ fn worker_apply_session_answer(
         .mid_registry
         .iter()
         .filter_map(|(transport_media_id, handle)| match handle {
-            super::super::media_registry::RegisteredMediaHandle::Producer {
+            super::super::super::media_registry::RegisteredMediaHandle::Producer {
                 session_key: owner_session_key,
                 mid,
             } if owner_session_key == session_key => Some((*transport_media_id, *mid)),
@@ -291,7 +291,7 @@ fn answer_remote_candidate_addrs(answer: &SdpAnswer) -> Vec<SocketAddr> {
 }
 
 fn apply_pending_recv_streams(
-    session_state: &mut super::super::state::RtcSessionState,
+    session_state: &mut super::super::super::state::RtcSessionState,
     max_bitrate_in: Bitrate,
 ) {
     // Answer-time recv refresh can recreate `StreamRx` bindings, so REMB must
@@ -328,7 +328,7 @@ fn apply_pending_recv_streams(
 fn apply_pending_recv_stream(
     api: &mut DirectApi<'_>,
     mid: Mid,
-    stream: &super::super::state::PendingRecvStream,
+    stream: &super::super::super::state::PendingRecvStream,
     max_bitrate_in: Bitrate,
 ) {
     if let Some(existing_ssrc) = api
@@ -351,7 +351,7 @@ fn apply_pending_recv_stream(
     }
 }
 
-fn stage_queued_removal_offer(session_state: &mut super::super::state::RtcSessionState) {
+fn stage_queued_removal_offer(session_state: &mut super::super::super::state::RtcSessionState) {
     if session_state.sdp_negotiation.queued_removal_mids.is_empty() {
         return;
     }
