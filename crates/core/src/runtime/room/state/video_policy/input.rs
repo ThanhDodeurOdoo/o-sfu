@@ -358,7 +358,7 @@ pub(super) fn featured_source_owner_for_active_speaker_source(
     transport_media_id: TransportMediaId,
 ) -> Option<UserId> {
     let entry = state.source_transport_media_entry(transport_media_id)?;
-    let detector_source = state.media.sources.get(&entry.source_id())?;
+    let detector_source = state.media.source(entry.source_id())?;
     let detector_policy = detector_source.policy().active_speaker()?;
     if detector_policy.role() != ActiveSpeakerSourceRole::Detector {
         return None;
@@ -366,16 +366,7 @@ pub(super) fn featured_source_owner_for_active_speaker_source(
     let owner_user_id = entry.owner_user_id().clone();
     state
         .media
-        .source_ids_by_owner
-        .get(&owner_user_id)?
-        .iter()
-        .filter_map(|source_id| state.media.sources.get(source_id))
-        .any(|source| {
-            source.policy().active_speaker().is_some_and(|policy| {
-                policy.group() == detector_policy.group()
-                    && policy.role() == ActiveSpeakerSourceRole::Promotable
-            })
-        })
+        .owner_has_promotable_source_in_group(&owner_user_id, detector_policy.group())
         .then_some(owner_user_id)
 }
 

@@ -61,7 +61,7 @@ impl RoomRelayRoutes {
         consumer_user_id: &UserId,
         consumer_connection_id: ConnectionId,
         source_id: PublishedSourceId,
-        active: bool,
+        activity: RelayRouteActivity,
     ) -> Vec<RelayRouteEffect> {
         let owner_key = RelayOwnerKey(consumer_user_id.clone(), consumer_connection_id, source_id);
         let Some(route_key) = self.route_key_for(&owner_key) else {
@@ -74,7 +74,6 @@ impl RoomRelayRoutes {
         let Some(owner_activity) = owners.get_mut(&owner_key) else {
             return Vec::new();
         };
-        let activity = RelayRouteActivity::from_active(active);
         if *owner_activity == activity {
             return Vec::new();
         }

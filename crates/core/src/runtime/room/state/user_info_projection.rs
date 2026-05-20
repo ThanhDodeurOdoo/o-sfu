@@ -33,16 +33,11 @@ impl RoomState {
 
     pub fn user_stats_counts(&self) -> (u64, BTreeMap<UserStreamId, u64>) {
         let mut active_users_by_stream: BTreeMap<UserStreamId, BTreeSet<UserId>> = BTreeMap::new();
-        for producer in self
-            .media
-            .producers
-            .values()
-            .filter(|producer| producer.active)
-        {
+        for (stream_id, owner_user_id) in self.media.active_producer_stream_owners() {
             active_users_by_stream
-                .entry(producer.stream_id.clone())
+                .entry(stream_id.clone())
                 .or_default()
-                .insert(producer.owner_user_id.clone());
+                .insert(owner_user_id.clone());
         }
         let active_stream_counts = active_users_by_stream
             .into_iter()

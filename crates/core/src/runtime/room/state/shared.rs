@@ -14,12 +14,11 @@ use super::{
         user_negotiation::UserNegotiation,
     },
     layout::UserLayout,
-    media::{ConsumerRouteView, RelayRouteEffect, RoomMediaGraph},
+    media::{ConsumerRouteView, RelayRouteEffect, RoomMediaGraph, TransportMediaRemoval},
     presence::UserPresence,
 };
 use crate::runtime::{
     ConnectionId, RecordingState, UserId,
-    media_transport::TransportMediaId,
     router_events::RoomRouterEventSink,
     source_model::{SourceSubscriptionIntent, UserStreamId},
 };
@@ -70,13 +69,6 @@ pub(in crate::runtime::room) struct ActiveUser {
     pub(super) sender: OutboundSender,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime::room) struct TransportMediaRemoval {
-    pub user: UserId,
-    pub connection: ConnectionId,
-    pub transport_media: TransportMediaId,
-}
-
 impl RoomState {
     pub fn new(
         runtime_context: &super::super::RoomRuntimeContext,
@@ -107,85 +99,15 @@ impl RoomState {
         }
     }
 
-    pub fn collect_consumer_transport_removals(
-        &self,
-        departing_user_ids: &BTreeSet<UserId>,
-    ) -> Vec<TransportMediaRemoval> {
-        let mut keys = BTreeSet::new();
-        for user_id in departing_user_ids {
-            if let Some(user_keys) = self.media.consumer_keys_by_user.get(user_id) {
-                keys.extend(user_keys.iter().cloned());
-            }
-            if let Some(source_ids) = self.media.source_ids_by_owner.get(user_id) {
-                for source_id in source_ids {
-                    if let Some(source_keys) = self.media.consumer_keys_by_source.get(source_id) {
-                        keys.extend(source_keys.iter().cloned());
-                    }
-                }
-            }
-        }
-        keys.into_iter()
-            .filter_map(|key| {
-                let consumer_state = self.media.consumer_index.get(&key)?;
-                Some(TransportMediaRemoval {
-                    user: key.consumer_user_id,
-                    connection: consumer_state.consumer_connection_id,
-                    transport_media: consumer_state.consumer_media,
-                })
-            })
-            .collect()
-    }
-
-    pub fn collect_producer_transport_removals(
-        &self,
-        departing_user_ids: &BTreeSet<UserId>,
-    ) -> Vec<TransportMediaRemoval> {
-        departing_user_ids
-            .iter()
-            .filter_map(|user_id| self.media.producer_ids_by_owner.get(user_id))
-            .flat_map(|producer_ids| producer_ids.iter())
-            .filter_map(|producer_id| {
-                let producer = self.media.producers.get(producer_id)?;
-                let transport_media = producer.transport_media_id?;
-                Some(TransportMediaRemoval {
-                    user: producer.owner_user_id.clone(),
-                    connection: producer.owner_connection_id,
-                    transport_media,
-                })
-            })
-            .collect()
-    }
-
     pub fn collect_user_transport_removals(
         &self,
         departing_user_ids: &BTreeSet<UserId>,
     ) -> Vec<TransportMediaRemoval> {
-        let mut removals = self.collect_producer_transport_removals(departing_user_ids);
-        removals.extend(self.collect_consumer_transport_removals(departing_user_ids));
-        removals
+        self.media.transport_removals_for_users(departing_user_ids)
     }
 
     pub fn purge_user_media_state(&mut self, user_id: &UserId) -> Vec<RelayRouteEffect> {
-        let mut relay_effects = Vec::new();
-        let source_ids = self
-            .media
-            .take_source_ids_for_owner(user_id)
-            .into_iter()
-            .collect::<Vec<_>>();
-        for source_id in source_ids {
-            if let Some((_producer, effects)) = self.media.remove_source(source_id) {
-                relay_effects.extend(effects);
-            }
-        }
-        let consumer_keys = self
-            .media
-            .take_consumer_keys_for_user(user_id)
-            .into_iter()
-            .collect::<Vec<_>>();
-        for key in consumer_keys {
-            relay_effects.extend(self.media.remove_consumer_key_state(&key));
-        }
-        relay_effects
+        self.media.remove_user_media(user_id)
     }
 
     pub fn user_for_connection(
@@ -230,18 +152,15 @@ impl RoomState {
     pub fn transport_consumer_entries(&self) -> Vec<(UserId, ConnectionId)> {
         let mut entries = self
             .media
-            .consumer_index
-            .iter()
-            .map(|(key, state)| (key.consumer_user_id.clone(), state.consumer_connection_id))
+            .committed_consumer_transport_entries()
             .collect::<Vec<_>>();
         entries.extend(
             self.media
-                .pending_consumer_bootstraps
-                .iter()
-                .filter_map(|key| {
+                .pending_consumer_user_ids()
+                .filter_map(|consumer_user_id| {
                     self.users
-                        .get(&key.consumer_user_id)
-                        .map(|user| (key.consumer_user_id.clone(), user.connection_id))
+                        .get(consumer_user_id)
+                        .map(|user| (consumer_user_id.clone(), user.connection_id))
                 }),
         );
         entries
@@ -273,14 +192,11 @@ impl RoomState {
     }
 
     pub fn publication_count(&self) -> usize {
-        self.media.sources.len()
+        self.media.publication_count()
     }
 
     pub fn subscription_count(&self) -> usize {
-        self.media
-            .consumer_index
-            .len()
-            .saturating_add(self.media.pending_consumer_bootstraps.len())
+        self.media.subscription_count()
     }
 
     pub fn media_counts(&self) -> RoomMediaCounts {
@@ -292,19 +208,5 @@ impl RoomState {
 
     pub fn is_empty(&self) -> bool {
         self.users.is_empty()
-    }
-}
-
-impl TransportMediaRemoval {
-    pub fn user(&self) -> &UserId {
-        &self.user
-    }
-
-    pub const fn connection(&self) -> ConnectionId {
-        self.connection
-    }
-
-    pub const fn transport_media(&self) -> TransportMediaId {
-        self.transport_media
     }
 }

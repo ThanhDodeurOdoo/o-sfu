@@ -25,12 +25,12 @@ use super::{
         ids::{ConsumerRuntimeId, ProducerRuntimeId},
         shared::RoomState,
     },
-    ConsumerKey, ConsumerRouteTransportRef, ConsumerState, PublishedProducer, SourceKey,
+    ConsumerKey, ConsumerRouteTransportRef, ConsumerState, PublishedProducer,
     relay::RelayRouteEffect,
 };
 use crate::runtime::{
     ConnectionId, UserId,
-    media_transport::TransportMediaId,
+    media_transport::{RelayRouteActivity, TransportMediaId},
     source_model::{
         ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
         SourceSubscriptionIntent, UserStreamId,
@@ -271,11 +271,11 @@ impl RoomState {
                 media_kind,
                 active,
             });
-            relay_effects.extend(self.media.relay_routes.set_consumer_active(
+            relay_effects.extend(self.media.set_relay_consumer_active(
                 user_id,
                 connection_id,
                 source_id,
-                active,
+                RelayRouteActivity::from_active(active),
             ));
         }
         (accepted_updates, relay_effects)
@@ -307,18 +307,12 @@ impl RoomState {
         should_include: impl Fn(&PublishedProducer) -> bool,
     ) -> Vec<PendingConsumerBootstrapTarget> {
         self.media
-            .producers
-            .iter()
+            .producers()
             .filter_map(|(producer_id, producer)| {
                 if !should_include(producer) {
                     return None;
                 }
-                self.pending_consumer_target(
-                    user_id,
-                    consumer_connection_id,
-                    *producer_id,
-                    producer,
-                )
+                self.pending_consumer_target(user_id, consumer_connection_id, producer_id, producer)
             })
             .collect()
     }
@@ -359,9 +353,7 @@ impl RoomState {
         stream_id: &UserStreamId,
     ) -> Option<PublishedSourceId> {
         self.media
-            .source_ids_by_owner_stream
-            .get(&SourceKey::new(producer_user_id, stream_id))
-            .copied()
+            .source_id_for_owner_stream(producer_user_id, stream_id)
     }
 
     fn set_consumer_source_selection(&mut self, key: &ConsumerKey, active: bool) {
@@ -384,11 +376,11 @@ impl RoomState {
                 user.parsed_client_rtp_capabilities.clone()?,
             )
         };
-        let producer = self.media.producers.get(&target.producer.producer_id)?;
+        let producer = self.media.producer(target.producer.producer_id)?;
         if !target.producer.matches_pending_producer(producer) {
             return None;
         }
-        let source_descriptor = self.media.sources.get(&target.producer.source_id)?.clone();
+        let source_descriptor = self.media.source(target.producer.source_id)?.clone();
         let consumer_key = ConsumerKey::new(&target.consumer_user_id, target.source_id());
         if self.media.consumer_bootstrap_exists(&consumer_key) {
             return None;
@@ -453,7 +445,7 @@ impl RoomState {
         else {
             return Vec::new();
         };
-        self.media.relay_routes.reserve_consumer(
+        self.media.reserve_relay_consumer(
             target,
             source_connection,
             source_media,
@@ -490,9 +482,7 @@ impl RoomState {
     ) -> ConsumerSourceSelection {
         let consumer_key = ConsumerKey::new(&target.consumer_user_id, target.source_id());
         self.media
-            .consumer_source_selections
-            .get(&consumer_key)
-            .copied()
+            .consumer_source_selection(&consumer_key)
             .unwrap_or_else(|| {
                 ConsumerSourceSelection::open(self.desired_source_subscription_active(
                     &target.consumer_user_id,
@@ -515,15 +505,11 @@ impl RoomState {
         if user.connection_id != target.consumer_connection_id || !user.negotiation.can_consume() {
             return None;
         }
-        let producer = self.media.producers.get(&pending.producer.producer_id)?;
+        let producer = self.media.producer(pending.producer.producer_id)?;
         if !pending.producer.matches_committed_producer(producer) {
             return None;
         }
-        if self
-            .media
-            .consumer_index
-            .contains_key(&pending.consumer_key)
-        {
+        if self.media.contains_consumer(&pending.consumer_key) {
             return None;
         }
         let initial_route_state = if pending.consumer_active {
@@ -575,7 +561,7 @@ impl RoomState {
     ) -> Vec<RelayRouteEffect> {
         let consumer_key = ConsumerKey::new(&target.consumer_user_id, target.source_id());
         self.media.remove_pending_consumer_bootstrap(&consumer_key);
-        self.media.relay_routes.release_target(target)
+        self.media.release_pending_relay_target(target)
     }
 
     pub fn desired_source_subscription_active(

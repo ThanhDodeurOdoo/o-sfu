@@ -76,8 +76,7 @@ impl RoomState {
         >,
     ) -> Vec<DiagnosticsSource> {
         self.media
-            .sources
-            .values()
+            .sources()
             .map(|source| {
                 let producer = self.media.producer_for_source(source.source_id());
                 let encodings = source
@@ -146,24 +145,17 @@ impl RoomState {
         connection_id: ConnectionId,
     ) -> Vec<DiagnosticsPublication> {
         self.media
-            .producers
-            .values()
-            .filter(|producer| {
-                producer.owner_user_id == *user_id && producer.owner_connection_id == connection_id
-            })
-            .filter_map(|producer| {
-                let source = self.media.sources.get(&producer.source_id)?;
-                Some(DiagnosticsPublication {
-                    active: producer.active,
-                    encoding_ids: source
-                        .encodings()
-                        .map(|encoding| encoding.encoding_id().as_u64())
-                        .collect(),
-                    media_kind: diagnostics_media_kind(producer.media_kind),
-                    source_id: producer.source_id.as_u64(),
-                    stream_id: producer.stream_id.to_string(),
-                    transport_media_id: producer.transport_media_id.map(TransportMediaId::as_u64),
-                })
+            .publications_for_user_connection(user_id, connection_id)
+            .map(|(source, producer)| DiagnosticsPublication {
+                active: producer.active,
+                encoding_ids: source
+                    .encodings()
+                    .map(|encoding| encoding.encoding_id().as_u64())
+                    .collect(),
+                media_kind: diagnostics_media_kind(producer.media_kind),
+                source_id: producer.source_id.as_u64(),
+                stream_id: producer.stream_id.to_string(),
+                transport_media_id: producer.transport_media_id.map(TransportMediaId::as_u64),
             })
             .collect()
     }
