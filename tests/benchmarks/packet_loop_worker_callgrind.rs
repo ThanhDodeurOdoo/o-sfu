@@ -44,7 +44,7 @@ fn start_instrumentation() {}
 fn stop_instrumentation() {}
 
 fn callgrind_worker_config() -> LibraryBenchmarkConfig {
-    let mut callgrind = Callgrind::with_args(["--collect-at-start=no"]);
+    let mut callgrind = Callgrind::with_args(["--instr-atstart=no"]);
     callgrind.entry_point(EntryPoint::None);
     if env::var_os("O_SFU_CALLGRIND_FLAMEGRAPHS").is_some() {
         callgrind.flamegraph(FlamegraphConfig::default());
