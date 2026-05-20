@@ -55,7 +55,7 @@ pub(super) fn publication_info_update(stream_type: StreamType, active: bool) -> 
 /// Stable telemetry operation name for a pending negotiation action.
 pub(super) fn negotiation_operation_name(action: &PendingUserAction) -> &'static str {
     match action {
-        PendingUserAction::EstablishSession { .. } => "initial_offer_create",
+        PendingUserAction::EstablishSession(_) => "initial_offer_create",
         PendingUserAction::RefreshSession => "renegotiation_offer_create",
     }
 }

@@ -5,9 +5,7 @@ use super::{
     User, UserError, UserOutput, UserSignal,
     compat::{map_core_negotiation_error, negotiation_operation_name},
     projection::session_description_payload,
-    state::{
-        PendingUserAction, PendingUserRequest, RenegotiationDisposition, ResolvedUserNegotiation,
-    },
+    state::{PendingUserAction, RenegotiationDisposition, ResolvedUserNegotiation},
 };
 use crate::{
     application::stream_catalog::stream_type_for_stream_id,
@@ -38,8 +36,13 @@ impl User {
         let Some(resolved) = self.resolve_negotiation_answer(&response_to) else {
             return Err(UserError::ProtocolViolation);
         };
+        let ResolvedUserNegotiation {
+            action,
+            queued_renegotiation,
+        } = resolved;
+        let request_operation = negotiation_operation_name(&action);
         let committed_stream_ids = self
-            .apply_negotiation_action(&resolved.pending, &answer.sdp, &response_to)
+            .apply_negotiation_action(action, &answer.sdp, &response_to, request_operation)
             .await?;
         for stream_id in committed_stream_ids {
             if let Some(stream_type) = stream_type_for_stream_id(&stream_id) {
@@ -48,13 +51,14 @@ impl User {
         }
         info!(
             event = telemetry_event::NEGOTIATION_SUCCEEDED,
-            operation = negotiation_operation_name(&resolved.pending.action),
+            operation = request_operation,
             outcome = "answer_applied",
             ?response_to,
             "applied negotiation answer"
         );
         Self::record_staged_publishes_committed();
-        self.send_follow_up_renegotiation_if_needed(&resolved).await
+        self.send_follow_up_renegotiation_if_needed(queued_renegotiation)
+            .await
     }
 
     #[instrument(
@@ -67,33 +71,31 @@ impl User {
         )
     )]
     pub(super) async fn create_initial_offer(&mut self) -> Result<UserOutput, UserError> {
-        let (offer, offered_capabilities) =
-            self.media().create_initial_offer().await.map_err(|error| {
-                warn!(
-                    event = telemetry_event::NEGOTIATION_FAILED,
-                    operation = "initial_offer_create",
-                    outcome = "transport_error",
-                    user_id = ?&self.id,
-                    connection_id = ?self.connection_id,
-                    remote_address = self.remote_address.as_ref(),
-                    ?error,
-                    "failed to create initial transport offer"
-                );
-                UserError::InternalError
-            })?;
+        let initial_offer = self.media().create_initial_offer().await.map_err(|error| {
+            warn!(
+                event = telemetry_event::NEGOTIATION_FAILED,
+                operation = "initial_offer_create",
+                outcome = "transport_error",
+                user_id = ?&self.id,
+                connection_id = ?self.connection_id,
+                remote_address = self.remote_address.as_ref(),
+                ?error,
+                "failed to create initial transport offer"
+            );
+            UserError::InternalError
+        })?;
         info!(
             event = telemetry_event::NEGOTIATION_STARTED,
             operation = "initial_offer_create",
             outcome = "offer_ready",
             "created initial transport offer"
         );
-        let offer_request = ServerRequest::Offer(session_description_payload(offer));
+        let offer_request =
+            ServerRequest::Offer(session_description_payload(initial_offer.offer().clone()));
         Ok(
             UserOutput::new().with_signal(self.issue_negotiation_request(
                 offer_request,
-                PendingUserAction::EstablishSession {
-                    offered_capabilities,
-                },
+                PendingUserAction::EstablishSession(initial_offer),
             )),
         )
     }
@@ -130,17 +132,16 @@ impl User {
         action: PendingUserAction,
     ) -> UserSignal {
         let request_id = self.state.next_request_id();
-        let signal = UserSignal::request(request_id.clone(), request.clone());
+        let operation = negotiation_operation_name(&action);
         info!(
             event = telemetry_event::NEGOTIATION_STARTED,
-            operation = negotiation_operation_name(&action),
+            operation,
             outcome = "request_prepared",
             ?request_id,
             "prepared negotiation request"
         );
-        self.state
-            .negotiation_state
-            .issue(request_id, request, action);
+        let signal = UserSignal::request(request_id.clone(), request);
+        self.state.negotiation_state.issue(request_id, action);
         signal
     }
 
@@ -181,10 +182,9 @@ impl User {
 
     async fn send_follow_up_renegotiation_if_needed(
         &mut self,
-        resolved: &ResolvedUserNegotiation,
+        queued_renegotiation: bool,
     ) -> Result<UserOutput, UserError> {
-        let needs_follow_up =
-            self.stage_queued_publish_slots().await? || resolved.queued_renegotiation;
+        let needs_follow_up = self.stage_queued_publish_slots().await? || queued_renegotiation;
         if !needs_follow_up {
             return Ok(UserOutput::new());
         }
@@ -193,29 +193,34 @@ impl User {
 
     async fn apply_negotiation_action(
         &self,
-        pending: &PendingUserRequest,
+        action: PendingUserAction,
         answer_sdp: &str,
         response_to: &RequestId,
+        request_operation: &'static str,
     ) -> Result<Vec<UserStreamId>, UserError> {
         let media = self.media();
-        let result = match &pending.action {
-            PendingUserAction::EstablishSession {
-                offered_capabilities,
-            } => {
-                media
-                    .apply_initial_answer(answer_sdp, offered_capabilities)
-                    .await
-            }
-            PendingUserAction::RefreshSession => media.apply_renegotiation_answer(answer_sdp).await,
+        let (apply_operation, result) = match action {
+            PendingUserAction::EstablishSession(initial_offer) => (
+                "answer_apply",
+                media.apply_initial_answer(answer_sdp, initial_offer).await,
+            ),
+            PendingUserAction::RefreshSession => (
+                "renegotiation_apply",
+                media.apply_renegotiation_answer(answer_sdp).await,
+            ),
         };
-        let committed_stream_ids = match result {
-            Ok(committed_stream_ids) => committed_stream_ids,
+        match result {
+            Ok(committed_stream_ids) => Ok(committed_stream_ids),
             Err(error) => {
-                self.log_negotiation_apply_error(response_to, pending, error);
-                return Err(map_core_negotiation_error(error));
+                self.log_negotiation_apply_error(
+                    response_to,
+                    apply_operation,
+                    request_operation,
+                    error,
+                );
+                Err(map_core_negotiation_error(error))
             }
-        };
-        Ok(committed_stream_ids)
+        }
     }
 
     async fn create_renegotiation_offer(&self) -> Result<Option<NegotiationOffer>, UserError> {
@@ -240,22 +245,20 @@ impl User {
     fn log_negotiation_apply_error(
         &self,
         response_to: &RequestId,
-        pending: &PendingUserRequest,
+        apply_operation: &'static str,
+        request_operation: &'static str,
         error: SfuCoreError,
     ) {
-        let (operation, outcome, message) = match error {
+        let (outcome, message) = match error {
             SfuCoreError::Transport(_) => (
-                "answer_apply",
                 "transport_error",
                 "failed to apply negotiation answer to the transport endpoint",
             ),
             SfuCoreError::CapabilityProjection(_) => (
-                "answer_apply",
                 "capability_projection_failed",
                 "failed to project client RTP capabilities from the answered SDP",
             ),
             SfuCoreError::SessionNegotiationRejected(outcome) => (
-                "answer_apply",
                 match outcome {
                     SessionNegotiationOutcome::Applied => "room_commit_unexpected",
                     SessionNegotiationOutcome::StaleConnection => "stale_connection",
@@ -263,7 +266,6 @@ impl User {
                 "failed to commit negotiated user state after initial answer",
             ),
             SfuCoreError::SessionRefreshRejected(outcome) => (
-                "renegotiation_apply",
                 match outcome {
                     SessionNegotiationOutcome::Applied => "room_refresh_unexpected",
                     SessionNegotiationOutcome::StaleConnection => "stale_connection",
@@ -273,13 +275,13 @@ impl User {
         };
         warn!(
             event = telemetry_event::NEGOTIATION_FAILED,
-            operation,
+            operation = apply_operation,
+            request_operation,
             outcome,
             user_id = ?&self.id,
             connection_id = ?self.connection_id,
             remote_address = self.remote_address.as_ref(),
             ?response_to,
-            request = ?pending.request,
             ?error,
             "{message}"
         );

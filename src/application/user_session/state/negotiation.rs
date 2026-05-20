@@ -10,12 +10,9 @@ use std::{
     mem::{replace, take},
 };
 
-use o_sfu_protocol::{
-    shared::StreamType,
-    signaling::{RequestId, ServerRequest},
-};
+use o_sfu_protocol::{shared::StreamType, signaling::RequestId};
 
-use crate::core::prelude::OfferedMediaCapabilities;
+use crate::core::prelude::InitialOffer;
 
 /// generator for monotonic server-authored request ids
 #[derive(Debug, Default)]
@@ -35,30 +32,12 @@ impl UserRequestIdSequencer {
 ///
 /// the pending action tells `User` which media-core answer path is legal when
 /// the browser resolves the request
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(in crate::application::user_session) enum PendingUserAction {
     /// the request expects to establish the first transport session
-    EstablishSession {
-        /// capabilities offered by the server for initial codec negotiation
-        offered_capabilities: OfferedMediaCapabilities,
-    },
+    EstablishSession(InitialOffer),
     /// the request only refreshes an existing transport session
     RefreshSession,
-}
-
-/// metadata for one unresolved server-authored request
-///
-/// this is stored until the browser answers
-/// the request id guards stale answers, while the action preserves which core
-/// operation is allowed to consume the answer SDP
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::application::user_session) struct PendingUserRequest {
-    /// unique id sent to the client
-    pub request_id: RequestId,
-    /// original request payload used for re-validation on answer
-    pub request: ServerRequest,
-    /// orchestration intent that triggered the request
-    pub action: PendingUserAction,
 }
 
 /// command returned to the orchestrator after a renegotiation request
@@ -80,9 +59,9 @@ pub(in crate::application::user_session) enum RenegotiationDisposition {
 /// the queued renegotiation flag is carried beside the pending request so
 /// `User` can apply the answer first, then decide whether follow-up media work
 /// needs another offer
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(in crate::application::user_session) struct ResolvedUserNegotiation {
-    pub pending: PendingUserRequest,
+    pub action: PendingUserAction,
     pub queued_renegotiation: bool,
 }
 
@@ -102,7 +81,8 @@ enum NegotiationPhase {
     BeforeInitialOffer,
     Stable,
     Negotiating {
-        pending: PendingUserRequest,
+        request_id: RequestId,
+        action: PendingUserAction,
         queued_renegotiation: bool,
     },
 }
@@ -141,18 +121,10 @@ impl UserNegotiationState {
     ///
     /// this moves the session to the negotiating phase and preserves any existing
     /// publish queue
-    pub fn issue(
-        &mut self,
-        request_id: RequestId,
-        request: ServerRequest,
-        action: PendingUserAction,
-    ) {
+    pub fn issue(&mut self, request_id: RequestId, action: PendingUserAction) {
         self.phase = NegotiationPhase::Negotiating {
-            pending: PendingUserRequest {
-                request_id,
-                request,
-                action,
-            },
+            request_id,
+            action,
             queued_renegotiation: false,
         };
     }
@@ -181,18 +153,19 @@ impl UserNegotiationState {
     /// returns the pending request metadata if the id matches, otherwise it
     /// returns `None` and preserves the current state
     pub fn resolve_answer(&mut self, response_to: &RequestId) -> Option<ResolvedUserNegotiation> {
-        let NegotiationPhase::Negotiating { pending, .. } = &self.phase else {
+        let NegotiationPhase::Negotiating { request_id, .. } = &self.phase else {
             return None;
         };
-        if pending.request_id != *response_to {
+        if *request_id != *response_to {
             return None;
         }
         match replace(&mut self.phase, NegotiationPhase::Stable) {
             NegotiationPhase::Negotiating {
-                pending,
+                action,
                 queued_renegotiation,
+                ..
             } => Some(ResolvedUserNegotiation {
-                pending,
+                action,
                 queued_renegotiation,
             }),
             other => {
@@ -205,10 +178,7 @@ impl UserNegotiationState {
 
 #[cfg(test)]
 mod tests {
-    use o_sfu_protocol::{
-        shared::StreamType,
-        signaling::{RequestId, ServerRequest, SessionDescriptionPayload},
-    };
+    use o_sfu_protocol::{shared::StreamType, signaling::RequestId};
 
     use super::*;
 
@@ -227,14 +197,7 @@ mod tests {
         let request_id = RequestId::new(String::from("server-1"));
         let mut state = UserNegotiationState::default();
         state.queue_publish_slot(StreamType::Camera);
-        state.issue(
-            request_id.clone(),
-            ServerRequest::Offer(SessionDescriptionPayload {
-                sdp: String::from("v=0"),
-                upload_slots: Vec::new(),
-            }),
-            PendingUserAction::RefreshSession,
-        );
+        state.issue(request_id.clone(), PendingUserAction::RefreshSession);
 
         let resolved = state.resolve_answer(&request_id);
 
@@ -250,14 +213,7 @@ mod tests {
     fn stale_answers_keep_the_current_pending_request() {
         let request_id = RequestId::new(String::from("server-1"));
         let mut state = UserNegotiationState::default();
-        state.issue(
-            request_id,
-            ServerRequest::Renegotiate(SessionDescriptionPayload {
-                sdp: String::from("v=0"),
-                upload_slots: Vec::new(),
-            }),
-            PendingUserAction::RefreshSession,
-        );
+        state.issue(request_id, PendingUserAction::RefreshSession);
 
         assert!(
             state

@@ -10,8 +10,7 @@ mod wire;
 
 use negotiation::UserRequestIdSequencer;
 pub(super) use negotiation::{
-    PendingUserAction, PendingUserRequest, RenegotiationDisposition, ResolvedUserNegotiation,
-    UserNegotiationState,
+    PendingUserAction, RenegotiationDisposition, ResolvedUserNegotiation, UserNegotiationState,
 };
 use o_sfu_protocol::signaling::RequestId;
 pub(super) use wire::{UserWireMessages, UserWireState};

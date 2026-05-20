@@ -34,14 +34,6 @@ use crate::{
     },
 };
 
-/// Router capabilities captured when an initial offer is created.
-///
-/// Pass this value back to [`MediaSession::apply_initial_answer`] for the
-/// matching answer. It binds answer projection to the exact router capability
-/// set that was advertised to the browser.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OfferedMediaCapabilities(MediaCapabilities);
-
 /// Transport-neutral SDP offer returned by the media-core public API.
 ///
 /// The media transport still owns the backend-specific `SessionOffer` shape.
@@ -60,6 +52,25 @@ pub struct NegotiationOffer {
     /// The browser bundle uses these slots to attach pending local tracks to
     /// the intended media sections without guessing from raw SDP.
     pub upload_slots: Vec<UploadSlot>,
+}
+
+/// Initial offer token that must be consumed by the matching answer.
+///
+/// This binds the offer sent to the browser to the router capabilities used
+/// later for answer projection. Keeping both values together prevents callers
+/// from applying an answer with capabilities captured from another offer.
+#[derive(Debug)]
+pub struct InitialOffer {
+    offer: NegotiationOffer,
+    offered_capabilities: MediaCapabilities,
+}
+
+impl InitialOffer {
+    /// Return the offer payload that should be sent to the browser.
+    #[must_use]
+    pub const fn offer(&self) -> &NegotiationOffer {
+        &self.offer
+    }
 }
 
 /// Upload opportunity advertised by a core negotiation offer.
@@ -188,7 +199,7 @@ pub struct SfuCore {
 ///
 /// ```ignore
 /// let session = core.session(&room, &user_id, connection_id);
-/// let (offer, caps) = session.create_initial_offer().await?;
+/// let initial_offer = session.create_initial_offer().await?;
 /// ```
 ///
 /// Updating a subscription:
@@ -252,27 +263,26 @@ impl MediaSession<'_> {
 
     /// Create the first transport offer for this session.
     ///
-    /// The returned [`OfferedMediaCapabilities`] must be stored with the
-    /// pending request and passed back to [`Self::apply_initial_answer`] to
-    /// ensure that the answer is interpreted against the exact capability
-    /// set used for the offer.
+    /// The returned [`InitialOffer`] must be stored with the pending request
+    /// and consumed by [`Self::apply_initial_answer`] so the answer is
+    /// interpreted against the exact capability set used for the offer.
     ///
     /// # Errors
     ///
     /// Returns [`SfuCoreError::Transport`] when the transport backend cannot
     /// create the offer.
-    pub async fn create_initial_offer(
-        &self,
-    ) -> Result<(NegotiationOffer, OfferedMediaCapabilities), SfuCoreError> {
-        let offered_capabilities =
-            OfferedMediaCapabilities(self.room.router_rtp_capabilities().await);
+    pub async fn create_initial_offer(&self) -> Result<InitialOffer, SfuCoreError> {
+        let offered_capabilities = self.room.router_rtp_capabilities().await;
         let offer = self
             .core
             .media_transport
             .create_initial_session_offer(self.context.transport_user_key())
             .await
             .map_err(SfuCoreError::Transport)?;
-        Ok((NegotiationOffer::from(offer), offered_capabilities))
+        Ok(InitialOffer {
+            offer: NegotiationOffer::from(offer),
+            offered_capabilities,
+        })
     }
 
     /// Create a follow-up offer after room state staged a media change.
@@ -315,13 +325,13 @@ impl MediaSession<'_> {
     pub async fn apply_initial_answer(
         &self,
         answer_sdp: &str,
-        offered_capabilities: &OfferedMediaCapabilities,
+        initial_offer: InitialOffer,
     ) -> Result<Vec<UserStreamId>, SfuCoreError> {
         let applied_answer = self.apply_transport_answer(answer_sdp).await?;
         let client_capabilities = self
             .core
             .media_transport
-            .negotiated_client_rtp_capabilities(answer_sdp, &offered_capabilities.0)
+            .negotiated_client_rtp_capabilities(answer_sdp, &initial_offer.offered_capabilities)
             .map_err(SfuCoreError::CapabilityProjection)?;
         let outcome = self
             .room
