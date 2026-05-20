@@ -1,10 +1,7 @@
-//! Supported in-repository server integration paths.
+//! In-repository server integration paths.
 //!
-//! The crate root remains the stable media-core front door. This namespace is
-//! the curated bridge from the private core runtime tree to the `o-sfu` server
-//! crate. It exposes the concrete pieces that the server, diagnostics routes,
-//! metrics exporter and in-repository tests need without making RTC workers,
-//! room-state internals or packet-loop modules part of the public front door.
+//! Use this namespace for concrete room, diagnostics, metrics, packet sink,
+//! recording and transport types that do not belong in [`crate::prelude`].
 
 pub mod diagnostics {
     //! Operator diagnostics storage and DTOs consumed by server HTTP routes.
@@ -120,7 +117,7 @@ pub mod transport {
     }
 
     pub use crate::{
-        SessionBitrateLimits,
+        prelude::SessionBitrateLimits,
         runtime::media_transport::{
             ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
             ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,

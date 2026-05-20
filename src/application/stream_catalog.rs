@@ -7,7 +7,7 @@
 //! belong here, not in core room state or the router.
 //!
 //! Core receives [`SourcePublishIntent`] and
-//! [`crate::core::SourceSubscriptionIntent`] values with opaque [`UserStreamId`]
+//! [`crate::core::prelude::SourceSubscriptionIntent`] values with opaque [`UserStreamId`]
 //! keys. It does not know whether a stream id came from Odoo's camera slot, a
 //! screen-share slot or a future custom stream.
 
@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use o_sfu_protocol::shared::StreamType;
 use o_sfu_router::MediaKind;
 
-use crate::core::{
+use crate::core::prelude::{
     ActiveSpeakerGroup, ActiveSpeakerPolicy, ActiveSpeakerSourceRole, SourceAdaptationPolicy,
     SourceLayoutPolicy, SourcePolicy, SourcePublishIntent, SourceRoomPolicySelector, UserStreamId,
 };
@@ -27,7 +27,7 @@ pub(crate) const SCREEN_STREAM_LABEL: &str = "screen";
 
 /// Build the core publish intent for one discuss upload request.
 ///
-/// `UserSession` calls this before [`crate::core::MediaSession::stage_publish`].
+/// `UserSession` calls this before [`crate::core::prelude::MediaSession::stage_publish`].
 /// Changing this mapping changes how future publications behave in core policy,
 /// including media kind, layout role, receiver bandwidth adaptation and active
 /// speaker participation.

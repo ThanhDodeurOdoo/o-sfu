@@ -21,7 +21,7 @@ use super::fixtures::*;
 use crate::{
     application::stream_catalog::source_publish_intent_for_stream_type,
     core::{
-        SessionNegotiationOutcome, UserInfoRefresh,
+        prelude::{SessionNegotiationOutcome, UserInfoRefresh},
         server::session::{UserId, UserInfo, UserPermissions},
     },
     runtime::{

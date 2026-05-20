@@ -1,6 +1,6 @@
 //! Runtime media transport boundary used by core orchestration.
 //!
-//! This module contains the service surface that room, server plus [`crate::SfuCore`]
+//! This module contains the service surface that room, server plus [`crate::prelude::SfuCore`]
 //! code use when they need media work to happen outside the pure router. It is
 //! intentionally named after the capability it provides: callers ask the media transport to create SDP
 //! offers, apply answers, publish or consume media, close sessions, read

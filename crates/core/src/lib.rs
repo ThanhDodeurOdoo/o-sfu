@@ -1,105 +1,30 @@
 //! Media-core facade for the `o-sfu` server.
 //!
-//! The supported front door is intentionally small:
+//! Stable callers use [`prelude`] for ordinary media work and [`server`] only
+//! when they need concrete room, transport, diagnostics, metrics or recording
+//! integration.
 //!
-//! - configuration values such as [`CoreOptions`], [`MediaOptions`],
-//!   [`RoutingOptions`], [`CodecOptions`], [`ObservabilityOptions`],
-//!   [`RtcPortRange`], [`SessionBitrateLimits`], [`VideoBitrateLimits`],
-//!   [`MediaCodecFlags`], [`CodecPreferences`], and [`RuntimeFeatureFlags`].
-//! - [`SfuCore`] and its borrow-based [`MediaSession`] handle, used by the
-//!   server application to express endpoint health checks, offer/answer
-//!   negotiation, publication, subscription, and cleanup intent. `SfuCore`
-//!   constructs sessions, while media operations live on `MediaSession`.
-//! - [`NegotiationOffer`], [`UploadSlot`], and [`UploadEncoding`], the
-//!   transport-neutral negotiation vocabulary exposed by the core front door.
-//! - [`MediaSessionContext`], the room-owned identity bundle carried by
-//!   [`MediaSession`].
-//! - semantic media intent and outcome types such as [`PublicationActivity`],
-//!   [`PublishStageOutcome`], [`UnpublishOutcome`] and [`UserInfoRefresh`] for
-//!   caller-facing control decisions.
-//! - [`MediaTransport`] as the runtime media transport handle and construction
-//!   facade for the server.
-//! - server-integration DTOs and facades under [`server`], including
-//!   diagnostics, metrics, room orchestration, recording taps, source
-//!   descriptors, and current transport construction seams.
-//!
-//! The implementation-heavy runtime tree is private. Integration tests and
-//! server code use [`server`] for in-repository integration and crate-root
-//! re-exports for the stable media-core front door. New public items should
-//! first fit the front door above or the explicit server-integration namespace.
-//! Otherwise they need an architecture note explaining why they are
-//! intentionally exposed.
-//!
-//! # Server-facing example
-//!
-//! ```rust,no_run
-//! use o_sfu_core::{MediaTransport, SfuCore};
-//! use o_sfu_core::server::room::Room;
-//! use o_sfu_core::server::session::UserId;
-//! use o_sfu_core::ConnectionId;
-//!
-//! async fn create_offer(
-//!     core: &SfuCore,
-//!     room: &Room,
-//!     user_id: &UserId,
-//!     connection_id: ConnectionId,
-//! ) -> Result<(), o_sfu_core::SfuCoreError> {
-//!     let session = core.session(room, user_id, connection_id);
-//!     let (offer, capabilities) = session.create_initial_offer().await?;
-//!     let browser_answer_sdp = exchange_offer_with_browser(offer.sdp).await?;
-//!     session
-//!         .apply_initial_answer(&browser_answer_sdp, &capabilities)
-//!         .await?;
-//!     Ok(())
-//! }
-//!
-//! async fn exchange_offer_with_browser(
-//!     _offer_sdp: String,
-//! ) -> Result<String, o_sfu_core::SfuCoreError> {
-//!     Ok(String::from("v=0\r\n"))
-//! }
-//!
-//! fn build_core(transport: MediaTransport) -> SfuCore {
-//!     SfuCore::new(transport)
-//! }
-//! ```
-//!
-//! `o-sfu-core` keeps worker topology behind [`MediaTransport`], while the
-//! session facade targets the runtime [`server::room::Room`] implementation.
-//! Normal server application code should use [`SfuCore`] and should not name
-//! concrete RTC workers.
+//! The crate root keeps only fundamental value types: [`Bitrate`],
+//! [`ConnectionId`] and [`RoomInstanceId`]. The private runtime tree stays
+//! hidden so new exposed types must fit [`prelude`] or [`server`] first.
 use std::fmt::{self, Display, Formatter};
 
 mod options;
+pub mod prelude;
 mod room;
 mod runtime;
 pub mod server;
 mod sfu;
 
-pub use options::{
-    AudioCodecPreference, CodecOptions, CodecPreferences, CoreOptions, LocalSpilloverPolicy,
-    LocalSpilloverPolicyError, LocalSpilloverPolicyParts, MediaCodecFlags, MediaOptions,
-    ObservabilityOptions, RoomSpilloverMode, RoomWorkerPolicy, RoutingOptions, RtcPortRange,
-    RuntimeFeatureFlags, SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
+pub(crate) use options::{
+    AudioCodecPreference, CodecPreferences, CoreOptions, LocalSpilloverPolicy, MediaCodecFlags,
+    RoomSpilloverMode, RoomWorkerPolicy, RtcPortRange, RuntimeFeatureFlags, SessionBitrateLimits,
+    VideoBitrateLimits, VideoCodecPreference,
 };
-pub use room::{
+pub(crate) use room::{
     MediaSessionContext, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
     RollbackStagedPublishOutcome, SessionNegotiationOutcome, SubscriptionUpdateOutcome,
     TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
-};
-pub use runtime::{
-    media_transport::{
-        MediaTransport, MediaTransportBuildError, MediaTransportBuilder, TransportSessionHealth,
-    },
-    source_model::{
-        ActiveSpeakerGroup, ActiveSpeakerPolicy, ActiveSpeakerSourceRole, SourceAdaptationPolicy,
-        SourceLayoutPolicy, SourcePolicy, SourcePublishIntent, SourceRoomPolicySelector,
-        SourceSubscriptionIntent, UploadLayerPolicyRole, UserStreamId,
-    },
-};
-pub use sfu::{
-    MediaSession, NegotiationOffer, OfferedMediaCapabilities, SfuCore, SfuCoreError,
-    UploadEncoding, UploadSlot,
 };
 
 /// Media bitrate stored as bits per second (not bytes per second).

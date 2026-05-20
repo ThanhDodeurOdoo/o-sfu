@@ -1,5 +1,7 @@
 use std::fmt;
 
+use o_sfu_core::prelude::{AudioCodecPreference, VideoCodecPreference};
+
 use super::settings::Config;
 
 pub(crate) struct ConfigLogView<'a> {
@@ -215,7 +217,7 @@ impl ConfigLogView<'_> {
                 .codecs
                 .preferences
                 .audio_order()
-                .map(o_sfu_core::AudioCodecPreference::wire_name)
+                .map(AudioCodecPreference::wire_name)
                 .join(","),
         )?;
         write_field(
@@ -225,7 +227,7 @@ impl ConfigLogView<'_> {
                 .codecs
                 .preferences
                 .video_order()
-                .map(o_sfu_core::VideoCodecPreference::wire_name)
+                .map(VideoCodecPreference::wire_name)
                 .join(","),
         )
     }

@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     application::stream_catalog::stream_type_for_stream_id,
-    core::{NegotiationOffer, SessionNegotiationOutcome, SfuCoreError, UserStreamId},
+    core::prelude::{NegotiationOffer, SessionNegotiationOutcome, SfuCoreError, UserStreamId},
     runtime::telemetry::schema::event as telemetry_event,
 };
 

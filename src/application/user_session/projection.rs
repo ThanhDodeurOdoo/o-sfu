@@ -13,7 +13,7 @@ use o_sfu_protocol::{
 };
 
 use crate::core::{
-    Bitrate, NegotiationOffer, UploadEncoding, UploadLayerPolicyRole, UploadSlot,
+    prelude::{Bitrate, NegotiationOffer, UploadEncoding, UploadLayerPolicyRole, UploadSlot},
     server::source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
 };
 

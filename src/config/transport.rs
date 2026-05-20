@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 
 use anyhow::{Result, anyhow, ensure};
-use o_sfu_core::{
+use o_sfu_core::prelude::{
     Bitrate, LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts,
     RoomWorkerPolicy, RtcPortRange, VideoBitrateLimits,
 };
@@ -214,7 +214,7 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
     use anyhow::Result;
-    use o_sfu_core::{LocalSpilloverPolicy, RoomSpilloverMode};
+    use o_sfu_core::prelude::{LocalSpilloverPolicy, RoomSpilloverMode};
 
     use super::{
         Bitrate, RoomWorkerPolicy, RtcPortRange, TransportConfig, VideoBitrateLimits,

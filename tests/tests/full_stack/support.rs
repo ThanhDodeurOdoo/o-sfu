@@ -2,7 +2,7 @@ pub(super) use std::time::{Duration, Instant};
 
 pub(super) use o_sfu::{
     config::{Config, MediaCodecFlags, RoomWorkerPolicy},
-    core::{LocalSpilloverPolicy, LocalSpilloverPolicyParts},
+    core::prelude::{LocalSpilloverPolicy, LocalSpilloverPolicyParts},
     http::IncomingBitRateStatsResponse,
 };
 pub(super) use o_sfu_protocol::{

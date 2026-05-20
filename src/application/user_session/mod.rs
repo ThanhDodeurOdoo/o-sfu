@@ -4,8 +4,8 @@
 //! facade with generic source intents
 //!
 //! business-layer changes to publication shape should enter core as
-//! [`crate::core::SourcePublishIntent`] and
-//! [`crate::core::SourceSubscriptionIntent`] values. `User` sequences those
+//! [`crate::core::prelude::SourcePublishIntent`] and
+//! [`crate::core::prelude::SourceSubscriptionIntent`] values. `User` sequences those
 //! intents around negotiation, request tracking and user-info fanout, while the
 //! pure connection-local state lives under `state/` and ordered websocket
 //! output lives in `output`
@@ -20,7 +20,7 @@ use std::sync::Arc;
 use o_sfu_protocol::shared::UserId;
 
 use crate::{
-    core::SfuCore,
+    core::prelude::SfuCore,
     runtime::{ConnectionId, room::Room},
 };
 
@@ -69,7 +69,7 @@ pub enum UserError {
 /// `User` owns connection-local negotiation state, local compatibility track
 /// bindings for the connected browser and cleanup completion. It does not own
 /// room membership, media publications or transport resources. Those stay
-/// behind [`Room`] and [`crate::core::MediaSession`], which keeps this boundary
+/// behind [`Room`] and [`crate::core::prelude::MediaSession`], which keeps this boundary
 /// focused on translating Odoo websocket intent into core media intent.
 ///
 /// # Concurrency

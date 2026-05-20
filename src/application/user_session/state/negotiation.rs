@@ -15,7 +15,7 @@ use o_sfu_protocol::{
     signaling::{RequestId, ServerRequest},
 };
 
-use crate::core::OfferedMediaCapabilities;
+use crate::core::prelude::OfferedMediaCapabilities;
 
 /// generator for monotonic server-authored request ids
 #[derive(Debug, Default)]

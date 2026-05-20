@@ -6,7 +6,7 @@ use crate::{
     application::stream_catalog::{
         source_publish_intent_for_stream_type, stream_id_for_stream_type,
     },
-    core::{
+    core::prelude::{
         PublicationActivity, PublicationActivityOutcome, RollbackStagedPublishOutcome,
         TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
     },

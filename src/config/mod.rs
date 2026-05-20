@@ -9,7 +9,7 @@ mod settings;
 mod telemetry;
 mod transport;
 
-pub use o_sfu_core::{
+pub use o_sfu_core::prelude::{
     Bitrate, CodecPreferences, MediaCodecFlags, RoomWorkerPolicy, RtcPortRange, VideoBitrateLimits,
 };
 
