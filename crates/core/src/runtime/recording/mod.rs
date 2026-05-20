@@ -1,3 +1,7 @@
+//! ================================================================
+//! ===                 WORK IN PROGRESS                     =======
+//! === <https://github.com/ThanhDodeurOdoo/o-sfu/issues/20> =======
+//! ================================================================
 mod service;
 #[cfg(test)]
 pub(crate) mod test_support;

@@ -1,3 +1,7 @@
+//! ================================================================
+//! ===                 WORK IN PROGRESS                     =======
+//! === <https://github.com/ThanhDodeurOdoo/o-sfu/issues/24> =======
+//! ================================================================
 use std::{env, net::SocketAddr, sync::Arc};
 
 use anyhow::{Context, Result};
