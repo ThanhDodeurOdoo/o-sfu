@@ -272,7 +272,7 @@ mod tests {
                 SessionUploadEncoding {
                     rid: common::DEFAULT_LOW_RID.to_owned(),
                     max_bitrate: None,
-                    resolution_scale: Some(2),
+                    resolution_scale: Some(4),
                     max_framerate: None,
                 },
                 SessionUploadEncoding {

@@ -849,7 +849,7 @@ test("renegotiation configures RID simulcast before answering supported video pu
                     active: true,
                     maxBitrate: 150000,
                     rid: "lo",
-                    scaleResolutionDownBy: 2
+                    scaleResolutionDownBy: 4
                 },
                 {
                     active: true,
@@ -866,7 +866,7 @@ test("renegotiation configures RID simulcast before answering supported video pu
                 active: true,
                 maxBitrate: 150000,
                 rid: "lo",
-                scaleResolutionDownBy: 2
+                scaleResolutionDownBy: 4
             },
             {
                 active: true,
@@ -914,7 +914,7 @@ test("renegotiation configures RID simulcast from server-owned upload slots", as
                     active: true,
                     maxBitrate: 150000,
                     rid: "lo",
-                    scaleResolutionDownBy: 2
+                    scaleResolutionDownBy: 4
                 },
                 {
                     active: true,
@@ -931,7 +931,7 @@ test("renegotiation configures RID simulcast from server-owned upload slots", as
                 active: true,
                 maxBitrate: 150000,
                 rid: "lo",
-                scaleResolutionDownBy: 2
+                scaleResolutionDownBy: 4
             },
             {
                 active: true,

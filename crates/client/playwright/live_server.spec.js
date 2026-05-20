@@ -48,7 +48,7 @@ test("default VP8 live publish applies RID simulcast and renders remotely", asyn
                 active: true,
                 maxBitrate: 150000,
                 rid: "lo",
-                scaleResolutionDownBy: 2
+                scaleResolutionDownBy: 4
             },
             {
                 active: true,

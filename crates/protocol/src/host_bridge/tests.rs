@@ -132,7 +132,7 @@ fn host_command_bridge_projects_source_snapshots() {
                         encoding_id: String::from("encoding-1"),
                         rid: Some(String::from("lo")),
                         max_bitrate: Some(150_000),
-                        resolution_scale: Some(2),
+                        resolution_scale: Some(4),
                         max_framerate: None,
                         policy_role: Some(UploadLayerPolicyRole::Thumbnail),
                         max_temporal_layer_id: Some(1),
@@ -157,7 +157,7 @@ fn host_command_bridge_projects_source_snapshots() {
                     "encodingId": "encoding-1",
                     "rid": "lo",
                     "maxBitrate": 150_000,
-                    "resolutionScale": 2,
+                    "resolutionScale": 4,
                     "policyRole": "thumbnail",
                     "maxTemporalLayerId": 1
                 }]

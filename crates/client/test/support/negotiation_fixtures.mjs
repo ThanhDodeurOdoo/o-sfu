@@ -33,7 +33,7 @@ export const videoUploadSlot = (
             {
                 maxBitrate: 150000,
                 rid: "lo",
-                resolutionScale: 2
+                resolutionScale: 4
             },
             {
                 maxBitrate: 900000,

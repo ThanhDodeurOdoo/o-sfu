@@ -208,7 +208,7 @@ fn protocol_server_offer_serializes_upload_slot_metadata() -> serde_json::Result
                     NegotiationUploadEncoding {
                         rid: String::from("lo"),
                         max_bitrate: Some(150_000),
-                        resolution_scale: Some(2),
+                        resolution_scale: Some(4),
                         max_framerate: None,
                     },
                     NegotiationUploadEncoding {
@@ -238,7 +238,7 @@ fn protocol_server_offer_serializes_upload_slot_metadata() -> serde_json::Result
                         {
                             "rid": "lo",
                             "maxBitrate": 150_000,
-                            "resolutionScale": 2
+                            "resolutionScale": 4
                         },
                         {
                             "rid": "hi",
