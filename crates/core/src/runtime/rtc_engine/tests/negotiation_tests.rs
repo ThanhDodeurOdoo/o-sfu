@@ -122,7 +122,7 @@ async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
         video_slot.simulcast_encodings[0].max_bitrate,
         Some(Bitrate::from_kbps(150))
     );
-    assert_eq!(video_slot.simulcast_encodings[0].resolution_scale, Some(2));
+    assert_eq!(video_slot.simulcast_encodings[0].resolution_scale, Some(4));
     assert_eq!(video_slot.simulcast_encodings[1].rid, "hi");
     assert_eq!(
         video_slot.simulcast_encodings[1].max_bitrate,
@@ -1149,7 +1149,7 @@ fn assert_default_vp8_upload_slot(upload_slots: &[SessionUploadSlot]) {
             ))
             .collect::<Vec<_>>(),
         vec![
-            ("lo", Some(Bitrate::from_kbps(150)), Some(2)),
+            ("lo", Some(Bitrate::from_kbps(150)), Some(4)),
             ("hi", Some(Bitrate::from_mbps(4)), Some(1))
         ]
     );

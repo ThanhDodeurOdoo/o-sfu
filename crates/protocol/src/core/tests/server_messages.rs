@@ -163,7 +163,7 @@ fn protocol_core_tracks_source_descriptors_from_track_snapshot() {
                 encoding_id: String::from("encoding-1"),
                 rid: Some(String::from("lo")),
                 max_bitrate: Some(150_000),
-                resolution_scale: Some(2),
+                resolution_scale: Some(4),
                 max_framerate: None,
                 policy_role: Some(UploadLayerPolicyRole::Thumbnail),
                 max_temporal_layer_id: Some(0),

@@ -11,6 +11,8 @@ use crate::{Bitrate, VideoBitrateLimits};
 pub(super) const DEFAULT_LOW_RID: &str = "lo";
 pub(super) const DEFAULT_HIGH_RID: &str = "hi";
 pub(super) const DEFAULT_LOW_MAX_BITRATE: Bitrate = Bitrate::from_kbps(150);
+const DEFAULT_LOW_RESOLUTION_SCALE: u16 = 4;
+const DEFAULT_HIGH_RESOLUTION_SCALE: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::rtc_engine) struct NegotiatedRid {
@@ -34,13 +36,13 @@ pub(super) fn default_layer_specs(
         SimulcastLayerSpec {
             rid: DEFAULT_LOW_RID,
             max_bitrate: Some(DEFAULT_LOW_MAX_BITRATE.min(high_max_bitrate)),
-            resolution_scale: 2,
+            resolution_scale: DEFAULT_LOW_RESOLUTION_SCALE,
             max_framerate: None,
         },
         SimulcastLayerSpec {
             rid: DEFAULT_HIGH_RID,
             max_bitrate: Some(high_max_bitrate),
-            resolution_scale: 1,
+            resolution_scale: DEFAULT_HIGH_RESOLUTION_SCALE,
             max_framerate: None,
         },
     ]
@@ -150,5 +152,9 @@ fn parse_max_bitrate(restrictions: &str) -> Option<Bitrate> {
 }
 
 fn resolution_scale_for_index(index: usize) -> u16 {
-    if index == 0 { 2 } else { 1 }
+    if index == 0 {
+        DEFAULT_LOW_RESOLUTION_SCALE
+    } else {
+        DEFAULT_HIGH_RESOLUTION_SCALE
+    }
 }
