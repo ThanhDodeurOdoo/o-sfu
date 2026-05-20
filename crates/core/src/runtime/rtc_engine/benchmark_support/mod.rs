@@ -10,6 +10,8 @@ mod ingress;
 mod relay;
 mod sinks;
 mod video;
+#[cfg(feature = "worker-benchmarks")]
+mod worker;
 
 pub use fanout::{FanoutBenchTopology, ROUTE_PLANNING_TURNS};
 pub use ingress::{INGRESS_DEMUX_ATTEMPTS, IngressRoutingBenchFixture};
@@ -19,3 +21,5 @@ pub use video::{
     KEYFRAME_COALESCING_REQUESTS, KeyframeCoalescingBenchFixture, RidReadinessBenchFixture,
     SELECTED_RID_DESTINATIONS,
 };
+#[cfg(feature = "worker-benchmarks")]
+pub use worker::{WORKER_COMMAND_ROUNDTRIPS, WorkerLoopBenchFixture};

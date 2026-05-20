@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   packet-loop-callgrind-comment:
-    if: github.event.workflow_run.event == 'pull_request'
+    if: github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'workflow_dispatch'
     runs-on: ubuntu-latest
 
     env:
@@ -127,6 +127,10 @@ jobs:
               };
             }
 
+            function isWorkerSummary(summary) {
+              return path.basename(String(summary.benchmark_file || "")) === "packet_loop_worker_callgrind.rs";
+            }
+
             function callgrindProfile(summary) {
               return (summary.profiles || []).find((profile) => profile.tool === "Callgrind");
             }
@@ -149,6 +153,9 @@ jobs:
             }
 
             function rowFromSummary(summary) {
+              if (isWorkerSummary(summary)) {
+                return null;
+              }
               const ir = callgrindMetric(summary, "Ir");
               const metrics = ir?.metrics;
               const both = metrics?.Both;
@@ -169,17 +176,132 @@ jobs:
               };
             }
 
-            const refs = readRefs(refsPath);
-            const issueNumber = [
-              Number(context.payload.workflow_run.pull_requests?.[0]?.number),
-              Number(refs.pull_request_number),
-            ].find((value) => Number.isSafeInteger(value) && value > 0);
-            if (!issueNumber) {
-              core.info("performance run is not attached to a pull request");
-              return;
+            function leftMetricValue(metric) {
+              if (metric == null || typeof metric !== "object") {
+                return metricValue(metric);
+              }
+              if (Object.prototype.hasOwnProperty.call(metric, "Left")) {
+                return metricValue(metric.Left);
+              }
+              return null;
             }
 
-            const rows = readJsonArray(summaryPath)
+            function manualWorkerRow(summary) {
+              if (!isWorkerSummary(summary)) {
+                return null;
+              }
+              const ir = callgrindMetric(summary, "Ir");
+              const value = leftMetricValue(ir?.metrics);
+              if (value == null) {
+                return null;
+              }
+              const labels = benchmarkLabels(summary);
+              return {
+                ...labels,
+                sortKey: `${labels.scope}/${labels.caseName}`,
+                ir: value,
+              };
+            }
+
+            function enabledLabel(value) {
+              return value === "true" ? "enabled" : "disabled";
+            }
+
+            function manualInvestigationSection(summaries, refs) {
+              const isManualRun =
+                refs.workflow_event === "workflow_dispatch"
+                || context.payload.workflow_run.event === "workflow_dispatch";
+              if (!isManualRun) {
+                return "";
+              }
+
+              const workerRequested = refs.worker_investigation === "true";
+              const manualOptions = [
+                refs.cache_simulation,
+                refs.branch_simulation,
+                refs.flamegraphs,
+                refs.dhat,
+              ].some((value) => value === "true");
+              const workerRows = summaries
+                .map(manualWorkerRow)
+                .filter(Boolean)
+                .sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+
+              if (!workerRequested && !manualOptions && workerRows.length === 0) {
+                return "";
+              }
+
+              const optionsTable = [
+                "| option | value |",
+                "| --- | --- |",
+                `| worker investigation | ${workerRequested ? "run" : "skipped"} |`,
+                `| cache simulation | ${enabledLabel(refs.cache_simulation)} |`,
+                `| branch simulation | ${enabledLabel(refs.branch_simulation)} |`,
+                `| flamegraphs | ${enabledLabel(refs.flamegraphs)} |`,
+                `| DHAT | ${enabledLabel(refs.dhat)} |`,
+              ].join("\n");
+              const workerTable = workerRows.length
+                ? [
+                  "| scope | case | Ir |",
+                  "| --- | --- | ---: |",
+                  ...workerRows.map((row) => [
+                    escapeCell(row.scope),
+                    escapeCell(row.caseName),
+                    formatInteger(row.ir),
+                  ].join(" | ")).map((row) => `| ${row} |`),
+                ].join("\n")
+                : workerRequested
+                  ? "worker investigation was requested but no worker Callgrind row was produced"
+                  : "";
+
+              return [
+                "## manual investigation",
+                "",
+                optionsTable,
+                workerTable ? "" : null,
+                workerTable,
+                "",
+                "manual worker outputs stay diagnostic and are not part of the PR regression table",
+              ].filter(Boolean).join("\n");
+            }
+
+            async function issueNumberForWorkflowRun(owner, repo) {
+              const run = context.payload.workflow_run;
+              const attachedIssue = (run.pull_requests || [])
+                .map((pullRequest) => Number(pullRequest.number))
+                .find((value) => Number.isSafeInteger(value) && value > 0);
+              if (attachedIssue) {
+                return attachedIssue;
+              }
+
+              if (run.event !== "workflow_dispatch") {
+                return null;
+              }
+
+              const headBranch = run.head_branch;
+              const headOwner = run.head_repository?.owner?.login;
+              if (!headBranch || !headOwner) {
+                return null;
+              }
+
+              // manual runs are not pull_request events, so find the open PR by trusted run metadata
+              const pulls = await github.paginate(github.rest.pulls.list, {
+                owner,
+                repo,
+                state: "open",
+                head: `${headOwner}:${headBranch}`,
+                per_page: 100,
+              });
+              const exactHead = pulls.find((pullRequest) => pullRequest.head?.sha === run.head_sha);
+              if (exactHead) {
+                return exactHead.number;
+              }
+              return pulls.length === 1 ? pulls[0].number : null;
+            }
+
+            const refs = readRefs(refsPath);
+            const summaries = readJsonArray(summaryPath);
+            const rows = summaries
               .map(rowFromSummary)
               .filter(Boolean)
               .sort((left, right) => left.sortKey.localeCompare(right.sortKey));
@@ -205,21 +327,23 @@ jobs:
             const omitted = rows.length > 25
               ? `\n\n${rows.length - 25} additional benchmark rows are in the artifact`
               : "";
+            const manualSection = manualInvestigationSection(summaries, refs);
             const body = [
               marker,
-              "## packet-loop Callgrind",
+              "## packet-loop Callgrind ([what is Callgrind?](https://valgrind.org/docs/manual/cl-manual.html))",
               "",
               `status: ${status}`,
               `benchmark job: ${benchmarkResult}`,
               `base ref: ${refs.base_ref || "n/a"}`,
               `head ref: ${refs.head_ref || "n/a"}`,
+              `[workflow run](${runUrl})`,
               "",
               table,
               omitted,
+              manualSection ? "" : null,
+              manualSection,
               "",
               `artifact: \`${artifactName}\``,
-              `[workflow run](${runUrl})`,
-              `[What is Callgrind?](https://valgrind.org/docs/manual/cl-manual.html)`,
             ].filter(Boolean).join("\n");
 
             async function writeSummaryFallback(error) {
@@ -236,6 +360,13 @@ jobs:
             }
 
             const { owner, repo } = context.repo;
+            const issueNumber = await issueNumberForWorkflowRun(owner, repo);
+            if (!issueNumber) {
+              core.info("performance run is not attached to a single open pull request");
+              await core.summary.addRaw(body).write();
+              return;
+            }
+
             try {
               const comments = await github.paginate(github.rest.issues.listComments, {
                 owner,

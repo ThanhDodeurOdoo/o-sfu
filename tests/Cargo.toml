@@ -10,6 +10,7 @@ version.workspace = true
 [features]
 default = ["otel-tracing"]
 otel-tracing = ["o-sfu/otel-tracing"]
+worker-benchmarks = ["o-sfu-core/worker-benchmarks"]
 
 [dependencies]
 anyhow.workspace = true
@@ -34,10 +35,12 @@ trybuild = "1.0.116"
 [dev-dependencies]
 o-sfu-core = { path = "../crates/core", features = ["internal-benchmarks"] }
 
-[target.'cfg(any(all(any(target_arch = "x86_64", target_arch = "x86"), any(target_os = "linux", target_os = "freebsd", target_os = "macos", all(target_os = "windows", target_env = "gnu"), target_os = "solaris")), all(target_arch = "aarch64", any(target_os = "freebsd", all(target_os = "linux", target_env = "gnu")))))'.dev-dependencies]
+# the manual worker benchmark uses Callgrind client requests only on the ubuntu runner
+# non-linux developer targets compile the same benchmark with no-op hooks
+[target.'cfg(all(target_arch = "x86_64", target_os = "linux"))'.dev-dependencies]
 iai-callgrind = { version = "0.16.1", features = ["client_requests"] }
 
-[target.'cfg(not(any(all(any(target_arch = "x86_64", target_arch = "x86"), any(target_os = "linux", target_os = "freebsd", target_os = "macos", all(target_os = "windows", target_env = "gnu"), target_os = "solaris")), all(target_arch = "aarch64", any(target_os = "freebsd", all(target_os = "linux", target_env = "gnu"))))))'.dev-dependencies]
+[target.'cfg(not(all(target_arch = "x86_64", target_os = "linux")))'.dev-dependencies]
 iai-callgrind = "0.16.1"
 
 [lints]
@@ -47,6 +50,12 @@ workspace = true
 name = "packet_loop_callgrind"
 path = "benchmarks/packet_loop_callgrind.rs"
 harness = false
+
+[[bench]]
+name = "packet_loop_worker_callgrind"
+path = "benchmarks/packet_loop_worker_callgrind.rs"
+harness = false
+required-features = ["worker-benchmarks"]
 
 [[test]]
 name = "miri_router_protocol"
