@@ -1,8 +1,8 @@
 //! Runtime media transport boundary used by core orchestration.
 //!
 //! This module contains the service surface that room, server plus [`crate::prelude::SfuCore`]
-//! code use when they need media work to happen outside the pure router. It is
-//! intentionally named after the capability it provides: callers ask the media transport to create SDP
+//! code use when they need media work to happen outside the pure router:
+//! callers ask the media transport to create SDP
 //! offers, apply answers, publish or consume media, close sessions, read
 //! diagnostics snapshots plus subscribe to source-policy wakeups.
 //!
@@ -23,7 +23,7 @@
 mod builder;
 mod config;
 mod operation;
-mod source_policy;
+mod policy_invalidation;
 #[cfg(any(test, feature = "testing-transport"))]
 pub mod test_support;
 mod types;
@@ -35,7 +35,7 @@ pub use builder::{MediaTransportBuildError, MediaTransportBuilder};
 pub use config::{MediaTransportConfig, MediaTransportDeps};
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
 use operation::TransportControlOperation;
-pub use source_policy::{
+pub use policy_invalidation::{
     SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
 };
 use tracing::warn;
