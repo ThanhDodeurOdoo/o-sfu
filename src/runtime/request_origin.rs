@@ -1,6 +1,11 @@
-use std::{net::SocketAddr, str};
+use std::{convert::Infallible, net::SocketAddr, str};
 
-use axum::http::{HeaderMap, header};
+use axum::{
+    extract::{ConnectInfo, FromRequestParts},
+    http::{HeaderMap, header, request::Parts},
+};
+
+use crate::runtime::RuntimeState;
 
 const UNKNOWN_REMOTE_ADDRESS: &str = "unknown";
 
@@ -9,6 +14,29 @@ const UNKNOWN_REMOTE_ADDRESS: &str = "unknown";
 pub struct RequestOrigin {
     pub base_url: String,
     pub remote_address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedRequestOrigin(pub RequestOrigin);
+
+impl FromRequestParts<RuntimeState> for ResolvedRequestOrigin {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &RuntimeState,
+    ) -> Result<Self, Self::Rejection> {
+        let connect_info = parts
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ConnectInfo(addr)| *addr);
+        Ok(Self(resolve_request_origin(
+            &parts.headers,
+            state.config.http.trust_proxy_headers,
+            state.config.http.bind_address,
+            connect_info,
+        )))
+    }
 }
 
 #[must_use]
