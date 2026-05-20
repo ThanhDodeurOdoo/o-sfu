@@ -1,4 +1,4 @@
-//! transport-side source-policy wake coordination
+//! transport-side source-policy invalidation/wake coordination
 //!
 //! `Room` owns source-packet selection policy
 //! packet loops only observe facts that can make that policy stale,
