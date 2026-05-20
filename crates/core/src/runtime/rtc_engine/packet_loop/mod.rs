@@ -24,13 +24,13 @@
 //! packet-loop turn
 //!   |
 //!   v
-//! drain pending worker commands
+//! PacketLoopTurn::drain_control_inputs
 //!   |
 //!   v
 //! mutate PacketLoopState and clear routing hints
 //!   |
 //!   v
-//! snapshot_and_pump
+//! PacketLoopTurn::pump
 //!   |
 //!   +--> drain dirty and timed-out Rtc sessions
 //!   |      |
@@ -48,25 +48,26 @@
 //!   +--> flush local RTC, relay and packet-sink destinations
 //!   |
 //!   v
-//! send queued UDP transmits
+//! PacketLoopTurn::flush_outputs
 //!   |
 //!   v
-//! biased wait for shutdown, command, timeout or UDP datagram
+//! PacketLoopTurn::wait_for_next_input
 //!   |
 //!   +--> shutdown or closed command channel -> return
 //!   |
-//!   +--> command -> mutate state and clear routing hints -> next turn
+//!   +--> PacketLoopTurn::apply_next_input -> next turn
 //!   |
 //!   +--> timeout -> next turn
 //!   |
 //!   +--> UDP datagram -> route through demux recovery -> next turn
 //! ```
 //!
-//! Commands are handled before media pumping, and the `tokio::select!` wait is
-//! biased toward shutdown and commands. This keeps lifecycle work responsive
-//! even when media traffic is heavy. Socket reads are still part of the same
-//! turn. A packet that enters `str0m` marks its session dirty, then the next
-//! turn drains any output produced by that input.
+//! commands are handled before media pumping
+//! the `tokio::select!` wait is biased toward shutdown and commands
+//! this keeps lifecycle work responsive even when media traffic is heavy
+//! socket reads are still part of the same turn
+//! a packet that enters `str0m` marks its session dirty, then the next turn
+//! drains any output produced by that input
 //!
 //! # Submodules
 //!
