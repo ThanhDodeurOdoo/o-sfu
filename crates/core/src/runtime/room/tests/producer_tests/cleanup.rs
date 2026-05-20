@@ -31,13 +31,9 @@ async fn explicit_unpublish_removes_state_and_transport_media() {
         .expect("published audio should expose a transport media id");
 
     assert_eq!(
-        room.unpublish_track(
-            &UserId::Integer(1),
-            connection_id,
-            &stream_id_for_source(TestSourceKind::AudioDetector),
-            &media_transport,
-        )
-        .await,
+        room.user_operation(&UserId::Integer(1), connection_id, &media_transport)
+            .unpublish(&stream_id_for_source(TestSourceKind::AudioDetector))
+            .await,
         UnpublishOutcome::Unpublished {
             cleanup: crate::TransportEffectOutcome::Applied
         }
@@ -93,12 +89,12 @@ async fn explicit_unpublish_queues_cleanup_when_real_transport_owner_is_gone() {
     assert_eq!(
         scenario
             .room
-            .unpublish_track(
+            .user_operation(
                 &scenario.publisher_user_id,
                 connection_id,
-                &stream_id_for_source(TestSourceKind::AudioDetector),
                 &scenario.media_transport,
             )
+            .unpublish(&stream_id_for_source(TestSourceKind::AudioDetector))
             .await,
         UnpublishOutcome::Unpublished {
             cleanup: crate::TransportEffectOutcome::Failed

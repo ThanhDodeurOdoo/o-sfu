@@ -25,14 +25,12 @@ async fn production_change_pauses_producer_and_broadcasts_track_binding() {
 
     let publisher_id = UserId::Integer(1);
     let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
-    room.set_publication_active_runtime(
-        &publisher_id,
-        publisher_connection_id,
-        &stream_id_for_source(TestSourceKind::ScalableVideo),
-        PublicationActivity::Inactive,
-        &adapter,
-    )
-    .await;
+    room.user_operation(&publisher_id, publisher_connection_id, &adapter)
+        .set_publication_activity(
+            &stream_id_for_source(TestSourceKind::ScalableVideo),
+            PublicationActivity::Inactive,
+        )
+        .await;
 
     let msgs1 = drain_outbound(&mut rx1);
     let msgs2 = drain_outbound(&mut rx2);
@@ -51,14 +49,12 @@ async fn production_change_pauses_producer_and_broadcasts_track_binding() {
         Some(false),
     );
 
-    room.set_publication_active_runtime(
-        &publisher_id,
-        publisher_connection_id,
-        &stream_id_for_source(TestSourceKind::ScalableVideo),
-        PublicationActivity::Active,
-        &adapter,
-    )
-    .await;
+    room.user_operation(&publisher_id, publisher_connection_id, &adapter)
+        .set_publication_activity(
+            &stream_id_for_source(TestSourceKind::ScalableVideo),
+            PublicationActivity::Active,
+        )
+        .await;
 
     let msgs1 = drain_outbound(&mut rx1);
     assert_track_binding_activity_update(
@@ -103,13 +99,9 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
     };
 
     assert_eq!(
-        room.unpublish_track(
-            &UserId::Integer(1),
-            test_connection_id(0),
-            &stream_id_for_source(TestSourceKind::ScalableVideo),
-            &adapter,
-        )
-        .await,
+        room.user_operation(&UserId::Integer(1), test_connection_id(0), &adapter)
+            .unpublish(&stream_id_for_source(TestSourceKind::ScalableVideo))
+            .await,
         UnpublishOutcome::Unpublished {
             cleanup: crate::TransportEffectOutcome::Applied
         }
@@ -381,14 +373,12 @@ async fn production_change_updates_screen_track_binding_activity() {
 
     let publisher_id = UserId::Integer(1);
     let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
-    room.set_publication_active_runtime(
-        &publisher_id,
-        publisher_connection_id,
-        &stream_id_for_source(TestSourceKind::ReadableVideo),
-        PublicationActivity::Inactive,
-        &adapter,
-    )
-    .await;
+    room.user_operation(&publisher_id, publisher_connection_id, &adapter)
+        .set_publication_activity(
+            &stream_id_for_source(TestSourceKind::ReadableVideo),
+            PublicationActivity::Inactive,
+        )
+        .await;
 
     let msgs = drain_outbound(&mut rx1);
     assert_track_binding_activity_update(
@@ -418,12 +408,10 @@ async fn production_change_updates_transport_route_activity() {
     let publisher_id = UserId::Integer(1);
     let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
     let outcome = room
-        .set_publication_active_runtime(
-            &publisher_id,
-            publisher_connection_id,
+        .user_operation(&publisher_id, publisher_connection_id, &adapter)
+        .set_publication_activity(
             &stream_id_for_source(TestSourceKind::ScalableVideo),
             PublicationActivity::Inactive,
-            &adapter,
         )
         .await;
     assert_eq!(
@@ -451,14 +439,12 @@ async fn production_change_commits_user_state_before_transport_update_finishes()
     drain_outbound(&mut rx2);
 
     let publisher_connection_id = user_connection_id(&room, &UserId::Integer(1)).await;
-    room.set_publication_active_runtime(
-        &UserId::Integer(1),
-        publisher_connection_id,
-        &stream_id_for_source(TestSourceKind::ScalableVideo),
-        PublicationActivity::Inactive,
-        &adapter,
-    )
-    .await;
+    room.user_operation(&UserId::Integer(1), publisher_connection_id, &adapter)
+        .set_publication_activity(
+            &stream_id_for_source(TestSourceKind::ScalableVideo),
+            PublicationActivity::Inactive,
+        )
+        .await;
 
     let Some((_, info)) = room
         .test_api()
@@ -478,14 +464,12 @@ async fn production_change_ignores_unknown_stream_type() {
     // No producer published for audio. PRODUCTION_CHANGE should be a no-op.
     let publisher_id = UserId::Integer(1);
     let publisher_connection_id = user_connection_id(&room, &publisher_id).await;
-    room.set_publication_active_runtime(
-        &publisher_id,
-        publisher_connection_id,
-        &stream_id_for_source(TestSourceKind::AudioDetector),
-        PublicationActivity::Inactive,
-        &adapter,
-    )
-    .await;
+    room.user_operation(&publisher_id, publisher_connection_id, &adapter)
+        .set_publication_activity(
+            &stream_id_for_source(TestSourceKind::AudioDetector),
+            PublicationActivity::Inactive,
+        )
+        .await;
 
     assert!(
         drain_outbound(&mut rx1).is_empty(),

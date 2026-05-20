@@ -234,7 +234,8 @@ async fn apply_negotiation_update(
     }
     if update.became_consumer_ready {
         return room
-            .bootstrap_missing_consumers_for_connection(user_id, connection_id, media_transport)
+            .user_operation(user_id, connection_id, media_transport)
+            .bootstrap_missing_consumers()
             .await;
     }
     true
@@ -277,11 +278,12 @@ pub(super) async fn refresh_session_consumers(
     user_id: &UserId,
     media_transport: &MediaTransport,
 ) -> bool {
-    room.apply_session_refreshed(
+    room.user_operation(
         user_id,
         user_connection_id(room, user_id).await,
         media_transport,
     )
+    .apply_session_refreshed()
     .await
         == SessionNegotiationOutcome::Applied
 }
@@ -296,6 +298,11 @@ pub(super) struct StagedPublishScenario {
 }
 
 impl StagedPublishScenario {
+    fn operation(&self) -> super::super::RoomUserOperation<'_> {
+        self.room
+            .user_operation(&self.user_id, self.connection_id, &self.adapter)
+    }
+
     pub(super) async fn new() -> Self {
         let (room, adapter, publisher_rx, subscriber_rx) = setup_two_ready_users().await;
         let user_id = UserId::Integer(1);
@@ -311,13 +318,8 @@ impl StagedPublishScenario {
     }
 
     pub(super) async fn stage_source(&self, stream_type: TestSourceKind) -> PublishStageOutcome {
-        self.room
-            .stage_negotiated_publish(
-                &self.user_id,
-                self.connection_id,
-                &source_publish_intent_for_source(stream_type),
-                &self.adapter,
-            )
+        self.operation()
+            .stage_negotiated_publish(&source_publish_intent_for_source(stream_type))
             .await
             .expect("stage publish should not hit transport failure")
     }
@@ -327,24 +329,14 @@ impl StagedPublishScenario {
     }
 
     pub(super) async fn rollback_scalable_video(&self) -> RollbackStagedPublishOutcome {
-        self.room
-            .rollback_staged_publish(
-                &self.user_id,
-                self.connection_id,
-                &stream_id_for_source(TestSourceKind::ScalableVideo),
-                &self.adapter,
-            )
+        self.operation()
+            .rollback_staged_publish(&stream_id_for_source(TestSourceKind::ScalableVideo))
             .await
     }
 
     pub(super) async fn unpublish_scalable_video(&self) -> UnpublishOutcome {
-        self.room
-            .unpublish_track(
-                &self.user_id,
-                self.connection_id,
-                &stream_id_for_source(TestSourceKind::ScalableVideo),
-                &self.adapter,
-            )
+        self.operation()
+            .unpublish(&stream_id_for_source(TestSourceKind::ScalableVideo))
             .await
     }
 
@@ -356,29 +348,26 @@ impl StagedPublishScenario {
             staged_transport_media_id,
             test_simulcast_video_rtp_parameters(),
         )]);
-        self.room
-            .commit_staged_publishes(
-                &self.user_id,
-                self.connection_id,
-                &applied_answer,
-                &self.adapter,
-            )
+        self.operation()
+            .commit_staged_publishes(&applied_answer)
             .await;
     }
 
     pub(super) async fn rollback_connection(&self) {
-        self.room
-            .rollback_staged_publishes_for_connection(
-                &self.user_id,
-                self.connection_id,
-                &self.adapter,
-            )
+        self.operation()
+            .rollback_staged_publishes_for_connection()
             .await;
     }
 
     pub(super) async fn staged_count(&self) -> usize {
         self.room
             .staged_publish_count_for_connection(&self.user_id, self.connection_id)
+            .await
+    }
+
+    pub(super) async fn scalable_video_is_published(&self) -> bool {
+        self.operation()
+            .is_stream_published(&stream_id_for_source(TestSourceKind::ScalableVideo))
             .await
     }
 
@@ -628,13 +617,12 @@ impl SourcePolicyScenario {
         });
         assert_eq!(
             self.room
-                .update_subscription_runtime(
+                .user_operation(
                     &receiver_user_id,
                     user_connection_id(&self.room, &receiver_user_id).await,
-                    &source_user_id,
-                    &intents,
                     &self.adapter,
                 )
+                .update_subscription(&source_user_id, &intents)
                 .await,
             SubscriptionUpdateOutcome::Applied
         );

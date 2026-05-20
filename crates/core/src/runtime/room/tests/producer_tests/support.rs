@@ -253,11 +253,12 @@ pub(super) async fn settle_refresh_offer(
 
     scenario
         .room
-        .apply_session_refreshed(
+        .user_operation(
             &scenario.subscriber_user_id,
             user_connection_id(&scenario.room, &scenario.subscriber_user_id).await,
             &scenario.media_transport,
         )
+        .apply_session_refreshed()
         .await;
 }
 #[allow(
