@@ -177,10 +177,16 @@ async fn rtc_initial_session_offer_advertises_h264_simulcast_when_vp8_is_disable
     );
     assert_eq!(video_slot.simulcast_encodings.len(), 2);
     assert_eq!(video_slot.simulcast_encodings[0].rid, "lo");
-    assert_eq!(video_slot.simulcast_encodings[0].max_bitrate, None);
+    assert_eq!(
+        video_slot.simulcast_encodings[0].max_bitrate,
+        Some(Bitrate::from_kbps(150))
+    );
     assert_eq!(video_slot.simulcast_encodings[0].resolution_scale, None);
     assert_eq!(video_slot.simulcast_encodings[1].rid, "hi");
-    assert_eq!(video_slot.simulcast_encodings[1].max_bitrate, None);
+    assert_eq!(
+        video_slot.simulcast_encodings[1].max_bitrate,
+        Some(Bitrate::from_mbps(4))
+    );
     assert_eq!(video_slot.simulcast_encodings[1].resolution_scale, None);
 }
 

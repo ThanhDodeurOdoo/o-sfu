@@ -39,6 +39,16 @@ fn source_encoding_with_options(
     rid: Option<&str>,
     max_bitrate: Option<Bitrate>,
 ) -> SourceEncodingDescriptor {
+    source_encoding_with_policy_role(source_id, encoding_id, rid, max_bitrate, None)
+}
+
+fn source_encoding_with_policy_role(
+    source_id: PublishedSourceId,
+    encoding_id: SourceEncodingId,
+    rid: Option<&str>,
+    max_bitrate: Option<Bitrate>,
+    policy_role: Option<UploadLayerPolicyRole>,
+) -> SourceEncodingDescriptor {
     let raw_encoding_id =
         u32::try_from(encoding_id.as_u64()).expect("test encoding id should fit in u32");
     SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
@@ -50,7 +60,7 @@ fn source_encoding_with_options(
         max_bitrate,
         resolution_scale: None,
         max_framerate: None,
-        policy_role: None,
+        policy_role,
         max_temporal_layer_id: None,
         negotiated_format: Some(video_format(96)),
     })
@@ -188,6 +198,43 @@ fn descriptor_keeps_declared_selectable_order_without_bitrates() {
     assert_eq!(
         selectable_encoding_ids(&descriptor),
         vec![first_encoding_id, second_encoding_id, third_encoding_id]
+    );
+}
+
+#[test]
+fn descriptor_orders_selectable_encodings_by_policy_role_without_bitrates() {
+    let source_id = PublishedSourceId::from_raw(7);
+    let high_encoding_id = SourceEncodingId::from_raw(1);
+    let low_encoding_id = SourceEncodingId::from_raw(2);
+    let descriptor = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+        source_id,
+        owner: PublishedSourceOwner::new(UserId::Integer(42)),
+        stream_id: UserStreamId::new("main-video"),
+        media_kind: MediaKind::Video,
+        policy: SourcePolicy::hidden(),
+        mid: None,
+        encodings: vec![
+            source_encoding_with_policy_role(
+                source_id,
+                high_encoding_id,
+                Some("hi"),
+                None,
+                Some(UploadLayerPolicyRole::Featured),
+            ),
+            source_encoding_with_policy_role(
+                source_id,
+                low_encoding_id,
+                Some("lo"),
+                None,
+                Some(UploadLayerPolicyRole::Thumbnail),
+            ),
+        ],
+    })
+    .expect("source descriptor should be valid");
+
+    assert_eq!(
+        selectable_encoding_ids(&descriptor),
+        vec![low_encoding_id, high_encoding_id]
     );
 }
 

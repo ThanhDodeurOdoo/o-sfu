@@ -624,3 +624,139 @@ fn selector_index(selector: SourceSelector, encodings: SelectableRouteEncodings<
         })
         .unwrap_or_else(|| encodings.len().saturating_sub(1))
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::expect_used,
+        reason = "test fixtures should fail loudly when they build invalid source graphs"
+    )]
+
+    use o_sfu_router::{MediaKind, Rid};
+
+    use super::*;
+    use crate::runtime::{
+        ConnectionId, UserId,
+        media_transport::{SourcePacketGate, TransportMediaId},
+        room::state::{
+            media::ConsumerRouteTransportRef,
+            video_policy::{
+                input::ReceiverVideoRouteInputParts, layout::ReceiverVideoLayoutIntent,
+            },
+        },
+        source_model::{
+            PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
+            PublishedSourceOwner, SourceEncodingDescriptorParts, SourceEncodingId,
+            SourceLayoutPolicy, SourceModelError, SourcePolicy, SourceRoomPolicySelector,
+            UserStreamId,
+        },
+    };
+
+    fn role_encoding(
+        source_id: PublishedSourceId,
+        encoding_id: SourceEncodingId,
+        rid: &str,
+        role: UploadLayerPolicyRole,
+    ) -> SourceEncodingDescriptor {
+        SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
+            encoding_id,
+            source_id,
+            rid: Some(Rid::new(rid)),
+            primary_ssrc: None,
+            repair_ssrc: None,
+            max_bitrate: None,
+            resolution_scale: None,
+            max_framerate: None,
+            policy_role: Some(role),
+            max_temporal_layer_id: None,
+            negotiated_format: None,
+        })
+    }
+
+    fn scalable_source(
+        encodings: Vec<SourceEncodingDescriptor>,
+    ) -> Result<PublishedSourceDescriptor, SourceModelError> {
+        PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+            source_id: PublishedSourceId::from_raw(7),
+            owner: PublishedSourceOwner::new(UserId::Integer(41)),
+            stream_id: UserStreamId::new("camera"),
+            media_kind: MediaKind::Video,
+            policy: SourcePolicy::new(
+                Some(SourceLayoutPolicy::new(
+                    SourceRoomPolicySelector::VisibleThumbnail,
+                    Some(SourceRoomPolicySelector::ActiveSpeaker),
+                )),
+                SourceAdaptationPolicy::ScalableVideo,
+                None,
+            ),
+            mid: None,
+            encodings,
+        })
+    }
+
+    fn route(
+        source: &PublishedSourceDescriptor,
+        current_selection: ConsumerSourceSelection,
+    ) -> ReceiverVideoRouteInput<'_> {
+        ReceiverVideoRouteInput::new(ReceiverVideoRouteInputParts {
+            user_count: 3,
+            source,
+            transport_ref: ConsumerRouteTransportRef::from_parts(
+                UserId::Integer(42),
+                ConnectionId::from_raw(10),
+                TransportMediaId::new(20),
+                UserId::Integer(41),
+                ConnectionId::from_raw(11),
+                TransportMediaId::new(21),
+            ),
+            current_selection,
+            layout_intent: ReceiverVideoLayoutIntent::new(
+                SourceRoomPolicySelector::VisibleThumbnail,
+            ),
+            visible_scalable_route_count: 2,
+            receiver_bandwidth: Some(Bitrate::from_kbps(21)),
+        })
+    }
+
+    #[test]
+    fn receiver_budget_uses_policy_role_order_when_bitrates_are_absent()
+    -> Result<(), SourceModelError> {
+        let source_id = PublishedSourceId::from_raw(7);
+        let high_encoding_id = SourceEncodingId::from_raw(1);
+        let low_encoding_id = SourceEncodingId::from_raw(2);
+        let source = scalable_source(vec![
+            role_encoding(
+                source_id,
+                high_encoding_id,
+                "hi",
+                UploadLayerPolicyRole::Featured,
+            ),
+            role_encoding(
+                source_id,
+                low_encoding_id,
+                "lo",
+                UploadLayerPolicyRole::Thumbnail,
+            ),
+        ])?;
+        let mut selection = ConsumerSourceSelection::open(true);
+        selection.set_selector(SourceSelector::Encoding(high_encoding_id));
+        selection.set_adaptation_observations(1, 0);
+        let route = route(&source, selection);
+
+        let updates = plan_receiver_routes(&[route])
+            .into_iter()
+            .filter_map(ReceiverVideoRouteAction::into_selection_update)
+            .collect::<Vec<_>>();
+
+        assert_eq!(updates.len(), 1);
+        let update = updates
+            .first()
+            .expect("budget plan should select the role-ranked thumbnail layer");
+        assert_eq!(update.selector(), SourceSelector::Encoding(low_encoding_id));
+        assert_eq!(
+            update.packet_gate(),
+            Some(&SourcePacketGate::Rid("lo".into()))
+        );
+        Ok(())
+    }
+}
