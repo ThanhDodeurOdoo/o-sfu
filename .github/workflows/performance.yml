@@ -27,11 +27,38 @@ on:
       - tests/Cargo.toml
       - tests/benchmarks/**
   workflow_dispatch:
+    # these knobs are for manual diagnosis only
+    # pull requests keep using the deterministic slice summary path below
     inputs:
       base_ref:
         description: Base ref for manual Callgrind comparison
         required: false
         type: string
+      worker_investigation:
+        description: Run the manual current-thread worker benchmark on the head ref
+        required: false
+        default: false
+        type: boolean
+      cache_simulation:
+        description: Enable Callgrind cache simulation for manual runs
+        required: false
+        default: false
+        type: boolean
+      branch_simulation:
+        description: Enable Callgrind branch simulation for manual runs
+        required: false
+        default: false
+        type: boolean
+      flamegraphs:
+        description: Generate flamegraph artifacts for the manual worker benchmark
+        required: false
+        default: false
+        type: boolean
+      dhat:
+        description: Add DHAT allocation artifacts for manual runs
+        required: false
+        default: false
+        type: boolean
 
 # every job in this workflow is read-only because the benchmark job runs pull request code
 # .github/workflows/performance-comment.yml owns PR comments from uploaded artifacts
@@ -44,7 +71,7 @@ concurrency:
 
 jobs:
   packet-loop-callgrind:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     # this job checks out and benchmarks pull request code, so it must not receive a write token
     permissions:
@@ -53,6 +80,11 @@ jobs:
     env:
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       INPUT_BASE_REF: ${{ github.event.inputs.base_ref }}
+      INPUT_BRANCH_SIMULATION: ${{ github.event.inputs.branch_simulation }}
+      INPUT_CACHE_SIMULATION: ${{ github.event.inputs.cache_simulation }}
+      INPUT_DHAT: ${{ github.event.inputs.dhat }}
+      INPUT_FLAMEGRAPHS: ${{ github.event.inputs.flamegraphs }}
+      INPUT_WORKER_INVESTIGATION: ${{ github.event.inputs.worker_investigation }}
       PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
       PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
       PUSH_BEFORE_SHA: ${{ github.event.before }}
@@ -80,6 +112,37 @@ jobs:
 
       - name: Install iai-callgrind runner
         run: cargo install iai-callgrind-runner --version 0.16.1 --locked
+
+      - name: Configure manual investigation options
+        id: investigation
+        run: |
+          set -euo pipefail
+
+          # manual inputs are empty for push and pull_request events
+          # every benchmark step still consumes the same outputs below
+          callgrind_args=""
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$INPUT_CACHE_SIMULATION" == "true" ]]; then
+            callgrind_args="--cache-sim=yes"
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$INPUT_BRANCH_SIMULATION" == "true" ]]; then
+            callgrind_args="${callgrind_args:+${callgrind_args} }--branch-sim=yes"
+          fi
+
+          tools=""
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$INPUT_DHAT" == "true" ]]; then
+            tools="dhat"
+          fi
+
+          flamegraphs=""
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$INPUT_FLAMEGRAPHS" == "true" ]]; then
+            flamegraphs="1"
+          fi
+
+          # later steps export only non-empty outputs
+          # this keeps push and pull_request runs on the default deterministic profile
+          echo "callgrind-args=${callgrind_args}" >> "$GITHUB_OUTPUT"
+          echo "flamegraphs=${flamegraphs}" >> "$GITHUB_OUTPUT"
+          echo "tools=${tools}" >> "$GITHUB_OUTPUT"
 
       - name: Resolve comparison refs
         id: refs
@@ -113,15 +176,57 @@ jobs:
 
       - name: Save base Callgrind baseline
         run: |
+          callgrind_args='${{ steps.investigation.outputs.callgrind-args }}'
+          tools='${{ steps.investigation.outputs.tools }}'
+          if [[ -n "$callgrind_args" ]]; then
+            export IAI_CALLGRIND_CALLGRIND_ARGS="$callgrind_args"
+          fi
+          if [[ -n "$tools" ]]; then
+            export IAI_CALLGRIND_TOOLS="$tools"
+          fi
+
           # iai-callgrind stores the named baseline under target/iai for the next step in this same job
           git checkout --force "${{ steps.refs.outputs.base-ref }}"
           cargo bench -p o-sfu-tests --bench packet_loop_callgrind -- --save-baseline=base --save-summary=json
 
       - name: Compare head Callgrind baseline
         run: |
+          callgrind_args='${{ steps.investigation.outputs.callgrind-args }}'
+          tools='${{ steps.investigation.outputs.tools }}'
+          if [[ -n "$callgrind_args" ]]; then
+            export IAI_CALLGRIND_CALLGRIND_ARGS="$callgrind_args"
+          fi
+          if [[ -n "$tools" ]]; then
+            export IAI_CALLGRIND_TOOLS="$tools"
+          fi
+
           # the head run loads the saved base baseline and emits JSON summaries with base-versus-head deltas
           git checkout --force "${{ steps.refs.outputs.head-ref }}"
           cargo bench -p o-sfu-tests --bench packet_loop_callgrind -- --baseline=base --save-summary=json
+
+      - name: Run manual worker Callgrind investigation
+        if: github.event_name == 'workflow_dispatch' && inputs.worker_investigation
+        run: |
+          # worker investigation measures the whole command path on the head ref only
+          # it is not a base-versus-head gate and it never feeds PR comments
+          callgrind_args='${{ steps.investigation.outputs.callgrind-args }}'
+          flamegraphs='${{ steps.investigation.outputs.flamegraphs }}'
+          tools='${{ steps.investigation.outputs.tools }}'
+          if [[ -n "$callgrind_args" ]]; then
+            export IAI_CALLGRIND_CALLGRIND_ARGS="$callgrind_args"
+          fi
+          if [[ -n "$flamegraphs" ]]; then
+            export O_SFU_CALLGRIND_FLAMEGRAPHS="$flamegraphs"
+          fi
+          if [[ -n "$tools" ]]; then
+            export IAI_CALLGRIND_TOOLS="$tools"
+          fi
+
+          # this target is diagnostic only
+          # normal pull_request runs never execute it
+          # manual PR comments may show its top-level summary when this run maps to one open PR
+          git checkout --force "${{ steps.refs.outputs.head-ref }}"
+          cargo bench -p o-sfu-tests --features worker-benchmarks --bench packet_loop_worker_callgrind -- --save-summary=json
 
       - name: Collect Callgrind summaries
         if: always()
@@ -138,6 +243,14 @@ jobs:
             printf 'base_ref=%s\n' '${{ steps.refs.outputs.base-ref }}'
             printf 'head_ref=%s\n' '${{ steps.refs.outputs.head-ref }}'
             printf 'pull_request_number=%s\n' "$PULL_REQUEST_NUMBER"
+            printf 'workflow_event=%s\n' "$GITHUB_EVENT_NAME"
+            printf 'worker_investigation=%s\n' "${INPUT_WORKER_INVESTIGATION:-false}"
+            printf 'cache_simulation=%s\n' "${INPUT_CACHE_SIMULATION:-false}"
+            printf 'branch_simulation=%s\n' "${INPUT_BRANCH_SIMULATION:-false}"
+            printf 'flamegraphs=%s\n' "${INPUT_FLAMEGRAPHS:-false}"
+            printf 'dhat=%s\n' "${INPUT_DHAT:-false}"
+            printf 'callgrind_args=%s\n' '${{ steps.investigation.outputs.callgrind-args }}'
+            printf 'tools=%s\n' '${{ steps.investigation.outputs.tools }}'
           } > performance-artifacts/callgrind-refs.env
 
       - name: Upload Callgrind artifacts
