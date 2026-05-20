@@ -39,6 +39,7 @@ use super::{
     definition::RoomDefinition,
     init::RoomInit,
     media_transaction::PendingPublishTransactions,
+    operation::RoomUserOperation,
     placement::{RoomPlacementLedger, RoomPlacementUsageSnapshot, RoomWorkerLoadContribution},
     state::{ConsumerRouteState, ConsumerRouteTransportRef, RoomState},
 };
@@ -276,6 +277,15 @@ impl Room {
                 router_event_sink,
             )),
         }
+    }
+
+    pub(crate) fn user_operation<'a>(
+        &'a self,
+        user_id: &'a UserId,
+        connection_id: ConnectionId,
+        media_transport: &'a MediaTransport,
+    ) -> RoomUserOperation<'a> {
+        RoomUserOperation::new(self, user_id, connection_id, media_transport)
     }
 
     #[must_use]

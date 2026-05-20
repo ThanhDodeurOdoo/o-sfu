@@ -31,14 +31,9 @@ async fn consumption_change_pauses_and_resumes_consumer() {
         readable_video: None,
         ..TestSubscriptionStates::default()
     });
-    room.update_subscription_runtime(
-        &subscriber_id,
-        subscriber_connection_id,
-        &publisher_id,
-        &pause_intents,
-        &adapter,
-    )
-    .await;
+    room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
+        .update_subscription(&publisher_id, &pause_intents)
+        .await;
 
     assert!(drain_outbound(&mut rx1).is_empty());
     assert!(drain_outbound(&mut rx2).is_empty());
@@ -50,14 +45,9 @@ async fn consumption_change_pauses_and_resumes_consumer() {
         readable_video: None,
         ..TestSubscriptionStates::default()
     });
-    room.update_subscription_runtime(
-        &subscriber_id,
-        subscriber_connection_id,
-        &publisher_id,
-        &resume_intents,
-        &adapter,
-    )
-    .await;
+    room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
+        .update_subscription(&publisher_id, &resume_intents)
+        .await;
 
     assert!(drain_outbound(&mut rx1).is_empty());
     assert!(drain_outbound(&mut rx2).is_empty());
@@ -89,14 +79,9 @@ async fn consumption_change_updates_transport_route_activity() {
         readable_video: None,
         ..TestSubscriptionStates::default()
     });
-    room.update_subscription_runtime(
-        &subscriber_id,
-        subscriber_connection_id,
-        &publisher_id,
-        &pause_intents,
-        &adapter,
-    )
-    .await;
+    room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
+        .update_subscription(&publisher_id, &pause_intents)
+        .await;
 
     assert_eq!(room.test_api().inspect().consumer_count().await, 1);
     assert!(drain_outbound(&mut rx1).is_empty());
@@ -129,14 +114,9 @@ async fn consumption_change_resume_requests_video_keyframe_refresh() {
         readable_video: None,
         ..TestSubscriptionStates::default()
     });
-    room.update_subscription_runtime(
-        &subscriber_id,
-        subscriber_connection_id,
-        &publisher_id,
-        &pause_intents,
-        &adapter,
-    )
-    .await;
+    room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
+        .update_subscription(&publisher_id, &pause_intents)
+        .await;
 
     let resume_intents = subscription_intents_from_test_states(&TestSubscriptionStates {
         scalable_video: Some(true),
@@ -144,14 +124,9 @@ async fn consumption_change_resume_requests_video_keyframe_refresh() {
         readable_video: None,
         ..TestSubscriptionStates::default()
     });
-    room.update_subscription_runtime(
-        &subscriber_id,
-        subscriber_connection_id,
-        &publisher_id,
-        &resume_intents,
-        &adapter,
-    )
-    .await;
+    room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
+        .update_subscription(&publisher_id, &resume_intents)
+        .await;
 
     assert_eq!(room.test_api().inspect().consumer_count().await, 1);
 }
@@ -170,14 +145,9 @@ async fn consumption_change_ignores_nonexistent_consumer() {
         readable_video: None,
         ..TestSubscriptionStates::default()
     });
-    room.update_subscription_runtime(
-        &subscriber_id,
-        subscriber_connection_id,
-        &publisher_id,
-        &pause_intents,
-        &adapter,
-    )
-    .await;
+    room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
+        .update_subscription(&publisher_id, &pause_intents)
+        .await;
 
     assert!(drain_outbound(&mut rx1).is_empty());
     assert!(drain_outbound(&mut rx2).is_empty());
@@ -196,14 +166,9 @@ async fn consumption_change_persists_preference_for_future_consumer_bootstrap() 
         readable_video: None,
         ..TestSubscriptionStates::default()
     });
-    room.update_subscription_runtime(
-        &subscriber_id,
-        subscriber_connection_id,
-        &publisher_id,
-        &pause_intents,
-        &adapter,
-    )
-    .await;
+    room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
+        .update_subscription(&publisher_id, &pause_intents)
+        .await;
 
     room.test_api()
         .media()
@@ -260,14 +225,9 @@ async fn consumption_change_handles_multiple_stream_types() {
         readable_video: None,
         ..TestSubscriptionStates::default()
     });
-    room.update_subscription_runtime(
-        &subscriber_id,
-        subscriber_connection_id,
-        &publisher_id,
-        &pause_intents,
-        &adapter,
-    )
-    .await;
+    room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
+        .update_subscription(&publisher_id, &pause_intents)
+        .await;
 
     // No-op outbound (consumer pause is silent).
     assert!(drain_outbound(&mut rx2).is_empty());
@@ -310,24 +270,17 @@ async fn user_leave_purges_producer_and_consumer_indexes() {
         readable_video: None,
         ..TestSubscriptionStates::default()
     });
-    room.update_subscription_runtime(
-        &subscriber_id,
-        subscriber_connection_id,
-        &UserId::Integer(1),
-        &pause_intents,
-        &adapter,
-    )
-    .await;
+    room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
+        .update_subscription(&UserId::Integer(1), &pause_intents)
+        .await;
 
     // Similarly, a production change for user 1 should be a no-op.
-    room.set_publication_active_runtime(
-        &UserId::Integer(1),
-        connection_id,
-        &stream_id_for_source(TestSourceKind::ScalableVideo),
-        PublicationActivity::Inactive,
-        &adapter,
-    )
-    .await;
+    room.user_operation(&UserId::Integer(1), connection_id, &adapter)
+        .set_publication_activity(
+            &stream_id_for_source(TestSourceKind::ScalableVideo),
+            PublicationActivity::Inactive,
+        )
+        .await;
 
     drain_outbound(&mut rx2);
 }

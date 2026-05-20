@@ -32,6 +32,7 @@ mod manager;
 mod media;
 mod media_transaction;
 mod membership;
+mod operation;
 mod outbound;
 mod placement;
 mod recording;
@@ -57,6 +58,7 @@ pub use manager::{
     JoinUserRequest, RoomManager, RoomManagerConfig, RoomManagerDeps, RuntimeRoomDirectorySnapshot,
     RuntimeRoomStatsSnapshot,
 };
+pub(crate) use operation::RoomUserOperation;
 pub use outbound::{
     DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
     RoomEventRequest, TrackBindingUpdate, UserOutbound, UserOutboundEvent, UserOutboundOverflow,

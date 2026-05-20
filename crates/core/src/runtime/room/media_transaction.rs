@@ -32,7 +32,7 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 
 use super::{
-    Room, RoomMediaCounts,
+    Room, RoomMediaCounts, RoomUserOperation,
     effects::{
         PublishReservationContinuation, RoomEffectBatch, RoomEffectContext, RoomTransportEffect,
     },
@@ -293,9 +293,8 @@ impl PendingPublishTransaction {
     /// reservation cleanup path was attempted.
     pub(super) async fn commit(
         self,
-        room: &Room,
+        operation: RoomUserOperation<'_>,
         applied_answer: &AppliedSessionAnswer,
-        media_transport: &MediaTransport,
     ) -> Option<UserStreamId> {
         let owner_user_id = self.descriptor.owner_user_id().clone();
         let owner_connection_id = self.descriptor.owner_connection_id();
@@ -306,8 +305,7 @@ impl PendingPublishTransaction {
             .cloned()
         else {
             self.cleanup_reserved_media(
-                room,
-                media_transport,
+                operation,
                 "media transport failed to remove staged publish media after answered negotiation omitted producer parameters",
             )
             .await;
@@ -324,8 +322,7 @@ impl PendingPublishTransaction {
             .negotiated_producer_upload_encodings(transport_media_id)
             .to_vec();
         self.commit_with_parameters_and_upload_encodings(
-            room,
-            media_transport,
+            operation,
             negotiated_parameters,
             upload_encodings,
         )
@@ -334,11 +331,11 @@ impl PendingPublishTransaction {
 
     async fn commit_with_parameters_and_upload_encodings(
         self,
-        room: &Room,
-        media_transport: &MediaTransport,
+        operation: RoomUserOperation<'_>,
         consumable_rtp_parameters: RouterRtpParameters,
         upload_encodings: Vec<SessionUploadEncoding>,
     ) -> Option<UserStreamId> {
+        let room = operation.room();
         let Self {
             descriptor,
             reservation,
@@ -379,8 +376,7 @@ impl PendingPublishTransaction {
         let Some(committed_publish) = committed_publish else {
             reservation
                 .cleanup(
-                    room,
-                    media_transport,
+                    operation,
                     "media transport failed to remove published transport media after room commit failed",
                 )
                 .await;
@@ -395,7 +391,7 @@ impl PendingPublishTransaction {
         };
         reservation.commit();
         let stream_id = committed_publish.stream_id.clone();
-        committed_publish.finish(room, media_transport).await;
+        committed_publish.finish(operation).await;
         Some(stream_id)
     }
 
@@ -405,13 +401,10 @@ impl PendingPublishTransaction {
     /// owner and the failure log context stay consistent
     async fn cleanup_reserved_media(
         self,
-        room: &Room,
-        media_port: &MediaTransport,
+        operation: RoomUserOperation<'_>,
         failure_message: &str,
     ) -> TransportEffectOutcome {
-        self.reservation
-            .cleanup(room, media_port, failure_message)
-            .await
+        self.reservation.cleanup(operation, failure_message).await
     }
 }
 
@@ -454,16 +447,16 @@ impl StagedMediaReservation {
     /// cleanup decision and must not be committed afterward.
     async fn cleanup(
         mut self,
-        room: &Room,
-        media_port: &MediaTransport,
+        operation: RoomUserOperation<'_>,
         failure_message: &str,
     ) -> TransportEffectOutcome {
-        let outcome = room
+        let outcome = operation
+            .room()
             .cleanup_transport_media_with_retry(
                 &self.owner_user_id,
                 self.owner_connection_id,
                 self.transport_media_id,
-                media_port,
+                operation.media_transport(),
                 failure_message,
             )
             .await;
@@ -504,13 +497,17 @@ impl CommittedPublish {
     /// - consumers bootstrap before receiver-driven policy so the policy can
     ///   choose per-consumer simulcast layers
     /// - diagnostics happen last
-    async fn finish(self, room: &Room, media_transport: &MediaTransport) {
+    async fn finish(self, operation: RoomUserOperation<'_>) {
+        let room = operation.room();
         RoomEffectBatch::new()
             .with_media_count_delta(self.media_counts_before, self.media_counts_after)
-            .execute(room, RoomEffectContext::runtime(media_transport))
+            .execute(
+                room,
+                RoomEffectContext::runtime(operation.media_transport()),
+            )
             .await;
         room.bootstrap_consumer_targets(
-            media_transport,
+            operation.media_transport(),
             ConsumerBootstrapOrigin::Publish,
             self.consumer_targets,
         )
@@ -518,7 +515,10 @@ impl CommittedPublish {
         RoomEffectBatch::new()
             .refresh_source_policy()
             .record_diagnostics(self.diagnostics)
-            .execute(room, RoomEffectContext::runtime(media_transport))
+            .execute(
+                room,
+                RoomEffectContext::runtime(operation.media_transport()),
+            )
             .await;
     }
 }
@@ -560,6 +560,17 @@ impl Room {
         self.pending_publish_transactions()
             .contains(user_id, connection_id, stream_id)
     }
+}
+
+impl RoomUserOperation<'_> {
+    #[must_use]
+    pub(crate) fn has_staged_publish(self, stream_id: &UserStreamId) -> bool {
+        self.room().pending_publish_transactions().contains(
+            self.user_id(),
+            self.connection_id(),
+            stream_id,
+        )
+    }
 
     /// Validates room ownership and reserves transport media for a negotiated publish.
     ///
@@ -572,45 +583,43 @@ impl Room {
     /// method consumes the duplicate reservation through cleanup and reports
     /// `PublishStageOutcome::DuplicateAfterReservation`.
     pub(crate) async fn stage_negotiated_publish(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
+        self,
         intent: &SourcePublishIntent,
-        media_port: &MediaTransport,
     ) -> Result<PublishStageOutcome, TransportAdapterError> {
+        let room = self.room();
         let validated_descriptor = {
-            let state = self.state.read().await;
-            state.validate_publish_descriptor(user_id, connection_id, intent)
+            let state = room.state.read().await;
+            state.validate_publish_descriptor(self.user_id(), self.connection_id(), intent)
         };
         let Some(validated_descriptor) = validated_descriptor else {
             return Ok(PublishStageOutcome::Rejected);
         };
-        // Cheap duplicate rejection goes first so we avoid reserving transport
-        // media when the same stream is already staged.
-        if self
-            .pending_publish_transactions()
-            .contains(user_id, connection_id, intent.stream_id())
-        {
+        if room.pending_publish_transactions().contains(
+            self.user_id(),
+            self.connection_id(),
+            intent.stream_id(),
+        ) {
             return Ok(PublishStageOutcome::Duplicate);
         }
-        let session_key = self.transport_user_key(user_id, connection_id);
         let publish_effect = RoomTransportEffect::PublishReservation {
             continuation: PublishReservationContinuation {
-                user: user_id.clone(),
-                connection: connection_id,
+                user: self.user_id().clone(),
+                connection: self.connection_id(),
                 stream: intent.stream_id().clone(),
             },
-            session_key,
+            session_key: self.transport_user_key(),
             media_kind: intent.media_kind(),
             rtp_parameters: answer_derived_publish_parameters(),
         };
-        let transport_media_id = match publish_effect.execute_publish_reservation(media_port).await
+        let transport_media_id = match publish_effect
+            .execute_publish_reservation(self.media_transport())
+            .await
         {
             Ok(transport_media_id) => transport_media_id,
             Err(error) => {
                 warn!(
-                    ?user_id,
-                    connection_id = ?connection_id,
+                    user_id = ?self.user_id(),
+                    connection_id = ?self.connection_id(),
                     stream_id = %intent.stream_id(),
                     media_kind = ?intent.media_kind(),
                     "failed to stage negotiated publish stream"
@@ -619,19 +628,14 @@ impl Room {
             }
         };
         let transaction = PendingPublishTransaction::new(validated_descriptor, transport_media_id);
-        // The transport await above leaves a race window where another publish
-        // intent can win first. The transaction owner is created before the
-        // synchronous registry lock so cancellation can no longer drop a raw
-        // transport media id between transport reservation and room ownership.
         let duplicate_stage = {
-            let mut pending_publish_transactions = self.pending_publish_transactions();
+            let mut pending_publish_transactions = room.pending_publish_transactions();
             pending_publish_transactions.stage(transaction).err()
         };
         if let Some(staged_publish) = duplicate_stage {
             let cleanup = staged_publish
                 .cleanup_reserved_media(
                     self,
-                    media_port,
                     "media transport failed to remove duplicated staged publish media",
                 )
                 .await;
@@ -646,24 +650,20 @@ impl Room {
     /// consumes the reservation even when transport cleanup fails, because the
     /// publish must not remain commit-capable after the user requested removal.
     pub(crate) async fn rollback_staged_publish(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
+        self,
         stream_id: &UserStreamId,
-        media_port: &MediaTransport,
     ) -> RollbackStagedPublishOutcome {
-        // Explicit unpublish before commit only needs transport cleanup because
-        // the producer never became live in room state.
-        let staged_publish =
-            self.pending_publish_transactions()
-                .take(user_id, connection_id, stream_id);
+        let staged_publish = self.room().pending_publish_transactions().take(
+            self.user_id(),
+            self.connection_id(),
+            stream_id,
+        );
         let Some(staged_publish) = staged_publish else {
             return RollbackStagedPublishOutcome::NotStaged;
         };
         let cleanup = staged_publish
             .cleanup_reserved_media(
                 self,
-                media_port,
                 "media transport failed to remove staged publish media during rollback",
             )
             .await;
@@ -676,20 +676,15 @@ impl Room {
     /// drain all in-flight reservations before the connection can disapear.
     /// Cleanup remains best-effort because transport teardown may already be in
     /// progress
-    pub(crate) async fn rollback_staged_publishes_for_connection(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-        media_port: &MediaTransport,
-    ) {
+    pub(crate) async fn rollback_staged_publishes_for_connection(self) {
         let staged_publishes = self
+            .room()
             .pending_publish_transactions()
-            .take_for_connection(user_id, connection_id);
+            .take_for_connection(self.user_id(), self.connection_id());
         for staged_publish in staged_publishes {
             staged_publish
                 .cleanup_reserved_media(
                     self,
-                    media_port,
                     "media transport failed to remove staged publish media during connection cleanup",
                 )
                 .await;
@@ -705,27 +700,24 @@ impl Room {
     /// state is stale, the transaction consumes its transport reservation
     /// through cleanup instead.
     pub(crate) async fn commit_staged_publishes(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
+        self,
         applied_answer: &AppliedSessionAnswer,
-        media_transport: &MediaTransport,
     ) -> Vec<UserStreamId> {
         let staged_publishes = self
+            .room()
             .pending_publish_transactions()
-            .take_for_connection(user_id, connection_id);
+            .take_for_connection(self.user_id(), self.connection_id());
         let mut committed_stream_ids = Vec::new();
         for staged_publish in staged_publishes {
-            if let Some(stream_id) = staged_publish
-                .commit(self, applied_answer, media_transport)
-                .await
-            {
+            if let Some(stream_id) = staged_publish.commit(self, applied_answer).await {
                 committed_stream_ids.push(stream_id);
             }
         }
         committed_stream_ids
     }
+}
 
+impl Room {
     /// Releases a pending consumer-bootstrap reservation after the matching
     /// effect path no longer needs it.
     ///

@@ -29,7 +29,7 @@ use crate::{
             AppliedSessionAnswer, MediaTransport, SessionOffer, SessionUploadEncoding,
             SessionUploadSlot, TransportAdapterError, TransportSessionHealth,
         },
-        room::Room,
+        room::{Room, RoomUserOperation},
         source_model::{SourcePublishIntent, SourceSubscriptionIntent, UserStreamId},
     },
 };
@@ -250,6 +250,14 @@ impl SfuCore {
 }
 
 impl MediaSession<'_> {
+    fn room_operation(&self) -> RoomUserOperation<'_> {
+        self.room.user_operation(
+            self.context.user_id(),
+            self.context.connection_id(),
+            &self.core.media_transport,
+        )
+    }
+
     /// Return the current transport health for this endpoint.
     ///
     /// None means the transport backend has no endpoint for this session key.
@@ -334,13 +342,8 @@ impl MediaSession<'_> {
             .negotiated_client_rtp_capabilities(answer_sdp, &initial_offer.offered_capabilities)
             .map_err(SfuCoreError::CapabilityProjection)?;
         let outcome = self
-            .room
-            .apply_session_negotiated(
-                self.context.user_id(),
-                self.context.connection_id(),
-                client_capabilities,
-                &self.core.media_transport,
-            )
+            .room_operation()
+            .apply_session_negotiated(client_capabilities)
             .await;
         if outcome != SessionNegotiationOutcome::Applied {
             return Err(SfuCoreError::SessionNegotiationRejected(outcome));
@@ -365,14 +368,7 @@ impl MediaSession<'_> {
         answer_sdp: &str,
     ) -> Result<Vec<UserStreamId>, SfuCoreError> {
         let applied_answer = self.apply_transport_answer(answer_sdp).await?;
-        let outcome = self
-            .room
-            .apply_session_refreshed(
-                self.context.user_id(),
-                self.context.connection_id(),
-                &self.core.media_transport,
-            )
-            .await;
+        let outcome = self.room_operation().apply_session_refreshed().await;
         if outcome != SessionNegotiationOutcome::Applied {
             return Err(SfuCoreError::SessionRefreshRejected(outcome));
         }
@@ -386,11 +382,7 @@ impl MediaSession<'_> {
     /// the staged transaction before the answer arrives.
     #[must_use]
     pub fn has_staged_publish(&self, stream_id: &UserStreamId) -> bool {
-        self.room.has_staged_publish(
-            self.context.user_id(),
-            self.context.connection_id(),
-            stream_id,
-        )
+        self.room_operation().has_staged_publish(stream_id)
     }
 
     /// Check whether the room currently has a live publication for this user.
@@ -399,9 +391,7 @@ impl MediaSession<'_> {
     /// does not reserve the stream against concurrent unpublish or user
     /// replacement.
     pub async fn is_stream_published(&self, stream_id: &UserStreamId) -> bool {
-        self.room
-            .is_stream_published(self.context.user_id(), stream_id)
-            .await
+        self.room_operation().is_stream_published(stream_id).await
     }
 
     /// Set the user-visible activity state for an already published stream.
@@ -414,14 +404,8 @@ impl MediaSession<'_> {
         stream_id: &UserStreamId,
         activity: PublicationActivity,
     ) -> PublicationActivityOutcome {
-        self.room
-            .set_publication_active_runtime(
-                self.context.user_id(),
-                self.context.connection_id(),
-                stream_id,
-                activity,
-                &self.core.media_transport,
-            )
+        self.room_operation()
+            .set_publication_activity(stream_id, activity)
             .await
     }
 
@@ -436,14 +420,8 @@ impl MediaSession<'_> {
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
     ) -> SubscriptionUpdateOutcome {
-        self.room
-            .update_subscription_runtime(
-                self.context.user_id(),
-                self.context.connection_id(),
-                target_user_id,
-                intents,
-                &self.core.media_transport,
-            )
+        self.room_operation()
+            .update_subscription(target_user_id, intents)
             .await
     }
 
@@ -452,15 +430,7 @@ impl MediaSession<'_> {
     /// Refresh controls whether other users need a full snapshot or a normal
     /// incremental update. Stale connections are ignored by the room boundary.
     pub async fn update_user_info(&self, info: UserInfo, refresh: UserInfoRefresh) {
-        self.room
-            .update_user_info(
-                self.context.user_id(),
-                self.context.connection_id(),
-                info,
-                refresh,
-                &self.core.media_transport,
-            )
-            .await;
+        self.room_operation().update_user_info(info, refresh).await;
     }
 
     /// Reserve media for a publish that still needs renegotiation.
@@ -482,13 +452,8 @@ impl MediaSession<'_> {
         &self,
         intent: &SourcePublishIntent,
     ) -> Result<PublishStageOutcome, SfuCoreError> {
-        self.room
-            .stage_negotiated_publish(
-                self.context.user_id(),
-                self.context.connection_id(),
-                intent,
-                &self.core.media_transport,
-            )
+        self.room_operation()
+            .stage_negotiated_publish(intent)
             .await
             .map_err(SfuCoreError::Transport)
     }
@@ -502,13 +467,8 @@ impl MediaSession<'_> {
         &self,
         stream_id: &UserStreamId,
     ) -> RollbackStagedPublishOutcome {
-        self.room
-            .rollback_staged_publish(
-                self.context.user_id(),
-                self.context.connection_id(),
-                stream_id,
-                &self.core.media_transport,
-            )
+        self.room_operation()
+            .rollback_staged_publish(stream_id)
             .await
     }
 
@@ -518,12 +478,8 @@ impl MediaSession<'_> {
     /// best-effort cleanup for in-flight publish reservations. It does not
     /// close the transport session itself.
     pub async fn rollback_connection_publishes(&self) {
-        self.room
-            .rollback_staged_publishes_for_connection(
-                self.context.user_id(),
-                self.context.connection_id(),
-                &self.core.media_transport,
-            )
+        self.room_operation()
+            .rollback_staged_publishes_for_connection()
             .await;
     }
 
@@ -533,14 +489,7 @@ impl MediaSession<'_> {
     /// are explicit outcomes so callers do not infer failure reasons from a
     /// collapsed boolean.
     pub async fn unpublish(&self, stream_id: &UserStreamId) -> UnpublishOutcome {
-        self.room
-            .unpublish_track(
-                self.context.user_id(),
-                self.context.connection_id(),
-                stream_id,
-                &self.core.media_transport,
-            )
-            .await
+        self.room_operation().unpublish(stream_id).await
     }
 
     /// apply the browser sdp answer to the media transport before updating room state
@@ -574,13 +523,8 @@ impl MediaSession<'_> {
         &self,
         applied_answer: &AppliedSessionAnswer,
     ) -> Vec<UserStreamId> {
-        self.room
-            .commit_staged_publishes(
-                self.context.user_id(),
-                self.context.connection_id(),
-                applied_answer,
-                &self.core.media_transport,
-            )
+        self.room_operation()
+            .commit_staged_publishes(applied_answer)
             .await
     }
 }

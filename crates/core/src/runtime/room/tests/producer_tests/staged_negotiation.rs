@@ -65,15 +65,7 @@ async fn staged_negotiated_publish_commit_moves_through_room_owned_transaction()
     scenario.commit().await;
 
     assert_eq!(scenario.staged_count().await, 0);
-    assert!(
-        scenario
-            .room
-            .is_stream_published(
-                &scenario.user_id,
-                &stream_id_for_source(TestSourceKind::ScalableVideo)
-            )
-            .await
-    );
+    assert!(scenario.scalable_video_is_published().await);
     assert!(
         scenario
             .room
