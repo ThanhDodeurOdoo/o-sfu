@@ -1,28 +1,30 @@
 #[cfg(any(test, feature = "testing-transport"))]
-#[path = "test_support/debug_command.rs"]
-mod debug_command;
-#[cfg(any(test, feature = "testing-transport"))]
-#[path = "test_support/debug_mailbox.rs"]
-mod debug_mailbox;
+#[path = "test_support/probe.rs"]
+mod probe;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 #[path = "test_support/route_graph.rs"]
 mod route_graph;
-#[cfg(any(test, feature = "testing-transport"))]
-#[path = "test_support/worker_debug.rs"]
-mod worker_debug;
 
 #[cfg(any(test, feature = "testing-transport"))]
-pub use debug_command::DebugRouteEntry;
-#[cfg(any(test, feature = "testing-transport"))]
-pub(super) use debug_command::DebugRtcWorkerCommand;
+pub use probe::DebugRouteEntry;
 #[cfg(test)]
-pub use debug_command::{DebugPacketGate, DebugRouteDestination};
+pub(super) use probe::{
+    ActiveRelayTargetCountProbe, HasAnyRemoteAddrSessionProbe, RecordIncomingMediaProbe,
+    RelayTargetCountProbe, RememberRemoteAddrProbe, RemoteAddrOwnerProbe, ResolveMidProbe,
+    SessionMaxBitrateInProbe, SessionMaxBitrateOutProbe, SessionStreamRxSsrcProbe,
+    SessionStreamTxSsrcProbe,
+};
+#[cfg(test)]
+pub use probe::{DebugPacketGate, DebugRouteDestination};
 #[cfg(any(test, feature = "testing-transport"))]
-pub(super) use debug_mailbox::{RtcWorkerDebugChannels, RtcWorkerDebugHandle};
+pub(super) use probe::{
+    DebugProbe, DebugProbeRequest, RouteEntryByConsumerMidProbe, RtcWorkerDebugChannels,
+    RtcWorkerDebugHandle, handle_debug_probe,
+};
+#[cfg(any(test, feature = "testing-transport"))]
+pub(super) use probe::{ObserveAudioActivityProbe, RouteEntryByMediaIdProbe, RouteEntryProbe};
 #[cfg(any(test, feature = "internal-benchmarks"))]
 pub(in crate::runtime::rtc_engine) use route_graph::MediaWorkerScenario;
-#[cfg(any(test, feature = "testing-transport"))]
-pub(super) use worker_debug::handle_debug_worker_command;
 
 #[cfg(any(test, feature = "internal-benchmarks"))]
 pub use super::forwarded_packet::test_support::sample_forwarded_packet;
