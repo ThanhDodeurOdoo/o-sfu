@@ -5,7 +5,7 @@ use o_sfu_protocol::shared::{DownloadStates, StreamType, UserInfo};
 use super::{UserError, state::PendingUserAction};
 use crate::{
     application::stream_catalog::stream_id_for_stream_type,
-    core::{SfuCoreError, SourceSubscriptionIntent, UserStreamId},
+    core::prelude::{SfuCoreError, SourceSubscriptionIntent, UserStreamId},
 };
 
 /// Project compatibility download state into core subscription intent.

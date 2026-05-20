@@ -668,7 +668,10 @@ mod tests {
     use o_sfu_router::RouterId;
 
     use super::*;
-    use crate::{Bitrate, LocalSpilloverPolicyError, LocalSpilloverPolicyParts};
+    use crate::{
+        Bitrate,
+        prelude::{LocalSpilloverPolicyError, LocalSpilloverPolicyParts},
+    };
 
     #[test]
     fn first_join_uses_lowest_load_worker() {

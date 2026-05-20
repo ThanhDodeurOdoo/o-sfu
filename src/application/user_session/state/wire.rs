@@ -234,7 +234,7 @@ mod tests {
     use crate::{
         application::stream_catalog::source_publish_intent_for_stream_type,
         core::{
-            Bitrate,
+            prelude::Bitrate,
             server::source_model::{
                 PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
                 SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,

@@ -38,7 +38,7 @@ use tracing::{info, warn};
 
 use crate::{
     config::Config,
-    core::{CoreOptions, SfuCore},
+    core::prelude::{CoreOptions, SfuCore},
 };
 
 pub(crate) mod auth;
@@ -52,7 +52,7 @@ pub(crate) mod websocket_server;
 
 use http_server::{serve_http, serve_http_on};
 pub(crate) use o_sfu_core::{
-    ConnectionId, SessionBitrateLimits,
+    prelude::{ConnectionId, SessionBitrateLimits},
     server::{metrics, packet_sinks, room, transport as media_transport},
 };
 pub(crate) use o_sfu_telemetry::{self as telemetry, prometheus};

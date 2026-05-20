@@ -1,5 +1,7 @@
 pub mod config;
-pub use o_sfu_core as core;
+pub mod core {
+    pub use o_sfu_core::{prelude, server};
+}
 pub(crate) mod application;
 mod runtime;
 

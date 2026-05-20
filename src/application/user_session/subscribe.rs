@@ -3,7 +3,7 @@ use tracing::{info, instrument};
 
 use super::{User, UserError, UserOutput, compat::subscription_intents_from_download_states};
 use crate::{
-    core::SubscriptionUpdateOutcome, runtime::telemetry::schema::event as telemetry_event,
+    core::prelude::SubscriptionUpdateOutcome, runtime::telemetry::schema::event as telemetry_event,
 };
 
 impl User {

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use o_sfu_core::MediaCodecFlags;
+use o_sfu_core::prelude::MediaCodecFlags;
 
 use super::parsing::parse_optional_env;
 

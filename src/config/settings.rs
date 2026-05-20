@@ -1,6 +1,6 @@
 use std::net::{IpAddr, SocketAddr};
 
-use o_sfu_core::Bitrate;
+use o_sfu_core::prelude::Bitrate;
 
 use super::{
     CodecPreferences, MediaCodecFlags, RoomWorkerPolicy, RtcPortRange, VideoBitrateLimits,

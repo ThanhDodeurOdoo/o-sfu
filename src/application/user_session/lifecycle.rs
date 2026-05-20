@@ -8,7 +8,7 @@ use tracing::{debug, error};
 
 use super::{User, UserDisconnectReason, UserError, UserOutput};
 use crate::{
-    core::{MediaSession, SfuCore, TransportSessionHealth, UserInfoRefresh},
+    core::prelude::{MediaSession, SfuCore, TransportSessionHealth, UserInfoRefresh},
     runtime::{ConnectionId, room::Room},
 };
 

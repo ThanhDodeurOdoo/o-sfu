@@ -21,7 +21,7 @@ use crate::{
 ///
 /// This is still RTC-specific because it describes the concrete server-side
 /// WebRTC transport. The orchestration layer should normally pass
-/// [`CoreOptions`](crate::CoreOptions) into
+/// [`CoreOptions`](crate::prelude::CoreOptions) into
 /// [`MediaTransport`](super::MediaTransport) construction instead of
 /// assembling this type directly.
 ///

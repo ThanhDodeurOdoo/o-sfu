@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow, ensure};
-use o_sfu_core::{AudioCodecPreference, CodecPreferences, VideoCodecPreference};
+use o_sfu_core::prelude::{AudioCodecPreference, CodecPreferences, VideoCodecPreference};
 
 pub(super) fn load_codec_preferences(
     mut get_var: impl FnMut(&str) -> Option<String>,
@@ -74,7 +74,7 @@ fn video_codec_preference(codec_name: &str) -> Option<VideoCodecPreference> {
 
 #[cfg(test)]
 mod tests {
-    use o_sfu_core::{AudioCodecPreference, CodecPreferences, VideoCodecPreference};
+    use o_sfu_core::prelude::{AudioCodecPreference, CodecPreferences, VideoCodecPreference};
 
     use super::load_codec_preferences;
 

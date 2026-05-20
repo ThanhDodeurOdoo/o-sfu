@@ -1,6 +1,6 @@
 //! Room media orchestration above pure state and transport effects.
 //!
-//! Public callers should normally enter through [`crate::MediaSession`]. This
+//! Public callers should normally enter through [`crate::prelude::MediaSession`]. This
 //! module is the room-internal bridge that takes generic source ids and
 //! subscription intents, performs short authoritative state transitions and
 //! then delegates transport work to effect plans after locks are released.

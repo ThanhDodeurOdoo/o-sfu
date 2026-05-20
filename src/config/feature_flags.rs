@@ -1,5 +1,5 @@
 use anyhow::Result;
-pub use o_sfu_core::RuntimeFeatureFlags;
+pub use o_sfu_core::prelude::RuntimeFeatureFlags;
 
 use super::parsing::parse_optional_env;
 
