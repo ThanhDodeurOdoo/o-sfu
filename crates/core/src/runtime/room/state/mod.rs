@@ -32,9 +32,9 @@ pub(in crate::runtime::room) use self::{
         ConsumerBootstrapOrigin, ConsumerRouteTransportRef, ConsumerRouteUpdate,
         PendingConsumerBootstrap, PendingConsumerBootstrapTarget, PlannedConsumerBootstrap,
         PlannedSubscriptionChange, PreparedConsumerBootstrap, RelayRouteEffect, RelayRouteKey,
-        ValidatedPublishDescriptor,
+        TransportMediaRemoval, ValidatedPublishDescriptor,
     },
     membership::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, LifecycleEffects},
-    shared::{RoomState, TransportMediaRemoval},
+    shared::RoomState,
     video_policy::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
 };

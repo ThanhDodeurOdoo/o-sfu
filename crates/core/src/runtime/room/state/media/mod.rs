@@ -17,12 +17,12 @@ mod test_support;
 mod tests;
 
 pub(super) use self::graph::{
-    ConsumerKey, ConsumerRouteView, ConsumerState, PublishedProducer, PublishedSourceInstall,
-    RoomMediaGraph, SourceKey, SourceTransportMediaIndexEntry,
+    ConsumerKey, ConsumerRouteView, ConsumerState, ProducerRouteTarget, PublishedProducer,
+    PublishedSourceInstall, RoomMediaGraph, SourceKey, SourceTransportMediaIndexEntry,
 };
 pub use self::subscription::{ConsumerRouteState, RemoteTrackBootstrap};
 pub(in crate::runtime::room) use self::{
-    graph::ConsumerRouteTransportRef,
+    graph::{ConsumerRouteTransportRef, TransportMediaRemoval},
     producer::ValidatedPublishDescriptor,
     relay::{RelayRouteEffect, RelayRouteKey},
     subscription::{

@@ -8,12 +8,10 @@
 use super::{
     super::{
         super::{RoomEventMessage, outbound::MessageFanout},
-        media::ConsumerKey,
         shared::RoomState,
     },
     action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
 };
-use crate::runtime::source_model::ConsumerSourceSelection;
 
 impl RoomState {
     /// Commits selector updates that still match the routed consumer media.
@@ -27,25 +25,16 @@ impl RoomState {
     ) {
         for update in updates {
             let route = update.route();
-            let key = ConsumerKey::new(route.consumer_user_id(), update.source_id());
-            let Some(current_route) = self.media.committed_consumer_route_for_key(&key) else {
-                continue;
-            };
-            if !current_route.matches_transport_ref(route) {
-                continue;
-            }
-            let selection = self
-                .media
-                .consumer_source_selections
-                .entry(key)
-                .or_insert_with(|| ConsumerSourceSelection::open(true));
-            selection.set_selector(update.selector());
-            selection.set_policy_pause_reason(update.policy_pause_reason());
-            selection.set_budget(update.budget());
-            selection.set_adaptation_observations(
-                update.pressure_observations(),
-                update.upgrade_observations(),
-            );
+            self.media
+                .update_consumer_source_selection(route, update.source_id(), |selection| {
+                    selection.set_selector(update.selector());
+                    selection.set_policy_pause_reason(update.policy_pause_reason());
+                    selection.set_budget(update.budget());
+                    selection.set_adaptation_observations(
+                        update.pressure_observations(),
+                        update.upgrade_observations(),
+                    );
+                });
         }
     }
 

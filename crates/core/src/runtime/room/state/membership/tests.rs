@@ -25,16 +25,16 @@ use crate::{
             state::{
                 ids::ProducerRuntimeId,
                 media::{
-                    ConsumerKey, ConsumerState, PublishedProducer, SourceKey,
-                    SourceTransportMediaIndexEntry,
+                    ConsumerKey, ConsumerState, PublishedProducer, PublishedSourceInstall,
+                    SourceKey,
                 },
             },
             topology::{RoutedConsumerId, RoutedProducerId},
         },
         source_model::{
-            PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
-            PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-            SourceEncodingId,
+            ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceDescriptorParts,
+            PublishedSourceId, PublishedSourceOwner, SourceEncodingDescriptor,
+            SourceEncodingDescriptorParts, SourceEncodingId,
             test_support::{source_publish_intent_for_source, stream_id_for_source},
         },
     },
@@ -72,7 +72,7 @@ fn install_test_published_producer(
     connection_id: ConnectionId,
     stream_type: TestSourceKind,
     routed_producer_id: RoutedProducerId,
-    transport_media_id: Option<TransportMediaId>,
+    transport_media_id: TransportMediaId,
 ) -> (ProducerRuntimeId, PublishedSourceId) {
     let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
     let source_id = PublishedSourceId::allocate(&mut state.next_source_id);
@@ -102,19 +102,12 @@ fn install_test_published_producer(
         )],
     })
     .expect("test source graph should be valid");
-    state.media.sources.insert(source_id, source);
-    state
-        .media
-        .source_ids_by_owner_stream
-        .insert(SourceKey::new(user_id, intent.stream_id()), source_id);
-    state
-        .media
-        .producer_id_by_source_id
-        .insert(source_id, producer_id);
-    state.media.register_source_owner(user_id, source_id);
-    state.media.producers.insert(
+    state.media.install_source(PublishedSourceInstall {
+        source_key: SourceKey::new(user_id, intent.stream_id()),
+        source_descriptor: source,
+        source_encoding_ids: vec![encoding_id],
         producer_id,
-        PublishedProducer {
+        producer: PublishedProducer {
             source_id,
             owner_user_id: user_id.clone(),
             owner_connection_id: connection_id,
@@ -122,23 +115,11 @@ fn install_test_published_producer(
             media_kind: MediaKind::Video,
             consumable_rtp_parameters: MediaStream::new(vec![], vec![], vec![]),
             routed_producer_id,
-            transport_media_id,
+            transport_media_id: Some(transport_media_id),
             active: true,
         },
-    );
-    state.media.register_producer_owner(user_id, producer_id);
-    if let Some(transport_media_id) = transport_media_id {
-        state.media.source_transport_media_index.insert(
-            transport_media_id,
-            SourceTransportMediaIndexEntry::new(
-                source_id,
-                vec![encoding_id],
-                user_id.clone(),
-                connection_id,
-                stream_id_for_source(stream_type),
-            ),
-        );
-    }
+        transport_media_id,
+    });
     (producer_id, source_id)
 }
 
@@ -265,11 +246,11 @@ fn leave_removes_consumer_routes_for_departed_session() {
         producer_connection_id,
         TestSourceKind::ScalableVideo,
         routed_producer_id,
-        Some(TransportMediaId::new(11)),
+        TransportMediaId::new(11),
     );
     let consumer_key = ConsumerKey::new(&UserId::Integer(2), source_id);
-    state.media.consumer_index.insert(
-        consumer_key.clone(),
+    assert!(state.media.commit_consumer(
+        consumer_key,
         ConsumerState {
             routed_consumer_id: RoutedConsumerId::new(RouterId(1), ConsumerId(20)),
             consumer_connection_id,
@@ -277,15 +258,18 @@ fn leave_removes_consumer_routes_for_departed_session() {
             source_media: TransportMediaId::new(11),
             consumer_media: TransportMediaId::new(21),
         },
-    );
-    state.media.register_consumer_key(&consumer_key);
+        ConsumerSourceSelection::open(true),
+    ));
 
     let outcome = state.apply_leave(&UserId::Integer(2), consumer_connection_id);
 
     assert!(outcome.is_some());
-    assert_eq!(state.media.consumer_index.len(), 0);
-    assert_eq!(state.media.producers.len(), 1);
-    assert!(state.media.producers.contains_key(&producer_id));
+    assert_eq!(state.media.consumer_count(), 0);
+    assert_eq!(state.media.producer_count(), 1);
+    assert_eq!(
+        state.media.producer_ids_for_user(&UserId::Integer(1)),
+        vec![producer_id]
+    );
 }
 
 #[test]
@@ -374,7 +358,7 @@ fn replacement_join_clears_transport_media_owner_index() {
         connection_id,
         TestSourceKind::ScalableVideo,
         routed_producer_id,
-        Some(transport_media_id),
+        transport_media_id,
     );
 
     assert_eq!(
@@ -406,6 +390,5 @@ fn replacement_join_clears_transport_media_owner_index() {
         state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
         None
     );
-    assert!(state.media.source_ids_by_owner.is_empty());
-    assert!(state.media.producer_ids_by_owner.is_empty());
+    assert!(state.media.source_indexes_are_empty());
 }

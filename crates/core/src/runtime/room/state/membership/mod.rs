@@ -26,9 +26,9 @@ use super::{
         user_negotiation::{UserNegotiation, UserNegotiationUpdate},
     },
     layout::UserLayout,
-    media::relay::RelayRouteEffect,
+    media::{RelayRouteEffect, TransportMediaRemoval},
     presence::UserPresence,
-    shared::{ActiveUser, RoomState, TransportMediaRemoval},
+    shared::{ActiveUser, RoomState},
 };
 use crate::runtime::{ConnectionId, UserId, UserInfo};
 
@@ -377,24 +377,12 @@ impl RoomState {
         topology: &mut RoomTopology,
         user_id: &UserId,
     ) -> Result<(), RoomTopologyError> {
-        let routed_consumers = self
-            .media
-            .consumer_keys_for_user(user_id)
-            .into_iter()
-            .filter_map(|key| self.media.consumer_index.get(&key))
-            .map(|consumer_state| consumer_state.routed_consumer_id)
-            .collect::<Vec<_>>();
+        let routed_consumers = self.media.routed_consumer_ids_for_user(user_id);
         for routed_consumer_id in routed_consumers {
             topology.remove_consumer(routed_consumer_id)?;
         }
 
-        let routed_producers = self
-            .media
-            .producer_ids_for_user(user_id)
-            .into_iter()
-            .filter_map(|producer_id| self.media.producers.get(&producer_id))
-            .map(|producer| producer.routed_producer_id)
-            .collect::<Vec<_>>();
+        let routed_producers = self.media.routed_producer_ids_for_user(user_id);
         for routed_producer_id in routed_producers {
             topology.remove_producer(routed_producer_id)?;
         }

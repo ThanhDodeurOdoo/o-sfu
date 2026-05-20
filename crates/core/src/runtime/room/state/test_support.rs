@@ -1,9 +1,6 @@
 use o_sfu_router::RouterId;
 
-use super::{
-    media::{SourceKey, SourceTransportMediaIndexEntry},
-    shared::RoomState,
-};
+use super::{media::SourceTransportMediaIndexEntry, shared::RoomState};
 #[cfg(test)]
 use crate::runtime::source_model::PublishedSourceId;
 use crate::runtime::{
@@ -38,11 +35,11 @@ impl RoomState {
     }
 
     pub fn producer_count(&self) -> usize {
-        self.media.producers.len()
+        self.media.producer_count()
     }
 
     pub fn consumer_count(&self) -> usize {
-        self.media.consumer_index.len()
+        self.media.consumer_count()
     }
 
     pub fn has_session(&self, user_id: &UserId) -> bool {
@@ -64,10 +61,7 @@ impl RoomState {
     }
 
     pub fn first_published_transport_media_id(&self) -> Option<TransportMediaId> {
-        self.media
-            .producers
-            .values()
-            .find_map(|producer| producer.transport_media_id)
+        self.media.first_published_transport_media_id()
     }
 
     pub fn producer_transport_media_id(
@@ -76,15 +70,11 @@ impl RoomState {
         connection_id: ConnectionId,
         stream_type: TestSourceKind,
     ) -> Option<TransportMediaId> {
-        let producer_id = self.media.producer_id_for_source_key(&SourceKey::new(
+        self.media.producer_transport_media_id(
             user_id,
+            connection_id,
             &stream_id_for_source(stream_type),
-        ))?;
-        let producer = self.media.producers.get(&producer_id)?;
-        if producer.owner_connection_id != connection_id {
-            return None;
-        }
-        producer.transport_media_id
+        )
     }
 
     pub fn inspect_producer_owner_user_id_for_transport_media_id(
@@ -101,7 +91,7 @@ impl RoomState {
         transport_media_id: TransportMediaId,
     ) -> Option<PublishedSourceId> {
         self.source_transport_media_entry(transport_media_id)
-            .map(|entry| entry.source_id)
+            .map(SourceTransportMediaIndexEntry::source_id)
     }
 
     pub fn inspect_source_encoding_ids_for_transport_media_id(
@@ -109,7 +99,7 @@ impl RoomState {
         transport_media_id: TransportMediaId,
     ) -> Option<Vec<SourceEncodingId>> {
         self.source_transport_media_entry(transport_media_id)
-            .map(|entry| entry.encoding_ids.clone())
+            .map(|entry| entry.encoding_ids().to_vec())
     }
 
     pub fn inspect_producer_owner_connection_id_for_transport_media_id(
