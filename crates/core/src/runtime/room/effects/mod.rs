@@ -16,8 +16,10 @@ use tracing::warn;
 
 use crate::{UnpublishOutcome, runtime::UserId};
 
+mod batch;
 mod source_policy;
 mod transport;
+pub(super) use batch::{MediaCountDelta, RoomEffectBatch, RoomEffectContext, TransportUserCleanup};
 use o_sfu_telemetry::schema::event as telemetry_event;
 pub(super) use source_policy::SourcePolicyEffectPlan;
 pub(in crate::runtime::room) use transport::{
@@ -35,67 +37,9 @@ use super::{
 use crate::runtime::{
     ConnectionId,
     diagnostics::DiagnosticsEventData,
-    media_transport::{
-        ConsumerActivity, MediaTransport, TransportMediaId, TransportRelayRouteAction,
-        TransportRelayRouteEffect,
-    },
+    media_transport::{ConsumerActivity, MediaTransport, TransportMediaId},
     source_model::UserStreamId,
 };
-
-pub(super) async fn execute_relay_route_effects(
-    room: &Room,
-    media_port: &MediaTransport,
-    effects: &[RelayRouteEffect],
-) -> bool {
-    let mut applied = true;
-    for effect in effects {
-        let transport_effect = TransportRelayRouteEffect {
-            source_session_key: room
-                .transport_user_key(&effect.route.source_user, effect.route.source_connection),
-            source_transport_media_id: effect.route.source_media,
-            target_media_worker_id: effect.route.target_worker,
-            action: effect.action,
-        };
-        let result = RoomTransportEffect::RelayRoute(transport_effect)
-            .execute_unit(media_port)
-            .await;
-        if let Err(error) = result {
-            applied = false;
-            if effect.action == TransportRelayRouteAction::Release {
-                room.record_relay_route_release_failure(
-                    effect,
-                    error,
-                    media_port,
-                    "media transport failed to release relay route",
-                )
-                .await;
-                continue;
-            }
-            warn!(
-                ?effect,
-                ?error,
-                "media transport failed to apply relay route effect"
-            );
-        }
-    }
-    applied
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct MediaCountDelta {
-    before: RoomMediaCounts,
-    after: RoomMediaCounts,
-}
-
-impl MediaCountDelta {
-    fn new(before: RoomMediaCounts, after: RoomMediaCounts) -> Self {
-        Self { before, after }
-    }
-
-    fn record(self, room: &Room) {
-        room.record_media_count_delta(self.before, self.after);
-    }
-}
 
 #[derive(Debug)]
 struct SubscriptionTransportOp {
@@ -232,10 +176,11 @@ impl SubscriptionEffectPlan {
     /// render again, so successful video resumes trigger an immediate keyframe
     /// request on the underlying consumer route.
     pub(super) async fn execute(self, room: &Room, media_port: &MediaTransport) {
-        if let Some(media_count_delta) = self.media_count_delta {
-            media_count_delta.record(room);
-        }
-        execute_relay_route_effects(room, media_port, &self.relay_ops).await;
+        RoomEffectBatch::new()
+            .with_optional_media_count_delta(self.media_count_delta)
+            .with_relay_effects(self.relay_ops)
+            .execute(room, RoomEffectContext::runtime(media_port))
+            .await;
         for transport_op in self.transport_ops {
             let route = &transport_op.route;
             let transport_route = room.transport_consumer_route(route);
@@ -299,7 +244,11 @@ impl ConsumerBootstrapOp {
             relay_effects,
             origin,
         } = self;
-        if !execute_relay_route_effects(room, media_port, &relay_effects).await {
+        let execution = RoomEffectBatch::new()
+            .with_relay_effects(relay_effects)
+            .execute(room, RoomEffectContext::runtime(media_port))
+            .await;
+        if !execution.relay_effects_applied() {
             room.release_pending_consumer_bootstrap(&target, media_port)
                 .await;
             return;
@@ -404,7 +353,10 @@ impl ConsumerBootstrapOp {
         )>,
     ) {
         let Some((sender, bootstrap, consumer_active)) = outbound else {
-            media_count_delta.record(room);
+            RoomEffectBatch::new()
+                .with_media_count_delta_value(media_count_delta)
+                .execute(room, RoomEffectContext::runtime(media_port))
+                .await;
             room.release_pending_consumer_bootstrap(target, media_port)
                 .await;
             room
@@ -418,38 +370,40 @@ impl ConsumerBootstrapOp {
                 .await;
             return;
         };
-        media_count_delta.record(room);
-        room.apply_initial_consumer_pause_state(
-            target,
-            consumer_transport_media_id,
-            consumer_active,
-            media_port,
-            origin,
-        )
-        .await;
-        room.diagnostics.record(
-            DiagnosticsEventData::for_user(
-                room.uuid(),
-                target.consumer_user_id(),
-                telemetry_event::SUBSCRIBE_SUCCEEDED,
+        let mut batch = RoomEffectBatch::new().with_media_count_delta_value(media_count_delta);
+        if !consumer_active {
+            batch = batch.with_initial_consumer_pause(
+                room,
+                target,
+                consumer_transport_media_id,
+                origin,
+            );
+        }
+        batch
+            .record_diagnostics(
+                DiagnosticsEventData::for_user(
+                    room.uuid(),
+                    target.consumer_user_id(),
+                    telemetry_event::SUBSCRIBE_SUCCEEDED,
+                )
+                .with_connection_id(target.consumer_connection_id().as_u64())
+                .with_media_worker_id(room.media_worker_id())
+                .with_transport_media_id(consumer_transport_media_id.as_u64())
+                .insert_field(
+                    "producer_user_id",
+                    serde_json::to_value(target.producer_user_id())
+                        .unwrap_or(serde_json::Value::Null),
+                )
+                .insert_field(
+                    "source_transport_media_id",
+                    target.transport_media_id().as_u64(),
+                )
+                .insert_field("stream_id", target.stream_id().to_string())
+                .insert_field("origin", format!("{origin:?}").to_lowercase()),
             )
-            .with_connection_id(target.consumer_connection_id().as_u64())
-            .with_media_worker_id(room.media_worker_id())
-            .with_transport_media_id(consumer_transport_media_id.as_u64())
-            .insert_field(
-                "producer_user_id",
-                serde_json::to_value(target.producer_user_id()).unwrap_or(serde_json::Value::Null),
-            )
-            .insert_field(
-                "source_transport_media_id",
-                target.transport_media_id().as_u64(),
-            )
-            .insert_field("stream_id", target.stream_id().to_string())
-            .insert_field("origin", format!("{origin:?}").to_lowercase()),
-        );
-        let _ = sender.send(super::UserOutbound::Request(Box::new(
-            bootstrap.into_room_event_request(),
-        )));
+            .send_outbound_request(sender, bootstrap.into_room_event_request())
+            .execute(room, RoomEffectContext::runtime(media_port))
+            .await;
     }
 }
 
@@ -489,12 +443,15 @@ impl UnpublishEffectPlan {
         let Some(outcome) = outcome else {
             return UnpublishOutcome::MissingPublication;
         };
-        MediaCountDelta::new(media_counts_before, media_counts_after).record(room);
-        execute_relay_route_effects(room, media_port, outcome.relay_effects()).await;
-        let cleanup = room
-            .cleanup_transport_removals_with_retry(media_port, outcome.transport_removals())
+        let execution = RoomEffectBatch::new()
+            .with_media_count_delta(media_counts_before, media_counts_after)
+            .with_relay_effects(outcome.relay_effects().iter().cloned())
+            .with_transport_removals(outcome.transport_removals().iter().cloned())
+            .execute(room, RoomEffectContext::runtime(media_port))
             .await;
         outcome.emit(&self.user, &self.stream);
-        UnpublishOutcome::Unpublished { cleanup }
+        UnpublishOutcome::Unpublished {
+            cleanup: execution.cleanup(),
+        }
     }
 }

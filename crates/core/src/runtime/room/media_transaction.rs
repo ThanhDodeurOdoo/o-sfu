@@ -33,7 +33,9 @@ use tracing::warn;
 
 use super::{
     Room, RoomMediaCounts,
-    effects::{PublishReservationContinuation, RoomTransportEffect},
+    effects::{
+        PublishReservationContinuation, RoomEffectBatch, RoomEffectContext, RoomTransportEffect,
+    },
     state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, ValidatedPublishDescriptor},
 };
 use crate::{
@@ -42,8 +44,8 @@ use crate::{
         ConnectionId, UserId,
         diagnostics::DiagnosticsEventData,
         media_transport::{
-            AppliedSessionAnswer, ConsumerActivity, MediaTransport, SessionUploadEncoding,
-            TransportAdapterError, TransportConsumerRoute, TransportMediaId,
+            AppliedSessionAnswer, MediaTransport, SessionUploadEncoding, TransportAdapterError,
+            TransportMediaId,
         },
         source_model::{SourcePublishIntent, UserStreamId},
         sync::lock_unpoisoned,
@@ -503,16 +505,21 @@ impl CommittedPublish {
     ///   choose per-consumer simulcast layers
     /// - diagnostics happen last
     async fn finish(self, room: &Room, media_transport: &MediaTransport) {
-        room.record_media_count_delta(self.media_counts_before, self.media_counts_after);
+        RoomEffectBatch::new()
+            .with_media_count_delta(self.media_counts_before, self.media_counts_after)
+            .execute(room, RoomEffectContext::runtime(media_transport))
+            .await;
         room.bootstrap_consumer_targets(
             media_transport,
             ConsumerBootstrapOrigin::Publish,
             self.consumer_targets,
         )
         .await;
-        room.sync_source_packet_selection_policy(media_transport)
+        RoomEffectBatch::new()
+            .refresh_source_policy()
+            .record_diagnostics(self.diagnostics)
+            .execute(room, RoomEffectContext::runtime(media_transport))
             .await;
-        room.diagnostics.record(self.diagnostics);
     }
 }
 
@@ -737,39 +744,11 @@ impl Room {
             drop(state);
             (media_counts_before, media_counts_after, relay_effects)
         };
-        self.record_media_count_delta(media_counts_before, media_counts_after);
-        super::effects::execute_relay_route_effects(self, media_port, &relay_effects).await;
-    }
-
-    pub(super) async fn apply_initial_consumer_pause_state(
-        &self,
-        target: &PendingConsumerBootstrapTarget,
-        consumer_transport_media_id: TransportMediaId,
-        consumer_active: bool,
-        media_port: &MediaTransport,
-        origin: ConsumerBootstrapOrigin,
-    ) {
-        if consumer_active {
-            return;
-        }
-        let route = TransportConsumerRoute::new(
-            self.transport_user_key(target.consumer_user_id(), target.consumer_connection_id()),
-            consumer_transport_media_id,
-            self.transport_user_key(target.producer_user_id(), target.producer_connection_id()),
-            target.transport_media_id(),
-        );
-        if media_port
-            .set_consumer_active(&route, ConsumerActivity::Inactive)
-            .await
-            .is_err()
-        {
-            warn!(
-                consumer_user_id = ?target.consumer_user_id(),
-                producer_user_id = ?target.producer_user_id(),
-                ?origin,
-                "media transport failed to apply the initial consumer pause state"
-            );
-        }
+        RoomEffectBatch::new()
+            .with_media_count_delta(media_counts_before, media_counts_after)
+            .with_relay_effects(relay_effects)
+            .execute(self, RoomEffectContext::runtime(media_port))
+            .await;
     }
 }
 
