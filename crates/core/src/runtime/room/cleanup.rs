@@ -510,18 +510,6 @@ impl Room {
     /// async transport effects outside the room state lock. Failed recoverable
     /// effects are recorded in the room cleanup reconciler so the state change
     /// stays committed while transport cleanup still has an owner.
-    pub(in crate::runtime::room) async fn cleanup_transport_removals(
-        &self,
-        cleanup: UserCleanup<'_>,
-        removals: &[TransportMediaRemoval],
-    ) -> TransportEffectOutcome {
-        let Some(media_transport) = cleanup.cleaning_media_transport() else {
-            return TransportEffectOutcome::Applied;
-        };
-        self.cleanup_transport_removals_with_retry(media_transport, removals)
-            .await
-    }
-
     /// remove a batch of detached media ids through the retry reconciler
     ///
     /// the caller has already committed the room-state transition that produced
@@ -595,23 +583,16 @@ impl Room {
         }
     }
 
-    /// Closes the transport user that belonged to a room user after membership
-    /// teardown has been committed.
+    /// close one detached transport user through the room cleanup reconciler
     ///
-    /// The room must not re-enter mutable state to rediscover this cleanup
-    /// later, so the runtime-local user and connection identity are converted
-    /// into a `TransportCleanupOperation` before the async adapter call. If the
-    /// adapter is temporarily unavailable, the operation is retained by the
-    /// room-local reconciler.
-    pub(in crate::runtime::room) async fn close_transport_user_for_cleanup(
+    /// callers pass this only after the state transition has decided the room
+    /// no longer owns the connection
+    pub(in crate::runtime::room) async fn close_transport_user_with_retry(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        cleanup: UserCleanup<'_>,
+        media_transport: &MediaTransport,
     ) {
-        let Some(media_transport) = cleanup.cleaning_media_transport() else {
-            return;
-        };
         let operation = TransportCleanupOperation::CloseUser {
             session_key: self.transport_user_key(user_id, connection_id),
             connection_id,
