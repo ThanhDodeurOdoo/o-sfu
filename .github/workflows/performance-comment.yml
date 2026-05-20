@@ -219,6 +219,7 @@ jobs:
               "",
               `artifact: \`${artifactName}\``,
               `[workflow run](${runUrl})`,
+              `[What is Callgrind?](https://valgrind.org/docs/manual/cl-manual.html)`,
             ].filter(Boolean).join("\n");
 
             async function writeSummaryFallback(error) {
