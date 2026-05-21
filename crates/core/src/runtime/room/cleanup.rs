@@ -78,11 +78,7 @@ use std::{
 
 use tracing::warn;
 
-use super::{
-    Room,
-    effects::RoomTransportEffect,
-    state::{RelayRouteEffect, RelayRouteKey, TransportMediaRemoval},
-};
+use super::{Room, effects::RoomTransportEffect, state::RelayRouteKey};
 use crate::{
     TransportEffectOutcome,
     runtime::{
@@ -194,7 +190,7 @@ pub(super) const CLEANUP_MAX_RETRIES: u8 = 3;
 /// a retry that finds the resource gone is treated by the adapter contract,
 /// then converted into a retry action by `CleanupReconciler`
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum TransportCleanupOperation {
+pub(in crate::runtime::room) enum TransportCleanupOperation {
     /// remove one media object from an already detached transport user
     ///
     /// this is used after room media state has forgotten the publication or
@@ -502,39 +498,23 @@ const fn cleanup_error_is_terminal(error: TransportAdapterError) -> bool {
 }
 
 impl Room {
-    /// Runs transport media cleanup after room state has already detached the
-    /// corresponding media objects.
+    /// execute cleanup operations after room state has already moved on
     ///
-    /// This is an orchestration-only cold path. The caller passes the cleanup
-    /// intent captured by the state transition, then this method performs the
-    /// async transport effects outside the room state lock. Failed recoverable
-    /// effects are recorded in the room cleanup reconciler so the state change
-    /// stays committed while transport cleanup still has an owner.
-    /// remove a batch of detached media ids through the retry reconciler
-    ///
-    /// the caller has already committed the room-state transition that produced
-    /// these removals
-    /// failures are therefore not rolled back into state
-    /// recoverable failures are retained by the room so a later cleanup cycle
-    /// can retry with the same resolved transport identities
-    pub(in crate::runtime::room) async fn cleanup_transport_removals_with_retry(
+    /// callers pass operations captured before async work starts
+    /// recoverable failures enter the room-owned retry queue
+    /// terminal failures go through the same escalation path used by delayed retries
+    pub(in crate::runtime::room) async fn execute_transport_cleanup_operations(
         &self,
         media_transport: &MediaTransport,
-        removals: &[TransportMediaRemoval],
+        operations: &[TransportCleanupOperation],
     ) -> TransportEffectOutcome {
         let mut cleanup = TransportEffectOutcome::Applied;
-        for removal in removals {
-            let connection_id = removal.connection();
-            let operation = TransportCleanupOperation::RemoveMedia {
-                session_key: self.transport_user_key(removal.user(), connection_id),
-                connection_id,
-                transport_media_id: removal.transport_media(),
-            };
+        for operation in operations {
             if let Err(error) = self
-                .execute_transport_cleanup_operation(&operation, media_transport)
+                .execute_transport_cleanup_operation(operation, media_transport)
                 .await
             {
-                self.record_cleanup_failure(&operation, error, media_transport)
+                self.record_cleanup_failure(operation, error, media_transport)
                     .await;
                 cleanup = TransportEffectOutcome::Failed;
             }
@@ -542,70 +522,6 @@ impl Room {
         self.reconcile_transport_cleanup_retries(media_transport)
             .await;
         cleanup
-    }
-
-    /// Removes one staged media reservation after room ownership was consumed.
-    ///
-    /// Staged rollback already decided that the reservation cannot commit.
-    /// A recoverable adapter failure therefore needs the same room-owned retry
-    /// owner as committed teardown cleanup.
-    pub(in crate::runtime::room) async fn cleanup_transport_media_with_retry(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-        transport_media_id: TransportMediaId,
-        media_transport: &MediaTransport,
-        failure_message: &str,
-    ) -> TransportEffectOutcome {
-        let operation = TransportCleanupOperation::RemoveMedia {
-            session_key: self.transport_user_key(user_id, connection_id),
-            connection_id,
-            transport_media_id,
-        };
-        match self
-            .execute_transport_cleanup_operation(&operation, media_transport)
-            .await
-        {
-            Ok(()) => TransportEffectOutcome::Applied,
-            Err(error) => {
-                warn!(
-                    ?user_id,
-                    connection_id = ?connection_id,
-                    ?transport_media_id,
-                    "{failure_message}"
-                );
-                self.record_cleanup_failure(&operation, error, media_transport)
-                    .await;
-                self.reconcile_transport_cleanup_retries(media_transport)
-                    .await;
-                TransportEffectOutcome::Failed
-            }
-        }
-    }
-
-    /// close one detached transport user through the room cleanup reconciler
-    ///
-    /// callers pass this only after the state transition has decided the room
-    /// no longer owns the connection
-    pub(in crate::runtime::room) async fn close_transport_user_with_retry(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-        media_transport: &MediaTransport,
-    ) {
-        let operation = TransportCleanupOperation::CloseUser {
-            session_key: self.transport_user_key(user_id, connection_id),
-            connection_id,
-        };
-        if let Err(error) = self
-            .execute_transport_cleanup_operation(&operation, media_transport)
-            .await
-        {
-            self.record_cleanup_failure(&operation, error, media_transport)
-                .await;
-        }
-        self.reconcile_transport_cleanup_retries(media_transport)
-            .await;
     }
 
     /// Executes one cleanup operation against the media transport.
@@ -654,31 +570,6 @@ impl Room {
                     .await
             }
         }
-    }
-
-    /// convert a failed relay release into room-owned cleanup retry state
-    ///
-    /// relay effects are applied after route state has already been committed
-    /// a failed release cannot be derived again from current topology, so the
-    /// source transport identity and route key become the durable retry owner
-    pub(in crate::runtime::room) async fn record_relay_route_release_failure(
-        &self,
-        effect: &RelayRouteEffect,
-        error: TransportAdapterError,
-        media_transport: &MediaTransport,
-        failure_message: &str,
-    ) -> TransportEffectOutcome {
-        let operation = TransportCleanupOperation::ReleaseRelayRoute {
-            source_session_key: self
-                .transport_user_key(&effect.route.source_user, effect.route.source_connection),
-            route: effect.route.clone(),
-        };
-        warn!(?effect, "{failure_message}");
-        self.record_cleanup_failure(&operation, error, media_transport)
-            .await;
-        self.reconcile_transport_cleanup_retries(media_transport)
-            .await;
-        TransportEffectOutcome::Failed
     }
 
     /// Records a failed first cleanup attempt and performs any immediate

@@ -33,6 +33,7 @@ use tracing::warn;
 
 use super::{
     Room, RoomMediaCounts, RoomUserOperation,
+    cleanup::TransportCleanupOperation,
     effects::{
         PublishReservationContinuation, RoomEffectBatch, RoomEffectContext, RoomTransportEffect,
     },
@@ -450,16 +451,25 @@ impl StagedMediaReservation {
         operation: RoomUserOperation<'_>,
         failure_message: &str,
     ) -> TransportEffectOutcome {
+        let cleanup = [TransportCleanupOperation::RemoveMedia {
+            session_key: operation
+                .room()
+                .transport_user_key(&self.owner_user_id, self.owner_connection_id),
+            connection_id: self.owner_connection_id,
+            transport_media_id: self.transport_media_id,
+        }];
         let outcome = operation
             .room()
-            .cleanup_transport_media_with_retry(
-                &self.owner_user_id,
-                self.owner_connection_id,
-                self.transport_media_id,
-                operation.media_transport(),
-                failure_message,
-            )
+            .execute_transport_cleanup_operations(operation.media_transport(), &cleanup)
             .await;
+        if outcome == TransportEffectOutcome::Failed {
+            warn!(
+                user_id = ?self.owner_user_id,
+                connection_id = ?self.owner_connection_id,
+                transport_media_id = ?self.transport_media_id,
+                "{failure_message}"
+            );
+        }
         self.state = StagedMediaReservationState::Released;
         outcome
     }
