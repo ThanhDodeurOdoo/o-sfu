@@ -1,7 +1,8 @@
 use crate::{
     config::{AuthConfig, Config, DiagnosticsConfig, HttpConfig, RuntimeFeatureFlags, UserConfig},
     core::prelude::{
-        CodecOptions, CoreOptions, MediaOptions, ObservabilityOptions, RoutingOptions,
+        CodecOptions, CoreOptions, MediaOptions, ObservabilityOptions, RoomMediaLimits,
+        RoutingOptions,
     },
     runtime::SessionBitrateLimits,
 };
@@ -9,6 +10,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeOptions {
     pub(crate) core: CoreOptions,
+    pub(crate) room_media_limits: RoomMediaLimits,
     effective_feature_flags: RuntimeFeatureFlags,
 }
 
@@ -47,6 +49,7 @@ impl RuntimeOptions {
                     transport_metrics_enabled: true,
                 },
             ),
+            room_media_limits: config.transport.room_media_limits,
             effective_feature_flags: effective_feature_flags(config.features),
         }
     }
@@ -86,8 +89,8 @@ mod tests {
     use crate::{
         config::{
             AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig,
-            HttpConfig, MediaCodecFlags, RoomWorkerPolicy, RtcPortRange, RuntimeFeatureFlags,
-            TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
+            HttpConfig, MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange,
+            RuntimeFeatureFlags, TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
         },
         core::server::room::{
             DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
@@ -121,6 +124,7 @@ mod tests {
                 rtc_port_range: RtcPortRange::new(50_000, 50_099),
                 rtc_media_worker_count: 4,
                 room_worker_policy: RoomWorkerPolicy::bounded_local_spillover(2),
+                room_media_limits: RoomMediaLimits::default(),
             },
             codecs: CodecConfig {
                 flags: MediaCodecFlags::default().with_h264(true),
@@ -161,6 +165,10 @@ mod tests {
         assert_eq!(
             options.core.routing.room_worker_policy.max_local_routers(),
             2
+        );
+        assert_eq!(
+            options.room_media_limits,
+            config.transport.room_media_limits
         );
         assert_eq!(options.core.codecs.flags, config.codecs.flags);
         assert_eq!(options.core.codecs.preferences, config.codecs.preferences);

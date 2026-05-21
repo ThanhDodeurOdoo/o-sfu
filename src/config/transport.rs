@@ -3,7 +3,7 @@ use std::net::IpAddr;
 use anyhow::{Result, anyhow, ensure};
 use o_sfu_core::prelude::{
     Bitrate, LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts,
-    RoomWorkerPolicy, RtcPortRange, VideoBitrateLimits,
+    RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, VideoBitrateLimits,
 };
 
 use super::{
@@ -37,6 +37,7 @@ pub(super) fn load_transport_config(
         parse_positive_env_or_default(&mut get_var, "ROOM_MAX_LOCAL_ROUTERS", 1)?;
     let room_spillover_mode = get_var("ROOM_SPILLOVER_MODE");
     let local_spillover_policy = load_local_spillover_policy(&mut get_var)?;
+    let room_media_limits = load_room_media_limits(&mut get_var)?;
     let rtc_port_range = RtcPortRange::new(rtc_min_port, rtc_max_port);
     validate_transport_config(TransportConfigValidation {
         public_ip,
@@ -59,6 +60,7 @@ pub(super) fn load_transport_config(
         rtc_port_range,
         rtc_media_worker_count,
         room_worker_policy,
+        room_media_limits,
     })
 }
 
@@ -148,6 +150,23 @@ fn load_local_spillover_policy(
     LocalSpilloverPolicy::try_new(parts).map_err(local_spillover_policy_error)
 }
 
+fn load_room_media_limits(
+    get_var: &mut impl FnMut(&str) -> Option<String>,
+) -> Result<RoomMediaLimits> {
+    Ok(RoomMediaLimits::try_new(
+        parse_positive_env_or_default(
+            get_var,
+            "ROOM_MAX_ACTIVE_AUDIO_SPEAKERS",
+            RoomMediaLimits::DEFAULT_MAX_ACTIVE_AUDIO_SPEAKERS,
+        )?,
+        parse_positive_env_or_default(
+            get_var,
+            "ROOM_MAX_VIDEO_DOWNLOADS_PER_RECEIVER",
+            RoomMediaLimits::DEFAULT_MAX_VIDEO_DOWNLOADS_PER_RECEIVER,
+        )?,
+    )?)
+}
+
 fn local_spillover_policy_error(error: LocalSpilloverPolicyError) -> anyhow::Error {
     match error {
         LocalSpilloverPolicyError::MinReceiverCountZero => {
@@ -217,8 +236,8 @@ mod tests {
     use o_sfu_core::prelude::{LocalSpilloverPolicy, RoomSpilloverMode};
 
     use super::{
-        Bitrate, RoomWorkerPolicy, RtcPortRange, TransportConfig, VideoBitrateLimits,
-        load_transport_config,
+        Bitrate, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, TransportConfig,
+        VideoBitrateLimits, load_transport_config,
     };
 
     fn load_transport_config_with_defaults(overrides: &[(&str, &str)]) -> Result<TransportConfig> {
@@ -249,6 +268,7 @@ mod tests {
                 rtc_port_range: RtcPortRange::new(40_000, 49_999),
                 rtc_media_worker_count: 1,
                 room_worker_policy: RoomWorkerPolicy::strict_single_router(),
+                room_media_limits: RoomMediaLimits::default(),
             })
         );
     }
@@ -318,6 +338,24 @@ mod tests {
         assert_eq!(policy.worker_pressure_threshold(), 50);
         assert_eq!(policy.activation_window(), 1);
         assert_eq!(policy.cooldown_window(), 4);
+    }
+
+    #[test]
+    fn load_transport_config_accepts_room_media_limits() {
+        let config = load_transport_config_with_defaults(&[
+            ("ROOM_MAX_ACTIVE_AUDIO_SPEAKERS", "3"),
+            ("ROOM_MAX_VIDEO_DOWNLOADS_PER_RECEIVER", "8"),
+        ]);
+
+        assert!(config.is_ok());
+        let Some(config) = config.ok() else {
+            return;
+        };
+        assert_eq!(config.room_media_limits.max_active_audio_speakers(), 3);
+        assert_eq!(
+            config.room_media_limits.max_video_downloads_per_receiver(),
+            8
+        );
     }
 
     #[test]
@@ -454,6 +492,14 @@ mod tests {
             ("zero max outgoing bitrate", &[("MAX_BITRATE_OUT", "0")]),
             ("zero max video bitrate", &[("MAX_VIDEO_BITRATE", "0")]),
             (
+                "zero active audio speaker limit",
+                &[("ROOM_MAX_ACTIVE_AUDIO_SPEAKERS", "0")],
+            ),
+            (
+                "zero video download limit",
+                &[("ROOM_MAX_VIDEO_DOWNLOADS_PER_RECEIVER", "0")],
+            ),
+            (
                 "more RTC workers than ports",
                 &[
                     ("RTC_MIN_PORT", "4000"),
@@ -487,6 +533,16 @@ mod tests {
                 "ROOM_SPILLOVER_WORKER_PRESSURE",
                 "abc",
                 "ROOM_SPILLOVER_WORKER_PRESSURE must be a valid u8",
+            ),
+            (
+                "ROOM_MAX_ACTIVE_AUDIO_SPEAKERS",
+                "abc",
+                "ROOM_MAX_ACTIVE_AUDIO_SPEAKERS must be a valid usize",
+            ),
+            (
+                "ROOM_MAX_VIDEO_DOWNLOADS_PER_RECEIVER",
+                "abc",
+                "ROOM_MAX_VIDEO_DOWNLOADS_PER_RECEIVER must be a valid usize",
             ),
         ];
 

@@ -10,7 +10,8 @@ mod telemetry;
 mod transport;
 
 pub use o_sfu_core::prelude::{
-    Bitrate, CodecPreferences, MediaCodecFlags, RoomWorkerPolicy, RtcPortRange, VideoBitrateLimits,
+    Bitrate, CodecPreferences, MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange,
+    VideoBitrateLimits,
 };
 
 pub(crate) use self::log_view::ConfigLogView;

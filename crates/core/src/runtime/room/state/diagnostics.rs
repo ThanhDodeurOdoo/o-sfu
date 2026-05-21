@@ -391,6 +391,8 @@ fn diagnostics_policy_pause_reason(value: PolicyPauseReason) -> DiagnosticsPolic
         PolicyPauseReason::HiddenTile => DiagnosticsPolicyPauseReason::HiddenTile,
         PolicyPauseReason::OverflowTile => DiagnosticsPolicyPauseReason::OverflowTile,
         PolicyPauseReason::MissingUsableLayer => DiagnosticsPolicyPauseReason::MissingUsableLayer,
+        PolicyPauseReason::AudioSpeakerLimit => DiagnosticsPolicyPauseReason::AudioSpeakerLimit,
+        PolicyPauseReason::VideoDownloadLimit => DiagnosticsPolicyPauseReason::VideoDownloadLimit,
     }
 }
 

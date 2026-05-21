@@ -46,6 +46,25 @@ pub struct RoutingOptions {
     pub room_worker_policy: RoomWorkerPolicy,
 }
 
+/// Room-owned media activation limits.
+///
+/// These limits control receiver delivery. They do not erase publication state
+/// or user subscription intent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoomMediaLimits {
+    max_active_audio_speakers: usize,
+    max_video_downloads_per_receiver: usize,
+}
+
+/// Invalid room media limit input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum RoomMediaLimitsError {
+    #[error("maximum active audio speakers must be greater than zero")]
+    MaxActiveAudioSpeakersZero,
+    #[error("maximum video downloads per receiver must be greater than zero")]
+    MaxVideoDownloadsPerReceiverZero,
+}
+
 /// Same-room placement policy for local router spillover.
 ///
 /// The policy is part of the public core configuration surface because server
@@ -227,6 +246,56 @@ impl RoomWorkerPolicy {
 impl Default for RoomWorkerPolicy {
     fn default() -> Self {
         Self::strict_single_router()
+    }
+}
+
+impl RoomMediaLimits {
+    pub const DEFAULT_MAX_ACTIVE_AUDIO_SPEAKERS: usize = 4;
+    pub const DEFAULT_MAX_VIDEO_DOWNLOADS_PER_RECEIVER: usize = 10;
+
+    /// Build room media limits after validating their invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RoomMediaLimitsError`] when a limit is zero.
+    pub const fn try_new(
+        max_active_audio_speakers: usize,
+        max_video_downloads_per_receiver: usize,
+    ) -> Result<Self, RoomMediaLimitsError> {
+        if max_active_audio_speakers == 0 {
+            return Err(RoomMediaLimitsError::MaxActiveAudioSpeakersZero);
+        }
+        if max_video_downloads_per_receiver == 0 {
+            return Err(RoomMediaLimitsError::MaxVideoDownloadsPerReceiverZero);
+        }
+        Ok(Self {
+            max_active_audio_speakers,
+            max_video_downloads_per_receiver,
+        })
+    }
+
+    #[must_use]
+    pub const fn conservative() -> Self {
+        Self {
+            max_active_audio_speakers: Self::DEFAULT_MAX_ACTIVE_AUDIO_SPEAKERS,
+            max_video_downloads_per_receiver: Self::DEFAULT_MAX_VIDEO_DOWNLOADS_PER_RECEIVER,
+        }
+    }
+
+    #[must_use]
+    pub const fn max_active_audio_speakers(self) -> usize {
+        self.max_active_audio_speakers
+    }
+
+    #[must_use]
+    pub const fn max_video_downloads_per_receiver(self) -> usize {
+        self.max_video_downloads_per_receiver
+    }
+}
+
+impl Default for RoomMediaLimits {
+    fn default() -> Self {
+        Self::conservative()
     }
 }
 

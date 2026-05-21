@@ -221,6 +221,12 @@ fn route_control_vad_true_promotes_active_speaker_immediately() {
         snapshot.first().map(|source| source.transport_media_id()),
         Some(source_transport_media_id)
     );
+    assert_eq!(
+        snapshot
+            .first()
+            .and_then(|source| source.last_audio_level_dbov()),
+        Some(-90)
+    );
 
     let diagnostics = state.active_speaker_diagnostics(now);
     assert_eq!(diagnostics.len(), 1);

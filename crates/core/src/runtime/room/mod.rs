@@ -16,7 +16,7 @@
 //!    |- router_state        -> bridge into the router core
 //!    |- topology            -> routing placement boundary
 //!    |- outbound            -> shared server-to-client fanout helpers
-//!    `- source_policy_sync -> room-owned video policy refresh bridge
+//!    `- source_policy_sync -> room-owned source policy refresh bridge
 //! ```
 
 mod cleanup;

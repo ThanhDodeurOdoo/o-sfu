@@ -22,7 +22,7 @@ use super::{
     ConsumerKey, ConsumerState, PublishedProducer, PublishedSourceInstall, SourceKey,
 };
 use crate::{
-    Bitrate, MediaCodecFlags,
+    Bitrate, MediaCodecFlags, RoomMediaLimits,
     runtime::{
         ConnectionId, RoomInstanceId, TestSourceKind, UserId, UserPermissions,
         media_transport::{SessionUploadEncoding, TransportMediaId},
@@ -61,6 +61,7 @@ fn test_state() -> RoomState {
     RoomState::new(
         &runtime_context,
         RoomAdmissionPolicy::new(4),
+        RoomMediaLimits::default(),
         router_rtp_capabilities(MediaCodecFlags::default()),
         Arc::new(RecordingService::new(
             RoomInstanceId::from_raw(0),

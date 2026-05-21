@@ -53,6 +53,8 @@ impl RoomUserOperation<'_> {
         );
         room.observe_load_triggered_source_fanout().await;
         effect_plan.execute(room, self.media_transport()).await;
+        room.sync_source_packet_selection_policy(self.media_transport())
+            .await;
         true
     }
 }

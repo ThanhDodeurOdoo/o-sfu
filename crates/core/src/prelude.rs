@@ -9,8 +9,9 @@ pub use crate::{
     options::{
         AudioCodecPreference, CodecOptions, CodecPreferences, CoreOptions, LocalSpilloverPolicy,
         LocalSpilloverPolicyError, LocalSpilloverPolicyParts, MediaCodecFlags, MediaOptions,
-        ObservabilityOptions, RoomSpilloverMode, RoomWorkerPolicy, RoutingOptions, RtcPortRange,
-        RuntimeFeatureFlags, SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
+        ObservabilityOptions, RoomMediaLimits, RoomMediaLimitsError, RoomSpilloverMode,
+        RoomWorkerPolicy, RoutingOptions, RtcPortRange, RuntimeFeatureFlags, SessionBitrateLimits,
+        VideoBitrateLimits, VideoCodecPreference,
     },
     room::{
         MediaSessionContext, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,

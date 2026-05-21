@@ -5,7 +5,7 @@ use super::{
     RoomManager, RoomManagerConfig, RoomManagerDeps,
 };
 use crate::{
-    MediaCodecFlags, RuntimeFeatureFlags,
+    MediaCodecFlags, RoomMediaLimits, RuntimeFeatureFlags,
     runtime::{
         diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -41,6 +41,19 @@ impl RoomManager {
                 RuntimeFeatureFlags::default(),
                 router_rtp_capabilities(MediaCodecFlags::default()),
             ),
+        ))
+    }
+
+    #[must_use]
+    pub fn for_test_with_media_limits(media_limits: RoomMediaLimits) -> Self {
+        Self::for_test_with_config(RoomManagerConfig::new(
+            1,
+            RoomRuntimePolicy::new(
+                RoomAdmissionPolicy::new(DEFAULT_TEST_MAX_SESSIONS),
+                RuntimeFeatureFlags::default(),
+                router_rtp_capabilities(MediaCodecFlags::default()),
+            )
+            .with_media_limits(media_limits),
         ))
     }
 

@@ -9,8 +9,8 @@ use std::{
 use crate::{
     config::{
         AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
-        MediaCodecFlags, RoomWorkerPolicy, RtcPortRange, RuntimeFeatureFlags, TelemetryConfig,
-        TransportConfig, UserConfig, VideoBitrateLimits,
+        MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RuntimeFeatureFlags,
+        TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
     },
     runtime::{
         DiagnosticsStore, MediaTransport, RoomPacketSinkRegistry, RuntimeMetrics, RuntimeState,
@@ -290,6 +290,7 @@ impl RuntimeTestBuilder {
                     video_bitrate_limits: VideoBitrateLimits::default(),
                     rtc_media_worker_count: 1,
                     room_worker_policy: RoomWorkerPolicy::strict_single_router(),
+                    room_media_limits: RoomMediaLimits::default(),
                 },
                 codecs: CodecConfig {
                     flags: MediaCodecFlags::default(),
