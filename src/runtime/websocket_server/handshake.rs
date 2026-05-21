@@ -86,44 +86,41 @@ struct RoomScopedConnectClaims {
     permissions: Option<UserPermissions>,
 }
 
+struct HandshakeAuthentication {
+    room: Arc<Room>,
+    claims: WebSocketConnectClaims,
+}
+
 /// post-auth handoff from the handshake to the steady-state session loop
 ///
 /// the room manager has already accepted this user
-/// every failure after this point must either clean up the exact connection id
-/// or hand ownership to the caller
+/// failures after this point must clean up this connection or hand ownership to the caller
 struct JoinedUser {
-    /// room that accepted the user and owns connection cleanup
     room: Arc<Room>,
-    /// runtime-normalized user identity stored in room membership
     user_id: UserId,
-    /// room-local connection token used to reject stale sockets
     connection_id: ConnectionId,
-    /// bounded receiver for room events addressed to this user
     outbound_rx: UserOutboundReceiver,
-    /// application protocol facade that will own post-auth signaling
     user: User,
+}
+
+impl JoinedUser {
+    fn into_connected(self, remote_address: Arc<str>) -> ConnectedUser {
+        ConnectedUser {
+            room: self.room,
+            user_id: self.user_id,
+            connection_id: self.connection_id,
+            remote_address,
+            outbound_rx: self.outbound_rx,
+            user: self.user,
+        }
+    }
 }
 
 /// admit one upgraded socket into an authenticated room user
 ///
-/// the caller must pass a raw socket that has not consumed any client frame
-/// this function owns every handshake outcome until either it returns a
-/// `ConnectedUser` or rejects the socket
-/// successful authentication drops the pre-auth permit before room join so
-/// authenticated users do not count against unauthenticated socket pressure
-///
-/// failure returns `None`
-/// auth and join failures send a close frame when the peer can still receive one
-/// startup failures clean up the room user before returning
-///
-/// on success this function authenticates the JWT, joins the target room, sends
-/// the initial welcome snapshot and initializes the post-auth protocol state
-/// that will drive the first offer/answer exchange
-///
-/// the returned `ConnectedUser` owns the authenticated reader half from the
-/// caller plus the bounded room-event receiver created during join
-/// the steady-state session loop becomes responsible for final cleanup after
-/// this exchange
+/// auth and join failures send terminal close frames
+/// startup failures clean up the accepted room session before returning `None`
+/// successful handshakes return the typed state consumed by the user loop
 #[o_sfu_telemetry::measure_duration(
     metrics = "state.metrics",
     record = "record_ws_handshake_duration"
@@ -135,45 +132,24 @@ pub(super) async fn establish_user(
     remote_address: Arc<str>,
     pre_auth_permit: PreAuthWebSocketPermit,
 ) -> Option<ConnectedUser> {
-    let (room, claims) =
+    let authentication =
         authenticate_handshake_session(state, writer, reader, remote_address.as_ref()).await?;
-    // authentication no longer counts against unauthenticated socket pressure
-    // room admission can fail without holding a pre-auth capacity slot
     drop(pre_auth_permit);
     let mut joined_user =
-        join_user(state, writer, room, claims, Arc::clone(&remote_address)).await?;
+        join_user(state, writer, authentication, Arc::clone(&remote_address)).await?;
     state.metrics.record_ws_user_joined();
-    record_session_span(
-        &joined_user.room,
-        &joined_user.user_id,
-        joined_user.connection_id,
-        remote_address.as_ref(),
-    );
-    initialize_user(
-        state,
-        writer,
-        &joined_user.room,
-        &joined_user.user_id,
-        joined_user.connection_id,
-        &mut joined_user.user,
-        remote_address.as_ref(),
-    )
-    .instrument(telemetry::activated_span(tracing::info_span!(
+    record_session_span(&joined_user, remote_address.as_ref());
+    let initialization_span = telemetry::activated_span(tracing::info_span!(
         "user.initialize",
         room_id = %joined_user.room.uuid(),
         user_id = ?joined_user.user_id,
         connection_id = ?joined_user.connection_id,
         remote_address = %remote_address
-    )))
-    .await?;
-    Some(ConnectedUser {
-        room: joined_user.room,
-        user_id: joined_user.user_id,
-        connection_id: joined_user.connection_id,
-        remote_address,
-        outbound_rx: joined_user.outbound_rx,
-        user: joined_user.user,
-    })
+    ));
+    initialize_user(state, writer, &mut joined_user, remote_address.as_ref())
+        .instrument(initialization_span)
+        .await?;
+    Some(joined_user.into_connected(remote_address))
 }
 
 /// read the first client frame under the authentication timeout
@@ -245,7 +221,7 @@ async fn authenticate_handshake_session(
     writer: &mut WsWriter,
     reader: &mut WsReader,
     remote_address: &str,
-) -> Option<(Arc<Room>, WebSocketConnectClaims)> {
+) -> Option<HandshakeAuthentication> {
     let auth_payload = receive_auth_or_reject(state, writer, reader, remote_address).await?;
     authenticate_session(state, writer, &auth_payload, remote_address).await
 }
@@ -339,7 +315,7 @@ async fn authenticate(
     state: &WebSocketServices,
     auth_payload: &AuthPayload,
     remote_address: &str,
-) -> Result<(Arc<Room>, WebSocketConnectClaims), WebSocketCloseCode> {
+) -> Result<HandshakeAuthentication, WebSocketCloseCode> {
     let room = resolve_handshake_room(state, auth_payload).await?;
     let claims = authenticate_room_scoped_claims(
         &auth_payload.jwt,
@@ -347,7 +323,7 @@ async fn authenticate(
         room.uuid(),
         remote_address,
     )?;
-    Ok((room, claims))
+    Ok(HandshakeAuthentication { room, claims })
 }
 
 /// select the candidate room without trusting user claims
@@ -450,7 +426,7 @@ async fn authenticate_session(
     writer: &mut WsWriter,
     auth_payload: &AuthPayload,
     remote_address: &str,
-) -> Option<(Arc<Room>, WebSocketConnectClaims)> {
+) -> Option<HandshakeAuthentication> {
     match authenticate(state, auth_payload, remote_address).await {
         Ok(result) => Some(result),
         Err(code) => {
@@ -475,7 +451,7 @@ async fn authenticate_session(
 #[instrument(
     name = "room.join",
     skip_all,
-    fields(room_id = %room.uuid(), user_id = ?claims.user_id)
+    fields(room_id = %authentication.room.uuid(), user_id = ?authentication.claims.user_id)
 )]
 /// allocate room membership and the bounded outbound queue
 ///
@@ -485,10 +461,10 @@ async fn authenticate_session(
 async fn join_user(
     state: &WebSocketServices,
     writer: &mut WsWriter,
-    room: Arc<Room>,
-    claims: WebSocketConnectClaims,
+    authentication: HandshakeAuthentication,
     remote_address: Arc<str>,
 ) -> Option<JoinedUser> {
+    let HandshakeAuthentication { room, claims } = authentication;
     // the room must never accept a user without a bounded outbound sink
     // create the queue before join so admission is atomic from the room view
     let (outbound_tx, outbound_rx) = UserOutboundSender::channel_with_limits(
@@ -568,23 +544,18 @@ async fn join_user(
 /// the upgrade span starts before authentication knows the room or user
 /// this is the point where later logs can be correlated with the accepted room
 /// user
-fn record_session_span(
-    room: &Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    remote_address: &str,
-) {
+fn record_session_span(joined_user: &JoinedUser, remote_address: &str) {
     let current_span = Span::current();
-    current_span.record("room_id", field::display(room.uuid()));
-    current_span.record("user_id", field::debug(user_id));
-    current_span.record("connection_id", field::debug(connection_id));
+    current_span.record("room_id", field::display(joined_user.room.uuid()));
+    current_span.record("user_id", field::debug(&joined_user.user_id));
+    current_span.record("connection_id", field::debug(joined_user.connection_id));
     current_span.record(
         telemetry_field::REMOTE_ADDRESS,
         field::display(remote_address),
     );
     info!(
         event = telemetry_event::WS_USER_ESTABLISHED,
-        connection_id = ?connection_id,
+        connection_id = ?joined_user.connection_id,
         remote_address,
         "websocket user established"
     );
@@ -603,46 +574,43 @@ fn record_session_span(
 async fn initialize_user(
     state: &WebSocketServices,
     writer: &mut WsWriter,
-    room: &Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    user: &mut User,
+    joined_user: &mut JoinedUser,
     remote_address: &str,
 ) -> Option<()> {
-    let output = match user.start().await {
+    let output = match joined_user.user.start().await {
         Ok(output) => output,
         Err(_error) => {
             warn!(
                 event = telemetry_event::WS_JOIN_FAILED,
-                ?user_id,
-                connection_id = ?connection_id,
+                user_id = ?joined_user.user_id,
+                connection_id = ?joined_user.connection_id,
                 remote_address,
                 outcome = "user_initialize_failed",
                 "failed to initialize websocket user"
             );
             state.metrics.record_ws_user_initialize_failure();
-            user.close().await;
-            cleanup_failed_session(state, room, user_id, connection_id).await;
+            joined_user.user.close().await;
+            cleanup_failed_session(state, joined_user).await;
             return None;
         }
     };
     if send_user_output_bounded(writer, output).await.is_err() {
         debug!(
-            ?user_id,
-            connection_id = ?connection_id,
+            user_id = ?joined_user.user_id,
+            connection_id = ?joined_user.connection_id,
             "failed to send user startup payload"
         );
         state.metrics.record_ws_startup_send_failure();
         warn!(
             event = telemetry_event::WS_JOIN_FAILED,
-            user_id = ?user_id,
-            connection_id = ?connection_id,
+            user_id = ?joined_user.user_id,
+            connection_id = ?joined_user.connection_id,
             remote_address,
             outcome = "startup_send_failed",
             "failed to send websocket user startup payload"
         );
-        user.close().await;
-        cleanup_failed_session(state, room, user_id, connection_id).await;
+        joined_user.user.close().await;
+        cleanup_failed_session(state, joined_user).await;
         return None;
     }
     Some(())
@@ -653,15 +621,15 @@ async fn initialize_user(
 /// cleanup is best effort here because the socket is already failing
 /// later room reconciliation still owns any transport retry work exposed by the
 /// close path
-async fn cleanup_failed_session(
-    state: &WebSocketServices,
-    room: &Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-) {
+async fn cleanup_failed_session(state: &WebSocketServices, joined_user: &JoinedUser) {
     let _ = state
         .room_manager
-        .close_session(room.uuid(), user_id, connection_id, &state.media_transport)
+        .close_session(
+            joined_user.room.uuid(),
+            &joined_user.user_id,
+            joined_user.connection_id,
+            &state.media_transport,
+        )
         .await;
 }
 
