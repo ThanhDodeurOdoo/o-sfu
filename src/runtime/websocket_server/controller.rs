@@ -188,17 +188,23 @@ async fn handle_socket(
         current_span.record("connection_id", field::debug(user_session.connection_id));
         services.metrics.record_ws_user_loop_started();
         let exit_reason = super::session_loop::run(super::session_loop::UserLoop {
-            writer: &mut ws_writer,
-            reader: &mut ws_reader,
-            room_manager: services.room_manager.as_ref(),
-            room: user_session.room.as_ref(),
-            user_id: &user_session.user_id,
-            connection_id: user_session.connection_id,
-            outbound_rx: &mut user_session.outbound_rx,
-            user: &mut user_session.user,
-            media_transport: &services.media_transport,
-            user_timeout_ms: services.user.timeout_ms,
-            ping_interval_ms: services.user.ping_interval_ms,
+            socket: super::session_loop::UserSocket {
+                writer: &mut ws_writer,
+                reader: &mut ws_reader,
+                outbound_rx: &mut user_session.outbound_rx,
+            },
+            session: super::session_loop::VerifiedUserSession {
+                room_manager: services.room_manager.as_ref(),
+                room: user_session.room.as_ref(),
+                user_id: &user_session.user_id,
+                connection_id: user_session.connection_id,
+                user: &mut user_session.user,
+                media_transport: &services.media_transport,
+            },
+            config: super::session_loop::UserLoopConfig {
+                user_timeout_ms: services.user.timeout_ms,
+                ping_interval_ms: services.user.ping_interval_ms,
+            },
             metrics: &services.metrics,
         })
         .await;
