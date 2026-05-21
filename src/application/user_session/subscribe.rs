@@ -43,7 +43,8 @@ impl User {
         let source_intents = subscription_intents_from_download_states(states);
         let outcome = self
             .media()
-            .update_subscription(target_user_id, &source_intents)
+            .subscription()
+            .update(target_user_id, &source_intents)
             .await;
         if outcome == SubscriptionUpdateOutcome::StaleConnection {
             return Err(UserError::ProtocolViolation);

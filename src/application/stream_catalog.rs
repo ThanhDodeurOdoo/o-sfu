@@ -27,7 +27,7 @@ pub(crate) const SCREEN_STREAM_LABEL: &str = "screen";
 
 /// Build the core publish intent for one discuss upload request.
 ///
-/// `UserSession` calls this before [`crate::core::prelude::MediaSession::stage_publish`].
+/// `UserSession` calls this before [`crate::core::prelude::MediaPublication::stage`].
 /// Changing this mapping changes how future publications behave in core policy,
 /// including media kind, layout role, receiver bandwidth adaptation and active
 /// speaker participation.

@@ -40,6 +40,15 @@ pub(in crate::application::user_session) enum PendingUserAction {
     RefreshSession,
 }
 
+impl PendingUserAction {
+    pub(in crate::application::user_session) const fn operation_name(&self) -> &'static str {
+        match self {
+            Self::EstablishSession(_) => "initial_offer_create",
+            Self::RefreshSession => "renegotiation_offer_create",
+        }
+    }
+}
+
 /// command returned to the orchestrator after a renegotiation request
 ///
 /// this keeps the state decision pure so `User` performs media work only when

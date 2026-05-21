@@ -3,13 +3,15 @@ use tracing::{info, instrument, warn};
 
 use super::{
     User, UserError, UserOutput, UserSignal,
-    compat::{map_core_negotiation_error, negotiation_operation_name},
+    compat::map_core_negotiation_error,
     projection::session_description_payload,
     state::{PendingUserAction, RenegotiationDisposition, ResolvedUserNegotiation},
 };
 use crate::{
     application::stream_catalog::stream_type_for_stream_id,
-    core::prelude::{NegotiationOffer, SessionNegotiationOutcome, SfuCoreError, UserStreamId},
+    core::prelude::{
+        InitialOffer, NegotiationOffer, SessionNegotiationOutcome, SfuCoreError, UserStreamId,
+    },
     runtime::telemetry::schema::event as telemetry_event,
 };
 
@@ -33,14 +35,21 @@ impl User {
     ) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
         self.validate_negotiation_answer(&response_to, &answer)?;
-        let Some(resolved) = self.resolve_negotiation_answer(&response_to) else {
-            return Err(UserError::ProtocolViolation);
-        };
-        let ResolvedUserNegotiation {
+        let Some(ResolvedUserNegotiation {
             action,
             queued_renegotiation,
-        } = resolved;
-        let request_operation = negotiation_operation_name(&action);
+        }) = self.state.negotiation_state.resolve_answer(&response_to)
+        else {
+            warn!(
+                user_id = ?&self.id,
+                connection_id = ?self.connection_id,
+                remote_address = self.remote_address.as_ref(),
+                ?response_to,
+                "received negotiation answer for an unknown or stale request"
+            );
+            return Err(UserError::ProtocolViolation);
+        };
+        let request_operation = action.operation_name();
         let committed_stream_ids = self
             .apply_negotiation_action(action, &answer.sdp, &response_to, request_operation)
             .await?;
@@ -56,9 +65,11 @@ impl User {
             ?response_to,
             "applied negotiation answer"
         );
-        Self::record_staged_publishes_committed();
-        self.send_follow_up_renegotiation_if_needed(queued_renegotiation)
-            .await
+        let needs_follow_up = self.stage_queued_publish_slots().await? || queued_renegotiation;
+        if needs_follow_up {
+            return self.renegotiate().await;
+        }
+        Ok(UserOutput::new())
     }
 
     #[instrument(
@@ -71,7 +82,8 @@ impl User {
         )
     )]
     pub(super) async fn create_initial_offer(&mut self) -> Result<UserOutput, UserError> {
-        let initial_offer = self.media().create_initial_offer().await.map_err(|error| {
+        let negotiation = self.media().negotiation();
+        let initial_offer = negotiation.create_initial_offer().await.map_err(|error| {
             warn!(
                 event = telemetry_event::NEGOTIATION_FAILED,
                 operation = "initial_offer_create",
@@ -90,14 +102,7 @@ impl User {
             outcome = "offer_ready",
             "created initial transport offer"
         );
-        let offer_request =
-            ServerRequest::Offer(session_description_payload(initial_offer.offer().clone()));
-        Ok(
-            UserOutput::new().with_signal(self.issue_negotiation_request(
-                offer_request,
-                PendingUserAction::EstablishSession(initial_offer),
-            )),
-        )
+        Ok(self.issue_negotiation_request(NegotiationRequestDraft::initial(initial_offer)))
     }
 
     #[instrument(
@@ -118,31 +123,24 @@ impl User {
                 let Some(offer) = self.create_renegotiation_offer().await? else {
                     return Ok(UserOutput::new());
                 };
-                let request = ServerRequest::Renegotiate(session_description_payload(offer));
-                Ok(UserOutput::new().with_signal(
-                    self.issue_negotiation_request(request, PendingUserAction::RefreshSession),
-                ))
+                Ok(self.issue_negotiation_request(NegotiationRequestDraft::refresh(offer)))
             }
         }
     }
 
-    fn issue_negotiation_request(
-        &mut self,
-        request: ServerRequest,
-        action: PendingUserAction,
-    ) -> UserSignal {
+    fn issue_negotiation_request(&mut self, draft: NegotiationRequestDraft) -> UserOutput {
+        let NegotiationRequestDraft { request, action } = draft;
         let request_id = self.state.next_request_id();
-        let operation = negotiation_operation_name(&action);
         info!(
             event = telemetry_event::NEGOTIATION_STARTED,
-            operation,
+            operation = action.operation_name(),
             outcome = "request_prepared",
             ?request_id,
             "prepared negotiation request"
         );
         let signal = UserSignal::request(request_id.clone(), request);
         self.state.negotiation_state.issue(request_id, action);
-        signal
+        UserOutput::new().with_signal(signal)
     }
 
     fn validate_negotiation_answer(
@@ -163,34 +161,6 @@ impl User {
         Ok(())
     }
 
-    fn resolve_negotiation_answer(
-        &mut self,
-        response_to: &RequestId,
-    ) -> Option<ResolvedUserNegotiation> {
-        let Some(resolved) = self.state.negotiation_state.resolve_answer(response_to) else {
-            warn!(
-                user_id = ?&self.id,
-                connection_id = ?self.connection_id,
-                remote_address = self.remote_address.as_ref(),
-                ?response_to,
-                "received negotiation answer for an unknown or stale request"
-            );
-            return None;
-        };
-        Some(resolved)
-    }
-
-    async fn send_follow_up_renegotiation_if_needed(
-        &mut self,
-        queued_renegotiation: bool,
-    ) -> Result<UserOutput, UserError> {
-        let needs_follow_up = self.stage_queued_publish_slots().await? || queued_renegotiation;
-        if !needs_follow_up {
-            return Ok(UserOutput::new());
-        }
-        self.renegotiate().await
-    }
-
     async fn apply_negotiation_action(
         &self,
         action: PendingUserAction,
@@ -198,15 +168,17 @@ impl User {
         response_to: &RequestId,
         request_operation: &'static str,
     ) -> Result<Vec<UserStreamId>, UserError> {
-        let media = self.media();
+        let negotiation = self.media().negotiation();
         let (apply_operation, result) = match action {
             PendingUserAction::EstablishSession(initial_offer) => (
                 "answer_apply",
-                media.apply_initial_answer(answer_sdp, initial_offer).await,
+                negotiation
+                    .apply_initial_answer(answer_sdp, initial_offer)
+                    .await,
             ),
             PendingUserAction::RefreshSession => (
                 "renegotiation_apply",
-                media.apply_renegotiation_answer(answer_sdp).await,
+                negotiation.apply_renegotiation_answer(answer_sdp).await,
             ),
         };
         match result {
@@ -225,6 +197,7 @@ impl User {
 
     async fn create_renegotiation_offer(&self) -> Result<Option<NegotiationOffer>, UserError> {
         self.media()
+            .negotiation()
             .create_renegotiation_offer()
             .await
             .map_err(|error| {
@@ -286,13 +259,27 @@ impl User {
             "{message}"
         );
     }
+}
 
-    fn record_staged_publishes_committed() {
-        info!(
-            event = telemetry_event::PUBLISH_COMMITTED,
-            operation = "publish_commit",
-            outcome = "applied",
-            "committed staged publish streams"
-        );
+struct NegotiationRequestDraft {
+    request: ServerRequest,
+    action: PendingUserAction,
+}
+
+impl NegotiationRequestDraft {
+    fn initial(initial_offer: InitialOffer) -> Self {
+        let request =
+            ServerRequest::Offer(session_description_payload(initial_offer.offer().clone()));
+        Self {
+            request,
+            action: PendingUserAction::EstablishSession(initial_offer),
+        }
+    }
+
+    fn refresh(offer: NegotiationOffer) -> Self {
+        Self {
+            request: ServerRequest::Renegotiate(session_description_payload(offer)),
+            action: PendingUserAction::RefreshSession,
+        }
     }
 }

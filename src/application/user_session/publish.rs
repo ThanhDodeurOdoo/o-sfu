@@ -36,7 +36,8 @@ impl User {
             return Ok(());
         };
         self.media()
-            .update_user_info(info, UserInfoRefresh::NotNeeded)
+            .presence()
+            .update_info(info, UserInfoRefresh::NotNeeded)
             .await;
         Ok(())
     }
@@ -74,12 +75,13 @@ impl User {
         let has_queued_publish = self.state.negotiation_state.has_queued_publish(stream_type);
         {
             let media = self.media();
-            if has_queued_publish || media.has_staged_publish(&stream_id) {
+            let publication = media.publication();
+            if has_queued_publish || publication.has_staged(&stream_id) {
                 return Ok(UserOutput::new());
             }
-            if media.is_stream_published(&stream_id).await {
-                let outcome = media
-                    .set_publication_activity(&stream_id, PublicationActivity::Active)
+            if publication.is_published(&stream_id).await {
+                let outcome = publication
+                    .set_activity(&stream_id, PublicationActivity::Active)
                     .await;
                 if matches!(outcome, PublicationActivityOutcome::Applied { .. }) {
                     self.update_publication_info(stream_type, true).await?;
@@ -121,13 +123,14 @@ impl User {
         }
         let media_disposition = {
             let media = self.media();
+            let publication = media.publication();
             let stream_id = stream_id_for_stream_type(stream_type);
-            match media.rollback_staged_publish(&stream_id).await {
+            match publication.rollback_staged_publish(&stream_id).await {
                 RollbackStagedPublishOutcome::RolledBack { cleanup } => {
                     Some(UnpublishMediaDisposition::RolledBackStagedPublish { cleanup })
                 }
                 RollbackStagedPublishOutcome::NotStaged => {
-                    match media.unpublish(&stream_id).await {
+                    match publication.unpublish(&stream_id).await {
                         UnpublishOutcome::Unpublished { cleanup } => {
                             Some(UnpublishMediaDisposition::RemovedLivePublication { cleanup })
                         }
@@ -165,7 +168,8 @@ impl User {
     async fn stage_publish_slot(&self, stream_type: StreamType) -> Result<bool, UserError> {
         let intent = source_publish_intent_for_stream_type(stream_type);
         let media_kind = intent.media_kind();
-        let outcome = self.media().stage_publish(&intent).await.map_err(|error| {
+        let publication = self.media().publication();
+        let outcome = publication.stage(&intent).await.map_err(|error| {
             warn!(
                 event = telemetry_event::PUBLISH_ABORTED,
                 operation = "publish_prepare",

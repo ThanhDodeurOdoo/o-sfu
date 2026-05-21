@@ -10,12 +10,6 @@ use crate::{
 };
 
 impl User {
-    /// Create the application session for a room-admitted websocket user.
-    ///
-    /// The caller must pass the normalized user id, the connection id returned
-    /// by room admission and shared room/core handles. Construction does not
-    /// emit the welcome payload or allocate the first offer. Call
-    /// [`User::start`] to perform that post-admission initialization.
     #[must_use]
     pub fn new(
         user_id: UserId,
@@ -35,8 +29,6 @@ impl User {
         }
     }
 
-    /// Rebuild a borrow-based media session for this room, user and runtime
-    /// connection identity.
     pub(super) fn media(&self) -> MediaSession<'_> {
         self.sfu_core
             .session(self.room.as_ref(), &self.id, self.connection_id)
@@ -59,7 +51,7 @@ impl User {
             })
     }
 
-    /// Build the startup output for an authenticated room member.
+    /// Build the startup output for a room member.
     ///
     /// The output contains the welcome snapshot followed by the initial server
     /// offer request. The caller must send it before entering the steady-state
@@ -81,7 +73,7 @@ impl User {
         Ok(output)
     }
 
-    /// Run mandatory explicit cleanup for this connection.
+    /// do the cleanup for this connection.
     ///
     /// This is idempotent and only rolls back staged publishes owned by this
     /// websocket session. Room membership teardown and transport-session close
@@ -90,7 +82,10 @@ impl User {
         if self.cleanup_finished {
             return;
         }
-        self.media().rollback_connection_publishes().await;
+        self.media()
+            .publication()
+            .rollback_connection_publishes()
+            .await;
         self.cleanup_finished = true;
     }
 
@@ -108,7 +103,8 @@ impl User {
     pub async fn update_info(&self, info: UserInfo) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
         self.media()
-            .update_user_info(info, UserInfoRefresh::NotNeeded)
+            .presence()
+            .update_info(info, UserInfoRefresh::NotNeeded)
             .await;
         Ok(UserOutput::new())
     }
@@ -132,6 +128,16 @@ impl User {
         Ok(UserOutput::new())
     }
 
+    /// Reject work from a websoket that no longer owns the room connection
+    ///
+    /// Replacement sockets reuse the same user id with a new connection id, so
+    /// every client intent must prove that this exact connection is still the
+    /// valid room member before it mutates room or media state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UserError::Kicked`] when the room no longer owns this
+    /// connection id for the user.
     pub(super) async fn reject_stale_connection(&self) -> Result<(), UserError> {
         if self.room.has_connection(&self.id, self.connection_id).await {
             return Ok(());
