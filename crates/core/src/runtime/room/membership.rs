@@ -33,7 +33,7 @@ use {
 
 use super::{
     BroadcastPayloadError, LocalRouterRuntimeContext, Room, RoomJoinError, RoomMediaCounts,
-    RoomUserOperation, RoomUserPermissions, UserOutboundSender,
+    RoomUserOperation, RoomUserPermissions, SourcePolicyEvent, UserOutboundSender,
     cleanup::UserCleanup,
     effects::{RoomEffectBatch, RoomEffectContext, TransportUserCleanup},
     state::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, RoomState},
@@ -206,7 +206,8 @@ impl Room {
         let planner = RoomPlacementPlanner::new(policy.max_local_routers(), policy);
         let decision = match policy.spillover() {
             RoomSpilloverMode::LoadTriggeredLocalSpillover(_) => {
-                self.observe_load_triggered_source_fanout().await;
+                self.handle_source_policy_event(SourcePolicyEvent::FanoutPressureChanged, None)
+                    .await;
                 let mut load_state = lock_unpoisoned(&self.load_triggered_placement);
                 planner.choose_with_load_state(&room_snapshot, &load_index, &mut load_state)
             }
@@ -516,7 +517,6 @@ impl Room {
                     .await
             }
         };
-        self.observe_load_triggered_source_fanout().await;
         self.reconcile_spillover_routers().await;
         result
     }
@@ -548,7 +548,7 @@ impl Room {
             .with_media_count_delta(count_delta.media_before, count_delta.media_after)
             .with_relay_effects(relay_effects)
             .with_transport_removals(transport_removals)
-            .refresh_source_policy()
+            .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged)
             .with_lifecycle_effects(effects)
             .register_diagnostics_user(user_id.clone())
             .record_diagnostics(
@@ -598,7 +598,7 @@ impl Room {
                     .with_media_worker_id(media_worker_id),
                 )
                 .forget_diagnostics_user(user_id.clone())
-                .refresh_source_policy();
+                .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged);
         }
         batch.execute(self, Self::effect_context(cleanup)).await;
         self.placement_ledger
@@ -626,7 +626,7 @@ impl Room {
             .with_media_count_delta(count_delta.media_before, count_delta.media_after)
             .with_relay_effects(outcome.relay_effects)
             .with_transport_removals(outcome.transport_removals)
-            .refresh_source_policy()
+            .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged)
             .with_lifecycle_effects(outcome.effects);
         let mut disconnected_sessions = Vec::with_capacity(outcome.disconnected_users.len());
         for disconnected_session in outcome.disconnected_users {
@@ -713,8 +713,11 @@ impl RoomUserOperation<'_> {
             state.apply_presence_update(self.user_id(), self.connection_id(), &info, need_refresh)
         };
         if let Some(outcome) = outcome {
-            room.sync_source_packet_selection_policy(self.media_transport())
-                .await;
+            room.handle_source_policy_event(
+                SourcePolicyEvent::ReceiverIntentChanged,
+                Some(self.media_transport()),
+            )
+            .await;
             outcome.emit();
         } else {
             warn!(

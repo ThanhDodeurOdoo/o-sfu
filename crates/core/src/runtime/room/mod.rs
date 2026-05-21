@@ -69,6 +69,7 @@ pub use placement::{
     LocalRoomRouterPlacements, LocalRoomRouterPlacementsError, LocalRouterRuntimeContext,
     RoomRuntimeContext,
 };
+pub(in crate::runtime::room) use source_policy_sync::SourcePolicyEvent;
 pub use state::{ConsumerRouteState, RemoteTrackBootstrap};
 #[cfg(any(test, feature = "testing-transport"))]
 pub use tests::api::{

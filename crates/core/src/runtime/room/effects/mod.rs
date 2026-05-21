@@ -27,7 +27,7 @@ pub(in crate::runtime::room) use transport::{
 };
 
 use super::{
-    Room, RoomMediaCounts,
+    Room, RoomMediaCounts, SourcePolicyEvent,
     cleanup::TransportCleanupOperation,
     state::{
         ConsumerBootstrapOrigin, ConsumerRouteTransportRef, ConsumerRouteUpdate,
@@ -448,7 +448,8 @@ impl UnpublishEffectPlan {
             .execute(room, RoomEffectContext::runtime(media_port))
             .await;
         outcome.emit(&self.user, &self.stream);
-        room.observe_load_triggered_source_fanout().await;
+        room.handle_source_policy_event(SourcePolicyEvent::RouteGraphChanged, Some(media_port))
+            .await;
         room.reconcile_spillover_routers().await;
         UnpublishOutcome::Unpublished {
             cleanup: execution.cleanup(),

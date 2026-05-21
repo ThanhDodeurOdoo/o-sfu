@@ -738,6 +738,12 @@ impl RoomState {
 }
 
 impl PlannedSubscriptionChange {
+    pub(in crate::runtime::room) fn touches_route_graph(&self) -> bool {
+        !self.route_updates.is_empty()
+            || !self.bootstraps.is_empty()
+            || !self.relay_effects.is_empty()
+    }
+
     pub fn into_parts(
         self,
     ) -> (

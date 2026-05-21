@@ -8,7 +8,7 @@
 //! facts after unlock
 //! it gives membership, publish, unpublish and subscription
 //! workflows one ordering point for metrics, transport cleanup, relay updates,
-//! source policy refresh, lifecycle fan-out, diagnostics and outbound room
+//! source policy events, lifecycle fan-out, diagnostics and outbound room
 //! requests
 //!
 //! callers should build a batch only from state-owned results that have already
@@ -27,7 +27,7 @@ use crate::{
         diagnostics::DiagnosticsEventData,
         media_transport::{MediaTransport, TransportRelayRouteAction, TransportRelayRouteEffect},
         room::{
-            Room, RoomEventRequest, RoomMediaCounts, UserOutbound,
+            Room, RoomEventRequest, RoomMediaCounts, SourcePolicyEvent, UserOutbound,
             cleanup::TransportCleanupOperation,
             outbound::OutboundSender,
             state::{LifecycleEffects, RelayRouteEffect, TransportMediaRemoval},
@@ -115,8 +115,8 @@ pub(in crate::runtime::room) struct RoomEffectBatch {
     transport_removals: Vec<TransportMediaRemoval>,
     /// detached transport users that no longer have an owning room session
     transport_user_closes: Vec<TransportUserCleanup>,
-    /// source policy refresh requested after media topology or membership changed
-    source_policy_refresh: bool,
+    /// source policy event requested after committed room work
+    source_policy_event: Option<SourcePolicyEvent>,
     /// best-effort close requests and room fan-out captured by state
     lifecycle_effects: Vec<LifecycleEffects>,
     /// diagnostics store mutations that must preserve caller order
@@ -264,9 +264,12 @@ impl RoomEffectBatch {
         self
     }
 
-    /// request a source packet policy refresh after topology-affecting work
-    pub(in crate::runtime::room) fn refresh_source_policy(mut self) -> Self {
-        self.source_policy_refresh = true;
+    /// record the source-policy consequence of the committed transition
+    pub(in crate::runtime::room) fn with_source_policy_event(
+        mut self,
+        event: SourcePolicyEvent,
+    ) -> Self {
+        self.source_policy_event = Some(event);
         self
     }
 
@@ -323,7 +326,7 @@ impl RoomEffectBatch {
     /// 2. apply relay route effects that were captured before unlock
     /// 3. run retry-backed transport media cleanup
     /// 4. close detached transport users
-    /// 5. refresh source packet policy from transport observations
+    /// 5. handle the source-policy event from transport observations
     /// 6. emit lifecycle fan-out and user close messages
     /// 7. write diagnostics effects in captured order
     /// 8. enqueue outbound room-event requests
@@ -343,7 +346,7 @@ impl RoomEffectBatch {
             relay_effects,
             transport_removals,
             transport_user_closes,
-            source_policy_refresh,
+            source_policy_event,
             lifecycle_effects,
             diagnostics,
             outbound_requests,
@@ -358,7 +361,7 @@ impl RoomEffectBatch {
             &transport_user_closes,
         )
         .await;
-        Self::execute_source_policy_refresh(room, context, source_policy_refresh).await;
+        Self::execute_source_policy_event(room, context, source_policy_event).await;
         Self::emit_lifecycle_effects(lifecycle_effects);
         Self::record_diagnostics_effects(room, diagnostics);
         Self::send_outbound_requests(outbound_requests);
@@ -432,16 +435,13 @@ impl RoomEffectBatch {
         cleanup
     }
 
-    async fn execute_source_policy_refresh(
+    async fn execute_source_policy_event(
         room: &Room,
         context: RoomEffectContext<'_>,
-        source_policy_refresh: bool,
+        source_policy_event: Option<SourcePolicyEvent>,
     ) {
-        if !source_policy_refresh {
-            return;
-        }
-        if let Some(media_transport) = context.media_transport {
-            room.sync_source_packet_selection_policy(media_transport)
+        if let Some(event) = source_policy_event {
+            room.handle_source_policy_event(event, context.media_transport)
                 .await;
         }
     }
