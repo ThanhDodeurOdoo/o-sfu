@@ -28,6 +28,7 @@ pub(in crate::runtime::room) use transport::{
 
 use super::{
     Room, RoomMediaCounts,
+    cleanup::TransportCleanupOperation,
     state::{
         ConsumerBootstrapOrigin, ConsumerRouteTransportRef, ConsumerRouteUpdate,
         PendingConsumerBootstrap, PendingConsumerBootstrapTarget, PlannedConsumerBootstrap,
@@ -365,14 +366,13 @@ impl ConsumerBootstrapOp {
                 .await;
             room.release_pending_consumer_bootstrap(target, media_port)
                 .await;
-            room
-                .cleanup_transport_media_with_retry(
-                    target.consumer_user_id(),
-                    target.consumer_connection_id(),
-                    consumer_transport_media_id,
-                    media_port,
-                    "media transport failed to remove consumer transport media after bootstrap state commit failed",
-                )
+            let cleanup = [TransportCleanupOperation::RemoveMedia {
+                session_key: room
+                    .transport_user_key(target.consumer_user_id(), target.consumer_connection_id()),
+                connection_id: target.consumer_connection_id(),
+                transport_media_id: consumer_transport_media_id,
+            }];
+            room.execute_transport_cleanup_operations(media_port, &cleanup)
                 .await;
             return;
         };

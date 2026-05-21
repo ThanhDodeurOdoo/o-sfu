@@ -28,6 +28,7 @@ use crate::{
         media_transport::{MediaTransport, TransportRelayRouteAction, TransportRelayRouteEffect},
         room::{
             Room, RoomEventRequest, RoomMediaCounts, UserOutbound,
+            cleanup::TransportCleanupOperation,
             outbound::OutboundSender,
             state::{LifecycleEffects, RelayRouteEffect, TransportMediaRemoval},
         },
@@ -402,16 +403,31 @@ impl RoomEffectBatch {
         let Some(media_transport) = context.cleanup_media_transport else {
             return TransportEffectOutcome::Applied;
         };
+        let removals = transport_removals
+            .iter()
+            .map(|removal| {
+                let connection_id = removal.connection();
+                TransportCleanupOperation::RemoveMedia {
+                    session_key: room.transport_user_key(removal.user(), connection_id),
+                    connection_id,
+                    transport_media_id: removal.transport_media(),
+                }
+            })
+            .collect::<Vec<_>>();
         let cleanup = room
-            .cleanup_transport_removals_with_retry(media_transport, transport_removals)
+            .execute_transport_cleanup_operations(media_transport, &removals)
             .await;
-        for transport_user_close in transport_user_closes {
-            room.close_transport_user_with_retry(
-                &transport_user_close.user_id,
-                transport_user_close.connection_id,
-                media_transport,
-            )
-            .await;
+        if !transport_user_closes.is_empty() {
+            let closes = transport_user_closes
+                .iter()
+                .map(|cleanup| TransportCleanupOperation::CloseUser {
+                    session_key: room.transport_user_key(&cleanup.user_id, cleanup.connection_id),
+                    connection_id: cleanup.connection_id,
+                })
+                .collect::<Vec<_>>();
+            let _ = room
+                .execute_transport_cleanup_operations(media_transport, &closes)
+                .await;
         }
         cleanup
     }
@@ -475,6 +491,21 @@ pub(super) async fn execute_relay_route_effects(
 ) -> bool {
     let mut applied = true;
     for effect in effects {
+        if effect.action == TransportRelayRouteAction::Release {
+            let operation = [TransportCleanupOperation::ReleaseRelayRoute {
+                source_session_key: room
+                    .transport_user_key(&effect.route.source_user, effect.route.source_connection),
+                route: effect.route.clone(),
+            }];
+            if room
+                .execute_transport_cleanup_operations(media_port, &operation)
+                .await
+                == TransportEffectOutcome::Failed
+            {
+                applied = false;
+            }
+            continue;
+        }
         let transport_effect = TransportRelayRouteEffect {
             source_session_key: room
                 .transport_user_key(&effect.route.source_user, effect.route.source_connection),
@@ -487,16 +518,6 @@ pub(super) async fn execute_relay_route_effects(
             .await;
         if let Err(error) = result {
             applied = false;
-            if effect.action == TransportRelayRouteAction::Release {
-                room.record_relay_route_release_failure(
-                    effect,
-                    error,
-                    media_port,
-                    "media transport failed to release relay route",
-                )
-                .await;
-                continue;
-            }
             warn!(
                 ?effect,
                 ?error,
