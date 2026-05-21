@@ -165,7 +165,10 @@ pub(in crate::runtime::rtc_engine) struct DebugProbeRequest {
 }
 
 impl DebugProbeRequest {
-    fn new<P>(probe: P, response: oneshot::Sender<P::Output>) -> Self
+    pub(in crate::runtime::rtc_engine) fn new<P>(
+        probe: P,
+        response: oneshot::Sender<P::Output>,
+    ) -> Self
     where
         P: DebugProbe,
     {
