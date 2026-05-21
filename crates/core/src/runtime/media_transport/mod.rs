@@ -46,8 +46,9 @@ pub use types::{
     SessionOffer, SessionUploadEncoding, SessionUploadSlot, SourcePacketGate,
     SourcePacketOperatingPoint, TransportAdapterError, TransportBitrateSnapshot,
     TransportConsumerRoute, TransportMediaId, TransportPlacementPressureSnapshot,
-    TransportRelayRouteAction, TransportRelayRouteEffect, TransportResult, TransportSessionHealth,
-    TransportSessionKey, TransportWorkerPressureSnapshot,
+    TransportQualitySample, TransportQualitySnapshot, TransportRelayRouteAction,
+    TransportRelayRouteEffect, TransportResult, TransportSessionHealth, TransportSessionKey,
+    TransportWorkerPressureSnapshot,
 };
 
 use crate::runtime::{RoomInstanceId, rtc_engine::RtcWorker};
@@ -489,6 +490,15 @@ impl MediaTransport {
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
         self.receiver_bandwidth_snapshot_from_workers(session_keys)
+    }
+
+    /// Returns sampled transport-quality observations for the requested sessions.
+    #[must_use]
+    pub fn transport_quality_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportQualitySnapshot {
+        self.transport_quality_snapshot_from_workers(session_keys)
     }
 
     /// Returns transport-worker pressure for the workers that own the sessions.

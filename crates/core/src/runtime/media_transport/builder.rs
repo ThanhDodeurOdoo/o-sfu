@@ -103,6 +103,7 @@ impl MediaTransportBuilder {
             rtc_port_range: options.media.rtc_port_range,
             codec_flags: options.codecs.flags,
             codec_preferences: options.codecs.preferences,
+            media_quality_interval: options.observability.media_quality_interval,
         });
         self.worker_count = options.routing.media_worker_count;
         self

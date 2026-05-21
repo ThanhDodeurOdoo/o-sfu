@@ -16,13 +16,13 @@ use super::{
     },
     labels::{
         BudgetSolverOutcome, ControlPlaneDurationBucket, HttpDisconnectResponseStatus,
-        HttpRoomResponseStatus, HttpRoute, RecordingActionOutcome, RtcDatagramDropReason,
-        RtcDatagramRoutePath, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
-        RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpForwardDestinationKind,
-        RtpRelayDropKind, SourceSelectionKind, TransportCleanupFailureKind, TransportHealthState,
-        TransportHealthTransition, TransportIceState, TransportUserLifetimeBucket,
-        WsBusClientFrameKind, WsBusDirection, WsBusFailureKind, WsConnectionStage,
-        WsSessionLoopExitReason, WsStartupFailureKind,
+        HttpRoomResponseStatus, HttpRoute, MediaQualityLossDirection, MediaQualityRttBucket,
+        MediaQualitySample, RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath,
+        RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
+        RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, SourceSelectionKind,
+        TransportCleanupFailureKind, TransportHealthState, TransportHealthTransition,
+        TransportIceState, TransportUserLifetimeBucket, WsBusClientFrameKind, WsBusDirection,
+        WsBusFailureKind, WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
     },
     rtc::{RtcMetrics, RtcMetricsRecorder, RtcRouteControlMetrics},
     rtp::{RtpMetrics, RtpMetricsRecorder},
@@ -70,6 +70,14 @@ pub struct RuntimeMetrics {
     pub(super) transport_user_lifetime_buckets: CounterFamily<TransportUserLifetimeBucket>,
     pub(super) transport_user_lifetime_count: Counter,
     pub(super) transport_user_lifetime_sum_micros: Counter,
+    pub(super) media_quality_samples: CounterFamily<MediaQualitySample>,
+    pub(super) media_quality_rtt: HistogramFamily<MediaQualitySample, MediaQualityRttBucket>,
+    pub(super) media_quality_loss_ppm_observed: CounterFamily<MediaQualityLossDirection>,
+    pub(super) media_quality_loss_observations: CounterFamily<MediaQualityLossDirection>,
+    pub(super) media_quality_bwe_bps_observed: Counter,
+    pub(super) media_quality_bwe_observations: Counter,
+    pub(super) media_quality_jitter_rtp_timestamp_units_observed: Counter,
+    pub(super) media_quality_jitter_observations: Counter,
     pub(super) transport_cleanup_retries: Counter,
     pub(super) transport_cleanup_retry_successes: Counter,
     pub(super) transport_cleanup_failures: CounterFamily<TransportCleanupFailureKind>,
@@ -421,6 +429,35 @@ impl RuntimeMetrics {
             self.transport_user_lifetime_buckets
                 .increment(TransportUserLifetimeBucket::Le300Seconds);
         }
+    }
+
+    pub fn record_media_quality_sample(&self, sample: MediaQualitySample) {
+        self.media_quality_samples.increment(sample);
+    }
+
+    pub fn record_media_quality_rtt(&self, sample: MediaQualitySample, duration: Duration) {
+        self.media_quality_rtt.observe(sample, duration);
+    }
+
+    pub fn record_media_quality_loss_ppm(
+        &self,
+        direction: MediaQualityLossDirection,
+        loss_ppm: u64,
+    ) {
+        self.media_quality_loss_ppm_observed
+            .add_u64(direction, loss_ppm);
+        self.media_quality_loss_observations.increment(direction);
+    }
+
+    pub fn record_media_quality_bwe_bps(&self, bwe_bps: u64) {
+        self.media_quality_bwe_bps_observed.add_u64(bwe_bps);
+        self.media_quality_bwe_observations.increment();
+    }
+
+    pub fn record_media_quality_jitter_rtp_timestamp_units(&self, jitter: u64) {
+        self.media_quality_jitter_rtp_timestamp_units_observed
+            .add_u64(jitter);
+        self.media_quality_jitter_observations.increment();
     }
 
     pub fn record_transport_cleanup_retry_scheduled(&self) {

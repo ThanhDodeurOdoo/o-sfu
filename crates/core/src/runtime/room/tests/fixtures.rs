@@ -91,6 +91,7 @@ pub(super) fn real_adapter() -> MediaTransport {
             rtc_port_range: RtcPortRange::new(port_start, port_end),
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: crate::CodecPreferences::default(),
+            media_quality_interval: None,
         })
         .deps(MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),

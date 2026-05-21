@@ -22,9 +22,9 @@ use crate::runtime::{
         ConsumerPacketGateUpdate, MediaTransport, MediaTransportConfig, MediaTransportDeps,
         ReceiverBandwidthSnapshot, SessionOffer, SourcePolicySignal,
         SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
-        TransportMediaId, TransportPlacementPressureSnapshot, TransportRelayRouteAction,
-        TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey,
-        TransportWorkerPressureSnapshot, operation::TransportControlOperation,
+        TransportMediaId, TransportPlacementPressureSnapshot, TransportQualitySnapshot,
+        TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionHealth,
+        TransportSessionKey, TransportWorkerPressureSnapshot, operation::TransportControlOperation,
     },
     rtc_engine::{RtcWorker, client_rtp_capabilities_from_answer},
 };
@@ -130,6 +130,21 @@ impl MediaTransport {
         for (worker_index, worker_session_keys) in self.session_keys_by_worker(session_keys) {
             if let Some(worker) = self.worker_for_index(worker_index) {
                 let worker_snapshot = worker.receiver_bandwidth_snapshot(&worker_session_keys);
+                snapshot.per_session.extend(worker_snapshot.per_session);
+            }
+        }
+        snapshot
+    }
+
+    /// Builds best-effort sampled quality snapshots across RTC workers.
+    pub(super) fn transport_quality_snapshot_from_workers(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportQualitySnapshot {
+        let mut snapshot = TransportQualitySnapshot::default();
+        for (worker_index, worker_session_keys) in self.session_keys_by_worker(session_keys) {
+            if let Some(worker) = self.worker_for_index(worker_index) {
+                let worker_snapshot = worker.transport_quality_snapshot(&worker_session_keys);
                 snapshot.per_session.extend(worker_snapshot.per_session);
             }
         }

@@ -59,7 +59,8 @@ pub use crate::runtime::media_transport::TransportSessionHealth;
 use crate::{
     Bitrate,
     runtime::media_transport::{
-        ReceiverBandwidthSnapshot, SessionUploadSlot, TransportMediaId, TransportSessionKey,
+        ReceiverBandwidthSnapshot, SessionUploadSlot, TransportMediaId, TransportQualitySample,
+        TransportQualitySnapshot, TransportSessionKey,
     },
 };
 
@@ -686,6 +687,8 @@ pub struct RtcSnapshotState {
     transport_health_by_session: BTreeMap<TransportSessionKey, TransportSessionHealth>,
     /// latest receiver bandwidth estimate by session
     receiver_bandwidth_by_session: BTreeMap<TransportSessionKey, Bitrate>,
+    /// latest sampled media quality by session
+    transport_quality_by_session: BTreeMap<TransportSessionKey, TransportQualitySample>,
 }
 
 impl RtcSnapshotState {
@@ -709,6 +712,7 @@ impl RtcSnapshotState {
         self.remote_addr_demux
             .forget_user_remote_candidate_addrs(session_key);
         self.receiver_bandwidth_by_session.remove(session_key);
+        self.transport_quality_by_session.remove(session_key);
         self.transport_health_by_session.remove(session_key)
     }
 
@@ -761,6 +765,38 @@ impl RtcSnapshotState {
                         .get(session_key)
                         .copied()
                         .map(|estimate| (session_key.clone(), estimate))
+                })
+                .collect(),
+        }
+    }
+
+    /// update sampled transport-quality observations for one session
+    pub(super) fn update_transport_quality(
+        &mut self,
+        session_key: &TransportSessionKey,
+        update: impl FnOnce(&mut TransportQualitySample),
+    ) {
+        let sample = self
+            .transport_quality_by_session
+            .entry(session_key.clone())
+            .or_default();
+        sample.sample_count = sample.sample_count.saturating_add(1);
+        update(sample);
+    }
+
+    /// build a transport-quality snapshot for the requested sessions
+    pub fn transport_quality_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportQualitySnapshot {
+        TransportQualitySnapshot {
+            per_session: session_keys
+                .iter()
+                .filter_map(|session_key| {
+                    self.transport_quality_by_session
+                        .get(session_key)
+                        .copied()
+                        .map(|sample| (session_key.clone(), sample))
                 })
                 .collect(),
         }

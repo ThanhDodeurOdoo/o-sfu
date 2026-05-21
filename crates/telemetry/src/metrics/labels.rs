@@ -257,6 +257,30 @@ pub(super) enum TransportUserLifetimeBucket {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaQualitySample {
+    Peer,
+    MediaIngress,
+    MediaEgress,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaQualityLossDirection {
+    Ingress,
+    Egress,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MediaQualityRttBucket {
+    Le50Millis,
+    Le100Millis,
+    Le250Millis,
+    Le500Millis,
+    Le1Second,
+    Le2Seconds,
+    Le5Seconds,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportCleanupFailureKind {
     Terminal,
     RetryExhausted,
@@ -514,6 +538,65 @@ impl MetricBucketLabel for TransportUserLifetimeBucket {
             Self::Le60Seconds => "60",
             Self::Le300Seconds => "300",
         }
+    }
+}
+
+impl_exported_metric_label!(MediaQualitySample {
+    Peer => (0, "peer"),
+    MediaIngress => (1, "media_ingress"),
+    MediaEgress => (2, "media_egress"),
+});
+
+impl_exported_metric_label!(MediaQualityLossDirection {
+    Ingress => (0, "ingress"),
+    Egress => (1, "egress"),
+});
+
+impl_metric_label!(MediaQualityRttBucket {
+    Le50Millis => 0,
+    Le100Millis => 1,
+    Le250Millis => 2,
+    Le500Millis => 3,
+    Le1Second => 4,
+    Le2Seconds => 5,
+    Le5Seconds => 6,
+});
+
+impl MetricBucketLabel for MediaQualityRttBucket {
+    fn upper_bound(self) -> &'static str {
+        match self {
+            Self::Le50Millis => "0.05",
+            Self::Le100Millis => "0.1",
+            Self::Le250Millis => "0.25",
+            Self::Le500Millis => "0.5",
+            Self::Le1Second => "1",
+            Self::Le2Seconds => "2",
+            Self::Le5Seconds => "5",
+        }
+    }
+}
+
+impl HistogramBucketLabel for MediaQualityRttBucket {
+    fn from_duration(duration: Duration) -> Self {
+        if duration <= Duration::from_millis(50) {
+            return Self::Le50Millis;
+        }
+        if duration <= Duration::from_millis(100) {
+            return Self::Le100Millis;
+        }
+        if duration <= Duration::from_millis(250) {
+            return Self::Le250Millis;
+        }
+        if duration <= Duration::from_millis(500) {
+            return Self::Le500Millis;
+        }
+        if duration <= Duration::from_secs(1) {
+            return Self::Le1Second;
+        }
+        if duration <= Duration::from_secs(2) {
+            return Self::Le2Seconds;
+        }
+        Self::Le5Seconds
     }
 }
 

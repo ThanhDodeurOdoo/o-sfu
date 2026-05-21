@@ -126,6 +126,12 @@ impl RoomState {
                         quality_summary: DiagnosticsQualitySummary {
                             current_incoming_bitrate: DiagnosticsIncomingBitrate::default(),
                             sampled_metrics_available: false,
+                            latest_bwe_bps: None,
+                            rtt_ms: None,
+                            ingress_loss_ppm: None,
+                            egress_loss_ppm: None,
+                            egress_jitter_rtp_timestamp_units: None,
+                            sample_count: 0,
                         },
                     });
                 Some(DiagnosticsUserView {

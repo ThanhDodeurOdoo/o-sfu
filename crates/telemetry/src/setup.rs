@@ -658,6 +658,7 @@ mod tests {
                 service_instance_id: Some("test-instance".to_owned()),
             },
             trace_export: TraceExportConfig::default(),
+            media_quality_interval: None,
         }
     }
 

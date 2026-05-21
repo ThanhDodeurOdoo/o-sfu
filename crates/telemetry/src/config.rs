@@ -1,11 +1,26 @@
+use std::time::Duration;
+
 pub const DEFAULT_TELEMETRY_SERVICE_NAME: &str = "o-sfu";
 pub const DEFAULT_TELEMETRY_DEPLOYMENT_ENVIRONMENT: &str = "local";
+pub const DEFAULT_MEDIA_QUALITY_INTERVAL: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TelemetryConfig {
     pub log_format: TelemetryLogFormat,
     pub resource: TelemetryResource,
     pub trace_export: TraceExportConfig,
+    pub media_quality_interval: Option<Duration>,
+}
+
+impl Default for TelemetryConfig {
+    fn default() -> Self {
+        Self {
+            log_format: TelemetryLogFormat::default(),
+            resource: TelemetryResource::default(),
+            trace_export: TraceExportConfig::default(),
+            media_quality_interval: Some(DEFAULT_MEDIA_QUALITY_INTERVAL),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

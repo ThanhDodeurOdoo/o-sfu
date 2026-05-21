@@ -45,6 +45,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 pub(super) use handlers::{
@@ -141,6 +142,7 @@ pub struct RtcWorker {
     pub(super) rtc_port_range: RtcPortRange,
     pub(super) codec_flags: MediaCodecFlags,
     pub(super) codec_preferences: CodecPreferences,
+    pub(super) media_quality_interval: Option<Duration>,
     pub(super) diagnostics: Arc<DiagnosticsStore>,
     pub(super) packet_sink_registry: Arc<RoomPacketSinkRegistry>,
     pub(super) source_policy_signal: Arc<SourcePolicySignal>,
@@ -180,6 +182,7 @@ impl RtcWorker {
             rtc_port_range: config.rtc_port_range(),
             codec_flags: config.codec_flags(),
             codec_preferences: config.codec_preferences(),
+            media_quality_interval: config.media_quality_interval(),
             diagnostics: deps.diagnostics(),
             packet_sink_registry: deps.packet_sink_registry(),
             source_policy_signal,

@@ -16,9 +16,10 @@ pub use self::{
     catalog::RuntimeMetrics,
     descriptor::MetricName,
     labels::{
-        BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
-        RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
-        RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, SourceSelectionKind,
+        BudgetSolverOutcome, HttpRoute, MediaQualityLossDirection, MediaQualitySample,
+        RtcDatagramDropReason, RtcDatagramRoutePath, RtcRelayEnqueueResult,
+        RtcRemoteControlDropKind, RtcRemotePacketGateConvergence, RtcRouteControlOutcome,
+        RtpForwardDestinationKind, RtpRelayDropKind, SourceSelectionKind,
         TransportCleanupFailureKind, TransportHealthState, TransportIceState,
         WsSessionLoopExitReason,
     },

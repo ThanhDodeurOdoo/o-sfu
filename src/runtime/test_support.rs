@@ -425,6 +425,7 @@ fn build_real_media_transport_for_test_config(
             rtc_port_range: config.transport.rtc_port_range,
             codec_flags: config.codecs.flags,
             codec_preferences: config.codecs.preferences,
+            media_quality_interval: config.telemetry.media_quality_interval,
         })
         .deps(MediaTransportDeps {
             diagnostics,

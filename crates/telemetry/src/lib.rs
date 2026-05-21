@@ -7,8 +7,9 @@ pub mod schema;
 mod setup;
 
 pub use config::{
-    DEFAULT_TELEMETRY_DEPLOYMENT_ENVIRONMENT, DEFAULT_TELEMETRY_SERVICE_NAME, TelemetryConfig,
-    TelemetryLogFormat, TelemetryResource, TraceExportConfig,
+    DEFAULT_MEDIA_QUALITY_INTERVAL, DEFAULT_TELEMETRY_DEPLOYMENT_ENVIRONMENT,
+    DEFAULT_TELEMETRY_SERVICE_NAME, TelemetryConfig, TelemetryLogFormat, TelemetryResource,
+    TraceExportConfig,
 };
 #[cfg(feature = "macros")]
 pub use o_sfu_telemetry_macros::{measure_duration, measure_http_request};

@@ -1,12 +1,16 @@
+use std::time::Duration;
+
 use anyhow::{Result, anyhow};
 pub use o_sfu_telemetry::{
-    DEFAULT_TELEMETRY_DEPLOYMENT_ENVIRONMENT, DEFAULT_TELEMETRY_SERVICE_NAME, TelemetryConfig,
-    TelemetryLogFormat, TelemetryResource, TraceExportConfig,
+    DEFAULT_MEDIA_QUALITY_INTERVAL, DEFAULT_TELEMETRY_DEPLOYMENT_ENVIRONMENT,
+    DEFAULT_TELEMETRY_SERVICE_NAME, TelemetryConfig, TelemetryLogFormat, TelemetryResource,
+    TraceExportConfig,
 };
 
-use super::parsing::parse_optional_non_empty_env;
+use super::parsing::{parse_env_or_default, parse_optional_non_empty_env};
 
 const OTEL_TRACING_FEATURE_NAME: &str = "otel-tracing";
+const MEDIA_QUALITY_INTERVAL_ENV: &str = "TELEMETRY_MEDIA_QUALITY_INTERVAL_MS";
 
 pub(super) fn load_telemetry_config(
     mut get_var: impl FnMut(&str) -> Option<String>,
@@ -29,6 +33,11 @@ pub(super) fn load_telemetry_config(
             "TELEMETRY_OTLP_ENDPOINT requires the `{OTEL_TRACING_FEATURE_NAME}` cargo feature"
         ));
     }
+    let media_quality_interval_ms = parse_env_or_default(
+        &mut get_var,
+        MEDIA_QUALITY_INTERVAL_ENV,
+        u64::try_from(DEFAULT_MEDIA_QUALITY_INTERVAL.as_millis()).unwrap_or(5_000),
+    )?;
     Ok(TelemetryConfig {
         log_format,
         resource: TelemetryResource {
@@ -45,11 +54,16 @@ pub(super) fn load_telemetry_config(
             )?,
         },
         trace_export: TraceExportConfig { otlp_endpoint },
+        media_quality_interval: (media_quality_interval_ms > 0)
+            .then(|| Duration::from_millis(media_quality_interval_ms)),
     })
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "otel-tracing")]
+    use std::time::Duration;
+
     #[cfg(feature = "otel-tracing")]
     use super::{TelemetryConfig, TelemetryLogFormat, TraceExportConfig};
     use super::{TelemetryResource, load_telemetry_config};
@@ -83,6 +97,7 @@ mod tests {
                 trace_export: TraceExportConfig {
                     otlp_endpoint: Some("http://collector:4317".to_owned()),
                 },
+                media_quality_interval: Some(Duration::from_secs(5)),
             })
         );
     }
@@ -121,5 +136,18 @@ mod tests {
             _ => None,
         });
         assert!(config.is_err());
+    }
+
+    #[test]
+    fn load_telemetry_config_allows_disabling_media_quality_sampling() {
+        let config = load_telemetry_config(|key| match key {
+            "TELEMETRY_MEDIA_QUALITY_INTERVAL_MS" => Some("0".to_owned()),
+            _ => None,
+        });
+
+        assert_eq!(
+            config.ok().and_then(|config| config.media_quality_interval),
+            None
+        );
     }
 }

@@ -11,7 +11,7 @@ use std::{
     mem,
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use o_sfu_rfc::webrtc::MediaKind as ProtocolMediaKind;
@@ -54,6 +54,7 @@ pub(super) struct OfferBootstrapConfig<'a> {
     pub(super) rtc_port_range: RtcPortRange,
     pub(super) codec_flags: MediaCodecFlags,
     pub(super) codec_preferences: CodecPreferences,
+    pub(super) media_quality_interval: Option<Duration>,
     pub(super) metrics: &'a RuntimeMetrics,
 }
 
@@ -474,12 +475,13 @@ fn ensure_session_ready_for_offer(
         state.shared_socket = Some(shared_socket);
         candidate_addr
     };
-    let created_session = bootstrap::ensure_session_rtc_state(
+    let created_session = bootstrap::ensure_session_rtc_state_with_stats_interval(
         &mut state.users,
         session_key,
         candidate_addr,
         config.max_bitrate_out,
         config.codec_flags,
+        config.media_quality_interval,
     )?;
     if let Ok(mut snapshot) = snapshot_state.lock() {
         snapshot.add_session(session_key);

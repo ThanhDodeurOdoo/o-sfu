@@ -52,6 +52,7 @@ fn test_media_transport_builder(rtc_port_range: RtcPortRange) -> MediaTransportB
             rtc_port_range,
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: crate::CodecPreferences::default(),
+            media_quality_interval: None,
         })
         .deps(MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),

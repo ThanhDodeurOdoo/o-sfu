@@ -318,6 +318,7 @@ impl RtcWorkerTestBuilder {
                 rtc_port_range: self.rtc_port_range,
                 codec_flags: self.codec_flags,
                 codec_preferences: self.codec_preferences,
+                media_quality_interval: None,
             },
             &MediaTransportDeps {
                 diagnostics: Arc::new(DiagnosticsStore::default()),

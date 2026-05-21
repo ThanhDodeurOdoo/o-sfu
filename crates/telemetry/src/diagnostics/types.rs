@@ -168,6 +168,17 @@ pub struct DiagnosticsIncomingBitrate {
 pub struct DiagnosticsQualitySummary {
     pub current_incoming_bitrate: DiagnosticsIncomingBitrate,
     pub sampled_metrics_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_bwe_bps: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rtt_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingress_loss_ppm: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub egress_loss_ppm: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub egress_jitter_rtp_timestamp_units: Option<u64>,
+    pub sample_count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -424,6 +435,6 @@ pub struct DiagnosticsEvent {
 #[derive(Debug)]
 pub enum DiagnosticsUserLookup {
     Missing,
-    Found(DiagnosticsUserDetail),
+    Found(Box<DiagnosticsUserDetail>),
     Conflict(DiagnosticsUserLookupConflict),
 }

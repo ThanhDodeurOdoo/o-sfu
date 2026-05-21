@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::{net::IpAddr, time::Duration};
 
 use bitflags::bitflags;
 
@@ -535,6 +535,7 @@ pub struct CodecOptions {
 pub struct ObservabilityOptions {
     pub transport_diagnostics_enabled: bool,
     pub transport_metrics_enabled: bool,
+    pub media_quality_interval: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
