@@ -24,23 +24,13 @@ async fn fake_rtc_peers_forward_vp8_high_rid_keyframe_without_browsers() {
     };
 
     let mut source = FakeMediaSource::vp8_camera_high();
-    assert!(publisher.publish_track(&source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_binding = assert_track_snapshot(
-        &mut subscriber,
-        UserId::Integer(92),
-        StreamType::Camera,
-        true,
-    )
-    .await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
-    assert_video_subscription_enabled(&mut subscriber, UserId::Integer(92)).await;
-    assert_consumer_route_active(
+    publish_video_source_and_ready_route(
         &server,
         &room,
-        &subscriber,
+        &mut publisher,
+        &mut subscriber,
         &UserId::Integer(92),
-        track_binding.stream_type,
+        &source,
     )
     .await;
 
@@ -78,35 +68,17 @@ async fn fake_rtc_vp8_selected_rid_requires_keyframe_before_forwarding() {
     };
 
     let mut source = FakeMediaSource::new(SyntheticVp8Stream::with_next_keyframe(false));
-    assert!(publisher.publish_track(&source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_binding = assert_track_snapshot(
-        &mut subscriber,
-        UserId::Integer(82),
-        StreamType::Camera,
-        true,
-    )
-    .await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
-    assert_video_subscription_enabled(&mut subscriber, UserId::Integer(82)).await;
-    assert_consumer_route_active(
+    publish_video_source_and_ready_route(
         &server,
         &room,
-        &subscriber,
+        &mut publisher,
+        &mut subscriber,
         &UserId::Integer(82),
-        track_binding.stream_type,
+        &source,
     )
     .await;
-    assert!(
-        server
-            .wait_for_video_subscription_selected_rid(
-                &room,
-                subscriber.user_id(),
-                &UserId::Integer(82),
-                "hi",
-            )
-            .await
-    );
+    assert_video_subscription_selected_rid(&server, &room, &subscriber, &UserId::Integer(82), "hi")
+        .await;
 
     let mut clock = FakeClock::default();
     assert_synthetic_video_packet_dropped(&mut publisher, &mut subscriber, &mut source, &mut clock)
@@ -144,35 +116,17 @@ async fn fake_rtc_vp8_selected_rid_drops_other_rids_after_activation() {
     };
 
     let mut high_source = FakeMediaSource::vp8_camera_high();
-    assert!(publisher.publish_track(&high_source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_binding = assert_track_snapshot(
-        &mut subscriber,
-        UserId::Integer(84),
-        StreamType::Camera,
-        true,
-    )
-    .await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
-    assert_video_subscription_enabled(&mut subscriber, UserId::Integer(84)).await;
-    assert_consumer_route_active(
+    publish_video_source_and_ready_route(
         &server,
         &room,
-        &subscriber,
+        &mut publisher,
+        &mut subscriber,
         &UserId::Integer(84),
-        track_binding.stream_type,
+        &high_source,
     )
     .await;
-    assert!(
-        server
-            .wait_for_video_subscription_selected_rid(
-                &room,
-                subscriber.user_id(),
-                &UserId::Integer(84),
-                "hi",
-            )
-            .await
-    );
+    assert_video_subscription_selected_rid(&server, &room, &subscriber, &UserId::Integer(84), "hi")
+        .await;
 
     let mut clock = FakeClock::default();
     assert_synthetic_video_packet_forwarded(
@@ -227,23 +181,13 @@ async fn fake_rtc_peers_forward_h264_high_rid_idr_without_browsers() {
     };
 
     let mut source = FakeMediaSource::h264_camera_high();
-    assert!(publisher.publish_track(&source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_binding = assert_track_snapshot(
-        &mut subscriber,
-        UserId::Integer(94),
-        StreamType::Camera,
-        true,
-    )
-    .await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
-    assert_video_subscription_enabled(&mut subscriber, UserId::Integer(94)).await;
-    assert_consumer_route_active(
+    publish_video_source_and_ready_route(
         &server,
         &room,
-        &subscriber,
+        &mut publisher,
+        &mut subscriber,
         &UserId::Integer(94),
-        track_binding.stream_type,
+        &source,
     )
     .await;
 
@@ -284,35 +228,17 @@ async fn fake_rtc_h264_selected_rid_requires_idr_before_forwarding() {
     };
 
     let mut source = FakeMediaSource::new(SyntheticH264Stream::with_idr(false));
-    assert!(publisher.publish_track(&source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_binding = assert_track_snapshot(
-        &mut subscriber,
-        UserId::Integer(78),
-        StreamType::Camera,
-        true,
-    )
-    .await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
-    assert_video_subscription_enabled(&mut subscriber, UserId::Integer(78)).await;
-    assert_consumer_route_active(
+    publish_video_source_and_ready_route(
         &server,
         &room,
-        &subscriber,
+        &mut publisher,
+        &mut subscriber,
         &UserId::Integer(78),
-        track_binding.stream_type,
+        &source,
     )
     .await;
-    assert!(
-        server
-            .wait_for_video_subscription_selected_rid(
-                &room,
-                subscriber.user_id(),
-                &UserId::Integer(78),
-                "hi",
-            )
-            .await
-    );
+    assert_video_subscription_selected_rid(&server, &room, &subscriber, &UserId::Integer(78), "hi")
+        .await;
 
     let mut clock = FakeClock::default();
     assert_synthetic_video_packet_dropped(&mut publisher, &mut subscriber, &mut source, &mut clock)
@@ -350,23 +276,13 @@ async fn fake_rtc_peer_rejects_invalid_synthetic_send_paths_without_panics() {
     };
 
     let source = FakeMediaSource::vp8_camera_high();
-    assert!(publisher.publish_track(&source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_binding = assert_track_snapshot(
-        &mut subscriber,
-        UserId::Integer(96),
-        StreamType::Camera,
-        true,
-    )
-    .await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
-    assert_video_subscription_enabled(&mut subscriber, UserId::Integer(96)).await;
-    assert_consumer_route_active(
+    publish_video_source_and_ready_route(
         &server,
         &room,
-        &subscriber,
+        &mut publisher,
+        &mut subscriber,
         &UserId::Integer(96),
-        track_binding.stream_type,
+        &source,
     )
     .await;
 

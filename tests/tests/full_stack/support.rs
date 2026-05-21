@@ -37,6 +37,105 @@ static FULL_STACK_TEST_LOCK: Mutex<()> = Mutex::const_new(());
 pub(super) async fn full_stack_test_guard() -> MutexGuard<'static, ()> {
     FULL_STACK_TEST_LOCK.lock().await
 }
+
+async fn publish_source_and_track_snapshot(
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
+    publisher_user_id: &UserId,
+    source: &FakeMediaSource,
+) -> TrackBinding {
+    assert!(publisher.publish_track(source).await.is_some());
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    let track_binding = assert_track_snapshot(
+        subscriber,
+        publisher_user_id.clone(),
+        source.stream_type(),
+        true,
+    )
+    .await;
+    assert!(subscriber.complete_next_negotiation().await.is_some());
+    track_binding
+}
+
+pub(super) async fn publish_source_and_ready_route(
+    server: &TestServer,
+    room: &str,
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
+    publisher_user_id: &UserId,
+    source: &FakeMediaSource,
+) -> TrackBinding {
+    let track_binding =
+        publish_source_and_track_snapshot(publisher, subscriber, publisher_user_id, source).await;
+    assert_consumer_route_active(
+        server,
+        room,
+        subscriber,
+        publisher_user_id,
+        track_binding.stream_type,
+    )
+    .await;
+    track_binding
+}
+
+pub(super) async fn consume_video_source_and_ready_route(
+    server: &TestServer,
+    room: &str,
+    subscriber: &mut ProtocolFakePeer,
+    publisher_user_id: &UserId,
+) -> TrackBinding {
+    let track_binding = assert_track_snapshot(
+        subscriber,
+        publisher_user_id.clone(),
+        StreamType::Camera,
+        true,
+    )
+    .await;
+    assert!(subscriber.complete_next_negotiation().await.is_some());
+    assert_video_subscription_enabled(subscriber, publisher_user_id.clone()).await;
+    assert_consumer_route_active(
+        server,
+        room,
+        subscriber,
+        publisher_user_id,
+        track_binding.stream_type,
+    )
+    .await;
+    track_binding
+}
+
+pub(super) async fn publish_video_source_and_ready_route(
+    server: &TestServer,
+    room: &str,
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
+    publisher_user_id: &UserId,
+    source: &FakeMediaSource,
+) -> TrackBinding {
+    assert!(publisher.publish_track(source).await.is_some());
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    consume_video_source_and_ready_route(server, room, subscriber, publisher_user_id).await
+}
+
+pub(super) async fn assert_video_subscription_selected_rid(
+    server: &TestServer,
+    room: &str,
+    subscriber: &ProtocolFakePeer,
+    publisher_user_id: &UserId,
+    rid: &str,
+) {
+    assert!(
+        server
+            .wait_for_video_subscription_selected_rid(
+                room,
+                subscriber.user_id(),
+                publisher_user_id,
+                rid,
+            )
+            .await
+    );
+}
+
 pub(super) async fn assert_load_triggered_spillover_release_route_flow(
     server: &TestServer,
     room: &str,
@@ -49,36 +148,14 @@ pub(super) async fn assert_load_triggered_spillover_release_route_flow(
     let mut source = FakeMediaSource::vp8_camera_high();
     assert!(publisher.publish_track(&source).await.is_some());
     assert!(publisher.complete_next_negotiation().await.is_some());
-    let local_track = assert_track_snapshot(
-        local_subscriber,
-        publisher_user_id.to_owned(),
-        StreamType::Camera,
-        true,
-    )
-    .await;
-    assert!(local_subscriber.complete_next_negotiation().await.is_some());
-    assert_video_subscription_enabled(local_subscriber, publisher_user_id.to_owned()).await;
-    let spillover_track = assert_track_snapshot(
-        &mut spillover_subscriber,
-        publisher_user_id.to_owned(),
-        StreamType::Camera,
-        true,
-    )
-    .await;
-    assert!(
-        spillover_subscriber
-            .complete_next_negotiation()
-            .await
-            .is_some()
-    );
-    assert_video_subscription_enabled(&mut spillover_subscriber, publisher_user_id.to_owned())
-        .await;
-    assert_consumer_route_active(
+    let local_track =
+        consume_video_source_and_ready_route(server, room, local_subscriber, publisher_user_id)
+            .await;
+    let spillover_track = consume_video_source_and_ready_route(
         server,
         room,
-        &spillover_subscriber,
+        &mut spillover_subscriber,
         publisher_user_id,
-        spillover_track.stream_type,
     )
     .await;
 
@@ -128,27 +205,13 @@ pub(super) async fn assert_load_triggered_spillover_replacement_mute_flow(
     spillover_subscriber_user_id: UserId,
 ) {
     let mut source = FakeMediaSource::audio();
-    assert!(publisher.publish_track(&source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_binding = assert_track_snapshot(
-        spillover_subscriber,
-        publisher_user_id.clone(),
-        StreamType::Audio,
-        true,
-    )
-    .await;
-    assert!(
-        spillover_subscriber
-            .complete_next_negotiation()
-            .await
-            .is_some()
-    );
-    assert_consumer_route_active(
+    let track_binding = publish_source_and_ready_route(
         server,
         room,
+        publisher,
         spillover_subscriber,
         &publisher_user_id,
-        track_binding.stream_type,
+        &source,
     )
     .await;
 
@@ -276,22 +339,13 @@ pub(super) async fn assert_published_audio_forwarding(
     source: &mut FakeMediaSource,
     clock: &mut FakeClock,
 ) {
-    assert!(publisher.publish_track(source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_binding = assert_track_snapshot(
-        subscriber,
-        harness.publisher_user_id.clone(),
-        StreamType::Audio,
-        true,
-    )
-    .await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
-    assert_consumer_route_active(
+    publish_source_and_ready_route(
         harness.server,
         harness.room,
+        publisher,
         subscriber,
         harness.publisher_user_id,
-        track_binding.stream_type,
+        source,
     )
     .await;
     assert_audio_packet_forwarded(publisher, subscriber, source, clock).await;
@@ -374,17 +428,13 @@ pub(super) async fn mute_subscriber_audio_download(
     subscriber: &mut ProtocolFakePeer,
     source: &mut FakeMediaSource,
 ) -> StreamType {
-    assert!(publisher.publish_track(source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_binding =
-        assert_track_snapshot(subscriber, UserId::Integer(82), StreamType::Audio, true).await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
-    assert_consumer_route_active(
+    let track_binding = publish_source_and_ready_route(
         server,
         room,
+        publisher,
         subscriber,
         &UserId::Integer(82),
-        track_binding.stream_type,
+        source,
     )
     .await;
 
@@ -834,17 +884,13 @@ pub(super) async fn assert_audio_media_arrives_and_download_mute_stops_flow(
     subscriber: &mut ProtocolFakePeer,
 ) {
     let mut source = FakeMediaSource::audio();
-    assert!(publisher.publish_track(&source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_binding =
-        assert_track_snapshot(subscriber, UserId::Integer(70), StreamType::Audio, true).await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
-    assert_consumer_route_active(
+    let track_binding = publish_source_and_ready_route(
         server,
         room,
+        publisher,
         subscriber,
         &UserId::Integer(70),
-        track_binding.stream_type,
+        &source,
     )
     .await;
 
@@ -882,17 +928,13 @@ pub(super) async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow
     subscriber: &mut ProtocolFakePeer,
 ) {
     let mut source = FakeMediaSource::audio();
-    assert!(publisher.publish_track(&source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_binding =
-        assert_track_snapshot(subscriber, UserId::Integer(70), StreamType::Audio, true).await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
-    assert_consumer_route_active(
+    let track_binding = publish_source_and_ready_route(
         server,
         room,
+        publisher,
         subscriber,
         &UserId::Integer(70),
-        track_binding.stream_type,
+        &source,
     )
     .await;
 

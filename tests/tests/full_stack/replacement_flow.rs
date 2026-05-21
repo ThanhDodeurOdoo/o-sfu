@@ -24,21 +24,15 @@ async fn fake_rtc_peers_rebootstrap_user_replacement_without_stale_media_routes(
     };
 
     let mut source = FakeMediaSource::audio();
-    assert!(initial_publisher.publish_track(&source).await.is_some());
-    assert!(
-        initial_publisher
-            .complete_next_negotiation()
-            .await
-            .is_some()
-    );
-    assert_track_snapshot(
+    publish_source_and_ready_route(
+        &server,
+        &room,
+        &mut initial_publisher,
         &mut subscriber,
-        UserId::Integer(80),
-        StreamType::Audio,
-        true,
+        &UserId::Integer(80),
+        &source,
     )
     .await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
 
     let mut clock = FakeClock::default();
     assert_audio_packet_forwarded(
@@ -76,16 +70,15 @@ async fn fake_rtc_peers_rebootstrap_user_replacement_without_stale_media_routes(
             .await
             .is_some()
     );
-    assert!(replacement.publish_track(&source).await.is_some());
-    assert!(replacement.complete_next_negotiation().await.is_some());
-    assert_track_snapshot(
+    publish_source_and_ready_route(
+        &server,
+        &room,
+        &mut replacement,
         &mut subscriber,
-        UserId::Integer(80),
-        StreamType::Audio,
-        true,
+        &UserId::Integer(80),
+        &source,
     )
     .await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
     assert_audio_packet_forwarded(&mut replacement, &mut subscriber, &mut source, &mut clock).await;
 }
 
@@ -269,15 +262,14 @@ async fn fake_rtc_replaced_socket_cannot_finish_a_queued_publish_negotiation() {
             .await
             .is_some()
     );
-    assert!(replacement.publish_track(&source).await.is_some());
-    assert!(replacement.complete_next_negotiation().await.is_some());
-    assert_track_snapshot(
+    publish_source_and_ready_route(
+        &server,
+        &room,
+        &mut replacement,
         &mut subscriber,
-        UserId::Integer(86),
-        StreamType::Audio,
-        true,
+        &UserId::Integer(86),
+        &source,
     )
     .await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
     assert_audio_packet_forwarded(&mut replacement, &mut subscriber, &mut source, &mut clock).await;
 }

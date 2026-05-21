@@ -32,35 +32,17 @@ async fn fake_rtc_cross_worker_vp8_selected_rid_survives_relay() {
     assert_cross_worker_placement(&server, &room, &publisher_user_id, &subscriber_user_id).await;
 
     let mut high_source = FakeMediaSource::new(SyntheticVp8Stream::with_next_keyframe(false));
-    assert!(publisher.publish_track(&high_source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_binding = assert_track_snapshot(
-        &mut subscriber,
-        publisher_user_id.clone(),
-        StreamType::Camera,
-        true,
-    )
-    .await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
-    assert_video_subscription_enabled(&mut subscriber, publisher_user_id.clone()).await;
-    assert_consumer_route_active(
+    publish_video_source_and_ready_route(
         &server,
         &room,
-        &subscriber,
+        &mut publisher,
+        &mut subscriber,
         &publisher_user_id,
-        track_binding.stream_type,
+        &high_source,
     )
     .await;
-    assert!(
-        server
-            .wait_for_video_subscription_selected_rid(
-                &room,
-                subscriber.user_id(),
-                &publisher_user_id,
-                "hi",
-            )
-            .await
-    );
+    assert_video_subscription_selected_rid(&server, &room, &subscriber, &publisher_user_id, "hi")
+        .await;
 
     let mut clock = FakeClock::default();
     assert_synthetic_video_packet_dropped(
@@ -129,35 +111,17 @@ async fn fake_rtc_cross_worker_h264_selected_rid_requires_idr_after_relay() {
     assert_cross_worker_placement(&server, &room, &publisher_user_id, &subscriber_user_id).await;
 
     let mut source = FakeMediaSource::new(SyntheticH264Stream::with_idr(false));
-    assert!(publisher.publish_track(&source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_binding = assert_track_snapshot(
-        &mut subscriber,
-        publisher_user_id.clone(),
-        StreamType::Camera,
-        true,
-    )
-    .await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
-    assert_video_subscription_enabled(&mut subscriber, publisher_user_id.clone()).await;
-    assert_consumer_route_active(
+    publish_video_source_and_ready_route(
         &server,
         &room,
-        &subscriber,
+        &mut publisher,
+        &mut subscriber,
         &publisher_user_id,
-        track_binding.stream_type,
+        &source,
     )
     .await;
-    assert!(
-        server
-            .wait_for_video_subscription_selected_rid(
-                &room,
-                subscriber.user_id(),
-                &publisher_user_id,
-                "hi",
-            )
-            .await
-    );
+    assert_video_subscription_selected_rid(&server, &room, &subscriber, &publisher_user_id, "hi")
+        .await;
 
     let mut clock = FakeClock::default();
     assert_synthetic_video_packet_dropped(&mut publisher, &mut subscriber, &mut source, &mut clock)
@@ -203,40 +167,23 @@ async fn fake_rtc_load_triggered_spillover_relays_vp8_after_threshold() {
     };
 
     let mut high_source = FakeMediaSource::new(SyntheticVp8Stream::with_next_keyframe(false));
-    assert!(publisher.publish_track(&high_source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_binding = assert_track_snapshot(
+    publish_video_source_and_ready_route(
+        &server,
+        &room,
+        &mut publisher,
         &mut spillover_subscriber,
-        publisher_user_id.clone(),
-        StreamType::Camera,
-        true,
+        &publisher_user_id,
+        &high_source,
     )
     .await;
-    assert!(
-        spillover_subscriber
-            .complete_next_negotiation()
-            .await
-            .is_some()
-    );
-    assert_video_subscription_enabled(&mut spillover_subscriber, publisher_user_id.clone()).await;
-    assert_consumer_route_active(
+    assert_video_subscription_selected_rid(
         &server,
         &room,
         &spillover_subscriber,
         &publisher_user_id,
-        track_binding.stream_type,
+        "hi",
     )
     .await;
-    assert!(
-        server
-            .wait_for_video_subscription_selected_rid(
-                &room,
-                spillover_subscriber.user_id(),
-                &publisher_user_id,
-                "hi",
-            )
-            .await
-    );
 
     let mut clock = FakeClock::default();
     assert_synthetic_video_packet_dropped(

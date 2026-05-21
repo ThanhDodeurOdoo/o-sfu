@@ -95,6 +95,74 @@ pub(crate) async fn recover_subscriber_and_replay_track(
     Some(replayed_track.clone())
 }
 
+pub(crate) async fn consume_replayed_camera_publish_after_recovery(
+    publisher: &ProtocolHarnessPeer,
+    subscriber: &mut ProtocolHarnessPeer,
+    publisher_user_id: ProtocolSessionId,
+) -> Option<()> {
+    consume_peer_joined_update(subscriber, publisher_user_id.clone()).await?;
+    let replayed_track_snapshot = read_track_snapshot(subscriber).await;
+    assert!(
+        replayed_track_snapshot.is_some(),
+        "subscriber should receive a replayed track snapshot after publisher recovery"
+    );
+    let replayed_track_snapshot = replayed_track_snapshot?;
+    assert_track_snapshot_contains(
+        &replayed_track_snapshot,
+        &publisher_user_id,
+        ProtocolStreamType::Camera,
+    );
+    assert!(
+        subscriber.read_server_frame().await.is_some(),
+        "subscriber should receive the replayed remote-track renegotiation request"
+    );
+    assert!(peer_reached_state(
+        publisher,
+        BundleConnectionState::Recovering
+    ));
+    assert!(peer_reached_state(
+        publisher,
+        BundleConnectionState::Connected
+    ));
+    Some(())
+}
+
+pub(crate) async fn recover_publisher_and_replay_camera_publish(
+    publisher: &mut ProtocolHarnessPeer,
+    subscriber: &mut ProtocolHarnessPeer,
+    publisher_user_id: ProtocolSessionId,
+) -> Option<()> {
+    subscriber.updates.clear();
+    close_peer_and_observe_recovery(publisher, subscriber).await?;
+    assert!(
+        subscriber.read_server_frame().await.is_some(),
+        "subscriber should consume the departure-side renegotiation before recovery rejoin"
+    );
+    subscriber.updates.clear();
+
+    assert!(
+        publisher
+            .flush_timers_with_delay(RECOVERY_DELAY_MS)
+            .await
+            .is_some(),
+        "recovery timer should reconnect the publisher"
+    );
+    assert!(
+        publisher.read_server_frame().await.is_some(),
+        "publisher should consume the recovery welcome frame"
+    );
+    assert!(
+        publisher.read_server_frame().await.is_some(),
+        "publisher should consume the recovery initial offer"
+    );
+    assert!(
+        publisher.read_server_frame().await.is_some(),
+        "publisher should consume the replayed publish renegotiation after recovery"
+    );
+
+    consume_replayed_camera_publish_after_recovery(publisher, subscriber, publisher_user_id).await
+}
+
 pub(crate) async fn setup_real_rtc_protocol_peers(
     room_name: &str,
     alice_user_id: UserId,
