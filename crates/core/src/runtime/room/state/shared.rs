@@ -201,7 +201,7 @@ impl RoomState {
                 if self
                     .media
                     .consumer_source_selection(&key)
-                    .is_some_and(|selection| !selection.active())
+                    .is_some_and(|selection| !selection.delivery_active())
                 {
                     continue;
                 }

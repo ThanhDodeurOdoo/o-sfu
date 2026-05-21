@@ -197,7 +197,7 @@ impl RoomState {
                     selection: diagnostics_source_selection(source, selection),
                     source_id: source.source_id().as_u64(),
                     source_transport_media_id: Some(route.state.source_media.as_u64()),
-                    state: if route.producer.active && selection.active() {
+                    state: if route.producer.active && selection.delivery_active() {
                         DiagnosticsRouteState::Active
                     } else {
                         DiagnosticsRouteState::Inactive

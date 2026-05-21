@@ -119,6 +119,16 @@ impl ConsumerSourceSelection {
         self.policy_pause_reason.is_none()
     }
 
+    /// Returns whether this receiver selection currently permits packet delivery.
+    ///
+    /// Use this for route-state projections, load accounting and keyframe
+    /// targeting. Source-policy planners should read [`Self::active`] so
+    /// policy-paused routes can be resumed.
+    #[must_use]
+    pub const fn delivery_active(self) -> bool {
+        self.active && self.policy_allows_delivery()
+    }
+
     #[must_use]
     pub const fn budget(self) -> ReceiverVideoBudgetDiagnostics {
         self.budget
