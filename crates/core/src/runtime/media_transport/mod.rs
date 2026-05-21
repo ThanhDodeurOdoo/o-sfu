@@ -254,7 +254,8 @@ impl MediaTransport {
     ///
     /// The source and consumer sessions must belong to the same room instance.
     /// Cross-worker routing is an implementation detail hidden behind this
-    /// method. Callers receive only the consumer-side transport media id.
+    /// method. The initial activity controls whether the packet loop can
+    /// forward packets before later room policy updates arrive.
     ///
     /// # Errors
     ///
@@ -268,6 +269,7 @@ impl MediaTransport {
         source_session_key: &TransportSessionKey,
         source_media_id: TransportMediaId,
         consumer_rtp_parameters: &RouterRtpParameters,
+        initial_activity: ConsumerActivity,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.consume_media_on_worker(
             consumer_session_key,
@@ -275,6 +277,7 @@ impl MediaTransport {
             source_session_key,
             source_media_id,
             consumer_rtp_parameters,
+            initial_activity,
         )
         .await
         .inspect_err(|error| {
@@ -284,6 +287,7 @@ impl MediaTransport {
                 ?source_media_id,
                 ?media_kind,
                 mid = consumer_rtp_parameters.mid(),
+                initial_active = initial_activity.is_active(),
                 ?error,
                 "media transport failed to declare consumer media"
             );

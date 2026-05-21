@@ -23,6 +23,7 @@ pub struct AddSendMediaRequest<'a> {
     pub source_transport_media_id: TransportMediaId,
     pub remote_source_control: Option<RemoteSourceControl>,
     pub consumer_rtp_parameters: &'a RouterRtpParameters,
+    pub active: bool,
 }
 
 #[derive(Clone, Copy)]

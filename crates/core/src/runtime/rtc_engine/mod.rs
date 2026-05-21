@@ -60,6 +60,6 @@ mod worker;
 #[cfg(any(test, feature = "testing-transport"))]
 pub use forwarded_packet::ForwardedPacket;
 pub use negotiated_capabilities::client_rtp_capabilities_from_answer;
-pub(in crate::runtime) use worker::RtcWorker;
+pub(in crate::runtime) use worker::{RtcSendMediaSource, RtcWorker};
 
 pub use crate::runtime::media_transport::TransportSessionHealth;

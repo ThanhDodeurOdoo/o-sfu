@@ -99,6 +99,8 @@ pub(in crate::runtime::rtc_engine::worker::handlers::media) struct ConsumerRoute
     /// router-negotiated consumer stream used for payload rewriting and the
     /// initial packet gate
     pub consumer_rtp_parameters: &'a RouterRtpParameters,
+    /// first destination-level activity state installed with the route
+    pub active: bool,
     /// packet-loop clock sample used for selected-rid freshness checks
     pub now: Instant,
 }
@@ -209,6 +211,7 @@ pub(in crate::runtime::rtc_engine::worker::handlers::media) fn register_consumer
         consumer_media_kind,
         source_transport_media_id,
         consumer_rtp_parameters,
+        active,
         now,
     } = registration;
     let (packet_gate, pending_packet_gate) = consumer_packet_gate_for_source(
@@ -229,7 +232,7 @@ pub(in crate::runtime::rtc_engine::worker::handlers::media) fn register_consumer
             dest_mid: consumer_mid,
             dest_payload_type,
             nackable: !consumer_media_kind.is_audio(),
-            active: true,
+            active,
             packet_gate,
             pending_packet_gate,
         });

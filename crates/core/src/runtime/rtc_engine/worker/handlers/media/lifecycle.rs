@@ -33,6 +33,7 @@ use super::{
                 DecoderRefreshCodec, RegisteredMediaHandle, RemoteSourceRegistration,
             },
             simulcast,
+            slots::ConsumerStreamHandle,
             state::{PacketLoopState, PendingRecvStream, RtcSessionState},
         },
         negotiation,
@@ -507,6 +508,7 @@ fn worker_add_send_media(
         source_transport_media_id,
         remote_source_control,
         consumer_rtp_parameters,
+        active,
     } = request;
     let remote_source_rollback = RemoteSourceRollback::capture(
         state,
@@ -544,27 +546,15 @@ fn worker_add_send_media(
         remote_source_rollback.rollback(state);
         return Err(TransportAdapterError::TransportUnavailable);
     };
-    let (mid, consumer_stream, should_mark_dirty) = {
-        let mid = if session_state.sdp_negotiation.initial_offer_applied {
-            match worker_stage_native_send_media(session_state, media_kind) {
-                Ok(mid) => mid,
-                Err(error) => {
-                    let _ = session_state;
-                    remote_source_rollback.rollback(state);
-                    return Err(error);
-                }
+    let (mid, consumer_stream, should_mark_dirty) =
+        match declare_consumer_stream(session_state, media_kind, consumer_rtp_parameters) {
+            Ok(consumer_stream) => consumer_stream,
+            Err(error) => {
+                let _ = session_state;
+                remote_source_rollback.rollback(state);
+                return Err(error);
             }
-        } else {
-            let mid = transport_mid(consumer_rtp_parameters).unwrap_or_default();
-            declare_direct_send_media(session_state, mid, media_kind, consumer_rtp_parameters);
-            mid
         };
-        (
-            mid,
-            session_state.consumer_streams.allocate(),
-            !session_state.sdp_negotiation.initial_offer_applied,
-        )
-    };
     if should_mark_dirty {
         state.mark_session_dirty(consumer_session_key);
     }
@@ -583,6 +573,7 @@ fn worker_add_send_media(
             consumer_media_kind: media_kind,
             source_transport_media_id,
             consumer_rtp_parameters,
+            active,
             now,
         },
     );
@@ -596,10 +587,30 @@ fn worker_add_send_media(
         ?transport_media_id,
         ?media_kind,
         consumer_payload_type = ?super::control::consumer_payload_type(consumer_rtp_parameters),
+        active,
         downstream_rid_policy = "single_ridless_stream",
         "declared send-only media and registered media route for consumer"
     );
     Ok(transport_media_id)
+}
+
+fn declare_consumer_stream(
+    session_state: &mut RtcSessionState,
+    media_kind: MediaKind,
+    consumer_rtp_parameters: &RouterRtpParameters,
+) -> TransportResult<(Mid, ConsumerStreamHandle, bool)> {
+    let mid = if session_state.sdp_negotiation.initial_offer_applied {
+        worker_stage_native_send_media(session_state, media_kind)?
+    } else {
+        let mid = transport_mid(consumer_rtp_parameters).unwrap_or_default();
+        declare_direct_send_media(session_state, mid, media_kind, consumer_rtp_parameters);
+        mid
+    };
+    Ok((
+        mid,
+        session_state.consumer_streams.allocate(),
+        !session_state.sdp_negotiation.initial_offer_applied,
+    ))
 }
 
 /// Stage one send-only consumer media section in the next local offer.

@@ -153,10 +153,9 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
         .add_send_media(
             &consumer_session_key,
             Str0mMediaKind::Audio,
-            &producer_session_key,
-            source_media_id,
-            None,
+            RtcSendMediaSource::local(&producer_session_key, source_media_id),
             &consumer_rtp_parameters,
+            true,
         )
         .await;
     assert!(consumer_media_id.is_ok());
@@ -185,6 +184,58 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
         Some(61_000)
     );
     assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Open);
+}
+
+#[tokio::test]
+async fn rtc_consume_media_can_start_route_inactive() {
+    let adapter = RtcWorker::default();
+    let producer_session_key = transport_key(1, 221, UserId::Integer(221));
+    let consumer_session_key = transport_key(1, 222, UserId::Integer(222));
+    let producer_rtp_parameters = sample_router_rtp_parameters("aud-up", 51_100);
+    let consumer_rtp_parameters = sample_router_rtp_parameters("aud-down", 61_100);
+
+    assert!(
+        adapter
+            .create_initial_session_offer(&producer_session_key)
+            .await
+            .is_ok()
+    );
+    assert!(
+        adapter
+            .create_initial_session_offer(&consumer_session_key)
+            .await
+            .is_ok()
+    );
+
+    let source_media_id = adapter
+        .add_recv_media(
+            &producer_session_key,
+            Str0mMediaKind::Audio,
+            &producer_rtp_parameters,
+        )
+        .await
+        .expect("producer media should be accepted");
+    let consumer_media_id = adapter
+        .add_send_media(
+            &consumer_session_key,
+            Str0mMediaKind::Audio,
+            RtcSendMediaSource::local(&producer_session_key, source_media_id),
+            &consumer_rtp_parameters,
+            false,
+        )
+        .await
+        .expect("consumer media should be accepted");
+
+    let route_entry = adapter
+        .debug_route_entry_by_media_id(source_media_id)
+        .await
+        .expect("source route should exist");
+    assert_eq!(route_entry.active_destination_count, 0);
+    assert!(route_entry.destinations.iter().any(|dest| {
+        dest.dest_session == consumer_session_key
+            && dest.dest_transport_media_id == consumer_media_id
+            && !dest.active
+    }));
 }
 
 #[tokio::test]
@@ -224,10 +275,9 @@ async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate
         .add_send_media(
             &first_consumer_session_key,
             Str0mMediaKind::Video,
-            &producer_session_key,
-            source_media_id,
-            None,
+            RtcSendMediaSource::local(&producer_session_key, source_media_id),
             &selected_consumer_rtp_parameters,
+            true,
         )
         .await
         .expect("selected-rid consumer should register");
@@ -242,10 +292,9 @@ async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate
         .add_send_media(
             &second_consumer_session_key,
             Str0mMediaKind::Video,
-            &producer_session_key,
-            source_media_id,
-            None,
+            RtcSendMediaSource::local(&producer_session_key, source_media_id),
             &open_consumer_rtp_parameters,
+            true,
         )
         .await
         .expect("open consumer should register");
@@ -287,10 +336,9 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
         .add_send_media(
             &consumer_session_key,
             Str0mMediaKind::Video,
-            &producer_session_key,
-            source_media_id,
-            None,
+            RtcSendMediaSource::local(&producer_session_key, source_media_id),
             &consumer_rtp_parameters,
+            true,
         )
         .await
         .expect("consumer media should register");
@@ -365,10 +413,9 @@ async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
         .add_send_media(
             &consumer_session_key,
             Str0mMediaKind::Video,
-            &producer_session_key,
-            source_media_id,
-            None,
+            RtcSendMediaSource::local(&producer_session_key, source_media_id),
             &consumer_rtp_parameters,
+            true,
         )
         .await
         .expect("consumer media should register");
@@ -426,10 +473,9 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
         .add_send_media(
             &consumer_session_key,
             Str0mMediaKind::Video,
-            &producer_session_key,
-            source_media_id,
-            None,
+            RtcSendMediaSource::local(&producer_session_key, source_media_id),
             &consumer_rtp_parameters,
+            true,
         )
         .await;
     assert!(consumer_media_id.is_ok());

@@ -701,19 +701,25 @@ impl RoomMediaGraph {
         self.consumer_source_selections.get(key).copied()
     }
 
-    /// ensures a receiver selection exists without replacing a newer choice
+    /// ensures a receiver selection exists for the bootstrap state.
     ///
-    /// bootstrap planning uses this when it derives an initial open selection
-    /// from stored download intent, later subscription updates must keep their
-    /// more specific selector or budget state
+    /// selections without committed consumers can only come from stored
+    /// subscription intent, so bootstrap planning may replace them with the
+    /// computed initial policy state. Committed routes keep their current
+    /// selector and budget state until source policy updates them.
     pub fn ensure_consumer_source_selection(
         &mut self,
         key: &ConsumerKey,
         selection: ConsumerSourceSelection,
     ) {
-        self.consumer_source_selections
-            .entry(key.clone())
-            .or_insert(selection);
+        if self.consumer_index.contains_key(key) {
+            self.consumer_source_selections
+                .entry(key.clone())
+                .or_insert(selection);
+        } else {
+            self.consumer_source_selections
+                .insert(key.clone(), selection);
+        }
         self.register_consumer_key(key);
     }
 

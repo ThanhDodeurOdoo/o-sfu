@@ -118,6 +118,7 @@ async fn consume_audio(
             source_session_key,
             source_media_id,
             rtp_parameters,
+            ConsumerActivity::Active,
         )
         .await;
     assert!(result.is_ok());

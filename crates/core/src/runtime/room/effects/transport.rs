@@ -39,6 +39,7 @@ pub(in crate::runtime::room) enum RoomTransportEffect {
         producer_session_key: TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         consumer_rtp_parameters: RouterRtpParameters,
+        initial_activity: ConsumerActivity,
     },
     MediaRemoval {
         session_key: TransportSessionKey,
@@ -134,6 +135,7 @@ impl RoomTransportEffect {
             producer_session_key,
             source_transport_media_id,
             consumer_rtp_parameters,
+            initial_activity,
         } = self
         else {
             return Err(TransportAdapterError::InvalidInput);
@@ -150,6 +152,7 @@ impl RoomTransportEffect {
                 producer_session_key,
                 *source_transport_media_id,
                 consumer_rtp_parameters,
+                *initial_activity,
             )
             .await?;
         let mid = media_transport
