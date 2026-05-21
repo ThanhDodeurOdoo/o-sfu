@@ -600,9 +600,9 @@ impl RoomTopology {
     /// missing, the topology has already lost authoritative placement for the
     /// user and the caller receives `MissingRouterForSession`.
     ///
-    /// After successful removal, idle spillover routers are detached. This is
-    /// a cleanup step for local topology state only. Transport session cleanup
-    /// remains owned by the room effect layer.
+    /// Idle spillover cleanup is reconciled by room policy after the state
+    /// transition commits. Transport session cleanup remains owned by the room
+    /// effect layer.
     pub(super) fn remove_session(&mut self, user_id: &UserId) -> Result<(), RoomTopologyError> {
         let home_router_id = self.require_home_router_id(user_id)?;
         if !self.routers.contains_key(&home_router_id) {
@@ -620,7 +620,6 @@ impl RoomTopology {
         self.prune_shadow_sessions(shadow_sessions)?;
         self.session_home_router.remove(user_id);
         self.session_seed_by_user.remove(user_id);
-        self.detach_idle_spillover_routers();
         Ok(())
     }
 
@@ -652,7 +651,6 @@ impl RoomTopology {
         self.prune_shadow_sessions_repairing(shadow_sessions, &mut report);
         self.session_home_router.remove(user_id);
         self.session_seed_by_user.remove(user_id);
-        self.detach_idle_spillover_routers();
         report
     }
 
@@ -767,30 +765,43 @@ impl RoomTopology {
         }
     }
 
-    /// Drop idle spillover router state after home sessions leave.
+    /// Return idle spillover routers that may be detached by room policy.
     ///
     /// Only active-spillover routers are candidates. Shadow sessions do not
-    /// keep a router attached after the last home session leaves because they
-    /// should have been removed with the source or receiver room state before
-    /// leave cleanup reaches this point.
-    fn detach_idle_spillover_routers(&mut self) {
+    /// make a router idle, so cross-router routes can finish cleanup before a
+    /// delayed detach removes the attached router state.
+    pub(in crate::runtime::room) fn idle_spillover_routers(&self) -> Vec<RouterId> {
         let active_home_routers = self
             .session_home_router
             .values()
             .copied()
             .collect::<BTreeSet<_>>();
-        let removable_router_ids = self
-            .router_memberships
+        self.router_memberships
             .iter()
             .filter_map(|(router_id, membership)| {
-                (*membership == RouterMembershipState::ActiveSpillover
-                    && !active_home_routers.contains(router_id))
-                .then_some(*router_id)
+                if *membership != RouterMembershipState::ActiveSpillover
+                    || active_home_routers.contains(router_id)
+                {
+                    return None;
+                }
+                self.routers
+                    .get(router_id)
+                    .is_some_and(|router| router.mapped_session_count() == 0)
+                    .then_some(*router_id)
             })
-            .collect::<Vec<_>>();
-        for router_id in removable_router_ids {
-            self.routers.remove(&router_id);
-            self.router_memberships.remove(&router_id);
+            .collect()
+    }
+
+    /// Drop explicitly selected idle spillover router state.
+    pub(in crate::runtime::room) fn detach_spillover_routers(&mut self, router_ids: &[RouterId]) {
+        for router_id in router_ids {
+            if self.router_memberships.get(router_id)
+                != Some(&RouterMembershipState::ActiveSpillover)
+            {
+                continue;
+            }
+            self.routers.remove(router_id);
+            self.router_memberships.remove(router_id);
         }
     }
 

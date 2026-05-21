@@ -17,10 +17,14 @@ use super::{
     media::{ConsumerRouteView, RelayRouteEffect, RoomMediaGraph, TransportMediaRemoval},
     presence::UserPresence,
 };
-use crate::runtime::{
-    ConnectionId, RecordingState, UserId,
-    router_events::RoomRouterEventSink,
-    source_model::{SourceSubscriptionIntent, UserStreamId},
+use crate::{
+    RoomSpilloverMode,
+    runtime::{
+        ConnectionId, RecordingState, UserId,
+        room::placement::LoadTriggeredPlacementState,
+        router_events::RoomRouterEventSink,
+        source_model::{SourceSubscriptionIntent, UserStreamId},
+    },
 };
 
 /// Core mutable state for a single SFU room (room).
@@ -172,6 +176,67 @@ impl RoomState {
             self.topology.has_assigned_local_placements(),
             self.topology.local_placements(),
         )
+    }
+
+    pub fn source_fanout_pressure(&self, max_fanout_per_source: usize) -> bool {
+        if max_fanout_per_source == 0 {
+            return false;
+        }
+        self.media.sources().any(|source| {
+            if !self
+                .media
+                .producer_for_source(source.source_id())
+                .is_some_and(|producer| producer.active)
+            {
+                return false;
+            }
+            let mut deliveries_by_worker = BTreeMap::new();
+            for key in self.media.consumer_keys_for_source(source.source_id()) {
+                if !self.media.consumer_bootstrap_exists(&key) {
+                    continue;
+                }
+                if self
+                    .media
+                    .consumer_source_selection(&key)
+                    .is_some_and(|selection| !selection.active())
+                {
+                    continue;
+                }
+                let Some(placement) = self.topology.home_placement_for_user(&key.consumer_user_id)
+                else {
+                    continue;
+                };
+                deliveries_by_worker
+                    .entry(placement.media_worker)
+                    .and_modify(|count: &mut usize| *count = count.saturating_add(1))
+                    .or_insert(1);
+            }
+            !deliveries_by_worker.is_empty()
+                && deliveries_by_worker
+                    .values()
+                    .all(|count| *count >= max_fanout_per_source)
+        })
+    }
+
+    pub fn reconcile_spillover_routers(
+        &mut self,
+        spillover: RoomSpilloverMode,
+        placement: &mut LoadTriggeredPlacementState,
+    ) {
+        match spillover {
+            RoomSpilloverMode::StrictSingleRouter => {}
+            RoomSpilloverMode::BoundedLocalSpillover => {
+                let idle_router_ids = self.topology.idle_spillover_routers();
+                self.topology.detach_spillover_routers(&idle_router_ids);
+                placement.clear_cooldowns(&idle_router_ids);
+            }
+            RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) => {
+                let idle_router_ids = self.topology.idle_spillover_routers();
+                let detachments =
+                    placement.cooldown_detachments(&idle_router_ids, policy.cooldown_window());
+                self.topology.detach_spillover_routers(&detachments);
+            }
+        }
     }
 
     pub fn user_connection_id(&self, user_id: &UserId) -> Option<ConnectionId> {

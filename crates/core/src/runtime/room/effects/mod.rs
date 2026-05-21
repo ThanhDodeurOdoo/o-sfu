@@ -450,6 +450,8 @@ impl UnpublishEffectPlan {
             .execute(room, RoomEffectContext::runtime(media_port))
             .await;
         outcome.emit(&self.user, &self.stream);
+        room.observe_load_triggered_source_fanout().await;
+        room.reconcile_spillover_routers().await;
         UnpublishOutcome::Unpublished {
             cleanup: execution.cleanup(),
         }

@@ -2,18 +2,21 @@ use std::{sync::Arc, time::Duration};
 
 use tokio::{sync::Notify, task::yield_now, time::timeout};
 
-use super::fixtures::*;
+use super::{super::placement::RoomPlacementDecisionReason, fixtures::*};
 use crate::{
-    MediaCodecFlags, RuntimeFeatureFlags,
+    LocalSpilloverPolicy, MediaCodecFlags, RoomWorkerPolicy, RuntimeFeatureFlags,
+    prelude::LocalSpilloverPolicyParts,
     runtime::{
         diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
+        packet_sink_registry::RoomPacketSinkRegistry, source_model::UserStreamId,
     },
 };
 
+type TestRoom = super::super::Room;
+
 async fn manager_join_user(
     manager: &RoomManager,
-    room: &Arc<super::super::Room>,
+    room: &Arc<TestRoom>,
     raw_user_id: i64,
     media_transport: &MediaTransport,
 ) -> ConnectionId {
@@ -32,6 +35,106 @@ async fn manager_join_user(
         .await
         .expect("user should join through manager");
     connection_id
+}
+
+fn manager_with_room_worker_policy(room_worker_policy: RoomWorkerPolicy) -> RoomManager {
+    RoomManager::for_test_with_config(super::super::RoomManagerConfig::new(
+        2,
+        super::super::RoomRuntimePolicy::new(
+            RoomAdmissionPolicy::new(100),
+            RuntimeFeatureFlags::default(),
+            super::super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+        )
+        .with_room_worker_policy(room_worker_policy),
+    ))
+}
+
+async fn serve_test_room(manager: &RoomManager, issuer: &str) -> Arc<TestRoom> {
+    manager
+        .serve_room(issuer, TEST_ROOM_KEY, &RoomConfig::default(), None)
+        .await
+}
+
+fn load_triggered_policy(
+    min_receiver_count: usize,
+    activation_window: usize,
+    cooldown_window: usize,
+    max_fanout_per_source: usize,
+) -> RoomWorkerPolicy {
+    let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+        min_receiver_count,
+        max_fanout_per_source,
+        activation_window,
+        cooldown_window,
+        ..LocalSpilloverPolicyParts::conservative()
+    })
+    .expect("test spillover policy should be valid");
+    RoomWorkerPolicy::load_triggered_local_spillover(2, policy)
+}
+
+async fn close_test_user(
+    manager: &RoomManager,
+    room: &Arc<TestRoom>,
+    raw_user_id: i64,
+    connection_id: ConnectionId,
+    media_transport: &MediaTransport,
+) {
+    assert!(
+        manager
+            .close_session(
+                room.uuid(),
+                &UserId::Integer(raw_user_id),
+                connection_id,
+                media_transport,
+            )
+            .await
+    );
+}
+
+async fn assert_home_worker(room: &Arc<TestRoom>, raw_user_id: i64, media_worker: usize) {
+    assert_eq!(
+        room.test_api()
+            .inspect()
+            .topology_home_media_worker_id(&UserId::Integer(raw_user_id))
+            .await,
+        Some(media_worker)
+    );
+}
+
+async fn assert_router_count(room: &Arc<TestRoom>, expected: usize) {
+    assert_eq!(
+        room.test_api().inspect().topology_router_count().await,
+        expected
+    );
+}
+
+fn assert_last_decision_reason(room: &Arc<TestRoom>, reason: RoomPlacementDecisionReason) {
+    assert_eq!(
+        room.test_api()
+            .inspect()
+            .load_triggered_last_decision_reason(),
+        Some(reason)
+    );
+}
+
+async fn seed_source_fanout_pressure(
+    manager: &RoomManager,
+    room: &Arc<TestRoom>,
+    media_transport: &MediaTransport,
+) -> UserStreamId {
+    manager_join_user(manager, room, 1, media_transport).await;
+    manager_join_user(manager, room, 2, media_transport).await;
+    make_session_ready_with_transport(room, &UserId::Integer(1), media_transport).await;
+    make_session_ready_with_transport(room, &UserId::Integer(2), media_transport).await;
+    publish_track(
+        room,
+        &UserId::Integer(1),
+        TestSourceKind::AudioDetector,
+        MediaKind::Audio,
+        test_audio_rtp_parameters(),
+        media_transport,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -259,4 +362,145 @@ async fn manager_lifecycle_future_does_not_block_empty_cleanup() {
         .expect("lifecycle holder task should not panic");
     assert!(held_room.is_some());
     assert!(manager.get_by_uuid(&room_id).await.is_none());
+}
+
+#[tokio::test]
+async fn load_triggered_join_keeps_small_rooms_on_primary_worker() {
+    let manager = manager_with_room_worker_policy(load_triggered_policy(4, 1, 1, 48));
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-load-small").await;
+
+    manager_join_user(&manager, &room, 1, &media_transport).await;
+    manager_join_user(&manager, &room, 2, &media_transport).await;
+
+    assert_home_worker(&room, 1, 0).await;
+    assert_home_worker(&room, 2, 0).await;
+}
+
+#[tokio::test]
+async fn load_triggered_join_requires_sustained_receiver_pressure() {
+    let manager = manager_with_room_worker_policy(load_triggered_policy(2, 2, 1, 48));
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-load-activation").await;
+
+    manager_join_user(&manager, &room, 1, &media_transport).await;
+    manager_join_user(&manager, &room, 2, &media_transport).await;
+    assert_last_decision_reason(&room, RoomPlacementDecisionReason::ActivationWindowNotMet);
+    manager_join_user(&manager, &room, 3, &media_transport).await;
+
+    assert_home_worker(&room, 2, 0).await;
+    assert_home_worker(&room, 3, 1).await;
+    assert_last_decision_reason(&room, RoomPlacementDecisionReason::ReceiverCountPressure);
+}
+
+#[tokio::test]
+async fn bounded_spillover_still_detaches_idle_router_immediately() {
+    let manager = manager_with_room_worker_policy(RoomWorkerPolicy::bounded_local_spillover(2));
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-bounded-detach").await;
+    manager_join_user(&manager, &room, 1, &media_transport).await;
+    let second_connection = manager_join_user(&manager, &room, 2, &media_transport).await;
+    assert_router_count(&room, 2).await;
+
+    close_test_user(&manager, &room, 2, second_connection, &media_transport).await;
+
+    assert_router_count(&room, 1).await;
+}
+
+#[tokio::test]
+async fn load_triggered_cooldown_delays_idle_spillover_detach() {
+    let manager = manager_with_room_worker_policy(load_triggered_policy(2, 1, 3, 48));
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-load-cooldown").await;
+    manager_join_user(&manager, &room, 1, &media_transport).await;
+    let second_connection = manager_join_user(&manager, &room, 2, &media_transport).await;
+    assert_router_count(&room, 2).await;
+
+    close_test_user(&manager, &room, 2, second_connection, &media_transport).await;
+    assert_router_count(&room, 2).await;
+
+    manager.drain_cleanup_retries(&media_transport).await;
+    assert_router_count(&room, 2).await;
+    manager.drain_cleanup_retries(&media_transport).await;
+    assert_router_count(&room, 1).await;
+}
+
+#[tokio::test]
+async fn load_triggered_activity_resets_spillover_cooldown() {
+    let manager = manager_with_room_worker_policy(load_triggered_policy(2, 1, 3, 48));
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-load-cooldown-reset").await;
+    manager_join_user(&manager, &room, 1, &media_transport).await;
+    let second_connection = manager_join_user(&manager, &room, 2, &media_transport).await;
+
+    close_test_user(&manager, &room, 2, second_connection, &media_transport).await;
+    assert_router_count(&room, 2).await;
+    let third_connection = manager_join_user(&manager, &room, 3, &media_transport).await;
+    assert_home_worker(&room, 3, 1).await;
+
+    close_test_user(&manager, &room, 3, third_connection, &media_transport).await;
+    manager.drain_cleanup_retries(&media_transport).await;
+
+    assert_router_count(&room, 2).await;
+}
+
+#[tokio::test]
+async fn source_fanout_pressure_places_next_join_on_spillover_worker() {
+    let manager = manager_with_room_worker_policy(load_triggered_policy(99, 1, 1, 1));
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-load-fanout").await;
+    seed_source_fanout_pressure(&manager, &room, &media_transport).await;
+
+    manager_join_user(&manager, &room, 3, &media_transport).await;
+
+    assert_home_worker(&room, 3, 1).await;
+    assert_last_decision_reason(&room, RoomPlacementDecisionReason::SourceFanoutPressure);
+}
+
+#[tokio::test]
+async fn source_fanout_pressure_clears_after_unpublish() {
+    let manager = manager_with_room_worker_policy(load_triggered_policy(99, 1, 1, 1));
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-load-fanout-clear").await;
+    let stream_id = seed_source_fanout_pressure(&manager, &room, &media_transport).await;
+    let publisher_connection = user_connection_id(&room, &UserId::Integer(1)).await;
+
+    assert_eq!(
+        room.user_operation(&UserId::Integer(1), publisher_connection, &media_transport)
+            .unpublish(&stream_id)
+            .await,
+        UnpublishOutcome::Unpublished {
+            cleanup: crate::TransportEffectOutcome::Applied
+        }
+    );
+    manager_join_user(&manager, &room, 3, &media_transport).await;
+
+    assert_home_worker(&room, 3, 0).await;
+}
+
+#[tokio::test]
+async fn source_fanout_pressure_clears_after_receiver_leave() {
+    let manager = manager_with_room_worker_policy(load_triggered_policy(99, 1, 1, 1));
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-load-fanout-leave").await;
+    seed_source_fanout_pressure(&manager, &room, &media_transport).await;
+    let receiver_connection = user_connection_id(&room, &UserId::Integer(2)).await;
+
+    close_test_user(&manager, &room, 2, receiver_connection, &media_transport).await;
+    manager_join_user(&manager, &room, 3, &media_transport).await;
+
+    assert_home_worker(&room, 3, 0).await;
+}
+
+#[tokio::test]
+async fn source_fanout_pressure_clears_after_receiver_replacement() {
+    let manager = manager_with_room_worker_policy(load_triggered_policy(99, 2, 1, 1));
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-load-fanout-replace").await;
+    seed_source_fanout_pressure(&manager, &room, &media_transport).await;
+
+    manager_join_user(&manager, &room, 2, &media_transport).await;
+    manager_join_user(&manager, &room, 3, &media_transport).await;
+
+    assert_home_worker(&room, 3, 0).await;
 }

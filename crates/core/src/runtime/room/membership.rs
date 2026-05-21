@@ -25,7 +25,10 @@ use tracing::warn;
 #[cfg(any(test, feature = "testing-transport"))]
 use {
     super::placement::{RoomPlacementPlanner, WorkerLoadIndex},
-    crate::runtime::media_transport::TransportWorkerPressureSnapshot,
+    crate::{
+        RoomSpilloverMode,
+        runtime::{media_transport::TransportWorkerPressureSnapshot, sync::lock_unpoisoned},
+    },
 };
 
 use super::{
@@ -201,9 +204,17 @@ impl Room {
             load_index.record_consumer(media_worker_id);
         }
         let planner = RoomPlacementPlanner::new(policy.max_local_routers(), policy);
-        planner
-            .choose(&room_snapshot, &load_index)
-            .resolve(&room_snapshot, || room_snapshot.next_local_router_id())
+        let decision = match policy.spillover() {
+            RoomSpilloverMode::LoadTriggeredLocalSpillover(_) => {
+                self.observe_load_triggered_source_fanout().await;
+                let mut load_state = lock_unpoisoned(&self.load_triggered_placement);
+                planner.choose_with_load_state(&room_snapshot, &load_index, &mut load_state)
+            }
+            RoomSpilloverMode::StrictSingleRouter | RoomSpilloverMode::BoundedLocalSpillover => {
+                planner.choose(&room_snapshot, &load_index)
+            }
+        };
+        decision.resolve(&room_snapshot, || room_snapshot.next_local_router_id())
     }
 
     /// join a user after placement has already been selected
@@ -474,7 +485,7 @@ impl Room {
         outcome: UserTransitionOutcome,
         cleanup: UserCleanup<'_>,
     ) -> UserTransitionResult {
-        match outcome {
+        let result = match outcome {
             UserTransitionOutcome::Join {
                 outcome,
                 count_delta,
@@ -504,7 +515,10 @@ impl Room {
                 self.finalize_disconnect_transition(outcome, count_delta, cleanup)
                     .await
             }
-        }
+        };
+        self.observe_load_triggered_source_fanout().await;
+        self.reconcile_spillover_routers().await;
+        result
     }
 
     /// Finalize a committed join after room state has allocated its connection.

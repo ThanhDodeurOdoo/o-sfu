@@ -40,11 +40,14 @@ use super::{
     init::RoomInit,
     media_transaction::PendingPublishTransactions,
     operation::RoomUserOperation,
-    placement::{RoomPlacementLedger, RoomPlacementUsageSnapshot, RoomWorkerLoadContribution},
+    placement::{
+        LoadTriggeredPlacementState, RoomPlacementLedger, RoomPlacementUsageSnapshot,
+        RoomWorkerLoadContribution,
+    },
     state::{ConsumerRouteState, ConsumerRouteTransportRef, RoomState},
 };
 use crate::{
-    RoomWorkerPolicy, RuntimeFeatureFlags,
+    RoomSpilloverMode, RoomWorkerPolicy, RuntimeFeatureFlags,
     runtime::{
         AvailableFeatures, ConnectionId, PeerSnapshot, RecordingState, RoomInstanceId, UserId,
         diagnostics::{
@@ -59,6 +62,7 @@ use crate::{
         recording::RecordingService,
         router_events::RoomRouterEventSink,
         source_model::UserStreamId,
+        sync::lock_unpoisoned,
     },
 };
 
@@ -197,6 +201,8 @@ pub struct Room {
     /// full committed placement needed to build session keys after placement
     /// has been committed.
     pub(super) placement_ledger: RoomPlacementLedger,
+    /// Room-local memory for load-triggered placement hysteresis.
+    pub(super) load_triggered_placement: StdMutex<LoadTriggeredPlacementState>,
     #[allow(
         dead_code,
         reason = "recording control-plane wiring is intentionally deferred until the replacement baseline is validated"
@@ -266,6 +272,7 @@ impl Room {
             diagnostics: services.diagnostics,
             definition,
             placement_ledger: RoomPlacementLedger::new(runtime_context.local_routers().primary()),
+            load_triggered_placement: StdMutex::new(LoadTriggeredPlacementState::default()),
             recording_service: Arc::clone(&recording_service),
             metrics: services.metrics,
             cleanup_reconciler: StdMutex::new(CleanupReconciler::default()),
@@ -364,6 +371,37 @@ impl Room {
                 })
                 .collect(),
         }
+    }
+
+    pub(in crate::runtime::room) async fn observe_load_triggered_source_fanout(&self) {
+        let RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) =
+            self.room_worker_policy().spillover()
+        else {
+            return;
+        };
+        let pressured = self
+            .state
+            .read()
+            .await
+            .source_fanout_pressure(policy.max_fanout_per_source());
+        lock_unpoisoned(&self.load_triggered_placement).set_source_fanout_pressure(pressured);
+    }
+
+    pub(in crate::runtime::room) async fn reconcile_spillover_routers(&self) {
+        let spillover = self.room_worker_policy().spillover();
+        if matches!(&spillover, RoomSpilloverMode::StrictSingleRouter) {
+            return;
+        }
+        let mut state = self.state.write().await;
+        let mut placement = lock_unpoisoned(&self.load_triggered_placement);
+        state.reconcile_spillover_routers(spillover, &mut placement);
+    }
+
+    #[cfg(test)]
+    pub(in crate::runtime::room) fn load_triggered_last_decision_reason(
+        &self,
+    ) -> Option<super::placement::RoomPlacementDecisionReason> {
+        lock_unpoisoned(&self.load_triggered_placement).last_decision_reason()
     }
 
     /// Current route state for one consumer or producer pair

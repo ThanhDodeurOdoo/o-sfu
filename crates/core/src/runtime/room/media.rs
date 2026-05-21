@@ -51,6 +51,7 @@ impl RoomUserOperation<'_> {
             planned_bootstraps,
             ConsumerBootstrapOrigin::LateJoin,
         );
+        room.observe_load_triggered_source_fanout().await;
         effect_plan.execute(room, self.media_transport()).await;
         true
     }
@@ -76,6 +77,7 @@ impl Room {
                 origin,
             )
         };
+        self.observe_load_triggered_source_fanout().await;
         effect_plan.execute(self, media_port).await;
     }
 
@@ -146,6 +148,7 @@ impl RoomUserOperation<'_> {
             .insert_field("stream_id", stream_id.to_string()),
         );
         outcome.emit();
+        room.observe_load_triggered_source_fanout().await;
         PublicationActivityOutcome::Applied { transport_update }
     }
 
@@ -187,6 +190,7 @@ impl RoomUserOperation<'_> {
                 planned_change,
             )
         };
+        room.observe_load_triggered_source_fanout().await;
         effect_plan.execute(room, self.media_transport()).await;
         room.sync_source_packet_selection_policy(self.media_transport())
             .await;

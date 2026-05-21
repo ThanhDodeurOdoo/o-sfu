@@ -357,6 +357,82 @@ pub(super) enum RoomPlacementDecision {
     AllocateSpillover { media_worker_id: usize },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::runtime::room) enum RoomPlacementDecisionReason {
+    ExistingPlacementAvailable,
+    ReceiverCountPressure,
+    ConsumerPressure,
+    SourceFanoutPressure,
+    EgressPressure,
+    PacketLoopLagPressure,
+    CommandBacklogPressure,
+    RelayMailboxPressure,
+    WorkerPressure,
+    ActivationWindowNotMet,
+    LocalRouterCapReached,
+}
+
+#[derive(Debug, Default)]
+pub(in crate::runtime::room) struct LoadTriggeredPlacementState {
+    activation_streak: usize,
+    source_fanout_pressure: bool,
+    cooldown_by_router: BTreeMap<RouterId, usize>,
+    last_decision_reason: Option<RoomPlacementDecisionReason>,
+}
+
+impl LoadTriggeredPlacementState {
+    pub(in crate::runtime::room) fn set_source_fanout_pressure(&mut self, pressured: bool) {
+        self.source_fanout_pressure = pressured;
+    }
+
+    fn record_decision(&mut self, reason: RoomPlacementDecisionReason) {
+        self.last_decision_reason = Some(reason);
+    }
+
+    fn reset_activation(&mut self) {
+        self.activation_streak = 0;
+    }
+
+    fn record_pressure(&mut self, policy: LocalSpilloverPolicy) -> bool {
+        self.activation_streak = self.activation_streak.saturating_add(1);
+        self.activation_streak >= policy.activation_window()
+    }
+
+    pub(in crate::runtime::room) fn cooldown_detachments(
+        &mut self,
+        idle_router_ids: &[RouterId],
+        cooldown_window: usize,
+    ) -> Vec<RouterId> {
+        self.cooldown_by_router
+            .retain(|router_id, _| idle_router_ids.contains(router_id));
+        let mut detached = Vec::new();
+        for router_id in idle_router_ids {
+            let cooldown = self.cooldown_by_router.entry(*router_id).or_default();
+            *cooldown = cooldown.saturating_add(1);
+            if *cooldown >= cooldown_window {
+                detached.push(*router_id);
+            }
+        }
+        for router_id in &detached {
+            self.cooldown_by_router.remove(router_id);
+        }
+        detached
+    }
+
+    pub(in crate::runtime::room) fn clear_cooldowns(&mut self, router_ids: &[RouterId]) {
+        for router_id in router_ids {
+            self.cooldown_by_router.remove(router_id);
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::runtime::room) const fn last_decision_reason(
+        &self,
+    ) -> Option<RoomPlacementDecisionReason> {
+        self.last_decision_reason
+    }
+}
+
 impl RoomPlacementDecision {
     pub(super) fn resolve(
         self,
@@ -429,20 +505,44 @@ impl WorkerPlacementLoad {
         }
     }
 
+    fn pressure_reason(self, policy: LocalSpilloverPolicy) -> Option<RoomPlacementDecisionReason> {
+        if self.session_count.saturating_add(1) >= policy.min_receiver_count() {
+            return Some(RoomPlacementDecisionReason::ReceiverCountPressure);
+        }
+        if self.consumer_count >= policy.max_active_consumers_per_router() {
+            return Some(RoomPlacementDecisionReason::ConsumerPressure);
+        }
+        if policy.egress_bitrate_threshold() > crate::Bitrate::zero()
+            && self.pressure.egress_bitrate >= policy.egress_bitrate_threshold()
+        {
+            return Some(RoomPlacementDecisionReason::EgressPressure);
+        }
+        if policy.packet_loop_lag_threshold_ms() > 0
+            && self.pressure.packet_loop_lag_ms >= policy.packet_loop_lag_threshold_ms()
+        {
+            return Some(RoomPlacementDecisionReason::PacketLoopLagPressure);
+        }
+        if policy.command_backlog_threshold() > 0
+            && self.pressure.command_backlog_depth >= policy.command_backlog_threshold()
+        {
+            return Some(RoomPlacementDecisionReason::CommandBacklogPressure);
+        }
+        if policy.relay_mailbox_depth_threshold() > 0
+            && self.pressure.relay_mailbox_depth >= policy.relay_mailbox_depth_threshold()
+        {
+            return Some(RoomPlacementDecisionReason::RelayMailboxPressure);
+        }
+        if policy.worker_pressure_threshold() > 0
+            && self.pressure.worker_pressure_score >= policy.worker_pressure_threshold()
+        {
+            return Some(RoomPlacementDecisionReason::WorkerPressure);
+        }
+        None
+    }
+
     /// whether adding another receiver would cross any spillover trigger
     fn is_overloaded(self, policy: LocalSpilloverPolicy) -> bool {
-        self.session_count.saturating_add(1) >= policy.min_receiver_count()
-            || self.consumer_count >= policy.max_active_consumers_per_router()
-            || policy.egress_bitrate_threshold() > crate::Bitrate::zero()
-                && self.pressure.egress_bitrate >= policy.egress_bitrate_threshold()
-            || policy.packet_loop_lag_threshold_ms() > 0
-                && self.pressure.packet_loop_lag_ms >= policy.packet_loop_lag_threshold_ms()
-            || policy.command_backlog_threshold() > 0
-                && self.pressure.command_backlog_depth >= policy.command_backlog_threshold()
-            || policy.relay_mailbox_depth_threshold() > 0
-                && self.pressure.relay_mailbox_depth >= policy.relay_mailbox_depth_threshold()
-            || policy.worker_pressure_threshold() > 0
-                && self.pressure.worker_pressure_score >= policy.worker_pressure_threshold()
+        self.pressure_reason(policy).is_some()
     }
 }
 
@@ -602,6 +702,16 @@ impl RoomPlacementPlanner {
         room: &RoomPlacementUsageSnapshot,
         load_index: &WorkerLoadIndex,
     ) -> RoomPlacementDecision {
+        let mut load_state = LoadTriggeredPlacementState::default();
+        self.choose_with_load_state(room, load_index, &mut load_state)
+    }
+
+    pub(super) fn choose_with_load_state(
+        &self,
+        room: &RoomPlacementUsageSnapshot,
+        load_index: &WorkerLoadIndex,
+        load_state: &mut LoadTriggeredPlacementState,
+    ) -> RoomPlacementDecision {
         let placement_cap = self
             .policy
             .max_local_routers()
@@ -610,12 +720,14 @@ impl RoomPlacementPlanner {
         let score_policy = score_policy(self.policy);
         let assigned_placements = room.assigned_placements();
         if assigned_placements.is_empty() {
+            load_state.reset_activation();
             return RoomPlacementDecision::AssignPrimary {
                 media_worker_id: load_index.least_loaded_worker(&[], score_policy),
             };
         }
         match self.policy.spillover() {
             RoomSpilloverMode::StrictSingleRouter => {
+                load_state.reset_activation();
                 RoomPlacementDecision::UseExisting(assigned_placements.first().copied().unwrap_or(
                     LocalRouterRuntimeContext {
                         router: room.primary_router(),
@@ -625,29 +737,46 @@ impl RoomPlacementPlanner {
             }
             RoomSpilloverMode::BoundedLocalSpillover => {
                 if assigned_placements.len() < placement_cap {
+                    load_state.reset_activation();
                     return RoomPlacementDecision::AllocateSpillover {
                         media_worker_id: load_index
                             .least_loaded_worker(assigned_placements, score_policy),
                     };
                 }
+                load_state.reset_activation();
                 RoomPlacementDecision::UseExisting(
                     load_index.least_loaded_placement(assigned_placements, score_policy),
                 )
             }
             RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) => {
                 let placement = load_index.least_loaded_placement(assigned_placements, policy);
-                if !load_index
+                let worker_pressure = load_index
                     .load_for_worker(placement.media_worker)
-                    .is_overloaded(policy)
-                {
+                    .pressure_reason(policy);
+                let pressure_reason = worker_pressure.or_else(|| {
+                    load_state
+                        .source_fanout_pressure
+                        .then_some(RoomPlacementDecisionReason::SourceFanoutPressure)
+                });
+                let Some(reason) = pressure_reason else {
+                    load_state.reset_activation();
+                    load_state
+                        .record_decision(RoomPlacementDecisionReason::ExistingPlacementAvailable);
+                    return RoomPlacementDecision::UseExisting(placement);
+                };
+                if !load_state.record_pressure(policy) {
+                    load_state.record_decision(RoomPlacementDecisionReason::ActivationWindowNotMet);
                     return RoomPlacementDecision::UseExisting(placement);
                 }
                 if assigned_placements.len() < placement_cap {
+                    load_state.reset_activation();
+                    load_state.record_decision(reason);
                     return RoomPlacementDecision::AllocateSpillover {
                         media_worker_id: load_index
                             .least_loaded_worker(assigned_placements, policy),
                     };
                 }
+                load_state.record_decision(RoomPlacementDecisionReason::LocalRouterCapReached);
                 RoomPlacementDecision::UseExisting(placement)
             }
         }
@@ -673,6 +802,65 @@ mod tests {
         prelude::{LocalSpilloverPolicyError, LocalSpilloverPolicyParts},
     };
 
+    fn placement(router: u64, media_worker: usize) -> LocalRouterRuntimeContext {
+        LocalRouterRuntimeContext {
+            router: RouterId(router),
+            media_worker,
+        }
+    }
+
+    fn primary_placement() -> LocalRouterRuntimeContext {
+        placement(7, 0)
+    }
+
+    fn room_with(placements: Vec<LocalRouterRuntimeContext>) -> RoomPlacementUsageSnapshot {
+        RoomPlacementUsageSnapshot::new(RouterId(7), true, placements)
+    }
+
+    fn primary_room() -> RoomPlacementUsageSnapshot {
+        room_with(vec![primary_placement()])
+    }
+
+    fn hot_loads(workers: impl IntoIterator<Item = usize>) -> WorkerLoadIndex {
+        WorkerLoadIndex::new(
+            2,
+            workers
+                .into_iter()
+                .map(|worker| {
+                    TransportWorkerPressureSnapshot::new(
+                        worker,
+                        TransportPlacementPressureSnapshot {
+                            egress_bitrate: Bitrate::from_bps(512),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    fn egress_policy(
+        activation_window: usize,
+    ) -> Result<LocalSpilloverPolicy, LocalSpilloverPolicyError> {
+        LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+            min_receiver_count: 99,
+            egress_bitrate_threshold: Bitrate::from_bps(256),
+            activation_window,
+            ..LocalSpilloverPolicyParts::conservative()
+        })
+    }
+
+    fn load_planner(policy: LocalSpilloverPolicy) -> RoomPlacementPlanner {
+        RoomPlacementPlanner::new(
+            2,
+            RoomWorkerPolicy::load_triggered_local_spillover(2, policy),
+        )
+    }
+
+    fn assert_reason(state: &LoadTriggeredPlacementState, reason: RoomPlacementDecisionReason) {
+        assert_eq!(state.last_decision_reason(), Some(reason));
+    }
+
     #[test]
     fn first_join_uses_lowest_load_worker() {
         let mut loads = WorkerLoadIndex::new(2, Vec::new());
@@ -691,14 +879,7 @@ mod tests {
         let mut loads = WorkerLoadIndex::new(3, Vec::new());
         loads.record_session(0);
         let planner = RoomPlacementPlanner::new(3, RoomWorkerPolicy::bounded_local_spillover(2));
-        let room = RoomPlacementUsageSnapshot::new(
-            RouterId(7),
-            true,
-            vec![LocalRouterRuntimeContext {
-                router: RouterId(7),
-                media_worker: 0,
-            }],
-        );
+        let room = primary_room();
 
         assert_eq!(
             planner.choose(&room, &loads),
@@ -709,21 +890,11 @@ mod tests {
     #[test]
     fn strict_room_reuses_assigned_worker_after_it_becomes_empty() {
         let planner = RoomPlacementPlanner::new(3, RoomWorkerPolicy::strict_single_router());
-        let room = RoomPlacementUsageSnapshot::new(
-            RouterId(7),
-            true,
-            vec![LocalRouterRuntimeContext {
-                router: RouterId(7),
-                media_worker: 2,
-            }],
-        );
+        let room = room_with(vec![placement(7, 2)]);
 
         assert_eq!(
             planner.choose(&room, &WorkerLoadIndex::new(3, Vec::new())),
-            RoomPlacementDecision::UseExisting(LocalRouterRuntimeContext {
-                router: RouterId(7),
-                media_worker: 2,
-            })
+            RoomPlacementDecision::UseExisting(placement(7, 2))
         );
     }
 
@@ -736,15 +907,9 @@ mod tests {
             min_receiver_count: 4,
             ..LocalSpilloverPolicyParts::conservative()
         })?;
-        let planner = RoomPlacementPlanner::new(
-            2,
-            RoomWorkerPolicy::load_triggered_local_spillover(2, policy),
-        );
-        let placement = LocalRouterRuntimeContext {
-            router: RouterId(7),
-            media_worker: 0,
-        };
-        let room = RoomPlacementUsageSnapshot::new(RouterId(7), true, vec![placement]);
+        let planner = load_planner(policy);
+        let placement = primary_placement();
+        let room = primary_room();
 
         assert_eq!(
             planner.choose(&room, &loads),
@@ -756,39 +921,129 @@ mod tests {
     #[test]
     fn load_triggered_spillover_allocates_when_existing_worker_is_hot()
     -> Result<(), LocalSpilloverPolicyError> {
-        let mut loads = WorkerLoadIndex::new(
-            2,
-            vec![TransportWorkerPressureSnapshot::new(
-                0,
-                TransportPlacementPressureSnapshot {
-                    egress_bitrate: Bitrate::from_bps(512),
-                    ..Default::default()
-                },
-            )],
-        );
+        let mut loads = hot_loads([0]);
         loads.record_session(0);
-        let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
-            min_receiver_count: 99,
-            egress_bitrate_threshold: Bitrate::from_bps(256),
-            ..LocalSpilloverPolicyParts::conservative()
-        })?;
-        let planner = RoomPlacementPlanner::new(
-            2,
-            RoomWorkerPolicy::load_triggered_local_spillover(2, policy),
-        );
-        let room = RoomPlacementUsageSnapshot::new(
-            RouterId(7),
-            true,
-            vec![LocalRouterRuntimeContext {
-                router: RouterId(7),
-                media_worker: 0,
-            }],
-        );
+        let planner = load_planner(egress_policy(1)?);
+        let room = primary_room();
 
         assert_eq!(
             planner.choose(&room, &loads),
             RoomPlacementDecision::AllocateSpillover { media_worker_id: 1 }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn activation_window_delays_load_triggered_allocation() -> Result<(), LocalSpilloverPolicyError>
+    {
+        let mut loads = hot_loads([0]);
+        loads.record_session(0);
+        let planner = load_planner(egress_policy(2)?);
+        let room = primary_room();
+        let mut state = LoadTriggeredPlacementState::default();
+
+        assert_eq!(
+            planner.choose_with_load_state(&room, &loads, &mut state),
+            RoomPlacementDecision::UseExisting(primary_placement())
+        );
+        assert_reason(&state, RoomPlacementDecisionReason::ActivationWindowNotMet);
+        assert_eq!(
+            planner.choose_with_load_state(&room, &loads, &mut state),
+            RoomPlacementDecision::AllocateSpillover { media_worker_id: 1 }
+        );
+        assert_reason(&state, RoomPlacementDecisionReason::EgressPressure);
+        Ok(())
+    }
+
+    #[test]
+    fn pressure_clearing_resets_activation_window() -> Result<(), LocalSpilloverPolicyError> {
+        let hot = hot_loads([0]);
+        let idle_loads = WorkerLoadIndex::new(2, Vec::new());
+        let planner = load_planner(egress_policy(2)?);
+        let placement = primary_placement();
+        let room = primary_room();
+        let mut state = LoadTriggeredPlacementState::default();
+
+        assert_eq!(
+            planner.choose_with_load_state(&room, &hot, &mut state),
+            RoomPlacementDecision::UseExisting(placement)
+        );
+        assert_eq!(
+            planner.choose_with_load_state(&room, &idle_loads, &mut state),
+            RoomPlacementDecision::UseExisting(placement)
+        );
+        assert_reason(
+            &state,
+            RoomPlacementDecisionReason::ExistingPlacementAvailable,
+        );
+        assert_eq!(
+            planner.choose_with_load_state(&room, &hot, &mut state),
+            RoomPlacementDecision::UseExisting(placement)
+        );
+        assert_reason(&state, RoomPlacementDecisionReason::ActivationWindowNotMet);
+        Ok(())
+    }
+
+    #[test]
+    fn allocation_resets_activation_window() -> Result<(), LocalSpilloverPolicyError> {
+        let loads = hot_loads([0]);
+        let planner = load_planner(egress_policy(2)?);
+        let placement = primary_placement();
+        let room = primary_room();
+        let mut state = LoadTriggeredPlacementState::default();
+
+        assert_eq!(
+            planner.choose_with_load_state(&room, &loads, &mut state),
+            RoomPlacementDecision::UseExisting(placement)
+        );
+        assert_eq!(
+            planner.choose_with_load_state(&room, &loads, &mut state),
+            RoomPlacementDecision::AllocateSpillover { media_worker_id: 1 }
+        );
+        assert_eq!(
+            planner.choose_with_load_state(&room, &loads, &mut state),
+            RoomPlacementDecision::UseExisting(placement)
+        );
+        assert_reason(&state, RoomPlacementDecisionReason::ActivationWindowNotMet);
+        Ok(())
+    }
+
+    #[test]
+    fn cap_reached_reuses_existing_placement_after_activation()
+    -> Result<(), LocalSpilloverPolicyError> {
+        let loads = hot_loads([0, 1]);
+        let planner = load_planner(egress_policy(1)?);
+        let first = primary_placement();
+        let room = room_with(vec![first, placement(8, 1)]);
+        let mut state = LoadTriggeredPlacementState::default();
+
+        assert_eq!(
+            planner.choose_with_load_state(&room, &loads, &mut state),
+            RoomPlacementDecision::UseExisting(first)
+        );
+        assert_reason(&state, RoomPlacementDecisionReason::LocalRouterCapReached);
+        Ok(())
+    }
+
+    #[test]
+    fn source_fanout_pressure_participates_in_activation() -> Result<(), LocalSpilloverPolicyError>
+    {
+        let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+            min_receiver_count: 99,
+            egress_bitrate_threshold: Bitrate::from_bps(0),
+            activation_window: 1,
+            ..LocalSpilloverPolicyParts::conservative()
+        })?;
+        let planner = load_planner(policy);
+        let room = primary_room();
+        let mut state = LoadTriggeredPlacementState::default();
+        state.set_source_fanout_pressure(true);
+
+        assert_eq!(
+            planner.choose_with_load_state(&room, &WorkerLoadIndex::new(2, Vec::new()), &mut state),
+            RoomPlacementDecision::AllocateSpillover { media_worker_id: 1 }
+        );
+        assert_reason(&state, RoomPlacementDecisionReason::SourceFanoutPressure);
         Ok(())
     }
 }
