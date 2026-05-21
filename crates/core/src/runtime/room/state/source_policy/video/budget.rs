@@ -125,22 +125,7 @@ fn plan_receiver_routes<'a>(
         .find_map(ReceiverVideoRouteInput::receiver_bandwidth);
     let mut planned_routes = routes
         .iter()
-        .filter_map(|route| {
-            let adaptation = consumer_route_adaptation_plan(route)?;
-            let selected_bitrate = selector_bitrate(route.encodings(), adaptation.selector);
-            let outcomes = adaptation_outcomes(
-                route.encodings(),
-                route.current_selection(),
-                adaptation.selector,
-            );
-            Some(PlannedReceiverRoute {
-                route,
-                adaptation,
-                selected_bitrate,
-                action: VideoRouteAction::Send(adaptation.selector),
-                outcomes,
-            })
-        })
+        .filter_map(planned_receiver_route)
         .collect::<Vec<_>>();
     apply_receiver_video_download_limit(&mut planned_routes, max_video_downloads_per_receiver);
     if let Some(receiver_bandwidth) = receiver_bandwidth {
@@ -151,6 +136,26 @@ fn plan_receiver_routes<'a>(
         .into_iter()
         .filter_map(|route| planned_route_update(route, budget))
         .collect()
+}
+
+fn planned_receiver_route<'a>(
+    route: &'a ReceiverVideoRouteInput<'a>,
+) -> Option<PlannedReceiverRoute<'a>> {
+    let adaptation =
+        consumer_route_adaptation_plan(route).or_else(|| current_route_admission_plan(route))?;
+    let selected_bitrate = selector_bitrate(route.encodings(), adaptation.selector);
+    let outcomes = adaptation_outcomes(
+        route.encodings(),
+        route.current_selection(),
+        adaptation.selector,
+    );
+    Some(PlannedReceiverRoute {
+        route,
+        adaptation,
+        selected_bitrate,
+        action: VideoRouteAction::Send(adaptation.selector),
+        outcomes,
+    })
 }
 
 fn consumer_route_adaptation_plan(
@@ -165,6 +170,21 @@ fn consumer_route_adaptation_plan(
         route.visible_scalable_route_count(),
         route.receiver_bandwidth(),
     )
+}
+
+fn current_route_admission_plan(
+    route: &ReceiverVideoRouteInput<'_>,
+) -> Option<ConsumerAdaptationPlan> {
+    if route.adaptation_policy() == SourceAdaptationPolicy::None {
+        return None;
+    }
+    let current = route.current_selection();
+    Some(ConsumerAdaptationPlan {
+        selector: current.selector(),
+        pressure_observations: current.pressure_observations(),
+        upgrade_observations: current.upgrade_observations(),
+        request_keyframe: false,
+    })
 }
 
 fn apply_receiver_video_download_limit(
@@ -763,17 +783,50 @@ mod tests {
         })
     }
 
+    fn ridless_encoding(
+        source_id: PublishedSourceId,
+        encoding_id: SourceEncodingId,
+    ) -> SourceEncodingDescriptor {
+        SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
+            encoding_id,
+            source_id,
+            rid: None,
+            primary_ssrc: None,
+            repair_ssrc: None,
+            max_bitrate: Some(Bitrate::from_kbps(900)),
+            resolution_scale: None,
+            max_framerate: None,
+            policy_role: None,
+            max_temporal_layer_id: None,
+            negotiated_format: None,
+        })
+    }
+
     fn scalable_source(
         encodings: Vec<SourceEncodingDescriptor>,
     ) -> Result<PublishedSourceDescriptor, SourceModelError> {
+        scalable_source_with(
+            PublishedSourceId::from_raw(7),
+            UserId::Integer(41),
+            SourceRoomPolicySelector::VisibleThumbnail,
+            encodings,
+        )
+    }
+
+    fn scalable_source_with(
+        source_id: PublishedSourceId,
+        owner_user_id: UserId,
+        visible_selector: SourceRoomPolicySelector,
+        encodings: Vec<SourceEncodingDescriptor>,
+    ) -> Result<PublishedSourceDescriptor, SourceModelError> {
         PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
-            source_id: PublishedSourceId::from_raw(7),
-            owner: PublishedSourceOwner::new(UserId::Integer(41)),
+            source_id,
+            owner: PublishedSourceOwner::new(owner_user_id),
             stream_id: UserStreamId::new("camera"),
             media_kind: MediaKind::Video,
             policy: SourcePolicy::new(
                 Some(SourceLayoutPolicy::new(
-                    SourceRoomPolicySelector::VisibleThumbnail,
+                    visible_selector,
                     Some(SourceRoomPolicySelector::ActiveSpeaker),
                 )),
                 SourceAdaptationPolicy::ScalableVideo,
@@ -788,6 +841,18 @@ mod tests {
         source: &PublishedSourceDescriptor,
         current_selection: ConsumerSourceSelection,
     ) -> ReceiverVideoRouteInput<'_> {
+        route_with_layout(
+            source,
+            current_selection,
+            SourceRoomPolicySelector::VisibleThumbnail,
+        )
+    }
+
+    fn route_with_layout(
+        source: &PublishedSourceDescriptor,
+        current_selection: ConsumerSourceSelection,
+        layout_selector: SourceRoomPolicySelector,
+    ) -> ReceiverVideoRouteInput<'_> {
         ReceiverVideoRouteInput::new(ReceiverVideoRouteInputParts {
             user_count: 3,
             source,
@@ -795,14 +860,12 @@ mod tests {
                 UserId::Integer(42),
                 ConnectionId::from_raw(10),
                 TransportMediaId::new(20),
-                UserId::Integer(41),
+                source.owner().user_id().clone(),
                 ConnectionId::from_raw(11),
-                TransportMediaId::new(21),
+                TransportMediaId::new(source.source_id().as_u64().saturating_add(20)),
             ),
             current_selection,
-            layout_intent: ReceiverVideoLayoutIntent::new(
-                SourceRoomPolicySelector::VisibleThumbnail,
-            ),
+            layout_intent: ReceiverVideoLayoutIntent::new(layout_selector),
             visible_scalable_route_count: 2,
             active_speaker_rank: None,
             receiver_bandwidth: Some(Bitrate::from_kbps(21)),
@@ -845,6 +908,58 @@ mod tests {
             update.packet_gate(),
             Some(&SourcePacketGate::Rid("lo".into()))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn video_download_limit_counts_ridless_single_encoding_routes() -> Result<(), SourceModelError>
+    {
+        let visible_source_id = PublishedSourceId::from_raw(7);
+        let hidden_source_id = PublishedSourceId::from_raw(8);
+        let visible_source = scalable_source_with(
+            visible_source_id,
+            UserId::Integer(41),
+            SourceRoomPolicySelector::VisibleThumbnail,
+            vec![ridless_encoding(
+                visible_source_id,
+                SourceEncodingId::from_raw(1),
+            )],
+        )?;
+        let hidden_source = scalable_source_with(
+            hidden_source_id,
+            UserId::Integer(43),
+            SourceRoomPolicySelector::Hidden,
+            vec![ridless_encoding(
+                hidden_source_id,
+                SourceEncodingId::from_raw(1),
+            )],
+        )?;
+        let routes = [
+            route_with_layout(
+                &visible_source,
+                ConsumerSourceSelection::open(true),
+                SourceRoomPolicySelector::VisibleThumbnail,
+            ),
+            route_with_layout(
+                &hidden_source,
+                ConsumerSourceSelection::open(true),
+                SourceRoomPolicySelector::Hidden,
+            ),
+        ];
+
+        let updates = plan_receiver_routes(&routes, 1);
+        let hidden_update = updates
+            .iter()
+            .find(|update| update.source_id() == hidden_source_id)
+            .expect("download cap should pause the RID-less overflow route");
+
+        assert_eq!(
+            hidden_update.policy_pause_reason(),
+            Some(PolicyPauseReason::VideoDownloadLimit)
+        );
+        assert!(hidden_update.route_activity_update());
+        assert!(hidden_update.outcomes().is_paused());
+        assert_eq!(hidden_update.budget().active_video_route_count(), 1);
         Ok(())
     }
 }
