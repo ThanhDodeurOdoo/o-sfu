@@ -397,6 +397,7 @@ pub(super) enum RtcWorkerCommand {
         source_transport_media_id: TransportMediaId,
         remote_source_control: Option<RemoteSourceControl>,
         consumer_rtp_parameters: RouterRtpParameters,
+        active: bool,
         response: RtcWorkerResponse<TransportMediaId>,
     },
     MediaControl(RtcMediaControlCommand),

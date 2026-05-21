@@ -253,9 +253,17 @@ impl ConsumerBootstrapOp {
                 .await;
             return;
         }
+        let initial_activity = ConsumerActivity::from_active(pending_bootstrap.consumer_active());
         let Some((consumer_transport_media_id, consumer_mid)) =
-            Self::declare_consumer_transport_media(&target, &prepared, origin, room, media_port)
-                .await
+            Self::declare_consumer_transport_media(
+                &target,
+                &prepared,
+                initial_activity,
+                origin,
+                room,
+                media_port,
+            )
+            .await
         else {
             return;
         };
@@ -294,6 +302,7 @@ impl ConsumerBootstrapOp {
     async fn declare_consumer_transport_media(
         target: &PendingConsumerBootstrapTarget,
         prepared: &PreparedConsumerBootstrap,
+        initial_activity: ConsumerActivity,
         origin: ConsumerBootstrapOrigin,
         room: &Room,
         media_port: &MediaTransport,
@@ -311,6 +320,7 @@ impl ConsumerBootstrapOp {
                 .transport_user_key(target.producer_user_id(), target.producer_connection_id()),
             source_transport_media_id: target.transport_media_id(),
             consumer_rtp_parameters: prepared.consumer_rtp_parameters().clone(),
+            initial_activity,
         };
         match effect.execute_consumer_creation(media_port).await {
             Ok(result) => Some(result),
@@ -346,13 +356,9 @@ impl ConsumerBootstrapOp {
         origin: ConsumerBootstrapOrigin,
         consumer_transport_media_id: TransportMediaId,
         media_count_delta: MediaCountDelta,
-        outbound: Option<(
-            super::outbound::OutboundSender,
-            super::RemoteTrackBootstrap,
-            bool,
-        )>,
+        outbound: Option<(super::outbound::OutboundSender, super::RemoteTrackBootstrap)>,
     ) {
-        let Some((sender, bootstrap, consumer_active)) = outbound else {
+        let Some((sender, bootstrap)) = outbound else {
             RoomEffectBatch::new()
                 .with_media_count_delta_value(media_count_delta)
                 .execute(room, RoomEffectContext::runtime(media_port))
@@ -370,16 +376,8 @@ impl ConsumerBootstrapOp {
                 .await;
             return;
         };
-        let mut batch = RoomEffectBatch::new().with_media_count_delta_value(media_count_delta);
-        if !consumer_active {
-            batch = batch.with_initial_consumer_pause(
-                room,
-                target,
-                consumer_transport_media_id,
-                origin,
-            );
-        }
-        batch
+        RoomEffectBatch::new()
+            .with_media_count_delta_value(media_count_delta)
             .record_diagnostics(
                 DiagnosticsEventData::for_user(
                     room.uuid(),

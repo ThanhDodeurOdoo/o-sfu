@@ -18,7 +18,7 @@ use str0m::media::MediaKind as Str0mMediaKind;
 use crate::runtime::{
     RoomInstanceId,
     media_transport::{
-        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
+        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerActivity,
         ConsumerPacketGateUpdate, MediaTransport, MediaTransportConfig, MediaTransportDeps,
         ReceiverBandwidthSnapshot, SessionOffer, SourcePolicySignal,
         SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
@@ -26,7 +26,7 @@ use crate::runtime::{
         TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionHealth,
         TransportSessionKey, TransportWorkerPressureSnapshot, operation::TransportControlOperation,
     },
-    rtc_engine::{RtcWorker, client_rtp_capabilities_from_answer},
+    rtc_engine::{RtcSendMediaSource, RtcWorker, client_rtp_capabilities_from_answer},
 };
 
 /// Distance between two worker media-id allocation ranges.
@@ -431,6 +431,7 @@ impl MediaTransport {
         source_session_key: &TransportSessionKey,
         source_media_id: TransportMediaId,
         consumer_rtp_parameters: &RouterRtpParameters,
+        initial_activity: ConsumerActivity,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         ensure_same_room_instance(consumer_session_key, source_session_key)?;
         let relay_route =
@@ -446,10 +447,13 @@ impl MediaTransport {
             .add_send_media(
                 consumer_session_key,
                 signaling_to_str0m_media_kind(media_kind),
-                source_session_key,
-                source_media_id,
-                remote_source_control,
+                RtcSendMediaSource {
+                    source_session_key,
+                    source_transport_media_id: source_media_id,
+                    remote_source_control,
+                },
                 consumer_rtp_parameters,
+                initial_activity.is_active(),
             )
             .await
     }

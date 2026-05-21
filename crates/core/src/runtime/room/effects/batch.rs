@@ -25,17 +25,11 @@ use crate::{
     runtime::{
         ConnectionId, UserId,
         diagnostics::DiagnosticsEventData,
-        media_transport::{
-            ConsumerActivity, MediaTransport, TransportConsumerRoute, TransportMediaId,
-            TransportRelayRouteAction, TransportRelayRouteEffect,
-        },
+        media_transport::{MediaTransport, TransportRelayRouteAction, TransportRelayRouteEffect},
         room::{
             Room, RoomEventRequest, RoomMediaCounts, UserOutbound,
             outbound::OutboundSender,
-            state::{
-                ConsumerBootstrapOrigin, LifecycleEffects, PendingConsumerBootstrapTarget,
-                RelayRouteEffect, TransportMediaRemoval,
-            },
+            state::{LifecycleEffects, RelayRouteEffect, TransportMediaRemoval},
         },
     },
 };
@@ -122,8 +116,6 @@ pub(in crate::runtime::room) struct RoomEffectBatch {
     transport_user_closes: Vec<TransportUserCleanup>,
     /// source policy refresh requested after media topology or membership changed
     source_policy_refresh: bool,
-    /// first transport pause state for consumers created from inactive intent
-    consumer_pause_states: Vec<ConsumerPauseStateEffect>,
     /// best-effort close requests and room fan-out captured by state
     lifecycle_effects: Vec<LifecycleEffects>,
     /// diagnostics store mutations that must preserve caller order
@@ -155,19 +147,6 @@ impl TransportUserCleanup {
             connection_id,
         }
     }
-}
-
-/// initial transport activity for a newly created consumer route
-///
-/// room state may accept a subscription while the user intent is inactive
-/// the consumer still needs to exist for negotiation, but transport forwarding
-/// must start paused until a later subscribe update resumes it
-#[derive(Debug)]
-struct ConsumerPauseStateEffect {
-    route: TransportConsumerRoute,
-    consumer_user_id: UserId,
-    producer_user_id: UserId,
-    origin: ConsumerBootstrapOrigin,
 }
 
 /// diagnostics mutations captured as ordered effects
@@ -290,31 +269,6 @@ impl RoomEffectBatch {
         self
     }
 
-    /// queue the first pause state for a consumer created from inactive intent
-    ///
-    /// the caller must only use this after room state has accepted the consumer
-    /// route and transport consumer creation has returned its media id
-    pub(in crate::runtime::room) fn with_initial_consumer_pause(
-        mut self,
-        room: &Room,
-        target: &PendingConsumerBootstrapTarget,
-        consumer_transport_media_id: TransportMediaId,
-        origin: ConsumerBootstrapOrigin,
-    ) -> Self {
-        self.consumer_pause_states.push(ConsumerPauseStateEffect {
-            route: TransportConsumerRoute::new(
-                room.transport_user_key(target.consumer_user_id(), target.consumer_connection_id()),
-                consumer_transport_media_id,
-                room.transport_user_key(target.producer_user_id(), target.producer_connection_id()),
-                target.transport_media_id(),
-            ),
-            consumer_user_id: target.consumer_user_id().clone(),
-            producer_user_id: target.producer_user_id().clone(),
-            origin,
-        });
-        self
-    }
-
     /// queue lifecycle notifications captured by room state
     pub(in crate::runtime::room) fn with_lifecycle_effects(
         mut self,
@@ -368,11 +322,10 @@ impl RoomEffectBatch {
     /// 2. apply relay route effects that were captured before unlock
     /// 3. run retry-backed transport media cleanup
     /// 4. close detached transport users
-    /// 5. apply first consumer pause states
-    /// 6. refresh source packet policy from transport observations
-    /// 7. emit lifecycle fan-out and user close messages
-    /// 8. write diagnostics effects in captured order
-    /// 9. enqueue outbound room-event requests
+    /// 5. refresh source packet policy from transport observations
+    /// 6. emit lifecycle fan-out and user close messages
+    /// 7. write diagnostics effects in captured order
+    /// 8. enqueue outbound room-event requests
     ///
     /// relay failures are reported through [`RoomEffectExecution`] because
     /// bootstrap callers may still need to release pending consumer state
@@ -390,7 +343,6 @@ impl RoomEffectBatch {
             transport_removals,
             transport_user_closes,
             source_policy_refresh,
-            consumer_pause_states,
             lifecycle_effects,
             diagnostics,
             outbound_requests,
@@ -405,7 +357,6 @@ impl RoomEffectBatch {
             &transport_user_closes,
         )
         .await;
-        Self::execute_consumer_pause_states(context, consumer_pause_states).await;
         Self::execute_source_policy_refresh(room, context, source_policy_refresh).await;
         Self::emit_lifecycle_effects(lifecycle_effects);
         Self::record_diagnostics_effects(room, diagnostics);
@@ -463,29 +414,6 @@ impl RoomEffectBatch {
             .await;
         }
         cleanup
-    }
-
-    async fn execute_consumer_pause_states(
-        context: RoomEffectContext<'_>,
-        consumer_pause_states: Vec<ConsumerPauseStateEffect>,
-    ) {
-        let Some(media_transport) = context.media_transport else {
-            return;
-        };
-        for effect in consumer_pause_states {
-            if media_transport
-                .set_consumer_active(&effect.route, ConsumerActivity::Inactive)
-                .await
-                .is_err()
-            {
-                warn!(
-                    consumer_user_id = ?effect.consumer_user_id,
-                    producer_user_id = ?effect.producer_user_id,
-                    origin = ?effect.origin,
-                    "media transport failed to apply the initial consumer pause state"
-                );
-            }
-        }
     }
 
     async fn execute_source_policy_refresh(

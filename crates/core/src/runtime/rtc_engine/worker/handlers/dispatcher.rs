@@ -251,6 +251,7 @@ fn handle_media_command(
             source_transport_media_id,
             remote_source_control,
             consumer_rtp_parameters,
+            active,
             response,
         } => media::respond_add_send_media(
             state,
@@ -261,6 +262,7 @@ fn handle_media_command(
                 source_transport_media_id,
                 remote_source_control,
                 consumer_rtp_parameters: &consumer_rtp_parameters,
+                active,
             },
             now,
             response,

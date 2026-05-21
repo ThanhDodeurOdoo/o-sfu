@@ -85,6 +85,26 @@ use crate::{
 
 static NEXT_RELAY_TARGET_ID: AtomicU64 = AtomicU64::new(1);
 
+pub(in crate::runtime) struct RtcSendMediaSource<'a> {
+    pub source_session_key: &'a TransportSessionKey,
+    pub source_transport_media_id: TransportMediaId,
+    pub remote_source_control: Option<RemoteSourceControl>,
+}
+
+impl RtcSendMediaSource<'_> {
+    #[cfg(test)]
+    pub const fn local(
+        source_session_key: &TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+    ) -> RtcSendMediaSource<'_> {
+        RtcSendMediaSource {
+            source_session_key,
+            source_transport_media_id,
+            remote_source_control: None,
+        }
+    }
+}
+
 /// published handle for a lazily booted packet-loop worker
 ///
 /// the handle is cloned by cold-path worker methods so they can enqueue work
@@ -414,18 +434,18 @@ impl RtcWorker {
         &self,
         consumer_session_key: &TransportSessionKey,
         media_kind: MediaKind,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        remote_source_control: Option<RemoteSourceControl>,
+        source: RtcSendMediaSource<'_>,
         consumer_rtp_parameters: &RouterRtpParameters,
+        active: bool,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.request_worker(|response| RtcWorkerCommand::AddSendMedia {
             consumer_session_key: consumer_session_key.clone(),
             media_kind,
-            source_session_key: source_session_key.clone(),
-            source_transport_media_id,
-            remote_source_control,
+            source_session_key: source.source_session_key.clone(),
+            source_transport_media_id: source.source_transport_media_id,
+            remote_source_control: source.remote_source_control,
             consumer_rtp_parameters: consumer_rtp_parameters.clone(),
+            active,
             response,
         })
         .await

@@ -10,7 +10,7 @@
 //! only knows whether a receiver wants a generic source active and which layout
 //! preference should be associated with that source.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_router::{
     ConsumerCapability, ConsumerRouteState as RouterConsumerRouteState,
@@ -32,8 +32,8 @@ use crate::runtime::{
     ConnectionId, UserId,
     media_transport::{RelayRouteActivity, TransportMediaId},
     source_model::{
-        ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
-        SourceSubscriptionIntent, UserStreamId,
+        ConsumerSourceSelection, PolicyPauseReason, PublishedSourceDescriptor, PublishedSourceId,
+        SourceRoutePriority, SourceSubscriptionIntent, UserStreamId,
     },
 };
 
@@ -112,7 +112,7 @@ pub(in crate::runtime::room) struct PendingConsumerBootstrap {
     consumer_key: ConsumerKey,
     sender: OutboundSender,
     bootstrap: RemoteTrackBootstrap,
-    consumer_active: bool,
+    consumer_selection: ConsumerSourceSelection,
     producer: ConsumerBootstrapProducerSnapshot,
 }
 
@@ -214,10 +214,43 @@ impl RoomState {
         &mut self,
         targets: Vec<PendingConsumerBootstrapTarget>,
     ) -> Vec<PlannedConsumerBootstrap> {
+        let mut targets = targets;
+        let active_speaker_source_user_ids = BTreeSet::new();
+        targets.sort_by_key(|target| {
+            self.consumer_bootstrap_admission_rank(target, &active_speaker_source_user_ids)
+        });
         targets
             .into_iter()
             .filter_map(|target| self.plan_consumer_bootstrap(&target))
             .collect()
+    }
+
+    fn consumer_bootstrap_admission_rank(
+        &self,
+        target: &PendingConsumerBootstrapTarget,
+        active_speaker_source_user_ids: &BTreeSet<UserId>,
+    ) -> (SourceRoutePriority, u64) {
+        if target.media_kind() != RouterMediaKind::Video {
+            return (
+                SourceRoutePriority::PinnedOrFeatured,
+                target.source_id().as_u64(),
+            );
+        }
+        let Some(source) = self.media.source(target.source_id()) else {
+            return (
+                SourceRoutePriority::HiddenOrOverflow,
+                target.source_id().as_u64(),
+            );
+        };
+        (
+            self.receiver_video_layout_intent(
+                target.consumer_user_id(),
+                source,
+                active_speaker_source_user_ids,
+            )
+            .priority(),
+            target.source_id().as_u64(),
+        )
     }
 
     fn apply_subscription_route_updates(
@@ -376,22 +409,27 @@ impl RoomState {
                 user.parsed_client_rtp_capabilities.clone()?,
             )
         };
-        let producer = self.media.producer(target.producer.producer_id)?;
-        if !target.producer.matches_pending_producer(producer) {
-            return None;
-        }
+        let (producer_active, producer_consumable_rtp_parameters, prepared_producer) = {
+            let producer = self.media.producer(target.producer.producer_id)?;
+            if !target.producer.matches_pending_producer(producer) {
+                return None;
+            }
+            (
+                producer.active,
+                producer.consumable_rtp_parameters.clone(),
+                target
+                    .producer
+                    .with_commit_snapshot(producer.routed_producer_id, producer.active),
+            )
+        };
         let source_descriptor = self.media.source(target.producer.source_id)?.clone();
         let consumer_key = ConsumerKey::new(&target.consumer_user_id, target.source_id());
         if self.media.consumer_bootstrap_exists(&consumer_key) {
             return None;
         }
-        let consumer_active = self
-            .consumer_source_selection_for_bootstrap(target)
-            .active();
-        let producer_consumable_rtp_parameters = producer.consumable_rtp_parameters.clone();
-        let prepared_producer = target
-            .producer
-            .with_commit_snapshot(producer.routed_producer_id, producer.active);
+        let consumer_selection =
+            self.consumer_source_selection_for_bootstrap(target, producer_active);
+        let consumer_active = consumer_selection.delivery_active();
         if !can_consume(&producer_consumable_rtp_parameters, &client_capabilities) {
             return None;
         }
@@ -400,10 +438,8 @@ impl RoomState {
             &client_capabilities,
         )
         .ok()?;
-        self.media.ensure_consumer_source_selection(
-            &consumer_key,
-            ConsumerSourceSelection::open(consumer_active),
-        );
+        self.media
+            .ensure_consumer_source_selection(&consumer_key, consumer_selection);
         self.media.reserve_consumer_bootstrap(consumer_key.clone());
         let consumer_id = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
         let relay_effects = self.reserve_relay_route(target, consumer_active);
@@ -428,7 +464,7 @@ impl RoomState {
                     active: prepared_producer.active.unwrap_or(true),
                     stream_id: prepared_producer.stream_id.clone(),
                 },
-                consumer_active,
+                consumer_selection,
                 producer: prepared_producer,
             },
             relay_effects,
@@ -479,9 +515,11 @@ impl RoomState {
     fn consumer_source_selection_for_bootstrap(
         &self,
         target: &PendingConsumerBootstrapTarget,
+        producer_active: bool,
     ) -> ConsumerSourceSelection {
         let consumer_key = ConsumerKey::new(&target.consumer_user_id, target.source_id());
-        self.media
+        let selection = self
+            .media
             .consumer_source_selection(&consumer_key)
             .unwrap_or_else(|| {
                 ConsumerSourceSelection::open(self.desired_source_subscription_active(
@@ -489,7 +527,61 @@ impl RoomState {
                     target.producer_user_id(),
                     target.stream_id(),
                 ))
+            });
+        self.apply_initial_video_download_cap(target, producer_active, selection)
+    }
+
+    fn apply_initial_video_download_cap(
+        &self,
+        target: &PendingConsumerBootstrapTarget,
+        producer_active: bool,
+        mut selection: ConsumerSourceSelection,
+    ) -> ConsumerSourceSelection {
+        if target.media_kind() != RouterMediaKind::Video
+            || !producer_active
+            || !selection.delivery_active()
+            || self.active_video_delivery_count_for_consumer(target.consumer_user_id())
+                < self.media_limits.max_video_downloads_per_receiver()
+        {
+            return selection;
+        }
+        selection.set_policy_pause_reason(Some(PolicyPauseReason::VideoDownloadLimit));
+        selection
+    }
+
+    fn active_video_delivery_count_for_consumer(&self, consumer_user_id: &UserId) -> usize {
+        let committed_count = self
+            .current_live_consumer_routes()
+            .filter(|route| route.consumer_user_id == *consumer_user_id)
+            .filter(|route| route.source.media_kind() == RouterMediaKind::Video)
+            .filter(|route| route.producer.active)
+            .filter(|route| {
+                let desired_active = self.desired_source_subscription_active(
+                    &route.consumer_user_id,
+                    route.source.owner().user_id(),
+                    route.source.stream_id(),
+                );
+                route.selection_or_open(desired_active).delivery_active()
             })
+            .count();
+        let pending_count = self
+            .media
+            .pending_consumer_routes_for_user(consumer_user_id)
+            .filter(|route| route.source.media_kind() == RouterMediaKind::Video)
+            .filter(|route| route.producer.is_some_and(|producer| producer.active))
+            .filter(|route| {
+                let desired_active = self.desired_source_subscription_active(
+                    consumer_user_id,
+                    route.source.owner().user_id(),
+                    route.source.stream_id(),
+                );
+                route
+                    .selection
+                    .unwrap_or_else(|| ConsumerSourceSelection::open(desired_active))
+                    .delivery_active()
+            })
+            .count();
+        committed_count + pending_count
     }
 
     pub fn commit_consumer_bootstrap(
@@ -498,7 +590,7 @@ impl RoomState {
         mut pending: PendingConsumerBootstrap,
         consumer_transport_media_id: TransportMediaId,
         consumer_mid: Option<String>,
-    ) -> Option<(OutboundSender, RemoteTrackBootstrap, bool)> {
+    ) -> Option<(OutboundSender, RemoteTrackBootstrap)> {
         self.media
             .remove_pending_consumer_bootstrap(&pending.consumer_key);
         let user = self.users.get(&target.consumer_user_id)?;
@@ -512,7 +604,8 @@ impl RoomState {
         if self.media.contains_consumer(&pending.consumer_key) {
             return None;
         }
-        let initial_route_state = if pending.consumer_active {
+        let consumer_active = pending.consumer_selection.delivery_active();
+        let initial_route_state = if consumer_active {
             RouterConsumerRouteState::Active
         } else {
             RouterConsumerRouteState::Paused
@@ -539,6 +632,7 @@ impl RoomState {
             pending.bootstrap.mid = consumer_mid;
         }
         let consumer_key = pending.consumer_key;
+        let consumer_selection = pending.consumer_selection;
         if !self.media.commit_consumer(
             consumer_key,
             ConsumerState {
@@ -548,11 +642,11 @@ impl RoomState {
                 source_media: target.transport_media_id(),
                 consumer_media: consumer_transport_media_id,
             },
-            ConsumerSourceSelection::open(pending.consumer_active),
+            consumer_selection,
         ) {
             return None;
         }
-        Some((pending.sender, pending.bootstrap, pending.consumer_active))
+        Some((pending.sender, pending.bootstrap))
     }
 
     pub fn release_pending_consumer_bootstrap(
@@ -599,17 +693,10 @@ impl RoomState {
         let Some(route) = self.media.committed_consumer_route_for_key(&consumer_key) else {
             return Some(ConsumerRouteState::Absent);
         };
-        let route_active = route.producer.active
-            && route.selection.map_or_else(
-                || {
-                    self.desired_source_subscription_active(
-                        consumer_user_id,
-                        producer_user_id,
-                        stream_id,
-                    )
-                },
-                ConsumerSourceSelection::delivery_active,
-            );
+        let desired_active =
+            self.desired_source_subscription_active(consumer_user_id, producer_user_id, stream_id);
+        let route_active =
+            route.producer.active && route.selection_or_open(desired_active).delivery_active();
         Some(if route_active {
             ConsumerRouteState::Active
         } else {
@@ -729,6 +816,12 @@ impl PendingConsumerBootstrapTarget {
 impl PreparedConsumerBootstrap {
     pub fn consumer_rtp_parameters(&self) -> &RouterRtpParameters {
         &self.consumer_rtp_parameters
+    }
+}
+
+impl PendingConsumerBootstrap {
+    pub(in crate::runtime::room) fn consumer_active(&self) -> bool {
+        self.consumer_selection.delivery_active()
     }
 }
 

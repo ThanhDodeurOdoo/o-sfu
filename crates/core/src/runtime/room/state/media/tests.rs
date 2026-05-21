@@ -51,6 +51,10 @@ use crate::{
 };
 
 fn test_state() -> RoomState {
+    test_state_with_media_limits(RoomMediaLimits::default())
+}
+
+fn test_state_with_media_limits(media_limits: RoomMediaLimits) -> RoomState {
     let packet_sink_registry = Arc::new(RoomPacketSinkRegistry::default());
     let runtime_context = RoomRuntimeContext::new(
         RoomInstanceId::from_raw(0),
@@ -63,7 +67,7 @@ fn test_state() -> RoomState {
     RoomState::new(
         &runtime_context,
         RoomAdmissionPolicy::new(4),
-        RoomMediaLimits::default(),
+        media_limits,
         router_rtp_capabilities(MediaCodecFlags::default()),
         Arc::new(RecordingService::new(
             RoomInstanceId::from_raw(0),
@@ -84,6 +88,27 @@ fn join_test_user(state: &mut RoomState, user_id: &UserId) {
             .apply_join(user_id, None, UserPermissions::default(), sender, false,)
             .is_ok()
     );
+}
+
+fn set_test_consumer_ready(state: &mut RoomState, user_id: &UserId) -> ConnectionId {
+    let connection_id = state
+        .user_connection_id(user_id)
+        .expect("consumer should have a connection id");
+    assert!(
+        state
+            .set_client_rtp_capabilities_for_test(
+                user_id,
+                connection_id,
+                &sample_client_rtp_capabilities(),
+            )
+            .session_present
+    );
+    assert!(
+        state
+            .set_transport_ready_for_test(user_id, connection_id, UserTransportReady::Consume,)
+            .session_present
+    );
+    connection_id
 }
 
 fn test_upload_encodings() -> Vec<SessionUploadEncoding> {
@@ -257,6 +282,36 @@ fn install_test_published_producer(
         stream_type,
         routed_producer_id,
         sample_video_rtp_parameters(None, 77_777),
+        transport_media_id,
+    )
+}
+
+fn install_test_consumable_video_producer(
+    state: &mut RoomState,
+    user_id: &UserId,
+    stream_type: TestSourceKind,
+    transport_media_id: TransportMediaId,
+    ssrc: u32,
+) -> (ProducerRuntimeId, PublishedSourceId) {
+    let connection_id = state
+        .user_connection_id(user_id)
+        .expect("publisher should have a connection id");
+    let routed_producer_id = state
+        .topology
+        .add_producer(user_id, RouterMediaKind::Video)
+        .expect("publisher route should be added");
+    let consumable_rtp_parameters = derive_consumable_rtp_parameters(
+        &sample_video_rtp_parameters(None, ssrc),
+        &state.router_rtp_capabilities(),
+    )
+    .expect("publisher RTP parameters should derive consumable router parameters");
+    install_test_published_producer_with_route(
+        state,
+        user_id,
+        connection_id,
+        stream_type,
+        routed_producer_id,
+        consumable_rtp_parameters,
         transport_media_id,
     )
 }
@@ -478,50 +533,13 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
     join_test_user(&mut state, &publisher_user_id);
     join_test_user(&mut state, &subscriber_user_id);
 
-    let publisher_connection_id = state
-        .user_connection_id(&publisher_user_id)
-        .expect("publisher should have a connection id");
-    let subscriber_connection_id = state
-        .user_connection_id(&subscriber_user_id)
-        .expect("subscriber should have a connection id");
-
-    assert!(
-        state
-            .set_client_rtp_capabilities_for_test(
-                &subscriber_user_id,
-                subscriber_connection_id,
-                &sample_client_rtp_capabilities(),
-            )
-            .session_present
-    );
-    assert!(
-        state
-            .set_transport_ready_for_test(
-                &subscriber_user_id,
-                subscriber_connection_id,
-                UserTransportReady::Consume,
-            )
-            .session_present
-    );
-
-    let routed_producer_id = state
-        .topology
-        .add_producer(&publisher_user_id, RouterMediaKind::Video)
-        .expect("publisher route should be added");
-    let producer_rtp_parameters = sample_video_rtp_parameters(None, 22_222);
-    let consumable_rtp_parameters = derive_consumable_rtp_parameters(
-        &producer_rtp_parameters,
-        &state.router_rtp_capabilities(),
-    )
-    .expect("publisher RTP parameters should derive consumable router parameters");
-    let (_producer_id, source_id) = install_test_published_producer_with_route(
+    let subscriber_connection_id = set_test_consumer_ready(&mut state, &subscriber_user_id);
+    let (_producer_id, source_id) = install_test_consumable_video_producer(
         &mut state,
         &publisher_user_id,
-        publisher_connection_id,
         TestSourceKind::ScalableVideo,
-        routed_producer_id,
-        consumable_rtp_parameters,
         TransportMediaId::new(10),
+        22_222,
     );
 
     let states = TestSubscriptionStates {
@@ -556,6 +574,78 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
     assert!(
         state.subscription_count() >= 1,
         "planning the bootstrap must reserve the pending consumer slot immediately"
+    );
+}
+
+#[test]
+fn missing_consumer_bootstrap_applies_video_download_cap_before_effects() {
+    let mut state = test_state_with_media_limits(RoomMediaLimits::try_new(4, 1).unwrap());
+    let publisher_user_id = UserId::Integer(1);
+    let subscriber_user_id = UserId::Integer(2);
+
+    join_test_user(&mut state, &publisher_user_id);
+    join_test_user(&mut state, &subscriber_user_id);
+
+    let subscriber_connection_id = set_test_consumer_ready(&mut state, &subscriber_user_id);
+    let (_scalable_producer_id, scalable_source_id) = install_test_consumable_video_producer(
+        &mut state,
+        &publisher_user_id,
+        TestSourceKind::ScalableVideo,
+        TransportMediaId::new(10),
+        22_222,
+    );
+    let (_readable_producer_id, readable_source_id) = install_test_consumable_video_producer(
+        &mut state,
+        &publisher_user_id,
+        TestSourceKind::ReadableVideo,
+        TransportMediaId::new(11),
+        33_333,
+    );
+    for source_id in [scalable_source_id, readable_source_id] {
+        state.media.ensure_consumer_source_selection(
+            &ConsumerKey::new(&subscriber_user_id, source_id),
+            ConsumerSourceSelection::open(true),
+        );
+    }
+
+    let planned_bootstraps = state
+        .plan_missing_consumer_bootstraps_for_connection(
+            &subscriber_user_id,
+            subscriber_connection_id,
+        )
+        .expect("subscriber session should still exist");
+
+    assert_eq!(planned_bootstraps.len(), 2);
+    let scalable_selection = state
+        .media
+        .consumer_source_selection(&ConsumerKey::new(&subscriber_user_id, scalable_source_id))
+        .expect("scalable source should have a consumer selection");
+    let readable_selection = state
+        .media
+        .consumer_source_selection(&ConsumerKey::new(&subscriber_user_id, readable_source_id))
+        .expect("readable source should have a consumer selection");
+    let selections = [scalable_selection, readable_selection];
+    assert!(selections.iter().all(|selection| selection.active()));
+    assert!(readable_selection.delivery_active());
+    assert_eq!(
+        scalable_selection.policy_pause_reason(),
+        Some(PolicyPauseReason::VideoDownloadLimit)
+    );
+    assert_eq!(
+        selections
+            .iter()
+            .filter(|selection| selection.delivery_active())
+            .count(),
+        1
+    );
+    assert_eq!(
+        selections
+            .iter()
+            .filter(|selection| {
+                selection.policy_pause_reason() == Some(PolicyPauseReason::VideoDownloadLimit)
+            })
+            .count(),
+        1
     );
 }
 
