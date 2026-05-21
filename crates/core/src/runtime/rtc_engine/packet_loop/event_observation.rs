@@ -5,10 +5,17 @@
 //! that translation so session draining can stay focused on moving `str0m`
 //! outputs into packet-loop buffers.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use o_sfu_telemetry::schema;
-use str0m::{Event, IceConnectionState, bwe::BweKind};
+use str0m::{
+    Event, IceConnectionState,
+    bwe::BweKind,
+    stats::{MediaEgressStats, MediaIngressStats, PeerStats},
+};
 use tracing::{debug, trace};
 
 use super::super::state::{RtcSnapshotState, TransportSessionHealth};
@@ -20,7 +27,9 @@ use crate::{
             maybe_health_json_value,
         },
         media_transport::{SourcePolicySignal, TransportSessionKey},
-        metrics::{self, RuntimeMetrics, TransportIceState},
+        metrics::{
+            self, MediaQualityLossDirection, MediaQualitySample, RuntimeMetrics, TransportIceState,
+        },
     },
 };
 
@@ -80,6 +89,15 @@ pub(super) fn observe_rtc_event(
         Event::EgressBitrateEstimate(kind) => {
             observe_receiver_bandwidth(snapshot_state, source_policy_signal, session_key, kind);
         }
+        Event::PeerStats(stats) => {
+            observe_peer_quality(snapshot_state, metrics, session_key, stats);
+        }
+        Event::MediaIngressStats(stats) => {
+            observe_media_ingress_quality(snapshot_state, metrics, session_key, stats);
+        }
+        Event::MediaEgressStats(stats) => {
+            observe_media_egress_quality(snapshot_state, metrics, session_key, stats);
+        }
         _ => {}
     }
     let Some(health) = transport_health_from_event(event) else {
@@ -106,6 +124,122 @@ pub(super) fn observe_rtc_event(
         session_key.media_worker_id(),
         fields,
     );
+}
+
+fn observe_peer_quality(
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    metrics: &RuntimeMetrics,
+    session_key: &TransportSessionKey,
+    stats: &PeerStats,
+) {
+    metrics.record_media_quality_sample(MediaQualitySample::Peer);
+    if let Some(rtt) = stats.rtt {
+        metrics.record_media_quality_rtt(MediaQualitySample::Peer, rtt);
+    }
+    if let Some(bwe_bps) = stats.bwe_tx.map(|bwe| bwe.as_u64()) {
+        metrics.record_media_quality_bwe_bps(bwe_bps);
+    }
+    if let Some(loss_ppm) = loss_fraction_ppm(stats.ingress_loss_fraction) {
+        metrics.record_media_quality_loss_ppm(MediaQualityLossDirection::Ingress, loss_ppm);
+    }
+    if let Some(loss_ppm) = loss_fraction_ppm(stats.egress_loss_fraction) {
+        metrics.record_media_quality_loss_ppm(MediaQualityLossDirection::Egress, loss_ppm);
+    }
+    let Ok(mut snapshot_state) = snapshot_state.lock() else {
+        return;
+    };
+    snapshot_state.update_transport_quality(session_key, |sample| {
+        if let Some(bwe_bps) = stats.bwe_tx.map(|bwe| bwe.as_u64()) {
+            sample.latest_bwe_bps = Some(bwe_bps);
+        }
+        if let Some(rtt_ms) = stats.rtt.map(duration_millis) {
+            sample.rtt_ms = Some(rtt_ms);
+        }
+        if let Some(loss_ppm) = loss_fraction_ppm(stats.ingress_loss_fraction) {
+            sample.ingress_loss_ppm = Some(loss_ppm);
+        }
+        if let Some(loss_ppm) = loss_fraction_ppm(stats.egress_loss_fraction) {
+            sample.egress_loss_ppm = Some(loss_ppm);
+        }
+    });
+}
+
+fn observe_media_ingress_quality(
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    metrics: &RuntimeMetrics,
+    session_key: &TransportSessionKey,
+    stats: &MediaIngressStats,
+) {
+    metrics.record_media_quality_sample(MediaQualitySample::MediaIngress);
+    if let Some(rtt) = stats.rtt {
+        metrics.record_media_quality_rtt(MediaQualitySample::MediaIngress, rtt);
+    }
+    if let Some(loss_ppm) = loss_fraction_ppm(stats.loss) {
+        metrics.record_media_quality_loss_ppm(MediaQualityLossDirection::Ingress, loss_ppm);
+    }
+    let Ok(mut snapshot_state) = snapshot_state.lock() else {
+        return;
+    };
+    snapshot_state.update_transport_quality(session_key, |sample| {
+        if let Some(rtt_ms) = stats.rtt.map(duration_millis) {
+            sample.rtt_ms = Some(rtt_ms);
+        }
+        if let Some(loss_ppm) = loss_fraction_ppm(stats.loss) {
+            sample.ingress_loss_ppm = Some(loss_ppm);
+        }
+    });
+}
+
+fn observe_media_egress_quality(
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    metrics: &RuntimeMetrics,
+    session_key: &TransportSessionKey,
+    stats: &MediaEgressStats,
+) {
+    metrics.record_media_quality_sample(MediaQualitySample::MediaEgress);
+    if let Some(rtt) = stats.rtt {
+        metrics.record_media_quality_rtt(MediaQualitySample::MediaEgress, rtt);
+    }
+    if let Some(loss_ppm) = loss_fraction_ppm(stats.loss) {
+        metrics.record_media_quality_loss_ppm(MediaQualityLossDirection::Egress, loss_ppm);
+    }
+    if let Some(remote) = stats.remote.as_ref() {
+        metrics.record_media_quality_jitter_rtp_timestamp_units(u64::from(remote.jitter));
+    }
+    let Ok(mut snapshot_state) = snapshot_state.lock() else {
+        return;
+    };
+    snapshot_state.update_transport_quality(session_key, |sample| {
+        if let Some(rtt_ms) = stats.rtt.map(duration_millis) {
+            sample.rtt_ms = Some(rtt_ms);
+        }
+        if let Some(loss_ppm) = loss_fraction_ppm(stats.loss) {
+            sample.egress_loss_ppm = Some(loss_ppm);
+        }
+        if let Some(remote) = stats.remote.as_ref() {
+            sample.egress_jitter_rtp_timestamp_units = Some(u64::from(remote.jitter));
+        }
+    });
+}
+
+fn loss_fraction_ppm(loss: Option<f32>) -> Option<u64> {
+    loss.filter(|loss| loss.is_finite())
+        .map(|loss| loss.clamp(0.0, 1.0))
+        .map(scaled_loss_ppm)
+}
+
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "loss is finite and clamped to 0..=1 before scaling to integer ppm"
+)]
+fn scaled_loss_ppm(loss: f32) -> u64 {
+    (loss * 1_000_000.0).round() as u64
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Store receiver bandwidth estimates and wake source-policy recomputation.

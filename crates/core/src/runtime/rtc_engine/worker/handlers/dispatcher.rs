@@ -9,7 +9,7 @@ use std::{
     collections::BTreeSet,
     net::IpAddr,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use tokio::sync::oneshot;
@@ -48,6 +48,7 @@ pub struct WorkerCommandContext<'a> {
     pub rtc_port_range: RtcPortRange,
     pub codec_flags: MediaCodecFlags,
     pub codec_preferences: CodecPreferences,
+    pub media_quality_interval: Option<Duration>,
     pub metrics: &'a RuntimeMetrics,
 }
 
@@ -137,6 +138,7 @@ fn handle_negotiation_command(
                 rtc_port_range: context.rtc_port_range,
                 codec_flags: context.codec_flags,
                 codec_preferences: context.codec_preferences,
+                media_quality_interval: context.media_quality_interval,
                 metrics: context.metrics,
             },
             &session_key,

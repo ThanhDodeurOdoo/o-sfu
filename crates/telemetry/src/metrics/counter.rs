@@ -187,6 +187,12 @@ impl<L: MetricLabel> CounterFamily<L> {
         }
     }
 
+    pub(super) fn add_u64(&self, label: L, value: u64) {
+        if let Some(counter) = self.counters.get(label.as_index()) {
+            counter.add_u64(value);
+        }
+    }
+
     pub(super) fn load(&self, label: L) -> u64 {
         self.counters.get(label.as_index()).map_or(0, Counter::load)
     }

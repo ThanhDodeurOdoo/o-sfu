@@ -3,11 +3,12 @@ use std::time::Duration;
 use o_sfu_model::WebSocketCloseCode;
 
 use super::{
-    BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
-    RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
-    RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetrics,
-    RuntimeMetricsSnapshot, SourceSelectionKind, TransportHealthState, TransportIceState,
-    WsSessionLoopExitReason, test_support::RuntimeMetricsSnapshotTestExt,
+    BudgetSolverOutcome, HttpRoute, MediaQualityLossDirection, MediaQualitySample, MetricName,
+    RtcDatagramDropReason, RtcDatagramRoutePath, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
+    RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpForwardDestinationKind,
+    RtpRelayDropKind, RuntimeMetrics, RuntimeMetricsSnapshot, SourceSelectionKind,
+    TransportHealthState, TransportIceState, WsSessionLoopExitReason,
+    test_support::{RuntimeMetricsSnapshotLookup, RuntimeMetricsSnapshotTestExt},
 };
 
 fn assert_live_gauges(snapshot: &RuntimeMetricsSnapshot) {
@@ -472,6 +473,85 @@ fn transport_lifecycle_metrics_track_ice_and_dtls_events() {
     assert_eq!(snapshot.transport_user_lifetime_le_300_seconds(), 0);
     assert_eq!(snapshot.transport_user_lifetime_count(), 1);
     assert_eq!(snapshot.transport_user_lifetime_sum_micros(), 301_000_000);
+}
+
+#[test]
+fn metrics_snapshot_tracks_sampled_media_quality() {
+    let metrics = RuntimeMetrics::default();
+
+    metrics.record_media_quality_sample(MediaQualitySample::Peer);
+    metrics.record_media_quality_sample(MediaQualitySample::MediaIngress);
+    metrics.record_media_quality_rtt(MediaQualitySample::Peer, Duration::from_millis(120));
+    metrics.record_media_quality_loss_ppm(MediaQualityLossDirection::Ingress, 25_000);
+    metrics.record_media_quality_loss_ppm(MediaQualityLossDirection::Egress, 40_000);
+    metrics.record_media_quality_bwe_bps(1_250_000);
+    metrics.record_media_quality_jitter_rtp_timestamp_units(180);
+
+    let snapshot = metrics.snapshot();
+
+    assert_eq!(
+        snapshot.counter_value(MetricName::MediaQualitySamplesTotal, &[("sample", "peer")]),
+        1
+    );
+    assert_eq!(
+        snapshot.counter_value(
+            MetricName::MediaQualitySamplesTotal,
+            &[("sample", "media_ingress")]
+        ),
+        1
+    );
+    assert_eq!(
+        snapshot.histogram_bucket_value(
+            MetricName::MediaQualityRttSeconds,
+            &[("sample", "peer")],
+            "0.25"
+        ),
+        1
+    );
+    assert_eq!(
+        snapshot.histogram_count_value(MetricName::MediaQualityRttSeconds, &[("sample", "peer")]),
+        1
+    );
+    assert_eq!(
+        snapshot.counter_value(
+            MetricName::MediaQualityLossPpmObservedTotal,
+            &[("direction", "ingress")]
+        ),
+        25_000
+    );
+    assert_eq!(
+        snapshot.counter_value(
+            MetricName::MediaQualityLossObservationsTotal,
+            &[("direction", "ingress")]
+        ),
+        1
+    );
+    assert_eq!(
+        snapshot.counter_value(
+            MetricName::MediaQualityLossPpmObservedTotal,
+            &[("direction", "egress")]
+        ),
+        40_000
+    );
+    assert_eq!(
+        snapshot.counter_value(MetricName::MediaQualityBweBpsObservedTotal, &[]),
+        1_250_000
+    );
+    assert_eq!(
+        snapshot.counter_value(MetricName::MediaQualityBweObservationsTotal, &[]),
+        1
+    );
+    assert_eq!(
+        snapshot.counter_value(
+            MetricName::MediaQualityJitterRtpTimestampUnitsObservedTotal,
+            &[]
+        ),
+        180
+    );
+    assert_eq!(
+        snapshot.counter_value(MetricName::MediaQualityJitterObservationsTotal, &[]),
+        1
+    );
 }
 
 #[test]

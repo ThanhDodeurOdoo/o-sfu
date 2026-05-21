@@ -14,7 +14,7 @@
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket as StdUdpSocket},
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use o_sfu_rfc::webrtc;
@@ -114,6 +114,7 @@ fn bind_ip_for_public_ip(public_ip: IpAddr) -> IpAddr {
 ///
 /// returns `TransportUnavailable` if the local candidate cannot be represented
 /// by str0m or cannot be attached to the newly created rtc state
+#[cfg(any(test, feature = "internal-benchmarks"))]
 pub(super) fn ensure_session_rtc_state(
     users: &mut SessionStore,
     session_key: &TransportSessionKey,
@@ -121,11 +122,29 @@ pub(super) fn ensure_session_rtc_state(
     max_bitrate_out: Bitrate,
     codec_flags: MediaCodecFlags,
 ) -> Result<bool, TransportAdapterError> {
+    ensure_session_rtc_state_with_stats_interval(
+        users,
+        session_key,
+        candidate_addr,
+        max_bitrate_out,
+        codec_flags,
+        None,
+    )
+}
+
+pub(super) fn ensure_session_rtc_state_with_stats_interval(
+    users: &mut SessionStore,
+    session_key: &TransportSessionKey,
+    candidate_addr: SocketAddr,
+    max_bitrate_out: Bitrate,
+    codec_flags: MediaCodecFlags,
+    stats_interval: Option<Duration>,
+) -> Result<bool, TransportAdapterError> {
     if users.contains_key(session_key) {
         return Ok(false);
     }
     let started_at = Instant::now();
-    let mut rtc = rtc_builder(codec_flags)
+    let mut rtc = rtc_builder(codec_flags, stats_interval)
         .enable_bwe(Some(Str0mBitrate::bps(max_bitrate_out.as_bps())))
         .set_ice_lite(true)
         .build(started_at);
@@ -163,13 +182,16 @@ pub(super) fn ensure_session_rtc_state(
 /// the builder runs
 /// in RTP mode because the SFU forwards RTP packets through worker-owned str0m
 /// sessions instead of using data channels or peer-connection media sources
-fn rtc_builder(codec_flags: MediaCodecFlags) -> str0m::RtcConfig {
+fn rtc_builder(codec_flags: MediaCodecFlags, stats_interval: Option<Duration>) -> str0m::RtcConfig {
     let mut config = Rtc::builder()
         .clear_codecs()
         .enable_opus(codec_flags.opus_enabled())
         .enable_pcmu(codec_flags.pcmu_enabled())
         .enable_pcma(codec_flags.pcma_enabled())
         .set_rtp_mode(true);
+    if let Some(stats_interval) = stats_interval {
+        config = config.set_stats_interval(Some(stats_interval));
+    }
     if codec_flags.vp8_enabled() {
         config.codec_config().add_config(
             VIDEO_PAYLOAD_TYPE_VP8.into(),

@@ -222,6 +222,7 @@ pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
             rtc_port_range,
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: CodecPreferences::default(),
+            media_quality_interval: None,
         })
         .deps(MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),

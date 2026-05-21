@@ -63,7 +63,7 @@ use crate::{
         media_transport::{
             ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ReceiverBandwidthSnapshot,
             TransportAdapterError, TransportBitrateSnapshot, TransportPlacementPressureSnapshot,
-            TransportSessionKey, TransportWorkerPressureSnapshot,
+            TransportQualitySnapshot, TransportSessionKey, TransportWorkerPressureSnapshot,
         },
     },
 };
@@ -244,6 +244,7 @@ impl RtcWorker {
                 rtc_port_range: self.rtc_port_range,
                 codec_flags: self.codec_flags,
                 codec_preferences: self.codec_preferences,
+                media_quality_interval: self.media_quality_interval,
                 media_id_base: self.media_id_base,
                 diagnostics: Arc::clone(&self.diagnostics),
                 packet_sink_registry: Arc::clone(&self.packet_sink_registry),
@@ -347,6 +348,20 @@ impl RtcWorker {
             return ReceiverBandwidthSnapshot::default();
         };
         snapshot_state.receiver_bandwidth_snapshot(session_keys)
+    }
+
+    /// reads sampled media quality from the worker snapshot state
+    pub fn transport_quality_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportQualitySnapshot {
+        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
+            return TransportQualitySnapshot::default();
+        };
+        let Ok(snapshot_state) = worker_handle.snapshot_state.lock() else {
+            return TransportQualitySnapshot::default();
+        };
+        snapshot_state.transport_quality_snapshot(session_keys)
     }
 
     /// builds a placement-pressure snapshot for selected sessions

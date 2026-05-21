@@ -238,6 +238,26 @@ pub struct ReceiverBandwidthSnapshot {
     pub per_session: Vec<(TransportSessionKey, Bitrate)>,
 }
 
+/// Latest sampled transport-quality facts keyed by transport user.
+///
+/// These values come from str0m stats events and are intended for diagnostics.
+/// Prometheus receives only aggregate counters and histograms so user identity
+/// never becomes a metrics label.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TransportQualitySnapshot {
+    pub per_session: Vec<(TransportSessionKey, TransportQualitySample)>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TransportQualitySample {
+    pub latest_bwe_bps: Option<u64>,
+    pub rtt_ms: Option<u64>,
+    pub ingress_loss_ppm: Option<u64>,
+    pub egress_loss_ppm: Option<u64>,
+    pub egress_jitter_rtp_timestamp_units: Option<u64>,
+    pub sample_count: u64,
+}
+
 /// Transport-observed pressure used by room-local placement policy.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TransportPlacementPressureSnapshot {

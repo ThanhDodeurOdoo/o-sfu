@@ -47,6 +47,7 @@ impl RuntimeOptions {
                 ObservabilityOptions {
                     transport_diagnostics_enabled: true,
                     transport_metrics_enabled: true,
+                    media_quality_interval: config.telemetry.media_quality_interval,
                 },
             ),
             room_media_limits: config.transport.room_media_limits,
@@ -172,6 +173,10 @@ mod tests {
         );
         assert_eq!(options.core.codecs.flags, config.codecs.flags);
         assert_eq!(options.core.codecs.preferences, config.codecs.preferences);
+        assert_eq!(
+            options.core.observability.media_quality_interval,
+            config.telemetry.media_quality_interval
+        );
     }
 
     #[test]

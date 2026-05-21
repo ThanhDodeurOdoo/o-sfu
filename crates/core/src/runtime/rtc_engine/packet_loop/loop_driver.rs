@@ -70,6 +70,7 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopConfig {
     pub rtc_port_range: RtcPortRange,
     pub codec_flags: MediaCodecFlags,
     pub codec_preferences: CodecPreferences,
+    pub media_quality_interval: Option<Duration>,
     /// first transport media id allocated by this worker
     ///
     /// media ids are worker-local counters once the loop is running
@@ -658,6 +659,7 @@ fn handle_control_input_and_clear_routing_cache(
             rtc_port_range: config.rtc_port_range,
             codec_flags: config.codec_flags,
             codec_preferences: config.codec_preferences,
+            media_quality_interval: config.media_quality_interval,
             metrics: &config.metrics,
         },
     );

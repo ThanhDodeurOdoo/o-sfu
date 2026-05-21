@@ -134,6 +134,7 @@ fn worker_config() -> MediaTransportConfig {
         rtc_port_range: RtcPortRange::new(46_200, 46_220),
         codec_flags: MediaCodecFlags::default(),
         codec_preferences: CodecPreferences::default(),
+        media_quality_interval: None,
     }
 }
 

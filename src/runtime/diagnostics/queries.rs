@@ -280,7 +280,7 @@ pub(crate) async fn user_detail_response(
     }
     match matches.len() {
         0 => DiagnosticsUserLookup::Missing,
-        1 => DiagnosticsUserLookup::Found(matches.remove(0)),
+        1 => DiagnosticsUserLookup::Found(Box::new(matches.remove(0))),
         _ => DiagnosticsUserLookup::Conflict(DiagnosticsUserLookupConflict {
             matching_room_ids: matches.into_iter().map(|detail| detail.room_id).collect(),
             requested_user_id: requested_user_id.to_owned(),

@@ -51,12 +51,12 @@ use crate::{
     runtime::{
         AvailableFeatures, ConnectionId, PeerSnapshot, RecordingState, RoomInstanceId, UserId,
         diagnostics::{
-            self, DiagnosticsQualitySummary, DiagnosticsSource, DiagnosticsStore,
-            DiagnosticsUserTransport, DiagnosticsUserView,
+            self, DiagnosticsIncomingBitrate, DiagnosticsQualitySummary, DiagnosticsSource,
+            DiagnosticsStore, DiagnosticsUserTransport, DiagnosticsUserView,
         },
         media_transport::{
             ActiveSpeakerSourceDiagnostic, MediaTransport, TransportConsumerRoute,
-            TransportMediaId, TransportSessionKey,
+            TransportMediaId, TransportQualitySample, TransportSessionKey,
         },
         metrics::RuntimeMetrics,
         recording::RecordingService,
@@ -601,6 +601,11 @@ impl Room {
             .map(|(user_id, connection_id)| self.transport_user_key(user_id, *connection_id))
             .collect::<Vec<_>>();
         let transport_snapshot = observability_port.transport_bitrate_snapshot(&session_keys);
+        let quality_by_session = observability_port
+            .transport_quality_snapshot(&session_keys)
+            .per_session
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
         let incoming_bitrate_by_session =
             state.diagnostics_incoming_bitrate_by_session(&transport_snapshot.per_media);
         let transport_by_session = session_entries
@@ -613,13 +618,13 @@ impl Room {
                         .session_transport_health(&session_key)
                         .map(diagnostics::diagnostics_transport_health),
                     media_worker_id: session_key.media_worker_id(),
-                    quality_summary: DiagnosticsQualitySummary {
-                        current_incoming_bitrate: incoming_bitrate_by_session
+                    quality_summary: diagnostics_quality_summary(
+                        incoming_bitrate_by_session
                             .get(&user_id)
                             .cloned()
                             .unwrap_or_default(),
-                        sampled_metrics_available: false,
-                    },
+                        quality_by_session.get(&session_key).copied(),
+                    ),
                 };
                 (user_id, transport)
             })
@@ -684,6 +689,34 @@ fn active_speaker_diagnostics_by_media(
         .into_iter()
         .map(|diagnostic| (diagnostic.transport_media_id(), diagnostic))
         .collect()
+}
+
+fn diagnostics_quality_summary(
+    current_incoming_bitrate: DiagnosticsIncomingBitrate,
+    quality_sample: Option<TransportQualitySample>,
+) -> DiagnosticsQualitySummary {
+    let Some(quality_sample) = quality_sample else {
+        return DiagnosticsQualitySummary {
+            current_incoming_bitrate,
+            sampled_metrics_available: false,
+            latest_bwe_bps: None,
+            rtt_ms: None,
+            ingress_loss_ppm: None,
+            egress_loss_ppm: None,
+            egress_jitter_rtp_timestamp_units: None,
+            sample_count: 0,
+        };
+    };
+    DiagnosticsQualitySummary {
+        current_incoming_bitrate,
+        sampled_metrics_available: quality_sample.sample_count > 0,
+        latest_bwe_bps: quality_sample.latest_bwe_bps,
+        rtt_ms: quality_sample.rtt_ms,
+        ingress_loss_ppm: quality_sample.ingress_loss_ppm,
+        egress_loss_ppm: quality_sample.egress_loss_ppm,
+        egress_jitter_rtp_timestamp_units: quality_sample.egress_jitter_rtp_timestamp_units,
+        sample_count: quality_sample.sample_count,
+    }
 }
 
 impl fmt::Debug for Room {

@@ -6,7 +6,7 @@
 //! transport config describes operator policy, while transport deps describe
 //! process-owned services shared with diagnostics, metrics and recording.
 
-use std::{net::IpAddr, sync::Arc};
+use std::{net::IpAddr, sync::Arc, time::Duration};
 
 use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
@@ -48,6 +48,8 @@ pub struct MediaTransportConfig {
     pub codec_flags: MediaCodecFlags,
     /// Codec preference order preserved while constructing router capabilities.
     pub codec_preferences: CodecPreferences,
+    /// str0m stats interval used for sampled transport-quality events.
+    pub media_quality_interval: Option<Duration>,
 }
 
 impl MediaTransportConfig {
@@ -65,6 +67,7 @@ impl MediaTransportConfig {
             rtc_port_range,
             codec_flags: self.codec_flags,
             codec_preferences: self.codec_preferences,
+            media_quality_interval: self.media_quality_interval,
         }
     }
 
@@ -101,6 +104,11 @@ impl MediaTransportConfig {
     #[must_use]
     pub const fn codec_preferences(&self) -> CodecPreferences {
         self.codec_preferences
+    }
+
+    #[must_use]
+    pub const fn media_quality_interval(&self) -> Option<Duration> {
+        self.media_quality_interval
     }
 }
 

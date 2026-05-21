@@ -460,6 +460,56 @@ metric_catalog! {
         kind: Histogram,
         samples: |metrics| vec![unlabeled_histogram(transport_lifetime_histogram(metrics))]
     },
+    MediaQualitySamplesTotal {
+        name: "osfu_media_quality_samples_total",
+        help: "Total sampled transport-quality events by str0m stats source.",
+        kind: Counter,
+        samples: |metrics| counter_family_samples(&metrics.media_quality_samples, "sample")
+    },
+    MediaQualityRttSeconds {
+        name: "osfu_media_quality_rtt_seconds",
+        help: "Sampled RTC round-trip time by str0m stats source.",
+        kind: Histogram,
+        samples: |metrics| histogram_family_samples(&metrics.media_quality_rtt, "sample")
+    },
+    MediaQualityLossPpmObservedTotal {
+        name: "osfu_media_quality_loss_ppm_observed_total",
+        help: "Sum of sampled packet loss observations in parts per million by direction.",
+        kind: Counter,
+        samples: |metrics| counter_family_samples(&metrics.media_quality_loss_ppm_observed, "direction")
+    },
+    MediaQualityLossObservationsTotal {
+        name: "osfu_media_quality_loss_observations_total",
+        help: "Total packet loss observations by direction.",
+        kind: Counter,
+        samples: |metrics| counter_family_samples(&metrics.media_quality_loss_observations, "direction")
+    },
+    MediaQualityBweBpsObservedTotal {
+        name: "osfu_media_quality_bwe_bps_observed_total",
+        help: "Sum of sampled peer egress bandwidth estimates in bits per second.",
+        kind: Counter,
+        samples: |metrics| vec![unlabeled_counter(metrics.media_quality_bwe_bps_observed.load())]
+    },
+    MediaQualityBweObservationsTotal {
+        name: "osfu_media_quality_bwe_observations_total",
+        help: "Total peer egress bandwidth estimate observations.",
+        kind: Counter,
+        samples: |metrics| vec![unlabeled_counter(metrics.media_quality_bwe_observations.load())]
+    },
+    MediaQualityJitterRtpTimestampUnitsObservedTotal {
+        name: "osfu_media_quality_jitter_rtp_timestamp_units_observed_total",
+        help: "Sum of sampled remote egress jitter observations in RTP timestamp units.",
+        kind: Counter,
+        samples: |metrics| vec![
+            unlabeled_counter(metrics.media_quality_jitter_rtp_timestamp_units_observed.load())
+        ]
+    },
+    MediaQualityJitterObservationsTotal {
+        name: "osfu_media_quality_jitter_observations_total",
+        help: "Total remote egress jitter observations.",
+        kind: Counter,
+        samples: |metrics| vec![unlabeled_counter(metrics.media_quality_jitter_observations.load())]
+    },
     TransportCleanupRetriesTotal {
         name: "osfu_transport_cleanup_retries_total",
         help: "Total room-owned transport cleanup retry attempts scheduled after cleanup failures.",
