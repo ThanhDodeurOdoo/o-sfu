@@ -278,17 +278,14 @@ async fn diagnostics_room_detail(
     Path(room_id): Path<String>,
 ) -> Response {
     async {
-        let Some(payload) = diagnostics::room_detail_response(
+        let payload = diagnostics::room_detail_response(
             &services.room_manager,
             &services.media_transport,
             &services.diagnostics,
             &room_id,
         )
-        .await
-        else {
-            return StatusCode::NOT_FOUND.into_response();
-        };
-        axum::Json(payload).into_response()
+        .await;
+        diagnostics_optional_response(payload)
     }
     .await
 }
@@ -298,17 +295,14 @@ async fn diagnostics_room_users(
     Path(room_id): Path<String>,
 ) -> Response {
     async {
-        let Some(payload) = diagnostics::room_users_response(
+        let payload = diagnostics::room_users_response(
             &services.room_manager,
             &services.media_transport,
             &services.diagnostics,
             &room_id,
         )
-        .await
-        else {
-            return StatusCode::NOT_FOUND.into_response();
-        };
-        axum::Json(payload).into_response()
+        .await;
+        diagnostics_optional_response(payload)
     }
     .await
 }
@@ -318,18 +312,15 @@ async fn diagnostics_room_graph(
     Path(room_id): Path<String>,
 ) -> Response {
     async {
-        let Some(payload) = diagnostics::room_detail_response(
+        let payload = diagnostics::room_detail_response(
             &services.room_manager,
             &services.media_transport,
             &services.diagnostics,
             &room_id,
         )
         .await
-        else {
-            return StatusCode::NOT_FOUND.into_response();
-        };
-        let graph = diagnostics::build_graph(&payload);
-        axum::Json(graph).into_response()
+        .map(|payload| diagnostics::build_graph(&payload));
+        diagnostics_optional_response(payload)
     }
     .await
 }
@@ -339,22 +330,27 @@ async fn diagnostics_user_graph(
     Path((room_id, user_id)): Path<(String, String)>,
 ) -> Response {
     async {
-        let Some(payload) = diagnostics::room_detail_response(
+        let payload = diagnostics::room_detail_response(
             &services.room_manager,
             &services.media_transport,
             &services.diagnostics,
             &room_id,
         )
         .await
-        else {
-            return StatusCode::NOT_FOUND.into_response();
-        };
-        let Some(graph) = diagnostics::build_user_graph(&payload, &user_id) else {
-            return StatusCode::NOT_FOUND.into_response();
-        };
-        axum::Json(graph).into_response()
+        .and_then(|payload| diagnostics::build_user_graph(&payload, &user_id));
+        diagnostics_optional_response(payload)
     }
     .await
+}
+
+fn diagnostics_optional_response<T>(payload: Option<T>) -> Response
+where
+    axum::Json<T>: IntoResponse,
+{
+    payload.map_or_else(
+        || StatusCode::NOT_FOUND.into_response(),
+        |payload| axum::Json(payload).into_response(),
+    )
 }
 
 async fn diagnostics_user_detail(
