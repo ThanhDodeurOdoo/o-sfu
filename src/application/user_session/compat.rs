@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use o_sfu_protocol::wire::{DownloadStates, StreamType, UserInfo};
 
-use super::{UserError, state::PendingUserAction};
+use super::UserError;
 use crate::{
     application::stream_catalog::stream_id_for_stream_type,
     core::prelude::{SfuCoreError, SourceSubscriptionIntent, UserStreamId},
@@ -49,14 +49,6 @@ pub(super) fn publication_info_update(stream_type: StreamType, active: bool) -> 
             is_screen_sharing_on: Some(active),
             ..UserInfo::default()
         }),
-    }
-}
-
-/// Stable telemetry operation name for a pending negotiation action.
-pub(super) fn negotiation_operation_name(action: &PendingUserAction) -> &'static str {
-    match action {
-        PendingUserAction::EstablishSession(_) => "initial_offer_create",
-        PendingUserAction::RefreshSession => "renegotiation_offer_create",
     }
 }
 

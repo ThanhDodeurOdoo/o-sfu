@@ -1,10 +1,11 @@
 //! Canonical media-core facade.
 //!
 //! This module keeps the public media API centered on [`SfuCore::session`].
-//! A caller creates one [`MediaSession`] for a room user connection and then
-//! expresses media intent through that handle. The handle keeps room identity,
-//! user identity and runtime connection identity together so outer
-//! orchestration does not pass the same tuple through every call.
+//! A caller creates one [`MediaSession`] for a room user connection, then
+//! enters a short-lived lifecycle handle for the intent it is executing. The
+//! session keeps room identity, user identity and runtime connection identity
+//! together so outer orchestration does not pass the same tuple through every
+//! call.
 //!
 //! # Business-layer API
 //!
@@ -13,7 +14,7 @@
 //! [`SourceSubscriptionIntent`] keyed by [`UserStreamId`] for download intent.
 //! Core does not accept compatibility stream labels on this facade. Those
 //! labels must be translated at the application edge before calling
-//! [`MediaSession::stage_publish`] or [`MediaSession::update_subscription`].
+//! [`MediaPublication::stage`] or [`MediaSubscription::update`].
 
 use std::collections::BTreeMap;
 
@@ -169,11 +170,11 @@ pub struct SfuCore {
 
 /// Borrowed media handle for one room user connection.
 ///
-/// [`MediaSession`] is the user interface of the core. It bundles a room, user
-/// identity, connection identity, and the derived transport session key.
-/// This grouping ensures that orchestration logic always operates on a
-/// consistent tuple of identities without passing them as individual arguments
-/// to every method.
+/// [`MediaSession`] is the identity bundle for core media work. It keeps a
+/// room, user identity, connection identity and derived transport session key
+/// together. Callers then choose a lifecycle handle such as
+/// [`MediaNegotiation`], [`MediaPublication`], [`MediaSubscription`] or
+/// [`MediaPresence`] to express the operation they are performing.
 ///
 /// # Lifecycle
 ///
@@ -199,13 +200,13 @@ pub struct SfuCore {
 ///
 /// ```ignore
 /// let session = core.session(&room, &user_id, connection_id);
-/// let initial_offer = session.create_initial_offer().await?;
+/// let initial_offer = session.negotiation().create_initial_offer().await?;
 /// ```
 ///
 /// Updating a subscription:
 ///
 /// ```ignore
-/// session.update_subscription(&target_user_id, &intents).await;
+/// session.subscription().update(&target_user_id, &intents).await;
 /// ```
 #[derive(Debug)]
 pub struct MediaSession<'a> {
@@ -213,6 +214,22 @@ pub struct MediaSession<'a> {
     room: &'a Room,
     context: MediaSessionContext<'a>,
 }
+
+/// Negotiation lifecycle handle for one media session.
+#[derive(Debug)]
+pub struct MediaNegotiation<'a>(MediaSession<'a>);
+
+/// Publication lifecycle handle for one media session.
+#[derive(Debug)]
+pub struct MediaPublication<'a>(MediaSession<'a>);
+
+/// Subscription lifecycle handle for one media session.
+#[derive(Debug)]
+pub struct MediaSubscription<'a>(MediaSession<'a>);
+
+/// Presence lifecycle handle for one media session.
+#[derive(Debug)]
+pub struct MediaPresence<'a>(MediaSession<'a>);
 
 impl SfuCore {
     /// Build a media core facade over the opaque runtime transport handle.
@@ -249,15 +266,7 @@ impl SfuCore {
     }
 }
 
-impl MediaSession<'_> {
-    fn room_operation(&self) -> RoomUserOperation<'_> {
-        self.room.user_operation(
-            self.context.user_id(),
-            self.context.connection_id(),
-            &self.core.media_transport,
-        )
-    }
-
+impl<'a> MediaSession<'a> {
     /// Return the current transport health for this endpoint.
     ///
     /// None means the transport backend has no endpoint for this session key.
@@ -269,10 +278,64 @@ impl MediaSession<'_> {
             .session_transport_health(self.context.transport_user_key())
     }
 
+    /// Enter the transport negotiation lifecycle for this media session.
+    #[must_use]
+    pub fn negotiation(self) -> MediaNegotiation<'a> {
+        MediaNegotiation(self)
+    }
+
+    /// Enter the publication lifecycle for this media session.
+    #[must_use]
+    pub fn publication(self) -> MediaPublication<'a> {
+        MediaPublication(self)
+    }
+
+    /// Enter the subscription lifecycle for this media session.
+    #[must_use]
+    pub fn subscription(self) -> MediaSubscription<'a> {
+        MediaSubscription(self)
+    }
+
+    /// Enter the presence lifecycle for this media session.
+    #[must_use]
+    pub fn presence(self) -> MediaPresence<'a> {
+        MediaPresence(self)
+    }
+
+    fn room_operation(&self) -> RoomUserOperation<'_> {
+        self.room.user_operation(
+            self.context.user_id(),
+            self.context.connection_id(),
+            &self.core.media_transport,
+        )
+    }
+
+    async fn apply_transport_answer(
+        &self,
+        answer_sdp: &str,
+    ) -> Result<AppliedSessionAnswer, SfuCoreError> {
+        self.core
+            .media_transport
+            .apply_session_answer(self.context.transport_user_key(), answer_sdp)
+            .await
+            .map_err(SfuCoreError::Transport)
+    }
+
+    async fn commit_staged_publishes(
+        &self,
+        applied_answer: &AppliedSessionAnswer,
+    ) -> Vec<UserStreamId> {
+        self.room_operation()
+            .commit_staged_publishes(applied_answer)
+            .await
+    }
+}
+
+impl MediaNegotiation<'_> {
     /// Create the first transport offer for this session.
     ///
     /// The returned [`InitialOffer`] must be stored with the pending request
-    /// and consumed by [`Self::apply_initial_answer`] so the answer is
+    /// and consumed by [`MediaNegotiation::apply_initial_answer`] so the answer is
     /// interpreted against the exact capability set used for the offer.
     ///
     /// # Errors
@@ -280,11 +343,12 @@ impl MediaSession<'_> {
     /// Returns [`SfuCoreError::Transport`] when the transport backend cannot
     /// create the offer.
     pub async fn create_initial_offer(&self) -> Result<InitialOffer, SfuCoreError> {
-        let offered_capabilities = self.room.router_rtp_capabilities().await;
+        let offered_capabilities = self.0.room.router_rtp_capabilities().await;
         let offer = self
+            .0
             .core
             .media_transport
-            .create_initial_session_offer(self.context.transport_user_key())
+            .create_initial_session_offer(self.0.context.transport_user_key())
             .await
             .map_err(SfuCoreError::Transport)?;
         Ok(InitialOffer {
@@ -307,9 +371,10 @@ impl MediaSession<'_> {
         &self,
     ) -> Result<Option<NegotiationOffer>, SfuCoreError> {
         match self
+            .0
             .core
             .media_transport
-            .create_session_renegotiation_offer(self.context.transport_user_key())
+            .create_session_renegotiation_offer(self.0.context.transport_user_key())
             .await
         {
             Ok(offer) => Ok(Some(NegotiationOffer::from(offer))),
@@ -335,20 +400,22 @@ impl MediaSession<'_> {
         answer_sdp: &str,
         initial_offer: InitialOffer,
     ) -> Result<Vec<UserStreamId>, SfuCoreError> {
-        let applied_answer = self.apply_transport_answer(answer_sdp).await?;
+        let applied_answer = self.0.apply_transport_answer(answer_sdp).await?;
         let client_capabilities = self
+            .0
             .core
             .media_transport
             .negotiated_client_rtp_capabilities(answer_sdp, &initial_offer.offered_capabilities)
             .map_err(SfuCoreError::CapabilityProjection)?;
         let outcome = self
+            .0
             .room_operation()
             .apply_session_negotiated(client_capabilities)
             .await;
         if outcome != SessionNegotiationOutcome::Applied {
             return Err(SfuCoreError::SessionNegotiationRejected(outcome));
         }
-        Ok(self.commit_staged_publishes(&applied_answer).await)
+        Ok(self.0.commit_staged_publishes(&applied_answer).await)
     }
 
     /// Apply the browser answer for a renegotiation offer.
@@ -367,22 +434,24 @@ impl MediaSession<'_> {
         &self,
         answer_sdp: &str,
     ) -> Result<Vec<UserStreamId>, SfuCoreError> {
-        let applied_answer = self.apply_transport_answer(answer_sdp).await?;
-        let outcome = self.room_operation().apply_session_refreshed().await;
+        let applied_answer = self.0.apply_transport_answer(answer_sdp).await?;
+        let outcome = self.0.room_operation().apply_session_refreshed().await;
         if outcome != SessionNegotiationOutcome::Applied {
             return Err(SfuCoreError::SessionRefreshRejected(outcome));
         }
-        Ok(self.commit_staged_publishes(&applied_answer).await)
+        Ok(self.0.commit_staged_publishes(&applied_answer).await)
     }
+}
 
+impl MediaPublication<'_> {
     /// Check whether this connection already has a staged publish for a stream.
     ///
     /// This is an idempotency hint for websocket orchestration. It is not an
     /// authority to commit media because another task could win or clean up
     /// the staged transaction before the answer arrives.
     #[must_use]
-    pub fn has_staged_publish(&self, stream_id: &UserStreamId) -> bool {
-        self.room_operation().has_staged_publish(stream_id)
+    pub fn has_staged(&self, stream_id: &UserStreamId) -> bool {
+        self.0.room_operation().has_staged_publish(stream_id)
     }
 
     /// Check whether the room currently has a live publication for this user.
@@ -390,8 +459,8 @@ impl MediaSession<'_> {
     /// The result is room-authoritative at the moment of the state read. It
     /// does not reserve the stream against concurrent unpublish or user
     /// replacement.
-    pub async fn is_stream_published(&self, stream_id: &UserStreamId) -> bool {
-        self.room_operation().is_stream_published(stream_id).await
+    pub async fn is_published(&self, stream_id: &UserStreamId) -> bool {
+        self.0.room_operation().is_stream_published(stream_id).await
     }
 
     /// Set the user-visible activity state for an already published stream.
@@ -399,38 +468,15 @@ impl MediaSession<'_> {
     /// The outcome reports both room acceptance and best-effort transport
     /// projection. A transport update failure does not mean the room-visible
     /// activity change was rejected.
-    pub async fn set_publication_activity(
+    pub async fn set_activity(
         &self,
         stream_id: &UserStreamId,
         activity: PublicationActivity,
     ) -> PublicationActivityOutcome {
-        self.room_operation()
+        self.0
+            .room_operation()
             .set_publication_activity(stream_id, activity)
             .await
-    }
-
-    /// Persist this session subscription intent for a target user.
-    ///
-    /// The returned outcome is room-authoritative. A stale connection outcome
-    /// means the caller is acting on a session that has already been replaced
-    /// or removed. The caller owns translation from compatibility download
-    /// state into the generic per-stream map.
-    pub async fn update_subscription(
-        &self,
-        target_user_id: &UserId,
-        intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
-    ) -> SubscriptionUpdateOutcome {
-        self.room_operation()
-            .update_subscription(target_user_id, intents)
-            .await
-    }
-
-    /// Update room-visible user information for this connection.
-    ///
-    /// Refresh controls whether other users need a full snapshot or a normal
-    /// incremental update. Stale connections are ignored by the room boundary.
-    pub async fn update_user_info(&self, info: UserInfo, refresh: UserInfoRefresh) {
-        self.room_operation().update_user_info(info, refresh).await;
     }
 
     /// Reserve media for a publish that still needs renegotiation.
@@ -448,11 +494,12 @@ impl MediaSession<'_> {
     ///
     /// Returns [`SfuCoreError`] when the room or transport cannot reserve the
     /// publish transaction.
-    pub async fn stage_publish(
+    pub async fn stage(
         &self,
         intent: &SourcePublishIntent,
     ) -> Result<PublishStageOutcome, SfuCoreError> {
-        self.room_operation()
+        self.0
+            .room_operation()
             .stage_negotiated_publish(intent)
             .await
             .map_err(SfuCoreError::Transport)
@@ -467,7 +514,8 @@ impl MediaSession<'_> {
         &self,
         stream_id: &UserStreamId,
     ) -> RollbackStagedPublishOutcome {
-        self.room_operation()
+        self.0
+            .room_operation()
             .rollback_staged_publish(stream_id)
             .await
     }
@@ -478,7 +526,8 @@ impl MediaSession<'_> {
     /// best-effort cleanup for in-flight publish reservations. It does not
     /// close the transport session itself.
     pub async fn rollback_connection_publishes(&self) {
-        self.room_operation()
+        self.0
+            .room_operation()
             .rollback_staged_publishes_for_connection()
             .await;
     }
@@ -489,43 +538,39 @@ impl MediaSession<'_> {
     /// are explicit outcomes so callers do not infer failure reasons from a
     /// collapsed boolean.
     pub async fn unpublish(&self, stream_id: &UserStreamId) -> UnpublishOutcome {
-        self.room_operation().unpublish(stream_id).await
+        self.0.room_operation().unpublish(stream_id).await
     }
+}
 
-    /// apply the browser sdp answer to the media transport before updating room state
+impl MediaSubscription<'_> {
+    /// Persist this session subscription intent for a target user.
     ///
-    /// this helper isolates the transport-specific phase of answer processing
-    /// it verifies and integrates the negotiated parameters without touching room state
-    /// this ensures that if the transport rejects the sdp, the overarching session remains unmodified
-    ///
-    /// # Errors
-    ///
-    /// returns [`SfuCoreError::Transport`] if the backend cannot interpret or accept the
-    /// answer, allowing the caller to fail the operation cleanly
-    async fn apply_transport_answer(
+    /// The returned outcome is room-authoritative. A stale connection outcome
+    /// means the caller is acting on a session that has already been replaced
+    /// or removed. The caller owns translation from compatibility download
+    /// state into the generic per-stream map.
+    pub async fn update(
         &self,
-        answer_sdp: &str,
-    ) -> Result<AppliedSessionAnswer, SfuCoreError> {
-        self.core
-            .media_transport
-            .apply_session_answer(self.context.transport_user_key(), answer_sdp)
+        target_user_id: &UserId,
+        intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
+    ) -> SubscriptionUpdateOutcome {
+        self.0
+            .room_operation()
+            .update_subscription(target_user_id, intents)
             .await
-            .map_err(SfuCoreError::Transport)
     }
+}
 
-    /// convert pending publish reservations into live room tracks
+impl MediaPresence<'_> {
+    /// Update room-visible user information for this connection.
     ///
-    /// this acts as the final phase of answer application where the validated upload
-    /// parameters are bound to the user's staged intents
-    /// it must only be called after both the transport and the room state have agreed
-    /// on the updated connection
-    async fn commit_staged_publishes(
-        &self,
-        applied_answer: &AppliedSessionAnswer,
-    ) -> Vec<UserStreamId> {
-        self.room_operation()
-            .commit_staged_publishes(applied_answer)
-            .await
+    /// Refresh controls whether other users need a full snapshot or a normal
+    /// incremental update. Stale connections are ignored by the room boundary.
+    pub async fn update_info(&self, info: UserInfo, refresh: UserInfoRefresh) {
+        self.0
+            .room_operation()
+            .update_user_info(info, refresh)
+            .await;
     }
 }
 

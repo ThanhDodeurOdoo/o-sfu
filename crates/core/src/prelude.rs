@@ -28,7 +28,7 @@ pub use crate::{
         },
     },
     sfu::{
-        InitialOffer, MediaSession, NegotiationOffer, SfuCore, SfuCoreError, UploadEncoding,
-        UploadSlot,
+        InitialOffer, MediaNegotiation, MediaPresence, MediaPublication, MediaSession,
+        MediaSubscription, NegotiationOffer, SfuCore, SfuCoreError, UploadEncoding, UploadSlot,
     },
 };
