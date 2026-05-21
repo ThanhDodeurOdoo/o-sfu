@@ -165,6 +165,13 @@ impl RoomTestInspect<'_> {
         self.room.state.read().await.topology_router_count()
     }
 
+    #[cfg(test)]
+    pub(in crate::runtime::room) fn load_triggered_last_decision_reason(
+        self,
+    ) -> Option<super::super::super::placement::RoomPlacementDecisionReason> {
+        self.room.load_triggered_last_decision_reason()
+    }
+
     #[must_use]
     pub fn media_worker_id(self) -> usize {
         self.room.placement_ledger.media_worker_id()

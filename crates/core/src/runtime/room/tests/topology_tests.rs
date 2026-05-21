@@ -308,7 +308,7 @@ fn topology_rejects_consumer_on_unreserved_router() {
 }
 
 #[test]
-fn topology_detaches_idle_spillover_router_after_last_home_session_leaves() {
+fn topology_reports_idle_spillover_router_after_last_home_session_leaves() {
     let mut topology = RoomTopology::new_with_bounded_spillover(RouterId(9), 2);
     let first_user_id = UserId::Integer(10);
     let second_user_id = UserId::Integer(20);
@@ -319,8 +319,24 @@ fn topology_detaches_idle_spillover_router_after_last_home_session_leaves() {
 
     assert!(topology.remove_session(&second_user_id).is_ok());
 
+    assert_eq!(topology.router_count(), 2);
+    assert_eq!(topology.idle_spillover_routers(), vec![RouterId(10)]);
+    topology.detach_spillover_routers(&[RouterId(10)]);
     assert_eq!(topology.router_count(), 1);
     assert_eq!(topology.user_count(), 1);
+}
+
+#[test]
+fn topology_never_reports_primary_router_as_idle_spillover() {
+    let mut topology = RoomTopology::new_with_bounded_spillover(RouterId(9), 2);
+    let user_id = UserId::Integer(10);
+
+    assert!(join_on_router(&mut topology, &user_id, 0, 9, 0).is_ok());
+    assert!(topology.remove_session(&user_id).is_ok());
+
+    assert!(topology.idle_spillover_routers().is_empty());
+    topology.detach_spillover_routers(&[RouterId(9)]);
+    assert_eq!(topology.router_count(), 1);
 }
 
 #[test]

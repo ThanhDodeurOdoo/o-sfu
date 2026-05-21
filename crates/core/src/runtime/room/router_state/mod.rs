@@ -74,6 +74,10 @@ impl RoomRouterState {
         &self.rtp_capabilities
     }
 
+    pub(super) fn mapped_session_count(&self) -> usize {
+        self.router_user_ids_by_user_id.len()
+    }
+
     /// Ensure the pure router contains a user matching the signaling-layer user.
     ///
     /// The runtime still accepts integer and string signaling user IDs, so this

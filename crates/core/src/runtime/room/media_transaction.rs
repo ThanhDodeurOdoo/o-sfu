@@ -741,6 +741,7 @@ impl Room {
             .with_relay_effects(relay_effects)
             .execute(self, RoomEffectContext::runtime(media_port))
             .await;
+        self.observe_load_triggered_source_fanout().await;
     }
 }
 

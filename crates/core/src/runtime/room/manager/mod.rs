@@ -17,12 +17,16 @@ use super::{
     factory::{RoomCreationIntent, RoomFactory},
     placement::{RoomPlacementPlanner, WorkerLoadIndex},
 };
-use crate::runtime::{
-    ConnectionId, RoomInstanceId, UserId, UserPermissions,
-    diagnostics::{self, DiagnosticsEventData, DiagnosticsStore},
-    media_transport::MediaTransport,
-    metrics::RuntimeMetrics,
-    packet_sink_registry::RoomPacketSinkRegistry,
+use crate::{
+    RoomSpilloverMode,
+    runtime::{
+        ConnectionId, RoomInstanceId, UserId, UserPermissions,
+        diagnostics::{self, DiagnosticsEventData, DiagnosticsStore},
+        media_transport::MediaTransport,
+        metrics::RuntimeMetrics,
+        packet_sink_registry::RoomPacketSinkRegistry,
+        sync::lock_unpoisoned,
+    },
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
@@ -304,15 +308,18 @@ impl RoomManager {
     pub async fn drain_cleanup_retries(&self, media_transport: &MediaTransport) {
         for entry in self.directory_entries().await {
             let room = entry.room();
-            if !room.has_pending_cleanup_retries() {
-                continue;
-            }
             let room_id = room.uuid().to_owned();
             self.run_current_room_mutation(
                 &room_id,
                 |room| async move {
-                    room.drain_cleanup_retries(media_transport).await;
-                    room.is_empty().await && !room.has_pending_cleanup_retries()
+                    let had_pending_cleanup_retries = room.has_pending_cleanup_retries();
+                    if had_pending_cleanup_retries {
+                        room.drain_cleanup_retries(media_transport).await;
+                    }
+                    room.reconcile_spillover_routers().await;
+                    had_pending_cleanup_retries
+                        && room.is_empty().await
+                        && !room.has_pending_cleanup_retries()
                 },
                 |should_remove| *should_remove,
             )
@@ -371,10 +378,19 @@ impl RoomManager {
     ) -> LocalRouterRuntimeContext {
         let room_snapshot = room.placement_usage_snapshot().await;
         let worker_loads = self.worker_load_index(media_transport).await;
-        let planner = RoomPlacementPlanner::new(self.media_worker_count, room.room_worker_policy());
-        planner
-            .choose(&room_snapshot, &worker_loads)
-            .resolve(&room_snapshot, || self.factory.allocate_spillover_router())
+        let policy = room.room_worker_policy();
+        let planner = RoomPlacementPlanner::new(self.media_worker_count, policy);
+        let decision = match policy.spillover() {
+            RoomSpilloverMode::LoadTriggeredLocalSpillover(_) => {
+                room.observe_load_triggered_source_fanout().await;
+                let mut load_state = lock_unpoisoned(&room.load_triggered_placement);
+                planner.choose_with_load_state(&room_snapshot, &worker_loads, &mut load_state)
+            }
+            RoomSpilloverMode::StrictSingleRouter | RoomSpilloverMode::BoundedLocalSpillover => {
+                planner.choose(&room_snapshot, &worker_loads)
+            }
+        };
+        decision.resolve(&room_snapshot, || self.factory.allocate_spillover_router())
     }
 
     async fn worker_load_index(&self, media_transport: &MediaTransport) -> WorkerLoadIndex {
