@@ -5,9 +5,9 @@ pub(super) use o_sfu::{
     core::prelude::{LocalSpilloverPolicy, LocalSpilloverPolicyParts},
     http::IncomingBitRateStatsResponse,
 };
-pub(super) use o_sfu_protocol::{
-    shared::{DownloadStates, StreamType, UserId, UserInfo, VideoLayoutIntent},
-    signaling::{ServerMessage, ServerRequest, TrackBinding},
+pub(super) use o_sfu_protocol::wire::{
+    DownloadStates, ServerMessage, ServerRequest, StreamType, TrackBinding, UserId, UserInfo,
+    VideoLayoutIntent,
 };
 pub(super) use o_sfu_telemetry::diagnostics::{
     DiagnosticsActiveSpeakerReason, DiagnosticsActiveSpeakerState,

@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use o_sfu_protocol::shared::UserId;
+use o_sfu_protocol::wire::UserId;
 
 use crate::{
     core::prelude::SfuCore,

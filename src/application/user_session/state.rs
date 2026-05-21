@@ -12,7 +12,7 @@ use negotiation::UserRequestIdSequencer;
 pub(super) use negotiation::{
     PendingUserAction, RenegotiationDisposition, ResolvedUserNegotiation, UserNegotiationState,
 };
-use o_sfu_protocol::signaling::RequestId;
+use o_sfu_protocol::wire::RequestId;
 pub(super) use wire::{UserWireMessages, UserWireState};
 
 /// connection-scoped state composed by the `User` orchestration facade

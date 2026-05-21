@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use o_sfu_protocol::shared::{DownloadStates, StreamType, UserInfo};
+use o_sfu_protocol::wire::{DownloadStates, StreamType, UserInfo};
 
 use super::{UserError, state::PendingUserAction};
 use crate::{

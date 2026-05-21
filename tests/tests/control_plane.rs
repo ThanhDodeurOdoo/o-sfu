@@ -9,12 +9,9 @@ use o_sfu::{
     config::{Config, RtcPortRange},
     http::{DISCONNECT_PATH, STATS_PATH, StatsResponse},
 };
-use o_sfu_protocol::{
-    shared::{DownloadStates, StreamType, UserId, UserInfo},
-    signaling::{
-        ClientBroadcastPayload, ClientMessage, ServerMessage, ServerRequest, StreamIntentPayload,
-        SubscribePayload,
-    },
+use o_sfu_protocol::wire::{
+    ClientBroadcastPayload, ClientMessage, DownloadStates, ServerMessage, ServerRequest,
+    StreamIntentPayload, StreamType, SubscribePayload, UserId, UserInfo,
 };
 use o_sfu_tests::support::{
     TEST_ROOM_KEY, TestServer, create_room, disconnect_sessions_via_http, metrics_text,

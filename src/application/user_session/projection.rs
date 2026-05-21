@@ -3,13 +3,10 @@
 //! this module isolates the conversion logic needed to map domain-native state into the format
 //! expected by the signaling protocol
 
-use o_sfu_protocol::{
-    shared::{StreamType, UserId},
-    signaling::{
-        NegotiationUploadEncoding, NegotiationUploadSlot, SessionDescriptionPayload,
-        SourceDescriptor, SourceEncodingDescriptor,
-        UploadLayerPolicyRole as ProtocolUploadLayerPolicyRole,
-    },
+use o_sfu_protocol::wire::{
+    NegotiationUploadEncoding, NegotiationUploadSlot, SessionDescriptionPayload, SourceDescriptor,
+    SourceEncodingDescriptor, StreamType, UploadLayerPolicyRole as ProtocolUploadLayerPolicyRole,
+    UserId,
 };
 
 use crate::core::{

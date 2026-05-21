@@ -2,12 +2,9 @@ use std::time::Duration;
 
 use axum::{Error as AxumError, extract::ws::Message};
 use futures_util::{SinkExt, StreamExt};
-use o_sfu_protocol::{
-    shared::UserId,
-    signaling::{
-        ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse,
-        RecordingActionResult, RecordingOptions, RequestId, ServerResponse, WebSocketCloseCode,
-    },
+use o_sfu_protocol::wire::{
+    ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse,
+    RecordingActionResult, RecordingOptions, RequestId, ServerResponse, UserId, WebSocketCloseCode,
 };
 use tokio::time::{Instant, sleep_until};
 use tracing::{debug, info, warn};

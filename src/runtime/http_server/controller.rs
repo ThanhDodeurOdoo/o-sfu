@@ -9,7 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use o_sfu_protocol::shared::StreamType;
+use o_sfu_protocol::wire::StreamType;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info};

@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use o_sfu_protocol::shared::StreamType;
+use o_sfu_protocol::wire::StreamType;
 use o_sfu_router::MediaKind;
 
 use crate::core::prelude::{
@@ -145,7 +145,7 @@ const fn source_policy_for_stream_type(stream_type: StreamType) -> SourcePolicy 
 
 #[cfg(test)]
 mod tests {
-    use o_sfu_protocol::shared::VideoLayoutIntent;
+    use o_sfu_protocol::wire::VideoLayoutIntent;
 
     use super::*;
 

@@ -1,4 +1,4 @@
-use o_sfu_protocol::shared::{DownloadStates, UserId};
+use o_sfu_protocol::wire::{DownloadStates, UserId};
 use tracing::{info, instrument};
 
 use super::{User, UserError, UserOutput, compat::subscription_intents_from_download_states};

@@ -30,9 +30,9 @@ use o_sfu::{
         RoomResponse, STATS_PATH, StatsResponse,
     },
 };
-use o_sfu_protocol::{
-    shared::{StreamType, UserId, UserPermissions},
-    signaling::{EnvelopeBatch, ServerEnvelope, ServerMessage, WelcomePayload},
+use o_sfu_protocol::wire::{
+    EnvelopeBatch, ServerEnvelope, ServerMessage, StreamType, UserId, UserPermissions,
+    WelcomePayload,
 };
 use o_sfu_telemetry::diagnostics::{
     DiagnosticsActiveSpeaker, DiagnosticsActiveSpeakerReason, DiagnosticsActiveSpeakerState,

@@ -32,9 +32,8 @@ use std::{sync::Arc, time::Duration};
 
 use axum::extract::ws::Message;
 use futures_util::StreamExt;
-use o_sfu_protocol::{
-    shared::{UserId, UserPermissions},
-    signaling::{AuthPayload, ClientEnvelope, ClientMessage, WebSocketCloseCode},
+use o_sfu_protocol::wire::{
+    AuthPayload, ClientEnvelope, ClientMessage, UserId, UserPermissions, WebSocketCloseCode,
 };
 use serde::Deserialize;
 use tokio::time::timeout;
@@ -694,7 +693,7 @@ async fn reject_handshake<T>(
 #[cfg(test)]
 mod tests {
     use axum::extract::ws::Message;
-    use o_sfu_protocol::signaling::WebSocketCloseCode;
+    use o_sfu_protocol::wire::WebSocketCloseCode;
     use serde_json::json;
 
     use super::{MAX_CLIENT_FRAME_BYTES, parse_auth_payload};

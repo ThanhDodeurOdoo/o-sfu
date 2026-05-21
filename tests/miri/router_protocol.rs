@@ -1,8 +1,8 @@
 use o_sfu_protocol::{
-    core::{Command, ProtocolCore},
-    shared::{AvailableFeatures, RecordingState, StreamType},
-    signaling::{
-        ClientEnvelope, ClientMessage, EnvelopeBatch, StreamIntentPayload, WelcomePayload,
+    host::{Command, ProtocolCore},
+    wire::{
+        AvailableFeatures, ClientEnvelope, ClientMessage, EnvelopeBatch, RecordingState,
+        StreamIntentPayload, StreamType, WelcomePayload,
     },
 };
 use o_sfu_router::{

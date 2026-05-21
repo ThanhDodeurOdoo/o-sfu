@@ -5,9 +5,8 @@ use std::{
 
 use futures_util::SinkExt;
 use o_sfu_protocol::{
-    core::{Command, CommandBatch, NegotiationKind, ProtocolCore},
-    host_bridge::{HostCommand, host_commands},
-    signaling::RecordingOptions,
+    host::{Command, CommandBatch, HostCommand, NegotiationKind, ProtocolCore, host_commands},
+    wire::RecordingOptions,
 };
 use tokio_tungstenite::{connect_async, tungstenite};
 

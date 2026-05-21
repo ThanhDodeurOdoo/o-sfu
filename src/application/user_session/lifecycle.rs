@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
-use o_sfu_protocol::{
-    shared::{JsonPayload, UserId, UserInfo},
-    signaling::{ServerMessage, WelcomePayload},
-};
+use o_sfu_protocol::wire::{JsonPayload, ServerMessage, UserId, UserInfo, WelcomePayload};
 use tracing::{debug, error};
 
 use super::{User, UserDisconnectReason, UserError, UserOutput};

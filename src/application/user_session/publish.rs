@@ -1,4 +1,4 @@
-use o_sfu_protocol::shared::StreamType;
+use o_sfu_protocol::wire::StreamType;
 use tracing::{info, instrument, warn};
 
 use super::{User, UserError, UserOutput, compat::publication_info_update};

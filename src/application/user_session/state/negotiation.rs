@@ -10,7 +10,7 @@ use std::{
     mem::{replace, take},
 };
 
-use o_sfu_protocol::{shared::StreamType, signaling::RequestId};
+use o_sfu_protocol::wire::{RequestId, StreamType};
 
 use crate::core::prelude::InitialOffer;
 
@@ -178,7 +178,7 @@ impl UserNegotiationState {
 
 #[cfg(test)]
 mod tests {
-    use o_sfu_protocol::{shared::StreamType, signaling::RequestId};
+    use o_sfu_protocol::wire::{RequestId, StreamType};
 
     use super::*;
 

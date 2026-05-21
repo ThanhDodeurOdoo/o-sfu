@@ -1,4 +1,10 @@
-// TODO: needs documentation:
+//! browser bundle compatibility edge for Odoo
+//!
+//! preserves legacy `SfuClient` methods while native protocol uses typed host
+//! commands and wire envelopes
+//!
+//! import through [`crate::bundle`]
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -24,7 +30,8 @@ pub type BundleMediaTrack = JsonPayload;
 
 pub type BundleStatsReport = JsonPayload;
 
-// TODO: needs documentation:
+/// method call accepted from the Odoo browser bundle edge with aliases like
+/// `updateUpload` and `updateDownload`
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "method", content = "arguments", rename_all = "camelCase")]
 pub enum BundleMethodCall {

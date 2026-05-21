@@ -8,7 +8,7 @@
 
 use std::net::SocketAddr;
 
-use o_sfu_protocol::shared::StreamType;
+use o_sfu_protocol::wire::StreamType;
 use o_sfu_router::{
     MediaKind, MediaStream,
     test_support::rtp_samples::{

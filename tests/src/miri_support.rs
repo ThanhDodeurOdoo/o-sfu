@@ -1,7 +1,9 @@
 use o_sfu_protocol::{
-    core::Command,
-    shared::{AvailableFeatures, RecordingState},
-    signaling::{ClientEnvelope, EnvelopeBatch, ServerEnvelope, WelcomePayload},
+    host::Command,
+    wire::{
+        AvailableFeatures, ClientEnvelope, EnvelopeBatch, RecordingState, ServerEnvelope,
+        WelcomePayload,
+    },
 };
 
 #[must_use]

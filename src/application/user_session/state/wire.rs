@@ -7,11 +7,9 @@
 
 use std::collections::BTreeMap;
 
-use o_sfu_protocol::{
-    shared::{StreamType, UserId, UserInfo},
-    signaling::{
-        PeerInfoPayload, PeerLeftPayload, ServerBroadcastPayload, ServerMessage, TrackBinding,
-    },
+use o_sfu_protocol::wire::{
+    PeerInfoPayload, PeerLeftPayload, ServerBroadcastPayload, ServerMessage, StreamType,
+    TrackBinding, UserId, UserInfo,
 };
 
 use super::super::projection::source_descriptor_from_source;
@@ -227,7 +225,7 @@ mod tests {
         reason = "test assertions use expect for direct fixture failures"
     )]
 
-    use o_sfu_protocol::shared::StreamType;
+    use o_sfu_protocol::wire::StreamType;
     use o_sfu_router::{Mid, Rid};
 
     use super::*;

@@ -4,7 +4,7 @@
 //! `User` decides the order of client-visible work, while the socket writer
 //! decides how adjacent messages are batched into protocol envelopes
 
-use o_sfu_protocol::signaling::{RequestId, ServerMessage, ServerRequest, ServerResponse};
+use o_sfu_protocol::wire::{RequestId, ServerMessage, ServerRequest, ServerResponse};
 
 /// ordered signaling produced by one user-session transition
 ///

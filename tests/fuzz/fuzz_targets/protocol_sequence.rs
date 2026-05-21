@@ -21,12 +21,12 @@ use libfuzzer_sys::{
     fuzz_target,
 };
 use o_sfu_protocol::{
-    core::{Command, ConnectionState, PendingRequestKind, ProtocolCore, RECOVERY_TIMER_ID},
-    shared::{
+    host::{Command, ConnectionState, PendingRequestKind, ProtocolCore, RECOVERY_TIMER_ID},
+    wire::{
         AvailableFeatures, RecordingState, RecordingStateUpdate, UserId, UserInfo, StopCode,
         StreamType,
     },
-    signaling::{
+    wire::{
         PeerInfoPayload, PeerLeftPayload, PeerSnapshot, RecordingActionResult, RecordingOptions,
         RequestId, ServerBroadcastPayload, ServerEnvelope, ServerMessage, ServerRequest,
         ServerResponse, SessionDescriptionPayload, TrackBinding, WebSocketCloseCode,
