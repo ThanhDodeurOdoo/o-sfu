@@ -13,14 +13,12 @@ use super::{
         topology::{RoomRouterStateFactory, RoomTopology},
         user_negotiation::UserNegotiation,
     },
-    layout::UserLayout,
     media::{ConsumerRouteView, RelayRouteEffect, RoomMediaGraph, TransportMediaRemoval},
-    presence::UserPresence,
 };
 use crate::{
     RoomMediaLimits, RoomSpilloverMode,
     runtime::{
-        ConnectionId, RecordingState, UserId,
+        ConnectionId, PeerSnapshot, RecordingState, UserId, UserInfo,
         room::placement::LoadTriggeredPlacementState,
         router_events::RoomRouterEventSink,
         source_model::{SourceSubscriptionIntent, UserStreamId},
@@ -64,14 +62,40 @@ pub(in crate::runtime::room) struct ActiveUser {
     pub(super) label: Option<String>,
     #[allow(dead_code, reason = "stored for future permission-gated actions")]
     pub(super) permissions: RoomUserPermissions,
-    pub(super) presence: UserPresence,
-    pub(super) layout: UserLayout,
+    pub(super) info: UserInfo,
+    pub(super) server_featured: Option<bool>,
     pub(super) negotiation: UserNegotiation,
     pub(super) desired_source_subscriptions:
         BTreeMap<UserId, BTreeMap<UserStreamId, SourceSubscriptionIntent>>,
     pub(super) parsed_client_rtp_capabilities: Option<RouterRtpCapabilities>,
     pub(super) connection_id: ConnectionId,
     pub(super) sender: OutboundSender,
+}
+
+impl ActiveUser {
+    pub(super) fn reset_presentation(&mut self) {
+        self.info = UserInfo::default();
+        self.server_featured = None;
+    }
+
+    pub(super) fn apply_info_update(&mut self, info: &UserInfo) {
+        self.info.apply_partial_update(info);
+    }
+
+    pub(super) const fn featured(&self) -> Option<bool> {
+        self.server_featured
+    }
+
+    pub(super) fn set_featured(&mut self, featured: Option<bool>) {
+        self.server_featured = featured;
+    }
+
+    pub(super) fn project_info(&self) -> UserInfo {
+        self.info
+            .clone()
+            .with_featured(self.server_featured)
+            .snapshot_complete()
+    }
 }
 
 impl RoomState {
@@ -248,6 +272,47 @@ impl RoomState {
 
     pub fn user_count(&self) -> usize {
         self.users.len()
+    }
+
+    pub fn user_snapshots_except(&self, excluded_user_id: &UserId) -> Vec<PeerSnapshot> {
+        self.users
+            .iter()
+            .filter(|(user_id, _session)| *user_id != excluded_user_id)
+            .map(|(user_id, user)| PeerSnapshot {
+                user_id: user_id.clone(),
+                info: user.project_info(),
+            })
+            .collect()
+    }
+
+    pub fn user_info_snapshot(&self, user_id: &UserId) -> Option<(UserId, UserInfo)> {
+        let user = self.users.get(user_id)?;
+        Some((user_id.clone(), user.project_info()))
+    }
+
+    pub fn user_info_snapshot_all(&self) -> BTreeMap<UserId, UserInfo> {
+        self.users
+            .iter()
+            .map(|(user_id, user)| (user_id.clone(), user.project_info()))
+            .collect()
+    }
+
+    pub fn user_stats_counts(&self) -> (u64, BTreeMap<UserStreamId, u64>) {
+        let mut active_users_by_stream: BTreeMap<UserStreamId, BTreeSet<UserId>> = BTreeMap::new();
+        for (stream_id, owner_user_id) in self.media.active_producer_stream_owners() {
+            active_users_by_stream
+                .entry(stream_id.clone())
+                .or_default()
+                .insert(owner_user_id.clone());
+        }
+        let active_stream_counts = active_users_by_stream
+            .into_iter()
+            .map(|(stream_id, users)| (stream_id, u64::try_from(users.len()).unwrap_or(u64::MAX)))
+            .collect();
+        (
+            u64::try_from(self.users.len()).unwrap_or(u64::MAX),
+            active_stream_counts,
+        )
     }
 
     pub(super) fn current_live_consumer_routes(

@@ -25,9 +25,7 @@ use super::{
         topology::{RoomTopology, RoomTopologyError},
         user_negotiation::{UserNegotiation, UserNegotiationUpdate},
     },
-    layout::UserLayout,
     media::{RelayRouteEffect, TransportMediaRemoval},
-    presence::UserPresence,
     shared::{ActiveUser, RoomState},
 };
 use crate::runtime::{ConnectionId, UserId, UserInfo};
@@ -247,8 +245,7 @@ impl RoomState {
             let old_sender = user.sender.clone();
             user.label.clone_from(&label);
             user.permissions.clone_from(&permissions);
-            user.presence = UserPresence::default();
-            user.layout = UserLayout::default();
+            user.reset_presentation();
             user.negotiation = UserNegotiation::default();
             user.parsed_client_rtp_capabilities = None;
             user.connection_id = connection_id;
@@ -260,8 +257,8 @@ impl RoomState {
             ActiveUser {
                 label,
                 permissions,
-                presence: UserPresence::default(),
-                layout: UserLayout::default(),
+                info: UserInfo::default(),
+                server_featured: None,
                 negotiation: UserNegotiation::default(),
                 desired_source_subscriptions: BTreeMap::new(),
                 parsed_client_rtp_capabilities: None,
@@ -472,7 +469,7 @@ impl RoomState {
         }
         {
             let user = self.user_mut_for_connection(user_id, connection_id)?;
-            user.presence.apply_update(info);
+            user.apply_info_update(info);
         }
         let snapshot = if need_refresh {
             self.user_info_snapshot_all()
