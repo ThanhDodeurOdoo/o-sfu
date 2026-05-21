@@ -74,6 +74,19 @@ fn selectable_encoding_ids(descriptor: &PublishedSourceDescriptor) -> Vec<Source
 }
 
 #[test]
+fn consumer_selection_delivery_requires_active_intent_and_policy_admission() {
+    let mut selection = ConsumerSourceSelection::open(true);
+    assert!(selection.delivery_active());
+
+    selection.set_policy_pause_reason(Some(PolicyPauseReason::VideoDownloadLimit));
+    assert!(!selection.delivery_active());
+
+    selection.set_policy_pause_reason(None);
+    selection.set_active(false);
+    assert!(!selection.delivery_active());
+}
+
+#[test]
 fn descriptor_keeps_source_encoding_identity_separate() {
     let source_id = PublishedSourceId::from_raw(7);
     let low_encoding_id = SourceEncodingId::from_raw(1);

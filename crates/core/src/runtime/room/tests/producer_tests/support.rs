@@ -14,8 +14,8 @@ pub(super) use crate::{
     Bitrate, MediaCodecFlags, RoomMediaLimits, RtcPortRange, SessionBitrateLimits,
     runtime::{
         diagnostics::{
-            DiagnosticsPolicyPauseReason, DiagnosticsSourceSelector, DiagnosticsStore,
-            DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
+            DiagnosticsPolicyPauseReason, DiagnosticsRouteState, DiagnosticsSourceSelector,
+            DiagnosticsStore, DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
         },
         media_transport::{
             MediaTransportConfig, MediaTransportDeps, SessionOffer, TransportMediaId,
@@ -160,11 +160,17 @@ pub(super) async fn assert_subscription_policy_pause_reason(
     };
     assert!(
         user.subscriptions.iter().any(|subscription| {
+            let expected_state = if expected_reason.is_some() {
+                DiagnosticsRouteState::Inactive
+            } else {
+                DiagnosticsRouteState::Active
+            };
             subscription.producer_user_id == *producer_user_id
                 && subscription.stream_id == stream_id_for_source(stream_type).to_string()
                 && subscription.selection.policy_pause_reason == expected_reason
+                && subscription.state == expected_state
         }),
-        "diagnostics should expose the expected policy pause reason: {:?}",
+        "diagnostics should expose the expected policy pause route state: {:?}",
         user.subscriptions
     );
 }

@@ -608,7 +608,7 @@ impl RoomState {
                         stream_id,
                     )
                 },
-                ConsumerSourceSelection::active,
+                ConsumerSourceSelection::delivery_active,
             );
         Some(if route_active {
             ConsumerRouteState::Active
@@ -635,7 +635,7 @@ impl RoomState {
                     {
                         return None;
                     }
-                    if !route.producer.active || !route.selection_or_open(true).active() {
+                    if !route.producer.active || !route.selection_or_open(true).delivery_active() {
                         return None;
                     }
                     Some(ConsumerKeyframeRefreshTarget {
