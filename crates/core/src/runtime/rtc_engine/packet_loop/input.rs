@@ -117,8 +117,9 @@ impl PacketLoopInputReceivers {
     /// Borrow relay input for bounded pump-phase draining.
     ///
     /// Callers should only use this while they are already in the packet-loop
-    /// turn that drains relay packets. Control waits use [`Self::recv_control`]
-    /// so relay bursts cannot become lifecycle work.
+    /// turn that drains relay packets. Control waits use [`Self::try_recv_control`]
+    /// and [`Self::recv_control_or_relay`] so relay bursts cannot become
+    /// lifecycle work.
     pub(super) fn relay_rx(&mut self) -> &mut mpsc::Receiver<ForwardedPacket> {
         &mut self.relay_rx
     }
@@ -131,11 +132,12 @@ impl PacketLoopInputReceivers {
         self.woken_relay_packet.take()
     }
 
-    /// Drain already queued control input without awaiting.
+    /// Take one already queued control input without awaiting.
     ///
-    /// The loop calls this before media pumping so queued lifecycle work runs
-    /// before packets are routed. Normal commands are checked before probe
-    /// input to preserve production ordering even in test builds.
+    /// The loop calls this at the wait boundary so queued lifecycle work becomes
+    /// one explicit input for the next packet-loop turn. Normal commands are
+    /// checked before probe input to preserve production ordering even in test
+    /// builds.
     pub(super) fn try_recv_control(&mut self) -> Option<PacketLoopControlInput> {
         if let Ok(command) = self.command_rx.try_recv() {
             return Some(PacketLoopControlInput::Command(command));

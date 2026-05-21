@@ -24,10 +24,13 @@
 //! packet-loop turn
 //!   |
 //!   v
-//! PacketLoopTurn::drain_control_inputs
+//! PacketLoopTurn::apply_input
 //!   |
-//!   v
-//! mutate PacketLoopState and clear routing hints
+//!   +--> control -> mutate PacketLoopState and clear routing hints
+//!   |
+//!   +--> timeout -> keep already due sessions ready
+//!   |
+//!   +--> UDP datagram -> route through demux recovery
 //!   |
 //!   v
 //! PacketLoopTurn::pump
@@ -55,17 +58,17 @@
 //!   |
 //!   +--> shutdown or closed command channel -> return
 //!   |
-//!   +--> PacketLoopTurn::apply_next_input -> next turn
+//!   +--> one control, timeout, relay wake or UDP datagram -> next turn
 //!   |
-//!   +--> timeout -> next turn
-//!   |
-//!   +--> UDP datagram -> route through demux recovery -> next turn
+//!   +--> relay wake stages one packet for bounded pump-phase draining
 //! ```
 //!
-//! commands are handled before media pumping
+//! each turn applies at most one control, timeout or UDP datagram input before
+//! media pumping
 //! the `tokio::select!` wait is biased toward shutdown and commands
 //! this keeps lifecycle work responsive even when media traffic is heavy
-//! socket reads are still part of the same turn
+//! relay packets remain pump-phase media work, with one relay wake allowed to
+//! resume an idle loop
 //! a packet that enters `str0m` marks its session dirty, then the next turn
 //! drains any output produced by that input
 //!
