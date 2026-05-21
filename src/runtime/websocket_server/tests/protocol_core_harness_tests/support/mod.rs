@@ -1,17 +1,16 @@
 pub(super) use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 pub(super) use o_sfu_protocol::{
-    bundle_api::{
+    bundle::{
         BundleBroadcastUpdate, BundleConnectionState, BundleDisconnectUpdate, BundleStateChange,
         BundleUpdate, bundle_session_info_key,
     },
-    host_bridge::HostPendingRequestKind,
-    shared::{
-        AvailableFeatures, DownloadStates as ProtocolDownloadStates, RecordingState,
-        StreamType as ProtocolStreamType, UserId as ProtocolSessionId,
-        UserInfo as ProtocolSessionInfo,
+    host::HostPendingRequestKind,
+    wire::{
+        AvailableFeatures, DownloadStates as ProtocolDownloadStates, EnvelopeBatch, RecordingState,
+        RequestId, ServerMessage, StreamType as ProtocolStreamType, TrackBinding,
+        UserId as ProtocolSessionId, UserInfo as ProtocolSessionInfo,
     },
-    signaling::{EnvelopeBatch, RequestId, ServerMessage, TrackBinding},
 };
 pub(super) use o_sfu_router::MediaKind;
 pub(super) use serde_json::json;

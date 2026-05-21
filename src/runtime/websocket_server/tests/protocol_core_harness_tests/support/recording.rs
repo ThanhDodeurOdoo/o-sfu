@@ -1,4 +1,4 @@
-use o_sfu_protocol::{host_bridge::HostCommand, shared::UserPermissions};
+use o_sfu_protocol::{host::HostCommand, wire::UserPermissions};
 
 use super::*;
 

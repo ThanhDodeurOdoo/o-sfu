@@ -5,7 +5,7 @@
 
 use std::{fmt, time::Duration};
 
-use o_sfu_protocol::shared::StreamType;
+use o_sfu_protocol::wire::StreamType;
 use o_sfu_rfc::rtp::{self, CodecName, frame_marking};
 use o_sfu_router::MediaKind;
 use str0m::rtp::ExtensionValues;

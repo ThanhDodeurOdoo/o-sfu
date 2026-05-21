@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use o_sfu_protocol::signaling::SessionDescriptionPayload;
+use o_sfu_protocol::wire::SessionDescriptionPayload;
 use o_sfu_rfc::{rtp::CodecName, webrtc};
 use o_sfu_router::MediaKind;
 use str0m::{

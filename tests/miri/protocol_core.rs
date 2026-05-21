@@ -1,12 +1,12 @@
 use o_sfu_protocol::{
-    core::{
+    host::{
         Command, ConnectionState, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent,
     },
-    shared::{DownloadStates, StreamType, UserId, UserInfo},
-    signaling::{
-        AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, RecordingOptions, RequestId,
-        ServerEnvelope, ServerMessage, ServerRequest, SessionDescriptionPayload,
-        StreamIntentPayload, SubscribePayload, TrackBinding, WebSocketCloseCode,
+    wire::{
+        AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, DownloadStates,
+        RecordingOptions, RequestId, ServerEnvelope, ServerMessage, ServerRequest,
+        SessionDescriptionPayload, StreamIntentPayload, StreamType, SubscribePayload, TrackBinding,
+        UserId, UserInfo, WebSocketCloseCode,
     },
 };
 use o_sfu_tests::miri_support::{

@@ -6,13 +6,10 @@
 use std::{future::Future, pin::Pin, time::Duration};
 
 use futures_util::SinkExt;
-use o_sfu_protocol::{
-    shared::{DownloadStates, StreamType, UserId, UserInfo},
-    signaling::{
-        AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch, RequestId,
-        ServerEnvelope, ServerMessage, ServerRequest, StreamIntentPayload, SubscribePayload,
-        WelcomePayload,
-    },
+use o_sfu_protocol::wire::{
+    AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, DownloadStates, EnvelopeBatch,
+    RequestId, ServerEnvelope, ServerMessage, ServerRequest, StreamIntentPayload, StreamType,
+    SubscribePayload, UserId, UserInfo, WelcomePayload,
 };
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};

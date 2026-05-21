@@ -14,13 +14,11 @@ use o_sfu::{
         decode_client_batch,
     },
 };
-use o_sfu_protocol::{
-    shared::{DownloadStates, StreamType, UserId, UserInfo, UserPermissions},
-    signaling::{
-        ClientEnvelope, ClientMessage, ClientResponse, Envelope, EnvelopeDecodeError,
-        PeerInfoPayload, RecordingActionResult, RequestId, ServerEnvelope, ServerMessage,
-        ServerResponse, SessionDescriptionPayload, StreamIntentPayload, SubscribePayload,
-    },
+use o_sfu_protocol::wire::{
+    ClientEnvelope, ClientMessage, ClientResponse, DownloadStates, Envelope, EnvelopeDecodeError,
+    PeerInfoPayload, RecordingActionResult, RequestId, ServerEnvelope, ServerMessage,
+    ServerResponse, SessionDescriptionPayload, StreamIntentPayload, StreamType, SubscribePayload,
+    UserId, UserInfo, UserPermissions,
 };
 
 const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";

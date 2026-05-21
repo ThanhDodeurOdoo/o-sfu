@@ -8,7 +8,7 @@ use std::{future::Future, time::Duration};
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use futures_util::{SinkExt, stream::SplitSink};
-use o_sfu_protocol::signaling::{
+use o_sfu_protocol::wire::{
     ClientEnvelope, Envelope, EnvelopeBatch, EnvelopeDecodeError, ServerEnvelope,
     WebSocketCloseCode,
 };

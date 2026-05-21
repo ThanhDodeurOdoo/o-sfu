@@ -31,7 +31,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures_util::{StreamExt, stream::SplitStream};
-use o_sfu_protocol::shared::UserId;
+use o_sfu_protocol::wire::UserId;
 use tracing::{Instrument, Span, field, info, warn};
 
 use super::{

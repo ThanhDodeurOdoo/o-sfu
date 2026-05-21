@@ -1,9 +1,9 @@
 use o_sfu_protocol::{
-    core::{
+    host::{
         ConnectionState, RECOVERY_TIMER_ID,
         verification::{VerificationConnectionLifecycle, VerificationLifecycleEffects},
     },
-    signaling::WebSocketCloseCode,
+    wire::WebSocketCloseCode,
 };
 
 const NON_TERMINAL_CLOSE_CODE: u16 = 1011;

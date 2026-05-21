@@ -1,4 +1,4 @@
-use o_sfu_protocol::signaling::ServerMessage;
+use o_sfu_protocol::wire::ServerMessage;
 
 use super::{User, UserError, UserOutput, state};
 use crate::runtime::room::{RemoteTrackBootstrap, RoomEventMessage, TrackBindingUpdate};

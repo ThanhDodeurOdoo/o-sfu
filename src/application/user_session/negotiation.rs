@@ -1,4 +1,4 @@
-use o_sfu_protocol::signaling::{RequestId, ServerRequest, SessionDescriptionPayload};
+use o_sfu_protocol::wire::{RequestId, ServerRequest, SessionDescriptionPayload};
 use tracing::{info, instrument, warn};
 
 use super::{

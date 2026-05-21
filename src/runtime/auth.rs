@@ -8,7 +8,7 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE},
 };
 use hmac::{Hmac, KeyInit, Mac};
-use o_sfu_protocol::shared::{UserId, UserPermissions};
+use o_sfu_protocol::wire::{UserId, UserPermissions};
 pub use o_sfu_rfc::jwt::RegisteredJwtClaims;
 use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -254,7 +254,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use base64::Engine as _;
-    use o_sfu_protocol::shared::{UserId, UserPermissions};
+    use o_sfu_protocol::wire::{UserId, UserPermissions};
     use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtAudience, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
     use serde::Serialize;
     use serde_json::json;
