@@ -8,6 +8,8 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
+use o_sfu_router::MediaKind;
+
 use super::{
     super::super::{media::ConsumerRouteTransportRef, shared::RoomState},
     layout::{ReceiverVideoLayoutIntent, featured_source_user_ids_for_active_speakers},
@@ -59,7 +61,9 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
             .current_live_consumer_routes()
             .filter_map(|route| {
                 let source = route.source;
-                if source.selectable_encoding_count() == 0 {
+                if source.media_kind() != MediaKind::Video
+                    || source.policy().adaptation() == SourceAdaptationPolicy::None
+                {
                     return None;
                 }
                 if !route.producer.active {
@@ -229,7 +233,9 @@ fn visible_scalable_route_counts_by_consumer(
     let mut counts = BTreeMap::new();
     for route in state.current_live_consumer_routes() {
         let source = route.source;
-        if source.policy().adaptation() != SourceAdaptationPolicy::ScalableVideo {
+        if source.media_kind() != MediaKind::Video
+            || source.policy().adaptation() != SourceAdaptationPolicy::ScalableVideo
+        {
             continue;
         }
         if !route.producer.active || !route.selection_or_open(true).active() {
