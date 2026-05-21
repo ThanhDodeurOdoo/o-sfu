@@ -1,7 +1,7 @@
 use anyhow::Result;
 pub use o_sfu_core::prelude::RuntimeFeatureFlags;
 
-use super::parsing::parse_optional_env;
+use super::{log_view::ConfigLogField, parsing::parse_optional_env};
 
 pub(super) fn load_runtime_feature_flags(
     mut get_var: impl FnMut(&str) -> Option<String>,
@@ -26,6 +26,15 @@ pub(super) fn load_runtime_feature_flags(
         )?
         .unwrap_or(false),
     })
+}
+
+#[must_use]
+pub(super) fn runtime_feature_flag_log_fields(flags: RuntimeFeatureFlags) -> [ConfigLogField; 3] {
+    [
+        ConfigLogField::new("transcription", flags.transcription),
+        ConfigLogField::new("audio_recording", flags.audio_recording),
+        ConfigLogField::new("video_recording", flags.video_recording),
+    ]
 }
 
 #[cfg(test)]

@@ -7,7 +7,10 @@ pub use o_sfu_telemetry::{
     TraceExportConfig,
 };
 
-use super::parsing::{parse_env_or_default, parse_optional_non_empty_env};
+use super::{
+    log_view::ConfigLogField,
+    parsing::{parse_env_or_default, parse_optional_non_empty_env},
+};
 
 const OTEL_TRACING_FEATURE_NAME: &str = "otel-tracing";
 const MEDIA_QUALITY_INTERVAL_ENV: &str = "TELEMETRY_MEDIA_QUALITY_INTERVAL_MS";
@@ -57,6 +60,33 @@ pub(super) fn load_telemetry_config(
         media_quality_interval: (media_quality_interval_ms > 0)
             .then(|| Duration::from_millis(media_quality_interval_ms)),
     })
+}
+
+#[must_use]
+pub(super) fn telemetry_log_fields(
+    config: &TelemetryConfig,
+    process_id: u32,
+) -> [ConfigLogField; 5] {
+    [
+        ConfigLogField::new("service_name", config.resource.service_name.as_str()),
+        ConfigLogField::new(
+            "deployment_environment",
+            config.resource.deployment_environment.as_str(),
+        ),
+        ConfigLogField::new(
+            "service_instance_id",
+            config.resource.resolved_instance_id(process_id),
+        ),
+        ConfigLogField::new("log_format", config.log_format.as_str()),
+        ConfigLogField::new(
+            "trace_export_otlp_endpoint",
+            config
+                .trace_export
+                .otlp_endpoint
+                .as_deref()
+                .unwrap_or("disabled"),
+        ),
+    ]
 }
 
 #[cfg(test)]
