@@ -8,8 +8,7 @@
 use std::collections::BTreeSet;
 
 use super::{
-    super::shared::RoomState,
-    action::FeaturedUserUpdate,
+    super::{super::shared::RoomState, action::FeaturedUserUpdate},
     input::{
         first_featured_source_user_for_active_speakers,
         first_featured_source_users_for_active_speakers,

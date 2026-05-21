@@ -280,6 +280,7 @@ impl Room {
             state: RwLock::new(RoomState::new(
                 &runtime_context,
                 runtime_policy.admission_policy,
+                runtime_policy.media_limits,
                 runtime_policy.router_rtp_capabilities,
                 router_event_sink,
             )),

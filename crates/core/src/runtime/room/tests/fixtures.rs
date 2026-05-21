@@ -24,8 +24,8 @@ pub(super) use super::super::{
 use crate::runtime::room::user_negotiation::{UserNegotiationUpdate, UserTransportReady};
 pub(super) use crate::{
     Bitrate, MediaCodecFlags, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
-    RollbackStagedPublishOutcome, RtcPortRange, SessionBitrateLimits, SessionNegotiationOutcome,
-    SubscriptionUpdateOutcome, UnpublishOutcome,
+    RollbackStagedPublishOutcome, RoomMediaLimits, RtcPortRange, SessionBitrateLimits,
+    SessionNegotiationOutcome, SubscriptionUpdateOutcome, UnpublishOutcome,
     runtime::{
         ConnectionId, TestSourceKind, UserId, UserPermissions, VideoLayoutIntent,
         diagnostics::DiagnosticsStore,
@@ -516,6 +516,24 @@ pub(super) async fn setup_ready_users_with_transport(
     (room, adapter)
 }
 
+pub(super) async fn setup_ready_users_with_transport_and_media_limits(
+    user_ids: &[i64],
+    media_limits: RoomMediaLimits,
+) -> (Arc<super::super::Room>, MediaTransport) {
+    let manager = RoomManager::for_test_with_media_limits(media_limits);
+    let room = manager
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
+        .await;
+    let adapter = real_adapter();
+    for &raw_user_id in user_ids {
+        let (sender, _receiver) = test_sender();
+        let user_id = UserId::Integer(raw_user_id);
+        join_user_without_transport_cleanup(&room, &adapter, user_id.clone(), sender).await;
+        make_session_ready_with_transport(&room, &user_id, &adapter).await;
+    }
+    (room, adapter)
+}
+
 pub(super) async fn setup_ready_users_with_transport_receivers(
     user_ids: &[i64],
 ) -> (
@@ -552,6 +570,15 @@ pub(super) struct SourcePolicyScenario {
 impl SourcePolicyScenario {
     pub(super) async fn with_ready_users(user_ids: &[i64]) -> Self {
         let (room, adapter) = setup_ready_users_with_transport(user_ids).await;
+        Self { room, adapter }
+    }
+
+    pub(super) async fn with_ready_users_and_media_limits(
+        user_ids: &[i64],
+        media_limits: RoomMediaLimits,
+    ) -> Self {
+        let (room, adapter) =
+            setup_ready_users_with_transport_and_media_limits(user_ids, media_limits).await;
         Self { room, adapter }
     }
 

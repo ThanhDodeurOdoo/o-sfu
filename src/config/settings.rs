@@ -3,8 +3,9 @@ use std::net::{IpAddr, SocketAddr};
 use o_sfu_core::prelude::Bitrate;
 
 use super::{
-    CodecPreferences, MediaCodecFlags, RoomWorkerPolicy, RtcPortRange, VideoBitrateLimits,
-    diagnostics::DiagnosticsConfig, feature_flags::RuntimeFeatureFlags, telemetry::TelemetryConfig,
+    CodecPreferences, MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange,
+    VideoBitrateLimits, diagnostics::DiagnosticsConfig, feature_flags::RuntimeFeatureFlags,
+    telemetry::TelemetryConfig,
 };
 
 pub const DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS: usize = 512;
@@ -54,6 +55,7 @@ pub struct TransportConfig {
     pub rtc_port_range: RtcPortRange,
     pub rtc_media_worker_count: usize,
     pub room_worker_policy: RoomWorkerPolicy,
+    pub room_media_limits: RoomMediaLimits,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

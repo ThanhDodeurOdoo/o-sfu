@@ -426,8 +426,9 @@ impl SourceRouteControl {
     ) -> Option<ActiveSpeakerSource> {
         self.source_audio_policy
             .as_ref()
-            .and_then(|source_audio_policy| source_audio_policy.active_speaker_observed_at(now))
-            .map(|observed_at| ActiveSpeakerSource::new(source_transport_media_id, observed_at))
+            .and_then(|source_audio_policy| {
+                source_audio_policy.active_speaker_source(source_transport_media_id, now)
+            })
     }
 
     /// builds diagnostics for the source audio policy when one exists

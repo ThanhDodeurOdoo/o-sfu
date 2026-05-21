@@ -1,6 +1,6 @@
-//! Async effect executor for room-owned video source policy.
+//! Async effect executor for room-owned source policy.
 //!
-//! The pure video-policy planner returns source-domain selector updates and
+//! The pure source-policy planners return source-domain selector updates and
 //! featured-state changes while the room lock is held. This executor owns
 //! the post-lock part of the transaction: apply packet gates to the transport
 //! adapter, request keyframes for accepted upswitches, and commit only the
@@ -48,8 +48,11 @@ impl SourcePolicyEffectPlan {
         active_speaker_sources: &[ActiveSpeakerSource],
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
     ) -> Self {
-        let consumer_packets = state
-            .consumer_packet_selection_updates(active_speaker_sources, receiver_bandwidth_snapshot);
+        let mut consumer_packets = state.audio_route_activity_updates(active_speaker_sources);
+        consumer_packets.extend(state.consumer_packet_selection_updates(
+            active_speaker_sources,
+            receiver_bandwidth_snapshot,
+        ));
         let featured_sessions = state.featured_session_updates(active_speaker_sources);
         Self {
             consumer_packets,
@@ -168,7 +171,7 @@ impl SourcePolicyEffectPlan {
             warn!(
                 ?route,
                 route_active = update.route_active(),
-                "media transport failed to apply receiver video policy route activity"
+                "media transport failed to apply source policy route activity"
             );
             return None;
         }

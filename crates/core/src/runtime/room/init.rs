@@ -6,7 +6,7 @@ use o_sfu_router::MediaCapabilities;
 
 use super::placement::RoomRuntimeContext;
 use crate::{
-    RoomWorkerPolicy, RuntimeFeatureFlags,
+    RoomMediaLimits, RoomWorkerPolicy, RuntimeFeatureFlags,
     runtime::{
         diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -50,6 +50,8 @@ pub struct RoomRuntimePolicy {
     pub router_rtp_capabilities: MediaCapabilities,
     /// same-room local worker-placement policy selected at runtime boot
     pub room_worker_policy: RoomWorkerPolicy,
+    /// room media activation caps applied by source policy
+    pub media_limits: RoomMediaLimits,
 }
 
 impl RoomRuntimePolicy {
@@ -64,6 +66,7 @@ impl RoomRuntimePolicy {
             feature_flags,
             router_rtp_capabilities,
             room_worker_policy: RoomWorkerPolicy::strict_single_router(),
+            media_limits: RoomMediaLimits::default(),
         }
     }
 
@@ -71,6 +74,13 @@ impl RoomRuntimePolicy {
     #[must_use]
     pub fn with_room_worker_policy(mut self, room_worker_policy: RoomWorkerPolicy) -> Self {
         self.room_worker_policy = room_worker_policy;
+        self
+    }
+
+    /// return a room policy that uses the provided media activation limits
+    #[must_use]
+    pub fn with_media_limits(mut self, media_limits: RoomMediaLimits) -> Self {
+        self.media_limits = media_limits;
         self
     }
 }

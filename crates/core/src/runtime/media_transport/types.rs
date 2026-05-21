@@ -299,6 +299,7 @@ impl TransportMediaId {
 pub struct ActiveSpeakerSource {
     transport_media_id: TransportMediaId,
     observed_at: Instant,
+    last_audio_level_dbov: Option<i8>,
 }
 
 impl ActiveSpeakerSource {
@@ -307,6 +308,20 @@ impl ActiveSpeakerSource {
         Self {
             transport_media_id,
             observed_at,
+            last_audio_level_dbov: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_audio_level(
+        transport_media_id: TransportMediaId,
+        observed_at: Instant,
+        last_audio_level_dbov: Option<i8>,
+    ) -> Self {
+        Self {
+            transport_media_id,
+            observed_at,
+            last_audio_level_dbov,
         }
     }
 
@@ -318,6 +333,11 @@ impl ActiveSpeakerSource {
     #[must_use]
     pub const fn observed_at(self) -> Instant {
         self.observed_at
+    }
+
+    #[must_use]
+    pub const fn last_audio_level_dbov(self) -> Option<i8> {
+        self.last_audio_level_dbov
     }
 }
 

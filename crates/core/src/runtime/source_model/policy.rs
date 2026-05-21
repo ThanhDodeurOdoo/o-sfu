@@ -334,7 +334,8 @@ pub enum SourceRoutePriority {
 /// [`Self::HiddenTile`] means layout hid the source. [`Self::OverflowTile`]
 /// means layout pushed it outside the visible tile set. [`Self::BudgetPressure`]
 /// means the route was useful, but the receiver BWE could not fit it after
-/// cheaper layers were tried.
+/// cheaper layers were tried. Hard activation caps use dedicated reasons so
+/// operators can distinguish them from bandwidth policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyPauseReason {
     /// The receiver budget cannot fit this route after cheaper layers were tried.
@@ -345,6 +346,10 @@ pub enum PolicyPauseReason {
     OverflowTile,
     /// No negotiated encoding or operating point can be forwarded usefully.
     MissingUsableLayer,
+    /// The active-audio-speaker cap withheld this route.
+    AudioSpeakerLimit,
+    /// The per-receiver live-video cap withheld this route.
+    VideoDownloadLimit,
 }
 
 /// Server-owned role for one published source encoding.

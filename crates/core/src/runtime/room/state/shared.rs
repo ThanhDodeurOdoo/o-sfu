@@ -18,7 +18,7 @@ use super::{
     presence::UserPresence,
 };
 use crate::{
-    RoomSpilloverMode,
+    RoomMediaLimits, RoomSpilloverMode,
     runtime::{
         ConnectionId, RecordingState, UserId,
         room::placement::LoadTriggeredPlacementState,
@@ -40,6 +40,7 @@ use crate::{
 #[derive(Debug)]
 pub(in crate::runtime::room) struct RoomState {
     pub(super) admission_policy: RoomAdmissionPolicy,
+    pub(super) media_limits: RoomMediaLimits,
     pub(super) users: BTreeMap<UserId, ActiveUser>,
     /// Monotonically increasing: each join, including re-joins, gets a fresh id
     /// so stale async callbacks from a previous connection are rejected.
@@ -77,11 +78,13 @@ impl RoomState {
     pub fn new(
         runtime_context: &super::super::RoomRuntimeContext,
         admission_policy: RoomAdmissionPolicy,
+        media_limits: RoomMediaLimits,
         router_rtp_capabilities: MediaCapabilities,
         router_event_sink: Arc<dyn RoomRouterEventSink>,
     ) -> Self {
         Self {
             admission_policy,
+            media_limits,
             users: BTreeMap::new(),
             next_connection_id: 0,
             next_source_id: 1,

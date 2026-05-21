@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use super::packet_gate::PacketLayerGate;
 use crate::runtime::media_transport::{
-    ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSourceDiagnostic,
-    TransportMediaId,
+    ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
+    ActiveSpeakerSourceDiagnostic, TransportMediaId,
 };
 
 const ACTIVE_SPEAKER_HOLD_WINDOW: Duration = Duration::from_millis(250);
@@ -68,9 +68,20 @@ impl SourceAudioPolicyState {
         self.packet_gate
     }
 
-    pub(super) fn active_speaker_observed_at(&self, now: Instant) -> Option<Instant> {
+    pub(super) fn active_speaker_source(
+        &self,
+        transport_media_id: TransportMediaId,
+        now: Instant,
+    ) -> Option<ActiveSpeakerSource> {
         self.last_spoke_at
             .filter(|_| self.active_until.is_some_and(|deadline| now < deadline))
+            .map(|observed_at| {
+                ActiveSpeakerSource::with_audio_level(
+                    transport_media_id,
+                    observed_at,
+                    self.last_audio_level_dbov,
+                )
+            })
     }
 
     pub(super) fn active_deadline_after(&self, now: Instant) -> Option<Instant> {

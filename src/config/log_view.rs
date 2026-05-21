@@ -180,6 +180,22 @@ impl ConfigLogView<'_> {
             formatter,
             "room_max_local_routers",
             config.transport.room_worker_policy.max_local_routers(),
+        )?;
+        write_field(
+            formatter,
+            "room_max_active_audio_speakers",
+            config
+                .transport
+                .room_media_limits
+                .max_active_audio_speakers(),
+        )?;
+        write_field(
+            formatter,
+            "room_max_video_downloads_per_receiver",
+            config
+                .transport
+                .room_media_limits
+                .max_video_downloads_per_receiver(),
         )
     }
 
@@ -241,8 +257,8 @@ mod tests {
     use crate::{
         config::{
             AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig,
-            HttpConfig, MediaCodecFlags, RoomWorkerPolicy, RtcPortRange, RuntimeFeatureFlags,
-            TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
+            HttpConfig, MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange,
+            RuntimeFeatureFlags, TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
         },
         core::server::room::{
             DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
@@ -276,6 +292,7 @@ mod tests {
                 rtc_port_range: RtcPortRange::new(40_000, 49_999),
                 rtc_media_worker_count: 1,
                 room_worker_policy: RoomWorkerPolicy::strict_single_router(),
+                room_media_limits: RoomMediaLimits::default(),
             },
             codecs: CodecConfig {
                 flags: MediaCodecFlags::default(),

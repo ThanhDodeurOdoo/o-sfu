@@ -12,7 +12,7 @@ use o_sfu_router::{ConsumerId, MediaKind, MediaStream, ProducerId, RouterId};
 
 use super::*;
 use crate::{
-    MediaCodecFlags,
+    MediaCodecFlags, RoomMediaLimits,
     runtime::{
         ConnectionId, RoomInstanceId, TestSourceKind, UserPermissions,
         media_transport::TransportMediaId,
@@ -53,6 +53,7 @@ fn test_state() -> RoomState {
     RoomState::new(
         &runtime_context,
         RoomAdmissionPolicy::new(4),
+        RoomMediaLimits::default(),
         router_rtp_capabilities(MediaCodecFlags::default()),
         Arc::new(RecordingService::new(
             RoomInstanceId::from_raw(0),

@@ -1,7 +1,7 @@
 //! Async synchronization bridge for room-owned video source policy.
 //!
 //! This file connects `Room` to the pure source-selection policy in
-//! `state::video_policy`. Room state decides which source-domain selector
+//! `state::source_policy`. Room state decides which source-domain selector
 //! each receiver should use, while `SourcePolicyEffectPlan` applies the
 //! resulting transport gates after the room lock is released.
 //!

@@ -6,7 +6,7 @@
 //! `presence` owns client-driven user presence state.
 //! `recording` owns room recording-control state updates and fan-out.
 //! `user_info_projection` owns outward-facing user projection.
-//! `video_policy` owns room-level source selection input, planning, projection, and commit.
+//! `source_policy` owns room-level source selection input, planning, projection, and commit.
 //! `shared` owns the room state shell.
 //! `membership` owns user lifecycle, presence fan-out, and negotiation readiness.
 //! `media` owns producer/consumer workflows and the media graph indexes.
@@ -21,10 +21,10 @@ mod membership;
 mod presence;
 mod recording;
 mod shared;
+mod source_policy;
 #[cfg(any(test, feature = "testing-transport"))]
 mod test_support;
 mod user_info_projection;
-mod video_policy;
 
 pub use self::media::{ConsumerRouteState, RemoteTrackBootstrap};
 pub(in crate::runtime::room) use self::{
@@ -36,5 +36,5 @@ pub(in crate::runtime::room) use self::{
     },
     membership::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, LifecycleEffects},
     shared::RoomState,
-    video_policy::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
+    source_policy::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
 };

@@ -1,4 +1,4 @@
-//! Pure room-owned video source policy.
+//! Pure room-owned source policy.
 //!
 //! The source-selection path is split into a one-way pipeline:
 //! immutable input from `RoomState` and transport observations, layout
@@ -9,10 +9,8 @@
 //! bandwidth, active-speaker layout, source descriptors, or route-pause reasons.
 
 mod action;
-mod budget;
+mod audio;
 mod commit;
-mod input;
-mod layout;
-mod projection;
+mod video;
 
 pub(in crate::runtime::room) use action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate};

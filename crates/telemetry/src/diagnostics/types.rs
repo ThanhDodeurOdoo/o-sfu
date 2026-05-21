@@ -60,6 +60,8 @@ pub enum DiagnosticsPolicyPauseReason {
     HiddenTile,
     OverflowTile,
     MissingUsableLayer,
+    AudioSpeakerLimit,
+    VideoDownloadLimit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

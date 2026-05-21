@@ -434,6 +434,7 @@ fn build_room_runtime_policy(
         ),
     )
     .with_room_worker_policy(options.core.routing.room_worker_policy)
+    .with_media_limits(options.room_media_limits)
 }
 
 fn build_room_manager(
@@ -484,8 +485,8 @@ mod tests {
     use crate::{
         config::{
             AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig,
-            HttpConfig, MediaCodecFlags, RoomWorkerPolicy, RtcPortRange, RuntimeFeatureFlags,
-            TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
+            HttpConfig, MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange,
+            RuntimeFeatureFlags, TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
         },
         core::server::room::{
             DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
@@ -559,6 +560,7 @@ mod tests {
                 rtc_port_range: RtcPortRange::new(41_000, 41_009),
                 rtc_media_worker_count: 1,
                 room_worker_policy: RoomWorkerPolicy::strict_single_router(),
+                room_media_limits: RoomMediaLimits::default(),
             },
             codecs: CodecConfig {
                 flags: MediaCodecFlags::default(),
