@@ -8,6 +8,7 @@ use o_sfu_core::prelude::{
 
 use super::{
     TransportConfig,
+    log_view::ConfigLogField,
     parsing::{parse_env_or_default, parse_positive_env_or_default, parse_required_env},
 };
 
@@ -62,6 +63,35 @@ pub(super) fn load_transport_config(
         room_worker_policy,
         room_media_limits,
     })
+}
+
+impl TransportConfig {
+    #[must_use]
+    pub(super) fn log_fields(&self) -> [ConfigLogField; 9] {
+        [
+            ConfigLogField::new("max_bitrate_in_bps", self.max_bitrate_in.as_bps()),
+            ConfigLogField::new("max_bitrate_out_bps", self.max_bitrate_out.as_bps()),
+            ConfigLogField::new(
+                "max_video_bitrate_bps",
+                self.video_bitrate_limits.max_video_bitrate().as_bps(),
+            ),
+            ConfigLogField::new("rtc_port_range_min", self.rtc_port_range.min()),
+            ConfigLogField::new("rtc_port_range_max", self.rtc_port_range.max()),
+            ConfigLogField::new("rtc_media_worker_count", self.rtc_media_worker_count),
+            ConfigLogField::new(
+                "room_max_local_routers",
+                self.room_worker_policy.max_local_routers(),
+            ),
+            ConfigLogField::new(
+                "room_max_active_audio_speakers",
+                self.room_media_limits.max_active_audio_speakers(),
+            ),
+            ConfigLogField::new(
+                "room_max_video_downloads_per_receiver",
+                self.room_media_limits.max_video_downloads_per_receiver(),
+            ),
+        ]
+    }
 }
 
 /// Translate the operator local-router cap into the core room policy.
