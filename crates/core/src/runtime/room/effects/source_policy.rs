@@ -35,7 +35,7 @@ use crate::runtime::{
 #[derive(Debug, Default)]
 pub(in crate::runtime::room) struct SourcePolicyEffectPlan {
     consumer_packets: Vec<ConsumerPacketSelectionUpdate>,
-    featured_sessions: Vec<FeaturedUserUpdate>,
+    featured_users: Vec<FeaturedUserUpdate>,
 }
 
 impl SourcePolicyEffectPlan {
@@ -53,15 +53,15 @@ impl SourcePolicyEffectPlan {
             active_speaker_sources,
             receiver_bandwidth_snapshot,
         ));
-        let featured_sessions = state.featured_session_updates(active_speaker_sources);
+        let featured_users = state.featured_user_updates(active_speaker_sources);
         Self {
             consumer_packets,
-            featured_sessions,
+            featured_users,
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.consumer_packets.is_empty() && self.featured_sessions.is_empty()
+        self.consumer_packets.is_empty() && self.featured_users.is_empty()
     }
 
     /// Applies transport-visible gates before committing selector state.
@@ -73,14 +73,14 @@ impl SourcePolicyEffectPlan {
     pub async fn execute(self, room: &Room, media_port: &MediaTransport) {
         let applied_consumer_packet_updates =
             Self::apply_consumer_packet_updates(room, media_port, self.consumer_packets).await;
-        if applied_consumer_packet_updates.is_empty() && self.featured_sessions.is_empty() {
+        if applied_consumer_packet_updates.is_empty() && self.featured_users.is_empty() {
             return;
         }
         Self::record_source_selection_metrics(room, &applied_consumer_packet_updates);
         let info_fanout = {
             let mut state = room.state.write().await;
             state.commit_consumer_packet_selection_updates(&applied_consumer_packet_updates);
-            state.commit_featured_user_updates(&self.featured_sessions)
+            state.commit_featured_user_updates(&self.featured_users)
         };
         if let Some(info_fanout) = info_fanout {
             info_fanout.emit();

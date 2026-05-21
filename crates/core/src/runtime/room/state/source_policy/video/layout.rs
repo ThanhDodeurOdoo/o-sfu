@@ -115,7 +115,7 @@ impl RoomState {
         let active_speaker_source_user_ids = self
             .users
             .iter()
-            .filter(|(_user_id, user)| user.layout.featured() == Some(true))
+            .filter(|(_user_id, user)| user.featured() == Some(true))
             .map(|(user_id, _session)| user_id.clone())
             .collect();
         Some(self.receiver_video_layout_intent(
@@ -132,17 +132,14 @@ impl RoomState {
     /// from the same observation. If there is no current active speaker, the
     /// method only emits clears when some user still has server-derived
     /// featured state.
-    pub fn featured_session_updates(
+    pub fn featured_user_updates(
         &self,
         active_speaker_sources: &[ActiveSpeakerSource],
     ) -> Vec<FeaturedUserUpdate> {
         let desired_featured_user_id =
             first_featured_source_user_for_active_speakers(self, active_speaker_sources);
         let should_clear_featured_state = desired_featured_user_id.is_none()
-            && self
-                .users
-                .values()
-                .any(|user| user.layout.featured().is_some());
+            && self.users.values().any(|user| user.featured().is_some());
         if desired_featured_user_id.is_none() && !should_clear_featured_state {
             return Vec::new();
         }
@@ -150,10 +147,10 @@ impl RoomState {
             .iter()
             .filter_map(|(user_id, user)| {
                 let desired_featured = desired_featured_user_id.as_ref().map_or_else(
-                    || user.layout.featured().is_some().then_some(false),
+                    || user.featured().is_some().then_some(false),
                     |featured_user_id| Some(featured_user_id == user_id),
                 );
-                (desired_featured != user.layout.featured())
+                (desired_featured != user.featured())
                     .then(|| FeaturedUserUpdate::new(user_id.clone(), desired_featured))
             })
             .collect()

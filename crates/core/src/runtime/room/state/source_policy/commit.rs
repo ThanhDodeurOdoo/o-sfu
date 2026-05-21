@@ -51,10 +51,10 @@ impl RoomState {
             .iter()
             .filter_map(|update| {
                 let user = self.users.get_mut(update.user_id())?;
-                if user.layout.featured() == update.featured() {
+                if user.featured() == update.featured() {
                     return None;
                 }
-                user.layout.set_featured(update.featured());
+                user.set_featured(update.featured());
                 Some(update.user_id().clone())
             })
             .collect::<Vec<_>>();
