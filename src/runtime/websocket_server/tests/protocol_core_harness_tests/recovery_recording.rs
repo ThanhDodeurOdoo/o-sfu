@@ -318,89 +318,6 @@ async fn protocol_core_propagates_raise_hand_info_over_real_server_user_flow() {
     );
 }
 
-async fn publish_camera_and_consume_initial_recovery_frames(
-    publisher: &mut ProtocolHarnessPeer,
-    subscriber: &mut ProtocolHarnessPeer,
-    publisher_session_id: ProtocolSessionId,
-) -> Option<()> {
-    assert!(
-        publisher
-            .publish(ProtocolStreamType::Camera, true)
-            .await
-            .is_some(),
-        "publisher should stage the initial protocol publish"
-    );
-    assert!(
-        publisher.read_server_frame().await.is_some(),
-        "publisher should consume the initial publish renegotiation and answer it"
-    );
-    let initial_track_snapshot = read_track_snapshot(subscriber).await;
-    assert!(
-        initial_track_snapshot.is_some(),
-        "subscriber should receive the initial translated track snapshot"
-    );
-    let initial_track_snapshot = initial_track_snapshot?;
-    assert_track_snapshot_contains(
-        &initial_track_snapshot,
-        &publisher_session_id,
-        ProtocolStreamType::Camera,
-    );
-    assert!(
-        subscriber.read_server_frame().await.is_some(),
-        "subscriber should receive the initial remote-track renegotiation request"
-    );
-    assert!(
-        consume_peer_info_update(
-            subscriber,
-            publisher_session_id,
-            ProtocolSessionInfo {
-                is_camera_on: Some(true),
-                ..ProtocolSessionInfo::snapshot_defaults()
-            },
-        )
-        .await
-        .is_some(),
-        "subscriber should consume the publisher camera-info update before recovery"
-    );
-    Some(())
-}
-
-async fn consume_replayed_camera_publish_after_recovery(
-    publisher: &ProtocolHarnessPeer,
-    subscriber: &mut ProtocolHarnessPeer,
-    publisher_session_id: ProtocolSessionId,
-) -> Option<()> {
-    assert!(
-        consume_peer_joined_update(subscriber, publisher_session_id.clone())
-            .await
-            .is_some()
-    );
-    let replayed_track_snapshot = read_track_snapshot(subscriber).await;
-    assert!(
-        replayed_track_snapshot.is_some(),
-        "subscriber should receive a replayed track snapshot after publisher recovery"
-    );
-    let replayed_track_snapshot = replayed_track_snapshot?;
-    assert_track_snapshot_contains(
-        &replayed_track_snapshot,
-        &publisher_session_id,
-        ProtocolStreamType::Camera,
-    );
-    assert!(
-        subscriber.read_server_frame().await.is_some(),
-        "subscriber should receive the replayed remote-track renegotiation request"
-    );
-    assert!(peer_reached_state(
-        publisher,
-        BundleConnectionState::Recovering
-    ));
-    assert!(peer_reached_state(
-        publisher,
-        BundleConnectionState::Connected
-    ));
-    Some(())
-}
-
 #[tokio::test]
 async fn protocol_core_replays_latest_publish_after_real_server_recovery() {
     let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_protocol_recovery_peers(
@@ -413,49 +330,21 @@ async fn protocol_core_replays_latest_publish_after_real_server_recovery() {
     };
 
     assert!(
-        publish_camera_and_consume_initial_recovery_frames(
+        publish_camera_and_bootstrap_subscriber(
             &mut bob,
             &mut alice,
-            ProtocolSessionId::Integer(82),
+            &ProtocolSessionId::Integer(82),
+            "publisher should stage the initial protocol publish",
+            "publisher should consume the initial publish renegotiation and answer it",
+            "subscriber should receive the initial translated track snapshot",
         )
         .await
-        .is_some(),
-    );
-    alice.updates.clear();
-
-    assert!(
-        close_peer_and_observe_recovery(&mut bob, &mut alice)
-            .await
-            .is_some()
-    );
-    assert!(
-        alice.read_server_frame().await.is_some(),
-        "subscriber should consume the departure-side renegotiation before recovery rejoin"
-    );
-    alice.updates.clear();
-
-    assert!(
-        bob.flush_timers_with_delay(RECOVERY_DELAY_MS)
-            .await
-            .is_some(),
-        "recovery timer should reconnect the publisher"
-    );
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "publisher should consume the recovery welcome frame"
-    );
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "publisher should consume the recovery initial offer"
-    );
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "publisher should consume the replayed publish renegotiation after recovery"
+        .is_some()
     );
 
     assert!(
-        consume_replayed_camera_publish_after_recovery(
-            &bob,
+        recover_publisher_and_replay_camera_publish(
+            &mut bob,
             &mut alice,
             ProtocolSessionId::Integer(82),
         )
@@ -479,49 +368,21 @@ async fn protocol_core_replays_latest_publish_after_real_rtc_server_recovery() {
     };
 
     assert!(
-        publish_camera_and_consume_initial_recovery_frames(
+        publish_camera_and_bootstrap_subscriber(
             &mut bob,
             &mut alice,
-            ProtocolSessionId::Integer(92),
+            &ProtocolSessionId::Integer(92),
+            "publisher should stage the initial protocol publish",
+            "publisher should consume the initial publish renegotiation and answer it",
+            "subscriber should receive the initial translated track snapshot",
         )
         .await
-        .is_some(),
-    );
-    alice.updates.clear();
-
-    assert!(
-        close_peer_and_observe_recovery(&mut bob, &mut alice)
-            .await
-            .is_some()
-    );
-    assert!(
-        alice.read_server_frame().await.is_some(),
-        "subscriber should consume the departure-side real-rtc renegotiation before recovery rejoin"
-    );
-    alice.updates.clear();
-
-    assert!(
-        bob.flush_timers_with_delay(RECOVERY_DELAY_MS)
-            .await
-            .is_some(),
-        "recovery timer should reconnect the real-rtc publisher"
-    );
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "publisher should consume the recovery welcome frame on the real rtc path"
-    );
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "publisher should consume the recovery initial offer on the real rtc path"
-    );
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "publisher should consume the replayed real-rtc publish renegotiation after recovery"
+        .is_some()
     );
 
     assert!(
-        consume_replayed_camera_publish_after_recovery(
-            &bob,
+        recover_publisher_and_replay_camera_publish(
+            &mut bob,
             &mut alice,
             ProtocolSessionId::Integer(92),
         )
