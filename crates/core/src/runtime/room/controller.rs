@@ -374,20 +374,6 @@ impl Room {
         }
     }
 
-    pub(in crate::runtime::room) async fn observe_load_triggered_source_fanout(&self) {
-        let RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) =
-            self.room_worker_policy().spillover()
-        else {
-            return;
-        };
-        let pressured = self
-            .state
-            .read()
-            .await
-            .source_fanout_pressure(policy.max_fanout_per_source());
-        lock_unpoisoned(&self.load_triggered_placement).set_source_fanout_pressure(pressured);
-    }
-
     pub(in crate::runtime::room) async fn reconcile_spillover_routers(&self) {
         let spillover = self.room_worker_policy().spillover();
         if matches!(&spillover, RoomSpilloverMode::StrictSingleRouter) {

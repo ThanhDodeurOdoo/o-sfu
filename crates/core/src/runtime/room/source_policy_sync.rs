@@ -18,9 +18,65 @@
 //! selector state is stored.
 
 use super::{Room, effects::SourcePolicyEffectPlan};
-use crate::runtime::media_transport::{ActiveSpeakerSource, MediaTransport};
+use crate::{
+    RoomSpilloverMode,
+    runtime::{
+        media_transport::{ActiveSpeakerSource, MediaTransport},
+        sync::lock_unpoisoned,
+    },
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(
+    clippy::enum_variant_names,
+    reason = "source-policy events intentionally name the changed room dimension at call sites"
+)]
+pub(in crate::runtime::room) enum SourcePolicyEvent {
+    RouteGraphChanged,
+    ReceiverIntentChanged,
+    FanoutPressureChanged,
+}
 
 impl Room {
+    pub(in crate::runtime::room) async fn handle_source_policy_event(
+        &self,
+        event: SourcePolicyEvent,
+        media_transport: Option<&MediaTransport>,
+    ) {
+        match event {
+            SourcePolicyEvent::RouteGraphChanged => {
+                self.observe_source_fanout_pressure().await;
+                if let Some(media_transport) = media_transport {
+                    self.sync_source_packet_selection_policy(media_transport)
+                        .await;
+                }
+            }
+            SourcePolicyEvent::ReceiverIntentChanged => {
+                if let Some(media_transport) = media_transport {
+                    self.sync_source_packet_selection_policy(media_transport)
+                        .await;
+                }
+            }
+            SourcePolicyEvent::FanoutPressureChanged => {
+                self.observe_source_fanout_pressure().await;
+            }
+        }
+    }
+
+    async fn observe_source_fanout_pressure(&self) {
+        let RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) =
+            self.room_worker_policy().spillover()
+        else {
+            return;
+        };
+        let pressured = self
+            .state
+            .read()
+            .await
+            .source_fanout_pressure(policy.max_fanout_per_source());
+        lock_unpoisoned(&self.load_triggered_placement).set_source_fanout_pressure(pressured);
+    }
+
     /// Refreshes source packet policy from live transport observability.
     ///
     /// Normal room transitions call this after publish, subscribe or user

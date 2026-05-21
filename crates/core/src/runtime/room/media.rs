@@ -16,7 +16,7 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 
 use super::{
-    Room, RoomUserOperation,
+    Room, RoomUserOperation, SourcePolicyEvent,
     effects::{
         RoomTransportEffect, SubscriptionEffectContext, SubscriptionEffectPlan, UnpublishEffectPlan,
     },
@@ -51,10 +51,12 @@ impl RoomUserOperation<'_> {
             planned_bootstraps,
             ConsumerBootstrapOrigin::LateJoin,
         );
-        room.observe_load_triggered_source_fanout().await;
         effect_plan.execute(room, self.media_transport()).await;
-        room.sync_source_packet_selection_policy(self.media_transport())
-            .await;
+        room.handle_source_policy_event(
+            SourcePolicyEvent::RouteGraphChanged,
+            Some(self.media_transport()),
+        )
+        .await;
         true
     }
 }
@@ -79,7 +81,6 @@ impl Room {
                 origin,
             )
         };
-        self.observe_load_triggered_source_fanout().await;
         effect_plan.execute(self, media_port).await;
     }
 
@@ -150,7 +151,11 @@ impl RoomUserOperation<'_> {
             .insert_field("stream_id", stream_id.to_string()),
         );
         outcome.emit();
-        room.observe_load_triggered_source_fanout().await;
+        room.handle_source_policy_event(
+            SourcePolicyEvent::FanoutPressureChanged,
+            Some(self.media_transport()),
+        )
+        .await;
         PublicationActivityOutcome::Applied { transport_update }
     }
 
@@ -162,7 +167,7 @@ impl RoomUserOperation<'_> {
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
     ) -> SubscriptionUpdateOutcome {
         let room = self.room();
-        let effect_plan = {
+        let (effect_plan, source_policy_event) = {
             let mut state = room.state.write().await;
             if state
                 .user_for_connection(self.user_id(), self.connection_id())
@@ -177,24 +182,31 @@ impl RoomUserOperation<'_> {
                 target_user_id,
                 intents,
             );
+            let source_policy_event = if planned_change.touches_route_graph() {
+                SourcePolicyEvent::RouteGraphChanged
+            } else {
+                SourcePolicyEvent::ReceiverIntentChanged
+            };
             let media_counts_after = state.media_counts();
             drop(state);
-            SubscriptionEffectPlan::from_planned_change(
-                room,
-                SubscriptionEffectContext {
-                    user_id: self.user_id(),
-                    connection_id: self.connection_id(),
-                    target_user_id,
-                    media_counts_before,
-                    media_counts_after,
-                    origin: ConsumerBootstrapOrigin::Subscribe,
-                },
-                planned_change,
+            (
+                SubscriptionEffectPlan::from_planned_change(
+                    room,
+                    SubscriptionEffectContext {
+                        user_id: self.user_id(),
+                        connection_id: self.connection_id(),
+                        target_user_id,
+                        media_counts_before,
+                        media_counts_after,
+                        origin: ConsumerBootstrapOrigin::Subscribe,
+                    },
+                    planned_change,
+                ),
+                source_policy_event,
             )
         };
-        room.observe_load_triggered_source_fanout().await;
         effect_plan.execute(room, self.media_transport()).await;
-        room.sync_source_packet_selection_policy(self.media_transport())
+        room.handle_source_policy_event(source_policy_event, Some(self.media_transport()))
             .await;
         SubscriptionUpdateOutcome::Applied
     }

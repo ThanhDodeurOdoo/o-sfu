@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 
 use super::{
     LocalRouterRuntimeContext, Room, RoomConfig, RoomJoinError, RoomManagerJoinError,
-    RoomRuntimePolicy, RoomUserStatsSnapshot, UserOutboundSender,
+    RoomRuntimePolicy, RoomUserStatsSnapshot, SourcePolicyEvent, UserOutboundSender,
     directory::{RoomDirectory, RoomDirectoryEntry, RoomLifecycleLease},
     factory::{RoomCreationIntent, RoomFactory},
     placement::{RoomPlacementPlanner, WorkerLoadIndex},
@@ -382,7 +382,11 @@ impl RoomManager {
         let planner = RoomPlacementPlanner::new(self.media_worker_count, policy);
         let decision = match policy.spillover() {
             RoomSpilloverMode::LoadTriggeredLocalSpillover(_) => {
-                room.observe_load_triggered_source_fanout().await;
+                room.handle_source_policy_event(
+                    SourcePolicyEvent::FanoutPressureChanged,
+                    Some(media_transport),
+                )
+                .await;
                 let mut load_state = lock_unpoisoned(&room.load_triggered_placement);
                 planner.choose_with_load_state(&room_snapshot, &worker_loads, &mut load_state)
             }

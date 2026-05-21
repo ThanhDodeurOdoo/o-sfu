@@ -32,7 +32,7 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 
 use super::{
-    Room, RoomMediaCounts, RoomUserOperation,
+    Room, RoomMediaCounts, RoomUserOperation, SourcePolicyEvent,
     cleanup::TransportCleanupOperation,
     effects::{
         PublishReservationContinuation, RoomEffectBatch, RoomEffectContext, RoomTransportEffect,
@@ -523,7 +523,7 @@ impl CommittedPublish {
         )
         .await;
         RoomEffectBatch::new()
-            .refresh_source_policy()
+            .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged)
             .record_diagnostics(self.diagnostics)
             .execute(
                 room,
@@ -751,7 +751,8 @@ impl Room {
             .with_relay_effects(relay_effects)
             .execute(self, RoomEffectContext::runtime(media_port))
             .await;
-        self.observe_load_triggered_source_fanout().await;
+        self.handle_source_policy_event(SourcePolicyEvent::FanoutPressureChanged, Some(media_port))
+            .await;
     }
 }
 
