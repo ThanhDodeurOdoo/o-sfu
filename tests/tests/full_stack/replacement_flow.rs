@@ -1,27 +1,19 @@
 use super::support::*;
 
 #[tokio::test]
-async fn fake_rtc_peers_rebootstrap_user_replacement_without_stale_media_routes() {
+async fn fake_rtc_peers_rebootstrap_user_replacement_without_stale_media_routes() -> TestResult {
     let _guard = full_stack_test_guard().await;
-    let room_server = spawn_room_server("issuer-replacement-rtc").await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
-
-    let setup = connect_two_rtc_ready_fake_peers(
-        &server,
-        &room,
+    let ReadyRoomFakePeers {
+        server,
+        room,
+        publisher: mut initial_publisher,
+        mut subscriber,
+    } = ready_room_fake_peers(
+        "issuer-replacement-rtc",
         UserId::Integer(80),
         UserId::Integer(81),
-        Duration::from_secs(5),
     )
-    .await;
-    assert!(setup.is_some());
-    let Some((mut initial_publisher, mut subscriber)) = setup else {
-        return;
-    };
+    .await?;
 
     let mut source = FakeMediaSource::audio();
     publish_source_and_ready_route(
@@ -44,10 +36,7 @@ async fn fake_rtc_peers_rebootstrap_user_replacement_without_stale_media_routes(
     .await;
 
     let replacement = connect_fake_peer(&server, &room, UserId::Integer(80), TEST_ROOM_KEY).await;
-    assert!(replacement.is_some());
-    let Some(mut replacement) = replacement else {
-        return;
-    };
+    let mut replacement = require_some(replacement, "replacement peer should connect")?;
 
     assert_eq!(
         initial_publisher.read_close_code().await,
@@ -64,12 +53,12 @@ async fn fake_rtc_peers_rebootstrap_user_replacement_without_stale_media_routes(
     )
     .await;
 
-    assert!(
+    require_some(
         replacement
             .wait_until_connected(Duration::from_secs(5))
-            .await
-            .is_some()
-    );
+            .await,
+        "replacement peer should reach ready state",
+    )?;
     publish_source_and_ready_route(
         &server,
         &room,
@@ -80,30 +69,24 @@ async fn fake_rtc_peers_rebootstrap_user_replacement_without_stale_media_routes(
     )
     .await;
     assert_audio_packet_forwarded(&mut replacement, &mut subscriber, &mut source, &mut clock).await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn fake_rtc_replacement_unpublish_and_republish_leave_no_stale_consumer_state() {
+async fn fake_rtc_replacement_unpublish_and_republish_leave_no_stale_consumer_state() -> TestResult
+{
     let _guard = full_stack_test_guard().await;
-    let room_server = spawn_room_server("issuer-replacement-unpublish").await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
-
-    let setup = connect_two_rtc_ready_fake_peers(
-        &server,
-        &room,
+    let ReadyRoomFakePeers {
+        server,
+        room,
+        publisher: mut initial_publisher,
+        mut subscriber,
+    } = ready_room_fake_peers(
+        "issuer-replacement-unpublish",
         UserId::Integer(82),
         UserId::Integer(83),
-        Duration::from_secs(5),
     )
-    .await;
-    assert!(setup.is_some());
-    let Some((mut initial_publisher, mut subscriber)) = setup else {
-        return;
-    };
+    .await?;
 
     Box::pin(assert_replacement_unpublish_and_republish_flow(
         &server,
@@ -113,30 +96,24 @@ async fn fake_rtc_replacement_unpublish_and_republish_leave_no_stale_consumer_st
         UserId::Integer(82),
     ))
     .await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotiation() {
+async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotiation() -> TestResult
+{
     let _guard = full_stack_test_guard().await;
-    let room_server = spawn_room_server("issuer-subscriber-replacement-mute").await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
-
-    let setup = connect_two_rtc_ready_fake_peers(
-        &server,
-        &room,
+    let ReadyRoomFakePeers {
+        server,
+        room,
+        mut publisher,
+        mut subscriber,
+    } = ready_room_fake_peers(
+        "issuer-subscriber-replacement-mute",
         UserId::Integer(82),
         UserId::Integer(83),
-        Duration::from_secs(5),
     )
-    .await;
-    assert!(setup.is_some());
-    let Some((mut publisher, mut subscriber)) = setup else {
-        return;
-    };
+    .await?;
 
     Box::pin(
         assert_subscriber_replacement_preserves_download_mute_after_renegotiation(
@@ -147,32 +124,28 @@ async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotia
         ),
     )
     .await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn fake_rtc_replaced_socket_cannot_emit_presence_updates_after_rejoin() {
+async fn fake_rtc_replaced_socket_cannot_emit_presence_updates_after_rejoin() -> TestResult {
     let _guard = full_stack_test_guard().await;
-    let room_server = spawn_room_server("issuer-replacement-rtc-info").await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
-
-    let peers =
-        connect_two_fake_peers(&server, &room, UserId::Integer(84), UserId::Integer(85)).await;
-    assert!(peers.is_some());
-    let Some((mut initial, mut observer)) = peers else {
-        return;
-    };
+    let RoomFakePeers {
+        server,
+        room,
+        publisher: mut initial,
+        subscriber: mut observer,
+    } = room_fake_peers(
+        "issuer-replacement-rtc-info",
+        UserId::Integer(84),
+        UserId::Integer(85),
+    )
+    .await?;
 
     assert_peer_joined_message_protocol(&mut initial, UserId::Integer(85)).await;
 
     let replacement = connect_fake_peer(&server, &room, UserId::Integer(84), TEST_ROOM_KEY).await;
-    assert!(replacement.is_some());
-    let Some(replacement) = replacement else {
-        return;
-    };
+    let replacement = require_some(replacement, "replacement peer should connect")?;
 
     let _ = initial
         .send_info(UserInfo {
@@ -188,59 +161,50 @@ async fn fake_rtc_replaced_socket_cannot_emit_presence_updates_after_rejoin() {
     assert_departure_message_protocol(&mut observer, UserId::Integer(84)).await;
     assert_peer_joined_message_protocol(&mut observer, UserId::Integer(84)).await;
     assert_no_server_message_protocol(&mut observer).await;
-    assert!(replacement.close().await.is_some());
+    require_some(replacement.close().await, "replacement should close")?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn fake_rtc_replaced_socket_cannot_finish_a_queued_publish_negotiation() {
+async fn fake_rtc_replaced_socket_cannot_finish_a_queued_publish_negotiation() -> TestResult {
     let _guard = full_stack_test_guard().await;
-    let room_server = spawn_room_server("issuer-replacement-rtc-queued-publish").await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
-
-    let setup = connect_two_rtc_ready_fake_peers(
-        &server,
-        &room,
+    let ReadyRoomFakePeers {
+        server,
+        room,
+        publisher: mut initial_publisher,
+        mut subscriber,
+    } = ready_room_fake_peers(
+        "issuer-replacement-rtc-queued-publish",
         UserId::Integer(86),
         UserId::Integer(87),
-        Duration::from_secs(5),
     )
-    .await;
-    assert!(setup.is_some());
-    let Some((mut initial_publisher, mut subscriber)) = setup else {
-        return;
-    };
+    .await?;
 
     let mut source = FakeMediaSource::audio();
-    assert!(initial_publisher.publish_track(&source).await.is_some());
+    require_some(
+        initial_publisher.publish_track(&source).await,
+        "initial publisher should send audio publish intent",
+    )?;
     let request = initial_publisher.read_next_server_request().await;
-    assert!(request.is_some());
-    let Some((request_id, request)) = request else {
-        return;
-    };
+    let (request_id, request) =
+        require_some(request, "initial publisher should receive renegotiation")?;
     assert!(
         matches!(request, ServerRequest::Renegotiate(_)),
         "publish should leave a renegotiation answer pending on the original socket"
     );
 
     let replacement = connect_fake_peer(&server, &room, UserId::Integer(86), TEST_ROOM_KEY).await;
-    assert!(replacement.is_some());
-    let Some(mut replacement) = replacement else {
-        return;
-    };
+    let mut replacement = require_some(replacement, "replacement peer should connect")?;
 
     assert_departure_message_protocol(&mut subscriber, UserId::Integer(86)).await;
     assert_peer_joined_message_protocol(&mut subscriber, UserId::Integer(86)).await;
 
-    assert!(
+    require_some(
         initial_publisher
             .respond_to_server_request(request_id, request)
-            .await
-            .is_some()
-    );
+            .await,
+        "stale publisher should send queued negotiation response",
+    )?;
     assert_no_server_message_protocol(&mut subscriber).await;
 
     let mut clock = FakeClock::default();
@@ -256,12 +220,12 @@ async fn fake_rtc_replaced_socket_cannot_finish_a_queued_publish_negotiation() {
         Some(CloseCode::Library(4108))
     );
 
-    assert!(
+    require_some(
         replacement
             .wait_until_connected(Duration::from_secs(5))
-            .await
-            .is_some()
-    );
+            .await,
+        "replacement peer should reach ready state",
+    )?;
     publish_source_and_ready_route(
         &server,
         &room,
@@ -272,4 +236,5 @@ async fn fake_rtc_replaced_socket_cannot_finish_a_queued_publish_negotiation() {
     )
     .await;
     assert_audio_packet_forwarded(&mut replacement, &mut subscriber, &mut source, &mut clock).await;
+    Ok(())
 }

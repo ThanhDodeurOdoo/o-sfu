@@ -1,27 +1,19 @@
 use super::support::*;
 
 #[tokio::test]
-async fn fake_rtc_peers_forward_vp8_high_rid_keyframe_without_browsers() {
+async fn fake_rtc_peers_forward_vp8_high_rid_keyframe_without_browsers() -> TestResult {
     let _guard = full_stack_test_guard().await;
-    let room_server = spawn_room_server("issuer-vp8-synthetic").await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
-
-    let setup = connect_two_rtc_ready_fake_peers(
-        &server,
-        &room,
+    let ReadyRoomFakePeers {
+        server,
+        room,
+        mut publisher,
+        mut subscriber,
+    } = ready_room_fake_peers(
+        "issuer-vp8-synthetic",
         UserId::Integer(92),
         UserId::Integer(93),
-        Duration::from_secs(5),
     )
-    .await;
-    assert!(setup.is_some());
-    let Some((mut publisher, mut subscriber)) = setup else {
-        return;
-    };
+    .await?;
 
     let mut source = FakeMediaSource::vp8_camera_high();
     publish_video_source_and_ready_route(
@@ -42,30 +34,23 @@ async fn fake_rtc_peers_forward_vp8_high_rid_keyframe_without_browsers() {
         &mut clock,
     )
     .await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn fake_rtc_vp8_selected_rid_requires_keyframe_before_forwarding() {
+async fn fake_rtc_vp8_selected_rid_requires_keyframe_before_forwarding() -> TestResult {
     let _guard = full_stack_test_guard().await;
-    let room_server = spawn_room_server("issuer-vp8-selected-rid-keyframe").await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
-
-    let setup = connect_two_rtc_ready_fake_peers(
-        &server,
-        &room,
+    let ReadyRoomFakePeers {
+        server,
+        room,
+        mut publisher,
+        mut subscriber,
+    } = ready_room_fake_peers(
+        "issuer-vp8-selected-rid-keyframe",
         UserId::Integer(82),
         UserId::Integer(83),
-        Duration::from_secs(5),
     )
-    .await;
-    assert!(setup.is_some());
-    let Some((mut publisher, mut subscriber)) = setup else {
-        return;
-    };
+    .await?;
 
     let mut source = FakeMediaSource::new(SyntheticVp8Stream::with_next_keyframe(false));
     publish_video_source_and_ready_route(
@@ -90,30 +75,23 @@ async fn fake_rtc_vp8_selected_rid_requires_keyframe_before_forwarding() {
         &mut clock,
     )
     .await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn fake_rtc_vp8_selected_rid_drops_other_rids_after_activation() {
+async fn fake_rtc_vp8_selected_rid_drops_other_rids_after_activation() -> TestResult {
     let _guard = full_stack_test_guard().await;
-    let room_server = spawn_room_server("issuer-vp8-selected-rid-filter").await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
-
-    let setup = connect_two_rtc_ready_fake_peers(
-        &server,
-        &room,
+    let ReadyRoomFakePeers {
+        server,
+        room,
+        mut publisher,
+        mut subscriber,
+    } = ready_room_fake_peers(
+        "issuer-vp8-selected-rid-filter",
         UserId::Integer(84),
         UserId::Integer(85),
-        Duration::from_secs(5),
     )
-    .await;
-    assert!(setup.is_some());
-    let Some((mut publisher, mut subscriber)) = setup else {
-        return;
-    };
+    .await?;
 
     let mut high_source = FakeMediaSource::vp8_camera_high();
     publish_video_source_and_ready_route(
@@ -152,33 +130,26 @@ async fn fake_rtc_vp8_selected_rid_drops_other_rids_after_activation() {
         &mut clock,
     )
     .await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn fake_rtc_peers_forward_h264_high_rid_idr_without_browsers() {
+async fn fake_rtc_peers_forward_h264_high_rid_idr_without_browsers() -> TestResult {
     let _guard = full_stack_test_guard().await;
     let mut config = test_config(1_000, 10);
     config.codecs.flags = MediaCodecFlags::default().with_vp8(false).with_h264(true);
-    let room_server =
-        spawn_room_server_with_config(config, "issuer-h264-synthetic", TEST_ROOM_KEY).await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
-
-    let setup = connect_two_rtc_ready_fake_peers(
-        &server,
-        &room,
+    let ReadyRoomFakePeers {
+        server,
+        room,
+        mut publisher,
+        mut subscriber,
+    } = ready_room_fake_peers_with_config(
+        config,
+        "issuer-h264-synthetic",
         UserId::Integer(94),
         UserId::Integer(95),
-        Duration::from_secs(5),
     )
-    .await;
-    assert!(setup.is_some());
-    let Some((mut publisher, mut subscriber)) = setup else {
-        return;
-    };
+    .await?;
 
     let mut source = FakeMediaSource::h264_camera_high();
     publish_video_source_and_ready_route(
@@ -199,33 +170,26 @@ async fn fake_rtc_peers_forward_h264_high_rid_idr_without_browsers() {
         &mut clock,
     )
     .await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn fake_rtc_h264_selected_rid_requires_idr_before_forwarding() {
+async fn fake_rtc_h264_selected_rid_requires_idr_before_forwarding() -> TestResult {
     let _guard = full_stack_test_guard().await;
     let mut config = test_config(1_000, 10);
     config.codecs.flags = MediaCodecFlags::default().with_vp8(false).with_h264(true);
-    let room_server =
-        spawn_room_server_with_config(config, "issuer-h264-selected-rid-idr", TEST_ROOM_KEY).await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
-
-    let setup = connect_two_rtc_ready_fake_peers(
-        &server,
-        &room,
+    let ReadyRoomFakePeers {
+        server,
+        room,
+        mut publisher,
+        mut subscriber,
+    } = ready_room_fake_peers_with_config(
+        config,
+        "issuer-h264-selected-rid-idr",
         UserId::Integer(78),
         UserId::Integer(79),
-        Duration::from_secs(5),
     )
-    .await;
-    assert!(setup.is_some());
-    let Some((mut publisher, mut subscriber)) = setup else {
-        return;
-    };
+    .await?;
 
     let mut source = FakeMediaSource::new(SyntheticH264Stream::with_idr(false));
     publish_video_source_and_ready_route(
@@ -250,30 +214,23 @@ async fn fake_rtc_h264_selected_rid_requires_idr_before_forwarding() {
         &mut clock,
     )
     .await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn fake_rtc_peer_rejects_invalid_synthetic_send_paths_without_panics() {
+async fn fake_rtc_peer_rejects_invalid_synthetic_send_paths_without_panics() -> TestResult {
     let _guard = full_stack_test_guard().await;
-    let room_server = spawn_room_server("issuer-invalid-synthetic-send").await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
-
-    let setup = connect_two_rtc_ready_fake_peers(
-        &server,
-        &room,
+    let ReadyRoomFakePeers {
+        server,
+        room,
+        mut publisher,
+        mut subscriber,
+    } = ready_room_fake_peers(
+        "issuer-invalid-synthetic-send",
         UserId::Integer(96),
         UserId::Integer(97),
-        Duration::from_secs(5),
     )
-    .await;
-    assert!(setup.is_some());
-    let Some((mut publisher, mut subscriber)) = setup else {
-        return;
-    };
+    .await?;
 
     let source = FakeMediaSource::vp8_camera_high();
     publish_video_source_and_ready_route(
@@ -301,4 +258,5 @@ async fn fake_rtc_peer_rejects_invalid_synthetic_send_paths_without_panics() {
             .await
             .is_none()
     );
+    Ok(())
 }

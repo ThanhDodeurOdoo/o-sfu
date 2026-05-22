@@ -1,34 +1,22 @@
 use super::support::*;
 
 #[tokio::test]
-async fn fake_rtc_cross_worker_vp8_selected_rid_survives_relay() {
+async fn fake_rtc_cross_worker_vp8_selected_rid_survives_relay() -> TestResult {
     let _guard = full_stack_test_guard().await;
-    let room_server = spawn_room_server_with_config(
-        cross_worker_test_config(),
-        "issuer-cross-worker-vp8-selected-rid",
-        TEST_ROOM_KEY,
-    )
-    .await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
     let publisher_user_id = UserId::Integer(182);
     let subscriber_user_id = UserId::Integer(183);
-
-    let setup = connect_two_rtc_ready_fake_peers(
-        &server,
-        &room,
+    let ReadyRoomFakePeers {
+        server,
+        room,
+        mut publisher,
+        mut subscriber,
+    } = ready_room_fake_peers_with_config(
+        cross_worker_test_config(),
+        "issuer-cross-worker-vp8-selected-rid",
         publisher_user_id.clone(),
         subscriber_user_id.clone(),
-        Duration::from_secs(5),
     )
-    .await;
-    assert!(setup.is_some());
-    let Some((mut publisher, mut subscriber)) = setup else {
-        return;
-    };
+    .await?;
     assert_cross_worker_placement(&server, &room, &publisher_user_id, &subscriber_user_id).await;
 
     let mut high_source = FakeMediaSource::new(SyntheticVp8Stream::with_next_keyframe(false));
@@ -75,39 +63,28 @@ async fn fake_rtc_cross_worker_vp8_selected_rid_survives_relay() {
         &mut clock,
     )
     .await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn fake_rtc_cross_worker_h264_selected_rid_requires_idr_after_relay() {
+async fn fake_rtc_cross_worker_h264_selected_rid_requires_idr_after_relay() -> TestResult {
     let _guard = full_stack_test_guard().await;
     let mut config = cross_worker_test_config();
     config.codecs.flags = MediaCodecFlags::default().with_vp8(false).with_h264(true);
-    let room_server = spawn_room_server_with_config(
-        config,
-        "issuer-cross-worker-h264-selected-rid",
-        TEST_ROOM_KEY,
-    )
-    .await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
     let publisher_user_id = UserId::Integer(184);
     let subscriber_user_id = UserId::Integer(185);
-
-    let setup = connect_two_rtc_ready_fake_peers(
-        &server,
-        &room,
+    let ReadyRoomFakePeers {
+        server,
+        room,
+        mut publisher,
+        mut subscriber,
+    } = ready_room_fake_peers_with_config(
+        config,
+        "issuer-cross-worker-h264-selected-rid",
         publisher_user_id.clone(),
         subscriber_user_id.clone(),
-        Duration::from_secs(5),
     )
-    .await;
-    assert!(setup.is_some());
-    let Some((mut publisher, mut subscriber)) = setup else {
-        return;
-    };
+    .await?;
     assert_cross_worker_placement(&server, &room, &publisher_user_id, &subscriber_user_id).await;
 
     let mut source = FakeMediaSource::new(SyntheticH264Stream::with_idr(false));
@@ -133,38 +110,28 @@ async fn fake_rtc_cross_worker_h264_selected_rid_requires_idr_after_relay() {
         &mut clock,
     )
     .await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn fake_rtc_load_triggered_spillover_relays_vp8_after_threshold() {
+async fn fake_rtc_load_triggered_spillover_relays_vp8_after_threshold() -> TestResult {
     let _guard = full_stack_test_guard().await;
-    let room_server = spawn_room_server_with_config(
-        load_triggered_spillover_test_config(),
-        "issuer-load-spillover-vp8-selected-rid",
-        TEST_ROOM_KEY,
-    )
-    .await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
     let publisher_user_id = UserId::Integer(190);
     let local_subscriber_user_id = UserId::Integer(191);
     let spillover_subscriber_user_id = UserId::Integer(192);
-
-    let setup = Box::pin(connect_load_triggered_spillover_rtc_peers(
-        &server,
-        &room,
+    let SpilloverRoomFakePeers {
+        server,
+        room,
+        mut publisher,
+        local_subscriber: _local_subscriber,
+        mut spillover_subscriber,
+    } = spillover_room_fake_peers(
+        "issuer-load-spillover-vp8-selected-rid",
         publisher_user_id.clone(),
         local_subscriber_user_id,
         spillover_subscriber_user_id,
-    ))
-    .await;
-    assert!(setup.is_some());
-    let Some((mut publisher, _local_subscriber, mut spillover_subscriber)) = setup else {
-        return;
-    };
+    )
+    .await?;
 
     let mut high_source = FakeMediaSource::new(SyntheticVp8Stream::with_next_keyframe(false));
     publish_video_source_and_ready_route(
@@ -209,38 +176,29 @@ async fn fake_rtc_load_triggered_spillover_relays_vp8_after_threshold() {
         &mut clock,
     )
     .await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn fake_rtc_load_triggered_spillover_releases_remote_route_after_subscriber_leaves() {
+async fn fake_rtc_load_triggered_spillover_releases_remote_route_after_subscriber_leaves()
+-> TestResult {
     let _guard = full_stack_test_guard().await;
-    let room_server = spawn_room_server_with_config(
-        load_triggered_spillover_test_config(),
-        "issuer-load-spillover-release-route",
-        TEST_ROOM_KEY,
-    )
-    .await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
     let publisher_user_id = UserId::Integer(193);
     let local_subscriber_user_id = UserId::Integer(194);
     let spillover_subscriber_user_id = UserId::Integer(195);
-
-    let setup = Box::pin(connect_load_triggered_spillover_rtc_peers(
-        &server,
-        &room,
+    let SpilloverRoomFakePeers {
+        server,
+        room,
+        mut publisher,
+        mut local_subscriber,
+        spillover_subscriber,
+    } = spillover_room_fake_peers(
+        "issuer-load-spillover-release-route",
         publisher_user_id.clone(),
-        local_subscriber_user_id.clone(),
+        local_subscriber_user_id,
         spillover_subscriber_user_id.clone(),
-    ))
-    .await;
-    assert!(setup.is_some());
-    let Some((mut publisher, mut local_subscriber, spillover_subscriber)) = setup else {
-        return;
-    };
+    )
+    .await?;
 
     Box::pin(assert_load_triggered_spillover_release_route_flow(
         &server,
@@ -252,38 +210,29 @@ async fn fake_rtc_load_triggered_spillover_releases_remote_route_after_subscribe
         &spillover_subscriber_user_id,
     ))
     .await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn fake_rtc_load_triggered_spillover_preserves_download_mute_after_subscriber_replacement() {
+async fn fake_rtc_load_triggered_spillover_preserves_download_mute_after_subscriber_replacement()
+-> TestResult {
     let _guard = full_stack_test_guard().await;
-    let room_server = spawn_room_server_with_config(
-        load_triggered_spillover_test_config(),
-        "issuer-load-spillover-replacement-mute",
-        TEST_ROOM_KEY,
-    )
-    .await;
-    assert!(room_server.is_some());
-    let Some(room_server) = room_server else {
-        return;
-    };
-    let (server, room) = room_server.into_parts();
     let publisher_user_id = UserId::Integer(196);
     let local_subscriber_user_id = UserId::Integer(197);
     let spillover_subscriber_user_id = UserId::Integer(198);
-
-    let setup = Box::pin(connect_load_triggered_spillover_rtc_peers(
-        &server,
-        &room,
+    let SpilloverRoomFakePeers {
+        server,
+        room,
+        mut publisher,
+        local_subscriber: _local_subscriber,
+        mut spillover_subscriber,
+    } = spillover_room_fake_peers(
+        "issuer-load-spillover-replacement-mute",
         publisher_user_id.clone(),
         local_subscriber_user_id,
         spillover_subscriber_user_id.clone(),
-    ))
-    .await;
-    assert!(setup.is_some());
-    let Some((mut publisher, _local_subscriber, mut spillover_subscriber)) = setup else {
-        return;
-    };
+    )
+    .await?;
 
     Box::pin(assert_load_triggered_spillover_replacement_mute_flow(
         &server,
@@ -294,4 +243,5 @@ async fn fake_rtc_load_triggered_spillover_preserves_download_mute_after_subscri
         spillover_subscriber_user_id,
     ))
     .await;
+    Ok(())
 }

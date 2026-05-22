@@ -14,12 +14,12 @@ use o_sfu_protocol::wire::{
     StreamIntentPayload, StreamType, SubscribePayload, UserId, UserInfo,
 };
 use o_sfu_tests::support::{
-    TEST_ROOM_KEY, TestServer, create_room, disconnect_sessions_via_http, metrics_text,
+    TEST_ROOM_KEY, TestResult, TestServer, create_room, disconnect_sessions_via_http, metrics_text,
     protocol_harness::{
         ProtocolWebSocketClient, connect_protocol_pair, protocol_test_config,
         read_until_server_message,
     },
-    signed_connect_claims, spawn_test_server,
+    require_some, signed_connect_claims, spawn_test_server,
 };
 use reqwest::StatusCode;
 use tokio::time::{Duration, timeout};
@@ -28,82 +28,88 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 const SLOW_CONSUMER_BATCH_LEN: usize = 64;
 const SLOW_CONSUMER_PAYLOAD_BYTES: usize = 1_024;
 
-#[tokio::test]
-async fn websocket_welcome_and_initial_offer_work_from_integration_test() {
-    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
-    let room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
-    assert!(room.is_some());
-    let Some(room) = room else {
-        return;
-    };
-    let token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(7));
-    assert!(token.is_some());
-    let Some(token) = token else {
-        return;
-    };
+async fn default_server() -> TestResult<TestServer> {
+    spawn_test_server(protocol_test_config(1_000, 10)).await
+}
 
-    let client = ProtocolWebSocketClient::authenticate_with_room(&server, &token, &room).await;
-    assert!(client.is_some());
-    let Some(mut client) = client else {
-        return;
-    };
+async fn server_with_room(issuer: &str) -> TestResult<(TestServer, String)> {
+    server_with_configured_room(protocol_test_config(1_000, 10), issuer).await
+}
 
-    let welcome = client.read_welcome().await;
-    assert!(welcome.is_some());
-    let Some(welcome) = welcome else {
-        return;
-    };
+async fn server_with_configured_room(
+    config: Config,
+    issuer: &str,
+) -> TestResult<(TestServer, String)> {
+    let server = spawn_test_server(config).await?;
+    let room = room(&server, issuer).await?;
+    Ok((server, room))
+}
+
+async fn room(server: &TestServer, issuer: &str) -> TestResult<String> {
+    require_some(
+        create_room(server, issuer, TEST_ROOM_KEY).await,
+        "room should be created",
+    )
+}
+
+fn token(room: &str, user_id: UserId) -> TestResult<String> {
+    require_some(
+        signed_connect_claims(TEST_ROOM_KEY, room, user_id),
+        "connect token should sign",
+    )
+}
+
+async fn client_in_room(
+    server: &TestServer,
+    room: &str,
+    user_id: UserId,
+) -> TestResult<ProtocolWebSocketClient> {
+    let token = token(room, user_id)?;
+    require_some(
+        ProtocolWebSocketClient::authenticate_with_room(server, &token, room).await,
+        "websocket client should authenticate",
+    )
+}
+
+async fn protocol_pair(
+    server: &TestServer,
+    room: &str,
+    first_user_id: UserId,
+    second_user_id: UserId,
+) -> TestResult<(ProtocolWebSocketClient, ProtocolWebSocketClient)> {
+    let first_token = token(room, first_user_id)?;
+    let second_token = token(room, second_user_id.clone())?;
+    require_some(
+        connect_protocol_pair(server, &first_token, &second_token, second_user_id).await,
+        "protocol pair should connect",
+    )
+}
+
+async fn initial_offer(client: &mut ProtocolWebSocketClient) -> TestResult<ServerRequest> {
+    let welcome = require_some(client.read_welcome().await, "welcome should be sent")?;
     assert!(welcome.features.rtc);
-
-    let request = client.read_server_request().await;
-    assert!(request.is_some());
-    let Some((_request_id, request)) = request else {
-        return;
-    };
-    assert!(matches!(request, ServerRequest::Offer(_)));
+    let (_request_id, request) = require_some(
+        client.read_server_request().await,
+        "initial offer should be sent",
+    )?;
+    Ok(request)
 }
 
 #[tokio::test]
-async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details() {
+async fn websocket_welcome_and_initial_offer_work_from_integration_test() -> TestResult {
+    let (server, room) = server_with_room("issuer-a").await?;
+    let mut client = client_in_room(&server, &room, UserId::Integer(7)).await?;
+    let request = initial_offer(&mut client).await?;
+    assert!(matches!(request, ServerRequest::Offer(_)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details() -> TestResult {
     let config = protocol_test_config(1_000, 10);
-    let server = spawn_test_server(config).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
-    let room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
-    assert!(room.is_some());
-    let Some(room) = room else {
-        return;
-    };
-    let token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(701));
-    assert!(token.is_some());
-    let Some(token) = token else {
-        return;
-    };
-
-    let client = ProtocolWebSocketClient::authenticate_with_room(&server, &token, &room).await;
-    assert!(client.is_some());
-    let Some(mut client) = client else {
-        return;
-    };
-
-    let welcome = client.read_welcome().await;
-    assert!(welcome.is_some());
-    let Some(welcome) = welcome else {
-        return;
-    };
-    assert!(welcome.features.rtc);
-
-    let request = client.read_server_request().await;
-    assert!(request.is_some(), "initial offer should be sent");
-    let Some((_request_id, request)) = request else {
-        return;
-    };
+    let (server, room) = server_with_configured_room(config, "issuer-a").await?;
+    let mut client = client_in_room(&server, &room, UserId::Integer(701)).await?;
+    let request = initial_offer(&mut client).await?;
     let ServerRequest::Offer(payload) = request else {
         panic!("expected offer request");
     };
@@ -120,51 +126,27 @@ async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details()
     } else {
         panic!("expected SDP candidate line");
     }
-    let Some(port) = payload
-        .sdp
-        .lines()
-        .find(|line| line.starts_with("a=candidate:"))
-        .and_then(|line| line.split_whitespace().nth(5))
-        .and_then(|value| value.parse::<u16>().ok())
-    else {
-        return;
-    };
+    let port = require_some(
+        payload
+            .sdp
+            .lines()
+            .find(|line| line.starts_with("a=candidate:"))
+            .and_then(|line| line.split_whitespace().nth(5))
+            .and_then(|value| value.parse::<u16>().ok()),
+        "candidate should expose an RTC port",
+    )?;
     assert!((40_000..=49_999).contains(&port));
+    Ok(())
 }
 
 #[tokio::test]
-async fn websocket_offer_advertises_configured_public_ip_in_rtc_mode() {
+async fn websocket_offer_advertises_configured_public_ip_in_rtc_mode() -> TestResult {
     let mut config = protocol_test_config(1_000, 10);
     config.transport.public_ip = "203.0.113.44".parse().unwrap_or(config.transport.public_ip);
     config.transport.rtc_port_range = RtcPortRange::new(45_000, 45_099);
-    let server = spawn_test_server(config).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
-    let room = create_room(&server, "issuer-public-ip", TEST_ROOM_KEY).await;
-    assert!(room.is_some());
-    let Some(room) = room else {
-        return;
-    };
-    let token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(702));
-    assert!(token.is_some());
-    let Some(token) = token else {
-        return;
-    };
-
-    let client = ProtocolWebSocketClient::authenticate_with_room(&server, &token, &room).await;
-    assert!(client.is_some());
-    let Some(mut client) = client else {
-        return;
-    };
-
-    assert!(client.read_welcome().await.is_some());
-    let request = client.read_server_request().await;
-    assert!(request.is_some(), "initial offer should be sent");
-    let Some((_request_id, request)) = request else {
-        return;
-    };
+    let (server, room) = server_with_configured_room(config, "issuer-public-ip").await?;
+    let mut client = client_in_room(&server, &room, UserId::Integer(702)).await?;
+    let request = initial_offer(&mut client).await?;
     let ServerRequest::Offer(payload) = request else {
         panic!("expected offer request");
     };
@@ -179,144 +161,94 @@ async fn websocket_offer_advertises_configured_public_ip_in_rtc_mode() {
     } else {
         panic!("expected SDP candidate line");
     }
+    Ok(())
 }
 
 #[tokio::test]
-async fn websocket_timeout_is_reported_from_integration_test() {
-    let server = spawn_test_server(protocol_test_config(25, 10)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
+async fn websocket_timeout_is_reported_from_integration_test() -> TestResult {
+    let server = spawn_test_server(protocol_test_config(25, 10)).await?;
 
     let client = ProtocolWebSocketClient::connect(&server).await;
-    assert!(client.is_some());
-    let Some(mut client) = client else {
-        return;
-    };
+    let mut client = require_some(client, "websocket client should connect")?;
 
     assert_eq!(
         client.read_close_code().await,
         Some(CloseCode::Library(4107))
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn invalid_jwt_is_rejected_from_integration_test() {
-    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
+async fn invalid_jwt_is_rejected_from_integration_test() -> TestResult {
+    let server = default_server().await?;
 
     let client = ProtocolWebSocketClient::authenticate_with_jwt(&server, "not-a-jwt").await;
-    assert!(client.is_some());
-    let Some(mut client) = client else {
-        return;
-    };
+    let mut client = require_some(client, "websocket client should connect")?;
 
     assert_eq!(
         client.read_close_code().await,
         Some(CloseCode::Library(4106))
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn room_creation_is_idempotent_by_issuer_from_integration_test() {
-    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
+async fn room_creation_is_idempotent_by_issuer_from_integration_test() -> TestResult {
+    let server = default_server().await?;
 
-    let first = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
-    let second = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
-    let third = create_room(&server, "issuer-b", TEST_ROOM_KEY).await;
-    assert!(first.is_some());
-    assert!(second.is_some());
-    assert!(third.is_some());
-    let (Some(first), Some(second), Some(third)) = (first, second, third) else {
-        return;
-    };
+    let first = room(&server, "issuer-a").await?;
+    let second = room(&server, "issuer-a").await?;
+    let third = room(&server, "issuer-b").await?;
 
     assert_eq!(first, second);
     assert_ne!(first, third);
+    Ok(())
 }
 
 #[tokio::test]
-async fn oversized_disconnect_body_is_rejected_before_handler_metrics_from_integration_test() {
-    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
+async fn oversized_disconnect_body_is_rejected_before_handler_metrics_from_integration_test()
+-> TestResult {
+    let server = default_server().await?;
 
     let response = reqwest::Client::new()
         .post(format!("{}{DISCONNECT_PATH}", server.http_base_url()))
         .body("x".repeat((16 * 1024) + 1))
         .send()
-        .await;
-    assert!(
-        response.is_ok(),
-        "oversized disconnect request should complete: {response:?}"
-    );
-    let Some(response) = response.ok() else {
-        return;
-    };
+        .await?;
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 
     let metrics = metrics_text(&server).await;
-    assert!(metrics.is_some());
-    let Some(metrics) = metrics else {
-        return;
-    };
+    let metrics = require_some(metrics, "metrics text should be exposed")?;
     assert!(metrics.contains("osfu_http_disconnect_requests_total 0"));
     assert!(metrics.contains("osfu_http_disconnect_responses_total{status=\"success\"} 0"));
     assert!(metrics.contains("osfu_http_disconnect_responses_total{status=\"bad_request\"} 0"));
     assert!(
         metrics.contains("osfu_http_disconnect_responses_total{status=\"unprocessable_entity\"} 0")
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn broadcast_reaches_other_user_from_integration_test() {
-    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
-    let room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
-    assert!(room.is_some());
-    let Some(room) = room else {
-        return;
-    };
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(1));
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(2));
-    assert!(alice_token.is_some());
-    assert!(bob_token.is_some());
-    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
-        return;
-    };
+async fn broadcast_reaches_other_user_from_integration_test() -> TestResult {
+    let (server, room) = server_with_room("issuer-a").await?;
+    let (mut alice, mut bob) =
+        protocol_pair(&server, &room, UserId::Integer(1), UserId::Integer(2)).await?;
 
-    let peers = connect_protocol_pair(&server, &alice_token, &bob_token, UserId::Integer(2)).await;
-    assert!(peers.is_some());
-    let Some((mut alice, mut bob)) = peers else {
-        return;
-    };
-
-    let sent = alice
-        .send_broadcast(serde_json::json!({
-            "type": StreamType::Audio,
-            "text": "hello"
-        }))
-        .await;
-    assert!(sent.is_some());
+    require_some(
+        alice
+            .send_broadcast(serde_json::json!({
+                "type": StreamType::Audio,
+                "text": "hello"
+            }))
+            .await,
+        "broadcast should send",
+    )?;
 
     let message = bob
         .read_server_message_with_timeout(Duration::from_secs(1))
         .await;
-    assert!(message.is_some());
-    if let Some(ServerMessage::Broadcast(payload)) = message {
+    let message = require_some(message, "broadcast should reach peer")?;
+    if let ServerMessage::Broadcast(payload) = message {
         assert_eq!(payload.sender_id, UserId::Integer(1));
         assert_eq!(
             payload.message,
@@ -328,41 +260,25 @@ async fn broadcast_reaches_other_user_from_integration_test() {
     } else {
         panic!("expected broadcast update");
     }
+    Ok(())
 }
 
 #[tokio::test]
-async fn websocket_slow_consumer_overflow_closes_only_slow_socket_from_integration_test() {
-    let server = spawn_test_server(slow_consumer_overflow_config()).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
-    let room = create_room(&server, "issuer-slow-consumer-overflow", TEST_ROOM_KEY).await;
-    assert!(room.is_some());
-    let Some(room) = room else {
-        return;
-    };
-    let slow_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(31));
-    let driver_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(32));
-    let witness_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(33));
-    assert!(slow_token.is_some());
-    assert!(driver_token.is_some());
-    assert!(witness_token.is_some());
-    let (Some(slow_token), Some(driver_token), Some(witness_token)) =
-        (slow_token, driver_token, witness_token)
-    else {
-        return;
-    };
+async fn websocket_slow_consumer_overflow_closes_only_slow_socket_from_integration_test()
+-> TestResult {
+    let (server, room) = server_with_configured_room(
+        slow_consumer_overflow_config(),
+        "issuer-slow-consumer-overflow",
+    )
+    .await?;
+    let (mut slow, mut driver) =
+        protocol_pair(&server, &room, UserId::Integer(31), UserId::Integer(32)).await?;
+    let witness_token = token(&room, UserId::Integer(33))?;
 
-    let peers =
-        connect_protocol_pair(&server, &slow_token, &driver_token, UserId::Integer(32)).await;
-    assert!(peers.is_some());
-    let Some((mut slow, mut driver)) = peers else {
-        return;
-    };
-
-    let sent = driver.send_messages(slow_consumer_broadcast_batch()).await;
-    assert!(sent.is_some());
+    require_some(
+        driver.send_messages(slow_consumer_broadcast_batch()).await,
+        "slow-consumer batch should send",
+    )?;
 
     let slow_close = timeout(Duration::from_secs(5), slow.read_close_code())
         .await
@@ -374,26 +290,20 @@ async fn websocket_slow_consumer_overflow_closes_only_slow_socket_from_integrati
         matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == UserId::Integer(31))
     })
     .await;
-    assert!(departed.is_some());
+    require_some(departed, "driver should observe slow peer departure")?;
 
     let witness =
         ProtocolWebSocketClient::authenticate_and_negotiate(&server, &witness_token).await;
-    assert!(witness.is_some());
-    let Some((witness, _welcome)) = witness else {
-        return;
-    };
+    let (witness, _welcome) = require_some(witness, "witness should reconnect")?;
     let rejoined = read_until_server_message(&mut driver, Duration::from_secs(1), |message| {
         matches!(message, ServerMessage::PeerJoined(payload) if payload.user_id == UserId::Integer(33))
     })
     .await;
-    assert!(rejoined.is_some());
-    assert!(witness.close().await.is_some());
+    require_some(rejoined, "driver should observe witness join")?;
+    require_some(witness.close().await, "witness should close")?;
 
     let metrics = metrics_text(&server).await;
-    assert!(metrics.is_some());
-    let Some(metrics) = metrics else {
-        return;
-    };
+    let metrics = require_some(metrics, "metrics text should be exposed")?;
     assert!(metric_value(&metrics, "osfu_ws_outbound_queue_overflows_total").unwrap_or(0) > 0);
     assert_eq!(
         metric_value(
@@ -402,113 +312,64 @@ async fn websocket_slow_consumer_overflow_closes_only_slow_socket_from_integrati
         ),
         Some(1)
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn user_info_change_reaches_other_user_from_integration_test() {
-    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
-    let room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
-    assert!(room.is_some());
-    let Some(room) = room else {
-        return;
-    };
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(1));
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(2));
-    assert!(alice_token.is_some());
-    assert!(bob_token.is_some());
-    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
-        return;
-    };
+async fn user_info_change_reaches_other_user_from_integration_test() -> TestResult {
+    let (server, room) = server_with_room("issuer-a").await?;
+    let (mut alice, mut bob) =
+        protocol_pair(&server, &room, UserId::Integer(1), UserId::Integer(2)).await?;
 
-    let peers = connect_protocol_pair(&server, &alice_token, &bob_token, UserId::Integer(2)).await;
-    assert!(peers.is_some());
-    let Some((mut alice, mut bob)) = peers else {
-        return;
-    };
-
-    let sent = alice
-        .send_info(UserInfo {
-            is_talking: Some(true),
-            ..UserInfo::default()
-        })
-        .await;
-    assert!(sent.is_some());
+    require_some(
+        alice
+            .send_info(UserInfo {
+                is_talking: Some(true),
+                ..UserInfo::default()
+            })
+            .await,
+        "info update should send",
+    )?;
 
     let message = read_until_server_message(&mut bob, Duration::from_secs(1), |message| {
         matches!(message, ServerMessage::PeerInfo(payload) if payload.user_id == UserId::Integer(1))
     })
     .await;
-    assert!(message.is_some());
-    if let Some(ServerMessage::PeerInfo(payload)) = message {
+    let message = require_some(message, "peer should receive info update")?;
+    if let ServerMessage::PeerInfo(payload) = message {
         assert_eq!(payload.info.is_talking, Some(true));
     } else {
         panic!("expected user info update");
     }
+    Ok(())
 }
 
 #[tokio::test]
-async fn stats_reports_live_user_aggregates_from_integration_test() {
-    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
-    let room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
-    assert!(room.is_some());
-    let Some(room) = room else {
-        return;
-    };
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(1));
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(2));
-    assert!(alice_token.is_some());
-    assert!(bob_token.is_some());
-    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
-        return;
-    };
+async fn stats_reports_live_user_aggregates_from_integration_test() -> TestResult {
+    let (server, room) = server_with_room("issuer-a").await?;
+    let (mut alice, mut bob) =
+        protocol_pair(&server, &room, UserId::Integer(1), UserId::Integer(2)).await?;
 
-    let peers = connect_protocol_pair(&server, &alice_token, &bob_token, UserId::Integer(2)).await;
-    assert!(peers.is_some());
-    let Some((mut alice, mut bob)) = peers else {
-        return;
-    };
-
-    let bob_sent = bob
-        .send_info(UserInfo {
+    require_some(
+        bob.send_info(UserInfo {
             is_talking: Some(true),
             ..UserInfo::default()
         })
-        .await;
-    assert!(bob_sent.is_some());
+        .await,
+        "info update should send",
+    )?;
 
     let peer_info = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
         matches!(message, ServerMessage::PeerInfo(payload) if payload.user_id == UserId::Integer(2))
     })
     .await;
-    assert!(peer_info.is_some());
+    require_some(peer_info, "peer info should reach alice")?;
 
-    let response = reqwest::get(format!("{}{STATS_PATH}", server.http_base_url()))
-        .await
-        .ok();
-    assert!(response.is_some());
-    let Some(response) = response else {
-        return;
-    };
+    let response = reqwest::get(format!("{}{STATS_PATH}", server.http_base_url())).await?;
     assert_eq!(response.status(), StatusCode::OK);
-    let stats = response.json::<StatsResponse>().await.ok();
-    assert!(stats.is_some());
-    let Some(stats) = stats else {
-        return;
-    };
+    let stats = response.json::<StatsResponse>().await?;
     assert_eq!(stats.len(), 1);
-    let first = stats.first();
-    assert!(first.is_some());
-    let Some(first) = first else {
-        return;
-    };
+    let first = require_some(stats.first(), "stats should contain the room")?;
     assert_eq!(first.uuid, room);
     assert_eq!(first.users_stats.count, 2);
     assert_eq!(first.users_stats.camera_count, 0);
@@ -516,91 +377,51 @@ async fn stats_reports_live_user_aggregates_from_integration_test() {
     assert_eq!(first.users_stats.incoming_bit_rate.total, 0);
     assert!(first.web_rtc_enabled);
     assert_eq!(first.remote_address, "127.0.0.1");
+    Ok(())
 }
 
 #[tokio::test]
-async fn room_full_and_last_disconnect_cleanup_are_observable_from_integration_test() {
-    let server = spawn_test_server(protocol_test_config(1_000, 1)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
-    let first_room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
-    assert!(first_room.is_some());
-    let Some(first_room) = first_room else {
-        return;
-    };
-    let first_token = signed_connect_claims(TEST_ROOM_KEY, &first_room, UserId::Integer(1));
-    let second_token = signed_connect_claims(TEST_ROOM_KEY, &first_room, UserId::Integer(2));
-    assert!(first_token.is_some());
-    assert!(second_token.is_some());
-    let (Some(first_token), Some(second_token)) = (first_token, second_token) else {
-        return;
-    };
+async fn room_full_and_last_disconnect_cleanup_are_observable_from_integration_test() -> TestResult
+{
+    let (server, first_room) =
+        server_with_configured_room(protocol_test_config(1_000, 1), "issuer-a").await?;
+    let first_token = token(&first_room, UserId::Integer(1))?;
+    let second_token = token(&first_room, UserId::Integer(2))?;
 
-    let first_client =
-        ProtocolWebSocketClient::authenticate_and_negotiate(&server, &first_token).await;
-    assert!(first_client.is_some());
-    let Some((first_client, _welcome)) = first_client else {
-        return;
-    };
+    let (first_client, _welcome) = require_some(
+        ProtocolWebSocketClient::authenticate_and_negotiate(&server, &first_token).await,
+        "first client should negotiate",
+    )?;
 
     let second_client =
         ProtocolWebSocketClient::authenticate_with_jwt(&server, &second_token).await;
-    assert!(second_client.is_some());
-    let Some(mut second_client) = second_client else {
-        return;
-    };
+    let mut second_client = require_some(second_client, "second client should connect")?;
     assert_eq!(
         second_client.read_close_code().await,
         Some(CloseCode::Library(4109)),
     );
 
-    assert!(first_client.close().await.is_some());
+    require_some(first_client.close().await, "first client should close")?;
     assert!(server.wait_for_room_absence(&first_room).await);
 
-    let second_room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
-    assert!(second_room.is_some());
-    let Some(second_room) = second_room else {
-        return;
-    };
+    let second_room = room(&server, "issuer-a").await?;
     assert_ne!(first_room, second_room);
 
-    let third_token = signed_connect_claims(TEST_ROOM_KEY, &second_room, UserId::Integer(3));
-    assert!(third_token.is_some());
-    let Some(third_token) = third_token else {
-        return;
-    };
+    let third_token = token(&second_room, UserId::Integer(3))?;
     let third_client =
         ProtocolWebSocketClient::authenticate_and_negotiate(&server, &third_token).await;
-    assert!(third_client.is_some());
+    require_some(
+        third_client,
+        "third client should negotiate in recreated room",
+    )?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn disconnect_api_kicks_target_and_notifies_remaining_from_integration_test() {
-    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
-    let room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
-    assert!(room.is_some());
-    let Some(room) = room else {
-        return;
-    };
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(1));
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(2));
-    assert!(alice_token.is_some());
-    assert!(bob_token.is_some());
-    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
-        return;
-    };
-
-    let peers = connect_protocol_pair(&server, &alice_token, &bob_token, UserId::Integer(2)).await;
-    assert!(peers.is_some());
-    let Some((mut alice, mut bob)) = peers else {
-        return;
-    };
+async fn disconnect_api_kicks_target_and_notifies_remaining_from_integration_test() -> TestResult {
+    let (server, room) = server_with_room("issuer-a").await?;
+    let (mut alice, mut bob) =
+        protocol_pair(&server, &room, UserId::Integer(1), UserId::Integer(2)).await?;
 
     let status = disconnect_sessions_via_http(
         &server,
@@ -615,56 +436,36 @@ async fn disconnect_api_kicks_target_and_notifies_remaining_from_integration_tes
         matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == UserId::Integer(2))
     })
     .await;
-    assert!(message.is_some());
-    if let Some(ServerMessage::PeerLeft(payload)) = message {
+    let message = require_some(message, "alice should receive peer departure")?;
+    if let ServerMessage::PeerLeft(payload) = message {
         assert_eq!(payload.user_id, UserId::Integer(2));
     } else {
         panic!("expected user departure notification");
     }
+    Ok(())
 }
 
 #[tokio::test]
-async fn replaced_socket_cannot_broadcast_or_change_info_from_integration_test() {
-    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
-    let room = create_room(&server, "issuer-replacement-guard", TEST_ROOM_KEY).await;
-    assert!(room.is_some());
-    let Some(room) = room else {
-        return;
-    };
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(1));
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(2));
-    assert!(alice_token.is_some());
-    assert!(bob_token.is_some());
-    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
-        return;
-    };
-
-    let peers = connect_protocol_pair(&server, &alice_token, &bob_token, UserId::Integer(2)).await;
-    assert!(peers.is_some());
-    let Some((mut alice, mut bob)) = peers else {
-        return;
-    };
-    let replacement =
-        ProtocolWebSocketClient::authenticate_and_negotiate(&server, &bob_token).await;
-    assert!(replacement.is_some());
-    let Some((replacement, _welcome)) = replacement else {
-        return;
-    };
+async fn replaced_socket_cannot_broadcast_or_change_info_from_integration_test() -> TestResult {
+    let (server, room) = server_with_room("issuer-replacement-guard").await?;
+    let bob_token = token(&room, UserId::Integer(2))?;
+    let (mut alice, mut bob) =
+        protocol_pair(&server, &room, UserId::Integer(1), UserId::Integer(2)).await?;
+    let (replacement, _welcome) = require_some(
+        ProtocolWebSocketClient::authenticate_and_negotiate(&server, &bob_token).await,
+        "replacement should negotiate",
+    )?;
 
     let departed = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
         matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == UserId::Integer(2))
     })
     .await;
-    assert!(departed.is_some());
+    require_some(departed, "alice should observe replaced peer departure")?;
     let rejoined = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
         matches!(message, ServerMessage::PeerJoined(payload) if payload.user_id == UserId::Integer(2))
     })
     .await;
-    assert!(rejoined.is_some());
+    require_some(rejoined, "alice should observe replacement join")?;
 
     let _ = bob
         .send_broadcast(serde_json::json!({ "text": "stale" }))
@@ -691,65 +492,30 @@ async fn replaced_socket_cannot_broadcast_or_change_info_from_integration_test()
         "stale replacement socket must not overwrite presence"
     );
     assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4108)));
-    assert!(replacement.close().await.is_some());
+    require_some(replacement.close().await, "replacement should close")?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn numeric_string_user_ids_share_one_runtime_identity() {
-    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
-    let room = create_room(
-        &server,
-        "issuer-runtime-user-id-normalization",
-        TEST_ROOM_KEY,
-    )
-    .await;
-    assert!(room.is_some());
-    let Some(room) = room else {
-        return;
-    };
-    let observer_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(7));
-    let numeric_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(42));
-    let string_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::String("42".to_owned()));
-    assert!(observer_token.is_some());
-    assert!(numeric_token.is_some());
-    assert!(string_token.is_some());
-    let (Some(observer_token), Some(numeric_token), Some(string_token)) =
-        (observer_token, numeric_token, string_token)
-    else {
-        return;
-    };
+async fn numeric_string_user_ids_share_one_runtime_identity() -> TestResult {
+    let (server, room) = server_with_room("issuer-runtime-user-id-normalization").await?;
+    let string_token = token(&room, UserId::String("42".to_owned()))?;
+    let (mut observer, mut numeric_user) =
+        protocol_pair(&server, &room, UserId::Integer(7), UserId::Integer(42)).await?;
 
-    let peers = connect_protocol_pair(
-        &server,
-        &observer_token,
-        &numeric_token,
-        UserId::Integer(42),
-    )
-    .await;
-    assert!(peers.is_some());
-    let Some((mut observer, mut numeric_user)) = peers else {
-        return;
-    };
+    let (mut replacement, _welcome) = require_some(
+        ProtocolWebSocketClient::authenticate_and_negotiate(&server, &string_token).await,
+        "string-id replacement should negotiate",
+    )?;
 
-    let replacement =
-        ProtocolWebSocketClient::authenticate_and_negotiate(&server, &string_token).await;
-    assert!(replacement.is_some());
-    let Some((mut replacement, _welcome)) = replacement else {
-        return;
-    };
-
-    assert_peer_left(&mut observer, UserId::Integer(42)).await;
-    assert_peer_joined(&mut observer, UserId::Integer(42)).await;
+    assert_peer_left(&mut observer, UserId::Integer(42)).await?;
+    assert_peer_joined(&mut observer, UserId::Integer(42)).await?;
     assert_eq!(
         numeric_user.read_close_code().await,
         Some(CloseCode::Library(4108))
     );
 
-    assert!(
+    require_some(
         observer
             .send_message(ClientMessage::Subscribe(SubscribePayload {
                 user_id: UserId::String("42".to_owned()),
@@ -758,11 +524,11 @@ async fn numeric_string_user_ids_share_one_runtime_identity() {
                     ..DownloadStates::default()
                 },
             }))
-            .await
-            .is_some()
-    );
+            .await,
+        "observer should subscribe using string user id",
+    )?;
 
-    assert_diagnostics_user(&server, &room, 42).await;
+    assert_diagnostics_user(&server, &room, 42).await?;
 
     let status = disconnect_sessions_via_http(
         &server,
@@ -774,45 +540,40 @@ async fn numeric_string_user_ids_share_one_runtime_identity() {
         replacement.read_close_code().await,
         Some(CloseCode::Library(4108))
     );
-    assert_peer_left(&mut observer, UserId::Integer(42)).await;
+    assert_peer_left(&mut observer, UserId::Integer(42)).await?;
+    Ok(())
 }
 
-async fn assert_peer_left(client: &mut ProtocolWebSocketClient, user_id: UserId) {
+async fn assert_peer_left(client: &mut ProtocolWebSocketClient, user_id: UserId) -> TestResult {
     let message = read_until_server_message(
         client,
         Duration::from_secs(1),
         |message| matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == user_id),
     )
     .await;
-    assert!(message.is_some());
+    require_some(message, "peer departure should be delivered")?;
+    Ok(())
 }
 
-async fn assert_peer_joined(client: &mut ProtocolWebSocketClient, user_id: UserId) {
+async fn assert_peer_joined(client: &mut ProtocolWebSocketClient, user_id: UserId) -> TestResult {
     let message = read_until_server_message(client, Duration::from_secs(1), |message| {
         matches!(message, ServerMessage::PeerJoined(payload) if payload.user_id == user_id)
     })
     .await;
-    assert!(message.is_some());
+    require_some(message, "peer join should be delivered")?;
+    Ok(())
 }
 
-async fn assert_diagnostics_user(server: &TestServer, room_id: &str, user_id: i64) {
+async fn assert_diagnostics_user(server: &TestServer, room_id: &str, user_id: i64) -> TestResult {
     let response = reqwest::Client::new()
         .get(format!(
             "{}/internal/diagnostics/users/{user_id}",
             server.http_base_url()
         ))
         .send()
-        .await;
-    assert!(response.is_ok());
-    let Some(response) = response.ok() else {
-        return;
-    };
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
-    let payload = response.json::<serde_json::Value>().await;
-    assert!(payload.is_ok());
-    let Some(payload) = payload.ok() else {
-        return;
-    };
+    let payload = response.json::<serde_json::Value>().await?;
     assert_eq!(
         payload.get("roomId").and_then(serde_json::Value::as_str),
         Some(room_id)
@@ -824,46 +585,26 @@ async fn assert_diagnostics_user(server: &TestServer, room_id: &str, user_id: i6
             .and_then(serde_json::Value::as_i64),
         Some(user_id)
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn replaced_socket_cannot_finish_a_queued_publish_negotiation_from_integration_test() {
-    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
-    let room = create_room(&server, "issuer-replacement-queued-publish", TEST_ROOM_KEY).await;
-    assert!(room.is_some());
-    let Some(room) = room else {
-        return;
-    };
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(11));
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(12));
-    assert!(alice_token.is_some());
-    assert!(bob_token.is_some());
-    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
-        return;
-    };
+async fn replaced_socket_cannot_finish_a_queued_publish_negotiation_from_integration_test()
+-> TestResult {
+    let (server, room) = server_with_room("issuer-replacement-queued-publish").await?;
+    let bob_token = token(&room, UserId::Integer(12))?;
+    let (mut alice, mut bob) =
+        protocol_pair(&server, &room, UserId::Integer(11), UserId::Integer(12)).await?;
 
-    let peers = connect_protocol_pair(&server, &alice_token, &bob_token, UserId::Integer(12)).await;
-    assert!(peers.is_some());
-    let Some((mut alice, mut bob)) = peers else {
-        return;
-    };
-
-    assert!(
+    require_some(
         bob.send_message(ClientMessage::Publish(StreamIntentPayload {
             stream_type: StreamType::Audio,
         }))
-        .await
-        .is_some()
-    );
+        .await,
+        "bob should send queued publish intent",
+    )?;
     let request = bob.read_server_request().await;
-    assert!(request.is_some());
-    let Some((request_id, request)) = request else {
-        return;
-    };
+    let (request_id, request) = require_some(request, "bob should receive queued renegotiation")?;
     assert!(
         matches!(request, ServerRequest::Renegotiate(_)),
         "publish should queue a renegotiation request before the replacement arrives"
@@ -871,27 +612,24 @@ async fn replaced_socket_cannot_finish_a_queued_publish_negotiation_from_integra
 
     let replacement =
         ProtocolWebSocketClient::authenticate_and_negotiate(&server, &bob_token).await;
-    assert!(replacement.is_some());
-    let Some((replacement, _welcome)) = replacement else {
-        return;
-    };
+    let (replacement, _welcome) = require_some(replacement, "replacement should negotiate")?;
 
     let departed = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
         matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == UserId::Integer(12))
     })
     .await;
-    assert!(departed.is_some());
+    require_some(departed, "alice should observe replaced peer departure")?;
     let rejoined = read_until_server_message(&mut alice, Duration::from_secs(1), |message| {
         matches!(message, ServerMessage::PeerJoined(payload) if payload.user_id == UserId::Integer(12))
     })
     .await;
-    assert!(rejoined.is_some());
+    require_some(rejoined, "alice should observe replacement join")?;
 
-    assert!(
+    require_some(
         bob.respond_to_negotiation_request(request_id, request)
-            .await
-            .is_some()
-    );
+            .await,
+        "stale socket should send queued negotiation response",
+    )?;
     assert_eq!(
         alice
             .read_server_message_with_timeout(Duration::from_millis(150))
@@ -900,34 +638,15 @@ async fn replaced_socket_cannot_finish_a_queued_publish_negotiation_from_integra
         "stale queued publish answers must not create observable room state"
     );
     assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4108)));
-    assert!(replacement.close().await.is_some());
+    require_some(replacement.close().await, "replacement should close")?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn bulk_disconnected_socket_cannot_broadcast_after_logical_removal() {
-    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
-    let room = create_room(&server, "issuer-disconnect-guard", TEST_ROOM_KEY).await;
-    assert!(room.is_some());
-    let Some(room) = room else {
-        return;
-    };
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(21));
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, &room, UserId::Integer(22));
-    assert!(alice_token.is_some());
-    assert!(bob_token.is_some());
-    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
-        return;
-    };
-
-    let peers = connect_protocol_pair(&server, &alice_token, &bob_token, UserId::Integer(22)).await;
-    assert!(peers.is_some());
-    let Some((mut alice, mut bob)) = peers else {
-        return;
-    };
+async fn bulk_disconnected_socket_cannot_broadcast_after_logical_removal() -> TestResult {
+    let (server, room) = server_with_room("issuer-disconnect-guard").await?;
+    let (mut alice, mut bob) =
+        protocol_pair(&server, &room, UserId::Integer(21), UserId::Integer(22)).await?;
 
     let status = disconnect_sessions_via_http(
         &server,
@@ -942,8 +661,8 @@ async fn bulk_disconnected_socket_cannot_broadcast_after_logical_removal() {
     let message = alice
         .read_server_message_with_timeout(Duration::from_secs(1))
         .await;
-    assert!(message.is_some());
-    if let Some(ServerMessage::PeerLeft(payload)) = message {
+    let message = require_some(message, "alice should receive peer departure")?;
+    if let ServerMessage::PeerLeft(payload) = message {
         assert_eq!(payload.user_id, UserId::Integer(22));
     } else {
         panic!("expected bulk disconnect to surface peerleft before any stale broadcast");
@@ -956,50 +675,23 @@ async fn bulk_disconnected_socket_cannot_broadcast_after_logical_removal() {
         "bulk-disconnected sockets must not squeeze extra broadcast traffic through after removal"
     );
     assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4108)));
+    Ok(())
 }
 
 #[tokio::test]
-async fn bulk_disconnect_scopes_each_room_independently_from_integration_test() {
-    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
-    let room_a = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
-    let room_b = create_room(&server, "issuer-b", TEST_ROOM_KEY).await;
-    assert!(room_a.is_some());
-    assert!(room_b.is_some());
-    let (Some(room_a), Some(room_b)) = (room_a, room_b) else {
-        return;
-    };
+async fn bulk_disconnect_scopes_each_room_independently_from_integration_test() -> TestResult {
+    let server = default_server().await?;
+    let room_a = room(&server, "issuer-a").await?;
+    let room_b = room(&server, "issuer-b").await?;
 
-    let a_keep_token = signed_connect_claims(TEST_ROOM_KEY, &room_a, UserId::Integer(1));
-    let a_drop_token = signed_connect_claims(TEST_ROOM_KEY, &room_a, UserId::Integer(2));
-    let b_drop_token = signed_connect_claims(TEST_ROOM_KEY, &room_b, UserId::Integer(1));
-    let b_keep_token = signed_connect_claims(TEST_ROOM_KEY, &room_b, UserId::Integer(2));
-    assert!(a_keep_token.is_some());
-    assert!(a_drop_token.is_some());
-    assert!(b_drop_token.is_some());
-    assert!(b_keep_token.is_some());
-    let (Some(a_keep_token), Some(a_drop_token), Some(b_drop_token), Some(b_keep_token)) =
-        (a_keep_token, a_drop_token, b_drop_token, b_keep_token)
-    else {
-        return;
-    };
-
-    let peers_in_room_a =
-        connect_protocol_pair(&server, &a_keep_token, &a_drop_token, UserId::Integer(2)).await;
-    assert!(peers_in_room_a.is_some());
-    let Some((mut a_keep, mut a_drop)) = peers_in_room_a else {
-        return;
-    };
-
-    let peers_in_room_b =
-        connect_protocol_pair(&server, &b_drop_token, &b_keep_token, UserId::Integer(2)).await;
-    assert!(peers_in_room_b.is_some());
-    let Some((mut b_drop, mut b_keep)) = peers_in_room_b else {
-        return;
-    };
+    let (mut a_keep, mut a_drop) =
+        protocol_pair(&server, &room_a, UserId::Integer(1), UserId::Integer(2)).await?;
+    let b_drop_token = token(&room_b, UserId::Integer(1))?;
+    let b_keep_token = token(&room_b, UserId::Integer(2))?;
+    let (mut b_drop, mut b_keep) = require_some(
+        connect_protocol_pair(&server, &b_drop_token, &b_keep_token, UserId::Integer(2)).await,
+        "room B protocol pair should connect",
+    )?;
 
     let status = disconnect_sessions_via_http(
         &server,
@@ -1024,8 +716,8 @@ async fn bulk_disconnect_scopes_each_room_independently_from_integration_test() 
         matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == UserId::Integer(2))
     })
     .await;
-    assert!(a_departure.is_some());
-    if let Some(ServerMessage::PeerLeft(payload)) = a_departure {
+    let a_departure = require_some(a_departure, "room A survivor should receive departure")?;
+    if let ServerMessage::PeerLeft(payload) = a_departure {
         assert_eq!(payload.user_id, UserId::Integer(2));
     } else {
         panic!("expected room A to receive the disconnected peerleft notification");
@@ -1035,8 +727,8 @@ async fn bulk_disconnect_scopes_each_room_independently_from_integration_test() 
         matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == UserId::Integer(1))
     })
     .await;
-    assert!(b_departure.is_some());
-    if let Some(ServerMessage::PeerLeft(payload)) = b_departure {
+    let b_departure = require_some(b_departure, "room B survivor should receive departure")?;
+    if let ServerMessage::PeerLeft(payload) = b_departure {
         assert_eq!(payload.user_id, UserId::Integer(1));
     } else {
         panic!("expected room B to receive the disconnected peerleft notification");
@@ -1056,39 +748,25 @@ async fn bulk_disconnect_scopes_each_room_independently_from_integration_test() 
         None,
         "room B survivor must not receive cross-room traffic after the bulk disconnect"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn mismatched_explicit_room_id_is_rejected_from_integration_test() {
-    let server = spawn_test_server(protocol_test_config(1_000, 10)).await;
-    assert!(server.is_ok());
-    let Some(server) = server.ok() else {
-        return;
-    };
-    let first_room = create_room(&server, "issuer-a", TEST_ROOM_KEY).await;
-    let second_room = create_room(&server, "issuer-b", TEST_ROOM_KEY).await;
-    assert!(first_room.is_some());
-    assert!(second_room.is_some());
-    let (Some(first_room), Some(second_room)) = (first_room, second_room) else {
-        return;
-    };
-    let token = signed_connect_claims(TEST_ROOM_KEY, &first_room, UserId::Integer(3));
-    assert!(token.is_some());
-    let Some(token) = token else {
-        return;
-    };
+async fn mismatched_explicit_room_id_is_rejected_from_integration_test() -> TestResult {
+    let server = default_server().await?;
+    let first_room = room(&server, "issuer-a").await?;
+    let second_room = room(&server, "issuer-b").await?;
+    let token = token(&first_room, UserId::Integer(3))?;
 
     let client =
         ProtocolWebSocketClient::authenticate_with_room(&server, &token, &second_room).await;
-    assert!(client.is_some());
-    let Some(mut client) = client else {
-        return;
-    };
+    let mut client = require_some(client, "client should connect before auth rejection")?;
 
     assert_eq!(
         client.read_close_code().await,
         Some(CloseCode::Library(4106))
     );
+    Ok(())
 }
 
 fn slow_consumer_overflow_config() -> Config {
