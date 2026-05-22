@@ -1,0 +1,69 @@
+name: Feature Matrix
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-feature-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        # actions/checkout v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        # dtolnay/rust-toolchain master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: 1.95.0
+
+      - name: Cache Rust build artifacts
+        # Swatinem/rust-cache v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          shared-key: rust-1.95-feature-matrix
+
+      - name: Install cargo-hack
+        run: cargo install cargo-hack --version 0.6.44 --locked
+
+      - name: Check root facade features
+        run: cargo hack --locked --package o-sfu --feature-powerset --depth 2 check --all-targets
+
+      - name: Check core internal features
+        run: |
+          cargo hack --locked --package o-sfu-core --feature-powerset --depth 2 check --all-targets
+          cargo check --locked --package o-sfu-core --all-targets --all-features
+
+      - name: Check telemetry optional features
+        run: |
+          cargo hack --locked --package o-sfu-telemetry --feature-powerset --depth 2 check --all-targets
+          cargo check --locked --package o-sfu-telemetry --all-targets --all-features
+
+      - name: Check protocol proof features
+        run: cargo hack --locked --package o-sfu-protocol --each-feature check --all-targets
+
+      - name: Check router support features
+        run: cargo hack --locked --package o-sfu-router --each-feature check --all-targets
+
+      - name: Check test benchmark features
+        run: |
+          cargo hack --locked --package o-sfu-tests --feature-powerset --depth 1 check --all-targets
+          cargo check --locked --package o-sfu-tests --all-targets --all-features
+
+      - name: Check proof crate dependencies
+        run: cargo check --locked --package o-sfu-proofs --all-targets --all-features

@@ -77,6 +77,37 @@ cargo test -p o-sfu-tests
 cargo test --workspace --doc
 ```
 
+## feature matrix
+
+the feature-matrix CI workflow uses `cargo-hack` to catch optional-feature drift
+outside the default workspace path
+
+install
+
+```bash
+cargo install cargo-hack --version 0.6.44 --locked
+```
+
+run the CI matrix locally:
+
+```bash
+cargo hack --locked --package o-sfu --feature-powerset --depth 2 check --all-targets
+cargo hack --locked --package o-sfu-core --feature-powerset --depth 2 check --all-targets
+cargo check --locked --package o-sfu-core --all-targets --all-features
+cargo hack --locked --package o-sfu-telemetry --feature-powerset --depth 2 check --all-targets
+cargo check --locked --package o-sfu-telemetry --all-targets --all-features
+cargo hack --locked --package o-sfu-protocol --each-feature check --all-targets
+cargo hack --locked --package o-sfu-router --each-feature check --all-targets
+cargo hack --locked --package o-sfu-tests --feature-powerset --depth 1 check --all-targets
+cargo check --locked --package o-sfu-tests --all-targets --all-features
+cargo check --locked --package o-sfu-proofs --all-targets --all-features
+```
+
+the matrix covers the root `otel-tracing` and `testing-transport` facade,
+core fuzzing, internal benchmark and worker benchmark features, telemetry
+macros and OpenTelemetry features, protocol verification models, router
+test-support and proof-crate dependency features
+
 Proof notes:
 
 - `cargo test -p o-sfu-proofs` compiles proofs only
