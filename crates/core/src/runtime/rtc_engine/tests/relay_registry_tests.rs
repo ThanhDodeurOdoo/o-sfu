@@ -50,7 +50,7 @@ fn worker_local_relay_targets_forward_packets_through_registered_mailboxes() {
     if let Some(relay_targets) = relay_targets {
         assert_eq!(relay_targets.len(), 1);
         if let Some(relay_target) = relay_targets.first() {
-            relay_target.forward_packet(&packet, source_transport_media_id);
+            relay_target.forward_packet(&state, &packet, source_transport_media_id);
         }
     }
 
@@ -92,7 +92,7 @@ fn worker_local_relay_targets_keep_multiple_target_mailboxes_per_source() {
     if let Some(relay_targets) = relay_targets {
         assert_eq!(relay_targets.len(), 2);
         for relay_target in relay_targets {
-            relay_target.forward_packet(&packet, source_transport_media_id);
+            relay_target.forward_packet(&state, &packet, source_transport_media_id);
         }
     }
 
@@ -248,7 +248,7 @@ fn worker_local_relay_targets_forward_packets_through_registered_inter_node_targ
     let Some(relay_target) = relay_targets.first() else {
         return;
     };
-    relay_target.forward_packet(&packet, source_transport_media_id);
+    relay_target.forward_packet(&state, &packet, source_transport_media_id);
 
     let forwarded = relay_rx.try_recv().ok();
     assert!(forwarded.is_some());
@@ -270,11 +270,19 @@ fn worker_local_relay_targets_report_overload_when_a_bounded_mailbox_is_full() {
     let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
 
     assert_eq!(
-        mailbox.forward_packet(&packet, source_transport_media_id),
-        RelayEnqueueOutcome::Enqueued
+        mailbox.forward_packet(
+            &PacketLoopState::default(),
+            &packet,
+            source_transport_media_id
+        ),
+        Some(RelayEnqueueOutcome::Enqueued)
     );
     assert_eq!(
-        mailbox.forward_packet(&packet, source_transport_media_id),
-        RelayEnqueueOutcome::Overloaded
+        mailbox.forward_packet(
+            &PacketLoopState::default(),
+            &packet,
+            source_transport_media_id
+        ),
+        Some(RelayEnqueueOutcome::Overloaded)
     );
 }

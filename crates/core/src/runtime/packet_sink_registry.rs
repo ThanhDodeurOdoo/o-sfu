@@ -186,11 +186,14 @@ impl RoomPacketSinkRegistry {
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn write_packet(&self, packet: &ForwardedPacket, transport_media_id: TransportMediaId) {
-        let Some(sink) = self.sink_for_room(packet.source_session_key().room_instance_id()) else {
+        let Some(source_session_key) = packet.stable_source_session_key() else {
+            return;
+        };
+        let Some(sink) = self.sink_for_room(source_session_key.room_instance_id()) else {
             return;
         };
         sink.record_packet(
-            packet.source_session_key(),
+            source_session_key,
             transport_media_id,
             packet.received_at(),
             packet.payload(),

@@ -253,15 +253,12 @@ impl PacketLoopState {
     pub(super) fn collect_ready_sessions(
         &mut self,
         now: Instant,
-        ready_sessions: &mut Vec<TransportSessionKey>,
+        ready_sessions: &mut Vec<SessionHandle>,
     ) {
         for session_handle in self.dirty_sessions.drain(..) {
-            let Some(session_key) = self.users.key_for_handle(session_handle).cloned() else {
-                continue;
-            };
             if let Some(session_state) = self.users.get_mut_by_handle(session_handle) {
                 session_state.packet_loop_dirty = false;
-                ready_sessions.push(session_key);
+                ready_sessions.push(session_handle);
             }
         }
         let session_timeouts = &mut self.session_timeouts;
@@ -273,8 +270,8 @@ impl PacketLoopState {
         ) {
             if session_timeouts.get(&session_handle).copied() == Some(deadline) {
                 session_timeouts.remove(&session_handle);
-                if let Some(ready_session_key) = users.key_for_handle(session_handle).cloned() {
-                    ready_sessions.push(ready_session_key);
+                if users.key_for_handle(session_handle).is_some() {
+                    ready_sessions.push(session_handle);
                 }
             }
         }
@@ -282,11 +279,27 @@ impl PacketLoopState {
         ready_sessions.dedup();
     }
 
-    /// replace the next `str0m` timeout deadline for one session
+    /// replace the next `str0m` timeout deadline by worker-local handle
     ///
-    /// old heap entries are left in place and invalidated by
-    /// [`Self::session_timeouts`]
-    /// this keeps updates `O(log n)` without needing arbitrary heap removal
+    /// stale handles are ignored because the session has already left this
+    /// worker or the slot now belongs to a later generation
+    pub(super) fn update_session_timeout_by_handle(
+        &mut self,
+        session_handle: SessionHandle,
+        next_timeout: Option<Instant>,
+    ) {
+        if self.users.key_for_handle(session_handle).is_none() {
+            return;
+        }
+        self.session_timeouts.remove(&session_handle);
+        if let Some(next_timeout) = next_timeout {
+            self.session_timeouts.insert(session_handle, next_timeout);
+            self.timeout_queue
+                .push(Reverse((next_timeout, session_handle)));
+        }
+    }
+
+    #[cfg(test)]
     pub(super) fn update_session_timeout(
         &mut self,
         session_key: &TransportSessionKey,
@@ -295,12 +308,7 @@ impl PacketLoopState {
         let Some(session_handle) = self.users.handle_for_key(session_key) else {
             return;
         };
-        self.session_timeouts.remove(&session_handle);
-        if let Some(next_timeout) = next_timeout {
-            self.session_timeouts.insert(session_handle, next_timeout);
-            self.timeout_queue
-                .push(Reverse((next_timeout, session_handle)));
-        }
+        self.update_session_timeout_by_handle(session_handle, next_timeout);
     }
 
     /// return the earliest live `str0m` timeout deadline

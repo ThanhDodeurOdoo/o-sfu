@@ -287,6 +287,16 @@ impl<K: Ord + Clone, V, Tag> KeyedSlotStore<K, V, Tag> {
     pub(super) fn get_mut_by_handle(&mut self, handle: SlotHandle<Tag>) -> Option<&mut V> {
         self.slots.get_mut(handle).map(|entry| &mut entry.value)
     }
+
+    /// mutably read by handle while borrowing the matching public key
+    pub(super) fn get_key_value_mut_by_handle(
+        &mut self,
+        handle: SlotHandle<Tag>,
+    ) -> Option<(&K, &mut V)> {
+        self.slots
+            .get_mut(handle)
+            .map(|entry| (&entry.key, &mut entry.value))
+    }
 }
 
 fn next_generation(generation: u64) -> u64 {

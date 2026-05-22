@@ -4,7 +4,7 @@ use {
         ActiveRelayTarget, ForwardedPacket, InterNodeRelaySender, RELAY_MAILBOX_CAPACITY,
         RelayEnqueueOutcome, RelayPacketMailbox,
     },
-    crate::runtime::media_transport::TransportMediaId,
+    crate::runtime::{media_transport::TransportMediaId, rtc_engine::state::PacketLoopState},
     tokio::sync::mpsc,
 };
 
@@ -40,11 +40,12 @@ impl InterNodeRelaySender {
 impl ActiveRelayTarget {
     pub fn forward_packet(
         &self,
+        state: &PacketLoopState,
         packet: &ForwardedPacket,
         source_transport_media_id: TransportMediaId,
-    ) -> RelayEnqueueOutcome {
+    ) -> Option<RelayEnqueueOutcome> {
         self.target()
-            .forward_packet(packet, source_transport_media_id)
-            .outcome()
+            .forward_packet(state, packet, source_transport_media_id)
+            .map(super::RelayEnqueueReport::outcome)
     }
 }

@@ -3,6 +3,7 @@ use tokio::sync::mpsc;
 use super::super::{
     forwarded_packet::ForwardedPacket,
     relay_registry::{RelayEnqueueOutcome, RelayPacketMailbox, RelayTargetTransport},
+    state::PacketLoopState,
     test_support::{sample_forwarded_packet, test_transport_session_key},
 };
 use crate::runtime::{UserId, media_transport::TransportMediaId};
@@ -26,6 +27,7 @@ pub struct RelayPressureBenchFixture {
     target: RelayTargetTransport,
     source_transport_media_id: TransportMediaId,
     packet: ForwardedPacket,
+    state: PacketLoopState,
     _rx: mpsc::Receiver<ForwardedPacket>,
 }
 
@@ -58,6 +60,7 @@ impl RelayPressureBenchFixture {
             target: RelayPacketMailbox::new(tx).into(),
             source_transport_media_id,
             packet,
+            state: PacketLoopState::default(),
             _rx: rx,
         }
     }
@@ -65,10 +68,11 @@ impl RelayPressureBenchFixture {
     fn count_matching_outcomes(&self, attempts: usize, expected: RelayEnqueueOutcome) -> usize {
         let mut matching_outcomes = 0;
         for _ in 0..attempts {
-            let report = self
+            if self
                 .target
-                .forward_packet(&self.packet, self.source_transport_media_id);
-            if report.outcome() == expected {
+                .forward_packet(&self.state, &self.packet, self.source_transport_media_id)
+                .is_some_and(|report| report.outcome() == expected)
+            {
                 matching_outcomes += 1;
             }
         }

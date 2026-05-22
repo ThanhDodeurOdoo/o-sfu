@@ -23,7 +23,10 @@ use tokio::net::UdpSocket;
 use tracing::{trace, warn};
 
 use super::{
-    super::state::{PacketLoopState, RtcSessionState, RtcSnapshotState},
+    super::{
+        slots::SessionHandle,
+        state::{PacketLoopState, RtcSessionState, RtcSnapshotState},
+    },
     buffers::PacketLoopBuffers,
     event_observation::{log_rtc_event, observe_rtc_event},
     keyframe_requests::PendingKeyframeRequest,
@@ -55,14 +58,16 @@ pub(super) fn drain_ready_sessions(
 ) {
     state.collect_ready_sessions(now, &mut buffers.ready_sessions);
     let mut ready_sessions = take(&mut buffers.ready_sessions);
-    for user_id in ready_sessions.drain(..) {
+    for session_handle in ready_sessions.drain(..) {
         let session_timeout = {
-            let Some(session_state) = state.users.get_mut(&user_id) else {
+            let Some((session_key, session_state)) =
+                state.users.get_key_value_mut_by_handle(session_handle)
+            else {
                 continue;
             };
-            drain_single_session(&user_id, session_state, context, buffers)
+            drain_single_session(session_handle, session_key, session_state, context, buffers)
         };
-        state.update_session_timeout(&user_id, session_timeout);
+        state.update_session_timeout_by_handle(session_handle, session_timeout);
     }
     buffers.ready_sessions = ready_sessions;
 }
@@ -79,6 +84,7 @@ pub(super) fn drain_ready_sessions(
 ///
 /// Returns the next timeout requested by the session, if any.
 fn drain_single_session(
+    session_handle: SessionHandle,
     session_key: &TransportSessionKey,
     session_state: &mut RtcSessionState,
     context: &SessionDrainContext<'_>,
@@ -97,7 +103,7 @@ fn drain_single_session(
             Ok(Output::Event(Event::RtpPacket(packet))) => {
                 buffers.pending_packets.push(
                     super::super::forwarded_packet::ForwardedPacket::from_rtp_packet(
-                        session_key.clone(),
+                        session_handle,
                         packet,
                     ),
                 );

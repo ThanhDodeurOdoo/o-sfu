@@ -1,11 +1,8 @@
 use super::fixtures::*;
-use crate::runtime::rtc_engine::{bootstrap::ensure_session_rtc_state, state::PacketLoopState};
-
-fn collect_ready_sessions(state: &mut PacketLoopState, now: Instant) -> Vec<TransportSessionKey> {
-    let mut ready_sessions = Vec::new();
-    state.collect_ready_sessions(now, &mut ready_sessions);
-    ready_sessions
-}
+use crate::runtime::rtc_engine::{
+    bootstrap::ensure_session_rtc_state, state::PacketLoopState,
+    test_support::collect_ready_session_keys,
+};
 
 fn insert_live_session(state: &mut PacketLoopState, session_key: &TransportSessionKey) {
     assert!(matches!(
@@ -94,7 +91,7 @@ fn packet_loop_state_tracks_dirty_and_timed_out_sessions_separately() {
 
     assert_eq!(state.next_timeout_deadline(), Some(first_timeout));
 
-    let ready_sessions = collect_ready_sessions(&mut state, now + Duration::from_millis(25));
+    let ready_sessions = collect_ready_session_keys(&mut state, now + Duration::from_millis(25));
     assert!(ready_sessions.contains(&first_session_key));
     assert!(ready_sessions.contains(&second_session_key));
     assert_eq!(ready_sessions.len(), 2);
@@ -115,7 +112,7 @@ fn packet_loop_state_prefers_latest_session_timeout_deadline() {
 
     assert_eq!(state.next_timeout_deadline(), Some(updated_timeout));
 
-    let ready_sessions = collect_ready_sessions(&mut state, now + Duration::from_millis(15));
+    let ready_sessions = collect_ready_session_keys(&mut state, now + Duration::from_millis(15));
     assert_eq!(ready_sessions.len(), 1);
     assert!(ready_sessions.contains(&session_key));
     assert_eq!(state.next_timeout_deadline(), None);
@@ -132,7 +129,7 @@ fn packet_loop_state_deduplicates_repeated_dirty_session_marks_on_drain() {
     state.mark_session_dirty(&session_key);
     state.update_session_timeout(&session_key, Some(now));
 
-    let ready_sessions = collect_ready_sessions(&mut state, now);
+    let ready_sessions = collect_ready_session_keys(&mut state, now);
 
     assert_eq!(ready_sessions, vec![session_key]);
     assert!(!state.has_dirty_sessions());
@@ -152,7 +149,7 @@ fn packet_loop_state_clears_all_dirty_duplicates_for_removed_session() {
     state.mark_session_dirty(&removed_session_key);
     state.clear_session_schedule(&removed_session_key);
 
-    let ready_sessions = collect_ready_sessions(&mut state, now);
+    let ready_sessions = collect_ready_session_keys(&mut state, now);
 
     assert_eq!(ready_sessions, vec![retained_session_key]);
 }
@@ -167,7 +164,7 @@ fn packet_loop_state_ignores_stale_dirty_handle_after_session_replacement() {
     state.mark_session_dirty(&session_key);
     replace_live_session(&mut state, &session_key);
 
-    let ready_sessions = collect_ready_sessions(&mut state, now);
+    let ready_sessions = collect_ready_session_keys(&mut state, now);
 
     assert!(ready_sessions.is_empty());
 }
@@ -182,7 +179,7 @@ fn packet_loop_state_ignores_stale_timeout_handle_after_session_replacement() {
     state.update_session_timeout(&session_key, Some(now + Duration::from_millis(10)));
     replace_live_session(&mut state, &session_key);
 
-    let ready_sessions = collect_ready_sessions(&mut state, now + Duration::from_millis(11));
+    let ready_sessions = collect_ready_session_keys(&mut state, now + Duration::from_millis(11));
 
     assert!(ready_sessions.is_empty());
     assert_eq!(state.next_timeout_deadline(), None);
