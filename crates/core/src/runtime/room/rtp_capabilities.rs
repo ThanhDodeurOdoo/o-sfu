@@ -4,28 +4,21 @@ use o_sfu_router::{
     RtcpFeedback, RtcpFeedbackKind,
 };
 
-use crate::{AudioCodecPreference, CodecPreferences, MediaCodecFlags, VideoCodecPreference};
+use crate::{
+    AudioCodecPreference, CodecPreferences, MediaCodecFlags, VideoCodecPreference,
+    runtime::h264_payloads::{H264_PAYLOAD_SPECS, H264PayloadSpec},
+};
 
 const AUDIO_PAYLOAD_TYPE_PCMU: u8 = 0;
 const AUDIO_PAYLOAD_TYPE_PCMA: u8 = 8;
 const AUDIO_PAYLOAD_TYPE_OPUS: u8 = 111;
 const VIDEO_PAYLOAD_TYPE_VP8: u8 = 96;
-const VIDEO_PAYLOAD_TYPE_H264_BASELINE_PACKETIZED: u8 = 102;
-const VIDEO_PAYLOAD_TYPE_H264_BASELINE_NON_INTERLEAVED: u8 = 104;
-const VIDEO_PAYLOAD_TYPE_H264_CONSTRAINED_PACKETIZED: u8 = 106;
-const VIDEO_PAYLOAD_TYPE_H264_CONSTRAINED_NON_INTERLEAVED: u8 = 108;
-const VIDEO_PAYLOAD_TYPE_H264_MAIN_PACKETIZED: u8 = 110;
-const VIDEO_PAYLOAD_TYPE_H264_MAIN_NON_INTERLEAVED: u8 = 113;
 const VIDEO_PAYLOAD_TYPE_H265: u8 = 115;
 const VIDEO_PAYLOAD_TYPE_VP9_PROFILE_0: u8 = 116;
 const VIDEO_PAYLOAD_TYPE_VP9_PROFILE_0_RTX: u8 = 117;
 const VIDEO_PAYLOAD_TYPE_VP9_PROFILE_2: u8 = 118;
 const VIDEO_PAYLOAD_TYPE_VP9_PROFILE_2_RTX: u8 = 119;
 const VIDEO_PAYLOAD_TYPE_AV1: u8 = 120;
-
-const H264_PROFILE_LEVEL_BASELINE: &str = "42001f";
-const H264_PROFILE_LEVEL_CONSTRAINED_BASELINE: &str = "42e01f";
-const H264_PROFILE_LEVEL_MAIN: &str = "4d001f";
 
 const HEADER_EXTENSION_ID_MID: u8 = 1;
 const HEADER_EXTENSION_ID_ABS_SEND_TIME: u8 = 4;
@@ -83,7 +76,7 @@ fn push_video_codec(codecs: &mut Vec<MediaCodecCapability>, codec: VideoCodecPre
                 VIDEO_PAYLOAD_TYPE_VP8,
             ));
         }
-        VideoCodecPreference::H264 => codecs.extend(h264_codec_capabilities()),
+        VideoCodecPreference::H264 => push_h264_codec_capabilities(codecs),
         VideoCodecPreference::H265 => codecs.push(video_codec_capability(
             rtp::CodecName::from("H265"),
             VIDEO_PAYLOAD_TYPE_H265,
@@ -149,50 +142,22 @@ fn video_codec_capability(codec_name: rtp::CodecName, payload_type: u8) -> Media
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None))
 }
 
-fn h264_codec_capabilities() -> [MediaCodecCapability; 6] {
-    [
-        h264_codec_capability(
-            VIDEO_PAYLOAD_TYPE_H264_BASELINE_PACKETIZED,
-            1,
-            H264_PROFILE_LEVEL_BASELINE,
-        ),
-        h264_codec_capability(
-            VIDEO_PAYLOAD_TYPE_H264_BASELINE_NON_INTERLEAVED,
-            0,
-            H264_PROFILE_LEVEL_BASELINE,
-        ),
-        h264_codec_capability(
-            VIDEO_PAYLOAD_TYPE_H264_CONSTRAINED_PACKETIZED,
-            1,
-            H264_PROFILE_LEVEL_CONSTRAINED_BASELINE,
-        ),
-        h264_codec_capability(
-            VIDEO_PAYLOAD_TYPE_H264_CONSTRAINED_NON_INTERLEAVED,
-            0,
-            H264_PROFILE_LEVEL_CONSTRAINED_BASELINE,
-        ),
-        h264_codec_capability(
-            VIDEO_PAYLOAD_TYPE_H264_MAIN_PACKETIZED,
-            1,
-            H264_PROFILE_LEVEL_MAIN,
-        ),
-        h264_codec_capability(
-            VIDEO_PAYLOAD_TYPE_H264_MAIN_NON_INTERLEAVED,
-            0,
-            H264_PROFILE_LEVEL_MAIN,
-        ),
-    ]
+fn push_h264_codec_capabilities(codecs: &mut Vec<MediaCodecCapability>) {
+    codecs.extend(
+        H264_PAYLOAD_SPECS
+            .iter()
+            .copied()
+            .map(h264_codec_capability),
+    );
 }
 
-fn h264_codec_capability(
-    payload_type: u8,
-    packetization_mode: u8,
-    profile_level_id: &str,
-) -> MediaCodecCapability {
-    video_codec_capability(rtp::CodecName::H264, payload_type)
-        .with_setting(CodecSetting::H264PacketizationMode(packetization_mode))
+fn h264_codec_capability(spec: H264PayloadSpec) -> MediaCodecCapability {
+    video_codec_capability(rtp::CodecName::H264, spec.payload_type())
+        .with_setting(CodecSetting::H264PacketizationMode(
+            spec.packetization_mode().fmtp_value(),
+        ))
         .with_setting(CodecSetting::H264ProfileLevelId(
-            profile_level_id.to_owned(),
+            spec.profile_level_id_parameter(),
         ))
 }
 
@@ -271,6 +236,7 @@ mod tests {
             .codecs()
             .filter(|codec| codec.codec_name() == "H264")
             .map(|codec| {
+                let payload_type = codec.payload_type().unwrap_or(u8::MAX);
                 let packetization_mode = codec
                     .settings()
                     .find_map(|setting| match setting {
@@ -287,18 +253,19 @@ mod tests {
                         _ => None,
                     })
                     .unwrap_or_default();
-                (packetization_mode, profile_level_id)
+                (payload_type, packetization_mode, profile_level_id)
             })
             .collect::<BTreeSet<_>>();
         assert_eq!(
             h264_variants,
             BTreeSet::from([
-                (0, String::from("42001f")),
-                (0, String::from("42e01f")),
-                (0, String::from("4d001f")),
-                (1, String::from("42001f")),
-                (1, String::from("42e01f")),
-                (1, String::from("4d001f")),
+                (35, 0, String::from("4d001f")),
+                (108, 1, String::from("42e01f")),
+                (114, 1, String::from("64001f")),
+                (123, 1, String::from("4d001f")),
+                (124, 0, String::from("42e01f")),
+                (125, 0, String::from("42001f")),
+                (127, 1, String::from("42001f")),
             ])
         );
         let vp9_profiles = capabilities
@@ -323,12 +290,13 @@ mod tests {
             })
             .collect::<BTreeSet<_>>();
         assert!(!rtx_associations.contains(&96));
-        assert!(!rtx_associations.contains(&102));
-        assert!(!rtx_associations.contains(&104));
-        assert!(!rtx_associations.contains(&106));
+        assert!(!rtx_associations.contains(&35));
         assert!(!rtx_associations.contains(&108));
-        assert!(!rtx_associations.contains(&110));
-        assert!(!rtx_associations.contains(&113));
+        assert!(!rtx_associations.contains(&114));
+        assert!(!rtx_associations.contains(&123));
+        assert!(!rtx_associations.contains(&124));
+        assert!(!rtx_associations.contains(&125));
+        assert!(!rtx_associations.contains(&127));
         assert!(rtx_associations.contains(&116));
         assert!(rtx_associations.contains(&118));
     }

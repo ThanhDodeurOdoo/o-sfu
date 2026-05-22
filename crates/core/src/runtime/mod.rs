@@ -12,6 +12,7 @@
 //! workers or room-state internals.
 
 pub mod diagnostics;
+pub(in crate::runtime) mod h264_payloads;
 mod hot_path;
 pub mod media_transport;
 pub mod metrics;
