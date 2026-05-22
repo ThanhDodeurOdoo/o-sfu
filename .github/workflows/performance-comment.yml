@@ -47,6 +47,7 @@ jobs:
             const artifactName = process.env.ARTIFACT_NAME;
             const benchmarkResult = process.env.BENCHMARK_RESULT;
             const runUrl = process.env.BENCHMARK_RUN_URL;
+            const comparisonRowLimit = 25;
             const summaryPath = path.join(
               "performance-comment",
               "performance-artifacts",
@@ -147,19 +148,19 @@ jobs:
               return profile?.summaries?.total?.regressions || [];
             }
 
-            function hasIrRegression(summary) {
+            function hasMetricRegression(summary, metricName) {
               return regressions(summary).some((regression) => {
                 const payload = regression.Soft || regression.Hard || {};
-                return payload.metric?.Callgrind === "Ir";
+                return payload.metric?.Callgrind === metricName;
               });
             }
 
-            function rowFromSummary(summary) {
+            function rowFromSummary(summary, metricName) {
               if (isWorkerSummary(summary)) {
                 return null;
               }
-              const ir = callgrindMetric(summary, "Ir");
-              const metrics = ir?.metrics;
+              const metric = callgrindMetric(summary, metricName);
+              const metrics = metric?.metrics;
               const both = metrics?.Both;
               if (!Array.isArray(both) || both.length !== 2) {
                 return null;
@@ -173,9 +174,48 @@ jobs:
                 sortKey: `${labels.scope}/${labels.caseName}`,
                 base,
                 head,
-                delta: ir?.diffs?.diff_pct,
-                result: hasIrRegression(summary) ? "regression" : "ok",
+                delta: metric?.diffs?.diff_pct,
+                result: hasMetricRegression(summary, metricName) ? "regression" : "ok",
               };
+            }
+
+            function rowsForMetric(summaries, metricName) {
+              return summaries
+                .map((summary) => rowFromSummary(summary, metricName))
+                .filter(Boolean)
+                .sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+            }
+
+            function metricTable(rows, label, baseColumn, headColumn, emptyMessage) {
+              if (rows.length === 0) {
+                return emptyMessage;
+              }
+              const tableRows = rows.slice(0, comparisonRowLimit).map((row) => [
+                escapeCell(row.scope),
+                escapeCell(row.caseName),
+                formatInteger(row.base),
+                formatInteger(row.head),
+                formatDelta(row.delta),
+                row.result,
+              ].join(" | "));
+              const omitted = rows.length > comparisonRowLimit
+                ? `\n\n${rows.length - comparisonRowLimit} additional ${label} benchmark rows are in the artifact`
+                : "";
+              return [
+                `**${label}:** ${metricDescription(label)}`,
+                "",
+                `| scope | case | ${baseColumn} | ${headColumn} | delta | result |`,
+                "| --- | --- | ---: | ---: | ---: | --- |",
+                ...tableRows.map((row) => `| ${row} |`),
+                omitted,
+              ].filter(Boolean).join("\n");
+            }
+
+            function metricDescription(label) {
+              if (label === "Ir") {
+                return "instruction reads, the most stable signal for code-shape changes such as added branches, calls or lookups";
+              }
+              return "Callgrind's estimated cycle cost from simulated memory access, useful for spotting cache and RAM traffic changes";
             }
 
             function leftMetricValue(metric) {
@@ -303,32 +343,26 @@ jobs:
 
             const refs = readRefs(refsPath);
             const summaries = readJsonArray(summaryPath);
-            const rows = summaries
-              .map(rowFromSummary)
-              .filter(Boolean)
-              .sort((left, right) => left.sortKey.localeCompare(right.sortKey));
-            const regressionCount = rows.filter((row) => row.result === "regression").length;
+            const irRows = rowsForMetric(summaries, "Ir");
+            const cycleRows = rowsForMetric(summaries, "EstimatedCycles");
+            const regressionCount = irRows.filter((row) => row.result === "regression").length;
             const status = benchmarkResult === "success" && regressionCount === 0
               ? "ok"
               : "needs review";
-            const tableRows = rows.slice(0, 25).map((row) => [
-              escapeCell(row.scope),
-              escapeCell(row.caseName),
-              formatInteger(row.base),
-              formatInteger(row.head),
-              formatDelta(row.delta),
-              row.result,
-            ].join(" | "));
-            const table = rows.length
-              ? [
-                "| scope | case | base Ir | head Ir | delta | result |",
-                "| --- | --- | ---: | ---: | ---: | --- |",
-                ...tableRows.map((row) => `| ${row} |`),
-              ].join("\n")
-              : "no comparable Callgrind summary rows were produced";
-            const omitted = rows.length > 25
-              ? `\n\n${rows.length - 25} additional benchmark rows are in the artifact`
-              : "";
+            const irTable = metricTable(
+              irRows,
+              "Ir",
+              "base Ir",
+              "head Ir",
+              "no comparable Callgrind Ir summary rows were produced",
+            );
+            const cycleTable = metricTable(
+              cycleRows,
+              "Estimated cycles",
+              "base cycles",
+              "head cycles",
+              "no comparable Callgrind estimated-cycle summary rows were produced",
+            );
             const manualSection = manualInvestigationSection(summaries, refs);
             const body = [
               marker,
@@ -340,8 +374,9 @@ jobs:
               `head ref: ${refs.head_ref || "n/a"}`,
               `[workflow run](${runUrl})`,
               "",
-              table,
-              omitted,
+              irTable,
+              "",
+              cycleTable,
               manualSection ? "" : null,
               manualSection,
               "",
