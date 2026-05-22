@@ -1,13 +1,6 @@
-/**
- * protocol and runtime contract definitions
- *
- * this module defines the interface between the platform-agnostic protocol
- * core (wasm) and the browser-specific host runtime. it includes command
- * schemas, state types, and the binding wrappers that enforce safety
- */
-
 import {
     CLIENT_UPDATE,
+    SFU_CLIENT_STATE,
     type AvailableFeatures,
     type ClientUpdateDetail,
     type ConnectionState,
@@ -24,11 +17,22 @@ import type { NegotiationUploadSlot, TrackBinding } from "./protocol.js";
 
 const MIN_TEMPORAL_LAYER_ID = 0;
 const MAX_TEMPORAL_LAYER_ID = 7;
+const STREAM_TYPES = ["audio", "camera", "screen"] as const;
+const UPLOAD_KINDS = ["audio", "video"] as const;
+const SOURCE_ENCODING_POLICY_ROLES = ["featured", "thumbnail", "degradedThumbnail"] as const;
+const RECORDING_STOP_CODES = [
+    "user_request",
+    "channel_closed",
+    "recording_timeout",
+    "recording_failed",
+    "disk_space_exhausted"
+] as const;
 
 export const NEGOTIATION_KIND = {
     OFFER: "offer",
     RENEGOTIATE: "renegotiate"
 } as const;
+const NEGOTIATION_KINDS = Object.values(NEGOTIATION_KIND);
 
 export type NegotiationKind = (typeof NEGOTIATION_KIND)[keyof typeof NEGOTIATION_KIND];
 
@@ -36,6 +40,7 @@ export const PENDING_REQUEST_KIND = {
     START_RECORDING: "startRecording",
     STOP_RECORDING: "stopRecording"
 } as const;
+const PENDING_REQUEST_KINDS = Object.values(PENDING_REQUEST_KIND);
 
 export type PendingRequestKind = (typeof PENDING_REQUEST_KIND)[keyof typeof PENDING_REQUEST_KIND];
 
@@ -121,36 +126,14 @@ export type ProtocolCoreProvider = () => ProtocolCoreBindings;
 let defaultProtocolCoreProvider: ProtocolCoreProvider | undefined;
 let protocolCoreProvider: ProtocolCoreProvider | undefined;
 
-/**
- * registers the entrypoint-owned default protocol-core provider
- *
- * browser bundles install this once so createProtocolCore() can stay
- * decoupled from a specific wasm bootstrap path
- *
- * @param provider callback that returns the protocol core bindings
- */
 export function configureDefaultProtocolCoreProvider(provider: ProtocolCoreProvider): void {
     defaultProtocolCoreProvider = provider;
 }
 
-/**
- * configures the active protocol core provider
- *
- * @param provider callback that returns the protocol core bindings
- */
 export function configureProtocolCoreProvider(provider: ProtocolCoreProvider): void {
     protocolCoreProvider = provider;
 }
 
-/**
- * wraps protocol core bindings with validation logic
- *
- * this ensures that values crossing the wasm boundary conform to the
- * expected types and constraints before they reach the rest of the client
- *
- * @param bindings raw protocol core bindings from the wasm module
- * @returns validated protocol core bindings
- */
 export function wrapProtocolCoreBindings(bindings: ProtocolCoreBindings): ProtocolCoreBindings {
     return {
         get state(): ConnectionState {
@@ -232,11 +215,6 @@ export function wrapProtocolCoreBindings(bindings: ProtocolCoreBindings): Protoc
     };
 }
 
-/**
- * creates a new protocol core instance using the configured provider
- *
- * @returns validated protocol core bindings
- */
 export function createProtocolCore(): ProtocolCoreBindings {
     return wrapProtocolCoreBindings(
         (protocolCoreProvider ?? requireDefaultProtocolCoreProvider())()
@@ -263,8 +241,6 @@ function validateHostCommands(value: unknown, context: string): HostCommand[] {
     return commands;
 }
 
-// Rust `CommandBatch` validation is canonical; this guard keeps browser hosts
-// defensive around dynamically loaded or stale protocol bindings.
 function validateHostCommandOrder(commands: HostCommand[], context: string): void {
     for (let index = 0; index < commands.length; index += 1) {
         const command = commands[index];
@@ -322,9 +298,17 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
             return command as HostCommand;
         case CommandKind.APPLY_NEGOTIATION:
             requireString(command.requestId, `${context}.requestId`);
-            validateNegotiationKind(command.negotiationKind, `${context}.negotiationKind`);
+            validateStringEnum(
+                command.negotiationKind,
+                NEGOTIATION_KINDS,
+                `${context}.negotiationKind`
+            );
             requireString(command.sdp, `${context}.sdp`);
-            validateNegotiationUploadSlots(command.uploadSlots, `${context}.uploadSlots`);
+            validateArray(
+                command.uploadSlots,
+                `${context}.uploadSlots`,
+                validateNegotiationUploadSlot
+            );
             return command as HostCommand;
         case CommandKind.ATTACH_TRACK:
             requireString(command.mid, `${context}.mid`);
@@ -344,32 +328,10 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
             requireOptionalString(command.cause, `${context}.cause`);
             return command as HostCommand;
         case CommandKind.REPLACE_TRACK_BINDINGS:
-            if (!Array.isArray(command.bindings)) {
-                throw new Error(`${context}.bindings must be an array`);
-            }
-            command.bindings.forEach((binding, index) => {
-                const validated = validateOptionalTrackBinding(
-                    binding,
-                    `${context}.bindings[${index}]`
-                );
-                if (validated === null || validated === undefined) {
-                    throw new Error(`${context}.bindings[${index}] must be a track binding`);
-                }
-            });
+            validateArray(command.bindings, `${context}.bindings`, validateTrackBinding);
             return command as HostCommand;
         case CommandKind.REPLACE_SOURCE_DESCRIPTORS:
-            if (!Array.isArray(command.sources)) {
-                throw new Error(`${context}.sources must be an array`);
-            }
-            command.sources.forEach((source, index) => {
-                const validated = validateOptionalSourceDescriptor(
-                    source,
-                    `${context}.sources[${index}]`
-                );
-                if (validated === null || validated === undefined) {
-                    throw new Error(`${context}.sources[${index}] must be a source descriptor`);
-                }
-            });
+            validateArray(command.sources, `${context}.sources`, validateSourceDescriptor);
             return command as HostCommand;
         case CommandKind.REMOVE_SESSION_TRACKS:
             validateSessionId(command.sessionId, `${context}.sessionId`);
@@ -381,7 +343,11 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
             };
         case CommandKind.REGISTER_PENDING_REQUEST:
             requireString(command.requestId, `${context}.requestId`);
-            validatePendingRequestKind(command.requestKind, `${context}.requestKind`);
+            validateStringEnum(
+                command.requestKind,
+                PENDING_REQUEST_KINDS,
+                `${context}.requestKind`
+            );
             return command as HostCommand;
         case CommandKind.RESOLVE_PENDING_REQUEST:
             requireString(command.requestId, `${context}.requestId`);
@@ -418,20 +384,7 @@ function validateClientUpdate(value: unknown, context: string): ClientUpdateDeta
         }
         case CLIENT_UPDATE.SOURCE: {
             const payload = asRecord(update.payload, `${context}.payload`);
-            if (!Array.isArray(payload.sources)) {
-                throw new Error(`${context}.payload.sources must be an array`);
-            }
-            payload.sources.forEach((source, index) => {
-                const validated = validateOptionalSourceDescriptor(
-                    source,
-                    `${context}.payload.sources[${index}]`
-                );
-                if (validated === null || validated === undefined) {
-                    throw new Error(
-                        `${context}.payload.sources[${index}] must be a source descriptor`
-                    );
-                }
-            });
+            validateArray(payload.sources, `${context}.payload.sources`, validateSourceDescriptor);
             return update as ClientUpdateDetail;
         }
         case CLIENT_UPDATE.DISCONNECT: {
@@ -458,7 +411,11 @@ function validateClientUpdate(value: unknown, context: string): ClientUpdateDeta
             const payload = asRecord(update.payload, `${context}.payload`);
             validateRecordingState(payload.state, `${context}.payload.state`);
             if (payload.stopCode !== undefined) {
-                validateRecordingStopCode(payload.stopCode, `${context}.payload.stopCode`);
+                validateStringEnum(
+                    payload.stopCode,
+                    RECORDING_STOP_CODES,
+                    `${context}.payload.stopCode`
+                );
             }
             return update as ClientUpdateDetail;
         }
@@ -468,7 +425,7 @@ function validateClientUpdate(value: unknown, context: string): ClientUpdateDeta
 }
 
 function validateOptionalTrackBinding(
-    value: TrackBinding | null | undefined,
+    value: unknown,
     context: string
 ): TrackBinding | null | undefined {
     if (value === null || value === undefined) {
@@ -480,12 +437,17 @@ function validateOptionalTrackBinding(
     validateStreamType(binding.type, `${context}.type`);
     requireBoolean(binding.active, `${context}.active`);
     if (binding.source !== undefined) {
-        const source = validateOptionalSourceDescriptor(binding.source, `${context}.source`);
-        if (source === null) {
-            throw new Error(`${context}.source must be a source descriptor when provided`);
-        }
+        requirePresent(
+            validateOptionalSourceDescriptor(binding.source, `${context}.source`),
+            `${context}.source`,
+            "source descriptor when provided"
+        );
     }
-    return value;
+    return value as TrackBinding;
+}
+
+function validateTrackBinding(value: unknown, context: string): TrackBinding {
+    return requirePresent(validateOptionalTrackBinding(value, context), context, "track binding");
 }
 
 function validateOptionalSourceDescriptor(
@@ -501,102 +463,70 @@ function validateOptionalSourceDescriptor(
     validateStreamType(source.type, `${context}.type`);
     requireBoolean(source.active, `${context}.active`);
     requireOptionalString(source.mid, `${context}.mid`);
-    if (!Array.isArray(source.encodings)) {
-        throw new Error(`${context}.encodings must be an array`);
-    }
-    source.encodings.forEach((encoding, index) => {
-        const descriptor = asRecord(encoding, `${context}.encodings[${index}]`);
-        requireString(descriptor.encodingId, `${context}.encodings[${index}].encodingId`);
-        requireOptionalString(descriptor.rid, `${context}.encodings[${index}].rid`);
-        requireOptionalNonNegativeInteger(
-            descriptor.maxBitrate,
-            `${context}.encodings[${index}].maxBitrate`
-        );
-        requireOptionalPositiveNumber(
-            descriptor.resolutionScale,
-            `${context}.encodings[${index}].resolutionScale`
-        );
-        requireOptionalNonNegativeInteger(
-            descriptor.maxFramerate,
-            `${context}.encodings[${index}].maxFramerate`
-        );
-        validateOptionalPolicyRole(
-            descriptor.policyRole,
-            `${context}.encodings[${index}].policyRole`
-        );
-        requireOptionalTemporalLayerId(
-            descriptor.maxTemporalLayerId,
-            `${context}.encodings[${index}].maxTemporalLayerId`
-        );
-    });
+    validateArray(source.encodings, `${context}.encodings`, validateSourceEncodingDescriptor);
     return value as SourceDescriptor;
 }
 
-function validateNegotiationUploadSlots(value: unknown, context: string): void {
-    if (!Array.isArray(value)) {
-        throw new Error(`${context} must be an array`);
-    }
-    value.forEach((slot, slotIndex) => {
-        const uploadSlot = asRecord(slot, `${context}[${slotIndex}]`);
-        requireString(uploadSlot.mid, `${context}[${slotIndex}].mid`);
-        validateUploadKind(uploadSlot.kind, `${context}[${slotIndex}].kind`);
-        validateOptionalStringArray(uploadSlot.codecs, `${context}[${slotIndex}].codecs`);
-        if (
-            uploadSlot.simulcastEncodings !== undefined &&
-            !Array.isArray(uploadSlot.simulcastEncodings)
-        ) {
-            throw new Error(`${context}[${slotIndex}].simulcastEncodings must be an array`);
-        }
-        for (const [encodingIndex, encoding] of (
-            uploadSlot.simulcastEncodings as unknown[] | undefined
-        )?.entries() ?? []) {
-            const uploadEncoding = asRecord(
-                encoding,
-                `${context}[${slotIndex}].simulcastEncodings[${encodingIndex}]`
-            );
-            requireString(
-                uploadEncoding.rid,
-                `${context}[${slotIndex}].simulcastEncodings[${encodingIndex}].rid`
-            );
-            requireOptionalNonNegativeInteger(
-                uploadEncoding.maxBitrate,
-                `${context}[${slotIndex}].simulcastEncodings[${encodingIndex}].maxBitrate`
-            );
-            requireOptionalFiniteNumber(
-                uploadEncoding.resolutionScale,
-                `${context}[${slotIndex}].simulcastEncodings[${encodingIndex}].resolutionScale`
-            );
-            requireOptionalNonNegativeInteger(
-                uploadEncoding.maxFramerate,
-                `${context}[${slotIndex}].simulcastEncodings[${encodingIndex}].maxFramerate`
-            );
-        }
-    });
+function validateSourceDescriptor(value: unknown, context: string): SourceDescriptor {
+    return requirePresent(
+        validateOptionalSourceDescriptor(value, context),
+        context,
+        "source descriptor"
+    );
+}
+
+function validateSourceEncodingDescriptor(value: unknown, context: string): void {
+    const descriptor = asRecord(value, context);
+    requireString(descriptor.encodingId, `${context}.encodingId`);
+    requireOptionalString(descriptor.rid, `${context}.rid`);
+    requireOptionalNonNegativeInteger(descriptor.maxBitrate, `${context}.maxBitrate`);
+    requireOptionalPositiveNumber(descriptor.resolutionScale, `${context}.resolutionScale`);
+    requireOptionalNonNegativeInteger(descriptor.maxFramerate, `${context}.maxFramerate`);
+    validateOptionalPolicyRole(descriptor.policyRole, `${context}.policyRole`);
+    requireOptionalTemporalLayerId(descriptor.maxTemporalLayerId, `${context}.maxTemporalLayerId`);
+}
+
+function validateNegotiationUploadSlot(value: unknown, context: string): void {
+    const uploadSlot = asRecord(value, context);
+    requireString(uploadSlot.mid, `${context}.mid`);
+    validateStringEnum(uploadSlot.kind, UPLOAD_KINDS, `${context}.kind`);
+    validateOptionalArray(uploadSlot.codecs, `${context}.codecs`, requireString);
+    validateOptionalArray(
+        uploadSlot.simulcastEncodings,
+        `${context}.simulcastEncodings`,
+        validateNegotiationUploadEncoding
+    );
+}
+
+function validateNegotiationUploadEncoding(value: unknown, context: string): void {
+    const uploadEncoding = asRecord(value, context);
+    requireString(uploadEncoding.rid, `${context}.rid`);
+    requireOptionalNonNegativeInteger(uploadEncoding.maxBitrate, `${context}.maxBitrate`);
+    requireOptionalFiniteNumber(uploadEncoding.resolutionScale, `${context}.resolutionScale`);
+    requireOptionalNonNegativeInteger(uploadEncoding.maxFramerate, `${context}.maxFramerate`);
 }
 
 function requireOptionalPositiveNumber(value: unknown, context: string): void {
-    if (
-        value !== undefined &&
-        (typeof value !== "number" || !Number.isFinite(value) || value <= 0)
-    ) {
-        throw new Error(`${context} must be a positive number`);
-    }
+    requireOptionalNumber(
+        value,
+        context,
+        "must be a positive number",
+        (number) => Number.isFinite(number) && number > 0
+    );
 }
 
 function requireOptionalFiniteNumber(value: unknown, context: string): void {
-    if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value))) {
-        throw new Error(`${context} must be a finite number`);
-    }
+    requireOptionalNumber(value, context, "must be a finite number", Number.isFinite);
 }
 
 function validateOptionalPolicyRole(value: unknown, context: string): void {
-    if (
-        value !== undefined &&
-        value !== "featured" &&
-        value !== "thumbnail" &&
-        value !== "degradedThumbnail"
-    ) {
-        throw new Error(`${context} must be a supported upload layer policy role`);
+    if (value !== undefined) {
+        validateStringEnum(
+            value,
+            SOURCE_ENCODING_POLICY_ROLES,
+            context,
+            `${context} must be a supported upload layer policy role`
+        );
     }
 }
 
@@ -631,47 +561,11 @@ function validateSessionInfo(value: unknown, context: string): SessionInfo {
 }
 
 function validateConnectionState(value: unknown, context: string): ConnectionState {
-    if (
-        value !== "disconnected" &&
-        value !== "connecting" &&
-        value !== "authenticated" &&
-        value !== "connected" &&
-        value !== "recovering" &&
-        value !== "closed"
-    ) {
-        throw new Error(`${context} is invalid: ${String(value)}`);
-    }
-    return value;
-}
-
-function validateNegotiationKind(value: unknown, context: string): NegotiationKind {
-    if (value !== NEGOTIATION_KIND.OFFER && value !== NEGOTIATION_KIND.RENEGOTIATE) {
-        throw new Error(`${context} is invalid: ${String(value)}`);
-    }
-    return value;
-}
-
-function validatePendingRequestKind(value: unknown, context: string): PendingRequestKind {
-    if (
-        value !== PENDING_REQUEST_KIND.START_RECORDING &&
-        value !== PENDING_REQUEST_KIND.STOP_RECORDING
-    ) {
-        throw new Error(`${context} is invalid: ${String(value)}`);
-    }
-    return value;
+    return validateStringEnum(value, Object.values(SFU_CLIENT_STATE), context);
 }
 
 function validateStreamType(value: unknown, context: string): StreamType {
-    if (value !== "audio" && value !== "camera" && value !== "screen") {
-        throw new Error(`${context} is invalid: ${String(value)}`);
-    }
-    return value;
-}
-
-function validateUploadKind(value: unknown, context: string): void {
-    if (value !== "audio" && value !== "video") {
-        throw new Error(`${context} is invalid: ${String(value)}`);
-    }
+    return validateStringEnum(value, STREAM_TYPES, context);
 }
 
 function validateSessionId(value: unknown, context: string): SessionId {
@@ -682,18 +576,6 @@ function validateSessionId(value: unknown, context: string): SessionId {
         throw new Error(`${context} number session ID must be finite`);
     }
     return value;
-}
-
-function validateRecordingStopCode(value: unknown, context: string): void {
-    if (
-        value !== "user_request" &&
-        value !== "channel_closed" &&
-        value !== "recording_timeout" &&
-        value !== "recording_failed" &&
-        value !== "disk_space_exhausted"
-    ) {
-        throw new Error(`${context} is invalid: ${String(value)}`);
-    }
 }
 
 function asRecord(value: unknown, context: string): Record<string, unknown> {
@@ -728,18 +610,6 @@ function requireOptionalString(value: unknown, context: string): void {
     }
 }
 
-function validateOptionalStringArray(value: unknown, context: string): void {
-    if (value === undefined) {
-        return;
-    }
-    if (!Array.isArray(value)) {
-        throw new Error(`${context} must be an array when provided`);
-    }
-    value.forEach((entry, index) => {
-        requireString(entry, `${context}[${index}]`);
-    });
-}
-
 function requireBoolean(value: unknown, context: string): boolean {
     if (typeof value !== "boolean") {
         throw new Error(`${context} must be a boolean`);
@@ -761,26 +631,75 @@ function requireInteger(value: unknown, context: string): number {
 }
 
 function requireOptionalNonNegativeInteger(value: unknown, context: string): void {
-    if (value === undefined) {
-        return;
-    }
-    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-        throw new Error(`${context} must be a non-negative integer when provided`);
-    }
+    requireOptionalNumber(
+        value,
+        context,
+        "must be a non-negative integer when provided",
+        (number) => Number.isInteger(number) && number >= 0
+    );
 }
 
 function requireOptionalTemporalLayerId(value: unknown, context: string): void {
-    if (value === undefined) {
-        return;
+    requireOptionalNumber(
+        value,
+        context,
+        `must be an integer from ${MIN_TEMPORAL_LAYER_ID} through ${MAX_TEMPORAL_LAYER_ID} when provided`,
+        (number) =>
+            Number.isInteger(number) &&
+            number >= MIN_TEMPORAL_LAYER_ID &&
+            number <= MAX_TEMPORAL_LAYER_ID
+    );
+}
+
+function validateArray<T>(
+    value: unknown,
+    context: string,
+    itemValidator: (item: unknown, context: string) => T,
+    arrayExpectation = "must be an array"
+): T[] {
+    if (!Array.isArray(value)) {
+        throw new Error(`${context} ${arrayExpectation}`);
     }
-    if (
-        typeof value !== "number" ||
-        !Number.isInteger(value) ||
-        value < MIN_TEMPORAL_LAYER_ID ||
-        value > MAX_TEMPORAL_LAYER_ID
-    ) {
-        throw new Error(
-            `${context} must be an integer from ${MIN_TEMPORAL_LAYER_ID} through ${MAX_TEMPORAL_LAYER_ID} when provided`
-        );
+    return value.map((item, index) => itemValidator(item, `${context}[${index}]`));
+}
+
+function validateOptionalArray<T>(
+    value: unknown,
+    context: string,
+    itemValidator: (item: unknown, context: string) => T
+): T[] | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+    return validateArray(value, context, itemValidator, "must be an array when provided");
+}
+
+function validateStringEnum<T extends string>(
+    value: unknown,
+    allowed: readonly T[],
+    context: string,
+    invalidMessage = `${context} is invalid: ${String(value)}`
+): T {
+    if (typeof value !== "string" || !allowed.includes(value as T)) {
+        throw new Error(invalidMessage);
+    }
+    return value as T;
+}
+
+function requirePresent<T>(value: T | null | undefined, context: string, label: string): T {
+    if (value === null || value === undefined) {
+        throw new Error(`${context} must be a ${label}`);
+    }
+    return value;
+}
+
+function requireOptionalNumber(
+    value: unknown,
+    context: string,
+    expectation: string,
+    isValid: (value: number) => boolean
+): void {
+    if (value !== undefined && (typeof value !== "number" || !isValid(value))) {
+        throw new Error(`${context} ${expectation}`);
     }
 }
