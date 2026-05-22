@@ -21,19 +21,21 @@ use super::{
     read_close_code, read_text_message, signed_connect_claims,
 };
 
-pub type ProtocolFakePeerPair = (ProtocolFakePeer, ProtocolFakePeer);
-pub type ProtocolFakePeerPairFuture<'a> =
-    Pin<Box<dyn Future<Output = Option<ProtocolFakePeerPair>> + 'a>>;
+pub type ProtocolFakePeerFuture<'a, T = ProtocolFakePeer> =
+    Pin<Box<dyn Future<Output = Option<T>> + 'a>>;
 
-pub async fn connect_two_fake_peers(
-    server: &TestServer,
-    room_id: &str,
+#[must_use]
+pub fn connect_two_fake_peers<'a>(
+    server: &'a TestServer,
+    room_id: &'a str,
     first_user_id: UserId,
     second_user_id: UserId,
-) -> Option<(ProtocolFakePeer, ProtocolFakePeer)> {
-    let first = connect_fake_peer(server, room_id, first_user_id, TEST_ROOM_KEY).await?;
-    let second = connect_fake_peer(server, room_id, second_user_id, TEST_ROOM_KEY).await?;
-    Some((first, second))
+) -> ProtocolFakePeerFuture<'a, (ProtocolFakePeer, ProtocolFakePeer)> {
+    Box::pin(async move {
+        let first = connect_fake_peer(server, room_id, first_user_id, TEST_ROOM_KEY).await?;
+        let second = connect_fake_peer(server, room_id, second_user_id, TEST_ROOM_KEY).await?;
+        Some((first, second))
+    })
 }
 
 #[must_use]
@@ -43,7 +45,7 @@ pub fn connect_two_rtc_ready_fake_peers<'a>(
     first_user_id: UserId,
     second_user_id: UserId,
     timeout_window: Duration,
-) -> ProtocolFakePeerPairFuture<'a> {
+) -> ProtocolFakePeerFuture<'a, (ProtocolFakePeer, ProtocolFakePeer)> {
     Box::pin(async move {
         let (mut first, mut second) =
             connect_two_fake_peers(server, room_id, first_user_id, second_user_id).await?;
@@ -53,36 +55,39 @@ pub fn connect_two_rtc_ready_fake_peers<'a>(
     })
 }
 
-pub async fn connect_fake_peer(
-    server: &TestServer,
-    room_id: &str,
+#[must_use]
+pub fn connect_fake_peer<'a>(
+    server: &'a TestServer,
+    room_id: &'a str,
     user_id: UserId,
-    key: &str,
-) -> Option<ProtocolFakePeer> {
-    let token = signed_connect_claims(key, room_id, user_id.clone())?;
-    let mut websocket = connect_websocket(server).await?;
-    websocket
-        .send(tungstenite::Message::Text(
-            encode_client_batch(vec![ClientEnvelope::Message(ClientMessage::Auth(
-                AuthPayload {
-                    jwt: token,
-                    channel: Some(room_id.to_owned()),
-                },
-            ))])?
-            .into(),
-        ))
-        .await
-        .ok()?;
+    key: &'a str,
+) -> ProtocolFakePeerFuture<'a> {
+    Box::pin(async move {
+        let token = signed_connect_claims(key, room_id, user_id.clone())?;
+        let mut websocket = connect_websocket(server).await?;
+        websocket
+            .send(tungstenite::Message::Text(
+                encode_client_batch(vec![ClientEnvelope::Message(ClientMessage::Auth(
+                    AuthPayload {
+                        jwt: token,
+                        channel: Some(room_id.to_owned()),
+                    },
+                ))])?
+                .into(),
+            ))
+            .await
+            .ok()?;
 
-    let welcome = decode_protocol_welcome_batch(&read_text_message(&mut websocket).await?)?;
-    let mut rtc_peer = FakeRtcPeer::bind(0).await?;
-    answer_next_server_request(&mut websocket, &mut rtc_peer).await?;
-
-    Some(ProtocolFakePeer {
-        user_id,
-        websocket,
-        welcome,
-        rtc_peer,
+        let welcome = decode_protocol_welcome_batch(&read_text_message(&mut websocket).await?)?;
+        let rtc_peer = FakeRtcPeer::bind(0).await?;
+        let mut peer = ProtocolFakePeer {
+            user_id,
+            websocket,
+            welcome,
+            rtc_peer,
+        };
+        Box::pin(peer.complete_next_negotiation()).await?;
+        Some(peer)
     })
 }
 
@@ -238,41 +243,17 @@ impl ProtocolFakePeer {
         request_id: RequestId,
         request: ServerRequest,
     ) -> Option<()> {
-        let response = match request {
-            ServerRequest::Offer(payload) => {
-                ClientResponse::Offer(self.rtc_peer.answer_offer(&payload.sdp)?)
-            }
-            ServerRequest::Renegotiate(payload) => {
-                ClientResponse::Renegotiate(self.rtc_peer.answer_offer(&payload.sdp)?)
-            }
-        };
-        self.websocket
-            .send(tungstenite::Message::Text(
-                encode_client_batch(vec![ClientEnvelope::Response {
-                    response_to: request_id,
-                    response,
-                }])?
-                .into(),
-            ))
+        send_server_request_response(&mut self.websocket, &mut self.rtc_peer, request_id, request)
             .await
-            .ok()?;
-        Some(())
     }
 }
 
-async fn answer_next_server_request(
+async fn send_server_request_response(
     websocket: &mut TestWebSocket,
     rtc_peer: &mut FakeRtcPeer,
+    request_id: RequestId,
+    request: ServerRequest,
 ) -> Option<()> {
-    let batch = read_protocol_batch(websocket).await?;
-    let envelope = batch.into_iter().next()?;
-    let ServerEnvelope::Request {
-        request_id,
-        request,
-    } = ServerEnvelope::decode(envelope).ok()?
-    else {
-        return None;
-    };
     let response = match request {
         ServerRequest::Offer(payload) => {
             ClientResponse::Offer(rtc_peer.answer_offer(&payload.sdp)?)
@@ -290,8 +271,7 @@ async fn answer_next_server_request(
             .into(),
         ))
         .await
-        .ok()?;
-    Some(())
+        .ok()
 }
 
 fn encode_client_batch(batch: Vec<ClientEnvelope>) -> Option<String> {
