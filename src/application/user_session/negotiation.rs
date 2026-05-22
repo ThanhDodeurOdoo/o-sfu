@@ -3,7 +3,6 @@ use tracing::{info, instrument, warn};
 
 use super::{
     User, UserError, UserOutput, UserSignal,
-    compat::map_core_negotiation_error,
     projection::session_description_payload,
     state::{PendingUserAction, RenegotiationDisposition, ResolvedUserNegotiation},
 };
@@ -184,13 +183,18 @@ impl User {
         match result {
             Ok(committed_stream_ids) => Ok(committed_stream_ids),
             Err(error) => {
+                let user_error = if error.is_client_negotiation_error() {
+                    UserError::ProtocolViolation
+                } else {
+                    UserError::InternalError
+                };
                 self.log_negotiation_apply_error(
                     response_to,
                     apply_operation,
                     request_operation,
                     error,
                 );
-                Err(map_core_negotiation_error(error))
+                Err(user_error)
             }
         }
     }

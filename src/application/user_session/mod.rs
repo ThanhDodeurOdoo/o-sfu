@@ -24,7 +24,6 @@ use crate::{
     runtime::{ConnectionId, room::Room},
 };
 
-mod compat;
 mod lifecycle;
 mod negotiation;
 mod output;

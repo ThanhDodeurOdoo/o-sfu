@@ -1,7 +1,7 @@
-use o_sfu_protocol::wire::StreamType;
+use o_sfu_protocol::wire::{StreamType, UserInfo};
 use tracing::{info, instrument, warn};
 
-use super::{User, UserError, UserOutput, compat::publication_info_update};
+use super::{User, UserError, UserOutput};
 use crate::{
     application::stream_catalog::{
         source_publish_intent_for_stream_type, stream_id_for_stream_type,
@@ -32,8 +32,16 @@ impl User {
         stream_type: StreamType,
         active: bool,
     ) -> Result<(), UserError> {
-        let Some(info) = publication_info_update(stream_type, active) else {
-            return Ok(());
+        let info = match stream_type {
+            StreamType::Audio => return Ok(()),
+            StreamType::Camera => UserInfo {
+                is_camera_on: Some(active),
+                ..UserInfo::default()
+            },
+            StreamType::Screen => UserInfo {
+                is_screen_sharing_on: Some(active),
+                ..UserInfo::default()
+            },
         };
         self.media()
             .presence()

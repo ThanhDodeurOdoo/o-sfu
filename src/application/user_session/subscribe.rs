@@ -1,9 +1,13 @@
-use o_sfu_protocol::wire::{DownloadStates, UserId};
+use std::collections::BTreeMap;
+
+use o_sfu_protocol::wire::{DownloadStates, StreamType, UserId};
 use tracing::{info, instrument};
 
-use super::{User, UserError, UserOutput, compat::subscription_intents_from_download_states};
+use super::{User, UserError, UserOutput};
 use crate::{
-    core::prelude::SubscriptionUpdateOutcome, runtime::telemetry::schema::event as telemetry_event,
+    application::stream_catalog::stream_id_for_stream_type,
+    core::prelude::{SourceSubscriptionIntent, SubscriptionUpdateOutcome},
+    runtime::telemetry::schema::event as telemetry_event,
 };
 
 impl User {
@@ -40,7 +44,20 @@ impl User {
             outcome = "request_received",
             "received subscribe intent"
         );
-        let source_intents = subscription_intents_from_download_states(states);
+        let source_intents = [
+            (StreamType::Audio, states.audio, None),
+            (StreamType::Camera, states.camera, states.camera_layout),
+            (StreamType::Screen, states.screen, states.screen_layout),
+        ]
+        .into_iter()
+        .filter(|(_, media, layout)| media.is_some() || layout.is_some())
+        .map(|(stream_type, media, layout)| {
+            (
+                stream_id_for_stream_type(stream_type),
+                SourceSubscriptionIntent::new(media, layout),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
         let outcome = self
             .media()
             .subscription()
