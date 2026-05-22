@@ -58,7 +58,9 @@ the baseline comparison on Linux
 The default CI test workflow uses `cargo nextest` for `o-sfu-cluster`,
 `o-sfu-core`, `o-sfu-protocol`, `o-sfu-rfc` plus `o-sfu-router`. The root
 `o-sfu` crate plus the `o-sfu-tests` integration crate and doctests stay on
-plain `cargo test`.
+plain `cargo test`. Scheduled and manually dispatched CI also runs
+`cargo test --workspace --release` with default features, matching the local
+default baseline without making every pull request pay the release build cost.
 
 Install
 
