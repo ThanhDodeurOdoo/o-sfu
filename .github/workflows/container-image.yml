@@ -74,8 +74,56 @@ jobs:
           # tag and pass an explicit CPU through the Dockerfile instead of
           # using target-cpu=native on the GitHub runner
           platforms: linux/amd64
+          load: ${{ github.event_name == 'pull_request' }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: ${{ github.event_name == 'pull_request' && 'false' || 'mode=max' }}
+          sbom: ${{ github.event_name != 'pull_request' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Select smoke-test image
+        id: smoke-image
+        if: github.event_name == 'pull_request'
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          image_tag="$(printf '%s\n' "$IMAGE_TAGS" | head -n 1)"
+          if [[ -z "$image_tag" ]]; then
+            echo "No image tag was produced for the smoke test" >&2
+            exit 1
+          fi
+          echo "tag=${image_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test image
+        if: github.event_name == 'pull_request'
+        env:
+          IMAGE_TAG: ${{ steps.smoke-image.outputs.tag }}
+        run: |
+          set -euo pipefail
+          container_id="$(docker run --detach \
+            --env AUTH_KEY=u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng= \
+            --env BIND_ADDRESS=0.0.0.0:8070 \
+            --env PUBLIC_IP=127.0.0.1 \
+            --publish 127.0.0.1:18070:8070 \
+            "$IMAGE_TAG")"
+          healthy=0
+          for _ in $(seq 1 60); do
+            if curl --fail --silent --show-error http://127.0.0.1:18070/v1/noop >/dev/null; then
+              healthy=1
+              break
+            fi
+            if [[ "$(docker inspect --format '{{.State.Running}}' "$container_id")" != "true" ]]; then
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$healthy" == "1" ]]; then
+            docker rm --force "$container_id" >/dev/null
+            exit 0
+          fi
+          docker logs "$container_id" || true
+          docker rm --force "$container_id" >/dev/null 2>&1 || true
+          exit 1
