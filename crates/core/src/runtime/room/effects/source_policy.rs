@@ -13,7 +13,10 @@ use tracing::{debug, warn};
 use super::{
     super::{
         Room,
-        state::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate, RoomState},
+        state::{
+            ConsumerPacketSelectionUpdate, FeaturedUserUpdate, RoomState,
+            rank_active_speaker_sources,
+        },
     },
     RoomTransportEffect,
 };
@@ -48,12 +51,14 @@ impl SourcePolicyEffectPlan {
         active_speaker_sources: &[ActiveSpeakerSource],
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
     ) -> Self {
-        let mut consumer_packets = state.audio_route_activity_updates(active_speaker_sources);
+        let ranked_active_speaker_sources = rank_active_speaker_sources(active_speaker_sources);
+        let mut consumer_packets =
+            state.audio_route_activity_updates(&ranked_active_speaker_sources);
         consumer_packets.extend(state.consumer_packet_selection_updates(
-            active_speaker_sources,
+            &ranked_active_speaker_sources,
             receiver_bandwidth_snapshot,
         ));
-        let featured_users = state.featured_user_updates(active_speaker_sources);
+        let featured_users = state.featured_user_updates(&ranked_active_speaker_sources);
         Self {
             consumer_packets,
             featured_users,

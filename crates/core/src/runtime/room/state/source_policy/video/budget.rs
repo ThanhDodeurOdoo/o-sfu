@@ -79,12 +79,12 @@ impl super::super::super::shared::RoomState {
     /// layout state to build staged updates for the effect executor.
     pub fn consumer_packet_selection_updates(
         &self,
-        active_speaker_sources: &[ActiveSpeakerSource],
+        ranked_active_speaker_sources: &[ActiveSpeakerSource],
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
     ) -> Vec<ConsumerPacketSelectionUpdate> {
         let input = ReceiverVideoPolicyInput::from_state(
             self,
-            active_speaker_sources,
+            ranked_active_speaker_sources,
             receiver_bandwidth_snapshot,
         );
         receiver_video_selection_updates(&input)

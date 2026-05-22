@@ -30,5 +30,7 @@ pub(in crate::runtime::room) use self::{
     },
     membership::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, LifecycleEffects},
     shared::RoomState,
-    source_policy::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
+    source_policy::{
+        ConsumerPacketSelectionUpdate, FeaturedUserUpdate, rank_active_speaker_sources,
+    },
 };
