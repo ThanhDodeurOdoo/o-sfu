@@ -1,6 +1,6 @@
 name: Performance Comment
 
-on:
+on: # zizmor: ignore[dangerous-triggers] this workflow only parses benchmark artifacts from the read-only Performance workflow
   workflow_run:
     workflows: [Performance]
     types: [completed]
@@ -25,7 +25,8 @@ jobs:
 
     steps:
       - name: Download Callgrind artifacts
-        uses: actions/download-artifact@v4
+        # actions/download-artifact v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         continue-on-error: true
         with:
           name: ${{ env.ARTIFACT_NAME }}
@@ -34,7 +35,8 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Update PR Callgrind summary comment
-        uses: actions/github-script@v8
+        # actions/github-script v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
         with:
           script: |
             const fs = require("fs");

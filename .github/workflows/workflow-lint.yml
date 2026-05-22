@@ -1,0 +1,62 @@
+name: Workflow Lint
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - .github/dependabot.yml
+      - .github/workflows/**
+  pull_request:
+    branches: [main, master]
+    paths:
+      - .github/dependabot.yml
+      - .github/workflows/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workflow-lint:
+    name: Workflow lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        # actions/checkout v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        # actions/setup-go v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version: "1.25.10"
+
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+      - name: Run actionlint
+        run: |
+          actionlint_path="$(go env GOPATH)/bin/actionlint"
+          "$actionlint_path"
+
+      - name: Setup Python
+        # actions/setup-python v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.13.13"
+
+      - name: Install zizmor
+        run: |
+          python -m venv "$RUNNER_TEMP/zizmor"
+          "$RUNNER_TEMP/zizmor/bin/python" -m pip install --disable-pip-version-check zizmor==1.25.2
+
+      - name: Run zizmor
+        run: |
+          "$RUNNER_TEMP/zizmor/bin/zizmor" --offline --min-severity=high .github

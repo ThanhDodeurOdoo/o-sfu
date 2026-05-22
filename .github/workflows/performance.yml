@@ -91,9 +91,11 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        # actions/checkout v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install Callgrind dependencies
         run: |
@@ -101,12 +103,14 @@ jobs:
           sudo apt-get install -y jq valgrind
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        # dtolnay/rust-toolchain master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
           toolchain: 1.95.0
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+        # Swatinem/rust-cache v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           shared-key: rust-1.95-callgrind
 
@@ -140,9 +144,11 @@ jobs:
 
           # later steps export only non-empty outputs
           # this keeps push and pull_request runs on the default deterministic profile
-          echo "callgrind-args=${callgrind_args}" >> "$GITHUB_OUTPUT"
-          echo "flamegraphs=${flamegraphs}" >> "$GITHUB_OUTPUT"
-          echo "tools=${tools}" >> "$GITHUB_OUTPUT"
+          {
+            echo "callgrind-args=${callgrind_args}"
+            echo "flamegraphs=${flamegraphs}"
+            echo "tools=${tools}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Resolve comparison refs
         id: refs
@@ -255,7 +261,8 @@ jobs:
 
       - name: Upload Callgrind artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        # actions/upload-artifact v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           # keep the raw iai-callgrind output available for local inspection when the summary is not enough
           name: packet-loop-callgrind-${{ github.run_id }}

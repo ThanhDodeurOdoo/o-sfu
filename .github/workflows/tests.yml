@@ -22,19 +22,24 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        # actions/checkout v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        # dtolnay/rust-toolchain master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
           toolchain: 1.95.0
           components: rustfmt, clippy
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@cargo-nextest
+        run: cargo install cargo-nextest --version 0.9.136 --locked
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+        # Swatinem/rust-cache v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           shared-key: rust-1.95-mainline
 
@@ -69,19 +74,24 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        # actions/checkout v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        # dtolnay/rust-toolchain master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
           toolchain: 1.95.0
           components: llvm-tools-preview
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --version 0.8.7 --locked
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+        # Swatinem/rust-cache v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           shared-key: rust-1.95-mainline
 
@@ -96,7 +106,8 @@ jobs:
         run: mkdir -p target/tests/target
 
       - name: Upload coverage artifacts
-        uses: actions/upload-artifact@v4
+        # actions/upload-artifact v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: rust-workspace-coverage
           path: |
@@ -109,7 +120,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        # actions/checkout v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
 
       - name: Build server container image
         run: docker build --file Dockerfile --tag o-sfu:test .
