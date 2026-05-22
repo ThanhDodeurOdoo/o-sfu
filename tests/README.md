@@ -95,7 +95,10 @@ cargo install cargo-deny --locked
 Run the enforced policy checks:
 
 ```bash
-cargo deny check advisories bans sources
+cargo deny check advisories bans licenses sources
+mkdir -p target/cargo-deny
+cargo metadata --manifest-path tests/fuzz/Cargo.toml --locked --format-version 1 > target/cargo-deny/fuzz-metadata.json
+cargo deny check --metadata-path target/cargo-deny/fuzz-metadata.json advisories bans licenses sources
 ```
 
 ## Public API audit
