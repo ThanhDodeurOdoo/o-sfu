@@ -11,11 +11,13 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 use tokio::sync::RwLock;
 
 use super::{
-    LocalRouterRuntimeContext, Room, RoomConfig, RoomJoinError, RoomManagerJoinError,
-    RoomRuntimePolicy, RoomUserStatsSnapshot, SourcePolicyEvent, UserOutboundSender,
+    Room, RoomConfig, RoomJoinError, RoomManagerJoinError, RoomRuntimePolicy,
+    RoomUserStatsSnapshot, SourcePolicyEvent, UserOutboundSender,
+    cleanup::UserCleanup,
     directory::{RoomDirectory, RoomDirectoryEntry, RoomLifecycleLease},
     factory::{RoomCreationIntent, RoomFactory},
-    placement::{RoomPlacementPlanner, WorkerLoadIndex},
+    membership::JoinSessionIntent,
+    placement::{JoinPlacement, RoomPlacementPlanner, WorkerLoadIndex},
 };
 use crate::{
     RoomSpilloverMode,
@@ -347,14 +349,18 @@ impl RoomManager {
             .run_current_room_mutation(
                 room_id,
                 |room| async move {
-                    let home_placement = self.choose_join_placement(&room, media_transport).await;
-                    room.add_user_on_placement(
-                        request.user_id,
-                        request.label,
-                        request.permissions,
-                        request.sender,
-                        media_transport,
-                        home_placement,
+                    let placement = self.prepare_join_placement(&room, media_transport).await;
+                    room.join_session_with_cleanup(
+                        JoinSessionIntent {
+                            user_id: request.user_id,
+                            label: request.label,
+                            permissions: request.permissions,
+                            sender: request.sender,
+                            emit_joined_fanout: true,
+                            placement,
+                        },
+                        UserCleanup::runtime(media_transport),
+                        || self.factory.allocate_spillover_router(),
                     )
                     .await
                 },
@@ -371,11 +377,11 @@ impl RoomManager {
         Ok((room, connection_id))
     }
 
-    async fn choose_join_placement(
+    async fn prepare_join_placement(
         &self,
         room: &Arc<Room>,
         media_transport: &MediaTransport,
-    ) -> LocalRouterRuntimeContext {
+    ) -> JoinPlacement {
         let room_snapshot = room.placement_usage_snapshot().await;
         let worker_loads = self.worker_load_index(media_transport).await;
         let policy = room.room_worker_policy();
@@ -394,7 +400,7 @@ impl RoomManager {
                 planner.choose(&room_snapshot, &worker_loads)
             }
         };
-        decision.resolve(&room_snapshot, || self.factory.allocate_spillover_router())
+        JoinPlacement::planned(decision, worker_loads, self.media_worker_count, policy)
     }
 
     async fn worker_load_index(&self, media_transport: &MediaTransport) -> WorkerLoadIndex {

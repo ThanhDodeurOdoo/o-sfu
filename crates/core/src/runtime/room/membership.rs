@@ -19,7 +19,7 @@
 //! They must not hold the room state lock across `.await`. Cleanup calls run
 //! after the state guard has been released.
 
-use o_sfu_router::MediaCapabilities;
+use o_sfu_router::{MediaCapabilities, RouterId};
 use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 #[cfg(any(test, feature = "testing-transport"))]
@@ -31,11 +31,14 @@ use {
     },
 };
 
+#[cfg(any(test, feature = "testing-transport"))]
+use super::LocalRouterRuntimeContext;
 use super::{
-    BroadcastPayloadError, LocalRouterRuntimeContext, Room, RoomJoinError, RoomMediaCounts,
-    RoomUserOperation, RoomUserPermissions, SourcePolicyEvent, UserOutboundSender,
+    BroadcastPayloadError, Room, RoomJoinError, RoomMediaCounts, RoomUserOperation,
+    SourcePolicyEvent, UserOutboundSender,
     cleanup::UserCleanup,
     effects::{RoomEffectBatch, RoomEffectContext, TransportUserCleanup},
+    placement::JoinPlacement,
     state::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, RoomState},
     user_negotiation::UserNegotiationUpdate,
 };
@@ -52,8 +55,8 @@ use crate::{
 ///
 /// this keeps the public join entrypoints small while making the transition
 /// pipeline consume one owned intent
-/// placement is resolved before the state mutation so `RoomState` can mirror
-/// the session into topology without awaiting worker-pressure reads
+/// placement is finalized under the state lock so topology sees the current
+/// committed router set without awaiting worker-pressure reads
 pub(in crate::runtime::room) struct JoinSessionIntent {
     /// stable room user identity
     pub user_id: UserId,
@@ -65,26 +68,17 @@ pub(in crate::runtime::room) struct JoinSessionIntent {
     pub sender: UserOutboundSender,
     /// whether existing peers should receive a joined fan-out
     pub emit_joined_fanout: bool,
-    /// router and media-worker placement selected before the join commits
-    pub home_placement: LocalRouterRuntimeContext,
+    /// router and media-worker placement resolved under the room-state lock
+    pub placement: JoinPlacement,
 }
 
 /// Membership command applied under the `RoomState` lock.
 ///
 /// The enum is local to this module because callers should express intent
-/// through `Room` methods. Keeping all membership commands in one pipeline
-/// makes the lock boundary explicit and gives every transition the same
-/// deferred cleanup path.
+/// through `Room` methods. Keeping leave commands in one pipeline makes the
+/// lock boundary explicit and gives those transitions the same deferred
+/// cleanup path.
 enum UserTransition<'a> {
-    /// Install a new session or replace the current session for the same user.
-    Join {
-        user_id: &'a UserId,
-        label: Option<String>,
-        permissions: RoomUserPermissions,
-        sender: UserOutboundSender,
-        emit_joined_fanout: bool,
-        home_placement: LocalRouterRuntimeContext,
-    },
     /// Close one runtime connection and clean up any matching transport owner.
     Close {
         user_id: &'a UserId,
@@ -215,36 +209,8 @@ impl Room {
                 planner.choose(&room_snapshot, &load_index)
             }
         };
-        decision.resolve(&room_snapshot, || room_snapshot.next_local_router_id())
-    }
-
-    /// join a user after placement has already been selected
-    ///
-    /// callers use this when the room manager has resolved the target router
-    /// and media worker from current load
-    /// the join is still allowed to fail if room state is full or topology
-    /// rejects the placement while committing the membership transition
-    pub(crate) async fn add_user_on_placement(
-        &self,
-        user_id: UserId,
-        label: Option<String>,
-        permissions: UserPermissions,
-        sender: UserOutboundSender,
-        media_transport: &MediaTransport,
-        home_placement: LocalRouterRuntimeContext,
-    ) -> Result<ConnectionId, RoomJoinError> {
-        self.join_session_with_cleanup(
-            JoinSessionIntent {
-                user_id,
-                label,
-                permissions,
-                sender,
-                emit_joined_fanout: true,
-                home_placement,
-            },
-            UserCleanup::runtime(media_transport),
-        )
-        .await
+        JoinPlacement::planned(decision, load_index, policy.max_local_routers(), policy)
+            .resolve_for_commit(&room_snapshot, || room_snapshot.next_local_router_id())
     }
 
     /// Run the room-owned join transition with an explicit cleanup policy.
@@ -259,28 +225,13 @@ impl Room {
         &self,
         intent: JoinSessionIntent,
         cleanup: UserCleanup<'_>,
+        allocate_spillover_router: impl FnOnce() -> RouterId,
     ) -> Result<ConnectionId, RoomJoinError> {
-        let JoinSessionIntent {
-            user_id,
-            label,
-            permissions,
-            sender,
-            emit_joined_fanout,
-            home_placement,
-        } = intent;
-        let UserTransitionResult::Joined(connection_id) = self
-            .run_session_transition(
-                UserTransition::Join {
-                    user_id: &user_id,
-                    label,
-                    permissions: permissions.into(),
-                    sender,
-                    emit_joined_fanout,
-                    home_placement,
-                },
-                cleanup,
-            )
-            .await?
+        let outcome = self
+            .apply_join_state_transition(intent, allocate_spillover_router)
+            .await?;
+        let UserTransitionResult::Joined(connection_id) =
+            self.finalize_session_transition(outcome, cleanup).await
         else {
             return Err(RoomJoinError::RouterState);
         };
@@ -396,9 +347,9 @@ impl Room {
             .ok();
     }
 
-    /// Apply one membership command and finalize its deferred effects.
+    /// Apply one leave-oriented membership command and finalize deferred effects.
     ///
-    /// This is the common sequencing point for join, close and disconnect. It
+    /// This is the common sequencing point for close and disconnect. It
     /// keeps the mutation phase and async effect phase adjacent in the code so
     /// future changes do not accidentally await while holding room state.
     async fn run_session_transition(
@@ -425,28 +376,6 @@ impl Room {
             let mut state = self.state.write().await;
             let counts_before = MembershipCountSnapshot::from_state(&state);
             let outcome = match transition {
-                UserTransition::Join {
-                    user_id,
-                    label,
-                    permissions,
-                    sender,
-                    emit_joined_fanout,
-                    home_placement,
-                } => {
-                    let outcome = state.apply_join_on_placement(
-                        user_id,
-                        label,
-                        permissions,
-                        sender,
-                        emit_joined_fanout,
-                        home_placement,
-                    )?;
-                    UserTransitionOutcome::Join {
-                        outcome,
-                        count_delta: counts_before
-                            .delta_to(MembershipCountSnapshot::from_state(&state)),
-                    }
-                }
                 UserTransition::Close {
                     user_id,
                     connection_id,
@@ -473,6 +402,35 @@ impl Room {
             outcome
         };
         Ok(Some(outcome))
+    }
+
+    async fn apply_join_state_transition(
+        &self,
+        intent: JoinSessionIntent,
+        allocate_spillover_router: impl FnOnce() -> RouterId,
+    ) -> Result<UserTransitionOutcome, RoomJoinError> {
+        let outcome = {
+            let mut state = self.state.write().await;
+            let counts_before = MembershipCountSnapshot::from_state(&state);
+            let home_placement = intent
+                .placement
+                .resolve_for_commit(&state.placement_usage_snapshot(), allocate_spillover_router);
+            let outcome = state.apply_join_on_placement(
+                &intent.user_id,
+                intent.label,
+                intent.permissions,
+                intent.sender,
+                intent.emit_joined_fanout,
+                home_placement,
+            )?;
+            let count_delta = counts_before.delta_to(MembershipCountSnapshot::from_state(&state));
+            drop(state);
+            UserTransitionOutcome::Join {
+                outcome,
+                count_delta,
+            }
+        };
+        Ok(outcome)
     }
 
     /// Run the async effects produced by a committed membership transition.

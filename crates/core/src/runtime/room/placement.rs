@@ -357,6 +357,18 @@ pub(super) enum RoomPlacementDecision {
     AllocateSpillover { media_worker_id: usize },
 }
 
+#[derive(Debug)]
+pub(super) enum JoinPlacement {
+    #[cfg(any(test, feature = "testing-transport"))]
+    Resolved(LocalRouterRuntimeContext),
+    Planned {
+        decision: RoomPlacementDecision,
+        worker_loads: WorkerLoadIndex,
+        media_worker_count: usize,
+        policy: RoomWorkerPolicy,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::runtime::room) enum RoomPlacementDecisionReason {
     ExistingPlacementAvailable,
@@ -433,22 +445,87 @@ impl LoadTriggeredPlacementState {
     }
 }
 
-impl RoomPlacementDecision {
-    pub(super) fn resolve(
+impl JoinPlacement {
+    pub(super) fn planned(
+        decision: RoomPlacementDecision,
+        worker_loads: WorkerLoadIndex,
+        media_worker_count: usize,
+        policy: RoomWorkerPolicy,
+    ) -> Self {
+        Self::Planned {
+            decision,
+            worker_loads,
+            media_worker_count,
+            policy,
+        }
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub(super) const fn resolved(placement: LocalRouterRuntimeContext) -> Self {
+        Self::Resolved(placement)
+    }
+
+    pub(super) fn resolve_for_commit(
         self,
         room: &RoomPlacementUsageSnapshot,
         allocate_spillover_router: impl FnOnce() -> RouterId,
     ) -> LocalRouterRuntimeContext {
-        match self {
-            Self::AssignPrimary { media_worker_id } => LocalRouterRuntimeContext {
-                router: room.primary_router(),
-                media_worker: media_worker_id,
-            },
-            Self::UseExisting(placement) => placement,
-            Self::AllocateSpillover { media_worker_id } => LocalRouterRuntimeContext {
-                router: allocate_spillover_router(),
-                media_worker: media_worker_id,
-            },
+        let (decision, worker_loads, media_worker_count, policy) = match self {
+            #[cfg(any(test, feature = "testing-transport"))]
+            Self::Resolved(placement) => return placement,
+            Self::Planned {
+                decision,
+                worker_loads,
+                media_worker_count,
+                policy,
+            } => (decision, worker_loads, media_worker_count, policy),
+        };
+        let assigned_placements = room.assigned_placements();
+        let score_policy = score_policy(policy);
+        let existing_placement =
+            worker_loads.least_loaded_placement(assigned_placements, score_policy);
+        match decision {
+            RoomPlacementDecision::AssignPrimary { media_worker_id } => {
+                if assigned_placements.is_empty() {
+                    return LocalRouterRuntimeContext {
+                        router: room.primary_router(),
+                        media_worker: media_worker_id,
+                    };
+                }
+                existing_placement
+            }
+            RoomPlacementDecision::UseExisting(placement) => {
+                if let Some(assigned) = assigned_placements
+                    .iter()
+                    .find(|assigned| assigned.router == placement.router)
+                {
+                    return *assigned;
+                }
+                if assigned_placements.is_empty() {
+                    return LocalRouterRuntimeContext {
+                        router: room.primary_router(),
+                        media_worker: placement.media_worker,
+                    };
+                }
+                existing_placement
+            }
+            RoomPlacementDecision::AllocateSpillover { media_worker_id } => {
+                if assigned_placements.is_empty() {
+                    return LocalRouterRuntimeContext {
+                        router: room.primary_router(),
+                        media_worker: media_worker_id,
+                    };
+                }
+                let placement_cap = policy.max_local_routers().min(media_worker_count).max(1);
+                if assigned_placements.len() >= placement_cap {
+                    return existing_placement;
+                }
+                LocalRouterRuntimeContext {
+                    router: allocate_spillover_router(),
+                    media_worker: worker_loads
+                        .least_loaded_worker(assigned_placements, score_policy),
+                }
+            }
         }
     }
 }
@@ -1023,6 +1100,76 @@ mod tests {
         );
         assert_reason(&state, RoomPlacementDecisionReason::LocalRouterCapReached);
         Ok(())
+    }
+
+    #[test]
+    fn stale_spillover_allocation_reuses_existing_placement_at_cap()
+    -> Result<(), LocalSpilloverPolicyError> {
+        let policy = RoomWorkerPolicy::load_triggered_local_spillover(2, egress_policy(1)?);
+        let stale_room = primary_room();
+        let planner = RoomPlacementPlanner::new(2, policy);
+        let first_decision = planner.choose(&stale_room, &hot_loads([0]));
+        let second_decision = planner.choose(&stale_room, &hot_loads([0]));
+        let mut allocation_count = 0;
+
+        let first_placement = JoinPlacement::planned(first_decision, hot_loads([0]), 2, policy)
+            .resolve_for_commit(&stale_room, || {
+                allocation_count += 1;
+                RouterId(8)
+            });
+        let second_placement = JoinPlacement::planned(second_decision, hot_loads([0]), 2, policy)
+            .resolve_for_commit(
+                &room_with(vec![primary_placement(), placement(8, 1)]),
+                || {
+                    allocation_count += 1;
+                    RouterId(9)
+                },
+            );
+
+        assert_eq!(first_placement, placement(8, 1));
+        assert_eq!(second_placement, placement(8, 1));
+        assert_eq!(allocation_count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn stale_primary_assignment_keeps_committed_primary_worker() {
+        let stale_decision = RoomPlacementDecision::AssignPrimary { media_worker_id: 1 };
+        let mut allocation_count = 0;
+
+        let placement = JoinPlacement::planned(
+            stale_decision,
+            WorkerLoadIndex::new(2, Vec::new()),
+            2,
+            RoomWorkerPolicy::strict_single_router(),
+        )
+        .resolve_for_commit(&primary_room(), || {
+            allocation_count += 1;
+            RouterId(8)
+        });
+
+        assert_eq!(placement, primary_placement());
+        assert_eq!(allocation_count, 0);
+    }
+
+    #[test]
+    fn stale_existing_placement_keeps_committed_worker() {
+        let stale_decision = RoomPlacementDecision::UseExisting(placement(7, 1));
+        let mut allocation_count = 0;
+
+        let placement = JoinPlacement::planned(
+            stale_decision,
+            WorkerLoadIndex::new(2, Vec::new()),
+            2,
+            RoomWorkerPolicy::strict_single_router(),
+        )
+        .resolve_for_commit(&primary_room(), || {
+            allocation_count += 1;
+            RouterId(8)
+        });
+
+        assert_eq!(placement, primary_placement());
+        assert_eq!(allocation_count, 0);
     }
 
     #[test]
