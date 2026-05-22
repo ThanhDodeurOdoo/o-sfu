@@ -1,17 +1,17 @@
-use super::support::*;
+use super::support::{self as s, flows as f, setup as st};
 
 #[tokio::test]
-async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_browsers() -> TestResult
-{
-    let _guard = full_stack_test_guard().await;
-    let ReadyRoomFakePeers {
+async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_browsers()
+-> s::TestResult {
+    let _guard = st::full_stack_test_guard().await;
+    let st::ReadyRoomFakePeers {
         server,
         room,
         mut publisher,
         mut subscriber,
-    } = ready_room_fake_peers("issuer-e", UserId::Integer(70), UserId::Integer(71)).await?;
+    } = st::ready_room_fake_integer_peers("issuer-e", 70, 71).await?;
 
-    assert_audio_media_arrives_and_download_mute_stops_flow(
+    f::assert_audio_media_arrives_and_download_mute_stops_flow(
         &server,
         &room,
         &mut publisher,
@@ -22,16 +22,16 @@ async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_brows
 }
 
 #[tokio::test]
-async fn fake_rtc_peers_stop_forwarding_after_explicit_upload_unpublish() -> TestResult {
-    let _guard = full_stack_test_guard().await;
-    let ReadyRoomFakePeers {
+async fn fake_rtc_peers_stop_forwarding_after_explicit_upload_unpublish() -> s::TestResult {
+    let _guard = st::full_stack_test_guard().await;
+    let st::ReadyRoomFakePeers {
         server,
         room,
         mut publisher,
         mut subscriber,
-    } = ready_room_fake_peers("issuer-f", UserId::Integer(70), UserId::Integer(71)).await?;
+    } = st::ready_room_fake_integer_peers("issuer-f", 70, 71).await?;
 
-    assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
+    f::assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
         &server,
         &room,
         &mut publisher,
