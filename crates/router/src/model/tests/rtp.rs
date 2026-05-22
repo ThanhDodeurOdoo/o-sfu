@@ -451,6 +451,34 @@ fn consumer_negotiation_accepts_h264_level_1b_for_level_1_1_capability() {
     assert!(can_consume(&consumable_parameters, &consumer_capabilities));
 }
 
+#[test]
+fn consumer_negotiation_rejects_h264_zero_level_idc() {
+    let consumable_parameters = h264_consumable_parameters("42e000");
+    let consumer_capabilities = h264_consumer_capabilities("42e00b");
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert_eq!(
+        negotiated_result,
+        Err(RtpNegotiationError::NoCompatibleConsumerCodec)
+    );
+    assert!(!can_consume(&consumable_parameters, &consumer_capabilities));
+}
+
+#[test]
+fn consumer_negotiation_rejects_matching_malformed_h264_profile_level_id() {
+    let consumable_parameters = h264_consumable_parameters("42e000");
+    let consumer_capabilities = h264_consumer_capabilities("42e000");
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert_eq!(
+        negotiated_result,
+        Err(RtpNegotiationError::NoCompatibleConsumerCodec)
+    );
+    assert!(!can_consume(&consumable_parameters, &consumer_capabilities));
+}
+
 fn h264_consumable_parameters(profile_level_id: &str) -> MediaStream {
     MediaStream::new(
         vec![

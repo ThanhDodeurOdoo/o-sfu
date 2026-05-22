@@ -837,7 +837,7 @@ pub mod h264 {
 
         fn try_from(value: u8) -> Result<Self, Self::Error> {
             match value {
-                0 => Ok(Self::Level1B),
+                9 => Ok(Self::Level1B),
                 10 => Ok(Self::Level1),
                 11 => Ok(Self::Level1_1),
                 12 => Ok(Self::Level1_2),
@@ -859,6 +859,9 @@ pub mod h264 {
         }
     }
 
+    const H264_LEVEL_1B_PROFILE_IDCS: [u8; 3] = [0x42, 0x4D, 0x58];
+    const H264_LEVEL_1B_OTHER_PROFILE_LEVEL_IDC: u8 = 9;
+    const H264_LEVEL_1_1_LEVEL_IDC: u8 = 11;
     const H264_LEVEL_1B_CONSTRAINT_SET3_FLAG: u8 = 0x10;
     const H264_PROFILE_PATTERNS: &[(Profile, u8, u8, u8)] = &[
         (Profile::ConstrainedBaseline, 0x42, 0b0100_1111, 0b0100_0000),
@@ -879,12 +882,17 @@ pub mod h264 {
     ];
 
     fn normalized_level_idc(profile_idc: u8, profile_iop: u8, level_idc: u8) -> Option<LevelIdc> {
-        if [0x42, 0x4D, 0x58].contains(&profile_idc) && level_idc == 11 {
-            return if (profile_iop & H264_LEVEL_1B_CONSTRAINT_SET3_FLAG) != 0 {
-                Some(LevelIdc::Level1B)
-            } else {
-                Some(LevelIdc::Level1_1)
-            };
+        if H264_LEVEL_1B_PROFILE_IDCS.contains(&profile_idc) {
+            if level_idc == H264_LEVEL_1B_OTHER_PROFILE_LEVEL_IDC {
+                return None;
+            }
+            if level_idc == H264_LEVEL_1_1_LEVEL_IDC {
+                return if (profile_iop & H264_LEVEL_1B_CONSTRAINT_SET3_FLAG) != 0 {
+                    Some(LevelIdc::Level1B)
+                } else {
+                    Some(LevelIdc::Level1_1)
+                };
+            }
         }
         LevelIdc::try_from(level_idc).ok()
     }
@@ -1182,12 +1190,22 @@ mod tests {
             ("42500b", Profile::ConstrainedBaseline, LevelIdc::Level1B),
             ("4d100b", Profile::Main, LevelIdc::Level1B),
             ("58100b", Profile::Extended, LevelIdc::Level1B),
+            ("640009", Profile::High, LevelIdc::Level1B),
         ];
 
         for (token, profile, level) in cases {
             let parsed = ProfileLevelId::parse(token);
             assert_eq!(parsed.map(ProfileLevelId::profile), Some(profile));
             assert_eq!(parsed.map(ProfileLevelId::level), Some(level));
+        }
+    }
+
+    #[test]
+    fn h264_profile_level_id_rejects_invalid_level_1b_encodings() {
+        let invalid_tokens = ["42e000", "42e009", "4d0009", "58e009", "640000"];
+
+        for token in invalid_tokens {
+            assert_eq!(ProfileLevelId::parse(token), None);
         }
     }
 
