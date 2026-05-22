@@ -186,7 +186,7 @@ jobs:
                 .sort((left, right) => left.sortKey.localeCompare(right.sortKey));
             }
 
-            function metricTable(rows, label, baseColumn, headColumn, emptyMessage) {
+            function metricTable(rows, metricName, label, baseColumn, headColumn, emptyMessage) {
               if (rows.length === 0) {
                 return emptyMessage;
               }
@@ -202,7 +202,7 @@ jobs:
                 ? `\n\n${rows.length - comparisonRowLimit} additional ${label} benchmark rows are in the artifact`
                 : "";
               return [
-                `**${label}:** ${metricDescription(label)}`,
+                `**${label}:** ${metricDescription(metricName)}`,
                 "",
                 `| scope | case | ${baseColumn} | ${headColumn} | delta | result |`,
                 "| --- | --- | ---: | ---: | ---: | --- |",
@@ -211,8 +211,8 @@ jobs:
               ].filter(Boolean).join("\n");
             }
 
-            function metricDescription(label) {
-              if (label === "Ir") {
+            function metricDescription(metricName) {
+              if (metricName === "Ir") {
                 return "instruction reads, the most stable signal for code-shape changes such as added branches, calls or lookups";
               }
               return "Callgrind's estimated cycle cost from simulated memory access, useful for spotting cache and RAM traffic changes";
@@ -284,7 +284,7 @@ jobs:
               ].join("\n");
               const workerTable = workerRows.length
                 ? [
-                  "| scope | case | Ir |",
+                  "| scope | case | IR |",
                   "| --- | --- | ---: |",
                   ...workerRows.map((row) => [
                     escapeCell(row.scope),
@@ -352,17 +352,20 @@ jobs:
             const irTable = metricTable(
               irRows,
               "Ir",
-              "base Ir",
-              "head Ir",
-              "no comparable Callgrind Ir summary rows were produced",
+              "IR",
+              "base IR",
+              "head IR",
+              "no comparable Callgrind IR summary rows were produced",
             );
             const cycleTable = metricTable(
               cycleRows,
+              "EstimatedCycles",
               "Estimated cycles",
               "base cycles",
               "head cycles",
               "no comparable Callgrind estimated-cycle summary rows were produced",
             );
+            const comparisonTables = `\n${[irTable, cycleTable].join("\n\n")}`;
             const manualSection = manualInvestigationSection(summaries, refs);
             const body = [
               marker,
@@ -374,9 +377,7 @@ jobs:
               `head ref: ${refs.head_ref || "n/a"}`,
               `[workflow run](${runUrl})`,
               "",
-              irTable,
-              "",
-              cycleTable,
+              comparisonTables,
               manualSection ? "" : null,
               manualSection,
               "",
