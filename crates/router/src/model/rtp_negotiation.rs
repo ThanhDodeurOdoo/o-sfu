@@ -479,8 +479,7 @@ fn h264_critical_settings_match(
     // `profile-level-id` is handled more carefully:
     // - profile mismatch means incompatible bitstreams;
     // - level is a decoder capability bound;
-    // - malformed tokens should not silently widen compatibility, so parse failure
-    //   falls back to literal equality instead of leting it pass
+    // - malformed tokens should not silently widen compatibility
     match (
         format.settings().find_map(|setting| match setting {
             CodecSetting::H264ProfileLevelId(profile_level_id) => Some(profile_level_id.as_str()),
@@ -514,9 +513,8 @@ fn h264_critical_settings_match(
                     && parsed_format_profile_level_id.level()
                         <= parsed_capability_profile_level_id.level()
             }
-            // If a profile-level-id token is malformed, fall back to exact equality so we do not
-            // silently widen compatibility beyond what the raw fmtp values literally express.
-            _ => format_profile_level_id == capability_profile_level_id,
+            // Malformed profile-level-id tokens are not RFC 6184 compatible.
+            _ => false,
         },
         _ => true,
     }

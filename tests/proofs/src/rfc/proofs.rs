@@ -42,15 +42,20 @@ fn hex_byte(nibble: u8) -> u8 {
 }
 
 fn spec_normalized_level_idc(profile_idc: u8, profile_iop: u8, level_idc: u8) -> Option<LevelIdc> {
-    if matches!(profile_idc, 0x42 | 0x4D | 0x58) && level_idc == 11 {
-        return if (profile_iop & CONSTRAINT_SET3_FLAG) != 0 {
-            Some(LevelIdc::Level1B)
-        } else {
-            Some(LevelIdc::Level1_1)
-        };
+    if matches!(profile_idc, 0x42 | 0x4D | 0x58) {
+        if level_idc == 9 {
+            return None;
+        }
+        if level_idc == 11 {
+            return if (profile_iop & CONSTRAINT_SET3_FLAG) != 0 {
+                Some(LevelIdc::Level1B)
+            } else {
+                Some(LevelIdc::Level1_1)
+            };
+        }
     }
     match level_idc {
-        0 => Some(LevelIdc::Level1B),
+        9 => Some(LevelIdc::Level1B),
         10 => Some(LevelIdc::Level1),
         11 => Some(LevelIdc::Level1_1),
         12 => Some(LevelIdc::Level1_2),
