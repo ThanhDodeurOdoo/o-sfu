@@ -1,4 +1,7 @@
-pub(super) use std::time::{Duration, Instant};
+pub(super) use std::{
+    future::Future,
+    time::{Duration, Instant},
+};
 
 pub(super) use o_sfu::{
     config::{Config, MediaCodecFlags, RoomWorkerPolicy},
@@ -13,7 +16,7 @@ pub(super) use o_sfu_telemetry::diagnostics::{
     DiagnosticsActiveSpeakerReason, DiagnosticsActiveSpeakerState,
 };
 pub(super) use o_sfu_tests::support::{
-    TEST_ROOM_KEY, TestServer, create_room,
+    TEST_ROOM_KEY, TestResult, TestServer, create_room,
     fake_media::{
         FakeClock, FakeMediaSource, SYNTHETIC_OPUS_ONE_FRAME_TOC, SyntheticH264Stream,
         SyntheticOpusStream, SyntheticVp8Stream,
@@ -23,7 +26,7 @@ pub(super) use o_sfu_tests::support::{
         ProtocolFakePeer, connect_fake_peer, connect_two_fake_peers,
         connect_two_rtc_ready_fake_peers,
     },
-    spawn_room_server, spawn_room_server_with_config, spawn_test_server, stats, test_config,
+    require_some, spawn_room_server_with_config, spawn_test_server, stats, test_config,
 };
 pub(super) use tokio::{
     sync::{Mutex, MutexGuard},
@@ -36,6 +39,131 @@ static FULL_STACK_TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
 pub(super) async fn full_stack_test_guard() -> MutexGuard<'static, ()> {
     FULL_STACK_TEST_LOCK.lock().await
+}
+
+pub(super) struct RoomFakePeers {
+    pub(super) server: TestServer,
+    pub(super) room: String,
+    pub(super) publisher: ProtocolFakePeer,
+    pub(super) subscriber: ProtocolFakePeer,
+}
+
+pub(super) struct ReadyRoomFakePeers {
+    pub(super) server: TestServer,
+    pub(super) room: String,
+    pub(super) publisher: ProtocolFakePeer,
+    pub(super) subscriber: ProtocolFakePeer,
+}
+
+pub(super) struct SpilloverRoomFakePeers {
+    pub(super) server: TestServer,
+    pub(super) room: String,
+    pub(super) publisher: ProtocolFakePeer,
+    pub(super) local_subscriber: ProtocolFakePeer,
+    pub(super) spillover_subscriber: ProtocolFakePeer,
+}
+
+pub(super) fn room_fake_peers(
+    issuer: &str,
+    publisher_user_id: UserId,
+    subscriber_user_id: UserId,
+) -> impl Future<Output = TestResult<RoomFakePeers>> + '_ {
+    Box::pin(async move {
+        let (server, room) = room_parts(issuer).await?;
+        let (publisher, subscriber) = require_some(
+            connect_two_fake_peers(&server, &room, publisher_user_id, subscriber_user_id).await,
+            "fake peers should connect",
+        )?;
+        Ok(RoomFakePeers {
+            server,
+            room,
+            publisher,
+            subscriber,
+        })
+    })
+}
+
+pub(super) async fn ready_room_fake_peers(
+    issuer: &str,
+    publisher_user_id: UserId,
+    subscriber_user_id: UserId,
+) -> TestResult<ReadyRoomFakePeers> {
+    ready_room_fake_peers_with_config(
+        test_config(1_000, 10),
+        issuer,
+        publisher_user_id,
+        subscriber_user_id,
+    )
+    .await
+}
+
+pub(super) async fn ready_room_fake_peers_with_config(
+    config: Config,
+    issuer: &str,
+    publisher_user_id: UserId,
+    subscriber_user_id: UserId,
+) -> TestResult<ReadyRoomFakePeers> {
+    let (server, room) = room_parts_with_config(config, issuer).await?;
+    let (publisher, subscriber) = require_some(
+        connect_two_rtc_ready_fake_peers(
+            &server,
+            &room,
+            publisher_user_id,
+            subscriber_user_id,
+            Duration::from_secs(5),
+        )
+        .await,
+        "fake RTC peers should reach ready state",
+    )?;
+    Ok(ReadyRoomFakePeers {
+        server,
+        room,
+        publisher,
+        subscriber,
+    })
+}
+
+pub(super) async fn spillover_room_fake_peers(
+    issuer: &str,
+    publisher_user_id: UserId,
+    local_subscriber_user_id: UserId,
+    spillover_subscriber_user_id: UserId,
+) -> TestResult<SpilloverRoomFakePeers> {
+    let (server, room) =
+        room_parts_with_config(load_triggered_spillover_test_config(), issuer).await?;
+    let (publisher, local_subscriber, spillover_subscriber) = require_some(
+        Box::pin(connect_load_triggered_spillover_rtc_peers(
+            &server,
+            &room,
+            publisher_user_id,
+            local_subscriber_user_id,
+            spillover_subscriber_user_id,
+        ))
+        .await,
+        "load-triggered spillover peers should connect",
+    )?;
+    Ok(SpilloverRoomFakePeers {
+        server,
+        room,
+        publisher,
+        local_subscriber,
+        spillover_subscriber,
+    })
+}
+
+pub(super) async fn room_parts(issuer: &str) -> TestResult<(TestServer, String)> {
+    room_parts_with_config(test_config(1_000, 10), issuer).await
+}
+
+pub(super) async fn room_parts_with_config(
+    config: Config,
+    issuer: &str,
+) -> TestResult<(TestServer, String)> {
+    Ok(require_some(
+        spawn_room_server_with_config(config, issuer, TEST_ROOM_KEY).await,
+        "room server should start",
+    )?
+    .into_parts())
 }
 
 async fn publish_source_and_track_snapshot(
@@ -511,20 +639,6 @@ pub(super) async fn assert_replacement_subscriber_inherits_muted_audio_download(
     let mut clock = FakeClock::default();
     assert_audio_packet_dropped(publisher, &mut replacement, source, &mut clock).await;
 }
-pub(super) async fn connect_audio_media_flow_peers(
-    server: &TestServer,
-    room: &str,
-) -> Option<(ProtocolFakePeer, ProtocolFakePeer)> {
-    connect_two_rtc_ready_fake_peers(
-        server,
-        room,
-        UserId::Integer(70),
-        UserId::Integer(71),
-        Duration::from_secs(5),
-    )
-    .await
-}
-
 pub(super) fn cross_worker_test_config() -> Config {
     let mut config = test_config(1_000, 10);
     config.transport.rtc_media_worker_count = 2;
@@ -959,13 +1073,6 @@ pub(super) async fn assert_audio_media_arrives_and_explicit_unpublish_stops_flow
     )
     .await;
     assert_audio_packet_dropped(publisher, subscriber, &mut source, &mut clock).await;
-}
-
-pub(super) async fn connect_camera_flow_peers(
-    server: &TestServer,
-    room: &str,
-) -> Option<(ProtocolFakePeer, ProtocolFakePeer)> {
-    connect_two_fake_peers(server, room, UserId::Integer(10), UserId::Integer(20)).await
 }
 
 pub(super) async fn publish_camera_track(

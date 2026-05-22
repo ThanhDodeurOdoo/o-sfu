@@ -5,8 +5,10 @@
 
 use std::{
     collections::BTreeMap,
+    fmt::Display,
     future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    result::Result as StdResult,
     time::Duration,
 };
 
@@ -54,6 +56,29 @@ pub type TestWebSocket =
 
 pub const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 pub const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
+
+pub type TestResult<T = ()> = Result<T>;
+
+/// Convert a required optional test fixture value into a contextual test error.
+///
+/// # Errors
+///
+/// Returns an error when the required value is absent.
+pub fn require_some<T>(value: Option<T>, context: &'static str) -> Result<T> {
+    value.ok_or_else(|| anyhow!(context))
+}
+
+/// Convert a required fallible test fixture value into a contextual test error.
+///
+/// # Errors
+///
+/// Returns an error when the wrapped result is an error.
+pub fn require_ok<T, E>(value: StdResult<T, E>, context: &'static str) -> Result<T>
+where
+    E: Display,
+{
+    value.map_err(|error| anyhow!("{context}: {error}"))
+}
 
 /// Test-only server handle used by integration tests to exercise the real HTTP and WS entry points.
 #[derive(Debug)]
