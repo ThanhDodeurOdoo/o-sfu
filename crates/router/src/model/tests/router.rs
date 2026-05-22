@@ -204,10 +204,22 @@ fn removing_a_producer_cleans_dependent_consumers_but_keeps_transports() {
     assert!(snapshot.contains_transport(PUBLISHER_RECV_TRANSPORT));
     assert!(snapshot.contains_transport(PUBLISHER_SEND_TRANSPORT));
     assert!(snapshot.contains_transport(SUBSCRIBER_SEND_TRANSPORT));
-    assert!(!snapshot.has_transport_producer_index(PUBLISHER_RECV_TRANSPORT));
-    assert!(!snapshot.has_transport_consumer_index(PUBLISHER_SEND_TRANSPORT));
-    assert!(!snapshot.has_transport_consumer_index(SUBSCRIBER_SEND_TRANSPORT));
-    assert!(!snapshot.has_producer_consumer_index(PRODUCER));
+    assert!(
+        !snapshot
+            .transport_producers()
+            .contains_key(PUBLISHER_RECV_TRANSPORT)
+    );
+    assert!(
+        !snapshot
+            .transport_consumers()
+            .contains_key(PUBLISHER_SEND_TRANSPORT)
+    );
+    assert!(
+        !snapshot
+            .transport_consumers()
+            .contains_key(SUBSCRIBER_SEND_TRANSPORT)
+    );
+    assert!(!snapshot.producer_consumers().contains_key(PRODUCER));
     assert_router_is_consistent(&router);
 }
 
@@ -266,9 +278,21 @@ fn removing_a_consumer_preserves_other_routes() {
     assert!(!snapshot.contains_consumer(CONSUMER));
     assert!(snapshot.contains_consumer(SECOND_CONSUMER));
     assert!(snapshot.contains_producer(PRODUCER));
-    assert!(!snapshot.has_transport_consumer_index(PUBLISHER_SEND_TRANSPORT));
-    assert!(snapshot.has_transport_consumer(SUBSCRIBER_SEND_TRANSPORT, SECOND_CONSUMER));
-    assert!(snapshot.has_producer_consumer(PRODUCER, SECOND_CONSUMER));
+    assert!(
+        !snapshot
+            .transport_consumers()
+            .contains_key(PUBLISHER_SEND_TRANSPORT)
+    );
+    assert!(
+        snapshot
+            .transport_consumers()
+            .contains(SUBSCRIBER_SEND_TRANSPORT, SECOND_CONSUMER)
+    );
+    assert!(
+        snapshot
+            .producer_consumers()
+            .contains(PRODUCER, SECOND_CONSUMER)
+    );
     assert_router_is_consistent(&router);
 }
 
@@ -285,10 +309,22 @@ fn removing_a_session_clears_cross_session_reverse_indices() {
     assert!(!snapshot.contains_producer(PRODUCER));
     assert!(!snapshot.contains_consumer(CONSUMER));
     assert!(!snapshot.contains_consumer(SECOND_CONSUMER));
-    assert!(!snapshot.has_session_transport_index(PUBLISHER_SESSION));
-    assert!(snapshot.has_session_transport(SUBSCRIBER_SESSION, SUBSCRIBER_SEND_TRANSPORT));
-    assert!(!snapshot.has_transport_consumer_index(SUBSCRIBER_SEND_TRANSPORT));
-    assert!(!snapshot.has_producer_consumer_index(PRODUCER));
+    assert!(
+        !snapshot
+            .session_transports()
+            .contains_key(PUBLISHER_SESSION)
+    );
+    assert!(
+        snapshot
+            .session_transports()
+            .contains(SUBSCRIBER_SESSION, SUBSCRIBER_SEND_TRANSPORT)
+    );
+    assert!(
+        !snapshot
+            .transport_consumers()
+            .contains_key(SUBSCRIBER_SEND_TRANSPORT)
+    );
+    assert!(!snapshot.producer_consumers().contains_key(PRODUCER));
     assert_router_is_consistent(&router);
 }
 
