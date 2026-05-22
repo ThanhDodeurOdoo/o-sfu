@@ -45,15 +45,15 @@ use crate::{
             relay_registry::{RelayPacketMailbox, RelayTargetId},
             route_control::{KeyframeRequestDecision, PacketLayerGate},
             state::PacketLoopState,
-            test_support::{MediaWorkerScenario, test_transport_session_key},
+            test_support::{
+                MediaWorkerScenario, collect_ready_session_keys, test_transport_session_key,
+            },
         },
     },
 };
 
 fn drain_ready_sessions(state: &mut PacketLoopState) -> Vec<TransportSessionKey> {
-    let mut ready_sessions = Vec::new();
-    state.collect_ready_sessions(Instant::now(), &mut ready_sessions);
-    ready_sessions
+    collect_ready_session_keys(state, Instant::now())
 }
 
 fn prepare_source_session(

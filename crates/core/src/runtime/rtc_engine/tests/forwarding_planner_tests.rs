@@ -26,8 +26,9 @@ use crate::runtime::{
         route_control::{PacketLayerGate, PacketOperatingPointGate},
         state::PacketLoopState,
         test_support::{
-            MediaWorkerScenario, sample_forwarded_packet, sample_forwarded_packet_with_frame_mark,
-            sample_forwarded_packet_with_rid, test_transport_session_key,
+            MediaWorkerScenario, sample_already_relayed_packet, sample_forwarded_packet,
+            sample_forwarded_packet_with_frame_mark, sample_forwarded_packet_with_rid,
+            test_transport_session_key,
         },
     },
 };
@@ -320,12 +321,13 @@ fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_r
         relay_mailbox.into(),
     );
     state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(1), true);
-    let pending_packets = vec![
-        sample_forwarded_packet(producer_session, "aud-up", b"payload")
-            .share_for_relay(source_transport_media_id),
-    ];
+    let mut pending_packets = vec![sample_already_relayed_packet(
+        producer_session,
+        source_transport_media_id,
+        "aud-up",
+        b"payload",
+    )];
     let mut forwards = Vec::new();
-    let mut pending_packets = pending_packets;
 
     populate_forward_routes(
         &state,

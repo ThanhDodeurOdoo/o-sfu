@@ -198,8 +198,8 @@ impl ForwardingDestination {
     ) -> Result<ForwardSendOutcome, RtcError> {
         match self {
             Self::LocalRtc(destination) => destination.send(state, packet, is_last_destination),
-            Self::PacketSink(destination) => Ok(destination.send(packet)),
-            Self::Relay(destination) => Ok(destination.send(packet)),
+            Self::PacketSink(destination) => Ok(destination.send(state, packet)),
+            Self::Relay(destination) => Ok(destination.send(state, packet)),
         }
     }
 }
@@ -290,9 +290,12 @@ impl PacketSinkDestination {
     }
 
     /// records the source packet without mutating rtc session state
-    fn send(&self, packet: &ForwardedPacket) -> ForwardSendOutcome {
+    fn send(&self, state: &PacketLoopState, packet: &ForwardedPacket) -> ForwardSendOutcome {
+        let Some(source_session_key) = packet.source_session_key(state) else {
+            return ForwardSendOutcome::SideEffect;
+        };
         self.sink.record_packet(
-            packet.source_session_key(),
+            source_session_key,
             self.transport_media_id,
             packet.received_at(),
             packet.payload(),
@@ -313,10 +316,13 @@ impl RelayPacketDestination {
     }
 
     /// enqueues a shared relay packet for another worker or node
-    fn send(&self, packet: &ForwardedPacket) -> ForwardSendOutcome {
-        ForwardSendOutcome::RelayEnqueue(
-            self.target.forward_packet(packet, self.transport_media_id),
-        )
+    fn send(&self, state: &PacketLoopState, packet: &ForwardedPacket) -> ForwardSendOutcome {
+        self.target
+            .forward_packet(state, packet, self.transport_media_id)
+            .map_or(
+                ForwardSendOutcome::SideEffect,
+                ForwardSendOutcome::RelayEnqueue,
+            )
     }
 }
 
@@ -399,7 +405,7 @@ mod tests {
         packet_sink_registry::PacketSink as MediaPacketSink,
         rtc_engine::{
             relay_registry::{InterNodeRelaySender, RelayPacketMailbox},
-            test_support::{sample_forwarded_packet, test_transport_session_key},
+            test_support::{sample_already_relayed_packet, test_transport_session_key},
         },
     };
 
@@ -459,13 +465,14 @@ mod tests {
     #[test]
     fn packet_forward_wraps_intra_node_relay_sinks_in_the_named_contract() {
         let (mailbox, mut relay_rx) = RelayPacketMailbox::channel_for_test();
-        let packet = sample_forwarded_packet(
+        let mut packet = sample_already_relayed_packet(
             test_transport_session_key(11, 0, 12, UserId::Integer(13)),
+            TransportMediaId::new(8),
             "aud-up",
             b"payload",
         );
         let forward = PacketForward::from_relay_target(6, TransportMediaId::new(9), mailbox.into());
-        let mut relay_packet = packet.share_for_relay(TransportMediaId::new(8));
+        let mut state = PacketLoopState::default();
 
         assert_eq!(forward.packet_idx(), 6);
         assert!(matches!(
@@ -474,23 +481,21 @@ mod tests {
                 if destination.transport_media_id == TransportMediaId::new(9)
                     && destination.target.kind() == RelayTargetKind::IntraNode
         ));
-        let _ =
-            forward
-                .destination()
-                .send(&mut PacketLoopState::default(), &mut relay_packet, true);
+        let _ = forward.destination().send(&mut state, &mut packet, true);
         assert!(relay_rx.try_recv().is_ok());
     }
 
     #[test]
     fn packet_forward_wraps_inter_node_relay_sinks_in_the_named_contract() {
         let (sender, mut relay_rx) = InterNodeRelaySender::channel_for_test();
-        let packet = sample_forwarded_packet(
+        let mut packet = sample_already_relayed_packet(
             test_transport_session_key(21, 0, 22, UserId::Integer(23)),
+            TransportMediaId::new(8),
             "aud-up",
             b"payload",
         );
         let forward = PacketForward::from_relay_target(7, TransportMediaId::new(10), sender.into());
-        let mut relay_packet = packet.share_for_relay(TransportMediaId::new(8));
+        let mut state = PacketLoopState::default();
 
         assert_eq!(forward.packet_idx(), 7);
         assert!(matches!(
@@ -499,10 +504,7 @@ mod tests {
                 if destination.transport_media_id == TransportMediaId::new(10)
                     && destination.target.kind() == RelayTargetKind::InterNode
         ));
-        let _ =
-            forward
-                .destination()
-                .send(&mut PacketLoopState::default(), &mut relay_packet, true);
+        let _ = forward.destination().send(&mut state, &mut packet, true);
         assert!(relay_rx.try_recv().is_ok());
     }
 }

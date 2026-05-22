@@ -24,7 +24,7 @@ use tracing::{debug, warn};
 
 use super::{
     super::{
-        forwarded_packet::ForwardedPacket,
+        forwarded_packet::{ForwardedPacket, ForwardedPacketSource},
         forwarding_destination::{ForwardSendOutcome, ForwardingDestination, relay_enqueue_result},
         media_registry::RegisteredMediaHandle,
         relay_registry::RelayEnqueueOutcome,
@@ -59,8 +59,8 @@ pub(super) fn record_incoming_stats(
             if packet.route_control_mid().is_some() {
                 // MID proves which producer this packet belongs to. Persist the
                 // SSRC before the browser stops sending MID/RID extensions.
-                state.learn_producer_ssrc_binding(
-                    packet.source_session_key(),
+                state.learn_producer_ssrc_binding_from_forwarded_source(
+                    packet.source(),
                     transport_media_id,
                     packet.route_control_ssrc(),
                     packet.route_control_rid_extension(),
@@ -77,11 +77,10 @@ pub(super) fn record_incoming_stats(
                     .dirty_source_policy_channel_ids
                     .push(facts.room_instance_id);
             }
-            let metadata = facts.layer_metadata;
-            if let Some(rid) = metadata.rid() {
+            if let Some(rid) = facts.layer_metadata.rid() {
                 state.observe_producer_rid_packet(transport_media_id, rid, packet.received_at());
                 buffers.push_rid_readiness(
-                    packet.source_session_key(),
+                    packet.source(),
                     transport_media_id,
                     rid,
                     facts.decoder_refresh,
@@ -96,15 +95,18 @@ pub(super) fn record_incoming_stats(
                 )
                 .unwrap_or(false);
             if unlikely(first_ingress) {
+                let Some(source_session_key) = packet.source_session_key(state) else {
+                    continue;
+                };
                 debug!(
-                    user_id = ?packet.source_session_key().user_id(),
-                    media_worker_id = packet.source_session_key().media_worker_id(),
+                    user_id = ?source_session_key.user_id(),
+                    media_worker_id = source_session_key.media_worker_id(),
                     ?transport_media_id,
                     payload_bytes = facts.payload_len,
                     "observed first RTP ingress for published media"
                 );
                 buffers.push_first_video_keyframe(
-                    packet.source_session_key(),
+                    packet.source(),
                     transport_media_id,
                     packet.received_at(),
                 );
@@ -124,15 +126,33 @@ fn flush_pending_rid_readiness(
     buffers: &mut PacketLoopBuffers,
 ) {
     for pending in buffers.pending_rid_readiness.drain(..) {
-        if apply_source_rid_readiness(
-            state,
-            metrics,
-            &pending.source_session_key,
-            pending.source_transport_media_id,
-            pending.rid,
-            pending.is_keyframe,
-            pending.observed_at,
-        ) {
+        let changed = match &pending.source {
+            ForwardedPacketSource::Relayed(source_session_key) => apply_source_rid_readiness(
+                state,
+                metrics,
+                source_session_key,
+                pending.source_transport_media_id,
+                pending.rid,
+                pending.is_keyframe,
+                pending.observed_at,
+            ),
+            ForwardedPacketSource::Local(session_handle) => {
+                let Some(source_session_key) = state.users.key_for_handle(*session_handle).cloned()
+                else {
+                    continue;
+                };
+                apply_source_rid_readiness(
+                    state,
+                    metrics,
+                    &source_session_key,
+                    pending.source_transport_media_id,
+                    pending.rid,
+                    pending.is_keyframe,
+                    pending.observed_at,
+                )
+            }
+        };
+        if changed {
             buffers
                 .rid_readiness_changed_sources
                 .push(pending.source_transport_media_id);
@@ -155,7 +175,7 @@ fn flush_pending_first_video_keyframes(
         request_first_video_keyframe(
             state,
             metrics,
-            &pending.source_session_key,
+            &pending.source,
             pending.source_transport_media_id,
             pending.observed_at,
         );
@@ -172,22 +192,54 @@ fn flush_pending_first_video_keyframes(
 fn request_first_video_keyframe(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
+    source: &ForwardedPacketSource,
+    transport_media_id: TransportMediaId,
+    now: Instant,
+) {
+    match source {
+        ForwardedPacketSource::Relayed(source_session_key) => {
+            request_first_video_keyframe_for_session(
+                state,
+                metrics,
+                source_session_key,
+                transport_media_id,
+                now,
+            );
+        }
+        ForwardedPacketSource::Local(session_handle) => {
+            let Some(source_session_key) = state.users.key_for_handle(*session_handle).cloned()
+            else {
+                return;
+            };
+            request_first_video_keyframe_for_session(
+                state,
+                metrics,
+                &source_session_key,
+                transport_media_id,
+                now,
+            );
+        }
+    }
+}
+
+fn request_first_video_keyframe_for_session(
+    state: &mut PacketLoopState,
+    metrics: &impl RtcRouteControlMetrics,
     source_session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
     now: Instant,
 ) {
-    if !source_is_video(state, source_session_key, transport_media_id) {
-        return;
+    if source_is_video(state, source_session_key, transport_media_id) {
+        request_keyframe_for_source(
+            state,
+            metrics,
+            source_session_key,
+            transport_media_id,
+            None,
+            KeyframeRequestKind::Pli,
+            now,
+        );
     }
-    request_keyframe_for_source(
-        state,
-        metrics,
-        source_session_key,
-        transport_media_id,
-        None,
-        KeyframeRequestKind::Pli,
-        now,
-    );
 }
 
 fn source_is_video(
@@ -264,8 +316,6 @@ pub(in crate::runtime::rtc_engine) fn flush_forward_routes(
     buffers: &mut PacketLoopBuffers,
 ) {
     let (forwards, pending_packets) = (&buffers.forwards, &mut buffers.pending_packets);
-    buffers.relay_packet = None;
-    buffers.relay_packet_idx = None;
     for (forward_idx, forward) in forwards.iter().enumerate() {
         let is_last_destination = forwards
             .get(forward_idx + 1)
@@ -277,22 +327,6 @@ pub(in crate::runtime::rtc_engine) fn flush_forward_routes(
         let destination = forward.destination();
         let destination_kind = destination.metrics_kind();
         let payload_len = packet.payload_len();
-        let relay_packet = match destination {
-            ForwardingDestination::Relay(_) => {
-                let Some(source_transport_media_id) =
-                    packet.resolve_source_transport_media_id(state)
-                else {
-                    continue;
-                };
-                if buffers.relay_packet_idx != Some(packet_idx) {
-                    buffers.relay_packet = Some(packet.share_for_relay(source_transport_media_id));
-                    buffers.relay_packet_idx = Some(packet_idx);
-                }
-                buffers.relay_packet.as_mut()
-            }
-            ForwardingDestination::LocalRtc(_) | ForwardingDestination::PacketSink(_) => None,
-        };
-        let packet = relay_packet.unwrap_or(packet);
         match destination.send(state, packet, is_last_destination) {
             Ok(ForwardSendOutcome::LocalRtc {
                 payload_bytes: Some(payload_len),

@@ -17,7 +17,11 @@ use std::{net::SocketAddr, time::Instant};
 use str0m::media::Rid;
 
 use super::{
-    super::{forwarded_packet::ForwardedPacket, forwarding_destination::PacketForward},
+    super::{
+        forwarded_packet::{ForwardedPacket, ForwardedPacketSource},
+        forwarding_destination::PacketForward,
+        slots::SessionHandle,
+    },
     keyframe_requests::{CoalescedKeyframeRequest, PendingKeyframeRequest},
 };
 use crate::runtime::{
@@ -56,7 +60,7 @@ impl PendingTransmit {
 }
 
 pub(super) struct PendingRidReadiness {
-    pub(super) source_session_key: TransportSessionKey,
+    pub(super) source: ForwardedPacketSource,
     pub(super) source_transport_media_id: TransportMediaId,
     pub(super) rid: Rid,
     pub(super) is_keyframe: bool,
@@ -64,7 +68,7 @@ pub(super) struct PendingRidReadiness {
 }
 
 pub(super) struct PendingFirstVideoKeyframe {
-    pub(super) source_session_key: TransportSessionKey,
+    pub(super) source: ForwardedPacketSource,
     pub(super) source_transport_media_id: TransportMediaId,
     pub(super) observed_at: Instant,
 }
@@ -85,18 +89,11 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopBuffers {
     pub(super) pending_transmit_count: usize,
     /// Media packets produced by local adapter sessions or inbound relays.
     pub(in crate::runtime::rtc_engine) pending_packets: Vec<ForwardedPacket>,
-    /// Shared relay packet cache for the current planned packet.
-    ///
-    /// Relay flush can have multiple relay destinations for one packet. The
-    /// planner orders forwards by packet index, so one cached packet plus its
-    /// index is enough to avoid dense scratch writes for local-only turns.
-    pub(super) relay_packet: Option<ForwardedPacket>,
-    pub(super) relay_packet_idx: Option<usize>,
     /// Raw keyframe feedback emitted by consumer sessions before source lookup.
     pub(in crate::runtime::rtc_engine) pending_keyframe_requests:
         Vec<(TransportSessionKey, PendingKeyframeRequest)>,
     /// Sessions ready for polling after dirty and timeout scheduling is merged.
-    pub(super) ready_sessions: Vec<TransportSessionKey>,
+    pub(super) ready_sessions: Vec<SessionHandle>,
     /// Source-keyed feedback after duplicate requests are merged.
     pub(super) coalesced_keyframe_requests: Vec<CoalescedKeyframeRequest>,
     /// Source/RID-keyed readiness work after packet-level liveness is updated.
@@ -122,8 +119,6 @@ impl PacketLoopBuffers {
             pending_transmits: Vec::with_capacity(64),
             pending_transmit_count: 0,
             pending_packets: Vec::with_capacity(32),
-            relay_packet: None,
-            relay_packet_idx: None,
             pending_keyframe_requests: Vec::with_capacity(8),
             ready_sessions: Vec::with_capacity(32),
             coalesced_keyframe_requests: Vec::with_capacity(8),
@@ -143,8 +138,6 @@ impl PacketLoopBuffers {
     pub(in crate::runtime::rtc_engine) fn clear(&mut self) {
         self.pending_transmit_count = 0;
         self.pending_packets.clear();
-        self.relay_packet = None;
-        self.relay_packet_idx = None;
         self.pending_keyframe_requests.clear();
         self.ready_sessions.clear();
         self.coalesced_keyframe_requests.clear();
@@ -180,7 +173,7 @@ impl PacketLoopBuffers {
 
     pub(super) fn push_rid_readiness(
         &mut self,
-        source_session_key: &TransportSessionKey,
+        source: &ForwardedPacketSource,
         source_transport_media_id: TransportMediaId,
         rid: Rid,
         is_keyframe: bool,
@@ -196,7 +189,7 @@ impl PacketLoopBuffers {
             return;
         }
         self.pending_rid_readiness.push(PendingRidReadiness {
-            source_session_key: source_session_key.clone(),
+            source: source.clone(),
             source_transport_media_id,
             rid,
             is_keyframe,
@@ -206,7 +199,7 @@ impl PacketLoopBuffers {
 
     pub(super) fn push_first_video_keyframe(
         &mut self,
-        source_session_key: &TransportSessionKey,
+        source: &ForwardedPacketSource,
         source_transport_media_id: TransportMediaId,
         observed_at: Instant,
     ) {
@@ -219,7 +212,7 @@ impl PacketLoopBuffers {
         }
         self.pending_first_video_keyframes
             .push(PendingFirstVideoKeyframe {
-                source_session_key: source_session_key.clone(),
+                source: source.clone(),
                 source_transport_media_id,
                 observed_at,
             });

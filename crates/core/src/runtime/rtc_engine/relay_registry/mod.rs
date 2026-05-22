@@ -62,10 +62,11 @@ impl RelayPacketMailbox {
 
     pub(super) fn forward_packet(
         &self,
+        state: &PacketLoopState,
         packet: &ForwardedPacket,
         source_transport_media_id: TransportMediaId,
-    ) -> RelayEnqueueOutcome {
-        forward_packet_to_target(&self.tx, packet, source_transport_media_id)
+    ) -> Option<RelayEnqueueOutcome> {
+        forward_packet_to_target(state, &self.tx, packet, source_transport_media_id)
     }
 
     pub(super) fn backlog_depth(&self) -> usize {
@@ -76,16 +77,6 @@ impl RelayPacketMailbox {
 #[derive(Debug, Clone)]
 pub(super) struct InterNodeRelaySender {
     tx: mpsc::Sender<ForwardedPacket>,
-}
-
-impl InterNodeRelaySender {
-    pub(super) fn forward_packet(
-        &self,
-        packet: &ForwardedPacket,
-        source_transport_media_id: TransportMediaId,
-    ) -> RelayEnqueueOutcome {
-        forward_packet_to_target(&self.tx, packet, source_transport_media_id)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -135,20 +126,25 @@ impl From<InterNodeRelaySender> for RelayTargetTransport {
 impl RelayTargetTransport {
     pub(super) fn forward_packet(
         &self,
+        state: &PacketLoopState,
         packet: &ForwardedPacket,
         source_transport_media_id: TransportMediaId,
-    ) -> RelayEnqueueReport {
+    ) -> Option<RelayEnqueueReport> {
         match self {
-            Self::IntraNodeMailbox(mailbox) => RelayEnqueueReport::new(
-                RelayTargetKind::IntraNode,
-                mailbox.forward_packet(packet, source_transport_media_id),
-                Some(mailbox.backlog_depth()),
-            ),
-            Self::InterNodeSender(sender) => RelayEnqueueReport::new(
-                RelayTargetKind::InterNode,
-                sender.forward_packet(packet, source_transport_media_id),
-                None,
-            ),
+            Self::IntraNodeMailbox(mailbox) => mailbox
+                .forward_packet(state, packet, source_transport_media_id)
+                .map(|outcome| {
+                    RelayEnqueueReport::new(
+                        RelayTargetKind::IntraNode,
+                        outcome,
+                        Some(mailbox.backlog_depth()),
+                    )
+                }),
+            Self::InterNodeSender(sender) => {
+                forward_packet_to_target(state, &sender.tx, packet, source_transport_media_id).map(
+                    |outcome| RelayEnqueueReport::new(RelayTargetKind::InterNode, outcome, None),
+                )
+            }
         }
     }
 
@@ -161,15 +157,17 @@ impl RelayTargetTransport {
 }
 
 fn forward_packet_to_target(
+    state: &PacketLoopState,
     tx: &mpsc::Sender<ForwardedPacket>,
     packet: &ForwardedPacket,
     source_transport_media_id: TransportMediaId,
-) -> RelayEnqueueOutcome {
-    match tx.try_send(packet.share_for_relay(source_transport_media_id)) {
+) -> Option<RelayEnqueueOutcome> {
+    let packet = packet.share_for_relay(state, source_transport_media_id)?;
+    Some(match tx.try_send(packet) {
         Ok(()) => RelayEnqueueOutcome::Enqueued,
         Err(mpsc::error::TrySendError::Full(_packet)) => RelayEnqueueOutcome::Overloaded,
         Err(mpsc::error::TrySendError::Closed(_packet)) => RelayEnqueueOutcome::Closed,
-    }
+    })
 }
 
 pub(super) fn sender_backlog_depth<T>(tx: &mpsc::Sender<T>) -> usize {

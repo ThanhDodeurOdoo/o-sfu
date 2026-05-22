@@ -31,7 +31,11 @@ use str0m::{
 use tracing::{debug, warn};
 
 use super::{
-    commands::RemoteSourceControl, route_control::PacketLayerGate, state::PacketLoopState,
+    commands::RemoteSourceControl,
+    forwarded_packet::ForwardedPacketSource,
+    route_control::PacketLayerGate,
+    slots::{MediaStore, SessionHandle},
+    state::PacketLoopState,
 };
 use crate::runtime::{
     RoomInstanceId,
@@ -234,6 +238,79 @@ impl SessionMediaLookup {
             && self.producer_ssrcs.is_empty()
             && self.producer_ssrc_rids.is_empty()
             && self.consumer_mids.is_empty()
+    }
+}
+
+fn learn_producer_ssrc_binding_for_session(
+    mid_registry: &MediaStore,
+    session_media: &mut SessionMediaRegistry,
+    producer_ssrcs_by_media: &mut BTreeMap<TransportMediaId, Vec<Ssrc>>,
+    session_key: &TransportSessionKey,
+    transport_media_id: TransportMediaId,
+    ssrc: Ssrc,
+    rid: Option<Rid>,
+) {
+    let Some(RegisteredMediaHandle::Producer {
+        session_key: registered_session_key,
+        mid,
+    }) = mid_registry.get(&transport_media_id)
+    else {
+        return;
+    };
+    if registered_session_key != session_key {
+        return;
+    }
+    let mid = *mid;
+
+    let (inserted, previous_rid) = if let Some(session_lookup) = session_media.get_mut(session_key)
+    {
+        if let Some(existing_transport_media_id) = session_lookup.producer_ssrcs.get(&ssrc)
+            && existing_transport_media_id != transport_media_id
+        {
+            warn!(
+                user_id = ?session_key.user_id(),
+                media_worker_id = session_key.media_worker_id(),
+                ?transport_media_id,
+                ?existing_transport_media_id,
+                ?mid,
+                ?ssrc,
+                ?rid,
+                "ignored dynamic producer SSRC binding because SSRC already belongs to another media"
+            );
+            return;
+        }
+        let inserted = session_lookup
+            .producer_ssrcs
+            .insert(ssrc, transport_media_id)
+            .is_none();
+        let previous_rid = rid.and_then(|rid| session_lookup.producer_ssrc_rids.insert(ssrc, rid));
+        (inserted, previous_rid)
+    } else {
+        let session_lookup = session_media.entry(session_key.clone()).or_default();
+        let inserted = session_lookup
+            .producer_ssrcs
+            .insert(ssrc, transport_media_id)
+            .is_none();
+        let previous_rid = rid.and_then(|rid| session_lookup.producer_ssrc_rids.insert(ssrc, rid));
+        (inserted, previous_rid)
+    };
+
+    let ssrcs = producer_ssrcs_by_media
+        .entry(transport_media_id)
+        .or_default();
+    if !ssrcs.contains(&ssrc) {
+        ssrcs.push(ssrc);
+    }
+    if inserted || previous_rid != rid {
+        debug!(
+            user_id = ?session_key.user_id(),
+            media_worker_id = session_key.media_worker_id(),
+            ?transport_media_id,
+            ?mid,
+            ?ssrc,
+            ?rid,
+            "learned dynamic producer SSRC binding from RTP header extensions"
+        );
     }
 }
 
@@ -692,58 +769,60 @@ impl PacketLoopState {
         ssrc: Ssrc,
         rid: Option<Rid>,
     ) {
-        let Some(RegisteredMediaHandle::Producer {
-            session_key: registered_session_key,
-            mid,
-        }) = self.media_handle(transport_media_id)
-        else {
+        learn_producer_ssrc_binding_for_session(
+            &self.mid_registry,
+            &mut self.session_media,
+            &mut self.producer_ssrcs_by_media,
+            session_key,
+            transport_media_id,
+            ssrc,
+            rid,
+        );
+    }
+
+    /// learn an SSRC binding from a forwarded packet source without requiring
+    /// local packets to materialize an owned session key
+    pub(super) fn learn_producer_ssrc_binding_from_forwarded_source(
+        &mut self,
+        source: &ForwardedPacketSource,
+        transport_media_id: TransportMediaId,
+        ssrc: Ssrc,
+        rid: Option<Rid>,
+    ) {
+        match source {
+            ForwardedPacketSource::Relayed(session_key) => {
+                self.learn_producer_ssrc_binding(session_key, transport_media_id, ssrc, rid);
+            }
+            ForwardedPacketSource::Local(session_handle) => {
+                self.learn_producer_ssrc_binding_from_session_handle(
+                    *session_handle,
+                    transport_media_id,
+                    ssrc,
+                    rid,
+                );
+            }
+        }
+    }
+
+    fn learn_producer_ssrc_binding_from_session_handle(
+        &mut self,
+        session_handle: SessionHandle,
+        transport_media_id: TransportMediaId,
+        ssrc: Ssrc,
+        rid: Option<Rid>,
+    ) {
+        let Some(session_key) = self.users.key_for_handle(session_handle) else {
             return;
         };
-        if registered_session_key != session_key {
-            return;
-        }
-        let mid = *mid;
-        if let Some(existing_transport_media_id) =
-            self.source_transport_media_id_for_ssrc(session_key, ssrc)
-            && existing_transport_media_id != transport_media_id
-        {
-            warn!(
-                user_id = ?session_key.user_id(),
-                media_worker_id = session_key.media_worker_id(),
-                ?transport_media_id,
-                ?existing_transport_media_id,
-                ?mid,
-                ?ssrc,
-                ?rid,
-                "ignored dynamic producer SSRC binding because SSRC already belongs to another media"
-            );
-            return;
-        }
-
-        let session_lookup = self.session_media.entry(session_key.clone()).or_default();
-        let inserted = session_lookup
-            .producer_ssrcs
-            .insert(ssrc, transport_media_id)
-            .is_none();
-        let previous_rid = rid.and_then(|rid| session_lookup.producer_ssrc_rids.insert(ssrc, rid));
-        let ssrcs = self
-            .producer_ssrcs_by_media
-            .entry(transport_media_id)
-            .or_default();
-        if !ssrcs.contains(&ssrc) {
-            ssrcs.push(ssrc);
-        }
-        if inserted || previous_rid != rid {
-            debug!(
-                user_id = ?session_key.user_id(),
-                media_worker_id = session_key.media_worker_id(),
-                ?transport_media_id,
-                ?mid,
-                ?ssrc,
-                ?rid,
-                "learned dynamic producer SSRC binding from RTP header extensions"
-            );
-        }
+        learn_producer_ssrc_binding_for_session(
+            &self.mid_registry,
+            &mut self.session_media,
+            &mut self.producer_ssrcs_by_media,
+            session_key,
+            transport_media_id,
+            ssrc,
+            rid,
+        );
     }
 
     /// resolve the source media id that feeds a consumer MID

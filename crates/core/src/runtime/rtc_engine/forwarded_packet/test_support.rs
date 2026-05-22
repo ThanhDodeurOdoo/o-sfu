@@ -5,7 +5,11 @@ use str0m::{
     rtp::{RtpHeader, Ssrc},
 };
 
-use super::{ForwardedPacket, ForwardedPacketData, ForwardedRelayRtpData};
+use super::{ForwardedPacket, ForwardedPacketData, ForwardedPacketSource, ForwardedRelayRtpData};
+#[cfg(test)]
+use crate::runtime::media_transport::TransportMediaId;
+#[cfg(test)]
+use crate::runtime::rtc_engine::slots::SessionHandle;
 use crate::runtime::{
     media_transport::TransportSessionKey, rtc_engine::shared_payload::SharedPayload,
 };
@@ -18,6 +22,36 @@ pub fn sample_forwarded_packet(
 ) -> ForwardedPacket {
     sample_forwarded_packet_with_extensions(
         source_session_key,
+        mid,
+        None,
+        ExtensionValues::default(),
+        payload,
+    )
+}
+
+#[cfg(test)]
+#[must_use]
+pub(in crate::runtime::rtc_engine) fn sample_already_relayed_packet(
+    source_session_key: TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    mid: &str,
+    payload: &[u8],
+) -> ForwardedPacket {
+    let mut packet = sample_forwarded_packet(source_session_key, mid, payload);
+    packet.source_transport_media_id = Some(source_transport_media_id);
+    packet.visits_origin_sinks = false;
+    packet
+}
+
+#[cfg(test)]
+#[must_use]
+pub(in crate::runtime::rtc_engine) fn sample_local_forwarded_packet(
+    source_session_handle: SessionHandle,
+    mid: &str,
+    payload: &[u8],
+) -> ForwardedPacket {
+    sample_forwarded_packet_with_source(
+        ForwardedPacketSource::Local(source_session_handle),
         mid,
         None,
         ExtensionValues::default(),
@@ -92,9 +126,25 @@ fn sample_forwarded_packet_with_extensions(
     ext_vals: ExtensionValues,
     payload: &[u8],
 ) -> ForwardedPacket {
+    sample_forwarded_packet_with_source(
+        ForwardedPacketSource::Relayed(source_session_key),
+        mid,
+        rid,
+        ext_vals,
+        payload,
+    )
+}
+
+fn sample_forwarded_packet_with_source(
+    source: ForwardedPacketSource,
+    mid: &str,
+    rid: Option<&str>,
+    ext_vals: ExtensionValues,
+    payload: &[u8],
+) -> ForwardedPacket {
     let received_at = Instant::now();
     ForwardedPacket {
-        source_session_key,
+        source,
         source_transport_media_id: None,
         resolved_source_rid: None,
         facts: None,
@@ -133,7 +183,7 @@ pub fn sample_forwarded_packet_without_mid(
 ) -> ForwardedPacket {
     let received_at = Instant::now();
     ForwardedPacket {
-        source_session_key,
+        source: ForwardedPacketSource::Relayed(source_session_key),
         source_transport_media_id: None,
         resolved_source_rid: None,
         facts: None,

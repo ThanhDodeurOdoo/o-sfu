@@ -28,7 +28,7 @@ use str0m::{
 use super::{
     local_forwarding::LocalForwardedRtp, local_send_rewrite::Vp8PayloadIdentity,
     media_registry::DecoderRefreshCodec, route_control::PacketLayerMetadata,
-    shared_payload::SharedPayload, state::PacketLoopState,
+    shared_payload::SharedPayload, slots::SessionHandle, state::PacketLoopState,
 };
 use crate::runtime::{
     RoomInstanceId,
@@ -50,7 +50,7 @@ pub struct ForwardedPacket {
     ///
     /// this also anchors the room instance used by source-policy wakeups and
     /// room-scoped packet sinks
-    source_session_key: TransportSessionKey,
+    source: ForwardedPacketSource,
     /// producer identity resolved from MID, SSRC or relay metadata
     ///
     /// once this is known it is cached so later state churn during the same
@@ -74,6 +74,28 @@ pub struct ForwardedPacket {
     payload: SharedPayload,
     /// origin-specific RTP header storage
     data: ForwardedPacketData,
+}
+
+/// source identity for one staged forwarded packet
+///
+/// local packets carry only a worker-local generation-checked handle while
+/// relayed packets carry the stable public key needed to cross worker mailboxes
+#[derive(Debug, Clone)]
+pub(super) enum ForwardedPacketSource {
+    Local(SessionHandle),
+    Relayed(TransportSessionKey),
+}
+
+impl ForwardedPacketSource {
+    pub(super) fn session_key<'a>(
+        &'a self,
+        state: &'a PacketLoopState,
+    ) -> Option<&'a TransportSessionKey> {
+        match self {
+            Self::Local(session_handle) => state.users.key_for_handle(*session_handle),
+            Self::Relayed(session_key) => Some(session_key),
+        }
+    }
 }
 
 /// rtp header storage for the two ingress paths handled by the packet loop
@@ -147,11 +169,11 @@ impl ForwardedPacket {
     /// the remaining `str0m` packet is kept only for header metadata and the
     /// original receive time
     pub(super) fn from_rtp_packet(
-        source_session_key: TransportSessionKey,
+        source_session_handle: SessionHandle,
         mut rtp_packet: RtpPacket,
     ) -> Self {
         Self {
-            source_session_key,
+            source: ForwardedPacketSource::Local(source_session_handle),
             source_transport_media_id: None,
             resolved_source_rid: None,
             facts: None,
@@ -163,8 +185,24 @@ impl ForwardedPacket {
     }
 
     #[must_use]
-    pub fn source_session_key(&self) -> &TransportSessionKey {
-        &self.source_session_key
+    pub(super) const fn source(&self) -> &ForwardedPacketSource {
+        &self.source
+    }
+
+    #[must_use]
+    pub(super) fn source_session_key<'a>(
+        &'a self,
+        state: &'a PacketLoopState,
+    ) -> Option<&'a TransportSessionKey> {
+        self.source.session_key(state)
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub(in crate::runtime) fn stable_source_session_key(&self) -> Option<&TransportSessionKey> {
+        match &self.source {
+            ForwardedPacketSource::Local(_) => None,
+            ForwardedPacketSource::Relayed(session_key) => Some(session_key),
+        }
     }
 
     #[must_use]
@@ -211,7 +249,7 @@ impl ForwardedPacket {
             source_transport_media_id,
             layer_metadata,
             payload_len: self.payload_len(),
-            room_instance_id: self.source_session_key.room_instance_id(),
+            room_instance_id: self.source_session_key(state)?.room_instance_id(),
             voice_activity: extensions.voice_activity,
             audio_level: extensions.audio_level,
             decoder_refresh,
@@ -248,10 +286,7 @@ impl ForwardedPacket {
     }
 
     pub(super) fn route_control_ssrc(&self) -> Ssrc {
-        match &self.data {
-            ForwardedPacketData::Str0mRtp(rtp_data) => rtp_data.rtp_packet.header.ssrc,
-            ForwardedPacketData::RelayRtp(rtp_data) => rtp_data.header.ssrc,
-        }
+        self.rtp_header().ssrc
     }
 
     pub(super) fn route_control_mid(&self) -> Option<Mid> {
@@ -270,29 +305,23 @@ impl ForwardedPacket {
     /// identity from local producer registries
     /// cached facts and resolved RID are preserved so the receiving worker can
     /// reuse source observations
-    pub(super) fn share_for_relay(&self, source_transport_media_id: TransportMediaId) -> Self {
-        let data = match &self.data {
-            ForwardedPacketData::Str0mRtp(rtp_data) => {
-                ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
-                    header: rtp_data.rtp_packet.header.clone(),
-                })
-            }
-            ForwardedPacketData::RelayRtp(rtp_data) => {
-                ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
-                    header: rtp_data.header.clone(),
-                })
-            }
-        };
-        Self {
-            source_session_key: self.source_session_key.clone(),
+    pub(super) fn share_for_relay(
+        &self,
+        state: &PacketLoopState,
+        source_transport_media_id: TransportMediaId,
+    ) -> Option<Self> {
+        Some(Self {
+            source: ForwardedPacketSource::Relayed(self.source.session_key(state)?.clone()),
             source_transport_media_id: Some(source_transport_media_id),
             resolved_source_rid: self.resolved_source_rid,
             facts: self.facts,
             visits_origin_sinks: false,
             received_at: self.received_at,
             payload: self.payload.share(),
-            data,
-        }
+            data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
+                header: self.rtp_header().clone(),
+            }),
+        })
     }
 
     pub(super) fn payload_len(&self) -> usize {
@@ -319,29 +348,15 @@ impl ForwardedPacket {
         if let Some(source_transport_media_id) = self.source_transport_media_id {
             return Some(source_transport_media_id);
         }
-        let resolved = match &self.data {
-            ForwardedPacketData::Str0mRtp(rtp_data) => {
-                if let Some(source_mid) = rtp_data.rtp_packet.header.ext_vals.mid
-                    && let Some(source_transport_media_id) = state
-                        .source_transport_media_id_for_mid(&self.source_session_key, source_mid)
-                {
-                    Some(source_transport_media_id)
-                } else {
-                    let source_ssrc = rtp_data.rtp_packet.header.ssrc;
-                    state.source_transport_media_id_for_ssrc(&self.source_session_key, source_ssrc)
-                }
-            }
-            ForwardedPacketData::RelayRtp(rtp_data) => {
-                if let Some(source_mid) = rtp_data.header.ext_vals.mid
-                    && let Some(source_transport_media_id) = state
-                        .source_transport_media_id_for_mid(&self.source_session_key, source_mid)
-                {
-                    Some(source_transport_media_id)
-                } else {
-                    let source_ssrc = rtp_data.header.ssrc;
-                    state.source_transport_media_id_for_ssrc(&self.source_session_key, source_ssrc)
-                }
-            }
+        let source_session_key = self.source.session_key(state)?;
+        let header = self.rtp_header();
+        let resolved = if let Some(source_mid) = header.ext_vals.mid
+            && let Some(source_transport_media_id) =
+                state.source_transport_media_id_for_mid(source_session_key, source_mid)
+        {
+            Some(source_transport_media_id)
+        } else {
+            state.source_transport_media_id_for_ssrc(source_session_key, header.ssrc)
         };
         if let Some(source_transport_media_id) = resolved {
             self.source_transport_media_id = Some(source_transport_media_id);
@@ -369,18 +384,19 @@ impl ForwardedPacket {
     }
 
     fn route_control_extension_values(&self) -> &ExtensionValues {
+        &self.rtp_header().ext_vals
+    }
+
+    fn rtp_header(&self) -> &RtpHeader {
         match &self.data {
-            ForwardedPacketData::Str0mRtp(rtp_data) => &rtp_data.rtp_packet.header.ext_vals,
-            ForwardedPacketData::RelayRtp(rtp_data) => &rtp_data.header.ext_vals,
+            ForwardedPacketData::Str0mRtp(rtp_data) => &rtp_data.rtp_packet.header,
+            ForwardedPacketData::RelayRtp(rtp_data) => &rtp_data.header,
         }
     }
 
     fn route_control_rid_from_ssrc(&self, state: &PacketLoopState) -> Option<Rid> {
-        let source_ssrc = match &self.data {
-            ForwardedPacketData::Str0mRtp(rtp_data) => rtp_data.rtp_packet.header.ssrc,
-            ForwardedPacketData::RelayRtp(rtp_data) => rtp_data.header.ssrc,
-        };
-        state.source_rid_for_ssrc(&self.source_session_key, source_ssrc)
+        let source_session_key = self.source.session_key(state)?;
+        state.source_rid_for_ssrc(source_session_key, self.rtp_header().ssrc)
     }
 
     fn decoder_refresh_for_source(
@@ -423,6 +439,8 @@ fn frame_mark_temporal_layer_id(frame_mark: u32) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use o_sfu_rfc::rtp::CodecName;
     use o_sfu_router::{
         MediaFormat, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters,
@@ -431,17 +449,39 @@ mod tests {
     use str0m::media::{Mid, Rid};
 
     use super::*;
-    use crate::runtime::{
-        UserId,
-        rtc_engine::{
-            forwarded_packet::test_support::{
-                sample_forwarded_packet, sample_forwarded_packet_with_frame_mark,
-                sample_forwarded_packet_with_rid, sample_forwarded_packet_without_mid,
+    use crate::{
+        Bitrate, MediaCodecFlags,
+        runtime::{
+            UserId,
+            rtc_engine::{
+                bootstrap::ensure_session_rtc_state,
+                forwarded_packet::test_support::{
+                    sample_forwarded_packet, sample_forwarded_packet_with_frame_mark,
+                    sample_forwarded_packet_with_rid, sample_forwarded_packet_without_mid,
+                    sample_local_forwarded_packet,
+                },
+                media_registry::RegisteredMediaHandle,
+                test_support::test_transport_session_key,
             },
-            media_registry::RegisteredMediaHandle,
-            test_support::test_transport_session_key,
         },
     };
+
+    fn install_test_session(
+        state: &mut PacketLoopState,
+        session_key: &TransportSessionKey,
+    ) -> Option<SessionHandle> {
+        assert!(
+            ensure_session_rtc_state(
+                &mut state.users,
+                session_key,
+                SocketAddr::from(([127, 0, 0, 1], 9)),
+                Bitrate::from_bps(1_000_000),
+                MediaCodecFlags::default(),
+            )
+            .is_ok()
+        );
+        state.users.handle_for_key(session_key)
+    }
 
     #[test]
     fn forwarded_packet_resolves_transport_media_id_through_the_registry() {
@@ -456,6 +496,55 @@ mod tests {
         assert_eq!(
             packet.resolve_source_transport_media_id(&state),
             Some(transport_media_id)
+        );
+    }
+
+    #[test]
+    fn local_forwarded_packet_resolves_transport_media_id_through_session_handle() {
+        let session_key = test_transport_session_key(51, 0, 19, UserId::Integer(17));
+        let mut state = PacketLoopState::default();
+        let session_handle = install_test_session(&mut state, &session_key);
+        assert!(session_handle.is_some());
+        let Some(session_handle) = session_handle else {
+            return;
+        };
+        let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: session_key.clone(),
+            mid: Mid::from("aud-up"),
+        });
+        let mut packet = sample_local_forwarded_packet(session_handle, "aud-up", b"payload");
+
+        assert_eq!(packet.source_session_key(&state), Some(&session_key));
+        assert_eq!(
+            packet.resolve_source_transport_media_id(&state),
+            Some(transport_media_id)
+        );
+    }
+
+    #[test]
+    fn stale_local_forwarded_packet_does_not_resolve_through_reused_slot() {
+        let session_key = test_transport_session_key(52, 0, 20, UserId::Integer(18));
+        let replacement_session_key = test_transport_session_key(52, 0, 21, UserId::Integer(19));
+        let mut state = PacketLoopState::default();
+        let stale_handle = install_test_session(&mut state, &session_key);
+        assert!(stale_handle.is_some());
+        let Some(stale_handle) = stale_handle else {
+            return;
+        };
+        let _removed = state.users.remove(&session_key);
+        let _replacement_handle = install_test_session(&mut state, &replacement_session_key);
+        state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: replacement_session_key,
+            mid: Mid::from("aud-up"),
+        });
+        let mut packet = sample_local_forwarded_packet(stale_handle, "aud-up", b"payload");
+
+        assert!(packet.source_session_key(&state).is_none());
+        assert_eq!(packet.resolve_facts(&state), None);
+        assert!(
+            packet
+                .share_for_relay(&state, TransportMediaId::new(99))
+                .is_none()
         );
     }
 
@@ -515,7 +604,11 @@ mod tests {
             ),
         );
         let source_packet = sample_forwarded_packet(session_key, "cam-up", &[0x65, 0x88]);
-        let mut relay_packet = source_packet.share_for_relay(source_transport_media_id);
+        let relay_packet = source_packet.share_for_relay(&state, source_transport_media_id);
+        assert!(relay_packet.is_some());
+        let Some(mut relay_packet) = relay_packet else {
+            return;
+        };
         let facts = relay_packet.resolve_facts(&state);
         assert!(facts.is_some());
         let Some(facts) = facts else {
@@ -529,9 +622,10 @@ mod tests {
     #[test]
     fn forwarded_packet_exposes_recording_payload_and_received_at() {
         let session_key = test_transport_session_key(42, 0, 10, UserId::Integer(8));
+        let state = PacketLoopState::default();
         let packet = sample_forwarded_packet(session_key.clone(), "aud-up", b"payload");
 
-        assert_eq!(packet.source_session_key(), &session_key);
+        assert_eq!(packet.source_session_key(&state), Some(&session_key));
         assert_eq!(packet.payload(), b"payload");
         assert_eq!(packet.payload_len(), 7);
         assert!(packet.received_at() <= Instant::now());
@@ -540,10 +634,15 @@ mod tests {
     #[test]
     fn forwarded_packet_relay_clone_keeps_payload_and_explicit_source_media_id() {
         let session_key = test_transport_session_key(43, 0, 11, UserId::Integer(9));
+        let state = PacketLoopState::default();
         let packet = sample_forwarded_packet(session_key.clone(), "aud-up", b"payload");
-        let mut relay_packet = packet.share_for_relay(TransportMediaId::new(18));
+        let relay_packet = packet.share_for_relay(&state, TransportMediaId::new(18));
+        assert!(relay_packet.is_some());
+        let Some(mut relay_packet) = relay_packet else {
+            return;
+        };
 
-        assert_eq!(relay_packet.source_session_key(), &session_key);
+        assert_eq!(relay_packet.source_session_key(&state), Some(&session_key));
         assert_eq!(relay_packet.payload(), b"payload");
         assert_eq!(
             relay_packet.resolve_source_transport_media_id(&PacketLoopState::default()),
@@ -664,7 +763,11 @@ mod tests {
             packet.resolve_route_control_layer_metadata(&source_state),
             PacketLayerMetadata::new(Some(Rid::from("hi")), None)
         );
-        let mut relay_packet = packet.share_for_relay(source_transport_media_id);
+        let relay_packet = packet.share_for_relay(&source_state, source_transport_media_id);
+        assert!(relay_packet.is_some());
+        let Some(mut relay_packet) = relay_packet else {
+            return;
+        };
 
         assert_eq!(
             relay_packet.resolve_route_control_layer_metadata(&PacketLoopState::default()),
