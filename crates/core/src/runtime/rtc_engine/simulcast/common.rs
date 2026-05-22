@@ -107,15 +107,35 @@ fn media_section_for_mid(sdp: &str, mid: Mid) -> Option<&str> {
         webrtc::sdp::ATTRIBUTE_PREFIX,
         webrtc::sdp::attribute::MID
     );
-    let marker_start = sdp.find(&marker)?;
     let media_prefix = format!("\n{}", webrtc::sdp::MEDIA_PREFIX);
-    let section_start = sdp[..marker_start]
-        .rfind(&media_prefix)
-        .map_or(0, |index| index + 1);
-    let section_end = sdp[marker_start..]
-        .find(&media_prefix)
-        .map_or(sdp.len(), |offset| marker_start + offset + 1);
-    Some(&sdp[section_start..section_end])
+    let mut section_search_start = 0;
+    while let Some(section_start) =
+        find_next_media_section_start(sdp, section_search_start, &media_prefix)
+    {
+        let section_body_start = section_start + webrtc::sdp::MEDIA_PREFIX.len();
+        let section_end = find_next_media_section_start(sdp, section_body_start, &media_prefix)
+            .unwrap_or(sdp.len());
+        let section = &sdp[section_start..section_end];
+        if section
+            .lines()
+            .map(|line| line.trim_end_matches('\r'))
+            .any(|line| line == marker)
+        {
+            return Some(section);
+        }
+        section_search_start = section_end;
+    }
+    None
+}
+
+fn find_next_media_section_start(sdp: &str, start: usize, media_prefix: &str) -> Option<usize> {
+    let remaining = sdp.get(start..)?;
+    if remaining.starts_with(webrtc::sdp::MEDIA_PREFIX) {
+        return Some(start);
+    }
+    remaining
+        .find(media_prefix)
+        .map(|offset| start + offset + 1)
 }
 
 fn parse_send_rid(line: &str) -> Option<NegotiatedRid> {

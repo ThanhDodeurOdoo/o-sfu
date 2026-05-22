@@ -241,6 +241,43 @@ mod tests {
     }
 
     #[test]
+    fn answer_send_rid_projection_matches_exact_mid_section() {
+        let answer = format!(
+            concat!(
+                "v=0\r\n",
+                "a=mid:cam\r\n",
+                "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n",
+                "a=mid:camera\r\n",
+                "a={rid_attr}:wrong {send} {max_br}=111000\r\n",
+                "a={simulcast_attr}:{send} wrong\r\n",
+                "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n",
+                "a=mid:cam\r\n",
+                "a={rid_attr}:right {send} {max_br}=222000\r\n",
+                "a={simulcast_attr}:{send} right\r\n"
+            ),
+            rid_attr = webrtc::sdp::attribute::RID,
+            simulcast_attr = webrtc::sdp::attribute::SIMULCAST,
+            send = webrtc::sdp::rid::DIRECTION_SEND,
+            max_br = webrtc::sdp::rid_restriction::MAX_BITRATE,
+        );
+
+        assert_eq!(
+            send_rids_for_mid(&answer, Mid::from("cam")),
+            vec![NegotiatedRid {
+                rid: Str0mRid::from("right"),
+                max_bitrate: Some(Bitrate::from_bps(222_000)),
+            }]
+        );
+        assert_eq!(
+            send_rids_for_mid(&answer, Mid::from("camera")),
+            vec![NegotiatedRid {
+                rid: Str0mRid::from("wrong"),
+                max_bitrate: Some(Bitrate::from_bps(111_000)),
+            }]
+        );
+    }
+
+    #[test]
     fn h264_and_vp8_profiles_are_promoted_simulcast_publication_paths() {
         let h264 = h264_parameters(1, "42e01f");
 
