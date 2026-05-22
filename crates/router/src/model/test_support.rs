@@ -11,6 +11,55 @@ use super::{
     RouterObserver, SessionId, SessionState, TransportDirection, TransportId,
 };
 
+/// read-only view over one detached reverse relation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelationSnapshot<'a, K, V> {
+    /// owner-to-dependent entries copied from the router index
+    entries: &'a [(K, Vec<V>)],
+}
+
+impl<'a, K, V> RelationSnapshot<'a, K, V>
+where
+    K: Copy + Eq,
+    V: Copy + Eq,
+{
+    fn new(entries: &'a [(K, Vec<V>)]) -> Self {
+        Self { entries }
+    }
+
+    /// count relation owner keys in this snapshot
+    #[must_use]
+    pub fn key_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// count dependents indexed under one owner key
+    #[must_use]
+    pub fn count(&self, key: K) -> usize {
+        self.entries
+            .iter()
+            .find_map(|(relation_key, values)| (*relation_key == key).then_some(values.len()))
+            .unwrap_or(0)
+    }
+
+    /// report whether one owner key has any indexed dependents
+    #[must_use]
+    pub fn contains_key(&self, key: K) -> bool {
+        self.entries
+            .iter()
+            .any(|(relation_key, _)| *relation_key == key)
+    }
+
+    /// report exact relation membership
+    #[must_use]
+    pub fn contains(&self, key: K, value: V) -> bool {
+        self.entries
+            .iter()
+            .find(|(relation_key, _)| *relation_key == key)
+            .is_some_and(|(_, values)| values.contains(&value))
+    }
+}
+
 /// detached router read model for assertions
 ///
 /// snapshots copy the primary maps and reverse indexes at one point in time
@@ -201,108 +250,28 @@ impl RouterStateSnapshot {
             .is_some_and(|(_, _, _, route_state)| producer_route_state == route_state)
     }
 
-    /// count session owner entries in the reverse index snapshot
+    /// return the session-to-transport relation snapshot
     #[must_use]
-    pub fn session_transport_index_count(&self) -> usize {
-        self.session_transports.len()
+    pub fn session_transports(&self) -> RelationSnapshot<'_, SessionId, TransportId> {
+        RelationSnapshot::new(&self.session_transports)
     }
 
-    /// count transport owner entries in the producer reverse index snapshot
+    /// return the transport-to-producer relation snapshot
     #[must_use]
-    pub fn transport_producer_index_count(&self) -> usize {
-        self.transport_producers.len()
+    pub fn transport_producers(&self) -> RelationSnapshot<'_, TransportId, ProducerId> {
+        RelationSnapshot::new(&self.transport_producers)
     }
 
-    /// count transport owner entries in the consumer reverse index snapshot
+    /// return the transport-to-consumer relation snapshot
     #[must_use]
-    pub fn transport_consumer_index_count(&self) -> usize {
-        self.transport_consumers.len()
+    pub fn transport_consumers(&self) -> RelationSnapshot<'_, TransportId, ConsumerId> {
+        RelationSnapshot::new(&self.transport_consumers)
     }
 
-    /// count producer owner entries in the consumer reverse index snapshot
+    /// return the producer-to-consumer relation snapshot
     #[must_use]
-    pub fn producer_consumer_index_count(&self) -> usize {
-        self.producer_consumers.len()
-    }
-
-    /// count transports indexed for one session
-    #[must_use]
-    pub fn session_transport_count(&self, session_id: SessionId) -> usize {
-        Self::relation_count(&self.session_transports, session_id)
-    }
-
-    /// count producers indexed for one transport
-    #[must_use]
-    pub fn transport_producer_count(&self, transport_id: TransportId) -> usize {
-        Self::relation_count(&self.transport_producers, transport_id)
-    }
-
-    /// count consumers indexed for one transport
-    #[must_use]
-    pub fn transport_consumer_count(&self, transport_id: TransportId) -> usize {
-        Self::relation_count(&self.transport_consumers, transport_id)
-    }
-
-    /// count consumers indexed for one producer
-    #[must_use]
-    pub fn producer_consumer_count(&self, producer_id: ProducerId) -> usize {
-        Self::relation_count(&self.producer_consumers, producer_id)
-    }
-
-    /// report whether one session has any transport relation entry
-    #[must_use]
-    pub fn has_session_transport_index(&self, session_id: SessionId) -> bool {
-        Self::relation_has_key(&self.session_transports, session_id)
-    }
-
-    /// report whether one transport has any producer relation entry
-    #[must_use]
-    pub fn has_transport_producer_index(&self, transport_id: TransportId) -> bool {
-        Self::relation_has_key(&self.transport_producers, transport_id)
-    }
-
-    /// report whether one transport has any consumer relation entry
-    #[must_use]
-    pub fn has_transport_consumer_index(&self, transport_id: TransportId) -> bool {
-        Self::relation_has_key(&self.transport_consumers, transport_id)
-    }
-
-    /// report whether one producer has any consumer relation entry
-    #[must_use]
-    pub fn has_producer_consumer_index(&self, producer_id: ProducerId) -> bool {
-        Self::relation_has_key(&self.producer_consumers, producer_id)
-    }
-
-    /// report exact session-to-transport membership in the snapshot
-    #[must_use]
-    pub fn has_session_transport(&self, session_id: SessionId, transport_id: TransportId) -> bool {
-        Self::relation_contains(&self.session_transports, session_id, transport_id)
-    }
-
-    /// report exact transport-to-producer membership in the snapshot
-    #[must_use]
-    pub fn has_transport_producer(
-        &self,
-        transport_id: TransportId,
-        producer_id: ProducerId,
-    ) -> bool {
-        Self::relation_contains(&self.transport_producers, transport_id, producer_id)
-    }
-
-    /// report exact transport-to-consumer membership in the snapshot
-    #[must_use]
-    pub fn has_transport_consumer(
-        &self,
-        transport_id: TransportId,
-        consumer_id: ConsumerId,
-    ) -> bool {
-        Self::relation_contains(&self.transport_consumers, transport_id, consumer_id)
-    }
-
-    /// report exact producer-to-consumer membership in the snapshot
-    #[must_use]
-    pub fn has_producer_consumer(&self, producer_id: ProducerId, consumer_id: ConsumerId) -> bool {
-        Self::relation_contains(&self.producer_consumers, producer_id, consumer_id)
+    pub fn producer_consumers(&self) -> RelationSnapshot<'_, ProducerId, ConsumerId> {
+        RelationSnapshot::new(&self.producer_consumers)
     }
 
     fn transport(
@@ -340,36 +309,6 @@ impl RouterStateSnapshot {
             .iter()
             .copied()
             .find(|(id, _, _, _, _, _)| *id == consumer_id)
-    }
-
-    fn relation_count<K, V>(relations: &[(K, Vec<V>)], key: K) -> usize
-    where
-        K: Copy + Eq,
-    {
-        relations
-            .iter()
-            .find_map(|(relation_key, values)| (*relation_key == key).then_some(values.len()))
-            .unwrap_or(0)
-    }
-
-    fn relation_has_key<K, V>(relations: &[(K, Vec<V>)], key: K) -> bool
-    where
-        K: Copy + Eq,
-    {
-        relations
-            .iter()
-            .any(|(relation_key, _)| *relation_key == key)
-    }
-
-    fn relation_contains<K, V>(relations: &[(K, Vec<V>)], key: K, value: V) -> bool
-    where
-        K: Copy + Eq,
-        V: Copy + Eq,
-    {
-        relations
-            .iter()
-            .find(|(relation_key, _)| *relation_key == key)
-            .is_some_and(|(_, values)| values.contains(&value))
     }
 }
 
@@ -576,278 +515,157 @@ fn consumer_pause_shadows_producer<O: RouterObserver>(router: &Router<O>) -> boo
 /// into each assertion
 #[cfg(kani)]
 pub mod proof {
-    use super::*;
+    pub use super::super::relation_index::RelationProofView;
+    use super::{super::NoopRouterObserver, *};
 
-    /// report whether the primary session map contains a session
-    #[must_use]
-    pub fn router_contains_session<O: RouterObserver>(
-        router: &Router<O>,
-        session_id: SessionId,
-    ) -> bool {
-        router.sessions.contains_key(&session_id)
+    /// cfg-gated proof view over primary maps and reverse relations
+    pub struct RouterProofView<'a, O: RouterObserver = NoopRouterObserver> {
+        router: &'a Router<O>,
     }
 
-    /// report whether the primary transport map contains a transport
-    #[must_use]
-    pub fn router_contains_transport<O: RouterObserver>(
-        router: &Router<O>,
-        transport_id: TransportId,
-    ) -> bool {
-        router.transports.contains_key(&transport_id)
-    }
+    impl<'a, O: RouterObserver> RouterProofView<'a, O> {
+        /// borrow router state for proof assertions
+        #[must_use]
+        pub fn new(router: &'a Router<O>) -> Self {
+            Self { router }
+        }
 
-    /// report whether the primary producer map contains a producer
-    #[must_use]
-    pub fn router_contains_producer<O: RouterObserver>(
-        router: &Router<O>,
-        producer_id: ProducerId,
-    ) -> bool {
-        router.producers.contains_key(&producer_id)
-    }
+        /// report whether the primary session map contains a session
+        #[must_use]
+        pub fn contains_session(&self, session_id: SessionId) -> bool {
+            self.router.sessions.contains_key(&session_id)
+        }
 
-    /// report whether the primary consumer map contains a consumer
-    #[must_use]
-    pub fn router_contains_consumer<O: RouterObserver>(
-        router: &Router<O>,
-        consumer_id: ConsumerId,
-    ) -> bool {
-        router.consumers.contains_key(&consumer_id)
-    }
+        /// report whether the primary transport map contains a transport
+        #[must_use]
+        pub fn contains_transport(&self, transport_id: TransportId) -> bool {
+            self.router.transports.contains_key(&transport_id)
+        }
 
-    /// count live transports in the primary map
-    #[must_use]
-    pub fn router_transport_count<O: RouterObserver>(router: &Router<O>) -> usize {
-        router.transports.len()
-    }
+        /// report whether the primary producer map contains a producer
+        #[must_use]
+        pub fn contains_producer(&self, producer_id: ProducerId) -> bool {
+            self.router.producers.contains_key(&producer_id)
+        }
 
-    /// count live producers in the primary map
-    #[must_use]
-    pub fn router_producer_count<O: RouterObserver>(router: &Router<O>) -> usize {
-        router.producers.len()
-    }
+        /// report whether the primary consumer map contains a consumer
+        #[must_use]
+        pub fn contains_consumer(&self, consumer_id: ConsumerId) -> bool {
+            self.router.consumers.contains_key(&consumer_id)
+        }
 
-    /// count live consumers in the primary map
-    #[must_use]
-    pub fn router_consumer_count<O: RouterObserver>(router: &Router<O>) -> usize {
-        router.consumers.len()
-    }
+        /// count live transports in the primary map
+        #[must_use]
+        pub fn transport_count(&self) -> usize {
+            self.router.transports.len()
+        }
 
-    /// count session owner entries in the transport reverse index
-    #[must_use]
-    pub fn router_session_transport_index_count<O: RouterObserver>(router: &Router<O>) -> usize {
-        router.indexes.session_transport_index_count()
-    }
+        /// count live producers in the primary map
+        #[must_use]
+        pub fn producer_count(&self) -> usize {
+            self.router.producers.len()
+        }
 
-    /// count transport owner entries in the producer reverse index
-    #[must_use]
-    pub fn router_transport_producer_index_count<O: RouterObserver>(router: &Router<O>) -> usize {
-        router.indexes.transport_producer_index_count()
-    }
+        /// count live consumers in the primary map
+        #[must_use]
+        pub fn consumer_count(&self) -> usize {
+            self.router.consumers.len()
+        }
 
-    /// count transport owner entries in the consumer reverse index
-    #[must_use]
-    pub fn router_transport_consumer_index_count<O: RouterObserver>(router: &Router<O>) -> usize {
-        router.indexes.transport_consumer_index_count()
-    }
+        /// return the session-to-transport relation proof view
+        #[must_use]
+        pub fn session_transports(&self) -> RelationProofView<'_, SessionId, TransportId> {
+            self.router.indexes.session_transports()
+        }
 
-    /// count producer owner entries in the consumer reverse index
-    #[must_use]
-    pub fn router_producer_consumer_index_count<O: RouterObserver>(router: &Router<O>) -> usize {
-        router.indexes.producer_consumer_index_count()
-    }
+        /// return the transport-to-producer relation proof view
+        #[must_use]
+        pub fn transport_producers(&self) -> RelationProofView<'_, TransportId, ProducerId> {
+            self.router.indexes.transport_producers()
+        }
 
-    /// count transports indexed under one session
-    #[must_use]
-    pub fn router_session_transport_count<O: RouterObserver>(
-        router: &Router<O>,
-        session_id: SessionId,
-    ) -> usize {
-        router.indexes.session_transport_count(session_id)
-    }
+        /// return the transport-to-consumer relation proof view
+        #[must_use]
+        pub fn transport_consumers(&self) -> RelationProofView<'_, TransportId, ConsumerId> {
+            self.router.indexes.transport_consumers()
+        }
 
-    /// count producers indexed under one receive transport
-    #[must_use]
-    pub fn router_transport_producer_count<O: RouterObserver>(
-        router: &Router<O>,
-        transport_id: TransportId,
-    ) -> usize {
-        router.indexes.transport_producer_count(transport_id)
-    }
+        /// return the producer-to-consumer relation proof view
+        #[must_use]
+        pub fn producer_consumers(&self) -> RelationProofView<'_, ProducerId, ConsumerId> {
+            self.router.indexes.producer_consumers()
+        }
 
-    /// count consumers indexed under one send transport
-    #[must_use]
-    pub fn router_transport_consumer_count<O: RouterObserver>(
-        router: &Router<O>,
-        transport_id: TransportId,
-    ) -> usize {
-        router.indexes.transport_consumer_count(transport_id)
-    }
+        /// assert a transport's captured owner and direction from primary storage
+        #[must_use]
+        pub fn transport_matches(
+            &self,
+            transport_id: TransportId,
+            session_id: SessionId,
+            direction: TransportDirection,
+        ) -> bool {
+            let Some(transport) = self.router.transports.get(&transport_id) else {
+                return false;
+            };
+            transport.session_id() == session_id && transport.direction() == direction
+        }
 
-    /// count consumers indexed under one producer
-    #[must_use]
-    pub fn router_producer_consumer_count<O: RouterObserver>(
-        router: &Router<O>,
-        producer_id: ProducerId,
-    ) -> usize {
-        router.indexes.producer_consumer_count(producer_id)
-    }
+        /// assert a producer's captured receive transport and media kind
+        #[must_use]
+        pub fn producer_origin_matches(
+            &self,
+            producer_id: ProducerId,
+            transport_id: TransportId,
+            media_kind: MediaKind,
+        ) -> bool {
+            let Some(producer) = self.router.producers.get(&producer_id) else {
+                return false;
+            };
+            producer.transport_id() == transport_id && producer.media_kind() == media_kind
+        }
 
-    /// report exact session-to-transport reverse-index membership
-    #[must_use]
-    pub fn router_has_session_transport<O: RouterObserver>(
-        router: &Router<O>,
-        session_id: SessionId,
-        transport_id: TransportId,
-    ) -> bool {
-        router
-            .indexes
-            .has_session_transport(session_id, transport_id)
-    }
+        /// assert a consumer's captured source producer, send transport and media kind
+        #[must_use]
+        pub fn consumer_origin_matches(
+            &self,
+            consumer_id: ConsumerId,
+            producer_id: ProducerId,
+            transport_id: TransportId,
+            media_kind: MediaKind,
+        ) -> bool {
+            let Some(consumer) = self.router.consumers.get(&consumer_id) else {
+                return false;
+            };
+            consumer.producer_id() == producer_id
+                && consumer.transport_id() == transport_id
+                && consumer.media_kind() == media_kind
+        }
 
-    /// report exact transport-to-producer reverse-index membership
-    #[must_use]
-    pub fn router_has_transport_producer<O: RouterObserver>(
-        router: &Router<O>,
-        transport_id: TransportId,
-        producer_id: ProducerId,
-    ) -> bool {
-        router
-            .indexes
-            .has_transport_producer(transport_id, producer_id)
-    }
+        /// assert that a consumer's producer shadow matches the current source state
+        #[must_use]
+        pub fn consumer_shadows_producer(&self, consumer_id: ConsumerId) -> bool {
+            let Some(consumer) = self.router.consumers.get(&consumer_id) else {
+                return false;
+            };
+            let Some(producer) = self.router.producers.get(&consumer.producer_id()) else {
+                return false;
+            };
+            consumer.producer_route_state() == producer.route_state()
+        }
 
-    /// report exact transport-to-consumer reverse-index membership
-    #[must_use]
-    pub fn router_has_transport_consumer<O: RouterObserver>(
-        router: &Router<O>,
-        transport_id: TransportId,
-        consumer_id: ConsumerId,
-    ) -> bool {
-        router
-            .indexes
-            .has_transport_consumer(transport_id, consumer_id)
-    }
-
-    /// report exact producer-to-consumer reverse-index membership
-    #[must_use]
-    pub fn router_has_producer_consumer<O: RouterObserver>(
-        router: &Router<O>,
-        producer_id: ProducerId,
-        consumer_id: ConsumerId,
-    ) -> bool {
-        router
-            .indexes
-            .has_producer_consumer(producer_id, consumer_id)
-    }
-
-    /// report whether a session has any transport reverse-index entry
-    #[must_use]
-    pub fn router_has_session_transport_index<O: RouterObserver>(
-        router: &Router<O>,
-        session_id: SessionId,
-    ) -> bool {
-        router.indexes.has_session_transport_index(session_id)
-    }
-
-    /// report whether a transport has any producer reverse-index entry
-    #[must_use]
-    pub fn router_has_transport_producer_index<O: RouterObserver>(
-        router: &Router<O>,
-        transport_id: TransportId,
-    ) -> bool {
-        router.indexes.has_transport_producer_index(transport_id)
-    }
-
-    /// report whether a transport has any consumer reverse-index entry
-    #[must_use]
-    pub fn router_has_transport_consumer_index<O: RouterObserver>(
-        router: &Router<O>,
-        transport_id: TransportId,
-    ) -> bool {
-        router.indexes.has_transport_consumer_index(transport_id)
-    }
-
-    /// report whether a producer has any consumer reverse-index entry
-    #[must_use]
-    pub fn router_has_producer_consumer_index<O: RouterObserver>(
-        router: &Router<O>,
-        producer_id: ProducerId,
-    ) -> bool {
-        router.indexes.has_producer_consumer_index(producer_id)
-    }
-
-    /// assert a transport's captured owner and direction from primary storage
-    #[must_use]
-    pub fn router_transport_matches<O: RouterObserver>(
-        router: &Router<O>,
-        transport_id: TransportId,
-        session_id: SessionId,
-        direction: TransportDirection,
-    ) -> bool {
-        let Some(transport) = router.transports.get(&transport_id) else {
-            return false;
-        };
-        transport.session_id() == session_id && transport.direction() == direction
-    }
-
-    /// assert a producer's captured receive transport and media kind
-    #[must_use]
-    pub fn router_producer_origin_matches<O: RouterObserver>(
-        router: &Router<O>,
-        producer_id: ProducerId,
-        transport_id: TransportId,
-        media_kind: MediaKind,
-    ) -> bool {
-        let Some(producer) = router.producers.get(&producer_id) else {
-            return false;
-        };
-        producer.transport_id() == transport_id && producer.media_kind() == media_kind
-    }
-
-    /// assert a consumer's captured source producer, send transport and media kind
-    #[must_use]
-    pub fn router_consumer_origin_matches<O: RouterObserver>(
-        router: &Router<O>,
-        consumer_id: ConsumerId,
-        producer_id: ProducerId,
-        transport_id: TransportId,
-        media_kind: MediaKind,
-    ) -> bool {
-        let Some(consumer) = router.consumers.get(&consumer_id) else {
-            return false;
-        };
-        consumer.producer_id() == producer_id
-            && consumer.transport_id() == transport_id
-            && consumer.media_kind() == media_kind
-    }
-
-    /// assert that a consumer's producer shadow matches the current source state
-    #[must_use]
-    pub fn router_consumer_shadows_producer<O: RouterObserver>(
-        router: &Router<O>,
-        consumer_id: ConsumerId,
-    ) -> bool {
-        let Some(consumer) = router.consumers.get(&consumer_id) else {
-            return false;
-        };
-        let Some(producer) = router.producers.get(&consumer.producer_id()) else {
-            return false;
-        };
-        consumer.producer_route_state() == producer.route_state()
-    }
-
-    /// assert the receiver-local route state and producer-shadow route state
-    #[must_use]
-    pub fn router_consumer_route_matches<O: RouterObserver>(
-        router: &Router<O>,
-        consumer_id: ConsumerId,
-        route_state: ConsumerRouteState,
-        producer_route_state: ProducerRouteState,
-    ) -> bool {
-        let Some(consumer) = router.consumers.get(&consumer_id) else {
-            return false;
-        };
-        consumer.route_state() == route_state
-            && consumer.producer_route_state() == producer_route_state
+        /// assert the receiver-local route state and producer-shadow route state
+        #[must_use]
+        pub fn consumer_route_matches(
+            &self,
+            consumer_id: ConsumerId,
+            route_state: ConsumerRouteState,
+            producer_route_state: ProducerRouteState,
+        ) -> bool {
+            let Some(consumer) = self.router.consumers.get(&consumer_id) else {
+                return false;
+            };
+            consumer.route_state() == route_state
+                && consumer.producer_route_state() == producer_route_state
+        }
     }
 }

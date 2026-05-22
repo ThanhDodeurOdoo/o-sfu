@@ -10,24 +10,7 @@ use o_sfu_router::{
     Consumer, ConsumerCapability, ConsumerId, ConsumerRouteState, MediaKind, Producer, ProducerId,
     ProducerRouteState, Router, RouterId, Session, SessionId, Transport, TransportDirection,
     TransportId,
-    test_support::{
-        proof::{
-            router_consumer_count, router_consumer_origin_matches, router_consumer_route_matches,
-            router_consumer_shadows_producer, router_contains_consumer, router_contains_producer,
-            router_contains_session, router_contains_transport, router_has_producer_consumer,
-            router_has_producer_consumer_index, router_has_session_transport,
-            router_has_session_transport_index, router_has_transport_consumer,
-            router_has_transport_consumer_index, router_has_transport_producer,
-            router_has_transport_producer_index, router_producer_consumer_count,
-            router_producer_consumer_index_count, router_producer_count,
-            router_producer_origin_matches, router_session_transport_count,
-            router_session_transport_index_count, router_transport_consumer_count,
-            router_transport_consumer_index_count, router_transport_count,
-            router_transport_matches, router_transport_producer_count,
-            router_transport_producer_index_count,
-        },
-        router_satisfies_invariants,
-    },
+    test_support::{proof::RouterProofView, router_satisfies_invariants},
 };
 
 const SYMBOLIC_ROUTE_COMMAND_VARIANTS: u8 = 9;
@@ -178,32 +161,33 @@ fn apply_cleanup_trace_route_state(router: &mut Router) {
 /// every count, reverse-index key and membership assertion is derived from that
 /// present set
 fn assert_symbolic_trace_invariants(router: &Router) {
-    let session_1 = router_contains_session(router, SessionId(1));
-    let session_2 = router_contains_session(router, SessionId(2));
-    let transport_10 = router_contains_transport(router, TransportId(10));
-    let transport_11 = router_contains_transport(router, TransportId(11));
-    let transport_20 = router_contains_transport(router, TransportId(20));
-    let transport_21 = router_contains_transport(router, TransportId(21));
-    let producer_30 = router_contains_producer(router, ProducerId(30));
-    let producer_31 = router_contains_producer(router, ProducerId(31));
-    let consumer_40 = router_contains_consumer(router, ConsumerId(40));
-    let consumer_41 = router_contains_consumer(router, ConsumerId(41));
+    let view = RouterProofView::new(router);
+    let session_1 = view.contains_session(SessionId(1));
+    let session_2 = view.contains_session(SessionId(2));
+    let transport_10 = view.contains_transport(TransportId(10));
+    let transport_11 = view.contains_transport(TransportId(11));
+    let transport_20 = view.contains_transport(TransportId(20));
+    let transport_21 = view.contains_transport(TransportId(21));
+    let producer_30 = view.contains_producer(ProducerId(30));
+    let producer_31 = view.contains_producer(ProducerId(31));
+    let consumer_40 = view.contains_consumer(ConsumerId(40));
+    let consumer_41 = view.contains_consumer(ConsumerId(41));
 
     assert!(router.session_count() == present(session_1) + present(session_2));
     assert!(
-        router_transport_count(router)
+        view.transport_count()
             == present(transport_10)
                 + present(transport_11)
                 + present(transport_20)
                 + present(transport_21)
     );
-    assert!(router_producer_count(router) == present(producer_30) + present(producer_31));
-    assert!(router_consumer_count(router) == present(consumer_40) + present(consumer_41));
+    assert!(view.producer_count() == present(producer_30) + present(producer_31));
+    assert!(view.consumer_count() == present(consumer_40) + present(consumer_41));
 
     assert_session_transport_index(router, SessionId(1), transport_10, transport_11);
     assert_session_transport_index(router, SessionId(2), transport_20, transport_21);
     assert!(
-        router_session_transport_index_count(router)
+        view.session_transports().key_count()
             == present(transport_10 || transport_11) + present(transport_20 || transport_21)
     );
 
@@ -244,10 +228,7 @@ fn assert_symbolic_trace_invariants(router: &Router) {
     assert_empty_transport_producer_index(router, TransportId(11));
     assert_transport_producer_index(router, TransportId(20), ProducerId(31), producer_31);
     assert_empty_transport_producer_index(router, TransportId(21));
-    assert!(
-        router_transport_producer_index_count(router)
-            == present(producer_30) + present(producer_31)
-    );
+    assert!(view.transport_producers().key_count() == present(producer_30) + present(producer_31));
 
     assert_known_producer(
         router,
@@ -270,16 +251,11 @@ fn assert_symbolic_trace_invariants(router: &Router) {
     assert_empty_transport_consumer_index(router, TransportId(10));
     assert_empty_transport_consumer_index(router, TransportId(20));
     assert_transport_consumer_index(router, TransportId(21), ConsumerId(40), consumer_40);
-    assert!(
-        router_transport_consumer_index_count(router)
-            == present(consumer_40) + present(consumer_41)
-    );
+    assert!(view.transport_consumers().key_count() == present(consumer_40) + present(consumer_41));
 
     assert_producer_consumer_index(router, ProducerId(30), ConsumerId(40), consumer_40);
     assert_producer_consumer_index(router, ProducerId(31), ConsumerId(41), consumer_41);
-    assert!(
-        router_producer_consumer_index_count(router) == present(consumer_40) + present(consumer_41)
-    );
+    assert!(view.producer_consumers().key_count() == present(consumer_40) + present(consumer_41));
 
     assert_known_consumer(
         router,
@@ -308,25 +284,26 @@ fn assert_symbolic_trace_invariants(router: &Router) {
 /// route commands are not allowed to remove entities
 /// only consumer acceptance remains symbolic
 fn assert_symbolic_route_trace_invariants(router: &Router) {
-    let consumer_40 = router_contains_consumer(router, ConsumerId(40));
-    let consumer_41 = router_contains_consumer(router, ConsumerId(41));
+    let view = RouterProofView::new(router);
+    let consumer_40 = view.contains_consumer(ConsumerId(40));
+    let consumer_41 = view.contains_consumer(ConsumerId(41));
 
-    assert!(router_contains_session(router, SessionId(1)));
-    assert!(router_contains_session(router, SessionId(2)));
-    assert!(router_contains_transport(router, TransportId(10)));
-    assert!(router_contains_transport(router, TransportId(11)));
-    assert!(router_contains_transport(router, TransportId(20)));
-    assert!(router_contains_transport(router, TransportId(21)));
-    assert!(router_contains_producer(router, ProducerId(30)));
-    assert!(router_contains_producer(router, ProducerId(31)));
+    assert!(view.contains_session(SessionId(1)));
+    assert!(view.contains_session(SessionId(2)));
+    assert!(view.contains_transport(TransportId(10)));
+    assert!(view.contains_transport(TransportId(11)));
+    assert!(view.contains_transport(TransportId(20)));
+    assert!(view.contains_transport(TransportId(21)));
+    assert!(view.contains_producer(ProducerId(30)));
+    assert!(view.contains_producer(ProducerId(31)));
     assert!(router.session_count() == 2);
-    assert!(router_transport_count(router) == 4);
-    assert!(router_producer_count(router) == 2);
-    assert!(router_consumer_count(router) == present(consumer_40) + present(consumer_41));
+    assert!(view.transport_count() == 4);
+    assert!(view.producer_count() == 2);
+    assert!(view.consumer_count() == present(consumer_40) + present(consumer_41));
 
     assert_session_transport_index(router, SessionId(1), true, true);
     assert_session_transport_index(router, SessionId(2), true, true);
-    assert!(router_session_transport_index_count(router) == 2);
+    assert!(view.session_transports().key_count() == 2);
 
     assert_known_transport(
         router,
@@ -365,7 +342,7 @@ fn assert_symbolic_route_trace_invariants(router: &Router) {
     assert_empty_transport_producer_index(router, TransportId(11));
     assert_transport_producer_index(router, TransportId(20), ProducerId(31), true);
     assert_empty_transport_producer_index(router, TransportId(21));
-    assert!(router_transport_producer_index_count(router) == 2);
+    assert!(view.transport_producers().key_count() == 2);
 
     assert_known_producer(
         router,
@@ -388,16 +365,11 @@ fn assert_symbolic_route_trace_invariants(router: &Router) {
     assert_empty_transport_consumer_index(router, TransportId(10));
     assert_empty_transport_consumer_index(router, TransportId(20));
     assert_transport_consumer_index(router, TransportId(21), ConsumerId(40), consumer_40);
-    assert!(
-        router_transport_consumer_index_count(router)
-            == present(consumer_40) + present(consumer_41)
-    );
+    assert!(view.transport_consumers().key_count() == present(consumer_40) + present(consumer_41));
 
     assert_producer_consumer_index(router, ProducerId(30), ConsumerId(40), consumer_40);
     assert_producer_consumer_index(router, ProducerId(31), ConsumerId(41), consumer_41);
-    assert!(
-        router_producer_consumer_index_count(router) == present(consumer_40) + present(consumer_41)
-    );
+    assert!(view.producer_consumers().key_count() == present(consumer_40) + present(consumer_41));
 
     assert_known_consumer(
         router,
@@ -429,9 +401,10 @@ fn assert_session_transport_index(
     second_transport: bool,
 ) {
     let expected = present(first_transport) + present(second_transport);
+    let view = RouterProofView::new(router);
 
-    assert!(router_session_transport_count(router, session_id) == expected);
-    assert!(router_has_session_transport_index(router, session_id) == (expected > 0));
+    assert!(view.session_transports().count(session_id) == expected);
+    assert!(view.session_transports().contains_key(session_id) == (expected > 0));
 }
 
 /// assert transport primary-map data plus the owning session index edge
@@ -443,16 +416,11 @@ fn assert_known_transport(
     transport_exists: bool,
     session_exists: bool,
 ) {
-    assert!(
-        router_transport_matches(router, transport_id, session_id, direction) == transport_exists
-    );
+    let view = RouterProofView::new(router);
+    assert!(view.transport_matches(transport_id, session_id, direction) == transport_exists);
     if transport_exists {
         assert!(session_exists);
-        assert!(router_has_session_transport(
-            router,
-            session_id,
-            transport_id
-        ));
+        assert!(view.session_transports().contains(session_id, transport_id));
     }
 }
 
@@ -463,15 +431,21 @@ fn assert_transport_producer_index(
     producer_id: ProducerId,
     producer_exists: bool,
 ) {
-    assert!(router_transport_producer_count(router, transport_id) == present(producer_exists));
-    assert!(router_has_transport_producer_index(router, transport_id) == producer_exists);
-    assert!(router_has_transport_producer(router, transport_id, producer_id) == producer_exists);
+    let view = RouterProofView::new(router);
+    assert!(view.transport_producers().count(transport_id) == present(producer_exists));
+    assert!(view.transport_producers().contains_key(transport_id) == producer_exists);
+    assert!(
+        view.transport_producers()
+            .contains(transport_id, producer_id)
+            == producer_exists
+    );
 }
 
 /// assert that a transport has no indexed producer
 fn assert_empty_transport_producer_index(router: &Router, transport_id: TransportId) {
-    assert!(router_transport_producer_count(router, transport_id) == 0);
-    assert!(!router_has_transport_producer_index(router, transport_id));
+    let view = RouterProofView::new(router);
+    assert!(view.transport_producers().count(transport_id) == 0);
+    assert!(!view.transport_producers().contains_key(transport_id));
 }
 
 /// assert producer primary-map data against its owning receive transport
@@ -483,10 +457,8 @@ fn assert_known_producer(
     producer_exists: bool,
     transport_exists: bool,
 ) {
-    assert!(
-        router_producer_origin_matches(router, producer_id, transport_id, media_kind)
-            == producer_exists
-    );
+    let view = RouterProofView::new(router);
+    assert!(view.producer_origin_matches(producer_id, transport_id, media_kind) == producer_exists);
     if producer_exists {
         assert!(transport_exists);
     }
@@ -499,15 +471,21 @@ fn assert_transport_consumer_index(
     consumer_id: ConsumerId,
     consumer_exists: bool,
 ) {
-    assert!(router_transport_consumer_count(router, transport_id) == present(consumer_exists));
-    assert!(router_has_transport_consumer_index(router, transport_id) == consumer_exists);
-    assert!(router_has_transport_consumer(router, transport_id, consumer_id) == consumer_exists);
+    let view = RouterProofView::new(router);
+    assert!(view.transport_consumers().count(transport_id) == present(consumer_exists));
+    assert!(view.transport_consumers().contains_key(transport_id) == consumer_exists);
+    assert!(
+        view.transport_consumers()
+            .contains(transport_id, consumer_id)
+            == consumer_exists
+    );
 }
 
 /// assert that a transport has no indexed consumer
 fn assert_empty_transport_consumer_index(router: &Router, transport_id: TransportId) {
-    assert!(router_transport_consumer_count(router, transport_id) == 0);
-    assert!(!router_has_transport_consumer_index(router, transport_id));
+    let view = RouterProofView::new(router);
+    assert!(view.transport_consumers().count(transport_id) == 0);
+    assert!(!view.transport_consumers().contains_key(transport_id));
 }
 
 /// assert the producer-to-consumer reverse index for one consumer dependency
@@ -517,9 +495,10 @@ fn assert_producer_consumer_index(
     consumer_id: ConsumerId,
     consumer_exists: bool,
 ) {
-    assert!(router_producer_consumer_count(router, producer_id) == present(consumer_exists));
-    assert!(router_has_producer_consumer_index(router, producer_id) == consumer_exists);
-    assert!(router_has_producer_consumer(router, producer_id, consumer_id) == consumer_exists);
+    let view = RouterProofView::new(router);
+    assert!(view.producer_consumers().count(producer_id) == present(consumer_exists));
+    assert!(view.producer_consumers().contains_key(producer_id) == consumer_exists);
+    assert!(view.producer_consumers().contains(producer_id, consumer_id) == consumer_exists);
 }
 
 /// assert consumer primary-map data plus required producer and transport owners
@@ -533,14 +512,15 @@ fn assert_known_consumer(
     producer_exists: bool,
     transport_exists: bool,
 ) {
+    let view = RouterProofView::new(router);
     assert!(
-        router_consumer_origin_matches(router, consumer_id, producer_id, transport_id, media_kind)
+        view.consumer_origin_matches(consumer_id, producer_id, transport_id, media_kind)
             == consumer_exists
     );
     if consumer_exists {
         assert!(producer_exists);
         assert!(transport_exists);
-        assert!(router_consumer_shadows_producer(router, consumer_id));
+        assert!(view.consumer_shadows_producer(consumer_id));
     }
 }
 
@@ -700,34 +680,33 @@ fn session_teardown_clears_reverse_indices_and_dependents() {
 
     assert!(router.remove_session(session_a).is_ok());
 
-    assert!(!router_contains_session(&router, session_a));
-    assert!(router_contains_session(&router, session_b));
-    assert!(!router_contains_transport(&router, receive_transport));
-    assert!(!router_contains_transport(&router, shared_send_transport));
-    assert!(router_contains_transport(&router, survivor_send_transport));
-    assert!(!router_contains_producer(&router, producer_id));
-    assert!(!router_contains_consumer(&router, removed_consumer_id));
-    assert!(!router_contains_consumer(&router, surviving_consumer_id));
-    assert!(!router_has_session_transport_index(&router, session_a));
-    assert!(router_session_transport_count(&router, session_b) == 1);
-    assert!(router_has_session_transport(
-        &router,
-        session_b,
-        survivor_send_transport
-    ));
-    assert!(!router_has_transport_producer_index(
-        &router,
-        receive_transport
-    ));
-    assert!(!router_has_transport_consumer_index(
-        &router,
-        shared_send_transport
-    ));
-    assert!(!router_has_transport_consumer_index(
-        &router,
-        survivor_send_transport
-    ));
-    assert!(!router_has_producer_consumer_index(&router, producer_id));
+    let view = RouterProofView::new(&router);
+    assert!(!view.contains_session(session_a));
+    assert!(view.contains_session(session_b));
+    assert!(!view.contains_transport(receive_transport));
+    assert!(!view.contains_transport(shared_send_transport));
+    assert!(view.contains_transport(survivor_send_transport));
+    assert!(!view.contains_producer(producer_id));
+    assert!(!view.contains_consumer(removed_consumer_id));
+    assert!(!view.contains_consumer(surviving_consumer_id));
+    assert!(!view.session_transports().contains_key(session_a));
+    assert!(view.session_transports().count(session_b) == 1);
+    assert!(
+        view.session_transports()
+            .contains(session_b, survivor_send_transport)
+    );
+    assert!(!view.transport_producers().contains_key(receive_transport));
+    assert!(
+        !view
+            .transport_consumers()
+            .contains_key(shared_send_transport)
+    );
+    assert!(
+        !view
+            .transport_consumers()
+            .contains_key(survivor_send_transport)
+    );
+    assert!(!view.producer_consumers().contains_key(producer_id));
     assert!(router_satisfies_invariants(&router));
     std::mem::forget(router);
 }
@@ -814,30 +793,27 @@ fn removing_a_producer_clears_dependents_but_keeps_live_transports() {
 
     assert!(router.remove_producer(producer_id).is_ok());
 
-    assert!(router_contains_session(&router, session_a));
-    assert!(router_contains_session(&router, session_b));
-    assert!(router_contains_transport(&router, receive_transport));
-    assert!(router_contains_transport(
-        &router,
-        same_session_send_transport
-    ));
-    assert!(router_contains_transport(&router, remote_send_transport));
-    assert!(!router_contains_producer(&router, producer_id));
-    assert!(!router_contains_consumer(&router, same_session_consumer));
-    assert!(!router_contains_consumer(&router, remote_consumer));
-    assert!(!router_has_transport_producer_index(
-        &router,
-        receive_transport
-    ));
-    assert!(!router_has_transport_consumer_index(
-        &router,
-        same_session_send_transport
-    ));
-    assert!(!router_has_transport_consumer_index(
-        &router,
-        remote_send_transport
-    ));
-    assert!(!router_has_producer_consumer_index(&router, producer_id));
+    let view = RouterProofView::new(&router);
+    assert!(view.contains_session(session_a));
+    assert!(view.contains_session(session_b));
+    assert!(view.contains_transport(receive_transport));
+    assert!(view.contains_transport(same_session_send_transport));
+    assert!(view.contains_transport(remote_send_transport));
+    assert!(!view.contains_producer(producer_id));
+    assert!(!view.contains_consumer(same_session_consumer));
+    assert!(!view.contains_consumer(remote_consumer));
+    assert!(!view.transport_producers().contains_key(receive_transport));
+    assert!(
+        !view
+            .transport_consumers()
+            .contains_key(same_session_send_transport)
+    );
+    assert!(
+        !view
+            .transport_consumers()
+            .contains_key(remote_send_transport)
+    );
+    assert!(!view.producer_consumers().contains_key(producer_id));
     assert!(router_satisfies_invariants(&router));
     std::mem::forget(router);
 }
@@ -924,37 +900,31 @@ fn removing_a_consumer_preserves_other_routes_and_indices() {
 
     assert!(router.remove_consumer(removed_consumer_id).is_ok());
 
-    assert!(router_contains_producer(&router, producer_id));
-    assert!(router_contains_transport(&router, receive_transport));
-    assert!(router_contains_transport(
-        &router,
-        removed_consumer_transport
-    ));
-    assert!(router_contains_transport(
-        &router,
-        surviving_consumer_transport
-    ));
-    assert!(!router_contains_consumer(&router, removed_consumer_id));
-    assert!(router_contains_consumer(&router, surviving_consumer_id));
-    assert!(!router_has_transport_consumer_index(
-        &router,
-        removed_consumer_transport
-    ));
-    assert!(router_has_transport_consumer(
-        &router,
-        surviving_consumer_transport,
-        surviving_consumer_id
-    ));
-    assert!(router_has_producer_consumer(
-        &router,
-        producer_id,
-        surviving_consumer_id
-    ));
-    assert!(!router_has_producer_consumer(
-        &router,
-        producer_id,
-        removed_consumer_id
-    ));
+    let view = RouterProofView::new(&router);
+    assert!(view.contains_producer(producer_id));
+    assert!(view.contains_transport(receive_transport));
+    assert!(view.contains_transport(removed_consumer_transport));
+    assert!(view.contains_transport(surviving_consumer_transport));
+    assert!(!view.contains_consumer(removed_consumer_id));
+    assert!(view.contains_consumer(surviving_consumer_id));
+    assert!(
+        !view
+            .transport_consumers()
+            .contains_key(removed_consumer_transport)
+    );
+    assert!(
+        view.transport_consumers()
+            .contains(surviving_consumer_transport, surviving_consumer_id)
+    );
+    assert!(
+        view.producer_consumers()
+            .contains(producer_id, surviving_consumer_id)
+    );
+    assert!(
+        !view
+            .producer_consumers()
+            .contains(producer_id, removed_consumer_id)
+    );
     assert!(router_satisfies_invariants(&router));
     std::mem::forget(router);
 }
@@ -1013,8 +983,8 @@ fn new_consumers_inherit_their_producer_pause_shadow() {
             .is_ok()
     );
 
-    assert!(router_consumer_route_matches(
-        &router,
+    let view = RouterProofView::new(&router);
+    assert!(view.consumer_route_matches(
         ConsumerId(40),
         ConsumerRouteState::Active,
         ProducerRouteState::Paused,
@@ -1101,14 +1071,13 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
             .is_ok()
     );
 
-    assert!(router_consumer_route_matches(
-        &router,
+    let view = RouterProofView::new(&router);
+    assert!(view.consumer_route_matches(
         ConsumerId(40),
         ConsumerRouteState::Active,
         ProducerRouteState::Paused,
     ));
-    assert!(router_consumer_route_matches(
-        &router,
+    assert!(view.consumer_route_matches(
         ConsumerId(41),
         ConsumerRouteState::Active,
         ProducerRouteState::Paused,
@@ -1200,14 +1169,13 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
             .is_ok()
     );
 
-    assert!(router_consumer_route_matches(
-        &router,
+    let view = RouterProofView::new(&router);
+    assert!(view.consumer_route_matches(
         ConsumerId(40),
         ConsumerRouteState::Active,
         ProducerRouteState::Active,
     ));
-    assert!(router_consumer_route_matches(
-        &router,
+    assert!(view.consumer_route_matches(
         ConsumerId(41),
         ConsumerRouteState::Active,
         ProducerRouteState::Active,
@@ -1270,8 +1238,8 @@ fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
             .set_consumer_route_state(ConsumerId(40), ConsumerRouteState::Paused)
             .is_ok()
     );
-    assert!(router_consumer_route_matches(
-        &router,
+    let view = RouterProofView::new(&router);
+    assert!(view.consumer_route_matches(
         ConsumerId(40),
         ConsumerRouteState::Paused,
         ProducerRouteState::Active,
@@ -1283,8 +1251,8 @@ fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
             .set_producer_route_state(ProducerId(30), ProducerRouteState::Paused)
             .is_ok()
     );
-    assert!(router_consumer_route_matches(
-        &router,
+    let view = RouterProofView::new(&router);
+    assert!(view.consumer_route_matches(
         ConsumerId(40),
         ConsumerRouteState::Paused,
         ProducerRouteState::Paused,
@@ -1296,8 +1264,8 @@ fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
             .set_producer_route_state(ProducerId(30), ProducerRouteState::Active)
             .is_ok()
     );
-    assert!(router_consumer_route_matches(
-        &router,
+    let view = RouterProofView::new(&router);
+    assert!(view.consumer_route_matches(
         ConsumerId(40),
         ConsumerRouteState::Paused,
         ProducerRouteState::Active,

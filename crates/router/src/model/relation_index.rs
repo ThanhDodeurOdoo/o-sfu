@@ -123,15 +123,6 @@ where
         self.entries.get(&key).copied().unwrap_or_default()
     }
 
-    /// expose owner-key presence only to proof predicates
-    ///
-    /// normal tests should assert through snapshots instead of depending on the
-    /// internal storage shape
-    #[cfg(kani)]
-    fn contains_key(&self, key: K) -> bool {
-        self.entries.contains_key(&key)
-    }
-
     /// expose exact relation membership to tests and proof predicates
     ///
     /// production teardown uses `remove` or `take` instead so callers do not
@@ -141,18 +132,6 @@ where
         self.entries
             .get(&key)
             .is_some_and(|values| values.contains(&value))
-    }
-
-    /// count dependents for one owner in proof-only assertions
-    #[cfg(kani)]
-    fn count(&self, key: K) -> usize {
-        self.entries.get(&key).map_or(0, BTreeSet::len)
-    }
-
-    /// count owner entries for proof-only assertions
-    #[cfg(kani)]
-    fn len(&self) -> usize {
-        self.entries.len()
     }
 
     /// copy the full relation without exposing the backing map type
@@ -211,6 +190,50 @@ where
         }
 
         true
+    }
+}
+
+#[cfg(kani)]
+/// borrowed proof view over one reverse relation
+pub struct RelationProofView<'a, K, V> {
+    relation: &'a RelationIndex<K, V>,
+}
+
+#[cfg(kani)]
+impl<'a, K, V> RelationProofView<'a, K, V>
+where
+    K: Copy + Ord,
+    V: Copy + Ord,
+{
+    fn new(relation: &'a RelationIndex<K, V>) -> Self {
+        Self { relation }
+    }
+
+    /// count relation owner keys
+    #[must_use]
+    pub fn key_count(&self) -> usize {
+        self.relation.entries.len()
+    }
+
+    /// count dependents indexed under one owner key
+    #[must_use]
+    pub fn count(&self, key: K) -> usize {
+        self.relation
+            .entries
+            .get(&key)
+            .map_or(0, |values| values.len())
+    }
+
+    /// report whether one owner key has any indexed dependents
+    #[must_use]
+    pub fn contains_key(&self, key: K) -> bool {
+        self.relation.entries.contains_key(&key)
+    }
+
+    /// report exact relation membership
+    #[must_use]
+    pub fn contains(&self, key: K, value: V) -> bool {
+        self.relation.contains(key, value)
     }
 }
 
@@ -381,6 +404,30 @@ impl RouterIndexes {
         self.producer_consumers.values_snapshot(producer_id)
     }
 
+    /// return a borrowed proof view over session transports
+    #[cfg(kani)]
+    pub(super) fn session_transports(&self) -> RelationProofView<'_, SessionId, TransportId> {
+        RelationProofView::new(&self.session_transports)
+    }
+
+    /// return a borrowed proof view over transport producers
+    #[cfg(kani)]
+    pub(super) fn transport_producers(&self) -> RelationProofView<'_, TransportId, ProducerId> {
+        RelationProofView::new(&self.transport_producers)
+    }
+
+    /// return a borrowed proof view over transport consumers
+    #[cfg(kani)]
+    pub(super) fn transport_consumers(&self) -> RelationProofView<'_, TransportId, ConsumerId> {
+        RelationProofView::new(&self.transport_consumers)
+    }
+
+    /// return a borrowed proof view over producer consumers
+    #[cfg(kani)]
+    pub(super) fn producer_consumers(&self) -> RelationProofView<'_, ProducerId, ConsumerId> {
+        RelationProofView::new(&self.producer_consumers)
+    }
+
     /// create a detached copy of every reverse relation for tests
     #[cfg(any(test, feature = "test-support", kani))]
     pub(super) fn snapshot(&self) -> RouterIndexSnapshot {
@@ -390,118 +437,6 @@ impl RouterIndexes {
             transport_consumers: self.transport_consumers.snapshot(),
             producer_consumers: self.producer_consumers.snapshot(),
         }
-    }
-
-    /// count session-owned transports for Kani proof assertions
-    #[cfg(kani)]
-    pub(super) fn session_transport_count(&self, session_id: SessionId) -> usize {
-        self.session_transports.count(session_id)
-    }
-
-    /// count transport-owned producers for Kani proof assertions
-    #[cfg(kani)]
-    pub(super) fn transport_producer_count(&self, transport_id: TransportId) -> usize {
-        self.transport_producers.count(transport_id)
-    }
-
-    /// count transport-owned consumers for Kani proof assertions
-    #[cfg(kani)]
-    pub(super) fn transport_consumer_count(&self, transport_id: TransportId) -> usize {
-        self.transport_consumers.count(transport_id)
-    }
-
-    /// count producer-dependent consumers for Kani proof assertions
-    #[cfg(kani)]
-    pub(super) fn producer_consumer_count(&self, producer_id: ProducerId) -> usize {
-        self.producer_consumers.count(producer_id)
-    }
-
-    /// count session owner entries for Kani proof assertions
-    #[cfg(kani)]
-    pub(super) fn session_transport_index_count(&self) -> usize {
-        self.session_transports.len()
-    }
-
-    /// count producer-owner transport entries for Kani proof assertions
-    #[cfg(kani)]
-    pub(super) fn transport_producer_index_count(&self) -> usize {
-        self.transport_producers.len()
-    }
-
-    /// count consumer-owner transport entries for Kani proof assertions
-    #[cfg(kani)]
-    pub(super) fn transport_consumer_index_count(&self) -> usize {
-        self.transport_consumers.len()
-    }
-
-    /// count producer dependency entries for Kani proof assertions
-    #[cfg(kani)]
-    pub(super) fn producer_consumer_index_count(&self) -> usize {
-        self.producer_consumers.len()
-    }
-
-    /// report whether a session has any indexed transport in Kani proofs
-    #[cfg(kani)]
-    pub(super) fn has_session_transport_index(&self, session_id: SessionId) -> bool {
-        self.session_transports.contains_key(session_id)
-    }
-
-    /// report whether a transport has any indexed producer in Kani proofs
-    #[cfg(kani)]
-    pub(super) fn has_transport_producer_index(&self, transport_id: TransportId) -> bool {
-        self.transport_producers.contains_key(transport_id)
-    }
-
-    /// report whether a transport has any indexed consumer in Kani proofs
-    #[cfg(kani)]
-    pub(super) fn has_transport_consumer_index(&self, transport_id: TransportId) -> bool {
-        self.transport_consumers.contains_key(transport_id)
-    }
-
-    /// report whether a producer has any indexed consumer in Kani proofs
-    #[cfg(kani)]
-    pub(super) fn has_producer_consumer_index(&self, producer_id: ProducerId) -> bool {
-        self.producer_consumers.contains_key(producer_id)
-    }
-
-    /// report exact session-to-transport membership in Kani proofs
-    #[cfg(kani)]
-    pub(super) fn has_session_transport(
-        &self,
-        session_id: SessionId,
-        transport_id: TransportId,
-    ) -> bool {
-        self.session_transports.contains(session_id, transport_id)
-    }
-
-    /// report exact transport-to-producer membership in Kani proofs
-    #[cfg(kani)]
-    pub(super) fn has_transport_producer(
-        &self,
-        transport_id: TransportId,
-        producer_id: ProducerId,
-    ) -> bool {
-        self.transport_producers.contains(transport_id, producer_id)
-    }
-
-    /// report exact transport-to-consumer membership in Kani proofs
-    #[cfg(kani)]
-    pub(super) fn has_transport_consumer(
-        &self,
-        transport_id: TransportId,
-        consumer_id: ConsumerId,
-    ) -> bool {
-        self.transport_consumers.contains(transport_id, consumer_id)
-    }
-
-    /// report exact producer-to-consumer membership in Kani proofs
-    #[cfg(kani)]
-    pub(super) fn has_producer_consumer(
-        &self,
-        producer_id: ProducerId,
-        consumer_id: ConsumerId,
-    ) -> bool {
-        self.producer_consumers.contains(producer_id, consumer_id)
     }
 
     /// verify that session transport indexes mirror the transport primary map
