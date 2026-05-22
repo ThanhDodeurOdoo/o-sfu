@@ -9,8 +9,12 @@
 //! bandwidth, active-speaker layout, source descriptors, or route-pause reasons.
 
 mod action;
+mod active_speaker;
 mod audio;
 mod commit;
 mod video;
 
-pub(in crate::runtime::room) use action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate};
+pub(in crate::runtime::room) use self::{
+    action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
+    active_speaker::rank_active_speaker_sources,
+};

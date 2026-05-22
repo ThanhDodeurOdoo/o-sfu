@@ -619,6 +619,22 @@ impl SourcePolicyScenario {
         }
     }
 
+    pub(super) async fn mark_active_speakers_with_levels(
+        &self,
+        speakers: impl IntoIterator<Item = (TransportMediaId, i8)>,
+    ) {
+        let observed_at = Instant::now();
+        for (transport_media_id, audio_level_dbov) in speakers {
+            self.adapter
+                .debug_observe_audio_activity_with_level(
+                    transport_media_id,
+                    audio_level_dbov,
+                    observed_at,
+                )
+                .await;
+        }
+    }
+
     pub(super) async fn refresh_policy(&self) {
         self.room
             .sync_source_packet_selection_policy(&self.adapter)

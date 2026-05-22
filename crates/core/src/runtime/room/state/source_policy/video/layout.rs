@@ -72,11 +72,11 @@ impl ReceiverVideoLayoutIntent {
 
 pub(in crate::runtime::room) fn featured_source_user_ids_for_active_speakers(
     state: &RoomState,
-    active_speaker_sources: &[ActiveSpeakerSource],
+    ranked_active_speaker_sources: &[ActiveSpeakerSource],
 ) -> BTreeSet<UserId> {
     first_featured_source_users_for_active_speakers(
         state,
-        active_speaker_sources,
+        ranked_active_speaker_sources,
         ACTIVE_SPEAKER_FEATURED_CLEAR_LIMIT,
     )
 }
@@ -134,10 +134,10 @@ impl RoomState {
     /// featured state.
     pub fn featured_user_updates(
         &self,
-        active_speaker_sources: &[ActiveSpeakerSource],
+        ranked_active_speaker_sources: &[ActiveSpeakerSource],
     ) -> Vec<FeaturedUserUpdate> {
         let desired_featured_user_id =
-            first_featured_source_user_for_active_speakers(self, active_speaker_sources);
+            first_featured_source_user_for_active_speakers(self, ranked_active_speaker_sources);
         let should_clear_featured_state = desired_featured_user_id.is_none()
             && self.users.values().any(|user| user.featured().is_some());
         if desired_featured_user_id.is_none() && !should_clear_featured_state {

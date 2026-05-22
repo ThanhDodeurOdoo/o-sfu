@@ -98,9 +98,24 @@ impl MediaTransport {
         transport_media_id: TransportMediaId,
         now: Instant,
     ) {
+        self.debug_observe_audio_activity_with_level(transport_media_id, -20, now)
+            .await;
+    }
+
+    pub async fn debug_observe_audio_activity_with_level(
+        &self,
+        transport_media_id: TransportMediaId,
+        audio_level_dbov: i8,
+        now: Instant,
+    ) {
         for worker in self.all_workers() {
             worker
-                .debug_observe_audio_activity(transport_media_id, Some(true), Some(-20), now)
+                .debug_observe_audio_activity(
+                    transport_media_id,
+                    Some(true),
+                    Some(audio_level_dbov),
+                    now,
+                )
                 .await;
         }
     }

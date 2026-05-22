@@ -63,6 +63,64 @@ async fn active_speaker_camera_policy_selects_the_observed_speaker() {
 }
 
 #[tokio::test]
+async fn active_speaker_camera_policy_prefers_louder_same_observation_speaker() {
+    let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
+        &[1, 2, 3],
+        RoomMediaLimits::try_new(4, 1).unwrap(),
+    )
+    .await;
+    scenario.publish_audio_and_camera_for_users(&[1, 3]).await;
+    let first_audio_media_id = scenario.audio_media_id(1).await;
+    let third_audio_media_id = scenario.audio_media_id(3).await;
+
+    scenario
+        .mark_active_speakers_with_levels([
+            (first_audio_media_id, -30),
+            (third_audio_media_id, -10),
+        ])
+        .await;
+    scenario.refresh_policy_until_upgrades_settle().await;
+
+    let first_info = scenario
+        .room
+        .test_api()
+        .inspect()
+        .user_info_snapshot(&UserId::Integer(1))
+        .await
+        .unwrap()
+        .1;
+    let third_info = scenario
+        .room
+        .test_api()
+        .inspect()
+        .user_info_snapshot(&UserId::Integer(3))
+        .await
+        .unwrap()
+        .1;
+    assert_eq!(first_info.is_featured, Some(false));
+    assert_eq!(third_info.is_featured, Some(true));
+
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        Some(DiagnosticsPolicyPauseReason::VideoDownloadLimit),
+    )
+    .await;
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(3),
+        TestSourceKind::ScalableVideo,
+        None,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn active_audio_speaker_limit_pauses_overflow_audio_routes() {
     let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
         &[1, 2, 3],

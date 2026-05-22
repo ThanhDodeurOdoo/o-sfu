@@ -3,10 +3,7 @@
 //! this boundary normalizes room indexes and transport observations into
 //! route-shaped facts so the budget planner stays pure and deterministic
 
-use std::{
-    cmp::Reverse,
-    collections::{BTreeMap, BTreeSet},
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_router::MediaKind;
 
@@ -47,13 +44,13 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
     #[must_use]
     pub fn from_state(
         state: &'a RoomState,
-        active_speaker_sources: &[ActiveSpeakerSource],
+        ranked_active_speaker_sources: &[ActiveSpeakerSource],
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
     ) -> Self {
         let featured_source_user_ids =
-            featured_source_user_ids_for_active_speakers(state, active_speaker_sources);
+            featured_source_user_ids_for_active_speakers(state, ranked_active_speaker_sources);
         let active_speaker_rank_by_user =
-            active_speaker_rank_by_user(state, active_speaker_sources);
+            active_speaker_rank_by_user(state, ranked_active_speaker_sources);
         let receiver_bandwidth_by_user = receiver_bandwidth_by_user(receiver_bandwidth_snapshot);
         let visible_scalable_route_counts =
             visible_scalable_route_counts_by_consumer(state, &featured_source_user_ids);
@@ -264,18 +261,10 @@ fn receiver_bandwidth_by_user(snapshot: &ReceiverBandwidthSnapshot) -> BTreeMap<
 
 fn active_speaker_rank_by_user(
     state: &RoomState,
-    active_speaker_sources: &[ActiveSpeakerSource],
+    ranked_active_speaker_sources: &[ActiveSpeakerSource],
 ) -> BTreeMap<UserId, usize> {
-    let mut ranked_sources = active_speaker_sources.to_vec();
-    ranked_sources.sort_by_key(|source| {
-        (
-            Reverse(source.observed_at()),
-            Reverse(source.last_audio_level_dbov().unwrap_or(i8::MIN)),
-            source.transport_media_id().as_u64(),
-        )
-    });
     let mut ranks = BTreeMap::new();
-    for source in ranked_sources {
+    for source in ranked_active_speaker_sources {
         let Some(user_id) =
             featured_source_owner_for_active_speaker_source(state, source.transport_media_id())
         else {
@@ -306,19 +295,19 @@ pub(super) fn featured_source_owner_for_active_speaker_source(
 
 pub(super) fn first_featured_source_user_for_active_speakers(
     state: &RoomState,
-    active_speaker_sources: &[ActiveSpeakerSource],
+    ranked_active_speaker_sources: &[ActiveSpeakerSource],
 ) -> Option<UserId> {
-    active_speaker_sources.iter().find_map(|source| {
+    ranked_active_speaker_sources.iter().find_map(|source| {
         featured_source_owner_for_active_speaker_source(state, source.transport_media_id())
     })
 }
 
 pub(super) fn first_featured_source_users_for_active_speakers(
     state: &RoomState,
-    active_speaker_sources: &[ActiveSpeakerSource],
+    ranked_active_speaker_sources: &[ActiveSpeakerSource],
     limit: usize,
 ) -> BTreeSet<UserId> {
-    active_speaker_sources
+    ranked_active_speaker_sources
         .iter()
         .filter_map(|source| {
             featured_source_owner_for_active_speaker_source(state, source.transport_media_id())
