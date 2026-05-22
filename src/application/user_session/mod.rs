@@ -7,8 +7,8 @@
 //! [`crate::core::prelude::SourcePublishIntent`] and
 //! [`crate::core::prelude::SourceSubscriptionIntent`] values. `User` sequences those
 //! intents around negotiation, request tracking and user-info fanout, while the
-//! pure connection-local state lives under `state/` and ordered websocket
-//! output lives in `output`
+//! pure connection-local state lives beside the workflow that consumes it and
+//! ordered websocket output lives in `output`
 //!
 //! `User` is the post-auth websocket session facade. it keeps the
 //! connection-scoped signaling state needed to answer one browser, including
