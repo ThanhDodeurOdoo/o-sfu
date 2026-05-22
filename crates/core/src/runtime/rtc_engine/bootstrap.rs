@@ -34,7 +34,10 @@ use super::{
 };
 use crate::{
     Bitrate, MediaCodecFlags, RtcPortRange,
-    runtime::media_transport::{TransportAdapterError, TransportSessionKey},
+    runtime::{
+        h264_payloads::H264_PAYLOAD_SPECS,
+        media_transport::{TransportAdapterError, TransportSessionKey},
+    },
 };
 
 const VIDEO_PAYLOAD_TYPE_VP8: u8 = 96;
@@ -217,21 +220,55 @@ fn rtc_builder(codec_flags: MediaCodecFlags, stats_interval: Option<Duration>) -
 /// receiver-safe RTP stream per consumer and does not model retransmission as a
 /// separate negotiated payload in this bootstrap path
 fn add_h264_codecs_without_rtx(codec_config: &mut CodecConfig) {
-    const H264_CODECS: &[(u8, bool, u32)] = &[
-        (127, true, 0x0042_001f),
-        (125, false, 0x0042_001f),
-        (108, true, 0x0042_e01f),
-        (124, false, 0x0042_e01f),
-        (123, true, 0x004d_001f),
-        (35, false, 0x004d_001f),
-        (114, true, 0x0064_001f),
-    ];
-    for (payload_type, packetization_mode, profile_level_id) in H264_CODECS {
+    for spec in H264_PAYLOAD_SPECS {
         codec_config.add_h264(
-            (*payload_type).into(),
+            spec.payload_type().into(),
             None,
-            *packetization_mode,
-            *profile_level_id,
+            spec.packetization_mode().str0m_flag(),
+            spec.profile_level_id(),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use str0m::format::Codec;
+
+    use super::*;
+
+    #[test]
+    fn h264_bootstrap_uses_the_shared_payload_contract_without_rtx() {
+        let mut config = rtc_builder(
+            MediaCodecFlags::default().with_vp8(false).with_h264(true),
+            None,
+        );
+        let h264_payloads = config
+            .codec_config()
+            .params()
+            .iter()
+            .filter(|params| params.spec().codec == Codec::H264)
+            .map(|params| {
+                let spec = params.spec();
+                (
+                    *params.pt(),
+                    params.resend().map(|payload_type| *payload_type),
+                    spec.format.packetization_mode,
+                    spec.format.profile_level_id,
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = H264_PAYLOAD_SPECS
+            .iter()
+            .map(|spec| {
+                (
+                    spec.payload_type(),
+                    None,
+                    Some(spec.packetization_mode().fmtp_value()),
+                    Some(spec.profile_level_id()),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(h264_payloads, expected);
     }
 }
