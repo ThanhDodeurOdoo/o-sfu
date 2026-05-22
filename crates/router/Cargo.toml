@@ -3,6 +3,8 @@ name = "o-sfu-router"
 description = "Router core for o-sfu"
 authors.workspace = true
 edition.workspace = true
+license.workspace = true
+publish.workspace = true
 rust-version = "1.93"
 version.workspace = true
 

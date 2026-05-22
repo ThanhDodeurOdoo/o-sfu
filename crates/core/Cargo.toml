@@ -4,6 +4,8 @@ name = "o-sfu-core"
 
 authors.workspace = true
 edition.workspace = true
+license.workspace = true
+publish.workspace = true
 rust-version.workspace = true
 version.workspace = true
 

@@ -2,6 +2,7 @@
 name = "o-sfu-fuzz"
 version = "0.0.0"
 publish = false
+license = "LGPL-3.0-or-later"
 edition = "2024"
 
 [workspace]

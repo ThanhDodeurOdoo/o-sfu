@@ -36,4 +36,12 @@ jobs:
         run: cargo install cargo-deny --version 0.19.7 --locked
 
       - name: Run dependency policy checks
-        run: cargo deny check advisories bans sources
+        run: cargo deny check advisories bans licenses sources
+
+      - name: Build fuzz dependency metadata
+        run: |
+          mkdir -p target/cargo-deny
+          cargo metadata --manifest-path tests/fuzz/Cargo.toml --locked --format-version 1 > target/cargo-deny/fuzz-metadata.json
+
+      - name: Run fuzz dependency policy checks
+        run: cargo deny check --metadata-path target/cargo-deny/fuzz-metadata.json advisories bans licenses sources
