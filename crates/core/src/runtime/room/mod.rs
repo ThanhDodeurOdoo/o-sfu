@@ -78,4 +78,6 @@ pub use tests::api::{
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
-pub(in crate::runtime::room) use self::{cleanup::UserCleanup, membership::JoinSessionIntent};
+pub(in crate::runtime::room) use self::{
+    cleanup::UserCleanup, membership::JoinSessionIntent, placement::JoinPlacement,
+};

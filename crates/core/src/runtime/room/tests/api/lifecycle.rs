@@ -1,5 +1,7 @@
+use o_sfu_router::RouterId;
+
 use super::super::super::{
-    JoinSessionIntent, Room, RoomJoinError, UserCleanup, UserOutboundSender,
+    JoinPlacement, JoinSessionIntent, Room, RoomJoinError, UserCleanup, UserOutboundSender,
 };
 use crate::runtime::{ConnectionId, UserId, UserPermissions, media_transport::MediaTransport};
 
@@ -34,9 +36,10 @@ impl RoomTestLifecycle<'_> {
                     permissions,
                     sender,
                     emit_joined_fanout: false,
-                    home_placement,
+                    placement: JoinPlacement::resolved(home_placement),
                 },
                 UserCleanup::state_only(None),
+                || RouterId(0),
             )
             .await
     }
@@ -67,9 +70,10 @@ impl RoomTestLifecycle<'_> {
                     permissions,
                     sender,
                     emit_joined_fanout: false,
-                    home_placement,
+                    placement: JoinPlacement::resolved(home_placement),
                 },
                 UserCleanup::state_only(Some(media_transport)),
+                || RouterId(0),
             )
             .await
     }
