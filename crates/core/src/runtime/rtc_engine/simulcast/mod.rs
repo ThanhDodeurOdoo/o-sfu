@@ -278,6 +278,36 @@ mod tests {
     }
 
     #[test]
+    fn answer_send_rid_projection_ignores_invalid_rfc8852_ids() {
+        let answer = format!(
+            concat!(
+                "v=0\r\n",
+                "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n",
+                "a=mid:video_0\r\n",
+                "a={rid_attr}:low-1 {send} {max_br}=150000\r\n",
+                "a={rid_attr}:hi_2 {send} {max_br}=450000\r\n",
+                "a={rid_attr}:hi2 {send} {max_br}=900000\r\n",
+                "a={simulcast_attr}:{send} low-1{separator}hi_2{separator}hi2\r\n"
+            ),
+            rid_attr = webrtc::sdp::attribute::RID,
+            simulcast_attr = webrtc::sdp::attribute::SIMULCAST,
+            send = webrtc::sdp::rid::DIRECTION_SEND,
+            max_br = webrtc::sdp::rid_restriction::MAX_BITRATE,
+            separator = webrtc::sdp::simulcast::STREAM_SEPARATOR,
+        );
+
+        let rids = send_rids_for_mid(&answer, Mid::from("video_0"));
+
+        assert_eq!(
+            rids,
+            vec![NegotiatedRid {
+                rid: Str0mRid::from("hi2"),
+                max_bitrate: Some(ANSWER_HIGH_MAX_BITRATE),
+            }]
+        );
+    }
+
+    #[test]
     fn h264_and_vp8_profiles_are_promoted_simulcast_publication_paths() {
         let h264 = h264_parameters(1, "42e01f");
 

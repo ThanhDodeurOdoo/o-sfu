@@ -301,15 +301,22 @@ pub mod sdp {
     pub mod rid {
         pub const DIRECTION_SEND: &str = "send";
         pub const DIRECTION_RECV: &str = "recv";
+        pub const MAX_ID_OCTETS: usize = 255;
 
+        /// Returns whether `value` is a valid RTP stream identifier.
+        ///
+        /// RFC 8852 section 3 constrains `RtpStreamId` and
+        /// `RepairedRtpStreamId` to 1-255 ASCII alphanumeric octets. RFC
+        /// Editor errata 7132 applies the same bound to RFC 8851 `rid-id`.
         #[must_use]
         pub fn is_id(value: &str) -> bool {
-            !value.is_empty() && value.as_bytes().iter().all(|byte| is_id_byte(*byte))
+            (1..=MAX_ID_OCTETS).contains(&value.len())
+                && value.as_bytes().iter().all(|byte| is_id_byte(*byte))
         }
 
         #[must_use]
         pub const fn is_id_byte(value: u8) -> bool {
-            matches!(value, b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' | b'-' | b'_')
+            matches!(value, b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z')
         }
     }
 
@@ -704,10 +711,17 @@ mod tests {
     }
 
     #[test]
-    fn rid_id_validation_follows_rfc_8851_grammar() {
-        assert!(sdp::rid::is_id("low-1"));
-        assert!(sdp::rid::is_id("hi_2"));
+    fn rid_id_validation_follows_rfc_8852_stream_id_rules() {
+        let max_length_id = "a".repeat(sdp::rid::MAX_ID_OCTETS);
+        let oversized_id = "a".repeat(sdp::rid::MAX_ID_OCTETS + 1);
+
+        assert!(sdp::rid::is_id("low1"));
+        assert!(sdp::rid::is_id("HI2"));
+        assert!(sdp::rid::is_id(&max_length_id));
         assert!(!sdp::rid::is_id(""));
+        assert!(!sdp::rid::is_id(&oversized_id));
+        assert!(!sdp::rid::is_id("low-1"));
+        assert!(!sdp::rid::is_id("hi_2"));
         assert!(!sdp::rid::is_id("hi.2"));
         assert!(!sdp::rid::is_id("hi:2"));
     }
