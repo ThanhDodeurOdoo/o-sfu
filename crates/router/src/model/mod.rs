@@ -6,7 +6,6 @@ mod consumer_capability;
 mod diagnostic;
 mod error;
 mod ids;
-mod media;
 mod observer;
 mod producer;
 mod proof_storage;
@@ -22,6 +21,8 @@ pub mod test_support;
 mod tests;
 mod transport;
 
+pub use o_sfu_rfc::webrtc::MediaKind;
+
 #[cfg(any(test, feature = "test-support"))]
 pub use self::diagnostic::{
     ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, RfcReference,
@@ -31,7 +32,6 @@ pub use self::{
     consumer_capability::ConsumerCapability,
     error::RouterError,
     ids::{ConsumerId, ProducerId, RouterId, SessionId, TransportId},
-    media::MediaKind,
     observer::{NoopRouterObserver, RouterEvent, RouterObserver},
     producer::Producer,
     route_state::{ConsumerRouteState, ProducerRouteState},
