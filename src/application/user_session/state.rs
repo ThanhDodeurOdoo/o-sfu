@@ -1,25 +1,22 @@
-//! signaling and compatibility state for one websocket connection
+//! connection-scoped state for one websocket session
 //!
-//! this module owns the pure state machines used to sequence server-authored
-//! requests and track the browser-facing track snapshot, it has no knowledge of
-//! transport resources or media core transactions, which keeps the transition
-//! logic deterministic and easy to test
+//! this module only composes the state owned by neighboring user-session
+//! workflows. negotiation sequencing lives beside negotiation orchestration and
+//! compatibility track snapshots live beside room-event projection
 
-mod negotiation;
-mod wire;
-
-use negotiation::UserRequestIdSequencer;
-pub(super) use negotiation::{
-    PendingUserAction, RenegotiationDisposition, ResolvedUserNegotiation, UserNegotiationState,
-};
 use o_sfu_protocol::wire::RequestId;
-pub(super) use wire::{UserWireMessages, UserWireState};
+
+use super::{
+    negotiation::{UserNegotiationState, UserRequestIdSequencer},
+    room_events::UserWireState,
+};
 
 /// connection-scoped state composed by the `User` orchestration facade
 ///
-/// `negotiation_state` owns the offer sequencing invariant and `wire_state`
-/// owns the browser-facing track snapshot while `User` still decides which state
-/// transition is legal for a client or room event
+/// `negotiation_state` belongs to negotiation workflow code and `wire_state`
+/// belongs to room-event workflow code. `User` still keeps them together so one
+/// websocket connection has one request sequence and one browser-facing track
+/// snapshot
 #[derive(Debug, Default)]
 pub(super) struct UserState {
     request_id_sequencer: UserRequestIdSequencer,
