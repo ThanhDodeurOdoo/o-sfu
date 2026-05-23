@@ -6,7 +6,7 @@ use crate::runtime::{ConnectionId, UserId};
 #[derive(Debug, Clone)]
 pub(in crate::runtime::room) struct PublishPrerequisites {
     connection_id: ConnectionId,
-    router_capabilities: MediaCapabilities,
+    capabilities: MediaCapabilities,
 }
 
 impl RoomState {
@@ -17,7 +17,7 @@ impl RoomState {
         }
         Some(PublishPrerequisites {
             connection_id: user.connection_id,
-            router_capabilities: self.topology.rtp_capabilities().clone(),
+            capabilities: self.topology.rtp_capabilities().clone(),
         })
     }
 }
@@ -27,7 +27,7 @@ impl PublishPrerequisites {
         self.connection_id
     }
 
-    pub fn router_capabilities(&self) -> MediaCapabilities {
-        self.router_capabilities.clone()
+    pub fn capabilities(&self) -> MediaCapabilities {
+        self.capabilities.clone()
     }
 }

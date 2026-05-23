@@ -5,7 +5,7 @@ use o_sfu_protocol::wire::{
     TrackBinding, UserId, UserInfo,
 };
 
-use super::{User, UserError, UserOutput, projection::source_descriptor_from_source};
+use super::{User, UserError, UserOutput, projection::wire_source_descriptor};
 use crate::{
     application::stream_catalog::stream_type_for_stream_id,
     core::server::source_model::PublishedSourceDescriptor,
@@ -26,7 +26,7 @@ pub(in crate::application::user_session) struct UserWireMessages {
 }
 
 impl UserWireMessages {
-    fn messages(messages: Vec<ServerMessage>) -> Self {
+    fn from_messages(messages: Vec<ServerMessage>) -> Self {
         Self {
             messages,
             needs_renegotiation: false,
@@ -52,14 +52,14 @@ impl UserWireState {
     /// signals that the browser needs to see the transition
     pub fn apply_room_event(&mut self, message: RoomEventMessage) -> UserWireMessages {
         match message {
-            RoomEventMessage::Broadcast { sender_id, message } => {
-                UserWireMessages::messages(vec![ServerMessage::Broadcast(ServerBroadcastPayload {
+            RoomEventMessage::Broadcast { sender_id, message } => UserWireMessages::from_messages(
+                vec![ServerMessage::Broadcast(ServerBroadcastPayload {
                     sender_id,
                     message: message.to_json(),
-                })])
-            }
+                })],
+            ),
             RoomEventMessage::UserJoined { user_id, info } => {
-                UserWireMessages::messages(vec![ServerMessage::PeerJoined(PeerInfoPayload {
+                UserWireMessages::from_messages(vec![ServerMessage::PeerJoined(PeerInfoPayload {
                     user_id,
                     info,
                 })])
@@ -89,7 +89,7 @@ impl UserWireState {
                 }
             }
             RoomEventMessage::RecordingStateChanged(state) => {
-                UserWireMessages::messages(vec![ServerMessage::RecordingChange(state)])
+                UserWireMessages::from_messages(vec![ServerMessage::RecordingChange(state)])
             }
         }
     }
@@ -115,14 +115,14 @@ impl UserWireState {
 
     pub fn apply_track_binding_update(&mut self, update: &TrackBindingUpdate) -> UserWireMessages {
         let Some(stream_type) = stream_type_for_stream_id(&update.stream_id) else {
-            return UserWireMessages::messages(Vec::new());
+            return UserWireMessages::from_messages(Vec::new());
         };
         let changed = match update.active {
             Some(active) => self.set_track_active(&update.user_id, stream_type, active),
             None => self.remove_track_binding(&update.user_id, stream_type),
         };
         if !changed {
-            return UserWireMessages::messages(Vec::new());
+            return UserWireMessages::from_messages(Vec::new());
         }
         UserWireMessages {
             messages: vec![ServerMessage::Tracks(self.snapshot())],
@@ -145,12 +145,7 @@ impl UserWireState {
                 user_id: user_id.clone(),
                 stream_type,
                 active,
-                source: Some(source_descriptor_from_source(
-                    source,
-                    user_id,
-                    stream_type,
-                    active,
-                )),
+                source: Some(wire_source_descriptor(source, user_id, stream_type, active)),
             },
         );
     }

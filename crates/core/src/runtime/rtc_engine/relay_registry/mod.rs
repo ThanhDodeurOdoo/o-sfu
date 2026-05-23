@@ -223,7 +223,7 @@ impl RelaySourceRegistration {
     }
 
     #[must_use]
-    pub(super) fn active_targets_slice(&self) -> &[ActiveRelayTarget] {
+    pub(super) fn active_targets(&self) -> &[ActiveRelayTarget] {
         &self.active_targets
     }
 
@@ -300,7 +300,7 @@ impl PacketLoopState {
             .and_then(|registration| {
                 registration
                     .has_active_targets()
-                    .then(|| registration.active_targets_slice())
+                    .then(|| registration.active_targets())
             })
     }
 

@@ -90,7 +90,7 @@ fn add_compatible_consumer<O: RouterObserver>(
     );
 }
 
-fn prepare_publish_pair(media_kind: MediaKind) -> Router {
+fn prepare_publisher_topology(media_kind: MediaKind) -> Router {
     let mut router = Router::new(ROUTER);
     join_session(&mut router, PUBLISHER_SESSION);
     join_session(&mut router, SUBSCRIBER_SESSION);
@@ -111,7 +111,7 @@ fn prepare_publish_pair(media_kind: MediaKind) -> Router {
 }
 
 fn prepare_publish_subscribe_pair(media_kind: MediaKind) -> Router {
-    let mut router = prepare_publish_pair(media_kind);
+    let mut router = prepare_publisher_topology(media_kind);
     add_compatible_consumer(&mut router, CONSUMER, SUBSCRIBER_SEND_TRANSPORT, media_kind);
     router
 }
@@ -396,7 +396,7 @@ fn consumers_must_use_send_transports() {
 
 #[test]
 fn consumers_must_match_their_producer_media_kind() {
-    let mut router = prepare_publish_pair(MediaKind::Audio);
+    let mut router = prepare_publisher_topology(MediaKind::Audio);
 
     assert_eq!(
         router.add_consumer(
@@ -419,7 +419,7 @@ fn consumers_must_match_their_producer_media_kind() {
 
 #[test]
 fn consumers_are_rejected_when_capabilities_are_incompatible() {
-    let mut router = prepare_publish_pair(MediaKind::Audio);
+    let mut router = prepare_publisher_topology(MediaKind::Audio);
 
     assert_eq!(
         router.add_consumer(
@@ -440,7 +440,7 @@ fn consumers_are_rejected_when_capabilities_are_incompatible() {
 
 #[test]
 fn new_consumers_inherit_their_producer_pause_state() {
-    let mut router = prepare_publish_pair(MediaKind::Audio);
+    let mut router = prepare_publisher_topology(MediaKind::Audio);
     assert_eq!(
         router.set_producer_route_state(PRODUCER, ProducerRouteState::Paused),
         Ok(())
@@ -470,7 +470,7 @@ fn new_consumers_inherit_their_producer_pause_state() {
 
 #[test]
 fn pausing_a_producer_updates_all_dependent_consumers() {
-    let mut router = prepare_publish_pair(MediaKind::Video);
+    let mut router = prepare_publisher_topology(MediaKind::Video);
     join_session(&mut router, SECOND_SUBSCRIBER_SESSION);
     open_transport(
         &mut router,

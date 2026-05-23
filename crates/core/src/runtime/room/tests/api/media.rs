@@ -79,9 +79,9 @@ impl RoomTestMedia<'_> {
             state.publish_prerequisites(user_id)?
         };
         let publisher_connection_id = publish_prerequisites.connection_id();
-        let router_capabilities = publish_prerequisites.router_capabilities();
+        let capabilities = publish_prerequisites.capabilities();
         let consumable_rtp_parameters =
-            derive_consumable_rtp_parameters(&producer_rtp_parameters, &router_capabilities)
+            derive_consumable_rtp_parameters(&producer_rtp_parameters, &capabilities)
                 .map_err(|error| {
                     warn!(
                         ?user_id,

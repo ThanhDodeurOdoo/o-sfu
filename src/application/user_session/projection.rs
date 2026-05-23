@@ -25,7 +25,7 @@ pub(super) fn session_description_payload(offer: NegotiationOffer) -> SessionDes
     }
 }
 
-pub(super) fn source_descriptor_from_source(
+pub(super) fn wire_source_descriptor(
     source: &PublishedSourceDescriptor,
     user_id: UserId,
     stream_type: StreamType,

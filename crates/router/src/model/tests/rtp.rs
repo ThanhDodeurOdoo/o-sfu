@@ -80,7 +80,7 @@ fn rtp_parameters_collect_codec_header_and_encoding_data() {
 
 #[test]
 fn derive_consumable_parameters_maps_payload_types_and_rtx_association() {
-    let router_capabilities = MediaCapabilities::new(
+    let capabilities = MediaCapabilities::new(
         vec![
             MediaCodecCapability::new(MediaKind::Video, "H264", 90_000)
                 .with_preferred_payload_type(101)
@@ -123,8 +123,7 @@ fn derive_consumable_parameters_maps_payload_types_and_rtx_association() {
     )
     .with_mid("video-0");
 
-    let consumable_result =
-        derive_consumable_rtp_parameters(&producer_parameters, &router_capabilities);
+    let consumable_result = derive_consumable_rtp_parameters(&producer_parameters, &capabilities);
     assert!(consumable_result.is_ok());
     let Ok(consumable) = consumable_result else {
         return;
@@ -251,7 +250,7 @@ fn consumer_negotiation_fails_when_no_media_codec_matches() {
 
 #[test]
 fn invalid_rtx_apt_is_reported_as_invalid_diagnostic() {
-    let router_capabilities = MediaCapabilities::new(
+    let capabilities = MediaCapabilities::new(
         vec![
             MediaCodecCapability::new(MediaKind::Video, "VP8", 90_000)
                 .with_preferred_payload_type(100),
@@ -270,7 +269,7 @@ fn invalid_rtx_apt_is_reported_as_invalid_diagnostic() {
         vec![],
     );
 
-    let negotiation = derive_consumable_rtp_parameters(&producer_parameters, &router_capabilities);
+    let negotiation = derive_consumable_rtp_parameters(&producer_parameters, &capabilities);
     assert_eq!(
         negotiation,
         Err(RtpNegotiationError::InvalidAptParameter {

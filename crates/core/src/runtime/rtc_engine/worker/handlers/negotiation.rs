@@ -491,10 +491,10 @@ fn ensure_session_ready_for_offer(
         state.register_egress_bitrate_counter(session_key.clone(), counter);
     }
     if let Some(session_state) = state.users.get(session_key) {
-        let registered_local_ice_ufrag = state
+        let local_ice_ufrag_changed = state
             .remote_addr_demux
             .remember_local_ice_ufrag(&session_state.local_ice_ufrag, session_key);
-        if created_session || registered_local_ice_ufrag {
+        if created_session || local_ice_ufrag_changed {
             debug!(
                 user_id = ?session_key.user_id(),
                 media_worker_id = session_key.media_worker_id(),
