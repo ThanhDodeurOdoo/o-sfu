@@ -7,6 +7,8 @@
 mod audio_policy;
 #[path = "full_stack/download_controls.rs"]
 mod download_controls;
+#[path = "full_stack/large_room_spillover.rs"]
+mod large_room_spillover;
 #[path = "full_stack/metrics.rs"]
 mod metrics;
 #[path = "full_stack/protocol_flow.rs"]

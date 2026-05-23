@@ -12,12 +12,28 @@ use super::{
     *,
 };
 
+const LARGE_ROOM_SIZE: usize = 64;
+const LARGE_ROOM_LOCAL_ROUTER_CAP: usize = 4;
+const LARGE_ROOM_MIN_RECEIVER_COUNT: usize = 3;
+const LARGE_ROOM_MAX_ACTIVE_CONSUMERS_PER_ROUTER: usize = 2;
+const LARGE_ROOM_MAX_FANOUT_PER_SOURCE: usize = 2;
+const LARGE_ROOM_ACTIVATION_WINDOW: usize = 1;
+const LARGE_ROOM_COOLDOWN_WINDOW: usize = 1;
+const LARGE_ROOM_MEDIA_LIMIT: usize = 2;
+
 pub(crate) struct SpilloverRoomFakePeers {
     pub(crate) server: TestServer,
     pub(crate) room: String,
     pub(crate) publisher: ProtocolFakePeer,
     pub(crate) local_subscriber: ProtocolFakePeer,
     pub(crate) spillover_subscriber: ProtocolFakePeer,
+}
+
+pub(crate) struct LargeRoomSpilloverFakePeers {
+    pub(crate) server: TestServer,
+    pub(crate) room: String,
+    pub(crate) publishers: Vec<ProtocolFakePeer>,
+    pub(crate) receivers: Vec<ProtocolFakePeer>,
 }
 
 pub(crate) async fn spillover_room_fake_peers(
@@ -48,6 +64,33 @@ pub(crate) async fn spillover_room_fake_peers(
     })
 }
 
+pub(crate) async fn large_room_spillover_fake_peers(
+    issuer: &str,
+    publisher_user_ids: &[UserId],
+    receiver_user_ids: &[UserId],
+) -> TestResult<LargeRoomSpilloverFakePeers> {
+    let (server, room) = room_parts_with_config(large_room_spillover_test_config(), issuer).await?;
+    let mut peers = Vec::with_capacity(publisher_user_ids.len() + receiver_user_ids.len());
+    for (peer_index, user_id) in publisher_user_ids
+        .iter()
+        .chain(receiver_user_ids)
+        .enumerate()
+    {
+        let peer = require_some(
+            connect_large_room_spillover_peer(&server, &room, user_id, peer_index).await,
+            "large-room spillover peer should connect",
+        )?;
+        peers.push(peer);
+    }
+    let receivers = peers.split_off(publisher_user_ids.len());
+    Ok(LargeRoomSpilloverFakePeers {
+        server,
+        room,
+        publishers: peers,
+        receivers,
+    })
+}
+
 fn load_triggered_spillover_test_config() -> Config {
     let mut config = super::test_config(1_000, 10);
     let policy = match LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
@@ -61,6 +104,30 @@ fn load_triggered_spillover_test_config() -> Config {
     config.transport.rtc_media_worker_count = 2;
     config.transport.room_worker_policy =
         RoomWorkerPolicy::load_triggered_local_spillover(2, policy);
+    config
+}
+
+fn large_room_spillover_test_config() -> Config {
+    let mut config = super::test_config(1_000, LARGE_ROOM_SIZE);
+    let policy = match LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
+        min_receiver_count: LARGE_ROOM_MIN_RECEIVER_COUNT,
+        max_active_consumers_per_router: LARGE_ROOM_MAX_ACTIVE_CONSUMERS_PER_ROUTER,
+        max_fanout_per_source: LARGE_ROOM_MAX_FANOUT_PER_SOURCE,
+        activation_window: LARGE_ROOM_ACTIVATION_WINDOW,
+        cooldown_window: LARGE_ROOM_COOLDOWN_WINDOW,
+        ..LocalSpilloverPolicyParts::conservative()
+    }) {
+        Ok(policy) => policy,
+        Err(error) => panic!("large-room spillover test policy should be valid: {error}"),
+    };
+    config.transport.rtc_media_worker_count = LARGE_ROOM_LOCAL_ROUTER_CAP;
+    config.transport.room_worker_policy =
+        RoomWorkerPolicy::load_triggered_local_spillover(LARGE_ROOM_LOCAL_ROUTER_CAP, policy);
+    config.transport.room_media_limits =
+        match RoomMediaLimits::try_new(LARGE_ROOM_MEDIA_LIMIT, LARGE_ROOM_MEDIA_LIMIT) {
+            Ok(limits) => limits,
+            Err(error) => panic!("large-room media limits should be valid: {error}"),
+        };
     config
 }
 
@@ -121,6 +188,29 @@ async fn connect_load_triggered_spillover_rtc_peers(
     assert_departure_message_protocol(&mut spillover_subscriber, activation_user_id).await;
 
     Some((publisher, local_subscriber, spillover_subscriber))
+}
+
+async fn connect_large_room_spillover_peer(
+    server: &TestServer,
+    room: &str,
+    user_id: &UserId,
+    peer_index: usize,
+) -> Option<ProtocolFakePeer> {
+    let mut peer = connect_fake_peer(server, room, user_id.clone(), TEST_ROOM_KEY).await?;
+    peer.wait_until_connected(super::Duration::from_secs(5))
+        .await?;
+    let asserted_peer_count =
+        LARGE_ROOM_LOCAL_ROUTER_CAP * LARGE_ROOM_MAX_ACTIVE_CONSUMERS_PER_ROUTER;
+    if peer_index < asserted_peer_count {
+        assert_user_media_worker(
+            server,
+            room,
+            user_id,
+            peer_index / LARGE_ROOM_MAX_ACTIVE_CONSUMERS_PER_ROUTER,
+        )
+        .await;
+    }
+    Some(peer)
 }
 
 async fn connect_load_triggered_peer_on_worker<const N: usize>(
