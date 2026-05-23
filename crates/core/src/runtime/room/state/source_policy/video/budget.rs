@@ -230,7 +230,7 @@ fn apply_receiver_overload_policy(
         .iter_mut()
         .filter(|route| route_can_downgrade(route))
     {
-        let Some((selector, bitrate)) = cheapest_useful_encoding(route.route.encodings()) else {
+        let Some((selector, bitrate)) = cheapest_useful_selector(route.route.encodings()) else {
             route.action = VideoRouteAction::Pause(PolicyPauseReason::MissingUsableLayer);
             selected_bitrate = selected_bitrate.saturating_sub(route.selected_bitrate);
             route.selected_bitrate = Bitrate::zero();
@@ -616,7 +616,7 @@ fn pause_reason_for_route(route: &PlannedReceiverRoute<'_>) -> PolicyPauseReason
     }
 }
 
-fn cheapest_useful_encoding(
+fn cheapest_useful_selector(
     encodings: SelectableRouteEncodings<'_>,
 ) -> Option<(SourceSelector, Bitrate)> {
     encodings

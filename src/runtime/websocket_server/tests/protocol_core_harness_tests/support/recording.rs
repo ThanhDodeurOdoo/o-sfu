@@ -21,7 +21,7 @@ fn has_resolved_pending_request(
     })
 }
 
-fn has_any_recording_update(updates: &[BundleUpdate]) -> bool {
+fn has_channel_info_update(updates: &[BundleUpdate]) -> bool {
     updates
         .iter()
         .any(|update| matches!(update, BundleUpdate::ChannelInfoChange(_)))
@@ -83,5 +83,5 @@ pub(crate) async fn assert_recording_request_rejected(
     request_kind: HostPendingRequestKind,
 ) -> Option<RequestId> {
     let request_id = drain_peer_until_pending_request_resolution(peer, request_kind, false).await?;
-    (!has_any_recording_update(&peer.updates)).then_some(request_id)
+    (!has_channel_info_update(&peer.updates)).then_some(request_id)
 }

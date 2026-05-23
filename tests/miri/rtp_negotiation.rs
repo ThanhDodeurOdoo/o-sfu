@@ -39,7 +39,7 @@ fn h264_profile_level_id_and_two_byte_profile_helpers_handle_edge_cases() {
 
 #[test]
 fn derive_consumable_parameters_remap_primary_payloads_rtx_apt_and_bindings() {
-    let router_capabilities = MediaCapabilities::new(
+    let capabilities = MediaCapabilities::new(
         vec![
             MediaCodecCapability::new(MediaKind::Video, "H264", 90_000)
                 .with_preferred_payload_type(101)
@@ -83,7 +83,7 @@ fn derive_consumable_parameters_remap_primary_payloads_rtx_apt_and_bindings() {
     )
     .with_mid("video-0");
 
-    let consumable = derive_consumable_rtp_parameters(&producer_parameters, &router_capabilities);
+    let consumable = derive_consumable_rtp_parameters(&producer_parameters, &capabilities);
     assert_eq!(consumable.as_ref().map(|_| ()), Ok(()));
     let Some(consumable) = consumable.ok() else {
         return;
@@ -123,7 +123,7 @@ fn derive_consumable_parameters_remap_primary_payloads_rtx_apt_and_bindings() {
 
 #[test]
 fn derive_consumable_parameters_reject_invalid_rtx_apt_values() {
-    let router_capabilities = MediaCapabilities::new(
+    let capabilities = MediaCapabilities::new(
         vec![
             MediaCodecCapability::new(MediaKind::Video, "VP8", 90_000)
                 .with_preferred_payload_type(100),
@@ -144,7 +144,7 @@ fn derive_consumable_parameters_reject_invalid_rtx_apt_values() {
     );
 
     assert_eq!(
-        derive_consumable_rtp_parameters(&producer_parameters, &router_capabilities),
+        derive_consumable_rtp_parameters(&producer_parameters, &capabilities),
         Err(RtpNegotiationError::InvalidAptParameter {
             codec_name: "rtx".to_owned(),
             payload_type: 97,

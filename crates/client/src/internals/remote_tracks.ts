@@ -210,7 +210,7 @@ export class RemoteTracks {
         if (!("addEventListener" in track) || typeof track.addEventListener !== "function") {
             return;
         }
-        const emitTrackState = () => {
+        const emitTrackUpdate = () => {
             const binding = this._remoteTrackBindings.get(mid);
             if (!binding || this._remoteTracksByMid.get(mid) !== track) {
                 return;
@@ -218,8 +218,8 @@ export class RemoteTracks {
             const appliedBinding = this.applyCurrentSubscriptionState(binding);
             this.publishTrack(mid, appliedBinding, appliedBinding, emitUpdate, true);
         };
-        track.addEventListener("mute", emitTrackState);
-        track.addEventListener("unmute", emitTrackState);
+        track.addEventListener("mute", emitTrackUpdate);
+        track.addEventListener("unmute", emitTrackUpdate);
     }
 
     private applyCurrentSubscriptionState(binding: AppliedTrackBinding): AppliedTrackBinding {

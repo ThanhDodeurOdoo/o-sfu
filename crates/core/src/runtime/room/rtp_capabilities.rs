@@ -200,7 +200,7 @@ mod tests {
     use crate::{CodecPreferences, MediaCodecFlags, VideoCodecPreference};
 
     #[test]
-    fn default_router_capabilities_match_the_browser_codec_baseline() {
+    fn default_capabilities_match_the_browser_codec_baseline() {
         let capabilities = router_rtp_capabilities(MediaCodecFlags::default());
         let codec_names = capabilities
             .codecs()
@@ -210,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn router_capabilities_include_enabled_optional_codecs() {
+    fn capabilities_include_enabled_optional_codecs() {
         let capabilities = router_rtp_capabilities(
             MediaCodecFlags::default()
                 .with_pcmu(true)
@@ -302,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn router_capabilities_follow_configured_codec_preferences() {
+    fn capabilities_follow_configured_codec_preferences() {
         let capabilities = router_rtp_capabilities_with_preferences(
             MediaCodecFlags::default().with_h264(true).with_vp9(true),
             CodecPreferences::default()

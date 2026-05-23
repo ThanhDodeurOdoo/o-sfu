@@ -90,7 +90,7 @@ fn route_control_coalesces_explicit_rids_independently() {
 }
 
 #[test]
-fn route_control_drops_packets_when_the_source_is_blocked() {
+fn route_control_drops_packets_when_the_is_source_blocked() {
     let mut state = RouteControlState::default();
     let source_transport_media_id = TransportMediaId::new(19);
     state.set_packet_gate(source_transport_media_id, PacketLayerGate::Block);

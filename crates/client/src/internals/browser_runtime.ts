@@ -581,8 +581,7 @@ export class BrowserRuntime {
         );
         if (
             negotiationKind === "offer" &&
-            (this.shouldFallbackToImmediateTransportReady() ||
-                localDescriptionHasOnlyInactiveMedia(answerSdp))
+            (this.lacksConnectionStateApi() || localDescriptionHasOnlyInactiveMedia(answerSdp))
         ) {
             emitRuntimeLog(
                 hooks,
@@ -644,7 +643,7 @@ export class BrowserRuntime {
         });
     }
 
-    private shouldFallbackToImmediateTransportReady(): boolean {
+    private lacksConnectionStateApi(): boolean {
         return typeof this._peerConnection?.connectionState !== "string";
     }
 

@@ -108,7 +108,7 @@ impl ParseDiagnostic for RtpNegotiationError {
 /// payload that is not part of the negotiated media codec set.
 pub fn derive_consumable_rtp_parameters(
     producer_parameters: &MediaStream,
-    router_capabilities: &MediaCapabilities,
+    capabilities: &MediaCapabilities,
 ) -> Result<MediaStream, RtpNegotiationError> {
     // Maps the producer's original primary payload type to the router-visible
     // payload type chosen for the consumable stream.
@@ -124,42 +124,38 @@ pub fn derive_consumable_rtp_parameters(
     // If a producer format has no router capability match, the router would not be
     // able to describe or forward that media in its consumable model, so we reject
     // the whole producer stream instead of silently dropping the codec.
-    for producer_format in producer_parameters.formats() {
+    for format in producer_parameters.formats() {
         // RFC 4588 section 8.1 binds RTX to an already-negotiated primary payload type via `apt`,
         // so media codecs must be matched before retransmission formats can be validated.
-        if producer_format.codec().is_rtx() {
+        if format.codec().is_rtx() {
             continue;
         }
-        let Some(capability_format) =
-            find_matching_media_capability(producer_format, router_capabilities)
-        else {
+        let Some(capability_format) = find_matching_media_capability(format, capabilities) else {
             // RFC 3264 section 6 only allows formats that both sides support to survive
             // negotiation, so a producer codec with no router capability match is rejected.
             return Err(RtpNegotiationError::UnsupportedProducerCodec {
-                codec_name: producer_format.codec().as_str().to_owned(),
-                payload_type: producer_format.payload_type(),
+                codec_name: format.codec().as_str().to_owned(),
+                payload_type: format.payload_type(),
             });
         };
-        let mapped_payload_type = mapped_payload_type(capability_format, producer_format);
+        let mapped_payload_type = mapped_payload_type(capability_format, format);
         mapped_media_payload_by_original_payload
-            .push((producer_format.payload_type_id(), mapped_payload_type));
-        let feedback = intersect_feedback(
-            producer_format.rtcp_feedback(),
-            capability_format.rtcp_feedback(),
-        );
+            .push((format.payload_type_id(), mapped_payload_type));
+        let feedback =
+            intersect_feedback(format.rtcp_feedback(), capability_format.rtcp_feedback());
         consumable_formats.push(clone_format_with_overrides(
-            producer_format,
+            format,
             mapped_payload_type,
             None,
             &feedback,
         ));
     }
 
-    for producer_format in producer_parameters.formats() {
-        if !producer_format.codec().is_rtx() {
+    for format in producer_parameters.formats() {
+        if !format.codec().is_rtx() {
             continue;
         }
-        let associated_payload_type = parse_rtx_associated_payload(producer_format)?;
+        let associated_payload_type = parse_rtx_associated_payload(format)?;
         let Some(mapped_associated_payload_type) = mapped_media_payload_by_original_payload
             .iter()
             .find_map(|(original, mapped)| {
@@ -168,35 +164,31 @@ pub fn derive_consumable_rtp_parameters(
         else {
             // RFC 4588 section 8.1 makes RTX invalid without a negotiated associated payload type.
             return Err(RtpNegotiationError::MissingAssociatedMediaCodecForRtx {
-                payload_type: producer_format.payload_type(),
+                payload_type: format.payload_type(),
                 associated_payload_type: associated_payload_type.value(),
             });
         };
-        let Some(capability_format) = find_matching_rtx_capability(
-            producer_format,
-            mapped_associated_payload_type,
-            router_capabilities,
-        ) else {
+        let Some(capability_format) =
+            find_matching_rtx_capability(format, mapped_associated_payload_type, capabilities)
+        else {
             // Unlike a primary media codec, RTX is an auxiliary retransmission format.
             // If the router does not support this RTX pairing, the media stream can still
             // remain valid without retransmission support, so we drop RTX rather than fail
             // the whole negotiation.
             continue;
         };
-        let mapped_payload_type = mapped_payload_type(capability_format, producer_format);
-        let feedback = intersect_feedback(
-            producer_format.rtcp_feedback(),
-            capability_format.rtcp_feedback(),
-        );
+        let mapped_payload_type = mapped_payload_type(capability_format, format);
+        let feedback =
+            intersect_feedback(format.rtcp_feedback(), capability_format.rtcp_feedback());
         consumable_formats.push(clone_format_with_overrides(
-            producer_format,
+            format,
             mapped_payload_type,
             Some(mapped_associated_payload_type),
             &feedback,
         ));
     }
 
-    let header_extensions = router_capabilities
+    let header_extensions = capabilities
         .header_extensions()
         .filter(|extension| {
             // RFC 8285 negotiates header extensions by common support. Keep only producer-backed
@@ -335,11 +327,11 @@ pub fn can_consume(
 /// capability entry to hardcode payload types.
 fn mapped_payload_type(
     capability_format: &MediaCodecCapability,
-    producer_format: &MediaFormat,
+    format: &MediaFormat,
 ) -> PayloadType {
     capability_format
         .payload_type_id()
-        .unwrap_or(producer_format.payload_type_id())
+        .unwrap_or(format.payload_type_id())
 }
 
 /// Media capability matching intentionally ignores payload type.
@@ -349,12 +341,12 @@ fn mapped_payload_type(
 /// clock rate, normalized channel count, and codec-specific critical fmtp
 /// parameters.
 fn find_matching_media_capability<'a>(
-    producer_format: &MediaFormat,
-    router_capabilities: &'a MediaCapabilities,
+    format: &MediaFormat,
+    capabilities: &'a MediaCapabilities,
 ) -> Option<&'a MediaCodecCapability> {
-    router_capabilities.codecs().find(|capability_format| {
+    capabilities.codecs().find(|capability_format| {
         !capability_format.codec().is_rtx()
-            && codec_match_ignoring_payload_type(producer_format, capability_format)
+            && codec_match_ignoring_payload_type(format, capability_format)
     })
 }
 
@@ -364,13 +356,13 @@ fn find_matching_media_capability<'a>(
 /// primary payload type, because RFC 4588 binds RTX to a specific primary PT
 /// through `apt`
 fn find_matching_rtx_capability<'a>(
-    producer_format: &MediaFormat,
+    format: &MediaFormat,
     mapped_associated_payload_type: PayloadType,
-    router_capabilities: &'a MediaCapabilities,
+    capabilities: &'a MediaCapabilities,
 ) -> Option<&'a MediaCodecCapability> {
-    router_capabilities.codecs().find(|capability_format| {
+    capabilities.codecs().find(|capability_format| {
         capability_format.codec().is_rtx()
-            && codec_match_ignoring_payload_type(producer_format, capability_format)
+            && codec_match_ignoring_payload_type(format, capability_format)
             && capability_format.settings().any(|setting| {
                 matches!(
                     setting,

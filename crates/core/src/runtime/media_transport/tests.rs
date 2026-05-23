@@ -61,7 +61,7 @@ fn test_media_transport_builder(rtc_port_range: RtcPortRange) -> MediaTransportB
         })
 }
 
-fn sample_router_capabilities() -> RouterRtpCapabilities {
+fn sample_capabilities() -> RouterRtpCapabilities {
     RouterRtpCapabilities::new(
         vec![
             MediaCodecCapability::new(RouterMediaKind::Audio, "opus", 48_000)
@@ -389,10 +389,8 @@ async fn assert_local_active_and_remote_inactive(
 fn rtc_engine_rejects_answers_without_projectable_client_capabilities() {
     let adapter = test_media_transport(1, RtcPortRange::new(46_100, 46_199));
 
-    let projected = adapter.negotiated_client_rtp_capabilities(
-        "v=0\r\ns=invalid-answer\r\n",
-        &sample_router_capabilities(),
-    );
+    let projected = adapter
+        .negotiated_client_rtp_capabilities("v=0\r\ns=invalid-answer\r\n", &sample_capabilities());
 
     assert_eq!(projected, Err(TransportAdapterError::InvalidInput));
 }

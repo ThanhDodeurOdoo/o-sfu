@@ -162,9 +162,9 @@ impl MediaTransport {
     pub fn negotiated_client_rtp_capabilities(
         &self,
         answer_sdp: &str,
-        offered_router_capabilities: &MediaCapabilities,
+        offered_capabilities: &MediaCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
-        Self::project_client_rtp_capabilities(answer_sdp, offered_router_capabilities).inspect_err(
+        Self::project_client_rtp_capabilities(answer_sdp, offered_capabilities).inspect_err(
             |error| {
                 warn!(
                     answer_len = answer_sdp.len(),

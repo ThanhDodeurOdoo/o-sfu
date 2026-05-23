@@ -121,10 +121,10 @@ impl DiagnosticsWorkerAccumulator {
 /// The function is cold-path only and recomputes the response from current snapshots.
 pub(crate) async fn summary_response(
     rooms: &RoomManager,
-    observability_port: &MediaTransport,
+    transport: &MediaTransport,
     diagnostics: &DiagnosticsStore,
 ) -> DiagnosticsSummaryResponse {
-    let room_snapshots = room_snapshots(rooms, observability_port, diagnostics).await;
+    let room_snapshots = room_snapshots(rooms, transport, diagnostics).await;
     let mut transport = DiagnosticsTransportCounts::default();
     let mut recording_rooms_active = 0_usize;
     let mut publications_active = 0_usize;
@@ -161,10 +161,10 @@ pub(crate) async fn summary_response(
 /// Each item is a summary for one live room
 pub(crate) async fn rooms_response(
     rooms: &RoomManager,
-    observability_port: &MediaTransport,
+    transport: &MediaTransport,
     diagnostics: &DiagnosticsStore,
 ) -> Vec<DiagnosticsRoomSummary> {
-    room_snapshots(rooms, observability_port, diagnostics)
+    room_snapshots(rooms, transport, diagnostics)
         .await
         .into_iter()
         .map(|snapshot| snapshot.detail.summary)
@@ -173,32 +173,28 @@ pub(crate) async fn rooms_response(
 
 pub(crate) async fn room_detail_response(
     rooms: &RoomManager,
-    observability_port: &MediaTransport,
+    transport: &MediaTransport,
     diagnostics: &DiagnosticsStore,
     room_id: &str,
 ) -> Option<DiagnosticsRoomDetail> {
     let entry = rooms.directory_snapshot(room_id).await?;
-    Some(
-        room_snapshot(&entry, observability_port, diagnostics)
-            .await
-            .detail,
-    )
+    Some(room_snapshot(&entry, transport, diagnostics).await.detail)
 }
 
 pub(crate) async fn room_users_response(
     rooms: &RoomManager,
-    observability_port: &MediaTransport,
+    transport: &MediaTransport,
     diagnostics: &DiagnosticsStore,
     room_id: &str,
 ) -> Option<Vec<DiagnosticsUserSummary>> {
     let entry = rooms.directory_snapshot(room_id).await?;
-    let snapshot = room_snapshot(&entry, observability_port, diagnostics).await;
+    let snapshot = room_snapshot(&entry, transport, diagnostics).await;
     Some(user_summaries(&snapshot.detail))
 }
 
 pub(crate) async fn workers_response(
     rooms: &RoomManager,
-    observability_port: &MediaTransport,
+    transport: &MediaTransport,
 ) -> Vec<DiagnosticsWorkerSummary> {
     let mut workers = (0..rooms.media_worker_count())
         .map(|media_worker_id| {
@@ -208,7 +204,7 @@ pub(crate) async fn workers_response(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    for pressure in observability_port.worker_pressure_snapshots() {
+    for pressure in transport.worker_pressure_snapshots() {
         workers
             .entry(pressure.media_worker_id)
             .or_insert_with(|| DiagnosticsWorkerAccumulator::new(pressure.media_worker_id))
@@ -217,7 +213,7 @@ pub(crate) async fn workers_response(
     for entry in rooms.directory_snapshots().await {
         let room = entry.room();
         let room_id = room.uuid();
-        let users = room.diagnostics_user_views(observability_port).await;
+        let users = room.diagnostics_user_views(transport).await;
         if users.is_empty() {
             workers
                 .entry(room.media_worker_id())
@@ -254,7 +250,7 @@ pub(crate) async fn workers_response(
 /// `(room_id, user_id)` scope.
 pub(crate) async fn user_detail_response(
     rooms: &RoomManager,
-    observability_port: &MediaTransport,
+    transport: &MediaTransport,
     diagnostics: &DiagnosticsStore,
     requested_user_id: &str,
 ) -> DiagnosticsUserLookup {
@@ -266,7 +262,7 @@ pub(crate) async fn user_detail_response(
     for entry in rooms.directory_snapshots_for_room_ids(&room_ids).await {
         let Some((user_view, user_id)) = entry
             .room()
-            .diagnostics_matching_user(requested_user_id, observability_port)
+            .diagnostics_matching_user(requested_user_id, transport)
             .await
         else {
             continue;
@@ -290,27 +286,24 @@ pub(crate) async fn user_detail_response(
 
 async fn room_snapshots(
     rooms: &RoomManager,
-    observability_port: &MediaTransport,
+    transport: &MediaTransport,
     diagnostics: &DiagnosticsStore,
 ) -> Vec<DiagnosticsRoomSnapshot> {
     let entries = rooms.directory_snapshots().await;
     let mut snapshots = Vec::with_capacity(entries.len());
     for entry in entries {
-        snapshots.push(room_snapshot(&entry, observability_port, diagnostics).await);
+        snapshots.push(room_snapshot(&entry, transport, diagnostics).await);
     }
     snapshots
 }
 
 async fn room_snapshot(
     entry: &RuntimeRoomDirectorySnapshot,
-    observability_port: &MediaTransport,
+    transport: &MediaTransport,
     diagnostics: &DiagnosticsStore,
 ) -> DiagnosticsRoomSnapshot {
-    let users = entry
-        .room()
-        .diagnostics_user_views(observability_port)
-        .await;
-    let sources = entry.room().diagnostics_sources(observability_port).await;
+    let users = entry.room().diagnostics_user_views(transport).await;
+    let sources = entry.room().diagnostics_sources(transport).await;
     let source_count = sources.len();
     let transport = transport_counts(&users);
     let publication_count = users.iter().map(|user| user.publications.len()).sum();

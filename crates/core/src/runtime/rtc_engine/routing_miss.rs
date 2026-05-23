@@ -440,7 +440,7 @@ impl PacketLoopRoutingState {
     }
 
     /// Returns whether a source is already blocked before packet fingerprinting.
-    pub(super) fn source_is_blocked(&mut self, source_addr: SocketAddr, now: Instant) -> bool {
+    pub(super) fn is_source_blocked(&mut self, source_addr: SocketAddr, now: Instant) -> bool {
         self.source_rate_limiter.is_blocked(source_addr, now)
     }
 
@@ -485,7 +485,7 @@ impl PacketLoopRoutingState {
     }
 
     #[cfg(test)]
-    pub(super) fn source_is_tracked(&self, source_addr: SocketAddr) -> bool {
+    pub(super) fn is_tracking_source(&self, source_addr: SocketAddr) -> bool {
         self.source_rate_limiter.contains_source(source_addr)
     }
 }
@@ -541,14 +541,14 @@ mod tests {
             now += Duration::from_millis(1);
         }
 
-        assert!(routing_state.source_is_tracked(source_addr));
+        assert!(routing_state.is_tracking_source(source_addr));
         assert!(
             routing_state.should_rate_limit_source(source_addr, start + Duration::from_millis(4),)
         );
 
         routing_state.record_fallback_route_success(miss_key, &packet, source_addr);
 
-        assert!(!routing_state.source_is_tracked(source_addr));
+        assert!(!routing_state.is_tracking_source(source_addr));
         assert!(
             !routing_state.should_rate_limit_source(source_addr, start + Duration::from_millis(5),)
         );

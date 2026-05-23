@@ -356,7 +356,7 @@ impl MediaTransport {
     /// state and returns `InvalidInput` when the answer cannot be projected.
     pub(super) fn project_client_rtp_capabilities(
         answer_sdp: &str,
-        _offered_router_capabilities: &MediaCapabilities,
+        _offered_capabilities: &MediaCapabilities,
     ) -> Result<MediaCapabilities, TransportAdapterError> {
         client_rtp_capabilities_from_answer(answer_sdp).ok_or(TransportAdapterError::InvalidInput)
     }

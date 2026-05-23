@@ -489,7 +489,7 @@ impl Room {
     /// rather than one global atomic instant.
     pub(crate) async fn session_stats_snapshot(
         &self,
-        observability_port: &MediaTransport,
+        transport: &MediaTransport,
     ) -> RoomUserStatsSnapshot {
         let state = self.state.read().await;
         let session_keys = state
@@ -497,7 +497,7 @@ impl Room {
             .into_iter()
             .map(|(user_id, connection_id)| self.transport_user_key(&user_id, connection_id))
             .collect::<Vec<_>>();
-        let transport_snapshot = observability_port.transport_bitrate_snapshot(&session_keys);
+        let transport_snapshot = transport.transport_bitrate_snapshot(&session_keys);
         let mut incoming_bitrate = IncomingBitrateSnapshot {
             total: transport_snapshot.total.as_bps(),
             ..Default::default()
@@ -578,7 +578,7 @@ impl Room {
     /// per-user view with transport health and current incoming bitrate.
     pub async fn diagnostics_user_views(
         &self,
-        observability_port: &MediaTransport,
+        transport: &MediaTransport,
     ) -> Vec<DiagnosticsUserView> {
         let state = self.state.read().await;
         let session_entries = state.transport_user_entries();
@@ -586,8 +586,8 @@ impl Room {
             .iter()
             .map(|(user_id, connection_id)| self.transport_user_key(user_id, *connection_id))
             .collect::<Vec<_>>();
-        let transport_snapshot = observability_port.transport_bitrate_snapshot(&session_keys);
-        let quality_by_session = observability_port
+        let transport_snapshot = transport.transport_bitrate_snapshot(&session_keys);
+        let quality_by_session = transport
             .transport_quality_snapshot(&session_keys)
             .per_session
             .into_iter()
@@ -600,7 +600,7 @@ impl Room {
                 let session_key = self.transport_user_key(&user_id, connection_id);
                 let transport = DiagnosticsUserTransport {
                     connection_id: connection_id.as_u64(),
-                    health: observability_port
+                    health: transport
                         .session_transport_health(&session_key)
                         .map(diagnostics::diagnostics_transport_health),
                     media_worker_id: session_key.media_worker_id(),
@@ -627,14 +627,9 @@ impl Room {
     /// from `MediaTransport`. This method keeps the merge at
     /// the room boundary so diagnostics routes do not inspect room state
     /// or transport internals directly.
-    pub async fn diagnostics_sources(
-        &self,
-        observability_port: &MediaTransport,
-    ) -> Vec<DiagnosticsSource> {
+    pub async fn diagnostics_sources(&self, transport: &MediaTransport) -> Vec<DiagnosticsSource> {
         let active_speaker_diagnostics = active_speaker_diagnostics_by_media(
-            observability_port
-                .active_speaker_diagnostic_snapshot()
-                .await,
+            transport.active_speaker_diagnostic_snapshot().await,
         );
         let state = self.state.read().await;
         let session_keys = state
@@ -642,7 +637,7 @@ impl Room {
             .iter()
             .map(|(user_id, connection_id)| self.transport_user_key(user_id, *connection_id))
             .collect::<Vec<_>>();
-        let transport_snapshot = observability_port.transport_bitrate_snapshot(&session_keys);
+        let transport_snapshot = transport.transport_bitrate_snapshot(&session_keys);
         let incoming_bitrate_by_source =
             state.diagnostics_incoming_bitrate_by_source(&transport_snapshot.per_media);
         state.diagnostics_sources(&incoming_bitrate_by_source, &active_speaker_diagnostics)
@@ -655,9 +650,9 @@ impl Room {
     pub async fn diagnostics_matching_user(
         &self,
         requested_user_id: &str,
-        observability_port: &MediaTransport,
+        transport: &MediaTransport,
     ) -> Option<(DiagnosticsUserView, UserId)> {
-        self.diagnostics_user_views(observability_port)
+        self.diagnostics_user_views(transport)
             .await
             .into_iter()
             .find(|user| user_id_matches(&user.user_id, requested_user_id))

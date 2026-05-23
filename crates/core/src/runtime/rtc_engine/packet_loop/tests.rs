@@ -414,7 +414,11 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
         .record_miss(miss_key, &packet, harness.source_addr, Instant::now());
 
     assert!(harness.routing_state.should_skip_scan(miss_key, &packet));
-    assert!(harness.routing_state.source_is_tracked(harness.source_addr));
+    assert!(
+        harness
+            .routing_state
+            .is_tracking_source(harness.source_addr)
+    );
 
     harness.route(&packet);
 
@@ -442,7 +446,11 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
         );
     }
     assert!(harness.routing_state.should_skip_scan(miss_key, &packet));
-    assert!(harness.routing_state.source_is_tracked(harness.source_addr));
+    assert!(
+        harness
+            .routing_state
+            .is_tracking_source(harness.source_addr)
+    );
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_routes_indexed(), 1);
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 0);

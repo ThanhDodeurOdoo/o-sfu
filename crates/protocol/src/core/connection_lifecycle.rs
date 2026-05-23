@@ -1,36 +1,36 @@
-//! Lifecycle transitions for the protocol core connection state machine
+//! lifecycle transitions for the protocol core connection state machine
 //!
-//! This module contain the "outer shell" of the client connection lifecycle:
-//! connect, transport-ready, websocket close, explicit disconnect and delayed
-//! recovery (It does not handle signaling messages or sticky replay content by
-//! itself(
+//! this module owns the outer client connection lifecycle for [`ProtocolCore`]:
+//! connect requests, transport readiness, websocket close events, explicit
+//! disconnects and recovery timer callbacks
 //!
-//! it does:
-//! - decide whether a transition is legal from the current state
-//! - decide what state the core should move to next
-//! - decide whether runtime or sticky state must be cleared
-//! - emit the command sequence the host/runtime must execute around that move
+//! it is a control-plane module
+//! it never opens sockets or advances transport work directly
+//! each transition returns ordered [`Command`] values the host must execute
+//! through the `CommandBatch` contract
 //!
-//! The slightly unusual split between `LifecycleModel`, `LifecyclePlan` and
-//! `apply_model` is becaise: The transition helpers stay pure and easy
-//! to reason about, while `apply_model` is the only place that mutates the live
-//! `ProtocolCore` and triggers cleanup side effects. That keeps lifecycle rules
-//! testable and proof-friendly without pushing cleanup policy all over `core.rs`.
+//! the lifecycle split has three layers:
 //!
-//! A few lifecycle rules:
-//! (if you are familiar with odoo/sfu's  client its basicly the same rules)
+//! ```text
+//! ProtocolCore snapshot -> LifecycleModel -> LifecyclePlan -> Commands
+//! ```
 //!
-//! - explicit `disconnect()` is terminal for the current user attempt and
-//!   clears both runtime and sticky state
-//! - terminal websocket close codes (`AuthFailed`, `Kicked`, `RoomFull`)
-//!   also stop recovery, but keep sticky state untouched because the caller did
-//!   not explicitly ask to wipe intent
-//! - non-terminal websocket closes keep the saved connect context and move into
-//!   `Recovering`, so the recovery timer can reconnect later
-//! - the recovery timer only reconnects from `Recovering`. stale timer fires in
-//!   any other state are no-ops
+//! the [`LifecycleModel`] is the small state slice shared by production and
+//! verification
+//! transition helpers mutate only that model and return a [`LifecyclePlan`]
+//! `apply_plan` is the bridge back to [`ProtocolCore`],
+//! where runtime state, sticky replay state and host-visible commands are
+//! updated in the prescribed order
 //!
-//! Example flows:
+//! the main contract is:
+//!
+//! - a fresh `connect` starts a new user attempt and wipes replayable intent
+//! - explicit `disconnect` is terminal for that user attempt and clears saved context
+//! - terminal close codes move to `Closed` without scheduling recovery
+//! - transient close events keep the saved connect context and enter `Recovering`
+//! - recovery timers only reconnect while the model is still `Recovering`
+//!
+//! example flows:
 //!
 //! ```text
 //! Disconnected --> connect()--> Connecting --> on_welcome() --> Authenticated
@@ -45,10 +45,10 @@
 //! Connected --> disconnect()--> Disconnected
 //! ```
 //!
-//! The last flow is intentionally different from `on_ws_close(...)`: explicit
+//! the last flow is intentionally different from `on_ws_close`: explicit
 //! disconnect wipes replayable intent and suppresses later recovery, while a
-//! transient socket loss keeps enough state around to reconnect and
-//! rebuild from saved state.
+//! transient socket loss keeps enough state around to reconnect and rebuild
+//! from saved state
 
 use super::{
     Command, Commands, ConnectContext, INITIAL_RECOVERY_DELAY_MS, ProtocolCore, RECOVERY_TIMER_ID,
@@ -58,14 +58,25 @@ use crate::{
     bundle_api::BundleConnectionState, shared::RecordingState, signaling::WebSocketCloseCode,
 };
 
+/// proof-friendly snapshot of the connection lifecycle state
+///
+/// this keeps only the state needed to decide whether a lifecycle event is
+/// legal and what retry delay should be used next
+/// runtime queues, track bindings and sticky replay stay on [`ProtocolCore`]
+/// so verification can share production transition logic without modeling
+/// unrelated state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct LifecycleModel {
+    /// current host-visible lifecycle state used to accept or reject events
     pub(super) state: BundleConnectionState,
+    /// whether authentication data is still available for websocket retry
     pub(super) has_connect_context: bool,
+    /// next delay that will be used for a transient close recovery attempt
     pub(super) recovery_delay_ms: u32,
 }
 
 impl LifecycleModel {
+    /// creates the empty lifecycle model used by verification harnesses
     #[cfg(feature = "verification-models")]
     #[must_use]
     pub(super) fn new() -> Self {
@@ -77,107 +88,132 @@ impl LifecycleModel {
     }
 }
 
+/// policy for updating the saved connect context after a lifecycle transition
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ConnectContextUpdate {
+    /// keep the saved context unchanged
     Preserve,
+    /// drop the saved context so later recovery callbacks cannot reconnect
     Clear,
+    /// replace the saved context with the input passed to `connect`
     ReplaceFromInput,
 }
 
-/// Cleanup policy that `apply_model` should use after the pure transition logic
-/// has decided on the next lifecycle state.
+/// cleanup policy that `apply_plan` should use after the pure transition logic
+/// has chosen the next lifecycle state
 ///
-/// This exists so the model helpers can say "what kind of cleanup is needed"
-/// without directly mutating the live runtime state themselves.
+/// the pure model can say which cleanup class is required without touching
+/// [`ProtocolCore`] state
+/// production code uses this to choose silent teardown
+/// or host-visible teardown commands, while verification only needs to know
+/// whether runtime state survives
 ///
-/// Example:
+/// example:
 ///
 /// ```text
 /// connect() uses `Silent` because a fresh connect should drop old runtime
-/// state, but it should not emit teardown commands for an already-dead user.
+/// state without emitting teardown commands for an already-dead user
 ///
-/// disconnect() uses `WithCommands` becuse the caller is ending a live user
+/// disconnect() uses `WithCommands` because the caller is ending a live user
 /// and the host must see the explicit cleanup commands that fall out of it
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RuntimeCleanupMode {
+    /// leave outbound batches, pending requests and track bindings untouched
     None,
+    /// clear runtime-only state without asking the host to close live resources
     Silent,
+    /// clear runtime-only state and emit the host cleanup commands still owed
     WithCommands,
 }
 
+/// source for a websocket connect command emitted after lifecycle cleanup
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ConnectCommandSource {
+    /// do not emit a websocket connect command
     None,
+    /// use the URL from the current `connect` input
     FreshInput,
+    /// use the URL from the saved connect context
     SavedContext,
 }
 
-/// Small typed effect surface for the connection lifecycle state machine.
+/// lifecycle side effect shared by production command translation and verification
 ///
-/// The lifecycle logic only needs a narrow slice of the full protocol command
-/// space: state changes, websocket connect or close, peer-connection close and
-/// recovery timer control. Keeping that surface separate lets production code
-/// translate it into real [`Command`] values while proofs stay on the shared
-/// lifecycle logic instead of paying for unrelated protocol command variants.
+/// this is intentionally narrower than [`Command`]
+/// lifecycle transitions only need state projection, socket teardown, peer
+/// teardown and recovery timer control
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LifecycleEffect {
+    /// emit a host-visible lifecycle state update
     EmitStateChange {
+        /// new lifecycle state to publish
         state: BundleConnectionState,
+        /// optional terminal reason to expose through the bundle edge
         cause: Option<LifecycleCloseCause>,
     },
+    /// close the current peer connection before the next transport attempt
     ClosePeerConnection,
+    /// close the websocket with the given close code
     CloseWebSocket {
+        /// websocket close code to pass to the host
         code: u16,
     },
+    /// schedule the recovery timer after peer cleanup
     ScheduleRecoveryTimer {
+        /// delay in milliseconds before the host calls the timer entry point
         ms: u32,
     },
+    /// cancel a previously scheduled recovery timer
     CancelRecoveryTimer,
 }
 
-/// Small bounded list of lifecycle effects emitted by one transition.
+/// bounded ordered list of lifecycle effects emitted by one transition
 ///
-/// Most lifecycle transitions in this module emit nothing, one effect, or a
-/// short ordered pair like "state change, then start the recovery timer". A
-/// `Vec` would work,
-/// but it would make the shape looser than the domain really is and it would
-/// pull allocation and generic collection machinery into the proof path for no
-/// gain.
+/// most lifecycle transitions emit nothing, one effect or the fixed triplet
+/// used by teardown and recovery
+/// a `Vec` would make the domain looser and pull allocation into the proof path
+/// for no gain
 ///
-/// This enum keeps the contract explicit:
+/// this enum keeps the contract explicit:
 ///
 /// - effects stay ordered
 /// - transitions can emit at most three effects
 /// - there is no invalid partially-filled state like "slot three is set but
 ///   slot one is not"
 ///
-/// That makes normal code easier to read and it keeps the virification-facing
-/// lifecycle surface small without inventing a fake model.
+/// that keeps normal code direct and the verification-facing lifecycle surface
+/// small without inventing a fake collection model
 ///
-/// Example:
+/// example:
 ///
 /// ```rs
 /// LifecycleEffects::one(LifecycleEffect::ScheduleRecoveryTimer { ms: 1_000 })
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LifecycleEffects {
+    /// no lifecycle effects were produced
     None,
+    /// one lifecycle effect was produced
     One(LifecycleEffect),
+    /// three lifecycle effects were produced in execution order
     Three(LifecycleEffect, LifecycleEffect, LifecycleEffect),
 }
 
 impl LifecycleEffects {
+    /// creates an empty effect list
     #[must_use]
     pub const fn new() -> Self {
         Self::None
     }
 
+    /// creates an effect list with one ordered effect
     #[must_use]
     pub const fn one(first: LifecycleEffect) -> Self {
         Self::One(first)
     }
 
+    /// creates an effect list with three ordered effects
     #[must_use]
     pub const fn three(
         first: LifecycleEffect,
@@ -188,32 +224,47 @@ impl LifecycleEffects {
     }
 }
 
+/// host-visible reason attached to a terminal lifecycle state change
+///
+/// values are derived from terminal websocket close codes and rendered as
+/// compatibility labels by production command translation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LifecycleCloseCause {
+    /// authentication was rejected by the server
     AuthFailed,
+    /// the server removed the user from the room
     Kicked,
+    /// the room refused the connection because capacity was exhausted
     RoomFull,
 }
 
-/// Pure result of one lifecycle transition.
+/// pure result of one lifecycle transition
 ///
-/// The transition helpers do not mutate the live core directly. They return a
-/// plan that says which commands should happen before cleanup, whether sticky
-/// state should be dropped, which runtime cleanup mode to use and which
-/// commands should happen after cleanup.
+/// the plan is the contract between proof-only model logic and live
+/// [`ProtocolCore`] mutation
+/// it records what must happen before cleanup, what state may be dropped, how
+/// the saved connect context changes and which host
+/// effects must happen after cleanup
 ///
-/// Keeping that plan explicit matters because command ordering is part of the
-/// contract. A refactor that clears runtime state too early or schedules a
-/// recovery timer too latecan change observable behavior even if the final
-/// state enum still looks correct.
+/// ordering matters because `CommandBatch` validates lifecycle side effects at
+/// the host boundary
+/// keep websocket close before peer close and schedule recovery only after peer
+/// close
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct LifecyclePlan {
+    /// host effects that must be emitted before runtime cleanup
     pub(super) effects_before_cleanup: LifecycleEffects,
+    /// host effects that must be emitted after cleanup has reached core state
     pub(super) effects_after_cleanup: LifecycleEffects,
+    /// source for a websocket connect command appended after cleanup
     pub(super) connect_after_cleanup: ConnectCommandSource,
+    /// whether sticky replay intent must be dropped for the new lifecycle
     pub(super) clear_sticky_state: bool,
+    /// how runtime-only state should be cleared for this transition
     pub(super) runtime_cleanup_mode: RuntimeCleanupMode,
+    /// how the saved connect context changes after this transition
     pub(super) connect_context_update: ConnectContextUpdate,
+    /// whether server-owned session snapshots should be reset
     pub(super) reset_session_state: bool,
 }
 
@@ -330,6 +381,11 @@ impl LifecyclePlan {
     }
 }
 
+/// plans a fresh connection attempt in the pure lifecycle model
+///
+/// accepted only from `Disconnected` or `Closed`
+/// accepted attempts reset recovery backoff, mark the saved connect context as
+/// present and move the lifecycle to `Connecting`
 pub(super) fn connect_model(model: &mut LifecycleModel) -> LifecyclePlan {
     if !matches!(
         model.state,
@@ -343,6 +399,10 @@ pub(super) fn connect_model(model: &mut LifecycleModel) -> LifecyclePlan {
     LifecyclePlan::fresh_connect(model.state)
 }
 
+/// plans the protocol admission to media-ready transition
+///
+/// only `Authenticated` can become `Connected`
+/// all other states are stale or premature host events and produce no effects
 pub(super) fn on_transport_ready_model(model: &mut LifecycleModel) -> LifecyclePlan {
     if model.state != BundleConnectionState::Authenticated {
         return LifecyclePlan::none();
@@ -351,6 +411,11 @@ pub(super) fn on_transport_ready_model(model: &mut LifecycleModel) -> LifecycleP
     LifecyclePlan::state_change(model.state)
 }
 
+/// plans an explicit user disconnect
+///
+/// this is a terminal action for the current user attempt
+/// it clears the saved connect context, resets recovery backoff and requests
+/// host-visible runtime cleanup
 pub(super) fn disconnect_model(model: &mut LifecycleModel) -> LifecyclePlan {
     if matches!(
         model.state,
@@ -364,6 +429,11 @@ pub(super) fn disconnect_model(model: &mut LifecycleModel) -> LifecyclePlan {
     LifecyclePlan::explicit_disconnect(model.state)
 }
 
+/// plans websocket close handling for terminal and recoverable socket loss
+///
+/// terminal close codes move to `Closed` and suppress recovery
+/// recoverable closes with saved context enter `Recovering`
+/// recoverable closes without saved context fall back to `Disconnected`
 pub(super) fn on_ws_close_model(model: &mut LifecycleModel, close_code: u16) -> LifecyclePlan {
     if matches!(
         model.state,
@@ -392,6 +462,10 @@ pub(super) fn on_ws_close_model(model: &mut LifecycleModel, close_code: u16) -> 
     LifecyclePlan::recover(model.state, delay_ms)
 }
 
+/// plans the retry attempt for the recovery timer
+///
+/// only `Recovering` with a saved connect context may retry
+/// stale timers in any other state are ignored
 pub(super) fn handle_recovery_timer_model(model: &mut LifecycleModel) -> LifecyclePlan {
     if model.state != BundleConnectionState::Recovering || !model.has_connect_context {
         return LifecyclePlan::none();
@@ -400,6 +474,7 @@ pub(super) fn handle_recovery_timer_model(model: &mut LifecycleModel) -> Lifecyc
     LifecyclePlan::retry_connect(model.state)
 }
 
+/// extracts the proof-friendly lifecycle model from the live core
 fn lifecycle_model(core: &ProtocolCore) -> LifecycleModel {
     LifecycleModel {
         state: core.state,
@@ -408,7 +483,13 @@ fn lifecycle_model(core: &ProtocolCore) -> LifecycleModel {
     }
 }
 
-fn apply_model(
+/// commits a pure lifecycle plan into the live [`ProtocolCore`]
+///
+/// this is the only function in this module that mutates runtime state, sticky
+/// replay state and saved connect context
+/// it captures any websocket URL before context replacement so fresh connects
+/// and saved-context retries both emit the right [`Command::Connect`]
+fn apply_plan(
     core: &mut ProtocolCore,
     model: LifecycleModel,
     plan: LifecyclePlan,
@@ -452,6 +533,10 @@ fn apply_model(
     commands
 }
 
+/// selects the URL for a post-cleanup websocket connect command
+///
+/// fresh connect paths use the caller input
+/// recovery paths use the context still stored on the core
 fn connect_url(
     core: &ProtocolCore,
     plan: &LifecyclePlan,
@@ -469,6 +554,7 @@ fn connect_url(
     }
 }
 
+/// translates an ordered lifecycle effect list into host commands
 fn lifecycle_effects_to_commands(core: &ProtocolCore, effects: LifecycleEffects) -> Commands {
     match effects {
         LifecycleEffects::None => Vec::new(),
@@ -481,6 +567,7 @@ fn lifecycle_effects_to_commands(core: &ProtocolCore, effects: LifecycleEffects)
     }
 }
 
+/// projects one lifecycle effect into the protocol command boundary
 fn lifecycle_effect_to_command(_core: &ProtocolCore, effect: LifecycleEffect) -> Command {
     match effect {
         LifecycleEffect::EmitStateChange { state, cause } => Command::EmitStateChange {
@@ -499,6 +586,7 @@ fn lifecycle_effect_to_command(_core: &ProtocolCore, effect: LifecycleEffect) ->
     }
 }
 
+/// maps terminal websocket close codes to host-visible lifecycle causes
 fn terminal_close_cause(close_code: u16) -> Option<LifecycleCloseCause> {
     match WebSocketCloseCode::from_u16(close_code) {
         Some(WebSocketCloseCode::AuthFailed) => Some(LifecycleCloseCause::AuthFailed),
@@ -508,6 +596,7 @@ fn terminal_close_cause(close_code: u16) -> Option<LifecycleCloseCause> {
     }
 }
 
+/// returns the compatibility label exposed through `EmitStateChange`
 fn lifecycle_close_cause_label(cause: LifecycleCloseCause) -> &'static str {
     match cause {
         LifecycleCloseCause::AuthFailed => "auth_failed",
@@ -516,15 +605,15 @@ fn lifecycle_close_cause_label(cause: LifecycleCloseCause) -> &'static str {
     }
 }
 
-/// Starts a fresh connection attempt from a disconnected or closed state.
+/// starts a fresh connection attempt from a disconnected or closed state
 ///
-/// This is the only lifecycle entry point that intentionally wipes both
-/// runtime state and sticky replay state before reconnecting. A brand-new
-/// `connect(...)` means "start over with this new endpoint and auth context",
-/// not "resume whatever the previous user was trying to do".
+/// this is the only lifecycle entry point that intentionally wipes both
+/// runtime state and sticky replay state before reconnecting
+/// a brand-new `connect` means "start over with this endpoint and auth context",
+/// not "resume whatever the previous user was trying to do"
 ///
-/// Calls from any other state are ignored so the host cannot accidentally stack
-/// overlapping connection attempts on top of an already-live user.
+/// calls from any other state are ignored so the host cannot accidentally stack
+/// overlapping connection attempts on top of an already-live user
 ///
 /// ```text
 /// Disconnected --connect(url, jwt, room)--> Connecting
@@ -537,14 +626,14 @@ pub(super) fn connect(
 ) -> Commands {
     let mut model = lifecycle_model(core);
     let plan = connect_model(&mut model);
-    apply_model(core, model, plan, Some(ConnectContext { url, jwt, room }))
+    apply_plan(core, model, plan, Some(ConnectContext { url, jwt, room }))
 }
 
-/// Marks the transport side as ready after the websocket/authentication phase.
+/// marks the transport side as ready after websocket authentication
 ///
-/// This only accepts the `Authenticated -> Connected` step. Earlier states have
-/// not completed protocol admission yet and later states have already consumed
-/// this transition.
+/// this only accepts the `Authenticated -> Connected` step
+/// earlier states have not completed protocol admission yet and later states
+/// have already consumed this transition
 ///
 /// ```text
 /// Connecting --on_welcome()--> Authenticated --on_transport_ready()--> Connected
@@ -552,24 +641,25 @@ pub(super) fn connect(
 pub(super) fn on_transport_ready(core: &mut ProtocolCore) -> Commands {
     let mut model = lifecycle_model(core);
     let plan = on_transport_ready_model(&mut model);
-    apply_model(core, model, plan, None)
+    apply_plan(core, model, plan, None)
 }
 
-/// Ends the current user attempt on purpose.
+/// ends the current user attempt on purpose
 ///
-/// Unlike `on_ws_close(...)`, this is not a recovery path. It clears the saved
-/// connect context, runtime state and sticky replay state, then closes the
-/// websocket and peer connection. Any later recovery-timer delivery becomes a
-/// no-op because the caller explicitly asked to stop.
+/// unlike `on_ws_close`, this is not a recovery path
+/// it clears the saved connect context, runtime state and sticky replay state,
+/// then closes the websocket and peer connection
+/// any later recovery-timer delivery becomes a no-op because the caller
+/// explicitly asked to stop
 pub(super) fn disconnect(core: &mut ProtocolCore) -> Commands {
     let mut model = lifecycle_model(core);
     let plan = disconnect_model(&mut model);
-    apply_model(core, model, plan, None)
+    apply_plan(core, model, plan, None)
 }
 
-/// Handles websocket closure after a user was already in flight.
+/// handles websocket closure after a user was already in flight
 ///
-/// There are three different cases here and mixing them up is the main way to
+/// there are three different cases here and mixing them up is the main way to
 /// break reconnect behavior:
 ///
 /// - terminal close codes move to `Closed`, clear the saved connect context,
@@ -579,7 +669,7 @@ pub(super) fn disconnect(core: &mut ProtocolCore) -> Commands {
 /// - non-terminal closes without saved connect context fall back to
 ///   `Disconnected`, because there is nothing safe to reconnect to
 ///
-/// Example:
+/// example:
 ///
 /// ```text
 /// Connected --on_ws_close(AuthFailed)--> Closed
@@ -588,17 +678,18 @@ pub(super) fn disconnect(core: &mut ProtocolCore) -> Commands {
 pub(super) fn on_ws_close(core: &mut ProtocolCore, close_code: u16) -> Commands {
     let mut model = lifecycle_model(core);
     let plan = on_ws_close_model(&mut model, close_code);
-    apply_model(core, model, plan, None)
+    apply_plan(core, model, plan, None)
 }
 
-/// Retries the saved websocket connection after a recovery delay.
+/// retries the saved websocket connection after a recovery delay
 ///
-/// This is intentionally narrow: only `Recovering` may consume the recovery
-/// timer. A stale timer firing after a successful reconnect or explicit
-/// disconnect must do nothing, otherwise dead users can get resurrected by
-/// old scheduled work.
+/// this is intentionally narrow
+/// only `Recovering` may consume the recovery timer
+/// a stale timer firing after a successful reconnect or explicit
+/// disconnect must do nothing, otherwise old scheduled work can restart an
+/// inactive attempt
 ///
-/// Example:
+/// example:
 ///
 /// ```text
 /// Connected --on_ws_close(1011)--> Recovering
@@ -608,5 +699,5 @@ pub(super) fn on_ws_close(core: &mut ProtocolCore, close_code: u16) -> Commands 
 pub(super) fn handle_recovery_timer(core: &mut ProtocolCore) -> Commands {
     let mut model = lifecycle_model(core);
     let plan = handle_recovery_timer_model(&mut model);
-    apply_model(core, model, plan, None)
+    apply_plan(core, model, plan, None)
 }

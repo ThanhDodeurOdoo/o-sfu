@@ -37,7 +37,7 @@ use crate::runtime::{
 /// state and selector floors derive from the same active-speaker observation.
 #[derive(Debug, Default)]
 pub(in crate::runtime::room) struct SourcePolicyEffectPlan {
-    consumer_packets: Vec<ConsumerPacketSelectionUpdate>,
+    consumer_packet_updates: Vec<ConsumerPacketSelectionUpdate>,
     featured_users: Vec<FeaturedUserUpdate>,
 }
 
@@ -60,13 +60,13 @@ impl SourcePolicyEffectPlan {
         ));
         let featured_users = state.featured_user_updates(&ranked_active_speaker_sources);
         Self {
-            consumer_packets,
+            consumer_packet_updates: consumer_packets,
             featured_users,
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.consumer_packets.is_empty() && self.featured_users.is_empty()
+        self.consumer_packet_updates.is_empty() && self.featured_users.is_empty()
     }
 
     /// Applies transport-visible gates before committing selector state.
@@ -77,7 +77,8 @@ impl SourcePolicyEffectPlan {
     /// refresh.
     pub async fn execute(self, room: &Room, media_port: &MediaTransport) {
         let applied_consumer_packet_updates =
-            Self::apply_consumer_packet_updates(room, media_port, self.consumer_packets).await;
+            Self::apply_consumer_packet_updates(room, media_port, self.consumer_packet_updates)
+                .await;
         if applied_consumer_packet_updates.is_empty() && self.featured_users.is_empty() {
             return;
         }

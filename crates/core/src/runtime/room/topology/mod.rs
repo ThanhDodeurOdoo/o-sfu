@@ -361,7 +361,7 @@ impl RoomTopology {
     /// attached so clients see one stable room capability surface.
     pub(super) fn rtp_capabilities(&self) -> &MediaCapabilities {
         let Some(primary_router) = self.routers.get(&self.primary_router) else {
-            return empty_router_capabilities();
+            return empty_capabilities();
         };
         primary_router.rtp_capabilities()
     }
@@ -842,7 +842,7 @@ struct ReceiverRouterSession {
     created_untracked_shadow: bool,
 }
 
-fn empty_router_capabilities() -> &'static MediaCapabilities {
+fn empty_capabilities() -> &'static MediaCapabilities {
     static EMPTY: OnceLock<MediaCapabilities> = OnceLock::new();
     EMPTY.get_or_init(|| MediaCapabilities::new(Vec::new(), Vec::new()))
 }

@@ -181,7 +181,7 @@ pub(in crate::runtime::rtc_engine) fn route_packet_to_matching_session_at(
         }
         CachedRouteOutcome::NotMatched => {}
     }
-    if routing_state.source_is_blocked(datagram.source_addr, datagram.now) {
+    if routing_state.is_source_blocked(datagram.source_addr, datagram.now) {
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
         return;
     }
