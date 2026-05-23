@@ -13,6 +13,14 @@ use crate::runtime::media_transport::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource, TransportMediaId,
 };
 
+fn active_speaker_ids(state: &RouteControlState, now: Instant) -> Vec<TransportMediaId> {
+    state
+        .active_speaker_sources(now)
+        .into_iter()
+        .map(ActiveSpeakerSource::transport_media_id)
+        .collect()
+}
+
 #[test]
 fn route_control_absorbs_repeated_keyframe_requests_within_the_window() {
     let mut state = RouteControlState::default();
@@ -213,7 +221,7 @@ fn route_control_vad_true_promotes_active_speaker_immediately() {
     let source_transport_media_id = TransportMediaId::new(28);
     let now = Instant::now();
 
-    state.observe_audio_activity(source_transport_media_id, Some(true), Some(-90), now);
+    assert!(state.observe_audio_activity(source_transport_media_id, Some(true), Some(-90), now));
 
     let snapshot = state.active_speaker_sources(now);
     assert_eq!(snapshot.len(), 1);
@@ -238,6 +246,111 @@ fn route_control_vad_true_promotes_active_speaker_immediately() {
         diagnostics.first().map(|diagnostic| diagnostic.reason()),
         Some(ActiveSpeakerActivityReason::Vad)
     );
+}
+
+#[test]
+fn route_control_vad_true_refresh_extends_deadline_without_dirtying_room_policy() {
+    let mut state = RouteControlState::default();
+    let source_transport_media_id = TransportMediaId::new(33);
+    let now = Instant::now();
+
+    assert!(state.observe_audio_activity(source_transport_media_id, Some(true), None, now));
+    let first_deadline = state.next_active_speaker_deadline(now).unwrap();
+    let refresh_at = now + Duration::from_millis(20);
+
+    assert!(!state.observe_audio_activity(source_transport_media_id, Some(true), None, refresh_at));
+    assert_eq!(
+        state.next_active_speaker_deadline(refresh_at),
+        Some(first_deadline + Duration::from_millis(20))
+    );
+    assert_eq!(
+        active_speaker_ids(&state, refresh_at),
+        vec![source_transport_media_id]
+    );
+}
+
+#[test]
+fn route_control_vad_false_inside_hold_window_does_not_dirty_room_policy() {
+    let mut state = RouteControlState::default();
+    let source_transport_media_id = TransportMediaId::new(34);
+    let now = Instant::now();
+
+    assert!(state.observe_audio_activity(source_transport_media_id, Some(true), None, now));
+
+    assert!(!state.observe_audio_activity(
+        source_transport_media_id,
+        Some(false),
+        None,
+        now + Duration::from_millis(100)
+    ));
+    assert_eq!(
+        state.effective_packet_gate(source_transport_media_id),
+        Some(PacketLayerGate::Open)
+    );
+    assert_eq!(
+        active_speaker_ids(&state, now + Duration::from_millis(100)),
+        vec![source_transport_media_id]
+    );
+}
+
+#[test]
+fn route_control_newer_speaker_order_change_dirties_room_policy() {
+    let mut state = RouteControlState::default();
+    let first_source_transport_media_id = TransportMediaId::new(35);
+    let second_source_transport_media_id = TransportMediaId::new(36);
+    let now = Instant::now();
+
+    assert!(state.observe_audio_activity(first_source_transport_media_id, Some(true), None, now));
+    assert!(state.observe_audio_activity(
+        second_source_transport_media_id,
+        Some(true),
+        None,
+        now + Duration::from_millis(10)
+    ));
+    assert_eq!(
+        active_speaker_ids(&state, now + Duration::from_millis(10)),
+        vec![
+            second_source_transport_media_id,
+            first_source_transport_media_id
+        ]
+    );
+
+    assert!(state.observe_audio_activity(
+        first_source_transport_media_id,
+        Some(true),
+        None,
+        now + Duration::from_millis(20)
+    ));
+    assert_eq!(
+        active_speaker_ids(&state, now + Duration::from_millis(20)),
+        vec![
+            first_source_transport_media_id,
+            second_source_transport_media_id
+        ]
+    );
+}
+
+#[test]
+fn route_control_same_timestamp_audio_level_rank_change_dirties_room_policy() {
+    let mut state = RouteControlState::default();
+    let first_source_transport_media_id = TransportMediaId::new(37);
+    let second_source_transport_media_id = TransportMediaId::new(38);
+    let now = Instant::now();
+
+    state.observe_audio_activity(first_source_transport_media_id, Some(true), Some(-30), now);
+    state.observe_audio_activity(second_source_transport_media_id, Some(true), Some(-10), now);
+    assert!(state.observe_audio_activity(
+        first_source_transport_media_id,
+        Some(true),
+        Some(-1),
+        now
+    ));
+    assert!(!state.observe_audio_activity(
+        first_source_transport_media_id,
+        Some(true),
+        Some(-1),
+        now
+    ));
 }
 
 #[test]
@@ -415,11 +528,7 @@ fn route_control_active_speaker_order_is_deterministic_for_equal_observations() 
     state.observe_audio_activity(first_source_transport_media_id, Some(true), None, now);
 
     assert_eq!(
-        state
-            .active_speaker_sources(now)
-            .into_iter()
-            .map(ActiveSpeakerSource::transport_media_id)
-            .collect::<Vec<_>>(),
+        active_speaker_ids(&state, now),
         vec![
             first_source_transport_media_id,
             second_source_transport_media_id
