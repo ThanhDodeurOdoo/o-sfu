@@ -14,7 +14,7 @@ pub(crate) mod spillover;
 pub(super) use std::time::{Duration, Instant};
 
 pub(super) use o_sfu::{
-    config::{Config, MediaCodecFlags, RoomWorkerPolicy},
+    config::{Config, MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy},
     core::prelude::{LocalSpilloverPolicy, LocalSpilloverPolicyParts},
     http::IncomingBitRateStatsResponse,
 };

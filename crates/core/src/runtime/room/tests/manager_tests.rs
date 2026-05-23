@@ -38,8 +38,15 @@ async fn manager_join_user(
 }
 
 fn manager_with_room_worker_policy(room_worker_policy: RoomWorkerPolicy) -> RoomManager {
+    manager_with_room_worker_policy_and_worker_count(room_worker_policy, 2)
+}
+
+fn manager_with_room_worker_policy_and_worker_count(
+    room_worker_policy: RoomWorkerPolicy,
+    media_worker_count: usize,
+) -> RoomManager {
     RoomManager::for_test_with_config(super::super::RoomManagerConfig::new(
-        2,
+        media_worker_count,
         super::super::RoomRuntimePolicy::new(
             RoomAdmissionPolicy::new(100),
             RuntimeFeatureFlags::default(),
@@ -61,15 +68,34 @@ fn load_triggered_policy(
     cooldown_window: usize,
     max_fanout_per_source: usize,
 ) -> RoomWorkerPolicy {
+    load_triggered_policy_with_cap(
+        2,
+        min_receiver_count,
+        LocalSpilloverPolicy::DEFAULT_MAX_ACTIVE_CONSUMERS_PER_ROUTER,
+        activation_window,
+        cooldown_window,
+        max_fanout_per_source,
+    )
+}
+
+fn load_triggered_policy_with_cap(
+    max_local_routers: usize,
+    min_receiver_count: usize,
+    max_active_consumers_per_router: usize,
+    activation_window: usize,
+    cooldown_window: usize,
+    max_fanout_per_source: usize,
+) -> RoomWorkerPolicy {
     let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
         min_receiver_count,
+        max_active_consumers_per_router,
         max_fanout_per_source,
         activation_window,
         cooldown_window,
         ..LocalSpilloverPolicyParts::conservative()
     })
     .expect("test spillover policy should be valid");
-    RoomWorkerPolicy::load_triggered_local_spillover(2, policy)
+    RoomWorkerPolicy::load_triggered_local_spillover(max_local_routers, policy)
 }
 
 async fn close_test_user(
@@ -391,6 +417,53 @@ async fn load_triggered_join_requires_sustained_receiver_pressure() {
     assert_home_worker(&room, 2, 0).await;
     assert_home_worker(&room, 3, 1).await;
     assert_last_decision_reason(&room, RoomPlacementDecisionReason::ReceiverCountPressure);
+}
+
+#[tokio::test]
+async fn load_triggered_large_room_reaches_but_does_not_exceed_local_router_cap() {
+    const LOCAL_ROUTER_CAP: usize = 4;
+    const MIN_RECEIVER_COUNT: usize = 3;
+    const MAX_ACTIVE_CONSUMERS_PER_ROUTER: usize = 2;
+    const ACTIVATION_WINDOW: usize = 1;
+    const COOLDOWN_WINDOW: usize = 1;
+    const MAX_FANOUT_PER_SOURCE: usize = 2;
+
+    let manager = manager_with_room_worker_policy_and_worker_count(
+        load_triggered_policy_with_cap(
+            LOCAL_ROUTER_CAP,
+            MIN_RECEIVER_COUNT,
+            MAX_ACTIVE_CONSUMERS_PER_ROUTER,
+            ACTIVATION_WINDOW,
+            COOLDOWN_WINDOW,
+            MAX_FANOUT_PER_SOURCE,
+        ),
+        LOCAL_ROUTER_CAP,
+    );
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-large-room-cap").await;
+
+    for user_id in 1..=12 {
+        manager_join_user(&manager, &room, user_id, &media_transport).await;
+        assert!(
+            room.test_api().inspect().topology_router_count().await <= LOCAL_ROUTER_CAP,
+            "load-triggered placement should not exceed the configured local router cap"
+        );
+    }
+
+    assert_router_count(&room, LOCAL_ROUTER_CAP).await;
+    for (user_id, media_worker) in [
+        (1, 0),
+        (2, 0),
+        (3, 1),
+        (4, 1),
+        (5, 2),
+        (6, 2),
+        (7, 3),
+        (8, 3),
+    ] {
+        assert_home_worker(&room, user_id, media_worker).await;
+    }
+    assert_last_decision_reason(&room, RoomPlacementDecisionReason::LocalRouterCapReached);
 }
 
 #[tokio::test]
