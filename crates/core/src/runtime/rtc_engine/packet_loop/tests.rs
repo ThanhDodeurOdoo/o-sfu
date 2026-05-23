@@ -1250,6 +1250,118 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
 }
 
 #[test]
+fn repeated_active_audio_packets_do_not_republish_source_policy_dirty_room() {
+    let producer_session = test_transport_session_key(39, 0, 40, UserId::Integer(41));
+    let room_instance_id = producer_session.room_instance_id();
+    let mut state = PacketLoopState::default();
+    state.register_media_handle(RegisteredMediaHandle::Producer {
+        session_key: producer_session.clone(),
+        mid: Mid::from("aud-up"),
+    });
+    let metrics = RuntimeMetrics::default();
+    let rtp_metrics = metrics.register_rtp_worker();
+    let source_policy_signal = SourcePolicySignal::default();
+    let subscription = source_policy_signal.subscribe();
+    let mut buffers = PacketLoopBuffers::new();
+
+    buffers
+        .pending_packets
+        .push(sample_forwarded_packet_with_audio_activity(
+            producer_session.clone(),
+            "aud-up",
+            Some(true),
+            Some(-30),
+            b"payload",
+        ));
+    record_incoming_stats(
+        &mut state,
+        &source_policy_signal,
+        &metrics,
+        &rtp_metrics,
+        &mut buffers,
+    );
+    assert_eq!(
+        subscription.take_pending_updates(),
+        BTreeSet::from([room_instance_id])
+    );
+
+    buffers.clear();
+    buffers
+        .pending_packets
+        .push(sample_forwarded_packet_with_audio_activity(
+            producer_session,
+            "aud-up",
+            Some(true),
+            Some(-30),
+            b"payload",
+        ));
+    record_incoming_stats(
+        &mut state,
+        &source_policy_signal,
+        &metrics,
+        &rtp_metrics,
+        &mut buffers,
+    );
+    assert!(subscription.take_pending_updates().is_empty());
+}
+
+#[test]
+fn active_audio_rank_change_publishes_source_policy_dirty_room() {
+    let first_producer_session = test_transport_session_key(42, 0, 43, UserId::Integer(44));
+    let second_producer_session = test_transport_session_key(42, 0, 45, UserId::Integer(46));
+    let room_instance_id = first_producer_session.room_instance_id();
+    let mut state = PacketLoopState::default();
+    let first_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+        session_key: first_producer_session.clone(),
+        mid: Mid::from("aud-first"),
+    });
+    let second_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+        session_key: second_producer_session,
+        mid: Mid::from("aud-second"),
+    });
+    let shared_observed_at = Instant::now();
+    assert!(state.route_control.observe_audio_activity(
+        first_transport_media_id,
+        Some(true),
+        Some(-30),
+        shared_observed_at,
+    ));
+    assert!(state.route_control.observe_audio_activity(
+        second_transport_media_id,
+        Some(true),
+        Some(-10),
+        shared_observed_at,
+    ));
+    let metrics = RuntimeMetrics::default();
+    let rtp_metrics = metrics.register_rtp_worker();
+    let source_policy_signal = SourcePolicySignal::default();
+    let subscription = source_policy_signal.subscribe();
+    let mut buffers = PacketLoopBuffers::new();
+
+    buffers
+        .pending_packets
+        .push(sample_forwarded_packet_with_audio_activity(
+            first_producer_session,
+            "aud-first",
+            Some(true),
+            Some(-1),
+            b"payload",
+        ));
+    record_incoming_stats(
+        &mut state,
+        &source_policy_signal,
+        &metrics,
+        &rtp_metrics,
+        &mut buffers,
+    );
+
+    assert_eq!(
+        subscription.take_pending_updates(),
+        BTreeSet::from([room_instance_id])
+    );
+}
+
+#[test]
 fn packet_loop_buffers_coalesce_source_policy_dirty_rooms_before_signal_flush() {
     let mut buffers = PacketLoopBuffers::new();
     let signal = SourcePolicySignal::default();

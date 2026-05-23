@@ -17,7 +17,11 @@
 //! active-speaker audio policy is intersected afterward because a silent source
 //! policy must be able to block every downstream route
 
-use std::{cmp::Reverse, collections::BTreeMap, time::Instant};
+use std::{
+    cmp::Reverse,
+    collections::{BTreeMap, btree_map::Entry},
+    time::Instant,
+};
 
 use str0m::media::Rid;
 use tracing::debug;
@@ -127,7 +131,7 @@ impl RouteControlState {
                 .insert(source_transport_media_id, source_control);
             debug!(
                 ?source_transport_media_id,
-                effective_packet_gate = ?self.effective_packet_gate_for_log(source_transport_media_id),
+                effective_packet_gate = ?self.effective_packet_gate_for_source(source_transport_media_id),
                 "updated source packet gate"
             );
             return;
@@ -137,7 +141,7 @@ impl RouteControlState {
         }
         debug!(
             ?source_transport_media_id,
-            effective_packet_gate = ?self.effective_packet_gate_for_log(source_transport_media_id),
+            effective_packet_gate = ?self.effective_packet_gate_for_source(source_transport_media_id),
             "updated source packet gate"
         );
     }
@@ -155,31 +159,37 @@ impl RouteControlState {
         audio_level_dbov: Option<i8>,
         now: Instant,
     ) -> bool {
-        let should_remove =
-            if let Some(source_control) = self.sources.get_mut(&source_transport_media_id) {
-                if !source_control.observe_audio_activity(voice_activity, audio_level_dbov, now) {
-                    return false;
-                }
-                source_control.is_empty()
-            } else {
-                if voice_activity.is_none() && audio_level_dbov.is_none() {
-                    return false;
-                }
-                let mut source_control = SourceRouteControl::default();
-                if !source_control.observe_audio_activity(voice_activity, audio_level_dbov, now) {
-                    return false;
-                }
-                if source_control.is_empty() {
-                    return false;
-                }
-                self.sources
-                    .insert(source_transport_media_id, source_control);
-                return true;
-            };
+        if let Entry::Vacant(entry) = self.sources.entry(source_transport_media_id) {
+            if voice_activity.is_none() && audio_level_dbov.is_none() {
+                return false;
+            }
+            let mut source_control = SourceRouteControl::default();
+            if !source_control.observe_audio_activity(voice_activity, audio_level_dbov, now) {
+                return false;
+            }
+            if source_control.is_empty() {
+                return false;
+            }
+            entry.insert(source_control);
+            return true;
+        }
+        let previous_active_speakers = self.room_policy_ranked_active_speaker_sources(now);
+        let previous_packet_gate = self.effective_packet_gate_for_source(source_transport_media_id);
+        let Some(source_control) = self.sources.get_mut(&source_transport_media_id) else {
+            return false;
+        };
+        if !source_control.observe_audio_activity(voice_activity, audio_level_dbov, now) {
+            return false;
+        }
+        let should_remove = source_control.is_empty();
         if should_remove {
             self.sources.remove(&source_transport_media_id);
         }
-        true
+        previous_packet_gate != self.effective_packet_gate_for_source(source_transport_media_id)
+            || !same_active_speaker_order(
+                &previous_active_speakers,
+                &self.room_policy_ranked_active_speaker_sources(now),
+            )
     }
 
     /// installs the packet gate requested by one relay target
@@ -256,19 +266,34 @@ impl RouteControlState {
     /// returns active-speaker sources currently inside their hold window
     ///
     /// results are ordered by most recent speech observation first
-    /// transport media id is used as a deterministic tie-breaker so room policy
-    /// sees stable ordering when packets share the same timestamp
+    /// transport media id is used as a deterministic tie-breaker so transport
+    /// snapshots stay stable when packets share the same timestamp
     pub fn active_speaker_sources(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
-        let mut sources = self
-            .sources
+        let mut sources = self.active_speaker_sources_unsorted(now);
+        sources.sort_unstable_by_key(|source| {
+            (
+                Reverse(source.observed_at()),
+                source.transport_media_id().as_u64(),
+            )
+        });
+        sources
+    }
+
+    fn active_speaker_sources_unsorted(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
+        self.sources
             .iter()
             .filter_map(|(source_transport_media_id, source_control)| {
                 source_control.active_speaker_source(*source_transport_media_id, now)
             })
-            .collect::<Vec<_>>();
-        sources.sort_by_key(|source| {
+            .collect()
+    }
+
+    fn room_policy_ranked_active_speaker_sources(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
+        let mut sources = self.active_speaker_sources_unsorted(now);
+        sources.sort_unstable_by_key(|source| {
             (
                 Reverse(source.observed_at()),
+                Reverse(source.last_audio_level_dbov().unwrap_or(i8::MIN)),
                 source.transport_media_id().as_u64(),
             )
         });
@@ -341,13 +366,11 @@ impl RouteControlState {
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> Option<PacketLayerGate> {
-        self.sources
-            .get(&source_transport_media_id)
-            .and_then(SourceRouteControl::effective_packet_gate)
+        self.effective_packet_gate_for_source(source_transport_media_id)
     }
 
-    /// computes the gate shown in route-control update logs
-    fn effective_packet_gate_for_log(
+    /// computes the gate installed for one route-control source
+    fn effective_packet_gate_for_source(
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> Option<PacketLayerGate> {
@@ -355,6 +378,12 @@ impl RouteControlState {
             .get(&source_transport_media_id)
             .and_then(SourceRouteControl::effective_packet_gate)
     }
+}
+
+fn same_active_speaker_order(left: &[ActiveSpeakerSource], right: &[ActiveSpeakerSource]) -> bool {
+    left.iter()
+        .map(|source| source.transport_media_id())
+        .eq(right.iter().map(|source| source.transport_media_id()))
 }
 
 /// all route-control state known for one source media id
