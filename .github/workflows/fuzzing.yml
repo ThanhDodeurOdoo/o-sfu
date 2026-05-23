@@ -1,12 +1,31 @@
 name: Fuzzing
 
 on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - .github/workflows/fuzzing.yml
+      - Cargo.lock
+      - Cargo.toml
+      - crates/core/src/runtime/rtc_engine/**
+      - crates/protocol/**
+      - crates/rfc/**
+      - src/application/user_session/**
+      - src/config/**
+      - src/runtime/auth.rs
+      - src/runtime/http_server/**
+      - src/runtime/websocket_server/**
+      - tests/fuzz/**
   schedule:
     - cron: '30 0 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   fuzz-targets:
@@ -43,8 +62,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          max_total_time=300
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            max_total_time=60
+          fi
           for target in protocol_decode protocol_sequence http_disconnect_auth sdp_answer; do
-            cargo +nightly-2026-04-01 fuzz run "$target" -- -max_total_time=300
+            cargo +nightly-2026-04-01 fuzz run "$target" -- -max_total_time="$max_total_time"
           done
 
       - name: Upload fuzz artifacts
