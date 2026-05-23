@@ -476,48 +476,32 @@ fn h264_critical_settings_match(
     if format_packetization_mode != capability_packetization_mode {
         return false;
     }
-    // `profile-level-id` is handled more carefully:
-    // - profile mismatch means incompatible bitstreams;
-    // - level is a decoder capability bound;
-    // - malformed tokens should not silently widen compatibility
-    match (
-        format.settings().find_map(|setting| match setting {
+    let format_profile_level_id = format
+        .settings()
+        .find_map(|setting| match setting {
             CodecSetting::H264ProfileLevelId(profile_level_id) => Some(profile_level_id.as_str()),
             _ => None,
-        }),
-        capability_format
-            .settings()
-            .find_map(|setting| match setting {
-                CodecSetting::H264ProfileLevelId(profile_level_id) => {
-                    Some(profile_level_id.as_str())
-                }
-                _ => None,
-            }),
-    ) {
-        (Some(format_profile_level_id), Some(capability_profile_level_id)) => match (
-            rfc_rtp::h264::ProfileLevelId::parse(format_profile_level_id),
-            rfc_rtp::h264::ProfileLevelId::parse(capability_profile_level_id),
-        ) {
-            // RFC 6184 section 8.2.2 matches H264 by profile and allows a receiver to declare a
-            // higher supported level than the stream it accepts, so same-profile lower-or-equal
-            // stream levels are accepted here.
-            (Some(parsed_format_profile_level_id), Some(parsed_capability_profile_level_id)) => {
-                // Same profile is required because different profiles define different
-                // bitstream constraints and decoding tools (e.g. baseline vs high).
-                //
-                // Level is a decoder capability bound. A receiver that advertises a higher
-                // level can accept streams encoded at a lower or equal level, so we allow
-                // format_level <= capability_level here.
-                parsed_format_profile_level_id.profile()
-                    == parsed_capability_profile_level_id.profile()
-                    && parsed_format_profile_level_id.level()
-                        <= parsed_capability_profile_level_id.level()
-            }
-            // Malformed profile-level-id tokens are not RFC 6184 compatible.
-            _ => false,
-        },
-        _ => true,
-    }
+        })
+        .unwrap_or(rfc_rtp::fmtp::H264_DEFAULT_PROFILE_LEVEL_ID);
+    let capability_profile_level_id = capability_format
+        .settings()
+        .find_map(|setting| match setting {
+            CodecSetting::H264ProfileLevelId(profile_level_id) => Some(profile_level_id.as_str()),
+            _ => None,
+        })
+        .unwrap_or(rfc_rtp::fmtp::H264_DEFAULT_PROFILE_LEVEL_ID);
+    let Some(parsed_format_profile_level_id) =
+        rfc_rtp::h264::ProfileLevelId::parse(format_profile_level_id)
+    else {
+        return false;
+    };
+    let Some(parsed_capability_profile_level_id) =
+        rfc_rtp::h264::ProfileLevelId::parse(capability_profile_level_id)
+    else {
+        return false;
+    };
+    parsed_format_profile_level_id.profile() == parsed_capability_profile_level_id.profile()
+        && parsed_format_profile_level_id.level() <= parsed_capability_profile_level_id.level()
 }
 
 fn vp9_critical_settings_match(

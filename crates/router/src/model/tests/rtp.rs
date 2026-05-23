@@ -452,6 +452,59 @@ fn consumer_negotiation_accepts_h264_level_1b_for_level_1_1_capability() {
 }
 
 #[test]
+fn consumer_negotiation_rejects_h264_high_profile_when_capability_omits_profile_level_id() {
+    let consumable_parameters = h264_consumable_parameters("64001f");
+    let consumer_capabilities = h264_consumer_capabilities_without_profile_level_id();
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert_eq!(
+        negotiated_result,
+        Err(RtpNegotiationError::NoCompatibleConsumerCodec)
+    );
+    assert!(!can_consume(&consumable_parameters, &consumer_capabilities));
+}
+
+#[test]
+fn consumer_negotiation_rejects_h264_level_1_1_when_capability_omits_profile_level_id() {
+    let consumable_parameters = h264_consumable_parameters("42a00b");
+    let consumer_capabilities = h264_consumer_capabilities_without_profile_level_id();
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert_eq!(
+        negotiated_result,
+        Err(RtpNegotiationError::NoCompatibleConsumerCodec)
+    );
+    assert!(!can_consume(&consumable_parameters, &consumer_capabilities));
+}
+
+#[test]
+fn consumer_negotiation_accepts_h264_when_both_sides_omit_profile_level_id() {
+    let consumable_parameters = h264_consumable_parameters_without_profile_level_id();
+    let consumer_capabilities = h264_consumer_capabilities_without_profile_level_id();
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert!(negotiated_result.is_ok());
+    assert!(can_consume(&consumable_parameters, &consumer_capabilities));
+}
+
+#[test]
+fn consumer_negotiation_rejects_h264_malformed_profile_level_id_when_capability_omits_it() {
+    let consumable_parameters = h264_consumable_parameters("42e000");
+    let consumer_capabilities = h264_consumer_capabilities_without_profile_level_id();
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert_eq!(
+        negotiated_result,
+        Err(RtpNegotiationError::NoCompatibleConsumerCodec)
+    );
+    assert!(!can_consume(&consumable_parameters, &consumer_capabilities));
+}
+
+#[test]
 fn consumer_negotiation_rejects_h264_zero_level_idc() {
     let consumable_parameters = h264_consumable_parameters("42e000");
     let consumer_capabilities = h264_consumer_capabilities("42e00b");
@@ -480,28 +533,45 @@ fn consumer_negotiation_rejects_matching_malformed_h264_profile_level_id() {
 }
 
 fn h264_consumable_parameters(profile_level_id: &str) -> MediaStream {
+    h264_consumable_parameters_with_profile_level_id(Some(profile_level_id))
+}
+
+fn h264_consumable_parameters_without_profile_level_id() -> MediaStream {
+    h264_consumable_parameters_with_profile_level_id(None)
+}
+
+fn h264_consumable_parameters_with_profile_level_id(profile_level_id: Option<&str>) -> MediaStream {
+    let mut format = MediaFormat::new(MediaKind::Video, "H264", 98, 90_000)
+        .with_parameter("packetization-mode", "1")
+        .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None));
+    if let Some(profile_level_id) = profile_level_id {
+        format = format.with_parameter("profile-level-id", profile_level_id);
+    }
     MediaStream::new(
-        vec![
-            MediaFormat::new(MediaKind::Video, "H264", 98, 90_000)
-                .with_parameter("packetization-mode", "1")
-                .with_parameter("profile-level-id", profile_level_id)
-                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
-        ],
+        vec![format],
         vec![],
         vec![StreamBinding::new().with_ssrc(5678)],
     )
 }
 
 fn h264_consumer_capabilities(profile_level_id: &str) -> MediaCapabilities {
-    MediaCapabilities::new(
-        vec![
-            MediaCodecCapability::new(MediaKind::Video, "H264", 90_000)
-                .with_parameter("packetization-mode", "1")
-                .with_parameter("profile-level-id", profile_level_id)
-                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
-        ],
-        vec![],
-    )
+    h264_consumer_capabilities_with_profile_level_id(Some(profile_level_id))
+}
+
+fn h264_consumer_capabilities_without_profile_level_id() -> MediaCapabilities {
+    h264_consumer_capabilities_with_profile_level_id(None)
+}
+
+fn h264_consumer_capabilities_with_profile_level_id(
+    profile_level_id: Option<&str>,
+) -> MediaCapabilities {
+    let mut capability = MediaCodecCapability::new(MediaKind::Video, "H264", 90_000)
+        .with_parameter("packetization-mode", "1")
+        .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None));
+    if let Some(profile_level_id) = profile_level_id {
+        capability = capability.with_parameter("profile-level-id", profile_level_id);
+    }
+    MediaCapabilities::new(vec![capability], vec![])
 }
 
 #[test]

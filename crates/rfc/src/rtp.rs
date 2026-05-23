@@ -577,6 +577,11 @@ pub mod fmtp {
     /// Reference: RFC 6184 section 8.1
     pub const H264_PROFILE_LEVEL_ID: &str = "profile-level-id";
 
+    /// Default H264 profile-level-id when the parameter is omitted.
+    ///
+    /// Reference: RFC 6184 section 8.1.
+    pub const H264_DEFAULT_PROFILE_LEVEL_ID: &str = "42000a";
+
     /// Default H264 packetization mode when the parameter is omitted.
     ///
     /// Reference: RFC 6184 section 6.2.
@@ -1164,7 +1169,7 @@ pub mod frame_marking {
 #[cfg(test)]
 mod tests {
     use super::{
-        frame_marking,
+        fmtp, frame_marking,
         h264::{self, LevelIdc, Profile, ProfileLevelId},
         header_extension, rtcp_feedback_format,
     };
@@ -1177,6 +1182,13 @@ mod tests {
             Some(Profile::ConstrainedBaseline)
         );
         assert_eq!(parsed.map(ProfileLevelId::level), Some(LevelIdc::Level3_1));
+    }
+
+    #[test]
+    fn h264_default_profile_level_id_is_baseline_level_1() {
+        let parsed = ProfileLevelId::parse(fmtp::H264_DEFAULT_PROFILE_LEVEL_ID);
+        assert_eq!(parsed.map(ProfileLevelId::profile), Some(Profile::Baseline));
+        assert_eq!(parsed.map(ProfileLevelId::level), Some(LevelIdc::Level1));
     }
 
     #[test]
