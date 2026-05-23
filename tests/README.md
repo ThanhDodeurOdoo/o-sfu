@@ -115,9 +115,10 @@ Proof notes:
 - router Kani harnesses call the production `o_sfu_router::Router`
 - Kani builds use router bounded proof storage
 - normal builds use `std::collections::BTreeMap` plus `BTreeSet`
-- pull requests touching router, protocol, RFC or proof code run the
+- `PR Formal Verification` runs
   `session_teardown_clears_reverse_indices_and_dependents` and protocol
-  recovery-reset Kani shards
+  recovery-reset Kani shards on pull requests touching router, protocol, RFC or
+  proof code
 - scheduled formal verification runs one router proof per one-hour worker
 
 ## Dependency check
