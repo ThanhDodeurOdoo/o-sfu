@@ -115,6 +115,9 @@ Proof notes:
 - router Kani harnesses call the production `o_sfu_router::Router`
 - Kani builds use router bounded proof storage
 - normal builds use `std::collections::BTreeMap` plus `BTreeSet`
+- pull requests touching router, protocol, RFC or proof code run the
+  `session_teardown_clears_reverse_indices_and_dependents` and protocol
+  recovery-reset Kani shards
 - scheduled formal verification runs one router proof per one-hour worker
 
 ## Dependency check
@@ -203,6 +206,11 @@ cargo +nightly fuzz run http_disconnect_auth
 cargo +nightly fuzz run protocol_sequence
 cargo +nightly fuzz run sdp_answer
 ```
+
+pull requests touching protocol, auth, websocket, HTTP origin, SDP projection or
+fuzz code run `protocol_decode`, `protocol_sequence`, `http_disconnect_auth`
+and `sdp_answer` for 60 seconds each while scheduled and manually dispatched
+fuzz runs keep the full 300 second budget per target
 
 ## Proofs
 
