@@ -1,0 +1,105 @@
+name: PR Formal Verification
+
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - .github/workflows/formal-verification-pr.yml
+      - Cargo.lock
+      - Cargo.toml
+      - crates/protocol/**
+      - crates/rfc/**
+      - crates/router/**
+      - tests/proofs/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  KANI_VERSION: 0.67.0
+
+jobs:
+  kani-pr:
+    name: PR Kani (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: router-session-teardown
+            command: >-
+              cargo kani -p o-sfu-proofs
+              -Z unstable-options
+              --harness session_teardown_clears_reverse_indices_and_dependents
+          - shard: protocol-recovery-reset
+            command: >-
+              cargo kani -p o-sfu-proofs
+              --harness protocol_core_welcome_resets_recovery_backoff
+              --harness protocol_core_disconnect_suppresses_recovery_and_allows_fresh_connect
+
+    steps:
+      - name: Checkout repository
+        # actions/checkout v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        # dtolnay/rust-toolchain master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: 1.95.0
+
+      - name: Cache Rust build artifacts
+        # Swatinem/rust-cache v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+
+      - name: Cache Kani installation
+        # actions/cache v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        with:
+          path: ~/.kani
+          key: ${{ runner.os }}-${{ runner.arch }}-kani-${{ env.KANI_VERSION }}
+
+      - name: Install Kani CLI
+        run: cargo install --locked --version "$KANI_VERSION" kani-verifier
+
+      - name: Bootstrap Kani release bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          kani_dir="$HOME/.kani/kani-${KANI_VERSION}"
+          if [[ -f "$kani_dir/rust-toolchain-version" ]]; then
+            exit 0
+          fi
+
+          case "$(uname -m)" in
+            x86_64)
+              target="x86_64-unknown-linux-gnu"
+              ;;
+            aarch64 | arm64)
+              target="aarch64-unknown-linux-gnu"
+              ;;
+            *)
+              echo "Unsupported runner architecture for Kani: $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+
+          bundle="kani-${KANI_VERSION}-${target}.tar.gz"
+          url="https://github.com/model-checking/kani/releases/download/kani-${KANI_VERSION}/${bundle}"
+
+          rm -rf "$kani_dir"
+          curl --retry 5 --retry-delay 5 --retry-all-errors -sSLf \
+            -o "$RUNNER_TEMP/$bundle" \
+            "$url"
+          cargo-kani setup --use-local-bundle "$RUNNER_TEMP/$bundle"
+
+      - name: Run PR Kani proof shard
+        run: ${{ matrix.command }}
