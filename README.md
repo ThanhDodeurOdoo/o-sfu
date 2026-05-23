@@ -89,10 +89,12 @@ you can read the one at [odoo/sfu](https://github.com/odoo/sfu), it's roughly th
 The control plane is experimental. The normal media-server Docker image does not
 copy or expose it. Build it explicitly with `Dockerfile.control-plane` or run
 `cargo run --bin o-sfu-control-plane` when testing scalable-topology work.
+The control-plane HTTP API does not authenticate requests yet, security specifications are 
+still to decide.
 
 | Variable                     | Default          | Description |
 | :--------------------------- | :--------------- | :---------- |
-| `CONTROL_PLANE_BIND_ADDRESS` | `127.0.0.1:8071` | todo        |
+| `CONTROL_PLANE_BIND_ADDRESS` | `127.0.0.1:8071` | Socket address for the experimental control-plane listener. The control-plane image overrides it to `0.0.0.0:8071` for container-network tests. |
 
 
 ## Running the server and contributing
