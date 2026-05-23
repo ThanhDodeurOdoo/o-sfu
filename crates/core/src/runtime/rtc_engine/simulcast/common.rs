@@ -95,10 +95,22 @@ pub(super) fn send_rids_for_mid(answer_sdp: &str, mid: Mid) -> Vec<NegotiatedRid
     let Some(section) = media_section_for_mid(answer_sdp, mid) else {
         return Vec::new();
     };
-    section
+    let declarations = section
         .lines()
         .filter_map(parse_send_rid)
-        .collect::<Vec<_>>()
+        .collect::<Vec<_>>();
+    accepted_send_simulcast_rids(section)
+        .into_iter()
+        .filter_map(|accepted_rid| {
+            declarations
+                .iter()
+                .find(|declaration| declaration.rid == accepted_rid)
+                .map(|declaration| NegotiatedRid {
+                    rid: Str0mRid::from(declaration.rid),
+                    max_bitrate: declaration.max_bitrate,
+                })
+        })
+        .collect()
 }
 
 fn media_section_for_mid(sdp: &str, mid: Mid) -> Option<&str> {
@@ -138,7 +150,13 @@ fn find_next_media_section_start(sdp: &str, start: usize, media_prefix: &str) ->
         .map(|offset| start + offset + 1)
 }
 
-fn parse_send_rid(line: &str) -> Option<NegotiatedRid> {
+#[derive(Debug, Clone, Copy)]
+struct SendRidDeclaration<'a> {
+    rid: &'a str,
+    max_bitrate: Option<Bitrate>,
+}
+
+fn parse_send_rid(line: &str) -> Option<SendRidDeclaration<'_>> {
     let rid_prefix = format!(
         "{}{}:",
         webrtc::sdp::ATTRIBUTE_PREFIX,
@@ -154,10 +172,50 @@ fn parse_send_rid(line: &str) -> Option<NegotiatedRid> {
     if webrtc::RtpStreamDirection::parse(direction) != Some(webrtc::RtpStreamDirection::Send) {
         return None;
     }
-    Some(NegotiatedRid {
-        rid: Str0mRid::from(rid),
+    Some(SendRidDeclaration {
+        rid,
         max_bitrate: parts.next().and_then(parse_max_bitrate),
     })
+}
+
+fn accepted_send_simulcast_rids(section: &str) -> Vec<&str> {
+    section
+        .lines()
+        .find_map(parse_send_simulcast_line)
+        .unwrap_or_default()
+}
+
+fn parse_send_simulcast_line(line: &str) -> Option<Vec<&str>> {
+    let simulcast_prefix = format!(
+        "{}{}:",
+        webrtc::sdp::ATTRIBUTE_PREFIX,
+        webrtc::sdp::attribute::SIMULCAST
+    );
+    let simulcast_value = line
+        .trim_end_matches('\r')
+        .strip_prefix(&simulcast_prefix)?;
+    let mut parts = simulcast_value.split_whitespace();
+    while let Some(direction) = parts.next() {
+        let rids = parts.next()?;
+        if direction == webrtc::sdp::simulcast::DIRECTION_SEND {
+            return Some(parse_simulcast_rid_list(rids));
+        }
+    }
+    None
+}
+
+fn parse_simulcast_rid_list(value: &str) -> Vec<&str> {
+    value
+        .split(webrtc::sdp::simulcast::STREAM_SEPARATOR)
+        .filter_map(|stream| {
+            let selected_alternative = stream
+                .split(webrtc::sdp::simulcast::ALTERNATIVE_SEPARATOR)
+                .next()?;
+            let rid = webrtc::sdp::simulcast::strip_initial_pause_prefix(selected_alternative)
+                .unwrap_or(selected_alternative);
+            webrtc::sdp::rid::is_id(rid).then_some(rid)
+        })
+        .collect()
 }
 
 fn parse_max_bitrate(restrictions: &str) -> Option<Bitrate> {
