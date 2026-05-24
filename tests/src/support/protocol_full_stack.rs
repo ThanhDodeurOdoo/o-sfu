@@ -7,9 +7,9 @@ use std::{future::Future, pin::Pin, time::Duration};
 
 use futures_util::SinkExt;
 use o_sfu_protocol::wire::{
-    AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, DownloadStates, EnvelopeBatch,
-    RequestId, ServerEnvelope, ServerMessage, ServerRequest, StreamIntentPayload, StreamType,
-    SubscribePayload, UserId, UserInfo, WelcomePayload,
+    AuthPayload, ClientEnvelope, ClientMessage, DownloadStates, RequestId, ServerEnvelope,
+    ServerMessage, ServerRequest, StreamIntentPayload, StreamType, SubscribePayload, UserId,
+    UserInfo, WelcomePayload,
 };
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
@@ -18,6 +18,7 @@ use super::{
     TEST_ROOM_KEY, TestServer, TestWebSocket, connect_websocket, decode_protocol_welcome_batch,
     fake_media::{FakeClock, FakeMediaSource},
     fake_rtc_peer::{FakeRtcPeer, ReceivedRtpPacket},
+    protocol_wire::{encode_client_batch, read_protocol_batch, send_server_request_response},
     read_close_code, read_text_message, signed_connect_claims,
 };
 
@@ -246,43 +247,4 @@ impl ProtocolFakePeer {
         send_server_request_response(&mut self.websocket, &mut self.rtc_peer, request_id, request)
             .await
     }
-}
-
-async fn send_server_request_response(
-    websocket: &mut TestWebSocket,
-    rtc_peer: &mut FakeRtcPeer,
-    request_id: RequestId,
-    request: ServerRequest,
-) -> Option<()> {
-    let response = match request {
-        ServerRequest::Offer(payload) => {
-            ClientResponse::Offer(rtc_peer.answer_offer(&payload.sdp)?)
-        }
-        ServerRequest::Renegotiate(payload) => {
-            ClientResponse::Renegotiate(rtc_peer.answer_offer(&payload.sdp)?)
-        }
-    };
-    websocket
-        .send(tungstenite::Message::Text(
-            encode_client_batch(vec![ClientEnvelope::Response {
-                response_to: request_id,
-                response,
-            }])?
-            .into(),
-        ))
-        .await
-        .ok()
-}
-
-fn encode_client_batch(batch: Vec<ClientEnvelope>) -> Option<String> {
-    let envelopes = batch
-        .into_iter()
-        .map(ClientEnvelope::into_envelope)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-    serde_json::to_string(&envelopes).ok()
-}
-
-async fn read_protocol_batch(websocket: &mut TestWebSocket) -> Option<EnvelopeBatch> {
-    serde_json::from_str(&read_text_message(websocket).await?).ok()
 }

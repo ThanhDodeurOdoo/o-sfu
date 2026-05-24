@@ -1,5 +1,7 @@
 pub(super) use std::{
+    fmt::Debug,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    result::Result as StdResult,
     sync::{
         Arc,
         atomic::{AtomicU16, Ordering},
@@ -7,6 +9,7 @@ pub(super) use std::{
     time::{Duration, Instant},
 };
 
+pub(super) use anyhow::{Result, anyhow};
 pub(super) use futures_util::{SinkExt, StreamExt};
 pub(super) use o_sfu_protocol::wire::{
     AuthPayload, AvailableFeatures, ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch,
@@ -59,6 +62,18 @@ static NEXT_WEBSOCKET_TEST_PEER_PORT: AtomicU16 = AtomicU16::new(58_000);
 pub(super) type TestWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
 pub(super) type CreateRoomQuery = RoomConfig;
+pub(super) type TestResult<T = ()> = Result<T>;
+
+pub(super) fn require_some<T>(value: Option<T>, context: &'static str) -> TestResult<T> {
+    value.ok_or_else(|| anyhow!(context))
+}
+
+pub(super) fn require_ok<T, E>(value: StdResult<T, E>, context: &'static str) -> TestResult<T>
+where
+    E: Debug,
+{
+    value.map_err(|error| anyhow!("{context}: {error:?}"))
+}
 
 /// raw websocket peer for tests that must prove the server handles a silent client
 ///
@@ -178,8 +193,16 @@ impl TestServerBuilder {
         let bind_address = self.runtime.config().http.bind_address;
         let runtime = self.runtime.build_state();
         let state_for_server = runtime.state.clone();
-        let listener = TcpListener::bind(bind_address).await.ok()?;
-        let addr = listener.local_addr().ok()?;
+        let listener = require_ok(
+            TcpListener::bind(bind_address).await,
+            "test listener should bind",
+        )
+        .ok()?;
+        let addr = require_ok(
+            listener.local_addr(),
+            "test listener address should resolve",
+        )
+        .ok()?;
         let handle = tokio::spawn(async move {
             let result = axum::serve(listener, app(state_for_server)).await;
             assert!(
@@ -194,6 +217,10 @@ impl TestServerBuilder {
             media_transport: runtime.media_transport,
             state: runtime.state,
         })
+    }
+
+    pub(super) async fn spawn_required(self) -> TestResult<TestServer> {
+        require_some(self.spawn().await, "test websocket server should start")
     }
 }
 

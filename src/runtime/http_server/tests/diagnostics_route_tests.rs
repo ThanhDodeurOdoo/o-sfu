@@ -3,10 +3,10 @@
     clippy::panic,
     clippy::too_many_lines,
     clippy::use_self,
-    reason = "the diagnostics route tests favor direct assertion style and a single end-to-end scenario over helper indirection"
+    reason = "the diagnostics route tests keep one end-to-end diagnostics scenario with direct field assertions"
 )]
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 use o_sfu_protocol::wire::StreamType;
 use o_sfu_router::{
@@ -30,10 +30,6 @@ use crate::{
     },
 };
 
-fn test_simulcast_video_rtp_parameters() -> MediaStream {
-    sample_simulcast_video_rtp_parameters(None)
-}
-
 const DIAGNOSTICS_ROUTE_PATHS: &[&str] = &[
     DIAGNOSTICS_SUMMARY_PATH,
     DIAGNOSTICS_ROOMS_PATH,
@@ -45,38 +41,90 @@ const DIAGNOSTICS_ROUTE_PATHS: &[&str] = &[
     "/internal/diagnostics/users/1",
 ];
 
-async fn assert_diagnostics_path_status(
+fn test_simulcast_video_rtp_parameters() -> MediaStream {
+    sample_simulcast_video_rtp_parameters(None)
+}
+
+async fn diagnostics_status(
     state: &RuntimeState,
     path: &str,
     authorization: Option<&str>,
     expected_status: StatusCode,
-) {
-    let mut request_builder = Request::get(path);
+) -> TestResult {
+    let mut builder = Request::get(path);
     if let Some(authorization) = authorization {
-        request_builder = request_builder.header(header::AUTHORIZATION, authorization);
+        builder = builder.header(header::AUTHORIZATION, authorization);
     }
-    let request = build_request(request_builder, Body::empty());
-    assert!(request.is_some());
-    let Some(request) = request else {
-        return;
-    };
-    let response = app(state.clone()).oneshot(request).await;
-    assert!(response.is_ok());
-    let Some(response) = response.ok() else {
-        return;
-    };
-    assert_eq!(response.status(), expected_status);
+    route_status(
+        state,
+        builder,
+        Body::empty(),
+        expected_status,
+        "diagnostics request should complete",
+    )
+    .await
 }
 
-async fn make_session_ready(room: &Room, user_id: &UserId, media_transport: &MediaTransport) {
-    let Some(connection_id) = room.test_api().inspect().user_connection_id(user_id).await else {
-        panic!("user should exist before publishing");
-    };
-    assert!(
-        create_transport_session_offer(room, user_id, media_transport)
-            .await
-            .is_some()
-    );
+async fn diagnostics_json<T>(state: &RuntimeState, path: impl AsRef<str>) -> TestResult<T>
+where
+    T: DeserializeOwned,
+{
+    route_json(
+        state,
+        Request::get(path.as_ref()),
+        Body::empty(),
+        StatusCode::OK,
+        "diagnostics request should succeed",
+    )
+    .await
+}
+
+async fn serve_diagnostics_room(
+    test_state: &RuntimeTestState,
+    issuer: &str,
+    remote_address: &str,
+) -> Arc<Room> {
+    test_state
+        .room_manager
+        .serve_room(
+            issuer,
+            TEST_ROOM_KEY,
+            &RoomConfig::default(),
+            Some(remote_address),
+        )
+        .await
+}
+
+async fn join_room_user(
+    state: &RuntimeState,
+    room: &Room,
+    user_id: UserId,
+    context: &'static str,
+) -> TestResult<UserOutboundReceiver> {
+    let (tx, rx) = test_outbound_sender(state);
+    require_ok(
+        room.test_api()
+            .lifecycle()
+            .join_user(user_id, None, UserPermissions::default(), tx)
+            .await,
+        context,
+    )?;
+    Ok(rx)
+}
+
+async fn make_session_ready(
+    room: &Room,
+    user_id: &UserId,
+    media_transport: &MediaTransport,
+) -> TestResult {
+    let connection_id = require_some(
+        room.test_api().inspect().user_connection_id(user_id).await,
+        "user should exist before publishing",
+    )?;
+    require_some(
+        create_transport_session_offer(room, user_id, media_transport).await,
+        "transport session offer should be created",
+    )?;
     assert_eq!(
         room.apply_session_negotiated(
             user_id,
@@ -87,6 +135,7 @@ async fn make_session_ready(room: &Room, user_id: &UserId, media_transport: &Med
         .await,
         SessionNegotiationOutcome::Applied
     );
+    Ok(())
 }
 
 async fn publish_media_stream(
@@ -95,9 +144,9 @@ async fn publish_media_stream(
     stream_type: StreamType,
     parameters: MediaStream,
     media_transport: &MediaTransport,
-) {
-    make_session_ready(room, user_id, media_transport).await;
-    assert!(
+) -> TestResult {
+    make_session_ready(room, user_id, media_transport).await?;
+    require_some(
         room.test_api()
             .media()
             .publish_intent(
@@ -107,115 +156,88 @@ async fn publish_media_stream(
                 parameters,
                 media_transport,
             )
-            .await
-            .is_some()
-    );
+            .await,
+        "media publish intent should commit",
+    )?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn diagnostics_routes_are_forbidden_without_token_on_public_listener() {
+async fn diagnostics_routes_are_forbidden_without_token_on_public_listener() -> TestResult {
     let mut state = test_state();
     state.config.http.bind_address = SocketAddr::from(([0, 0, 0, 0], 8070));
 
     for path in DIAGNOSTICS_ROUTE_PATHS {
-        assert_diagnostics_path_status(&state, path, None, StatusCode::FORBIDDEN).await;
+        diagnostics_status(&state, path, None, StatusCode::FORBIDDEN).await?;
     }
+    Ok(())
 }
 
 #[tokio::test]
-async fn diagnostics_routes_require_the_configured_bearer_token() {
+async fn diagnostics_routes_require_the_configured_bearer_token() -> TestResult {
     let mut state = test_state();
     state.config.http.bind_address = SocketAddr::from(([0, 0, 0, 0], 8070));
     state.config.diagnostics.auth_token = Some(String::from("operator-secret"));
 
     for path in DIAGNOSTICS_ROUTE_PATHS {
-        assert_diagnostics_path_status(&state, path, None, StatusCode::UNAUTHORIZED).await;
-        assert_diagnostics_path_status(
+        diagnostics_status(&state, path, None, StatusCode::UNAUTHORIZED).await?;
+        diagnostics_status(
             &state,
             path,
             Some("Basic operator-secret"),
             StatusCode::UNAUTHORIZED,
         )
-        .await;
-        assert_diagnostics_path_status(
+        .await?;
+        diagnostics_status(
             &state,
             path,
             Some("jwt operator-secret"),
             StatusCode::UNAUTHORIZED,
         )
-        .await;
+        .await?;
     }
 
-    let authorized = build_request(
-        Request::get(DIAGNOSTICS_SUMMARY_PATH)
-            .header(header::AUTHORIZATION, "Bearer operator-secret"),
-        Body::empty(),
-    );
-    assert!(authorized.is_some());
-    let Some(authorized) = authorized else {
-        return;
-    };
-    let authorized_response = app(state).oneshot(authorized).await;
-    assert!(authorized_response.is_ok());
-    let Some(authorized_response) = authorized_response.ok() else {
-        return;
-    };
-    assert_eq!(authorized_response.status(), StatusCode::OK);
+    diagnostics_status(
+        &state,
+        DIAGNOSTICS_SUMMARY_PATH,
+        Some("Bearer operator-secret"),
+        StatusCode::OK,
+    )
+    .await
 }
 
 #[tokio::test]
-async fn diagnostics_routes_return_live_room_and_user_details() {
+async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
     let test_state = test_state_with_handles();
-    let room = test_state
-        .room_manager
-        .serve_room(
-            "issuer-a",
-            TEST_ROOM_KEY,
-            &RoomConfig::default(),
-            Some("203.0.113.10"),
-        )
-        .await;
-    let (alice_tx, _alice_rx) = test_outbound_sender(&test_state.state);
-    let (bob_tx, _bob_rx) = test_outbound_sender(&test_state.state);
-    let (carol_tx, _carol_rx) = test_outbound_sender(&test_state.state);
+    let room = serve_diagnostics_room(&test_state, "issuer-a", "203.0.113.10").await;
     let alice_session_id = UserId::Integer(1);
     let bob_session_id = UserId::Integer(2);
     let carol_session_id = UserId::Integer(3);
-    let alice_join = room
-        .test_api()
-        .lifecycle()
-        .join_user(
+    let _receivers = [
+        join_room_user(
+            &test_state.state,
+            &room,
             alice_session_id.clone(),
-            None,
-            UserPermissions::default(),
-            alice_tx,
+            "alice should join diagnostics room",
         )
-        .await;
-    let bob_join = room
-        .test_api()
-        .lifecycle()
-        .join_user(
+        .await?,
+        join_room_user(
+            &test_state.state,
+            &room,
             bob_session_id.clone(),
-            None,
-            UserPermissions::default(),
-            bob_tx,
+            "bob should join diagnostics room",
         )
-        .await;
-    let carol_join = room
-        .test_api()
-        .lifecycle()
-        .join_user(
+        .await?,
+        join_room_user(
+            &test_state.state,
+            &room,
             carol_session_id.clone(),
-            None,
-            UserPermissions::default(),
-            carol_tx,
+            "carol should join diagnostics room",
         )
-        .await;
-    assert!(alice_join.is_ok());
-    assert!(bob_join.is_ok());
-    assert!(carol_join.is_ok());
-    make_session_ready(&room, &bob_session_id, &test_state.media_transport).await;
-    make_session_ready(&room, &carol_session_id, &test_state.media_transport).await;
+        .await?,
+    ];
+    make_session_ready(&room, &bob_session_id, &test_state.media_transport).await?;
+    make_session_ready(&room, &carol_session_id, &test_state.media_transport).await?;
     publish_media_stream(
         &room,
         &alice_session_id,
@@ -223,15 +245,14 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
         test_simulcast_video_rtp_parameters(),
         &test_state.media_transport,
     )
-    .await;
-    let Some(alice_connection_id) = room
-        .test_api()
-        .inspect()
-        .user_connection_id(&alice_session_id)
-        .await
-    else {
-        panic!("alice should still have a live connection");
-    };
+    .await?;
+    let alice_connection_id = require_some(
+        room.test_api()
+            .inspect()
+            .user_connection_id(&alice_session_id)
+            .await,
+        "alice should still have a live connection",
+    )?;
     for _ in 0..2 {
         test_state
             .state
@@ -241,75 +262,32 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
             .update_info(UserInfo::default(), UserInfoRefresh::NotNeeded)
             .await;
     }
-    let rooms_request = build_request(Request::get(DIAGNOSTICS_ROOMS_PATH), Body::empty());
-    assert!(rooms_request.is_some());
-    let Some(rooms_request) = rooms_request else {
-        return;
-    };
-    let rooms_response = app(test_state.state.clone()).oneshot(rooms_request).await;
-    assert!(rooms_response.is_ok());
-    let Some(rooms_response) = rooms_response.ok() else {
-        return;
-    };
-    assert_eq!(rooms_response.status(), StatusCode::OK);
-    let room_summaries: Option<Vec<DiagnosticsRoomSummary>> = parse_json(rooms_response).await;
-    assert!(room_summaries.is_some());
-    let Some(room_summaries) = room_summaries else {
-        return;
-    };
+
+    let room_summaries: Vec<DiagnosticsRoomSummary> =
+        diagnostics_json(&test_state.state, DIAGNOSTICS_ROOMS_PATH).await?;
     assert_eq!(room_summaries.len(), 1);
     assert_eq!(room_summaries[0].user_count, 3);
     assert_eq!(room_summaries[0].source_count, 1);
     assert_eq!(room_summaries[0].publication_count, 1);
     assert_eq!(room_summaries[0].subscription_count, 2);
 
-    let room_users_request = build_request(
-        Request::get(format!("/internal/diagnostics/rooms/{}/users", room.uuid())),
-        Body::empty(),
-    );
-    assert!(room_users_request.is_some());
-    let Some(room_users_request) = room_users_request else {
-        return;
-    };
-    let room_users_response = app(test_state.state.clone())
-        .oneshot(room_users_request)
-        .await;
-    assert!(room_users_response.is_ok());
-    let Some(room_users_response) = room_users_response.ok() else {
-        return;
-    };
-    assert_eq!(room_users_response.status(), StatusCode::OK);
-    let room_users: Option<Vec<DiagnosticsUserSummary>> = parse_json(room_users_response).await;
-    assert!(room_users.is_some());
-    let Some(room_users) = room_users else {
-        return;
-    };
+    let room_users: Vec<DiagnosticsUserSummary> = diagnostics_json(
+        &test_state.state,
+        format!("/internal/diagnostics/rooms/{}/users", room.uuid()),
+    )
+    .await?;
     assert_eq!(room_users.len(), 3);
-    let Some(alice_summary) = room_users.iter().find(|user| user.user_key == "1") else {
-        panic!("alice summary should be listed");
-    };
+    let alice_summary = require_some(
+        room_users.iter().find(|user| user.user_key == "1"),
+        "alice summary should be listed",
+    )?;
     assert_eq!(alice_summary.room_id, room.uuid());
     assert_eq!(alice_summary.publication_count, 1);
     assert_eq!(alice_summary.subscription_count, 0);
     assert_eq!(alice_summary.media_worker_id, 0);
 
-    let workers_request = build_request(Request::get(DIAGNOSTICS_WORKERS_PATH), Body::empty());
-    assert!(workers_request.is_some());
-    let Some(workers_request) = workers_request else {
-        return;
-    };
-    let workers_response = app(test_state.state.clone()).oneshot(workers_request).await;
-    assert!(workers_response.is_ok());
-    let Some(workers_response) = workers_response.ok() else {
-        return;
-    };
-    assert_eq!(workers_response.status(), StatusCode::OK);
-    let worker_summaries: Option<Vec<DiagnosticsWorkerSummary>> =
-        parse_json(workers_response).await;
-    assert!(worker_summaries.is_some());
-    let Some(worker_summaries) = worker_summaries else {
-        return;
-    };
+    let worker_summaries: Vec<DiagnosticsWorkerSummary> =
+        diagnostics_json(&test_state.state, DIAGNOSTICS_WORKERS_PATH).await?;
     assert_eq!(worker_summaries.len(), 1);
     let worker_summary = &worker_summaries[0];
     assert_eq!(worker_summary.media_worker_id, 0);
@@ -323,25 +301,11 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     assert_eq!(worker_summary.pressure.relay_mailbox_depth, 0);
     assert_eq!(worker_summary.pressure.worker_pressure_score, 0);
 
-    let detail_request = build_request(
-        Request::get(format!("/internal/diagnostics/rooms/{}", room.uuid())),
-        Body::empty(),
-    );
-    assert!(detail_request.is_some());
-    let Some(detail_request) = detail_request else {
-        return;
-    };
-    let detail_response = app(test_state.state.clone()).oneshot(detail_request).await;
-    assert!(detail_response.is_ok());
-    let Some(detail_response) = detail_response.ok() else {
-        return;
-    };
-    assert_eq!(detail_response.status(), StatusCode::OK);
-    let detail: Option<DiagnosticsRoomDetail> = parse_json(detail_response).await;
-    assert!(detail.is_some());
-    let Some(detail) = detail else {
-        return;
-    };
+    let detail: DiagnosticsRoomDetail = diagnostics_json(
+        &test_state.state,
+        format!("/internal/diagnostics/rooms/{}", room.uuid()),
+    )
+    .await?;
     assert_eq!(detail.summary.uuid, room.uuid());
     assert_eq!(detail.summary.remote_address, "203.0.113.10");
     assert_eq!(detail.users.len(), 3);
@@ -365,81 +329,34 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
             .any(|event| event.event == "publish.committed")
     );
 
-    let room_graph_request = build_request(
-        Request::get(format!(
-            "/internal/diagnostics/node-graph/rooms/{}",
-            room.uuid()
-        )),
-        Body::empty(),
-    );
-    assert!(room_graph_request.is_some());
-    let Some(room_graph_request) = room_graph_request else {
-        return;
-    };
-    let room_graph_response = app(test_state.state.clone())
-        .oneshot(room_graph_request)
-        .await;
-    assert!(room_graph_response.is_ok());
-    let Some(room_graph_response) = room_graph_response.ok() else {
-        return;
-    };
-    assert_eq!(room_graph_response.status(), StatusCode::OK);
-    let room_graph: Option<Value> = parse_json(room_graph_response).await;
-    assert!(room_graph.is_some());
-    let Some(room_graph) = room_graph else {
-        return;
-    };
+    let room_graph: Value = diagnostics_json(
+        &test_state.state,
+        format!("/internal/diagnostics/node-graph/rooms/{}", room.uuid()),
+    )
+    .await?;
     assert!(room_graph["nodes"].as_array().is_some_and(|nodes| {
         nodes
             .iter()
             .any(|node| node["id"] == format!("room:{}", room.uuid()))
     }));
 
-    let old_channel_graph_request = build_request(
-        Request::get(format!(
-            "/internal/diagnostics/node-graph/channels/{}",
-            room.uuid()
-        )),
-        Body::empty(),
-    );
-    assert!(old_channel_graph_request.is_some());
-    let Some(old_channel_graph_request) = old_channel_graph_request else {
-        return;
-    };
-    let old_channel_graph_response = app(test_state.state.clone())
-        .oneshot(old_channel_graph_request)
-        .await;
-    assert!(old_channel_graph_response.is_ok());
-    let Some(old_channel_graph_response) = old_channel_graph_response.ok() else {
-        return;
-    };
-    assert_eq!(old_channel_graph_response.status(), StatusCode::NOT_FOUND);
+    diagnostics_status(
+        &test_state.state,
+        &format!("/internal/diagnostics/node-graph/channels/{}", room.uuid()),
+        None,
+        StatusCode::NOT_FOUND,
+    )
+    .await?;
 
-    let alice_graph_request = build_request(
-        Request::get(format!(
+    let alice_graph: Value = diagnostics_json(
+        &test_state.state,
+        format!(
             "/internal/diagnostics/node-graph/rooms/{}/users/{}",
             room.uuid(),
             alice_session_id.clone().into_integer_string()
-        )),
-        Body::empty(),
-    );
-    assert!(alice_graph_request.is_some());
-    let Some(alice_graph_request) = alice_graph_request else {
-        return;
-    };
-    let alice_graph_response = app(test_state.state.clone())
-        .oneshot(alice_graph_request)
-        .await;
-    assert!(alice_graph_response.is_ok());
-    let Some(alice_graph_response) = alice_graph_response.ok() else {
-        return;
-    };
-    assert_eq!(alice_graph_response.status(), StatusCode::OK);
-    let alice_graph: Option<Value> = parse_json(alice_graph_response).await;
-    assert!(alice_graph.is_some());
-    let Some(alice_graph) = alice_graph else {
-        return;
-    };
+        ),
+    )
+    .await?;
     assert!(
         alice_graph["nodes"]
             .as_array()
@@ -454,31 +371,15 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
                 && edge["detail__direction"] == "outbound"))
     );
 
-    let bob_graph_request = build_request(
-        Request::get(format!(
+    let bob_graph: Value = diagnostics_json(
+        &test_state.state,
+        format!(
             "/internal/diagnostics/node-graph/rooms/{}/users/{}",
             room.uuid(),
             bob_session_id.clone().into_integer_string()
-        )),
-        Body::empty(),
-    );
-    assert!(bob_graph_request.is_some());
-    let Some(bob_graph_request) = bob_graph_request else {
-        return;
-    };
-    let bob_graph_response = app(test_state.state.clone())
-        .oneshot(bob_graph_request)
-        .await;
-    assert!(bob_graph_response.is_ok());
-    let Some(bob_graph_response) = bob_graph_response.ok() else {
-        return;
-    };
-    assert_eq!(bob_graph_response.status(), StatusCode::OK);
-    let bob_graph: Option<Value> = parse_json(bob_graph_response).await;
-    assert!(bob_graph.is_some());
-    let Some(bob_graph) = bob_graph else {
-        return;
-    };
+        ),
+    )
+    .await?;
     assert!(
         bob_graph["edges"]
             .as_array()
@@ -488,28 +389,14 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
                 && edge["detail__direction"] == "inbound"))
     );
 
-    let session_request = build_request(
-        Request::get(format!(
+    let session_detail: DiagnosticsUserDetail = diagnostics_json(
+        &test_state.state,
+        format!(
             "/internal/diagnostics/users/{}",
             alice_session_id.clone().into_integer_string()
-        )),
-        Body::empty(),
-    );
-    assert!(session_request.is_some());
-    let Some(session_request) = session_request else {
-        return;
-    };
-    let session_response = app(test_state.state.clone()).oneshot(session_request).await;
-    assert!(session_response.is_ok());
-    let Some(session_response) = session_response.ok() else {
-        return;
-    };
-    assert_eq!(session_response.status(), StatusCode::OK);
-    let session_detail: Option<DiagnosticsUserDetail> = parse_json(session_response).await;
-    assert!(session_detail.is_some());
-    let Some(session_detail) = session_detail else {
-        return;
-    };
+        ),
+    )
+    .await?;
     assert_eq!(session_detail.room_id, room.uuid());
     assert_eq!(session_detail.user.user_id, alice_session_id);
     assert_eq!(session_detail.user.publications.len(), 1);
@@ -522,30 +409,14 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
             .any(|event| event.event == "user.joined")
     );
 
-    let bob_session_request = build_request(
-        Request::get(format!(
+    let bob_session_detail: DiagnosticsUserDetail = diagnostics_json(
+        &test_state.state,
+        format!(
             "/internal/diagnostics/users/{}",
             bob_session_id.clone().into_integer_string()
-        )),
-        Body::empty(),
-    );
-    assert!(bob_session_request.is_some());
-    let Some(bob_session_request) = bob_session_request else {
-        return;
-    };
-    let bob_session_response = app(test_state.state.clone())
-        .oneshot(bob_session_request)
-        .await;
-    assert!(bob_session_response.is_ok());
-    let Some(bob_session_response) = bob_session_response.ok() else {
-        return;
-    };
-    assert_eq!(bob_session_response.status(), StatusCode::OK);
-    let bob_session_detail: Option<DiagnosticsUserDetail> = parse_json(bob_session_response).await;
-    assert!(bob_session_detail.is_some());
-    let Some(bob_session_detail) = bob_session_detail else {
-        return;
-    };
+        ),
+    )
+    .await?;
     assert_eq!(bob_session_detail.user.subscriptions.len(), 1);
     let subscription = &bob_session_detail.user.subscriptions[0];
     assert_eq!(subscription.source_id, 1);
@@ -574,140 +445,78 @@ async fn diagnostics_routes_return_live_room_and_user_details() {
     assert_eq!(subscription.selection.selected_video_bitrate_bps, 900_000);
     assert_eq!(subscription.selection.over_budget_exception_reason, None);
 
-    let summary_request = build_request(Request::get(DIAGNOSTICS_SUMMARY_PATH), Body::empty());
-    assert!(summary_request.is_some());
-    let Some(summary_request) = summary_request else {
-        return;
-    };
-    let summary_response = app(test_state.state).oneshot(summary_request).await;
-    assert!(summary_response.is_ok());
-    let Some(summary_response) = summary_response.ok() else {
-        return;
-    };
-    assert_eq!(summary_response.status(), StatusCode::OK);
-    let summary: Option<DiagnosticsSummaryResponse> = parse_json(summary_response).await;
-    assert!(summary.is_some());
-    let Some(summary) = summary else {
-        return;
-    };
+    let summary: DiagnosticsSummaryResponse =
+        diagnostics_json(&test_state.state, DIAGNOSTICS_SUMMARY_PATH).await?;
     assert_eq!(summary.rooms_active, 1);
     assert_eq!(summary.users_active, 3);
     assert_eq!(summary.publications_active, 1);
     assert_eq!(summary.subscriptions_active, 2);
+    Ok(())
 }
 
 #[tokio::test]
-async fn diagnostics_user_lookup_reports_ambiguous_matches() {
+async fn diagnostics_user_lookup_reports_ambiguous_matches() -> TestResult {
     let test_state = test_state_with_handles();
-    let first_room = test_state
-        .room_manager
-        .serve_room(
-            "issuer-a",
-            TEST_ROOM_KEY,
-            &RoomConfig::default(),
-            Some("203.0.113.10"),
+    let first_room = serve_diagnostics_room(&test_state, "issuer-a", "203.0.113.10").await;
+    let second_room = serve_diagnostics_room(&test_state, "issuer-b", "203.0.113.11").await;
+    let _receivers = [
+        join_room_user(
+            &test_state.state,
+            &first_room,
+            UserId::Integer(7),
+            "first matching user should join",
         )
-        .await;
-    let second_room = test_state
-        .room_manager
-        .serve_room(
-            "issuer-b",
-            TEST_ROOM_KEY,
-            &RoomConfig::default(),
-            Some("203.0.113.11"),
+        .await?,
+        join_room_user(
+            &test_state.state,
+            &second_room,
+            UserId::Integer(7),
+            "second matching user should join",
         )
-        .await;
-    let (first_tx, _first_rx) = test_outbound_sender(&test_state.state);
-    let (second_tx, _second_rx) = test_outbound_sender(&test_state.state);
-    assert!(
-        first_room
-            .test_api()
-            .lifecycle()
-            .join_user(
-                UserId::Integer(7),
-                None,
-                UserPermissions::default(),
-                first_tx,
-            )
-            .await
-            .is_ok()
-    );
-    assert!(
-        second_room
-            .test_api()
-            .lifecycle()
-            .join_user(
-                UserId::Integer(7),
-                None,
-                UserPermissions::default(),
-                second_tx,
-            )
-            .await
-            .is_ok()
-    );
+        .await?,
+    ];
 
-    let request = build_request(Request::get("/internal/diagnostics/users/7"), Body::empty());
-    assert!(request.is_some());
-    let Some(request) = request else {
-        return;
-    };
-    let response = app(test_state.state).oneshot(request).await;
-    assert!(response.is_ok());
-    let Some(response) = response.ok() else {
-        return;
-    };
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    let conflict: Option<DiagnosticsUserLookupConflict> = parse_json(response).await;
-    assert!(conflict.is_some());
-    let Some(conflict) = conflict else {
-        return;
-    };
+    let response = route_response(
+        &test_state.state,
+        Request::get("/internal/diagnostics/users/7"),
+        Body::empty(),
+        StatusCode::CONFLICT,
+        "ambiguous diagnostics lookup should complete",
+    )
+    .await?;
+    let conflict: DiagnosticsUserLookupConflict =
+        response_json(response, "conflict payload should decode").await?;
     assert_eq!(conflict.requested_user_id, "7");
     assert_eq!(conflict.matching_room_ids.len(), 2);
+    Ok(())
 }
 
 #[tokio::test]
-async fn diagnostics_user_lookup_reports_missing_index_matches() {
+async fn diagnostics_user_lookup_reports_missing_index_matches() -> TestResult {
     let test_state = test_state_with_handles();
-    let request = build_request(
-        Request::get("/internal/diagnostics/users/404"),
-        Body::empty(),
-    );
-    assert!(request.is_some());
-    let Some(request) = request else {
-        return;
-    };
-    let response = app(test_state.state).oneshot(request).await;
-    assert!(response.is_ok());
-    let Some(response) = response.ok() else {
-        return;
-    };
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    diagnostics_status(
+        &test_state.state,
+        "/internal/diagnostics/users/404",
+        None,
+        StatusCode::NOT_FOUND,
+    )
+    .await
 }
 
 #[tokio::test]
-async fn diagnostics_user_lookup_survives_user_replacement_without_conflict() {
+async fn diagnostics_user_lookup_survives_user_replacement_without_conflict() -> TestResult {
     let test_state = test_state_with_handles();
-    let room = test_state
-        .room_manager
-        .serve_room(
-            "issuer-replacement",
-            TEST_ROOM_KEY,
-            &RoomConfig::default(),
-            Some("203.0.113.12"),
-        )
-        .await;
+    let room = serve_diagnostics_room(&test_state, "issuer-replacement", "203.0.113.12").await;
     let user_id = UserId::Integer(9);
-    let (first_tx, _first_rx) = test_outbound_sender(&test_state.state);
+    let _first_rx = join_room_user(
+        &test_state.state,
+        &room,
+        user_id.clone(),
+        "first user should join",
+    )
+    .await?;
     let (replacement_tx, _replacement_rx) = test_outbound_sender(&test_state.state);
-    assert!(
-        room.test_api()
-            .lifecycle()
-            .join_user(user_id.clone(), None, UserPermissions::default(), first_tx,)
-            .await
-            .is_ok()
-    );
-    assert!(
+    require_ok(
         room.test_api()
             .lifecycle()
             .join_user(
@@ -716,62 +525,40 @@ async fn diagnostics_user_lookup_survives_user_replacement_without_conflict() {
                 UserPermissions::default(),
                 replacement_tx,
             )
-            .await
-            .is_ok()
-    );
+            .await,
+        "replacement user should join",
+    )?;
 
-    let request = build_request(Request::get("/internal/diagnostics/users/9"), Body::empty());
-    assert!(request.is_some());
-    let Some(request) = request else {
-        return;
-    };
-    let response = app(test_state.state).oneshot(request).await;
-    assert!(response.is_ok());
-    let Some(response) = response.ok() else {
-        return;
-    };
-    assert_eq!(response.status(), StatusCode::OK);
-    let detail: Option<DiagnosticsUserDetail> = parse_json(response).await;
-    assert!(detail.is_some());
-    let Some(detail) = detail else {
-        return;
-    };
+    let detail: DiagnosticsUserDetail =
+        diagnostics_json(&test_state.state, "/internal/diagnostics/users/9").await?;
     assert_eq!(detail.room_id, room.uuid());
     assert_eq!(detail.user.user_id, user_id);
+    Ok(())
 }
 
 #[tokio::test]
-async fn diagnostics_user_lookup_drops_room_teardown_entries() {
+async fn diagnostics_user_lookup_drops_room_teardown_entries() -> TestResult {
     let test_state = test_state_with_handles();
-    let room = test_state
-        .room_manager
-        .serve_room(
-            "issuer-teardown",
-            TEST_ROOM_KEY,
-            &RoomConfig::default(),
-            Some("203.0.113.13"),
-        )
-        .await;
+    let room = serve_diagnostics_room(&test_state, "issuer-teardown", "203.0.113.13").await;
     let room_id = room.uuid().to_owned();
     let user_id = UserId::Integer(11);
     let (tx, _rx) = test_outbound_sender(&test_state.state);
-    let join = test_state
-        .room_manager
-        .join_user(
-            &room_id,
-            JoinUserRequest {
-                user_id: user_id.clone(),
-                label: None,
-                permissions: UserPermissions::default(),
-                sender: tx,
-            },
-            &test_state.media_transport,
-        )
-        .await;
-    assert!(join.is_ok());
-    let Some((_room, connection_id)) = join.ok() else {
-        return;
-    };
+    let (_room, connection_id) = require_ok(
+        test_state
+            .room_manager
+            .join_user(
+                &room_id,
+                JoinUserRequest {
+                    user_id: user_id.clone(),
+                    label: None,
+                    permissions: UserPermissions::default(),
+                    sender: tx,
+                },
+                &test_state.media_transport,
+            )
+            .await,
+        "user should join before teardown",
+    )?;
     assert!(
         test_state
             .room_manager
@@ -784,20 +571,13 @@ async fn diagnostics_user_lookup_drops_room_teardown_entries() {
             .await
     );
 
-    let request = build_request(
-        Request::get("/internal/diagnostics/users/11"),
-        Body::empty(),
-    );
-    assert!(request.is_some());
-    let Some(request) = request else {
-        return;
-    };
-    let response = app(test_state.state).oneshot(request).await;
-    assert!(response.is_ok());
-    let Some(response) = response.ok() else {
-        return;
-    };
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    diagnostics_status(
+        &test_state.state,
+        "/internal/diagnostics/users/11",
+        None,
+        StatusCode::NOT_FOUND,
+    )
+    .await
 }
 
 trait SessionIdExt {

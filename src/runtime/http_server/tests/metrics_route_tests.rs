@@ -77,61 +77,45 @@ fn assert_metrics_snapshot(snapshot: &RuntimeMetricsSnapshot) {
 }
 
 #[tokio::test]
-async fn metrics_route_exports_prometheus_text_for_runtime_counters() {
+async fn metrics_route_exports_prometheus_text_for_runtime_counters() -> TestResult {
     let state = test_state();
 
-    let noop = build_request(Request::get(NOOP_PATH), Body::empty());
-    assert!(noop.is_some());
-    let Some(noop) = noop else {
-        return;
-    };
-    let noop_response = app(state.clone()).oneshot(noop).await;
-    assert!(noop_response.is_ok());
-    let Some(noop_response) = noop_response.ok() else {
-        return;
-    };
-    assert_eq!(noop_response.status(), StatusCode::OK);
+    route_status(
+        &state,
+        Request::get(NOOP_PATH),
+        Body::empty(),
+        StatusCode::OK,
+        "noop request should complete",
+    )
+    .await?;
 
-    let invalid_disconnect =
-        build_request(Request::post(DISCONNECT_PATH), Body::from("invalid-token"));
-    assert!(invalid_disconnect.is_some());
-    let Some(invalid_disconnect) = invalid_disconnect else {
-        return;
-    };
-    let invalid_disconnect_response = app(state.clone()).oneshot(invalid_disconnect).await;
-    assert!(invalid_disconnect_response.is_ok());
-    let Some(invalid_disconnect_response) = invalid_disconnect_response.ok() else {
-        return;
-    };
-    assert_eq!(
-        invalid_disconnect_response.status(),
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
+    route_status(
+        &state,
+        Request::post(DISCONNECT_PATH),
+        Body::from("invalid-token"),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "invalid disconnect request should complete",
+    )
+    .await?;
 
-    let metrics_request = build_request(Request::get(METRICS_PATH), Body::empty());
-    assert!(metrics_request.is_some());
-    let Some(metrics_request) = metrics_request else {
-        return;
-    };
-    let metrics_response = app(state.clone()).oneshot(metrics_request).await;
-    assert!(metrics_response.is_ok());
-    let Some(metrics_response) = metrics_response.ok() else {
-        return;
-    };
-    assert_eq!(metrics_response.status(), StatusCode::OK);
+    let metrics_response = route_response(
+        &state,
+        Request::get(METRICS_PATH),
+        Body::empty(),
+        StatusCode::OK,
+        "metrics request should complete",
+    )
+    .await?;
     assert_eq!(
         metrics_response.headers().get(header::CONTENT_TYPE),
         Some(&header::HeaderValue::from_static(
             "text/plain; version=0.0.4; charset=utf-8"
         ))
     );
-    let payload = parse_text(metrics_response).await;
-    assert!(payload.is_some());
-    let Some(payload) = payload else {
-        return;
-    };
+    let payload = response_text(metrics_response, "metrics payload should decode").await?;
     assert_metrics_payload(&payload);
 
     let snapshot = state.metrics.snapshot();
     assert_metrics_snapshot(&snapshot);
+    Ok(())
 }

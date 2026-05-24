@@ -8,5 +8,6 @@ pub mod fake_rtc_peer;
 mod harness;
 pub mod protocol_full_stack;
 pub mod protocol_harness;
+mod protocol_wire;
 
 pub use harness::*;
