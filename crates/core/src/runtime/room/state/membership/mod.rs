@@ -22,7 +22,6 @@ use super::{
         BroadcastPayload, BroadcastPayloadError, LocalRouterRuntimeContext, RoomEventMessage,
         RoomJoinError, RoomUserPermissions, UserCloseReason,
         outbound::{MessageFanout, OutboundSender},
-        topology::{RoomTopology, RoomTopologyError},
         user_negotiation::{UserNegotiation, UserNegotiationUpdate},
     },
     media::{RelayRouteEffect, TransportMediaRemoval},
@@ -99,8 +98,6 @@ pub(in crate::runtime::room) struct JoinUserOutcome {
     pub user_id: UserId,
     /// authoritative router and media-worker placement for the new connection
     pub transport_home_placement: LocalRouterRuntimeContext,
-    /// media worker used by diagnostics for the accepted connection
-    pub transport_media_worker_id: usize,
     /// transport media owned by any connection replaced during the join
     pub transport_removals: Vec<TransportMediaRemoval>,
     /// relay routes that belonged to replaced media state
@@ -174,14 +171,11 @@ impl RoomState {
         home_placement: LocalRouterRuntimeContext,
     ) -> Result<LocalRouterRuntimeContext, RoomJoinError> {
         let mut topology = self.topology.clone();
-        if !is_new && let Err(error) = self.reset_existing_session_routing(&mut topology, user_id) {
-            error!(
-                ?user_id,
-                ?error,
-                "failed to reset replaced user routing in room router"
-            );
-            return Err(RoomJoinError::RouterState);
-        }
+        let affected_consumers = if is_new {
+            Vec::new()
+        } else {
+            self.media.routed_consumer_ids_affected_by_user(user_id)
+        };
         let topology_result = if is_new {
             topology.apply_client_join_on_placement(user_id, connection_id.as_u64(), home_placement)
         } else {
@@ -189,6 +183,7 @@ impl RoomState {
                 user_id,
                 connection_id.as_u64(),
                 home_placement,
+                affected_consumers,
             )
         };
         if let Err(error) = topology_result {
@@ -316,7 +311,6 @@ impl RoomState {
         let connection_id = ConnectionId::allocate(&mut self.next_connection_id);
         let transport_home_placement =
             self.apply_join_topology(user_id, connection_id, is_new, home_placement)?;
-        let transport_media_worker_id = transport_home_placement.media_worker;
         let transport_removals = self.join_transport_removals(user_id, is_new);
 
         let previous_sender =
@@ -363,27 +357,9 @@ impl RoomState {
             effects,
             user_id: user_id.clone(),
             transport_home_placement,
-            transport_media_worker_id,
             transport_removals,
             relay_effects,
         })
-    }
-
-    fn reset_existing_session_routing(
-        &self,
-        topology: &mut RoomTopology,
-        user_id: &UserId,
-    ) -> Result<(), RoomTopologyError> {
-        let routed_consumers = self.media.routed_consumer_ids_for_user(user_id);
-        for routed_consumer_id in routed_consumers {
-            topology.remove_consumer(routed_consumer_id)?;
-        }
-
-        let routed_producers = self.media.routed_producer_ids_for_user(user_id);
-        for routed_producer_id in routed_producers {
-            topology.remove_producer(routed_producer_id)?;
-        }
-        Ok(())
     }
 
     /// remove one current user and return every state-derived cleanup intent
@@ -397,7 +373,10 @@ impl RoomState {
         let user = self.users.remove(user_id)?;
         let departing_user_ids = BTreeSet::from([user_id.clone()]);
         let transport_removals = self.collect_user_transport_removals(&departing_user_ids);
-        let topology_repair = self.topology.remove_session_repairing(user_id);
+        let affected_consumers = self.media.routed_consumer_ids_affected_by_user(user_id);
+        let topology_repair = self
+            .topology
+            .remove_session_repairing(user_id, affected_consumers);
         if !topology_repair.is_clean() {
             error!(
                 ?user_id,

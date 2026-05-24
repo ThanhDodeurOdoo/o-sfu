@@ -69,11 +69,13 @@ impl Room {
         else {
             return;
         };
-        let pressured = self
-            .state
-            .read()
-            .await
-            .source_fanout_pressure(policy.max_fanout_per_source());
+        let pressured = self.state.read().await.source_fanout_pressure(
+            policy.max_fanout_per_source(),
+            |connection_id| {
+                self.placement_state
+                    .media_worker_id_for_connection(connection_id)
+            },
+        );
         lock_unpoisoned(&self.load_triggered_placement).set_source_fanout_pressure(pressured);
     }
 

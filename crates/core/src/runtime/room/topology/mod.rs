@@ -247,8 +247,6 @@ pub(super) struct RoomTopology {
     /// This map can be smaller than `local_routers` because idle spillover
     /// routers are detached. The primary router is the only permanent entry.
     routers: BTreeMap<RouterId, RoomRouterState>,
-    /// Whether a join has committed a placement for this room.
-    has_assigned_local_placements: bool,
     /// Attached-router membership class used for cleanup decisions.
     router_memberships: BTreeMap<RouterId, RouterMembershipState>,
     /// Authoritative home router for each live user.
@@ -346,7 +344,6 @@ impl RoomTopology {
             local_routers,
             router_state_factory: router_state_factory.clone(),
             routers,
-            has_assigned_local_placements: false,
             router_memberships,
             session_home_router: BTreeMap::new(),
             session_seed_by_user: BTreeMap::new(),
@@ -401,8 +398,9 @@ impl RoomTopology {
         user_id: &UserId,
         router_session_seed: u64,
         placement: super::LocalRouterRuntimeContext,
+        affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
     ) -> Result<(), RoomTopologyError> {
-        self.remove_session(user_id)?;
+        self.remove_session(user_id, affected_consumers)?;
         self.apply_client_join_on_placement(user_id, router_session_seed, placement)
     }
 
@@ -416,16 +414,14 @@ impl RoomTopology {
             .find(|placement| placement.router == router_id)
     }
 
+    #[cfg(test)]
     pub(super) fn primary_router_id(&self) -> RouterId {
         self.primary_router
     }
 
+    #[cfg(test)]
     pub(super) fn local_placements(&self) -> Vec<super::LocalRouterRuntimeContext> {
         self.local_routers.iter().collect()
-    }
-
-    pub(super) const fn has_assigned_local_placements(&self) -> bool {
-        self.has_assigned_local_placements
     }
 
     /// Attach one reserved router if it is not already live.
@@ -466,8 +462,6 @@ impl RoomTopology {
             .router_mut_for_user(user_id, router_id)?
             .add_producer(user_id, media_kind)?;
         let routed_producer_id = RoutedProducerId::new(router_id, producer_id);
-        self.shadow_sessions
-            .register_producer(user_id, routed_producer_id);
         Ok(routed_producer_id)
     }
 
@@ -524,11 +518,8 @@ impl RoomTopology {
             }
         };
         let routed_consumer_id = RoutedConsumerId::new(producer_id.router_id(), consumer_id);
-        self.shadow_sessions.register_consumer(
-            producer_id,
-            routed_consumer_id,
-            receiver_session.shadow_key,
-        );
+        self.shadow_sessions
+            .register_consumer(routed_consumer_id, receiver_session.shadow_key);
         Ok(routed_consumer_id)
     }
 
@@ -560,23 +551,6 @@ impl RoomTopology {
         Ok(())
     }
 
-    /// Remove a routed consumer and prune its receiver shadow if it was the
-    /// last edge using that shadow.
-    ///
-    /// The pure router mutation happens first so topology shadow state only
-    /// changes after the router accepted the teardown. Returned shadow cleanup
-    /// stays local to the topology layer and does not involve transport media.
-    pub(super) fn remove_consumer(
-        &mut self,
-        consumer_id: RoutedConsumerId,
-    ) -> Result<(), RoomTopologyError> {
-        self.router_mut(consumer_id.router_id())?
-            .remove_consumer(consumer_id.consumer_id())?;
-        let shadow_sessions = self.shadow_sessions.unregister_consumer(consumer_id);
-        self.prune_shadow_sessions(shadow_sessions)?;
-        Ok(())
-    }
-
     /// Remove a routed producer and reconcile the shadows of dependent
     /// cross-router consumers.
     ///
@@ -586,10 +560,13 @@ impl RoomTopology {
     pub(super) fn remove_producer(
         &mut self,
         producer_id: RoutedProducerId,
+        affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
     ) -> Result<(), RoomTopologyError> {
         self.router_mut(producer_id.router_id())?
             .remove_producer(producer_id.producer_id())?;
-        let shadow_sessions = self.shadow_sessions.unregister_producer(producer_id);
+        let shadow_sessions = self
+            .shadow_sessions
+            .unregister_consumers(affected_consumers);
         self.prune_shadow_sessions(shadow_sessions)?;
         Ok(())
     }
@@ -603,7 +580,11 @@ impl RoomTopology {
     /// Idle spillover cleanup is reconciled by room policy after the state
     /// transition commits. Transport session cleanup remains owned by the room
     /// effect layer.
-    pub(super) fn remove_session(&mut self, user_id: &UserId) -> Result<(), RoomTopologyError> {
+    pub(super) fn remove_session(
+        &mut self,
+        user_id: &UserId,
+        affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
+    ) -> Result<(), RoomTopologyError> {
         let home_router_id = self.require_home_router_id(user_id)?;
         if !self.routers.contains_key(&home_router_id) {
             return Err(RoomTopologyError::MissingRouterForSession {
@@ -616,7 +597,9 @@ impl RoomTopology {
             self.router_mut_for_user(user_id, router_id)?
                 .remove_session(user_id)?;
         }
-        let shadow_sessions = self.shadow_sessions.unregister_session(user_id);
+        let shadow_sessions = self
+            .shadow_sessions
+            .unregister_consumers(affected_consumers);
         self.prune_shadow_sessions(shadow_sessions)?;
         self.session_home_router.remove(user_id);
         self.session_seed_by_user.remove(user_id);
@@ -626,6 +609,7 @@ impl RoomTopology {
     pub(super) fn remove_session_repairing(
         &mut self,
         user_id: &UserId,
+        affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
     ) -> RoomTopologyRepairReport {
         let mut report = RoomTopologyRepairReport::default();
         match self.require_home_router_id(user_id) {
@@ -647,7 +631,9 @@ impl RoomTopology {
                 report.record(error);
             }
         }
-        let shadow_sessions = self.shadow_sessions.unregister_session(user_id);
+        let shadow_sessions = self
+            .shadow_sessions
+            .unregister_consumers(affected_consumers);
         self.prune_shadow_sessions_repairing(shadow_sessions, &mut report);
         self.session_home_router.remove(user_id);
         self.session_seed_by_user.remove(user_id);
@@ -684,7 +670,6 @@ impl RoomTopology {
             .insert(user_id.clone(), placement.router);
         self.session_seed_by_user
             .insert(user_id.clone(), router_session_seed);
-        self.has_assigned_local_placements = true;
         Ok(())
     }
 

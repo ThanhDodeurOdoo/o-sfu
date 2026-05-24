@@ -31,7 +31,7 @@ fn replace_on_router(
     router: u64,
     media_worker: usize,
 ) -> Result<(), RoomTopologyError> {
-    topology.replace_client_session_on_placement(user_id, seed, placement(router, media_worker))
+    topology.replace_client_session_on_placement(user_id, seed, placement(router, media_worker), [])
 }
 
 #[test]
@@ -197,12 +197,19 @@ fn topology_prunes_receiver_shadow_when_cross_router_source_leaves_first() {
         )
         .ok();
     assert!(consumer.is_some());
+    let Some(consumer) = consumer else {
+        return;
+    };
 
     assert_eq!(
         topology.mapped_session_count_for_router(RouterId(9)),
         Some(2)
     );
-    assert!(topology.remove_session(&producer_user_id).is_ok());
+    assert!(
+        topology
+            .remove_session(&producer_user_id, [consumer])
+            .is_ok()
+    );
 
     assert_eq!(
         topology.mapped_session_count_for_router(RouterId(9)),
@@ -241,29 +248,41 @@ fn topology_keeps_receiver_shadow_until_last_source_router_consumer_is_removed()
         return;
     };
 
+    let mut consumers = Vec::new();
     for producer in [first_producer, second_producer] {
-        assert!(
-            topology
-                .add_consumer(
-                    &consumer_user_id,
-                    producer,
-                    RouterMediaKind::Audio,
-                    ConsumerCapability::Compatible,
-                )
-                .is_ok()
-        );
+        let consumer = topology
+            .add_consumer(
+                &consumer_user_id,
+                producer,
+                RouterMediaKind::Audio,
+                ConsumerCapability::Compatible,
+            )
+            .ok();
+        assert!(consumer.is_some());
+        let Some(consumer) = consumer else {
+            return;
+        };
+        consumers.push(consumer);
     }
 
     assert_eq!(
         topology.mapped_session_count_for_router(RouterId(9)),
         Some(2)
     );
-    assert!(topology.remove_producer(first_producer).is_ok());
+    assert!(
+        topology
+            .remove_producer(first_producer, [consumers[0]])
+            .is_ok()
+    );
     assert_eq!(
         topology.mapped_session_count_for_router(RouterId(9)),
         Some(2)
     );
-    assert!(topology.remove_producer(second_producer).is_ok());
+    assert!(
+        topology
+            .remove_producer(second_producer, [consumers[1]])
+            .is_ok()
+    );
     assert_eq!(
         topology.mapped_session_count_for_router(RouterId(9)),
         Some(1)
@@ -317,7 +336,7 @@ fn topology_reports_idle_spillover_router_after_last_home_session_leaves() {
     assert!(join_on_router(&mut topology, &second_user_id, 1, 10, 1).is_ok());
     assert_eq!(topology.router_count(), 2);
 
-    assert!(topology.remove_session(&second_user_id).is_ok());
+    assert!(topology.remove_session(&second_user_id, []).is_ok());
 
     assert_eq!(topology.router_count(), 2);
     assert_eq!(topology.idle_spillover_routers(), vec![RouterId(10)]);
@@ -332,7 +351,7 @@ fn topology_never_reports_primary_router_as_idle_spillover() {
     let user_id = UserId::Integer(10);
 
     assert!(join_on_router(&mut topology, &user_id, 0, 9, 0).is_ok());
-    assert!(topology.remove_session(&user_id).is_ok());
+    assert!(topology.remove_session(&user_id, []).is_ok());
 
     assert!(topology.idle_spillover_routers().is_empty());
     topology.detach_spillover_routers(&[RouterId(9)]);
@@ -347,7 +366,7 @@ fn topology_reports_missing_router_for_user_lookup() {
     topology.remove_router_for_test(RouterId(7));
 
     assert_eq!(
-        topology.remove_session(&user_id),
+        topology.remove_session(&user_id, []),
         Err(RoomTopologyError::MissingRouterForSession {
             user_id,
             router_id: RouterId(7),
@@ -384,7 +403,10 @@ fn topology_preserves_pure_router_errors_without_synthetic_user_ids() {
     let mut topology = RoomTopology::new(RouterId(9));
 
     assert_eq!(
-        topology.remove_producer(RoutedProducerId::new(RouterId(9), RouterProducerId(99),)),
+        topology.remove_producer(
+            RoutedProducerId::new(RouterId(9), RouterProducerId(99),),
+            []
+        ),
         Err(RoomTopologyError::RouterState(
             RoomRouterStateError::Router(RouterError::MissingProducer(RouterProducerId(99)))
         ))

@@ -977,10 +977,7 @@ impl RoomMediaGraph {
             .unwrap_or_default()
     }
 
-    /// producer ids owned by a publisher user
-    ///
-    /// this is used for router cleanup where pure routed producer ids are
-    /// derived after checking that the graph producer is still live
+    #[cfg(test)]
     pub fn producer_ids_for_user(&self, user_id: &UserId) -> Vec<ProducerRuntimeId> {
         self.producer_ids_by_owner
             .get(user_id)
@@ -1000,16 +997,35 @@ impl RoomMediaGraph {
             .collect()
     }
 
-    /// routed producer ids owned by a publisher user
+    /// routed consumer ids that receive from one published source
     ///
-    /// this projects through live producer state so stale owner index entries
-    /// cannot escape the graph
-    pub fn routed_producer_ids_for_user(&self, user_id: &UserId) -> Vec<RoutedProducerId> {
-        self.producer_ids_for_user(user_id)
+    /// source teardown passes this snapshot to topology before the media graph
+    /// removes the source-owned consumer edges
+    pub fn routed_consumer_ids_for_source(
+        &self,
+        source_id: PublishedSourceId,
+    ) -> Vec<RoutedConsumerId> {
+        self.consumer_keys_for_source(source_id)
             .into_iter()
-            .filter_map(|producer_id| self.producers.get(&producer_id))
-            .map(|producer| producer.routed_producer_id)
+            .filter_map(|key| self.consumer_index.get(&key))
+            .map(|consumer_state| consumer_state.routed_consumer_id)
             .collect()
+    }
+
+    /// routed consumers affected when one room user leaves or is replaced
+    ///
+    /// the result includes consumers owned by the departing receiver plus
+    /// consumers attached to sources owned by the departing publisher
+    pub fn routed_consumer_ids_affected_by_user(&self, user_id: &UserId) -> Vec<RoutedConsumerId> {
+        let mut consumer_ids = self.routed_consumer_ids_for_user(user_id);
+        if let Some(source_ids) = self.source_ids_by_owner.get(user_id) {
+            for source_id in source_ids {
+                consumer_ids.extend(self.routed_consumer_ids_for_source(*source_id));
+            }
+        }
+        consumer_ids.sort_unstable();
+        consumer_ids.dedup();
+        consumer_ids
     }
 
     fn producer_id_for_source_key(&self, source_key: &SourceKey) -> Option<ProducerRuntimeId> {

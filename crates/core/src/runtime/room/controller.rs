@@ -20,7 +20,7 @@
 //! The file exists to keep one clear contract at the room boundary:
 //!
 //! - immutable room identity lives in `RoomDefinition`, while committed
-//!   placement lookup lives in `RoomPlacementLedger`
+//!   placement lookup lives in `RoomPlacementState`
 //! - mutable membership and media topology live behind `RoomState`
 //! - websocket and transport work must happen after room locks are released
 //! - signaling code consumes high-level room events instead of reaching into
@@ -41,7 +41,7 @@ use super::{
     media_transaction::PendingPublishTransactions,
     operation::RoomUserOperation,
     placement::{
-        LoadTriggeredPlacementState, RoomPlacementLedger, RoomPlacementUsageSnapshot,
+        LoadTriggeredPlacementState, RoomPlacementState, RoomPlacementUsageSnapshot,
         RoomWorkerLoadContribution,
     },
     state::{ConsumerRouteState, ConsumerRouteTransportRef, RoomState},
@@ -197,10 +197,10 @@ pub struct Room {
     pub(super) definition: RoomDefinition,
     /// Mutable placement lookup for committed room connections.
     ///
-    /// The pure topology owns router execution state. This ledger keeps the
+    /// The pure topology owns router execution state. This state keeps the
     /// full committed placement needed to build session keys after placement
     /// has been committed.
-    pub(super) placement_ledger: RoomPlacementLedger,
+    pub(super) placement_state: RoomPlacementState,
     /// Room-local memory for load-triggered placement hysteresis.
     pub(super) load_triggered_placement: StdMutex<LoadTriggeredPlacementState>,
     #[allow(
@@ -268,10 +268,14 @@ impl Room {
         ));
         let recording_event_sink = Arc::<RecordingService>::clone(&recording_service);
         let router_event_sink: Arc<dyn RoomRouterEventSink> = recording_event_sink;
+        let instance_id = definition.instance_id();
         Self {
             diagnostics: services.diagnostics,
             definition,
-            placement_ledger: RoomPlacementLedger::new(runtime_context.local_routers().primary()),
+            placement_state: RoomPlacementState::new(
+                instance_id,
+                runtime_context.local_routers().clone(),
+            ),
             load_triggered_placement: StdMutex::new(LoadTriggeredPlacementState::default()),
             recording_service: Arc::clone(&recording_service),
             metrics: services.metrics,
@@ -320,11 +324,8 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> TransportSessionKey {
-        self.placement_ledger.transport_user_key(
-            self.definition.instance_id(),
-            user_id,
-            connection_id,
-        )
+        self.placement_state
+            .transport_user_key(user_id, connection_id)
     }
 
     #[must_use]
@@ -340,10 +341,8 @@ impl Room {
         )
     }
 
-    pub(in crate::runtime::room) async fn placement_usage_snapshot(
-        &self,
-    ) -> RoomPlacementUsageSnapshot {
-        self.state.read().await.placement_usage_snapshot()
+    pub(in crate::runtime::room) fn placement_usage_snapshot(&self) -> RoomPlacementUsageSnapshot {
+        self.placement_state.usage_snapshot()
     }
 
     pub(in crate::runtime::room) async fn worker_load_contribution(
@@ -366,9 +365,9 @@ impl Room {
                 .collect(),
             consumer_workers: consumer_entries
                 .into_iter()
-                .map(|(user_id, connection_id)| {
-                    self.transport_user_key(&user_id, connection_id)
-                        .media_worker_id()
+                .map(|(_, connection_id)| {
+                    self.placement_state
+                        .media_worker_id_for_connection(connection_id)
                 })
                 .collect(),
         }
@@ -546,7 +545,7 @@ impl Room {
     /// Runtime diagnostics and transport command paths use this to route work
     /// to the correct RTC worker.
     pub fn media_worker_id(&self) -> usize {
-        self.placement_ledger.media_worker_id()
+        self.placement_state.media_worker_id()
     }
 
     pub(in crate::runtime::room) fn room_worker_policy(&self) -> RoomWorkerPolicy {
@@ -616,7 +615,7 @@ impl Room {
             })
             .collect();
         state.diagnostics_user_views(
-            self.placement_ledger.media_worker_id(),
+            self.placement_state.media_worker_id(),
             &transport_by_session,
         )
     }
@@ -705,7 +704,7 @@ impl fmt::Debug for Room {
         formatter
             .debug_struct("Room")
             .field("instance_id", &self.definition.instance_id())
-            .field("media_worker_id", &self.placement_ledger.media_worker_id())
+            .field("media_worker_id", &self.placement_state.media_worker_id())
             .field("uuid", &self.definition.uuid())
             .field("issuer", &self.definition.issuer())
             .field("web_rtc_enabled", &self.definition.web_rtc_enabled())

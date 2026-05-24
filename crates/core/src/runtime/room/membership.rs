@@ -38,7 +38,7 @@ use super::{
     SourcePolicyEvent, UserOutboundSender,
     cleanup::UserCleanup,
     effects::{RoomEffectBatch, RoomEffectContext, TransportUserCleanup},
-    placement::JoinPlacement,
+    placement::{CommittedPlacementReceipt, JoinPlacement},
     state::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, RoomState},
     user_negotiation::UserNegotiationUpdate,
 };
@@ -112,6 +112,7 @@ enum UserTransitionOutcome {
     /// A successful join, including replacement cleanup and fan-out effects.
     Join {
         outcome: JoinUserOutcome,
+        placement_receipt: CommittedPlacementReceipt,
         count_delta: MembershipCountDelta,
     },
     /// A close command with optional state output.
@@ -187,7 +188,7 @@ impl Room {
         &self,
         pressure_snapshots: Vec<TransportWorkerPressureSnapshot>,
     ) -> LocalRouterRuntimeContext {
-        let room_snapshot = self.placement_usage_snapshot().await;
+        let room_snapshot = self.placement_usage_snapshot();
         let policy = self.room_worker_policy();
         let mut load_index = WorkerLoadIndex::new(policy.max_local_routers(), pressure_snapshots);
         let contribution = self.worker_load_contribution().await;
@@ -412,9 +413,10 @@ impl Room {
         let outcome = {
             let mut state = self.state.write().await;
             let counts_before = MembershipCountSnapshot::from_state(&state);
-            let home_placement = intent
-                .placement
-                .resolve_for_commit(&state.placement_usage_snapshot(), allocate_spillover_router);
+            let home_placement = intent.placement.resolve_for_commit(
+                &self.placement_state.usage_snapshot(),
+                allocate_spillover_router,
+            );
             let outcome = state.apply_join_on_placement(
                 &intent.user_id,
                 intent.label,
@@ -423,10 +425,16 @@ impl Room {
                 intent.emit_joined_fanout,
                 home_placement,
             )?;
+            let placement_receipt = self.placement_state.register_committed_placement(
+                &outcome.user_id,
+                outcome.connection_id,
+                outcome.transport_home_placement,
+            );
             let count_delta = counts_before.delta_to(MembershipCountSnapshot::from_state(&state));
             drop(state);
             UserTransitionOutcome::Join {
                 outcome,
+                placement_receipt,
                 count_delta,
             }
         };
@@ -447,9 +455,10 @@ impl Room {
         let result = match outcome {
             UserTransitionOutcome::Join {
                 outcome,
+                placement_receipt,
                 count_delta,
             } => {
-                self.finalize_join_transition(outcome, count_delta, cleanup)
+                self.finalize_join_transition(outcome, placement_receipt, count_delta, cleanup)
                     .await
             }
             UserTransitionOutcome::Close {
@@ -487,20 +496,24 @@ impl Room {
     async fn finalize_join_transition(
         &self,
         outcome: JoinUserOutcome,
+        placement_receipt: CommittedPlacementReceipt,
         count_delta: MembershipCountDelta,
         cleanup: UserCleanup<'_>,
     ) -> UserTransitionResult {
         let JoinUserOutcome {
-            connection_id,
+            connection_id: _,
             effects,
             user_id,
-            transport_home_placement,
-            transport_media_worker_id,
+            transport_home_placement: _,
             transport_removals,
             relay_effects,
         } = outcome;
-        self.placement_ledger
-            .register_committed_placement(connection_id, transport_home_placement);
+        let connection_id = placement_receipt.connection_id();
+        let transport_session_key = placement_receipt.transport_session_key();
+        debug_assert_eq!(
+            transport_session_key.media_worker_id(),
+            placement_receipt.media_worker_id()
+        );
         RoomEffectBatch::new()
             .with_user_count_delta(count_delta.users_before, count_delta.users_after)
             .with_media_count_delta(count_delta.media_before, count_delta.media_after)
@@ -512,7 +525,7 @@ impl Room {
             .record_diagnostics(
                 DiagnosticsEventData::for_user(self.uuid(), &user_id, telemetry_event::USER_JOINED)
                     .with_connection_id(connection_id.as_u64())
-                    .with_media_worker_id(transport_media_worker_id),
+                    .with_media_worker_id(transport_session_key.media_worker_id()),
             )
             .execute(self, Self::effect_context(cleanup))
             .await;
@@ -535,7 +548,7 @@ impl Room {
     ) -> UserTransitionResult {
         let had_state = outcome.is_some();
         let media_worker_id = self
-            .placement_ledger
+            .placement_state
             .media_worker_id_for_connection(connection_id);
         let mut batch = RoomEffectBatch::new()
             .with_user_count_delta(count_delta.users_before, count_delta.users_after)
@@ -559,7 +572,7 @@ impl Room {
                 .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged);
         }
         batch.execute(self, Self::effect_context(cleanup)).await;
-        self.placement_ledger
+        self.placement_state
             .unregister_committed_placement(connection_id);
         if had_state {
             UserTransitionResult::Applied
@@ -600,7 +613,7 @@ impl Room {
                         telemetry_event::USER_DISCONNECTED,
                     )
                     .with_media_worker_id(
-                        self.placement_ledger
+                        self.placement_state
                             .media_worker_id_for_connection(disconnected_session.connection_id),
                     ),
                 )
@@ -609,7 +622,7 @@ impl Room {
         }
         batch.execute(self, Self::effect_context(cleanup)).await;
         for disconnected_session in disconnected_sessions {
-            self.placement_ledger
+            self.placement_state
                 .unregister_committed_placement(disconnected_session.connection_id);
         }
         UserTransitionResult::Applied

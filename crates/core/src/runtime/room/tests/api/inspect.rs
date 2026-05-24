@@ -174,6 +174,6 @@ impl RoomTestInspect<'_> {
 
     #[must_use]
     pub fn media_worker_id(self) -> usize {
-        self.room.placement_ledger.media_worker_id()
+        self.room.placement_state.media_worker_id()
     }
 }
