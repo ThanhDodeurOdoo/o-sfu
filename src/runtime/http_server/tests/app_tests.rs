@@ -57,31 +57,21 @@ async fn publish_video_stream(
 }
 
 #[tokio::test]
-async fn noop_returns_ok_response() {
-    let request = build_request(Request::get(NOOP_PATH), Body::empty());
-    assert!(request.is_some());
-    let Some(request) = request else {
-        return;
-    };
-    let response = app(test_state()).oneshot(request).await;
-    assert!(
-        response.is_ok(),
-        "noop request should succeed: {response:?}"
-    );
-    let Some(response) = response.ok() else {
-        return;
-    };
-    assert_eq!(response.status(), StatusCode::OK);
-    let payload: Option<NoopResponse> = parse_json(response).await;
-    assert!(payload.is_some());
-    let Some(payload) = payload else {
-        return;
-    };
+async fn noop_returns_ok_response() -> TestResult {
+    let payload: NoopResponse = route_json(
+        &test_state(),
+        Request::get(NOOP_PATH),
+        Body::empty(),
+        StatusCode::OK,
+        "noop request should succeed",
+    )
+    .await?;
     assert_eq!(payload.result, "ok");
+    Ok(())
 }
 
 #[tokio::test]
-async fn stats_returns_live_room_data() {
+async fn stats_returns_live_room_data() -> TestResult {
     let test_state = test_state_with_handles();
     let query = CreateRoomQuery::default();
     let room = test_state
@@ -115,12 +105,8 @@ async fn stats_returns_live_room_data() {
         .await;
     assert!(alice_join.is_ok());
     assert!(bob_join.is_ok());
-    let Some(alice_connection_id) = alice_join.ok() else {
-        return;
-    };
-    let Some(bob_connection_id) = bob_join.ok() else {
-        return;
-    };
+    let alice_connection_id = require_ok(alice_join, "alice should join")?;
+    let bob_connection_id = require_ok(bob_join, "bob should join")?;
     publish_video_stream(
         &room,
         &UserId::Integer(1),
@@ -140,31 +126,16 @@ async fn stats_returns_live_room_data() {
     )
     .await;
 
-    let request = build_request(Request::get(STATS_PATH), Body::empty());
-    assert!(request.is_some());
-    let Some(request) = request else {
-        return;
-    };
-    let response = app(test_state.state).oneshot(request).await;
-    assert!(
-        response.is_ok(),
-        "stats request should succeed: {response:?}"
-    );
-    let Some(response) = response.ok() else {
-        return;
-    };
-    assert_eq!(response.status(), StatusCode::OK);
-    let payload: Option<StatsResponse> = parse_json(response).await;
-    assert!(payload.is_some());
-    let Some(payload) = payload else {
-        return;
-    };
+    let payload: StatsResponse = route_json(
+        &test_state.state,
+        Request::get(STATS_PATH),
+        Body::empty(),
+        StatusCode::OK,
+        "stats request should succeed",
+    )
+    .await?;
     assert_eq!(payload.len(), 1);
-    let first = payload.first();
-    assert!(first.is_some());
-    let Some(first) = first else {
-        return;
-    };
+    let first = require_some(payload.first(), "stats payload should contain one room")?;
     assert_eq!(first.uuid, room.uuid());
     assert_eq!(first.remote_address, "203.0.113.10");
     assert_eq!(first.users_stats.count, 2);
@@ -177,4 +148,5 @@ async fn stats_returns_live_room_data() {
     assert!(first.web_rtc_enabled);
     assert!(first.create_date.contains('T'));
     assert!(first.create_date.ends_with('Z'));
+    Ok(())
 }

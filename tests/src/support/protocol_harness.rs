@@ -6,9 +6,8 @@ use std::{
 use futures_util::SinkExt;
 use o_sfu::config::Config;
 use o_sfu_protocol::wire::{
-    AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientResponse,
-    EnvelopeBatch, RequestId, ServerEnvelope, ServerMessage, ServerRequest, UserId, UserInfo,
-    WelcomePayload,
+    AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, EnvelopeBatch, RequestId,
+    ServerEnvelope, ServerMessage, ServerRequest, UserId, UserInfo, WelcomePayload,
 };
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
@@ -19,6 +18,7 @@ use super::{
         TestServer, TestWebSocket, connect_websocket, read_close_code, read_text_message,
         test_config,
     },
+    protocol_wire::{encode_client_batch, read_protocol_batch, send_server_request_response},
 };
 
 const RTC_NEGOTIATION_PORT_BASE: u16 = 56_000;
@@ -170,25 +170,13 @@ impl ProtocolWebSocketClient {
         response_to: RequestId,
         request: ServerRequest,
     ) -> Option<()> {
-        let response = match request {
-            ServerRequest::Offer(payload) => {
-                ClientResponse::Offer(self.rtc_peer.answer_offer(&payload.sdp)?)
-            }
-            ServerRequest::Renegotiate(payload) => {
-                ClientResponse::Renegotiate(self.rtc_peer.answer_offer(&payload.sdp)?)
-            }
-        };
-        self.websocket
-            .send(tungstenite::Message::Text(
-                encode_client_batch(vec![ClientEnvelope::Response {
-                    response_to,
-                    response,
-                }])?
-                .into(),
-            ))
-            .await
-            .ok()?;
-        Some(())
+        send_server_request_response(
+            &mut self.websocket,
+            &mut self.rtc_peer,
+            response_to,
+            request,
+        )
+        .await
     }
 
     pub async fn read_close_code(&mut self) -> Option<CloseCode> {
@@ -201,8 +189,7 @@ impl ProtocolWebSocketClient {
     }
 
     async fn read_server_batch(&mut self) -> Option<EnvelopeBatch> {
-        let payload = read_text_message(&mut self.websocket).await?;
-        serde_json::from_str(&payload).ok()
+        read_protocol_batch(&mut self.websocket).await
     }
 }
 
@@ -210,15 +197,6 @@ fn encode_auth(auth_payload: AuthPayload) -> Option<String> {
     encode_client_batch(vec![ClientEnvelope::Message(ClientMessage::Auth(
         auth_payload,
     ))])
-}
-
-fn encode_client_batch(batch: Vec<ClientEnvelope>) -> Option<String> {
-    let envelopes = batch
-        .into_iter()
-        .map(ClientEnvelope::into_envelope)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-    serde_json::to_string(&envelopes).ok()
 }
 
 fn next_negotiation_port() -> u16 {

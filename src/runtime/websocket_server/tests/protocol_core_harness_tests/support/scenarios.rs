@@ -1,5 +1,12 @@
 use super::*;
 
+type ProtocolPeerSetup = (
+    TestServer,
+    Arc<Room>,
+    ProtocolHarnessPeer,
+    ProtocolHarnessPeer,
+);
+
 pub(crate) async fn publish_camera_and_bootstrap_subscriber(
     publisher: &mut ProtocolHarnessPeer,
     subscriber: &mut ProtocolHarnessPeer,
@@ -169,53 +176,52 @@ pub(crate) async fn setup_real_rtc_protocol_peers(
     bob_user_id: UserId,
     alice_port: u16,
     bob_port: u16,
-) -> Option<(
-    TestServer,
-    Arc<Room>,
-    ProtocolHarnessPeer,
-    ProtocolHarnessPeer,
-)> {
+) -> Option<ProtocolPeerSetup> {
     let server = TestServerBuilder::new()
         .media_transport(build_real_rtc_media_transport())
         .spawn()
         .await?;
-    let room = create_room(&server, room_name, CreateRoomQuery::default()).await;
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), alice_user_id)?;
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), bob_user_id.clone())?;
-
-    let mut alice = ProtocolHarnessPeer::with_real_rtc_negotiation(alice_port)?;
-    let mut bob = ProtocolHarnessPeer::with_real_rtc_negotiation(bob_port)?;
-    alice
-        .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
-        .await?;
-    bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
-        .await?;
-    consume_peer_joined_update(&mut alice, bob_user_id.clone()).await?;
-
-    Some((server, room, alice, bob))
+    let alice = ProtocolHarnessPeer::with_real_rtc_negotiation(alice_port)?;
+    let bob = ProtocolHarnessPeer::with_real_rtc_negotiation(bob_port)?;
+    Box::pin(setup_protocol_peers_with(
+        server,
+        room_name,
+        alice_user_id,
+        bob_user_id,
+        alice,
+        bob,
+    ))
+    .await
 }
 
 pub(crate) async fn setup_protocol_recovery_peers(
     alice_user_id: UserId,
     bob_user_id: UserId,
-) -> Option<(
-    TestServer,
-    Arc<Room>,
-    ProtocolHarnessPeer,
-    ProtocolHarnessPeer,
-)> {
+) -> Option<ProtocolPeerSetup> {
     let server = TestServerBuilder::new().spawn().await?;
-    let room = create_room(
-        &server,
+    Box::pin(setup_protocol_peers_with(
+        server,
         "issuer-protocol-recovery",
-        CreateRoomQuery::default(),
-    )
-    .await;
+        alice_user_id,
+        bob_user_id,
+        ProtocolHarnessPeer::default(),
+        ProtocolHarnessPeer::default(),
+    ))
+    .await
+}
+
+async fn setup_protocol_peers_with(
+    server: TestServer,
+    room_name: &str,
+    alice_user_id: UserId,
+    bob_user_id: UserId,
+    mut alice: ProtocolHarnessPeer,
+    mut bob: ProtocolHarnessPeer,
+) -> Option<ProtocolPeerSetup> {
+    let room = create_room(&server, room_name, CreateRoomQuery::default()).await;
     let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), alice_user_id)?;
     let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), bob_user_id.clone())?;
 
-    let mut alice = ProtocolHarnessPeer::default();
-    let mut bob = ProtocolHarnessPeer::default();
     alice
         .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
         .await?;
