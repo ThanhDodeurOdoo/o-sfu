@@ -3,7 +3,7 @@ use super::{
     RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
     RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetricsSnapshot,
     SourceSelectionKind, TransportCleanupFailureKind, TransportHealthState, TransportIceState,
-    counter::ExportedMetricLabel,
+    counter::ExportedMetricLabel, labels::ExportedMetricLabelPair,
 };
 
 macro_rules! snapshot_counter_accessors {
@@ -41,6 +41,7 @@ pub struct HttpInflightSnapshot {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct HttpRequestDurationSnapshot {
     pub noop: DurationHistogramSnapshot,
+    pub metrics: DurationHistogramSnapshot,
 }
 
 pub trait RuntimeMetricsSnapshotLookup {
@@ -129,6 +130,10 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
                 MetricName::HttpRequestDurationSeconds,
                 &[("route", metric_label(HttpRoute::Noop))],
             ),
+            metrics: self.duration_snapshot(
+                MetricName::HttpRequestDurationSeconds,
+                &[("route", metric_label(HttpRoute::Metrics))],
+            ),
         }
     }
 
@@ -145,9 +150,16 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
     }
 
     snapshot_counter_accessors! {
+        http_noop_requests => HttpNoopRequestsTotal &[],
+        http_stats_requests => HttpStatsRequestsTotal &[],
         http_room_requests => HttpRoomRequestsTotal &[],
+        http_room_success => HttpRoomResponsesTotal &[("status", "success")],
         http_room_unauthorized => HttpRoomResponsesTotal &[("status", "unauthorized")],
+        http_room_forbidden => HttpRoomResponsesTotal &[("status", "forbidden")],
+        http_room_bad_request => HttpRoomResponsesTotal &[("status", "bad_request")],
         http_disconnect_requests => HttpDisconnectRequestsTotal &[],
+        http_disconnect_success => HttpDisconnectResponsesTotal &[("status", "success")],
+        http_disconnect_bad_request => HttpDisconnectResponsesTotal &[("status", "bad_request")],
         http_disconnect_unprocessable_entity => HttpDisconnectResponsesTotal &[("status", "unprocessable_entity")],
         http_metrics_requests => HttpMetricsRequestsTotal &[],
         ws_connections_accepted => WsConnectionsTotal &[("stage", "accepted")],
@@ -403,13 +415,7 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
     }
 
     fn rtc_relay_enqueue(&self, result: RtcRelayEnqueueResult) -> u64 {
-        self.counter_value(
-            MetricName::RtcRelayEnqueuesTotal,
-            &[
-                ("target", result.target_label()),
-                ("outcome", result.outcome_label()),
-            ],
-        )
+        self.counter_value(MetricName::RtcRelayEnqueuesTotal, &result.label_pair())
     }
 
     fn rtc_relay_enqueue_intra_node_enqueued(&self) -> u64 {
