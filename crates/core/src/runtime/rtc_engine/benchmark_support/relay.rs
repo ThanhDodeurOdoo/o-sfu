@@ -2,7 +2,7 @@ use tokio::sync::mpsc;
 
 use super::super::{
     forwarded_packet::ForwardedPacket,
-    relay_registry::{RelayEnqueueOutcome, RelayPacketMailbox, RelayTargetTransport},
+    relay_registry::{RelayEnqueueOutcome, RelayPacketMailbox},
     state::PacketLoopState,
     test_support::{sample_forwarded_packet, test_transport_session_key},
 };
@@ -24,7 +24,7 @@ enum RelayPressureMode {
 /// send path for both open and overloaded mailbox states
 pub struct RelayPressureBenchFixture {
     mode: RelayPressureMode,
-    target: RelayTargetTransport,
+    target: RelayPacketMailbox,
     source_transport_media_id: TransportMediaId,
     packet: ForwardedPacket,
     state: PacketLoopState,
@@ -57,7 +57,7 @@ impl RelayPressureBenchFixture {
         let (tx, rx) = mpsc::channel(capacity);
         Self {
             mode,
-            target: RelayPacketMailbox::new(tx).into(),
+            target: RelayPacketMailbox::new(tx),
             source_transport_media_id,
             packet,
             state: PacketLoopState::default(),

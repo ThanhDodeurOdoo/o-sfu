@@ -65,7 +65,7 @@ use super::{
         RtcMediaControlCommand, RtcWorkerCommand,
     },
     packet_loop::PacketLoopLagSnapshot,
-    relay_registry::{RelayPacketMailbox, RelayTargetId, RelayTargetTransport},
+    relay_registry::{RelayPacketMailbox, RelayTargetId},
     state::RtcSnapshotState,
 };
 use crate::{
@@ -554,7 +554,7 @@ impl RtcWorker {
                 source_session_key: source_session_key.clone(),
                 source_transport_media_id,
                 target_id: target.relay_target_id,
-                target: RelayTargetTransport::from(mailbox),
+                target: mailbox,
                 response,
             })
         })

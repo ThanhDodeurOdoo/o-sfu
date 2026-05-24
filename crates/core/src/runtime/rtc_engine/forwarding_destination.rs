@@ -13,9 +13,7 @@ use str0m::RtcError;
 use super::{
     forwarded_packet::ForwardedPacket,
     local_forwarding::LocalPacketDestination,
-    relay_registry::{
-        RelayEnqueueOutcome, RelayEnqueueReport, RelayTargetKind, RelayTargetTransport,
-    },
+    relay_registry::{RelayEnqueueOutcome, RelayEnqueueReport, RelayPacketMailbox},
     state::PacketLoopState,
 };
 use crate::runtime::{
@@ -46,7 +44,7 @@ pub(super) enum ForwardingDestination {
     LocalRtc(LocalRtcPacketDestination),
     /// room-scoped packet sink such as recording
     PacketSink(PacketSinkDestination),
-    /// relay target for another worker or another node
+    /// relay target for another local worker
     Relay(RelayPacketDestination),
 }
 
@@ -90,7 +88,7 @@ pub(super) struct PacketSinkDestination {
 #[derive(Clone)]
 pub(super) struct RelayPacketDestination {
     transport_media_id: TransportMediaId,
-    target: RelayTargetTransport,
+    target: RelayPacketMailbox,
 }
 
 impl PacketForward {
@@ -132,7 +130,7 @@ impl PacketForward {
     pub(super) fn from_relay_target(
         packet_idx: usize,
         transport_media_id: TransportMediaId,
-        target: RelayTargetTransport,
+        target: RelayPacketMailbox,
     ) -> Self {
         Self {
             packet_idx,
@@ -169,7 +167,7 @@ impl ForwardingDestination {
         match self {
             Self::LocalRtc(_) => RtpForwardDestinationKind::LocalRtc,
             Self::PacketSink(destination) => destination.metrics_kind(),
-            Self::Relay(destination) => destination.metrics_kind(),
+            Self::Relay(_) => RtpForwardDestinationKind::IntraNodeRelay,
         }
     }
 
@@ -177,7 +175,7 @@ impl ForwardingDestination {
     pub(super) const fn relay_drop_kind(&self) -> Option<RtpRelayDropKind> {
         match self {
             Self::LocalRtc(_) | Self::PacketSink(_) => None,
-            Self::Relay(destination) => Some(destination.relay_drop_kind()),
+            Self::Relay(_) => Some(RtpRelayDropKind::IntraNodeRelay),
         }
     }
 
@@ -305,17 +303,7 @@ impl PacketSinkDestination {
 }
 
 impl RelayPacketDestination {
-    /// maps the relay transport kind to the recorder bucket used by metrics
-    const fn metrics_kind(&self) -> RtpForwardDestinationKind {
-        self.target.kind().forward_destination_kind()
-    }
-
-    /// maps the relay transport kind to the overload metric namespace
-    const fn relay_drop_kind(&self) -> RtpRelayDropKind {
-        self.target.kind().relay_drop_kind()
-    }
-
-    /// enqueues a shared relay packet for another worker or node
+    /// enqueues a shared relay packet for another local worker
     fn send(&self, state: &PacketLoopState, packet: &ForwardedPacket) -> ForwardSendOutcome {
         self.target
             .forward_packet(state, packet, self.transport_media_id)
@@ -327,41 +315,10 @@ impl RelayPacketDestination {
 }
 
 pub(super) const fn relay_enqueue_result(report: RelayEnqueueReport) -> RtcRelayEnqueueResult {
-    match (report.target_kind(), report.outcome()) {
-        (RelayTargetKind::IntraNode, RelayEnqueueOutcome::Enqueued) => {
-            RtcRelayEnqueueResult::IntraNodeEnqueued
-        }
-        (RelayTargetKind::IntraNode, RelayEnqueueOutcome::Overloaded) => {
-            RtcRelayEnqueueResult::IntraNodeOverloaded
-        }
-        (RelayTargetKind::IntraNode, RelayEnqueueOutcome::Closed) => {
-            RtcRelayEnqueueResult::IntraNodeClosed
-        }
-        (RelayTargetKind::InterNode, RelayEnqueueOutcome::Enqueued) => {
-            RtcRelayEnqueueResult::InterNodeEnqueued
-        }
-        (RelayTargetKind::InterNode, RelayEnqueueOutcome::Overloaded) => {
-            RtcRelayEnqueueResult::InterNodeOverloaded
-        }
-        (RelayTargetKind::InterNode, RelayEnqueueOutcome::Closed) => {
-            RtcRelayEnqueueResult::InterNodeClosed
-        }
-    }
-}
-
-impl RelayTargetKind {
-    const fn forward_destination_kind(self) -> RtpForwardDestinationKind {
-        match self {
-            Self::IntraNode => RtpForwardDestinationKind::IntraNodeRelay,
-            Self::InterNode => RtpForwardDestinationKind::InterNodeRelay,
-        }
-    }
-
-    const fn relay_drop_kind(self) -> RtpRelayDropKind {
-        match self {
-            Self::IntraNode => RtpRelayDropKind::IntraNodeRelay,
-            Self::InterNode => RtpRelayDropKind::InterNodeRelay,
-        }
+    match report.outcome() {
+        RelayEnqueueOutcome::Enqueued => RtcRelayEnqueueResult::IntraNodeEnqueued,
+        RelayEnqueueOutcome::Overloaded => RtcRelayEnqueueResult::IntraNodeOverloaded,
+        RelayEnqueueOutcome::Closed => RtcRelayEnqueueResult::IntraNodeClosed,
     }
 }
 
@@ -383,7 +340,6 @@ impl fmt::Debug for RelayPacketDestination {
         formatter
             .debug_struct("RelayPacketDestination")
             .field("transport_media_id", &self.transport_media_id)
-            .field("relay_target_kind", &self.target.kind())
             .finish_non_exhaustive()
     }
 }
@@ -404,7 +360,7 @@ mod tests {
         media_transport::{TransportMediaId, TransportSessionKey},
         packet_sink_registry::PacketSink as MediaPacketSink,
         rtc_engine::{
-            relay_registry::{InterNodeRelaySender, RelayPacketMailbox},
+            relay_registry::RelayPacketMailbox,
             test_support::{sample_already_relayed_packet, test_transport_session_key},
         },
     };
@@ -471,7 +427,7 @@ mod tests {
             "aud-up",
             b"payload",
         );
-        let forward = PacketForward::from_relay_target(6, TransportMediaId::new(9), mailbox.into());
+        let forward = PacketForward::from_relay_target(6, TransportMediaId::new(9), mailbox);
         let mut state = PacketLoopState::default();
 
         assert_eq!(forward.packet_idx(), 6);
@@ -479,30 +435,6 @@ mod tests {
             forward.destination(),
             ForwardingDestination::Relay(destination)
                 if destination.transport_media_id == TransportMediaId::new(9)
-                    && destination.target.kind() == RelayTargetKind::IntraNode
-        ));
-        let _ = forward.destination().send(&mut state, &mut packet, true);
-        assert!(relay_rx.try_recv().is_ok());
-    }
-
-    #[test]
-    fn packet_forward_wraps_inter_node_relay_sinks_in_the_named_contract() {
-        let (sender, mut relay_rx) = InterNodeRelaySender::channel_for_test();
-        let mut packet = sample_already_relayed_packet(
-            test_transport_session_key(21, 0, 22, UserId::Integer(23)),
-            TransportMediaId::new(8),
-            "aud-up",
-            b"payload",
-        );
-        let forward = PacketForward::from_relay_target(7, TransportMediaId::new(10), sender.into());
-        let mut state = PacketLoopState::default();
-
-        assert_eq!(forward.packet_idx(), 7);
-        assert!(matches!(
-            forward.destination(),
-            ForwardingDestination::Relay(destination)
-                if destination.transport_media_id == TransportMediaId::new(10)
-                    && destination.target.kind() == RelayTargetKind::InterNode
         ));
         let _ = forward.destination().send(&mut state, &mut packet, true);
         assert!(relay_rx.try_recv().is_ok());

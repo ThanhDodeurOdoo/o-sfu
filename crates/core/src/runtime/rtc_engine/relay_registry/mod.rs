@@ -19,33 +19,23 @@ pub(super) enum RelayEnqueueOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct RelayEnqueueReport {
-    target_kind: RelayTargetKind,
     outcome: RelayEnqueueOutcome,
-    mailbox_depth: Option<usize>,
+    mailbox_depth: usize,
 }
 
 impl RelayEnqueueReport {
-    const fn new(
-        target_kind: RelayTargetKind,
-        outcome: RelayEnqueueOutcome,
-        mailbox_depth: Option<usize>,
-    ) -> Self {
+    const fn new(outcome: RelayEnqueueOutcome, mailbox_depth: usize) -> Self {
         Self {
-            target_kind,
             outcome,
             mailbox_depth,
         }
-    }
-
-    pub(super) const fn target_kind(self) -> RelayTargetKind {
-        self.target_kind
     }
 
     pub(super) const fn outcome(self) -> RelayEnqueueOutcome {
         self.outcome
     }
 
-    pub(super) const fn mailbox_depth(self) -> Option<usize> {
+    pub(super) const fn mailbox_depth(self) -> usize {
         self.mailbox_depth
     }
 }
@@ -65,8 +55,9 @@ impl RelayPacketMailbox {
         state: &PacketLoopState,
         packet: &ForwardedPacket,
         source_transport_media_id: TransportMediaId,
-    ) -> Option<RelayEnqueueOutcome> {
+    ) -> Option<RelayEnqueueReport> {
         forward_packet_to_target(state, &self.tx, packet, source_transport_media_id)
+            .map(|outcome| RelayEnqueueReport::new(outcome, self.backlog_depth()))
     }
 
     pub(super) fn backlog_depth(&self) -> usize {
@@ -75,30 +66,13 @@ impl RelayPacketMailbox {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct InterNodeRelaySender {
-    tx: mpsc::Sender<ForwardedPacket>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) enum RelayTargetTransport {
-    IntraNodeMailbox(RelayPacketMailbox),
-    InterNodeSender(InterNodeRelaySender),
-}
-
-#[derive(Debug, Clone)]
 pub(super) struct ActiveRelayTarget {
     target_id: RelayTargetId,
-    target: RelayTargetTransport,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RelayTargetKind {
-    IntraNode,
-    InterNode,
+    target: RelayPacketMailbox,
 }
 
 impl ActiveRelayTarget {
-    fn new(target_id: RelayTargetId, target: RelayTargetTransport) -> Self {
+    fn new(target_id: RelayTargetId, target: RelayPacketMailbox) -> Self {
         Self { target_id, target }
     }
 
@@ -106,53 +80,8 @@ impl ActiveRelayTarget {
         self.target_id
     }
 
-    pub(super) const fn target(&self) -> &RelayTargetTransport {
+    pub(super) const fn target(&self) -> &RelayPacketMailbox {
         &self.target
-    }
-}
-
-impl From<RelayPacketMailbox> for RelayTargetTransport {
-    fn from(value: RelayPacketMailbox) -> Self {
-        Self::IntraNodeMailbox(value)
-    }
-}
-
-impl From<InterNodeRelaySender> for RelayTargetTransport {
-    fn from(value: InterNodeRelaySender) -> Self {
-        Self::InterNodeSender(value)
-    }
-}
-
-impl RelayTargetTransport {
-    pub(super) fn forward_packet(
-        &self,
-        state: &PacketLoopState,
-        packet: &ForwardedPacket,
-        source_transport_media_id: TransportMediaId,
-    ) -> Option<RelayEnqueueReport> {
-        match self {
-            Self::IntraNodeMailbox(mailbox) => mailbox
-                .forward_packet(state, packet, source_transport_media_id)
-                .map(|outcome| {
-                    RelayEnqueueReport::new(
-                        RelayTargetKind::IntraNode,
-                        outcome,
-                        Some(mailbox.backlog_depth()),
-                    )
-                }),
-            Self::InterNodeSender(sender) => {
-                forward_packet_to_target(state, &sender.tx, packet, source_transport_media_id).map(
-                    |outcome| RelayEnqueueReport::new(RelayTargetKind::InterNode, outcome, None),
-                )
-            }
-        }
-    }
-
-    pub(super) const fn kind(&self) -> RelayTargetKind {
-        match self {
-            Self::IntraNodeMailbox(_) => RelayTargetKind::IntraNode,
-            Self::InterNodeSender(_) => RelayTargetKind::InterNode,
-        }
     }
 }
 
@@ -185,7 +114,7 @@ impl RelayTargetId {
 
 #[derive(Debug, Clone)]
 struct RelayTargetRegistration {
-    target: RelayTargetTransport,
+    target: RelayPacketMailbox,
     active: bool,
 }
 
@@ -197,7 +126,7 @@ pub(super) struct RelaySourceRegistration {
 }
 
 impl RelaySourceRegistration {
-    pub(super) fn add_target(&mut self, target_id: RelayTargetId, target: RelayTargetTransport) {
+    pub(super) fn add_target(&mut self, target_id: RelayTargetId, target: RelayPacketMailbox) {
         self.targets
             .entry(target_id)
             .or_insert(RelayTargetRegistration {
@@ -308,7 +237,7 @@ impl PacketLoopState {
         &mut self,
         source_transport_media_id: TransportMediaId,
         target_id: RelayTargetId,
-        target: RelayTargetTransport,
+        target: RelayPacketMailbox,
     ) {
         self.relay_targets
             .entry(source_transport_media_id)

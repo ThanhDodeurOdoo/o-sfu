@@ -22,7 +22,6 @@
 
 mod builder;
 mod config;
-mod operation;
 mod policy_invalidation;
 #[cfg(any(test, feature = "testing-transport"))]
 pub mod test_support;
@@ -34,7 +33,6 @@ use std::{collections::BTreeSet, sync::Arc, time::Instant};
 pub use builder::{MediaTransportBuildError, MediaTransportBuilder};
 pub use config::{MediaTransportConfig, MediaTransportDeps};
 use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
-use operation::TransportControlOperation;
 pub use policy_invalidation::{
     SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
 };
@@ -307,7 +305,7 @@ impl MediaTransport {
         &self,
         effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
-        self.execute_control_operation(TransportControlOperation::RelayRouteEffect(effect.clone()))
+        self.apply_relay_route_effect_on_worker(effect)
             .await
             .inspect_err(|error| {
                 warn!(
@@ -336,21 +334,17 @@ impl MediaTransport {
         transport_media_id: TransportMediaId,
         activity: ProducerActivity,
     ) -> Result<(), TransportAdapterError> {
-        self.execute_control_operation(TransportControlOperation::SetProducerActivity {
-            session_key: session_key.clone(),
-            transport_media_id,
-            activity,
-        })
-        .await
-        .inspect_err(|error| {
-            warn!(
-                ?session_key,
-                ?transport_media_id,
-                active = activity.is_active(),
-                ?error,
-                "media transport failed to update producer activity"
-            );
-        })
+        self.set_producer_active_on_worker(session_key, transport_media_id, activity)
+            .await
+            .inspect_err(|error| {
+                warn!(
+                    ?session_key,
+                    ?transport_media_id,
+                    active = activity.is_active(),
+                    ?error,
+                    "media transport failed to update producer activity"
+                );
+            })
     }
 
     /// Updates whether a consumer route may receive packets.
@@ -367,19 +361,16 @@ impl MediaTransport {
         route: &TransportConsumerRoute,
         activity: ConsumerActivity,
     ) -> Result<(), TransportAdapterError> {
-        self.execute_control_operation(TransportControlOperation::SetConsumerActivity {
-            route: route.clone(),
-            activity,
-        })
-        .await
-        .inspect_err(|error| {
-            warn!(
-                ?route,
-                active = activity.is_active(),
-                ?error,
-                "media transport failed to update consumer activity"
-            );
-        })
+        self.set_consumer_active_on_worker(route, activity)
+            .await
+            .inspect_err(|error| {
+                warn!(
+                    ?route,
+                    active = activity.is_active(),
+                    ?error,
+                    "media transport failed to update consumer activity"
+                );
+            })
     }
 
     /// Applies source-policy packet gating to one consumer route.
@@ -398,19 +389,16 @@ impl MediaTransport {
         route: &TransportConsumerRoute,
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
-        self.execute_control_operation(TransportControlOperation::SetConsumerPacketGate {
-            route: route.clone(),
-            packet_gate: packet_gate.clone(),
-        })
-        .await
-        .inspect_err(|error| {
-            warn!(
-                ?route,
-                ?packet_gate,
-                ?error,
-                "media transport failed to update consumer packet gate"
-            );
-        })
+        self.set_consumer_packet_gate_on_worker(route, packet_gate.clone())
+            .await
+            .inspect_err(|error| {
+                warn!(
+                    ?route,
+                    ?packet_gate,
+                    ?error,
+                    "media transport failed to update consumer packet gate"
+                );
+            })
     }
 
     /// Applies packet gates for multiple routes and preserves input order in
@@ -447,17 +435,15 @@ impl MediaTransport {
         &self,
         route: &TransportConsumerRoute,
     ) -> Result<(), TransportAdapterError> {
-        self.execute_control_operation(TransportControlOperation::RequestConsumerKeyframe {
-            route: route.clone(),
-        })
-        .await
-        .inspect_err(|error| {
-            warn!(
-                ?route,
-                ?error,
-                "media transport failed to request a consumer keyframe refresh"
-            );
-        })
+        self.request_consumer_keyframe_on_worker(route)
+            .await
+            .inspect_err(|error| {
+                warn!(
+                    ?route,
+                    ?error,
+                    "media transport failed to request a consumer keyframe refresh"
+                );
+            })
     }
 
     /// Returns the negotiated MID for a transport media handle when known.

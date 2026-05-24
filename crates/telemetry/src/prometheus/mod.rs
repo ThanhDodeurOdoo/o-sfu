@@ -283,7 +283,6 @@ mod tests {
         metrics.record_rtp_forwarded(RtpForwardDestinationKind::LocalRtc, 900);
         metrics.record_rtp_forwarded(RtpForwardDestinationKind::Recording, 700);
         metrics.record_rtp_forwarded(RtpForwardDestinationKind::IntraNodeRelay, 500);
-        metrics.record_rtp_forwarded(RtpForwardDestinationKind::InterNodeRelay, 300);
         metrics.record_transport_ice_state_change(TransportIceState::Checking);
         metrics.record_transport_ice_state_change(TransportIceState::Connected);
         metrics.record_transport_dtls_connected();
@@ -302,7 +301,7 @@ mod tests {
         metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
         metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeEnqueued);
         metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeOverloaded);
-        metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::InterNodeClosed);
+        metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeClosed);
         metrics.record_rtc_relay_mailbox_depth(7);
         metrics.record_rtc_relay_drain_batch(4, true);
         metrics.record_rtc_remote_control_drop(RtcRemoteControlDropKind::Keyframe);
@@ -391,7 +390,7 @@ mod tests {
             "osfu_rtc_relay_enqueues_total{target=\"intra_node_relay\",outcome=\"overloaded\"} 1"
         ));
         assert!(rendered.contains(
-            "osfu_rtc_relay_enqueues_total{target=\"inter_node_relay\",outcome=\"closed\"} 1"
+            "osfu_rtc_relay_enqueues_total{target=\"intra_node_relay\",outcome=\"closed\"} 1"
         ));
         assert!(rendered.contains("osfu_rtc_relay_mailbox_depth_samples_total 1"));
         assert!(rendered.contains("osfu_rtc_relay_mailbox_depth_observed_total 7"));

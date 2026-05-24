@@ -84,13 +84,10 @@ fn assert_forwarding_volume_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.rtp_forwarded_packets_local_rtc(), 1);
     assert_eq!(snapshot.rtp_forwarded_packets_recording(), 1);
     assert_eq!(snapshot.rtp_forwarded_packets_intra_node_relay(), 1);
-    assert_eq!(snapshot.rtp_forwarded_packets_inter_node_relay(), 1);
     assert_eq!(snapshot.rtp_forwarded_payload_bytes_local_rtc(), 900);
     assert_eq!(snapshot.rtp_forwarded_payload_bytes_recording(), 700);
     assert_eq!(snapshot.rtp_forwarded_payload_bytes_intra_node_relay(), 500);
-    assert_eq!(snapshot.rtp_forwarded_payload_bytes_inter_node_relay(), 300);
     assert_eq!(snapshot.rtp_relay_overload_drops_intra_node_relay(), 1);
-    assert_eq!(snapshot.rtp_relay_overload_drops_inter_node_relay(), 1);
 }
 
 fn assert_rtc_datagram_and_route_control_metrics(snapshot: &RuntimeMetricsSnapshot) {
@@ -122,7 +119,7 @@ fn assert_rtc_route_control_metrics(snapshot: &RuntimeMetricsSnapshot) {
 fn assert_rtc_relay_pressure_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.rtc_relay_enqueue_intra_node_enqueued(), 1);
     assert_eq!(snapshot.rtc_relay_enqueue_intra_node_overloaded(), 1);
-    assert_eq!(snapshot.rtc_relay_enqueue_inter_node_closed(), 1);
+    assert_eq!(snapshot.rtc_relay_enqueue_intra_node_closed(), 1);
     assert_eq!(snapshot.rtc_relay_mailbox_depth_samples(), 1);
     assert_eq!(snapshot.rtc_relay_mailbox_depth_observed(), 7);
     assert_eq!(snapshot.rtc_relay_drain_batches(), 1);
@@ -282,9 +279,7 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     metrics.record_rtp_forwarded(RtpForwardDestinationKind::LocalRtc, 900);
     metrics.record_rtp_forwarded(RtpForwardDestinationKind::Recording, 700);
     metrics.record_rtp_forwarded(RtpForwardDestinationKind::IntraNodeRelay, 500);
-    metrics.record_rtp_forwarded(RtpForwardDestinationKind::InterNodeRelay, 300);
     metrics.record_rtp_relay_overload_drop(RtpRelayDropKind::IntraNodeRelay);
-    metrics.record_rtp_relay_overload_drop(RtpRelayDropKind::InterNodeRelay);
     metrics.record_transport_ice_state_change(TransportIceState::Checking);
     metrics.record_transport_ice_state_change(TransportIceState::Connected);
     metrics.record_transport_dtls_connected();
@@ -306,7 +301,7 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
     metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeEnqueued);
     metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeOverloaded);
-    metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::InterNodeClosed);
+    metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeClosed);
     metrics.record_rtc_relay_mailbox_depth(7);
     metrics.record_rtc_relay_drain_batch(4, true);
     metrics.record_rtc_remote_control_drop(RtcRemoteControlDropKind::Keyframe);
@@ -389,7 +384,7 @@ fn metrics_snapshot_aggregates_worker_local_rtc_recorders() {
     first_worker.record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Retry);
     second_worker.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
     second_worker.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
-    second_worker.record_rtc_relay_enqueue(RtcRelayEnqueueResult::InterNodeClosed);
+    second_worker.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeClosed);
     second_worker.record_rtc_relay_mailbox_depth(4);
     second_worker.record_rtc_relay_drain_batch(3, false);
     second_worker.record_rtc_remote_control_drop(RtcRemoteControlDropKind::Keyframe);
@@ -407,7 +402,7 @@ fn metrics_snapshot_aggregates_worker_local_rtc_recorders() {
     assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
     assert_eq!(snapshot.rtc_route_control_absorbed(), 1);
     assert_eq!(snapshot.rtc_relay_enqueue_intra_node_enqueued(), 1);
-    assert_eq!(snapshot.rtc_relay_enqueue_inter_node_closed(), 1);
+    assert_eq!(snapshot.rtc_relay_enqueue_intra_node_closed(), 1);
     assert_eq!(snapshot.rtc_relay_mailbox_depth_samples(), 2);
     assert_eq!(snapshot.rtc_relay_mailbox_depth_observed(), 7);
     assert_eq!(snapshot.rtc_relay_drain_batches(), 2);

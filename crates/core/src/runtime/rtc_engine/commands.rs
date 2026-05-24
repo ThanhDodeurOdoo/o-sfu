@@ -14,7 +14,7 @@ use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
 use tokio::sync::{mpsc, oneshot};
 
 use super::{
-    relay_registry::{RelayTargetId, RelayTargetTransport},
+    relay_registry::{RelayPacketMailbox, RelayTargetId},
     route_control::PacketLayerGate,
 };
 use crate::runtime::{
@@ -206,7 +206,7 @@ pub(super) enum RtcMediaControlCommand {
         source_session_key: TransportSessionKey,
         source_transport_media_id: TransportMediaId,
         target_id: RelayTargetId,
-        target: RelayTargetTransport,
+        target: RelayPacketMailbox,
         response: RtcWorkerResponse<()>,
     },
     RemoveRelayTarget {

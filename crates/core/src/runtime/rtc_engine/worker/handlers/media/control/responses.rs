@@ -16,7 +16,7 @@ use crate::runtime::{
     metrics::RuntimeMetrics,
     rtc_engine::{
         commands::ConsumerPacketGateCommand,
-        relay_registry::{RelayTargetId, RelayTargetTransport},
+        relay_registry::{RelayPacketMailbox, RelayTargetId},
         route_control::PacketLayerGate,
         state::PacketLoopState,
     },
@@ -91,7 +91,7 @@ pub fn respond_add_relay_target(
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     target_id: RelayTargetId,
-    target: RelayTargetTransport,
+    target: RelayPacketMailbox,
     response: oneshot::Sender<Result<(), TransportAdapterError>>,
 ) {
     let _ = response.send(remote_source::worker_add_relay_target(
