@@ -130,7 +130,7 @@ async fn negotiated_session_rejects_stale_connection() {
 #[tokio::test]
 async fn removing_publisher_clears_media_state_and_transport_routes() {
     let (room, media_transport, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_users_with_transport().await;
+        setup_two_ready_users().await;
     publish_simulcast_camera(&room, &UserId::Integer(1), &media_transport).await;
     drain_outbound(&mut publisher_rx);
     assert!(

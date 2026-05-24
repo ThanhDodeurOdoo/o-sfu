@@ -2,6 +2,11 @@ use std::{fmt, sync::Arc};
 
 use o_sfu_router::{RouterEvent, RouterObserver};
 
+/// room-owned sink for pure-router topology events
+///
+/// the router emits topology facts without knowing which room subsystem will
+/// consume them. recording is the only sink today, but the trait keeps router
+/// state independent from recording capture and any later diagnostics sink
 pub(in crate::runtime) trait RoomRouterEventSink: Send + Sync {
     fn handle_room_router_event(&self, event: RouterEvent);
 }
@@ -12,6 +17,7 @@ pub(in crate::runtime) struct RoomRouterObserver {
 }
 
 impl RoomRouterObserver {
+    /// adapts one room sink into the pure-router observer callback
     pub fn new(sink: Arc<dyn RoomRouterEventSink>) -> Self {
         Self { sink }
     }

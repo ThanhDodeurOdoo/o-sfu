@@ -25,12 +25,7 @@ async fn consumption_change_pauses_and_resumes_consumer() {
     let subscriber_connection_id = user_connection_id(&room, &subscriber_id).await;
 
     // User 2 sends CONSUMPTION_CHANGE: pause camera from user 1.
-    let pause_intents = subscription_intents_from_test_states(&TestSubscriptionStates {
-        scalable_video: Some(false),
-        audio_detector: None,
-        readable_video: None,
-        ..TestSubscriptionStates::default()
-    });
+    let pause_intents = pause_scalable_video_intents();
     room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
         .update_subscription(&publisher_id, &pause_intents)
         .await;
@@ -39,12 +34,7 @@ async fn consumption_change_pauses_and_resumes_consumer() {
     assert!(drain_outbound(&mut rx2).is_empty());
 
     // User 2 sends CONSUMPTION_CHANGE: resume camera from user 1.
-    let resume_intents = subscription_intents_from_test_states(&TestSubscriptionStates {
-        scalable_video: Some(true),
-        audio_detector: None,
-        readable_video: None,
-        ..TestSubscriptionStates::default()
-    });
+    let resume_intents = resume_scalable_video_intents();
     room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
         .update_subscription(&publisher_id, &resume_intents)
         .await;
@@ -55,7 +45,7 @@ async fn consumption_change_pauses_and_resumes_consumer() {
 
 #[tokio::test]
 async fn consumption_change_updates_transport_route_activity() {
-    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users_with_transport().await;
+    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
     room.test_api()
         .media()
@@ -73,12 +63,7 @@ async fn consumption_change_updates_transport_route_activity() {
     let subscriber_id = UserId::Integer(2);
     let publisher_id = UserId::Integer(1);
     let subscriber_connection_id = user_connection_id(&room, &subscriber_id).await;
-    let pause_intents = subscription_intents_from_test_states(&TestSubscriptionStates {
-        scalable_video: Some(false),
-        audio_detector: None,
-        readable_video: None,
-        ..TestSubscriptionStates::default()
-    });
+    let pause_intents = pause_scalable_video_intents();
     room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
         .update_subscription(&publisher_id, &pause_intents)
         .await;
@@ -90,7 +75,7 @@ async fn consumption_change_updates_transport_route_activity() {
 
 #[tokio::test]
 async fn consumption_change_resume_requests_video_keyframe_refresh() {
-    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users_with_transport().await;
+    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
     room.test_api()
         .media()
@@ -108,22 +93,12 @@ async fn consumption_change_resume_requests_video_keyframe_refresh() {
     let subscriber_id = UserId::Integer(2);
     let publisher_id = UserId::Integer(1);
     let subscriber_connection_id = user_connection_id(&room, &subscriber_id).await;
-    let pause_intents = subscription_intents_from_test_states(&TestSubscriptionStates {
-        scalable_video: Some(false),
-        audio_detector: None,
-        readable_video: None,
-        ..TestSubscriptionStates::default()
-    });
+    let pause_intents = pause_scalable_video_intents();
     room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
         .update_subscription(&publisher_id, &pause_intents)
         .await;
 
-    let resume_intents = subscription_intents_from_test_states(&TestSubscriptionStates {
-        scalable_video: Some(true),
-        audio_detector: None,
-        readable_video: None,
-        ..TestSubscriptionStates::default()
-    });
+    let resume_intents = resume_scalable_video_intents();
     room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
         .update_subscription(&publisher_id, &resume_intents)
         .await;
@@ -139,12 +114,7 @@ async fn consumption_change_ignores_nonexistent_consumer() {
     let subscriber_id = UserId::Integer(2);
     let publisher_id = UserId::Integer(1);
     let subscriber_connection_id = user_connection_id(&room, &subscriber_id).await;
-    let pause_intents = subscription_intents_from_test_states(&TestSubscriptionStates {
-        scalable_video: Some(false),
-        audio_detector: Some(false),
-        readable_video: None,
-        ..TestSubscriptionStates::default()
-    });
+    let pause_intents = pause_audio_and_scalable_video_intents();
     room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
         .update_subscription(&publisher_id, &pause_intents)
         .await;
@@ -155,17 +125,12 @@ async fn consumption_change_ignores_nonexistent_consumer() {
 
 #[tokio::test]
 async fn consumption_change_persists_preference_for_future_consumer_bootstrap() {
-    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users_with_transport().await;
+    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
     let subscriber_id = UserId::Integer(2);
     let publisher_id = UserId::Integer(1);
     let subscriber_connection_id = user_connection_id(&room, &subscriber_id).await;
-    let pause_intents = subscription_intents_from_test_states(&TestSubscriptionStates {
-        scalable_video: Some(false),
-        audio_detector: None,
-        readable_video: None,
-        ..TestSubscriptionStates::default()
-    });
+    let pause_intents = pause_scalable_video_intents();
     room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
         .update_subscription(&publisher_id, &pause_intents)
         .await;
@@ -219,12 +184,7 @@ async fn consumption_change_handles_multiple_stream_types() {
     let subscriber_id = UserId::Integer(2);
     let publisher_id = UserId::Integer(1);
     let subscriber_connection_id = user_connection_id(&room, &subscriber_id).await;
-    let pause_intents = subscription_intents_from_test_states(&TestSubscriptionStates {
-        scalable_video: Some(false),
-        audio_detector: Some(false),
-        readable_video: None,
-        ..TestSubscriptionStates::default()
-    });
+    let pause_intents = pause_audio_and_scalable_video_intents();
     room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
         .update_subscription(&publisher_id, &pause_intents)
         .await;
@@ -264,12 +224,7 @@ async fn user_leave_purges_producer_and_consumer_indexes() {
     // producer should be a no-op (the consumer index entry was cleaned up).
     let subscriber_id = UserId::Integer(2);
     let subscriber_connection_id = user_connection_id(&room, &subscriber_id).await;
-    let pause_intents = subscription_intents_from_test_states(&TestSubscriptionStates {
-        scalable_video: Some(false),
-        audio_detector: None,
-        readable_video: None,
-        ..TestSubscriptionStates::default()
-    });
+    let pause_intents = pause_scalable_video_intents();
     room.user_operation(&subscriber_id, subscriber_connection_id, &adapter)
         .update_subscription(&UserId::Integer(1), &pause_intents)
         .await;

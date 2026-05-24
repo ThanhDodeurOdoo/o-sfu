@@ -2,8 +2,7 @@ use super::support::*;
 
 #[tokio::test]
 async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
-    let (room, adapter, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_users_with_transport().await;
+    let (room, adapter, mut publisher_rx, mut subscriber_rx) = setup_two_ready_users().await;
 
     publish_simulcast_camera(&room, &UserId::Integer(1), &adapter).await;
 
@@ -244,8 +243,7 @@ async fn pinned_camera_layout_overrides_active_speaker_bias_for_that_receiver() 
 
 #[tokio::test]
 async fn screen_share_layout_uses_screen_specific_priority_in_diagnostics() {
-    let (room, adapter, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_users_with_transport().await;
+    let (room, adapter, mut publisher_rx, mut subscriber_rx) = setup_two_ready_users().await;
 
     publish_track(
         &room,

@@ -227,15 +227,11 @@ impl PendingPublishTransactions {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Vec<PendingPublishTransaction> {
-        let matching_keys = self
-            .staged
-            .keys()
-            .filter(|key| key.user == *user_id && key.connection == connection_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        matching_keys
-            .into_iter()
-            .filter_map(|key| self.staged.remove(&key))
+        self.staged
+            .extract_if(.., |key, _transaction| {
+                &key.user == user_id && key.connection == connection_id
+            })
+            .map(|(_key, transaction)| transaction)
             .collect()
     }
 }

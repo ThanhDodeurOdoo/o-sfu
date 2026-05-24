@@ -4,14 +4,14 @@ use std::{
     fmt,
     sync::{
         Arc, Mutex, MutexGuard, RwLock,
-        atomic::{AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Instant,
 };
 
 use o_sfu_router::{RouterEvent, SessionId as UserId};
 
-use super::{MediaPacketSink, into_packet_sink, user::RecordingSession};
+use super::{MediaPacketSink, user::RecordingSession};
 use crate::runtime::{
     RoomInstanceId,
     media_transport::{TransportMediaId, TransportSessionKey},
@@ -24,48 +24,15 @@ use crate::runtime::{
 const RECENT_CAPTURED_STREAM_CACHE_SLOTS: usize = 64;
 const EMPTY_CAPTURED_STREAM_CACHE_ENTRY: u64 = 0;
 
-#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecordingLifecycleState {
     Idle,
-    Starting,
     Recording,
-    Stopping,
-    Finalizing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RecordingTransitionError {
-    action: RecordingAction,
     pub(super) state: RecordingLifecycleState,
-}
-
-impl RecordingLifecycleState {
-    const fn as_u8(self) -> u8 {
-        match self {
-            Self::Idle => 0,
-            Self::Starting => 1,
-            Self::Recording => 2,
-            Self::Stopping => 3,
-            Self::Finalizing => 4,
-        }
-    }
-
-    const fn from_u8(value: u8) -> Self {
-        match value {
-            1 => Self::Starting,
-            2 => Self::Recording,
-            3 => Self::Stopping,
-            4 => Self::Finalizing,
-            _ => Self::Idle,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RecordingAction {
-    Start,
-    Stop,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,7 +45,7 @@ pub(crate) struct RecordingServiceSnapshot {
 }
 
 struct RecordingCaptureState {
-    lifecycle: AtomicU8,
+    active: AtomicBool,
     captured_packet_count: AtomicU64,
     captured_streams: RwLock<BTreeSet<TransportMediaId>>,
     recent_captured_streams: [AtomicU64; RECENT_CAPTURED_STREAM_CACHE_SLOTS],
@@ -93,9 +60,7 @@ impl MediaPacketSink for RecordingCaptureState {
         _received_at: Instant,
         _payload: &[u8],
     ) {
-        if RecordingLifecycleState::from_u8(self.lifecycle.load(Ordering::Acquire))
-            != RecordingLifecycleState::Recording
-        {
+        if !self.active.load(Ordering::Acquire) {
             return;
         }
 
@@ -120,7 +85,7 @@ impl MediaPacketSink for RecordingCaptureState {
 impl RecordingCaptureState {
     fn new(metrics: Arc<RuntimeMetrics>) -> Self {
         Self {
-            lifecycle: AtomicU8::new(RecordingLifecycleState::Idle.as_u8()),
+            active: AtomicBool::new(false),
             captured_packet_count: AtomicU64::new(0),
             captured_streams: RwLock::new(BTreeSet::new()),
             recent_captured_streams: from_fn(|_| AtomicU64::new(EMPTY_CAPTURED_STREAM_CACHE_ENTRY)),
@@ -130,7 +95,7 @@ impl RecordingCaptureState {
 
     fn snapshot(&self, user_count: usize, producer_count: usize) -> RecordingServiceSnapshot {
         RecordingServiceSnapshot {
-            lifecycle: RecordingLifecycleState::from_u8(self.lifecycle.load(Ordering::Acquire)),
+            lifecycle: self.lifecycle_state(),
             user_count,
             producer_count,
             captured_packet_count: self.captured_packet_count.load(Ordering::Acquire),
@@ -138,28 +103,36 @@ impl RecordingCaptureState {
         }
     }
 
-    fn transition_lifecycle(
-        &self,
-        expected: RecordingLifecycleState,
-        next: RecordingLifecycleState,
-        action: RecordingAction,
-    ) -> Result<(), RecordingTransitionError> {
-        self.lifecycle
-            .compare_exchange(
-                expected.as_u8(),
-                next.as_u8(),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .map_err(|state| RecordingTransitionError {
-                action,
-                state: RecordingLifecycleState::from_u8(state),
-            })?;
+    fn start(&self) -> Result<(), RecordingTransitionError> {
+        self.active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(Self::transition_error)?;
         Ok(())
     }
 
-    fn store_lifecycle(&self, state: RecordingLifecycleState) {
-        self.lifecycle.store(state.as_u8(), Ordering::Release);
+    fn stop(&self) -> Result<(), RecordingTransitionError> {
+        self.active
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(Self::transition_error)?;
+        Ok(())
+    }
+
+    fn transition_error(active: bool) -> RecordingTransitionError {
+        RecordingTransitionError {
+            state: if active {
+                RecordingLifecycleState::Recording
+            } else {
+                RecordingLifecycleState::Idle
+            },
+        }
+    }
+
+    fn lifecycle_state(&self) -> RecordingLifecycleState {
+        if self.active.load(Ordering::Acquire) {
+            RecordingLifecycleState::Recording
+        } else {
+            RecordingLifecycleState::Idle
+        }
     }
 
     fn recent_stream_cache_contains(&self, transport_media_id: TransportMediaId) -> bool {
@@ -209,33 +182,19 @@ impl RecordingService {
     }
 
     pub(crate) fn start(&self) -> Result<(), RecordingTransitionError> {
-        self.capture.transition_lifecycle(
-            RecordingLifecycleState::Idle,
-            RecordingLifecycleState::Starting,
-            RecordingAction::Start,
-        )?;
-        let sink = into_packet_sink(Arc::<RecordingCaptureState>::clone(&self.capture));
+        self.capture.start()?;
         self.packet_sink_registry.register_room(
             self.room_instance_id,
-            sink,
+            Arc::<RecordingCaptureState>::clone(&self.capture),
             RtpForwardDestinationKind::Recording,
         );
-        self.capture
-            .store_lifecycle(RecordingLifecycleState::Recording);
         Ok(())
     }
 
     pub(crate) fn stop(&self) -> Result<(), RecordingTransitionError> {
-        self.capture.transition_lifecycle(
-            RecordingLifecycleState::Recording,
-            RecordingLifecycleState::Stopping,
-            RecordingAction::Stop,
-        )?;
+        self.capture.stop()?;
         self.packet_sink_registry
             .unregister_room(self.room_instance_id);
-        self.capture
-            .store_lifecycle(RecordingLifecycleState::Finalizing);
-        self.capture.store_lifecycle(RecordingLifecycleState::Idle);
         Ok(())
     }
 

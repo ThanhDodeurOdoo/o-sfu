@@ -34,6 +34,9 @@ use crate::runtime::{
     },
 };
 
+#[cfg(test)]
+mod test_support;
+
 /// media graph for one room
 ///
 /// sources, producers, consumers, selections, pending bootstrap reservations
@@ -1185,50 +1188,9 @@ impl RoomMediaGraph {
             || self.pending_consumer_bootstraps.contains(consumer_key)
     }
 
-    /// test helper for source primary-store membership
-    #[cfg(test)]
-    pub fn contains_source(&self, source_id: PublishedSourceId) -> bool {
-        self.sources.contains_key(&source_id)
-    }
-
     /// checks whether a consumer key has a committed route
     pub fn contains_consumer(&self, key: &ConsumerKey) -> bool {
         self.consumer_index.contains_key(key)
-    }
-
-    /// test helper for pending bootstrap membership
-    #[cfg(test)]
-    pub fn contains_pending_consumer_bootstrap(&self, key: &ConsumerKey) -> bool {
-        self.pending_consumer_bootstraps.contains(key)
-    }
-
-    /// test helper for stored receiver selection membership
-    #[cfg(test)]
-    pub fn contains_consumer_source_selection(&self, key: &ConsumerKey) -> bool {
-        self.consumer_source_selections.contains_key(key)
-    }
-
-    /// test helper proving all source and producer stores are empty
-    #[cfg(test)]
-    pub fn source_indexes_are_empty(&self) -> bool {
-        self.sources.is_empty()
-            && self.source_ids_by_owner_stream.is_empty()
-            && self.source_ids_by_owner.is_empty()
-            && self.producer_id_by_source_id.is_empty()
-            && self.producer_ids_by_owner.is_empty()
-            && self.producers.is_empty()
-    }
-
-    /// test helper proving one publisher has no source owner index entry
-    #[cfg(test)]
-    pub fn owner_source_index_is_empty(&self, user_id: &UserId) -> bool {
-        !self.source_ids_by_owner.contains_key(user_id)
-    }
-
-    /// test helper proving one publisher has no producer owner index entry
-    #[cfg(test)]
-    pub fn owner_producer_index_is_empty(&self, user_id: &UserId) -> bool {
-        !self.producer_ids_by_owner.contains_key(user_id)
     }
 }
 

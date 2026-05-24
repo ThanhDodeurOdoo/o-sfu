@@ -67,8 +67,7 @@ async fn production_change_pauses_producer_and_broadcasts_track_binding() {
 
 #[tokio::test]
 async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
-    let (room, adapter, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_users_with_transport().await;
+    let (room, adapter, mut publisher_rx, mut subscriber_rx) = setup_two_ready_users().await;
 
     publish_track(
         &room,
@@ -391,7 +390,7 @@ async fn production_change_updates_screen_track_binding_activity() {
 
 #[tokio::test]
 async fn production_change_updates_transport_route_activity() {
-    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users_with_transport().await;
+    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
     publish_track(
         &room,
@@ -424,7 +423,7 @@ async fn production_change_updates_transport_route_activity() {
 
 #[tokio::test]
 async fn production_change_commits_user_state_before_transport_update_finishes() {
-    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users_with_transport().await;
+    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
     publish_track(
         &room,

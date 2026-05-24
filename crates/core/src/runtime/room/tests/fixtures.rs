@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::{
+    collections::BTreeMap,
+    sync::atomic::{AtomicU16, Ordering},
+};
 pub(super) use std::{
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
@@ -36,7 +39,7 @@ pub(super) use crate::{
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
         packet_sink_registry::RoomPacketSinkRegistry,
         source_model::{
-            UserStreamId,
+            SourceSubscriptionIntent, UserStreamId,
             test_support::{
                 TestSubscriptionStates, source_publish_intent_for_source, stream_id_for_source,
                 subscription_intents_from_test_states,
@@ -480,21 +483,6 @@ pub(super) async fn setup_two_ready_users() -> (
     )
 }
 
-pub(super) async fn setup_two_ready_users_with_transport() -> (
-    Arc<super::super::Room>,
-    MediaTransport,
-    UserOutboundReceiver,
-    UserOutboundReceiver,
-) {
-    let fixture = setup_ready_room_fixture(ReadyRoomFixtureOptions::two_ready_users()).await;
-    (
-        fixture.room,
-        fixture.adapter,
-        fixture.first_rx,
-        fixture.second_rx,
-    )
-}
-
 pub(super) async fn setup_late_join_bootstrap_scenario() -> (
     Arc<super::super::Room>,
     MediaTransport,
@@ -751,6 +739,30 @@ pub(super) async fn source_media_ids(
     let audio_media_id = source_media_id(room, user_id, TestSourceKind::AudioDetector).await;
     let camera_media_id = source_media_id(room, user_id, TestSourceKind::ScalableVideo).await;
     (audio_media_id, camera_media_id)
+}
+
+pub(super) fn pause_scalable_video_intents() -> BTreeMap<UserStreamId, SourceSubscriptionIntent> {
+    scalable_video_intents(false)
+}
+
+pub(super) fn resume_scalable_video_intents() -> BTreeMap<UserStreamId, SourceSubscriptionIntent> {
+    scalable_video_intents(true)
+}
+
+pub(super) fn pause_audio_and_scalable_video_intents()
+-> BTreeMap<UserStreamId, SourceSubscriptionIntent> {
+    subscription_intents_from_test_states(&TestSubscriptionStates {
+        audio_detector: Some(false),
+        scalable_video: Some(false),
+        ..TestSubscriptionStates::default()
+    })
+}
+
+fn scalable_video_intents(active: bool) -> BTreeMap<UserStreamId, SourceSubscriptionIntent> {
+    subscription_intents_from_test_states(&TestSubscriptionStates {
+        scalable_video: Some(active),
+        ..TestSubscriptionStates::default()
+    })
 }
 
 pub(super) async fn source_media_id(

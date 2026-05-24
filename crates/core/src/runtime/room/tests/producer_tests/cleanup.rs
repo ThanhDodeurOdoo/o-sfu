@@ -3,7 +3,7 @@ use super::support::*;
 #[tokio::test]
 async fn explicit_unpublish_removes_state_and_transport_media() {
     let (room, media_transport, mut publisher_rx, mut subscriber_rx) =
-        setup_two_ready_users_with_transport().await;
+        setup_two_ready_users().await;
     publish_track(
         &room,
         &UserId::Integer(1),
