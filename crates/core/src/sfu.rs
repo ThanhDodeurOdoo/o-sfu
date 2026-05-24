@@ -118,15 +118,19 @@ pub struct UploadEncoding {
 /// the transport step completed, but room state refused the callback because
 /// the connection no longer owned the user session. Callers should treat stale
 /// connection outcomes as protocol races, not as transport outages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SfuCoreError {
     /// The transport backend rejected a media operation.
-    Transport(TransportAdapterError),
+    #[error("transport operation failed")]
+    Transport(#[source] TransportAdapterError),
     /// The answered SDP could not be projected into router-native capabilities.
-    CapabilityProjection(TransportAdapterError),
+    #[error("capability projection failed")]
+    CapabilityProjection(#[source] TransportAdapterError),
     /// Room state rejected the initial answer after transport accepted it.
+    #[error("session negotiation rejected: {0:?}")]
     SessionNegotiationRejected(SessionNegotiationOutcome),
     /// Room state rejected a follow-up answer after transport accepted it.
+    #[error("session refresh rejected: {0:?}")]
     SessionRefreshRejected(SessionNegotiationOutcome),
 }
 

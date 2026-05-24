@@ -16,3 +16,4 @@ workspace = true
 
 [dependencies]
 o-sfu-rfc.workspace = true
+thiserror.workspace = true

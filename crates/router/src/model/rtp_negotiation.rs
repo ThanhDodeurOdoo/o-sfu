@@ -23,20 +23,24 @@ use super::{
 use super::{ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, RfcReference};
 
 /// Failure raised while deriving or negotiating RTP parameters.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RtpNegotiationError {
+    #[error("unsupported producer codec {codec_name} payload {payload_type}")]
     UnsupportedProducerCodec {
         codec_name: String,
         payload_type: u8,
     },
+    #[error("invalid apt parameter for codec {codec_name} payload {payload_type}")]
     InvalidAptParameter {
         codec_name: String,
         payload_type: u8,
     },
+    #[error("missing media codec for rtx payload {payload_type} apt {associated_payload_type}")]
     MissingAssociatedMediaCodecForRtx {
         payload_type: u8,
         associated_payload_type: u8,
     },
+    #[error("no compatible consumer codec")]
     NoCompatibleConsumerCodec,
 }
 
