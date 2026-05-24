@@ -63,6 +63,27 @@ impl From<PendingRequestKind> for HostPendingRequestKind {
     }
 }
 
+#[cfg(feature = "ts-bindings")]
+pub(crate) const HOST_COMMAND_KINDS: &[(&str, &str)] = &[
+    ("CONNECT", "connect"),
+    ("SEND_WEB_SOCKET", "sendWebSocket"),
+    ("CLOSE_WEB_SOCKET", "closeWebSocket"),
+    ("APPLY_NEGOTIATION", "applyNegotiation"),
+    ("CREATE_PEER_CONNECTION", "createPeerConnection"),
+    ("CLOSE_PEER_CONNECTION", "closePeerConnection"),
+    ("ATTACH_TRACK", "attachTrack"),
+    ("DETACH_TRACK", "detachTrack"),
+    ("REPLACE_TRACK_BINDINGS", "replaceTrackBindings"),
+    ("REPLACE_SOURCE_DESCRIPTORS", "replaceSourceDescriptors"),
+    ("REMOVE_SESSION_TRACKS", "removeSessionTracks"),
+    ("EMIT_STATE_CHANGE", "emitStateChange"),
+    ("EMIT_UPDATE", "emitUpdate"),
+    ("REGISTER_PENDING_REQUEST", "registerPendingRequest"),
+    ("RESOLVE_PENDING_REQUEST", "resolvePendingRequest"),
+    ("SCHEDULE_TIMER", "scheduleTimer"),
+    ("CANCEL_TIMER", "cancelTimer"),
+];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum HostCommand {

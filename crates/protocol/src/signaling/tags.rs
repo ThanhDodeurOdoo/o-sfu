@@ -14,3 +14,23 @@ pub(super) const SUBSCRIBE: &str = "subscribe";
 pub(super) const TRACKS: &str = "tracks";
 pub(super) const UNPUBLISH: &str = "unpublish";
 pub(super) const WELCOME: &str = "welcome";
+
+#[cfg(feature = "ts-bindings")]
+pub(crate) const WIRE_TAGS: &[(&str, &str)] = &[
+    ("AUTH", AUTH),
+    ("BROADCAST", BROADCAST),
+    ("INFO", INFO),
+    ("OFFER", OFFER),
+    ("PEER_INFO", PEER_INFO),
+    ("PEER_JOINED", PEER_JOINED),
+    ("PEER_LEFT", PEER_LEFT),
+    ("PUBLISH", PUBLISH),
+    ("RECORDING_CHANGE", RECORDING_CHANGE),
+    ("RENEGOTIATE", RENEGOTIATE),
+    ("START_RECORDING", START_RECORDING),
+    ("STOP_RECORDING", STOP_RECORDING),
+    ("SUBSCRIBE", SUBSCRIBE),
+    ("TRACKS", TRACKS),
+    ("UNPUBLISH", UNPUBLISH),
+    ("WELCOME", WELCOME),
+];
