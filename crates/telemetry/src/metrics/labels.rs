@@ -38,6 +38,26 @@ macro_rules! impl_exported_metric_label {
     };
 }
 
+macro_rules! impl_exported_metric_label_pair {
+    ($label:ty { $($variant:ident => ($index:expr, [($first_name:literal, $first_value:literal), ($second_name:literal, $second_value:literal)])),+ $(,)? }) => {
+        impl_metric_label!($label {
+            $($variant => $index),+
+        });
+
+        impl ExportedMetricLabelPair for $label {
+            fn label_pair(self) -> [(&'static str, &'static str); 2] {
+                match self {
+                    $(Self::$variant => [($first_name, $first_value), ($second_name, $second_value)]),+
+                }
+            }
+        }
+    };
+}
+
+pub(super) trait ExportedMetricLabelPair: MetricLabel {
+    fn label_pair(self) -> [(&'static str, &'static str); 2];
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WsSessionLoopExitReason {
     UserClosed,
@@ -476,6 +496,15 @@ impl_metric_label!(RtcRelayEnqueueResult {
     InterNodeClosed => 5,
 });
 
+impl ExportedMetricLabelPair for RtcRelayEnqueueResult {
+    fn label_pair(self) -> [(&'static str, &'static str); 2] {
+        [
+            ("target", self.target_label()),
+            ("outcome", self.outcome_label()),
+        ]
+    }
+}
+
 impl_exported_metric_label!(RtcRemoteControlDropKind {
     Keyframe => (0, "keyframe"),
     PacketGate => (1, "packet_gate"),
@@ -514,13 +543,13 @@ impl_exported_metric_label!(TransportHealthState {
     Disconnected => (1, "disconnected"),
 });
 
-impl_metric_label!(TransportHealthTransition {
-    UnsetToConnected => 0,
-    UnsetToDisconnected => 1,
-    ConnectedToDisconnected => 2,
-    DisconnectedToConnected => 3,
-    ConnectedToUnset => 4,
-    DisconnectedToUnset => 5,
+impl_exported_metric_label_pair!(TransportHealthTransition {
+    UnsetToConnected => (0, [("from", "unset"), ("to", "connected")]),
+    UnsetToDisconnected => (1, [("from", "unset"), ("to", "disconnected")]),
+    ConnectedToDisconnected => (2, [("from", "connected"), ("to", "disconnected")]),
+    DisconnectedToConnected => (3, [("from", "disconnected"), ("to", "connected")]),
+    ConnectedToUnset => (4, [("from", "connected"), ("to", "unset")]),
+    DisconnectedToUnset => (5, [("from", "disconnected"), ("to", "unset")]),
 });
 
 impl_metric_label!(TransportUserLifetimeBucket {
@@ -607,9 +636,9 @@ impl_exported_metric_label!(TransportCleanupFailureKind {
     Shutdown => (3, "shutdown"),
 });
 
-impl_metric_label!(RecordingActionOutcome {
-    StartAccepted => 0,
-    StartRejected => 1,
-    StopAccepted => 2,
-    StopRejected => 3,
+impl_exported_metric_label_pair!(RecordingActionOutcome {
+    StartAccepted => (0, [("action", "start"), ("outcome", "accepted")]),
+    StartRejected => (1, [("action", "start"), ("outcome", "rejected")]),
+    StopAccepted => (2, [("action", "stop"), ("outcome", "accepted")]),
+    StopRejected => (3, [("action", "stop"), ("outcome", "rejected")]),
 });

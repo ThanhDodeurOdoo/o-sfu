@@ -7,10 +7,10 @@ use super::{
         MetricBucketLabel, MetricLabel as MetricStorageLabel, UpDownCounterFamily,
     },
     labels::{
-        ControlPlaneDurationBucket, HttpRoute, RecordingActionOutcome, RtcDatagramDropReason,
+        ControlPlaneDurationBucket, ExportedMetricLabelPair, HttpRoute, RtcDatagramDropReason,
         RtcDatagramRoutePath, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
         RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpFlowDirection,
-        RtpForwardDestinationKind, TransportHealthTransition,
+        RtpForwardDestinationKind,
     },
     rtc::RtcMetricsSnapshot,
     rtp::{RtpMetricsSnapshot, RtpWorkerMetricsSnapshot},
@@ -282,24 +282,7 @@ metric_catalog! {
         name: "osfu_recording_actions_total",
         help: "Total recording control actions by action and outcome.",
         kind: Counter,
-        samples: |metrics| vec![
-            counter(
-                [("action", "start"), ("outcome", "accepted")],
-                metrics.recording_actions.load(RecordingActionOutcome::StartAccepted),
-            ),
-            counter(
-                [("action", "start"), ("outcome", "rejected")],
-                metrics.recording_actions.load(RecordingActionOutcome::StartRejected),
-            ),
-            counter(
-                [("action", "stop"), ("outcome", "accepted")],
-                metrics.recording_actions.load(RecordingActionOutcome::StopAccepted),
-            ),
-            counter(
-                [("action", "stop"), ("outcome", "rejected")],
-                metrics.recording_actions.load(RecordingActionOutcome::StopRejected),
-            ),
-        ]
+        samples: |metrics| label_pair_counter_family_samples(&metrics.recording_actions)
     },
     RecordingRoomsActive {
         name: "osfu_recording_rooms_active",
@@ -329,32 +312,7 @@ metric_catalog! {
         name: "osfu_transport_health_transitions_total",
         help: "Total transport health-state transitions observed from the transport adapter.",
         kind: Counter,
-        samples: |metrics| vec![
-            counter(
-                [("from", "unset"), ("to", "connected")],
-                metrics.transport_health_transitions.load(TransportHealthTransition::UnsetToConnected),
-            ),
-            counter(
-                [("from", "unset"), ("to", "disconnected")],
-                metrics.transport_health_transitions.load(TransportHealthTransition::UnsetToDisconnected),
-            ),
-            counter(
-                [("from", "connected"), ("to", "disconnected")],
-                metrics.transport_health_transitions.load(TransportHealthTransition::ConnectedToDisconnected),
-            ),
-            counter(
-                [("from", "disconnected"), ("to", "connected")],
-                metrics.transport_health_transitions.load(TransportHealthTransition::DisconnectedToConnected),
-            ),
-            counter(
-                [("from", "connected"), ("to", "unset")],
-                metrics.transport_health_transitions.load(TransportHealthTransition::ConnectedToUnset),
-            ),
-            counter(
-                [("from", "disconnected"), ("to", "unset")],
-                metrics.transport_health_transitions.load(TransportHealthTransition::DisconnectedToUnset),
-            ),
-        ]
+        samples: |metrics| label_pair_counter_family_samples(&metrics.transport_health_transitions)
     },
     RtpPacketsTotal {
         name: "osfu_rtp_packets_total",
@@ -667,6 +625,23 @@ where
         .collect()
 }
 
+fn label_pair_counter_family_samples<L>(family: &CounterFamily<L>) -> Vec<MetricSample>
+where
+    L: ExportedMetricLabelPair,
+{
+    label_pair_counter_samples(|label| family.load(label))
+}
+
+fn label_pair_counter_samples<L>(load: impl Fn(L) -> u64) -> Vec<MetricSample>
+where
+    L: ExportedMetricLabelPair,
+{
+    L::VARIANTS
+        .iter()
+        .map(|label| counter(label.label_pair(), load(*label)))
+        .collect()
+}
+
 fn rtp_flow_samples(
     snapshot: &RtpMetricsSnapshot,
     label_name: &'static str,
@@ -769,18 +744,7 @@ fn rtc_route_control_samples(
 }
 
 fn rtc_relay_enqueue_samples(snapshot: &RtcMetricsSnapshot) -> Vec<MetricSample> {
-    <RtcRelayEnqueueResult as MetricStorageLabel>::VARIANTS
-        .iter()
-        .map(|result| {
-            counter(
-                [
-                    ("target", result.target_label()),
-                    ("outcome", result.outcome_label()),
-                ],
-                snapshot.relay_enqueues(*result),
-            )
-        })
-        .collect()
+    label_pair_counter_samples(|result: RtcRelayEnqueueResult| snapshot.relay_enqueues(result))
 }
 
 fn rtc_remote_control_drop_samples(
