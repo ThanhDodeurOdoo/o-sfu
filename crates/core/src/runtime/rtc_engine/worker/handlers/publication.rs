@@ -23,16 +23,17 @@ use str0m::{
 #[cfg(test)]
 use {
     super::super::super::media_registry::RegisteredMediaHandle,
-    crate::runtime::media_transport::{TransportAdapterError, TransportMediaId},
-    tokio::sync::oneshot,
-    tracing::warn,
+    crate::runtime::media_transport::TransportMediaId, tokio::sync::oneshot, tracing::warn,
 };
 
 use super::super::super::{
     simulcast,
     state::{PacketLoopState, RtcSessionState},
 };
-use crate::{Bitrate, runtime::media_transport::TransportSessionKey};
+use crate::{
+    Bitrate,
+    runtime::media_transport::{TransportAdapterError, TransportSessionKey},
+};
 
 #[cfg(test)]
 pub(super) fn respond_resolve_negotiated_producer_parameters(
@@ -54,16 +55,16 @@ pub(super) fn refresh_negotiated_producer_parameters(
     producer_mids: &[Mid],
     answer_sdp: &str,
     max_bitrate_in: Bitrate,
-) -> Vec<(Mid, RouterRtpParameters)> {
+) -> Result<Vec<(Mid, RouterRtpParameters)>, TransportAdapterError> {
     let mut refreshed_parameters = Vec::with_capacity(producer_mids.len());
     let producer_mid_set = producer_mids.iter().copied().collect::<BTreeSet<_>>();
     {
         let Some(session_state) = state.users.get_mut(session_key) else {
-            return refreshed_parameters;
+            return Ok(refreshed_parameters);
         };
         let Some(answer) = answer_for_projection(session_state, &producer_mid_set, answer_sdp)
         else {
-            return refreshed_parameters;
+            return Ok(refreshed_parameters);
         };
         for media_line in answer
             .media_lines
@@ -95,7 +96,8 @@ pub(super) fn refresh_negotiated_producer_parameters(
                 .into_iter()
                 .map(project_header_extension)
                 .collect::<Vec<_>>();
-            let rids = simulcast::send_rids_for_mid(answer_sdp, mid);
+            let rids = simulcast::send_rids_for_mid(answer_sdp, mid)
+                .map_err(|_error| TransportAdapterError::InvalidInput)?;
             let primary_ssrcs = media_line
                 .ssrc_info()
                 .into_iter()
@@ -128,7 +130,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
     for (mid, parameters) in &refreshed_parameters {
         state.refresh_producer_ssrc_bindings(session_key, *mid, parameters);
     }
-    refreshed_parameters
+    Ok(refreshed_parameters)
 }
 
 fn answer_for_projection(

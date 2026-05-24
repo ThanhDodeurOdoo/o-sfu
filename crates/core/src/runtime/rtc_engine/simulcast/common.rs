@@ -13,12 +13,16 @@ pub(super) const DEFAULT_HIGH_RID: &str = "hi";
 pub(super) const DEFAULT_LOW_MAX_BITRATE: Bitrate = Bitrate::from_kbps(150);
 const DEFAULT_LOW_RESOLUTION_SCALE: u16 = 4;
 const DEFAULT_HIGH_RESOLUTION_SCALE: u16 = 1;
+const MAX_SEND_STREAMS: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::rtc_engine) struct NegotiatedRid {
     pub rid: Str0mRid,
     pub max_bitrate: Option<Bitrate>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::runtime::rtc_engine) struct SimulcastAnswerError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SimulcastLayerSpec<'a> {
@@ -91,26 +95,31 @@ pub(super) fn layers_from_rid_bindings(
     (layers.len() >= 2).then_some(layers)
 }
 
-pub(super) fn send_rids_for_mid(answer_sdp: &str, mid: Mid) -> Vec<NegotiatedRid> {
+pub(super) fn send_rids_for_mid(
+    answer_sdp: &str,
+    mid: Mid,
+) -> Result<Vec<NegotiatedRid>, SimulcastAnswerError> {
     let Some(section) = media_section_for_mid(answer_sdp, mid) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let declarations = section
         .lines()
         .filter_map(parse_send_rid)
         .collect::<Vec<_>>();
-    accepted_send_simulcast_rids(section)
-        .into_iter()
-        .filter_map(|accepted_rid| {
-            declarations
-                .iter()
-                .find(|declaration| declaration.rid == accepted_rid)
-                .map(|declaration| NegotiatedRid {
-                    rid: Str0mRid::from(declaration.rid),
-                    max_bitrate: declaration.max_bitrate,
-                })
-        })
-        .collect()
+    let mut rids = Vec::with_capacity(MAX_SEND_STREAMS);
+    for rid in accepted_send_simulcast_rids(section)? {
+        let Some(declaration) = declarations
+            .iter()
+            .find(|declaration| declaration.rid == rid)
+        else {
+            return Err(SimulcastAnswerError);
+        };
+        rids.push(NegotiatedRid {
+            rid: Str0mRid::from(declaration.rid),
+            max_bitrate: declaration.max_bitrate,
+        });
+    }
+    Ok(rids)
 }
 
 fn media_section_for_mid(sdp: &str, mid: Mid) -> Option<&str> {
@@ -178,44 +187,69 @@ fn parse_send_rid(line: &str) -> Option<SendRidDeclaration<'_>> {
     })
 }
 
-fn accepted_send_simulcast_rids(section: &str) -> Vec<&str> {
-    section
+fn accepted_send_simulcast_rids(section: &str) -> Result<Vec<&str>, SimulcastAnswerError> {
+    let mut lines = section
         .lines()
-        .find_map(parse_send_simulcast_line)
-        .unwrap_or_default()
+        .filter_map(|line| parse_simulcast_value(line.trim_end_matches('\r')));
+    let Some(value) = lines.next() else {
+        return Ok(Vec::new());
+    };
+    if lines.next().is_some() {
+        return Err(SimulcastAnswerError);
+    }
+    parse_send_simulcast_value(value)
 }
 
-fn parse_send_simulcast_line(line: &str) -> Option<Vec<&str>> {
+fn parse_simulcast_value(line: &str) -> Option<&str> {
     let simulcast_prefix = format!(
         "{}{}:",
         webrtc::sdp::ATTRIBUTE_PREFIX,
         webrtc::sdp::attribute::SIMULCAST
     );
-    let simulcast_value = line
-        .trim_end_matches('\r')
-        .strip_prefix(&simulcast_prefix)?;
-    let mut parts = simulcast_value.split_whitespace();
-    while let Some(direction) = parts.next() {
-        let rids = parts.next()?;
-        if direction == webrtc::sdp::simulcast::DIRECTION_SEND {
-            return Some(parse_simulcast_rid_list(rids));
-        }
-    }
-    None
+    line.strip_prefix(&simulcast_prefix)
 }
 
-fn parse_simulcast_rid_list(value: &str) -> Vec<&str> {
-    value
-        .split(webrtc::sdp::simulcast::STREAM_SEPARATOR)
-        .filter_map(|stream| {
-            let selected_alternative = stream
-                .split(webrtc::sdp::simulcast::ALTERNATIVE_SEPARATOR)
-                .next()?;
-            let rid = webrtc::sdp::simulcast::strip_initial_pause_prefix(selected_alternative)
-                .unwrap_or(selected_alternative);
-            webrtc::sdp::rid::is_id(rid).then_some(rid)
-        })
-        .collect()
+fn parse_send_simulcast_value(value: &str) -> Result<Vec<&str>, SimulcastAnswerError> {
+    let mut send = None;
+    let mut seen_direction = false;
+    let mut parts = value.split_whitespace();
+    while let Some(direction) = parts.next() {
+        seen_direction = true;
+        let Some(rids) = parts.next() else {
+            return Err(SimulcastAnswerError);
+        };
+        match direction {
+            webrtc::sdp::simulcast::DIRECTION_SEND => {
+                if send.replace(rids).is_some() {
+                    return Err(SimulcastAnswerError);
+                }
+            }
+            webrtc::sdp::simulcast::DIRECTION_RECV => {}
+            _ => return Err(SimulcastAnswerError),
+        }
+    }
+    if !seen_direction {
+        return Err(SimulcastAnswerError);
+    }
+    send.map_or(Ok(Vec::new()), parse_simulcast_rid_list)
+}
+
+fn parse_simulcast_rid_list(value: &str) -> Result<Vec<&str>, SimulcastAnswerError> {
+    let mut rids = Vec::new();
+    for stream in value.split(webrtc::sdp::simulcast::STREAM_SEPARATOR) {
+        if stream.contains(webrtc::sdp::simulcast::ALTERNATIVE_SEPARATOR) {
+            return Err(SimulcastAnswerError);
+        }
+        let rid = webrtc::sdp::simulcast::strip_initial_pause_prefix(stream).unwrap_or(stream);
+        if !webrtc::sdp::rid::is_id(rid) || rids.contains(&rid) {
+            return Err(SimulcastAnswerError);
+        }
+        rids.push(rid);
+        if rids.len() > MAX_SEND_STREAMS {
+            return Err(SimulcastAnswerError);
+        }
+    }
+    Ok(rids)
 }
 
 fn parse_max_bitrate(restrictions: &str) -> Option<Bitrate> {

@@ -212,6 +212,10 @@ fn worker_apply_session_answer(
     let Some(session_state) = state.users.get_mut(session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
+    for producer_mid in &producer_mids {
+        simulcast::send_rids_for_mid(answer_sdp, *producer_mid)
+            .map_err(|_error| TransportAdapterError::InvalidInput)?;
+    }
     let Some(pending_offer) = session_state.sdp_negotiation.pending_offer.take() else {
         return Err(TransportAdapterError::InvalidInput);
     };
@@ -239,7 +243,7 @@ fn worker_apply_session_answer(
         &producer_mids,
         answer_sdp,
         max_bitrate_in,
-    );
+    )?;
     let refreshed_by_mid = refreshed_parameters.into_iter().collect::<BTreeMap<_, _>>();
     if let Some(session_state) = state.users.get_mut(session_key) {
         stage_queued_removal_offer(session_state);
