@@ -22,7 +22,7 @@ use crate::runtime::{
     rtc_engine::{
         forwarded_packet::ForwardedPacket,
         forwarding_destination::{ForwardingDestination, PacketForward},
-        relay_registry::{InterNodeRelaySender, RelayPacketMailbox, RelayTargetId},
+        relay_registry::{RelayPacketMailbox, RelayTargetId},
         route_control::{PacketLayerGate, PacketOperatingPointGate},
         state::PacketLoopState,
         test_support::{
@@ -280,13 +280,13 @@ fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc
     state.add_relay_target(
         source_transport_media_id,
         RelayTargetId::new(1),
-        first_relay_mailbox.into(),
+        first_relay_mailbox,
     );
     state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(1), true);
     state.add_relay_target(
         source_transport_media_id,
         RelayTargetId::new(2),
-        second_relay_mailbox.into(),
+        second_relay_mailbox,
     );
     state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(2), true);
     let forwards = plan_forwards(
@@ -346,7 +346,7 @@ fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_r
     state.add_relay_target(
         source_transport_media_id,
         RelayTargetId::new(1),
-        relay_mailbox.into(),
+        relay_mailbox,
     );
     state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(1), true);
     let forwards = plan_forwards(
@@ -393,7 +393,7 @@ fn populate_forward_routes_only_relays_the_registered_source_media() {
     state.add_relay_target(
         first_source_transport_media_id,
         RelayTargetId::new(1),
-        relay_mailbox.into(),
+        relay_mailbox,
     );
     state.set_relay_target_active(first_source_transport_media_id, RelayTargetId::new(1), true);
     let pending_packets = vec![
@@ -430,44 +430,6 @@ fn populate_forward_routes_only_relays_the_registered_source_media() {
             .get_mut(1)
             .and_then(|packet| packet.resolve_source_transport_media_id(&state)),
         Some(second_source_transport_media_id)
-    );
-}
-
-#[test]
-fn populate_forward_routes_plans_inter_node_relay_targets_without_new_packet_shape() {
-    let producer_session = test_transport_session_key(58, 0, 59, UserId::Integer(60));
-    let mut state = PacketLoopState::default();
-    let packet_sink_registry = RoomPacketSinkRegistry::default();
-    let metrics = RuntimeMetrics::default();
-    let (inter_node_sender, _inter_node_rx) = InterNodeRelaySender::channel_for_test();
-    let mut scenario = MediaWorkerScenario::new(&mut state);
-    let source_transport_media_id = scenario.source(producer_session.clone(), Mid::from("aud-up"));
-
-    state.add_relay_target(
-        source_transport_media_id,
-        RelayTargetId::new(9),
-        inter_node_sender.into(),
-    );
-    state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(9), true);
-
-    let forwards = plan_forwards(
-        &state,
-        &packet_sink_registry,
-        &metrics,
-        vec![sample_forwarded_packet(
-            producer_session,
-            "aud-up",
-            b"payload",
-        )],
-    );
-
-    assert_forward_plan(
-        &state,
-        &forwards,
-        &[(
-            0,
-            ExpectedForward::Kind(RtpForwardDestinationKind::InterNodeRelay),
-        )],
     );
 }
 
@@ -606,7 +568,7 @@ fn populate_forward_routes_enforces_per_consumer_temporal_ceilings_after_aggrega
 
 #[allow(
     clippy::too_many_lines,
-    reason = "the heterogeneous relay-target matrix is clearer as one complete planner regression"
+    reason = "the two-relay-target matrix is clearer as one complete planner regression"
 )]
 #[test]
 fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admits() {
@@ -614,23 +576,15 @@ fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admit
     let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let metrics = RuntimeMetrics::default();
-    let (intra_node_mailbox, _intra_node_rx) = RelayPacketMailbox::channel_for_test();
-    let (inter_node_sender, _inter_node_rx) = InterNodeRelaySender::channel_for_test();
+    let (hi_mailbox, _hi_rx) = RelayPacketMailbox::channel_for_test();
+    let (lo_mailbox, _lo_rx) = RelayPacketMailbox::channel_for_test();
     let mut scenario = MediaWorkerScenario::new(&mut state);
     let source_transport_media_id = scenario.source(producer_session.clone(), Mid::from("cam-up"));
     let hi_target_id = RelayTargetId::new(1);
     let lo_target_id = RelayTargetId::new(2);
-    state.add_relay_target(
-        source_transport_media_id,
-        hi_target_id,
-        intra_node_mailbox.into(),
-    );
+    state.add_relay_target(source_transport_media_id, hi_target_id, hi_mailbox);
     state.set_relay_target_active(source_transport_media_id, hi_target_id, true);
-    state.add_relay_target(
-        source_transport_media_id,
-        lo_target_id,
-        inter_node_sender.into(),
-    );
+    state.add_relay_target(source_transport_media_id, lo_target_id, lo_mailbox);
     state.set_relay_target_active(source_transport_media_id, lo_target_id, true);
     state.route_control.set_relay_packet_gate(
         source_transport_media_id,
@@ -671,7 +625,7 @@ fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admit
             ),
             (
                 1,
-                ExpectedForward::Kind(RtpForwardDestinationKind::InterNodeRelay),
+                ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
             ),
         ],
     );
@@ -722,7 +676,7 @@ fn populate_forward_routes_gates_only_the_selected_source_media() {
     state.add_relay_target(
         gated_source_transport_media_id,
         RelayTargetId::new(1),
-        relay_mailbox.into(),
+        relay_mailbox,
     );
     state.set_relay_target_active(gated_source_transport_media_id, RelayTargetId::new(1), true);
     let forwards = plan_forwards(

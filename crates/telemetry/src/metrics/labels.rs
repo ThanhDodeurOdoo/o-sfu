@@ -149,13 +149,11 @@ pub enum RtpForwardDestinationKind {
     LocalRtc,
     Recording,
     IntraNodeRelay,
-    InterNodeRelay,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RtpRelayDropKind {
     IntraNodeRelay,
-    InterNodeRelay,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,9 +184,6 @@ pub enum RtcRelayEnqueueResult {
     IntraNodeEnqueued,
     IntraNodeOverloaded,
     IntraNodeClosed,
-    InterNodeEnqueued,
-    InterNodeOverloaded,
-    InterNodeClosed,
 }
 
 impl RtcRelayEnqueueResult {
@@ -198,18 +193,15 @@ impl RtcRelayEnqueueResult {
             Self::IntraNodeEnqueued | Self::IntraNodeOverloaded | Self::IntraNodeClosed => {
                 "intra_node_relay"
             }
-            Self::InterNodeEnqueued | Self::InterNodeOverloaded | Self::InterNodeClosed => {
-                "inter_node_relay"
-            }
         }
     }
 
     #[must_use]
     pub const fn outcome_label(self) -> &'static str {
         match self {
-            Self::IntraNodeEnqueued | Self::InterNodeEnqueued => "enqueued",
-            Self::IntraNodeOverloaded | Self::InterNodeOverloaded => "overloaded",
-            Self::IntraNodeClosed | Self::InterNodeClosed => "closed",
+            Self::IntraNodeEnqueued => "enqueued",
+            Self::IntraNodeOverloaded => "overloaded",
+            Self::IntraNodeClosed => "closed",
         }
     }
 }
@@ -459,12 +451,10 @@ impl_exported_metric_label!(RtpForwardDestinationKind {
     LocalRtc => (0, "local_rtc"),
     Recording => (1, "recording"),
     IntraNodeRelay => (2, "intra_node_relay"),
-    InterNodeRelay => (3, "inter_node_relay"),
 });
 
 impl_exported_metric_label!(RtpRelayDropKind {
     IntraNodeRelay => (0, "intra_node_relay"),
-    InterNodeRelay => (1, "inter_node_relay"),
 });
 
 impl_exported_metric_label!(RtcDatagramRoutePath {
@@ -491,9 +481,6 @@ impl_metric_label!(RtcRelayEnqueueResult {
     IntraNodeEnqueued => 0,
     IntraNodeOverloaded => 1,
     IntraNodeClosed => 2,
-    InterNodeEnqueued => 3,
-    InterNodeOverloaded => 4,
-    InterNodeClosed => 5,
 });
 
 impl ExportedMetricLabelPair for RtcRelayEnqueueResult {

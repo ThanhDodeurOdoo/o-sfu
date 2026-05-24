@@ -20,11 +20,12 @@ use crate::runtime::{
     media_transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerActivity,
         ConsumerPacketGateUpdate, MediaTransport, MediaTransportConfig, MediaTransportDeps,
-        ReceiverBandwidthSnapshot, SessionOffer, SourcePolicySignal,
-        SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
-        TransportMediaId, TransportPlacementPressureSnapshot, TransportQualitySnapshot,
-        TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionHealth,
-        TransportSessionKey, TransportWorkerPressureSnapshot, operation::TransportControlOperation,
+        ProducerActivity, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
+        SourcePolicySignal, SourcePolicyUpdateSubscription, TransportAdapterError,
+        TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,
+        TransportPlacementPressureSnapshot, TransportQualitySnapshot, TransportRelayRouteAction,
+        TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey,
+        TransportWorkerPressureSnapshot,
     },
     rtc_engine::{RtcSendMediaSource, RtcWorker, client_rtp_capabilities_from_answer},
 };
@@ -458,56 +459,59 @@ impl MediaTransport {
             .await
     }
 
-    pub(super) async fn execute_control_operation(
+    pub(super) async fn apply_relay_route_effect_on_worker(
         &self,
-        operation: TransportControlOperation,
+        effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
-        match operation {
-            TransportControlOperation::RelayRouteEffect(effect) => {
-                self.execute_relay_route_effect(effect).await
-            }
-            TransportControlOperation::SetProducerActivity {
-                session_key,
-                transport_media_id,
-                activity,
-            } => {
-                self.require_worker_for_user(&session_key)?
-                    .set_producer_active(&session_key, transport_media_id, activity.is_active())
-                    .await
-            }
-            TransportControlOperation::SetConsumerActivity { route, activity } => {
-                ensure_same_room_instance(
-                    route.consumer_session_key(),
-                    route.source_session_key(),
-                )?;
-                self.require_worker_for_user(route.consumer_session_key())?
-                    .set_consumer_active(&route, activity.is_active())
-                    .await
-            }
-            TransportControlOperation::SetConsumerPacketGate { route, packet_gate } => {
-                ensure_same_room_instance(
-                    route.consumer_session_key(),
-                    route.source_session_key(),
-                )?;
-                self.require_worker_for_user(route.consumer_session_key())?
-                    .set_consumer_packet_gate(&route, packet_gate)
-                    .await
-            }
-            TransportControlOperation::RequestConsumerKeyframe { route } => {
-                ensure_same_room_instance(
-                    route.consumer_session_key(),
-                    route.source_session_key(),
-                )?;
-                self.require_worker_for_user(route.consumer_session_key())?
-                    .request_consumer_keyframe(&route)
-                    .await
-            }
-        }
+        self.execute_relay_route_effect(effect).await
+    }
+
+    pub(super) async fn set_producer_active_on_worker(
+        &self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+        activity: ProducerActivity,
+    ) -> Result<(), TransportAdapterError> {
+        self.require_worker_for_user(session_key)?
+            .set_producer_active(session_key, transport_media_id, activity.is_active())
+            .await
+    }
+
+    pub(super) async fn set_consumer_active_on_worker(
+        &self,
+        route: &TransportConsumerRoute,
+        activity: ConsumerActivity,
+    ) -> Result<(), TransportAdapterError> {
+        ensure_same_room_instance(route.consumer_session_key(), route.source_session_key())?;
+        self.require_worker_for_user(route.consumer_session_key())?
+            .set_consumer_active(route, activity.is_active())
+            .await
+    }
+
+    pub(super) async fn set_consumer_packet_gate_on_worker(
+        &self,
+        route: &TransportConsumerRoute,
+        packet_gate: SourcePacketGate,
+    ) -> Result<(), TransportAdapterError> {
+        ensure_same_room_instance(route.consumer_session_key(), route.source_session_key())?;
+        self.require_worker_for_user(route.consumer_session_key())?
+            .set_consumer_packet_gate(route, packet_gate)
+            .await
+    }
+
+    pub(super) async fn request_consumer_keyframe_on_worker(
+        &self,
+        route: &TransportConsumerRoute,
+    ) -> Result<(), TransportAdapterError> {
+        ensure_same_room_instance(route.consumer_session_key(), route.source_session_key())?;
+        self.require_worker_for_user(route.consumer_session_key())?
+            .request_consumer_keyframe(route)
+            .await
     }
 
     async fn execute_relay_route_effect(
         &self,
-        effect: TransportRelayRouteEffect,
+        effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
         let source_worker = self.require_worker_for_user(&effect.source_session_key)?;
         let target_worker =

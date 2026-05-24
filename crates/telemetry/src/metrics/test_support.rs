@@ -307,10 +307,6 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
         self.rtp_forwarded_packets(RtpForwardDestinationKind::IntraNodeRelay)
     }
 
-    fn rtp_forwarded_packets_inter_node_relay(&self) -> u64 {
-        self.rtp_forwarded_packets(RtpForwardDestinationKind::InterNodeRelay)
-    }
-
     fn rtp_forwarded_payload_bytes(&self, destination: RtpForwardDestinationKind) -> u64 {
         self.counter_value(
             MetricName::RtpForwardedPayloadBytesTotal,
@@ -330,10 +326,6 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
         self.rtp_forwarded_payload_bytes(RtpForwardDestinationKind::IntraNodeRelay)
     }
 
-    fn rtp_forwarded_payload_bytes_inter_node_relay(&self) -> u64 {
-        self.rtp_forwarded_payload_bytes(RtpForwardDestinationKind::InterNodeRelay)
-    }
-
     fn rtp_relay_overload_drops(&self, destination: RtpRelayDropKind) -> u64 {
         self.counter_value(
             MetricName::RtpRelayOverloadDropsTotal,
@@ -343,10 +335,6 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
 
     fn rtp_relay_overload_drops_intra_node_relay(&self) -> u64 {
         self.rtp_relay_overload_drops(RtpRelayDropKind::IntraNodeRelay)
-    }
-
-    fn rtp_relay_overload_drops_inter_node_relay(&self) -> u64 {
-        self.rtp_relay_overload_drops(RtpRelayDropKind::InterNodeRelay)
     }
 
     fn rtc_datagram_routes(&self, path: RtcDatagramRoutePath) -> u64 {
@@ -428,18 +416,6 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
 
     fn rtc_relay_enqueue_intra_node_closed(&self) -> u64 {
         self.rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeClosed)
-    }
-
-    fn rtc_relay_enqueue_inter_node_enqueued(&self) -> u64 {
-        self.rtc_relay_enqueue(RtcRelayEnqueueResult::InterNodeEnqueued)
-    }
-
-    fn rtc_relay_enqueue_inter_node_overloaded(&self) -> u64 {
-        self.rtc_relay_enqueue(RtcRelayEnqueueResult::InterNodeOverloaded)
-    }
-
-    fn rtc_relay_enqueue_inter_node_closed(&self) -> u64 {
-        self.rtc_relay_enqueue(RtcRelayEnqueueResult::InterNodeClosed)
     }
 
     fn rtc_remote_control_drops(&self, kind: RtcRemoteControlDropKind) -> u64 {

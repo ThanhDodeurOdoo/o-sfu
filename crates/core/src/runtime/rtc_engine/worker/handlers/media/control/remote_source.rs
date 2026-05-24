@@ -5,7 +5,7 @@ use crate::runtime::{
     media_transport::{TransportAdapterError, TransportMediaId, TransportSessionKey},
     rtc_engine::{
         demux::MediaRouteEntry,
-        relay_registry::{RelayTargetId, RelayTargetTransport},
+        relay_registry::{RelayPacketMailbox, RelayTargetId},
         route_control::PacketLayerGate,
         state::PacketLoopState,
     },
@@ -41,7 +41,7 @@ pub(super) fn worker_add_relay_target(
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     target_id: RelayTargetId,
-    target: RelayTargetTransport,
+    target: RelayPacketMailbox,
 ) -> Result<(), TransportAdapterError> {
     ensure_owned_local_producer_mid(state, source_session_key, source_transport_media_id)?;
     state.add_relay_target(source_transport_media_id, target_id, target);

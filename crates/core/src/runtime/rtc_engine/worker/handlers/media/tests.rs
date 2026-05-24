@@ -92,7 +92,7 @@ fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
         prepare_source_session(&mut state, &source_session, source_mid, 77_777);
     let relay_target_id = RelayTargetId::new(8);
 
-    state.add_relay_target(source_transport_media_id, relay_target_id, mailbox.into());
+    state.add_relay_target(source_transport_media_id, relay_target_id, mailbox);
     state.set_relay_target_active(source_transport_media_id, relay_target_id, true);
 
     respond_request_remote_keyframe(

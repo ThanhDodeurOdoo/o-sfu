@@ -1,6 +1,4 @@
-use super::super::relay_registry::{
-    InterNodeRelaySender, RelayEnqueueOutcome, RelayPacketMailbox, RelayTargetId,
-};
+use super::super::relay_registry::{RelayEnqueueOutcome, RelayPacketMailbox, RelayTargetId};
 use crate::runtime::{
     UserId,
     media_transport::TransportMediaId,
@@ -17,7 +15,7 @@ fn worker_local_relay_targets_track_active_sources() {
     let source_transport_media_id = TransportMediaId::new(8);
     let relay_target = RelayTargetId::new(1);
 
-    state.add_relay_target(source_transport_media_id, relay_target, mailbox.into());
+    state.add_relay_target(source_transport_media_id, relay_target, mailbox);
     state.set_relay_target_active(source_transport_media_id, relay_target, true);
     assert!(
         state
@@ -42,7 +40,7 @@ fn worker_local_relay_targets_forward_packets_through_registered_mailboxes() {
     let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
     let relay_target = RelayTargetId::new(1);
 
-    state.add_relay_target(source_transport_media_id, relay_target, mailbox.into());
+    state.add_relay_target(source_transport_media_id, relay_target, mailbox);
     state.set_relay_target_active(source_transport_media_id, relay_target, true);
 
     let relay_targets = state.relay_targets_for_source(source_transport_media_id);
@@ -77,13 +75,13 @@ fn worker_local_relay_targets_keep_multiple_target_mailboxes_per_source() {
     state.add_relay_target(
         source_transport_media_id,
         RelayTargetId::new(1),
-        first_mailbox.into(),
+        first_mailbox,
     );
     state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(1), true);
     state.add_relay_target(
         source_transport_media_id,
         RelayTargetId::new(2),
-        second_mailbox.into(),
+        second_mailbox,
     );
     state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(2), true);
 
@@ -107,12 +105,8 @@ fn worker_local_relay_targets_do_not_reference_count_room_owners() {
     let source_transport_media_id = TransportMediaId::new(12);
     let relay_target = RelayTargetId::new(1);
 
-    state.add_relay_target(
-        source_transport_media_id,
-        relay_target,
-        mailbox.clone().into(),
-    );
-    state.add_relay_target(source_transport_media_id, relay_target, mailbox.into());
+    state.add_relay_target(source_transport_media_id, relay_target, mailbox.clone());
+    state.add_relay_target(source_transport_media_id, relay_target, mailbox);
     state.set_relay_target_active(source_transport_media_id, relay_target, true);
     state.set_relay_target_active(source_transport_media_id, relay_target, true);
     assert_eq!(
@@ -143,13 +137,13 @@ fn worker_local_relay_targets_keep_sources_independent() {
     state.add_relay_target(
         first_source_transport_media_id,
         RelayTargetId::new(1),
-        first_mailbox.into(),
+        first_mailbox,
     );
     state.set_relay_target_active(first_source_transport_media_id, RelayTargetId::new(1), true);
     state.add_relay_target(
         second_source_transport_media_id,
         RelayTargetId::new(2),
-        second_mailbox.into(),
+        second_mailbox,
     );
     state.set_relay_target_active(
         second_source_transport_media_id,
@@ -187,16 +181,8 @@ fn worker_local_relay_targets_only_forward_to_targets_with_active_routes() {
     let first_target = RelayTargetId::new(1);
     let second_target = RelayTargetId::new(2);
 
-    state.add_relay_target(
-        source_transport_media_id,
-        first_target,
-        first_mailbox.into(),
-    );
-    state.add_relay_target(
-        source_transport_media_id,
-        second_target,
-        second_mailbox.into(),
-    );
+    state.add_relay_target(source_transport_media_id, first_target, first_mailbox);
+    state.add_relay_target(source_transport_media_id, second_target, second_mailbox);
     assert!(
         state
             .relay_targets_for_source(source_transport_media_id)
@@ -228,41 +214,6 @@ fn worker_local_relay_targets_only_forward_to_targets_with_active_routes() {
 }
 
 #[test]
-fn worker_local_relay_targets_forward_packets_through_registered_inter_node_targets() {
-    let mut state = PacketLoopState::default();
-    let (sender, mut relay_rx) = InterNodeRelaySender::channel_for_test();
-    let source_transport_media_id = TransportMediaId::new(41);
-    let session_key = test_transport_session_key(33, 0, 34, UserId::Integer(35));
-    let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
-    let relay_target = RelayTargetId::new(7);
-
-    state.add_relay_target(source_transport_media_id, relay_target, sender.into());
-    state.set_relay_target_active(source_transport_media_id, relay_target, true);
-
-    let relay_targets = state.relay_targets_for_source(source_transport_media_id);
-    assert!(relay_targets.is_some());
-    let Some(relay_targets) = relay_targets else {
-        return;
-    };
-    assert_eq!(relay_targets.len(), 1);
-    let Some(relay_target) = relay_targets.first() else {
-        return;
-    };
-    relay_target.forward_packet(&state, &packet, source_transport_media_id);
-
-    let forwarded = relay_rx.try_recv().ok();
-    assert!(forwarded.is_some());
-    let Some(mut forwarded) = forwarded else {
-        return;
-    };
-    assert_eq!(forwarded.payload(), b"payload");
-    assert_eq!(
-        forwarded.resolve_source_transport_media_id(&PacketLoopState::default()),
-        Some(source_transport_media_id)
-    );
-}
-
-#[test]
 fn worker_local_relay_targets_report_overload_when_a_bounded_mailbox_is_full() {
     let (mailbox, _rx) = RelayPacketMailbox::channel_for_test_with_capacity(1);
     let source_transport_media_id = TransportMediaId::new(42);
@@ -270,19 +221,23 @@ fn worker_local_relay_targets_report_overload_when_a_bounded_mailbox_is_full() {
     let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
 
     assert_eq!(
-        mailbox.forward_packet(
-            &PacketLoopState::default(),
-            &packet,
-            source_transport_media_id
-        ),
+        mailbox
+            .forward_packet(
+                &PacketLoopState::default(),
+                &packet,
+                source_transport_media_id
+            )
+            .map(super::super::relay_registry::RelayEnqueueReport::outcome),
         Some(RelayEnqueueOutcome::Enqueued)
     );
     assert_eq!(
-        mailbox.forward_packet(
-            &PacketLoopState::default(),
-            &packet,
-            source_transport_media_id
-        ),
+        mailbox
+            .forward_packet(
+                &PacketLoopState::default(),
+                &packet,
+                source_transport_media_id
+            )
+            .map(super::super::relay_registry::RelayEnqueueReport::outcome),
         Some(RelayEnqueueOutcome::Overloaded)
     );
 }
