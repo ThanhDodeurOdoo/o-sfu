@@ -373,6 +373,73 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
 }
 
 #[tokio::test]
+async fn rtc_simulcast_answer_rejects_unoffered_rid_alternatives() {
+    let adapter = RtcWorker::default();
+    let session_key = transport_key(1, 335, UserId::Integer(335));
+    let mut remote = build_remote_rtc(55_035);
+
+    let initial_offer = adapter
+        .create_initial_session_offer(&session_key)
+        .await
+        .expect("initial offer should succeed");
+    apply_offer_answer(
+        &adapter,
+        &session_key,
+        &mut remote,
+        initial_offer.into_sdp(),
+    )
+    .await;
+
+    let transport_media_id = adapter
+        .add_recv_media(
+            &session_key,
+            Str0mMediaKind::Video,
+            &sample_simulcast_video_rtp_parameters(Some("simulcast-up")),
+        )
+        .await
+        .expect("simulcast publish intent should stage a renegotiation offer");
+    let negotiated_mid = adapter
+        .debug_resolve_mid(transport_media_id)
+        .await
+        .expect("simulcast publish should expose the staged mid");
+    let renegotiation_offer = adapter
+        .create_session_renegotiation_offer(&session_key)
+        .await
+        .expect("staged simulcast renegotiation offer should be available")
+        .into_sdp();
+    let answer_sdp = remote
+        .sdp_api()
+        .accept_offer(
+            SdpOffer::from_sdp_string(&renegotiation_offer).expect("simulcast offer should parse"),
+        )
+        .expect("remote simulcast answer should build")
+        .to_sdp_string();
+    let answer_sdp = answer_with_simulcast_send_rids(
+        &answer_sdp,
+        negotiated_mid.to_string().as_str(),
+        &[("lo", Some(150_000)), ("hi", Some(900_000))],
+    )
+    .replacen(
+        &sdp_simulcast_line(webrtc::sdp::simulcast::DIRECTION_SEND, &["lo", "hi"]),
+        &format!(
+            "a={}:{} lo{}backup{}hi",
+            webrtc::sdp::attribute::SIMULCAST,
+            webrtc::sdp::simulcast::DIRECTION_SEND,
+            webrtc::sdp::simulcast::ALTERNATIVE_SEPARATOR,
+            webrtc::sdp::simulcast::STREAM_SEPARATOR
+        ),
+        1,
+    );
+
+    assert_eq!(
+        adapter
+            .apply_session_answer(&session_key, &answer_sdp)
+            .await,
+        Err(TransportAdapterError::InvalidInput)
+    );
+}
+
+#[tokio::test]
 async fn rtc_initial_session_offer_rejects_overlapping_pending_offer() {
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 35, UserId::Integer(35));

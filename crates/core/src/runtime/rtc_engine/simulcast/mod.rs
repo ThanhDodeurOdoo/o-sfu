@@ -9,7 +9,7 @@ mod consumer;
 mod h264;
 mod vp8;
 
-pub(in crate::runtime::rtc_engine) use common::NegotiatedRid;
+pub(in crate::runtime::rtc_engine) use common::{NegotiatedRid, SimulcastAnswerError};
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{MediaKind, Mid, Simulcast as Str0mSimulcast};
 
@@ -180,7 +180,10 @@ pub(super) fn publish_upload_encodings_or_default(
     bootstrap_upload_encodings(media_kind, codec_flags, video_bitrate_limits)
 }
 
-pub(super) fn send_rids_for_mid(answer_sdp: &str, mid: Mid) -> Vec<NegotiatedRid> {
+pub(super) fn send_rids_for_mid(
+    answer_sdp: &str,
+    mid: Mid,
+) -> Result<Vec<NegotiatedRid>, SimulcastAnswerError> {
     common::send_rids_for_mid(answer_sdp, mid)
 }
 
@@ -223,11 +226,9 @@ mod tests {
             separator = webrtc::sdp::simulcast::STREAM_SEPARATOR,
         );
 
-        let rids = send_rids_for_mid(&answer, Mid::from("video_0"));
-
         assert_eq!(
-            rids,
-            vec![
+            send_rids_for_mid(&answer, Mid::from("video_0")),
+            Ok(vec![
                 NegotiatedRid {
                     rid: Str0mRid::from(common::DEFAULT_LOW_RID),
                     max_bitrate: Some(common::DEFAULT_LOW_MAX_BITRATE),
@@ -236,7 +237,7 @@ mod tests {
                     rid: Str0mRid::from(common::DEFAULT_HIGH_RID),
                     max_bitrate: Some(ANSWER_HIGH_MAX_BITRATE),
                 },
-            ]
+            ])
         );
     }
 
@@ -259,10 +260,10 @@ mod tests {
 
         assert_eq!(
             send_rids_for_mid(&answer, Mid::from("video_0")),
-            vec![NegotiatedRid {
+            Ok(vec![NegotiatedRid {
                 rid: Str0mRid::from(common::DEFAULT_LOW_RID),
                 max_bitrate: Some(common::DEFAULT_LOW_MAX_BITRATE),
-            }]
+            }])
         );
     }
 
@@ -286,7 +287,7 @@ mod tests {
 
         assert_eq!(
             send_rids_for_mid(&answer, Mid::from("video_0")),
-            vec![
+            Ok(vec![
                 NegotiatedRid {
                     rid: Str0mRid::from(common::DEFAULT_LOW_RID),
                     max_bitrate: Some(common::DEFAULT_LOW_MAX_BITRATE),
@@ -295,7 +296,7 @@ mod tests {
                     rid: Str0mRid::from(common::DEFAULT_HIGH_RID),
                     max_bitrate: Some(ANSWER_HIGH_MAX_BITRATE),
                 },
-            ]
+            ])
         );
     }
 
@@ -314,11 +315,14 @@ mod tests {
             max_br = webrtc::sdp::rid_restriction::MAX_BITRATE,
         );
 
-        assert!(send_rids_for_mid(&answer, Mid::from("video_0")).is_empty());
+        assert!(matches!(
+            send_rids_for_mid(&answer, Mid::from("video_0")),
+            Ok(rids) if rids.is_empty()
+        ));
     }
 
     #[test]
-    fn answer_send_rid_projection_uses_first_simulcast_alternative() {
+    fn answer_send_rid_projection_rejects_simulcast_alternatives() {
         let answer = format!(
             concat!(
                 "v=0\r\n",
@@ -340,16 +344,7 @@ mod tests {
 
         assert_eq!(
             send_rids_for_mid(&answer, Mid::from("video_0")),
-            vec![
-                NegotiatedRid {
-                    rid: Str0mRid::from(common::DEFAULT_LOW_RID),
-                    max_bitrate: Some(common::DEFAULT_LOW_MAX_BITRATE),
-                },
-                NegotiatedRid {
-                    rid: Str0mRid::from(common::DEFAULT_HIGH_RID),
-                    max_bitrate: Some(ANSWER_HIGH_MAX_BITRATE),
-                },
-            ]
+            Err(SimulcastAnswerError)
         );
     }
 
@@ -376,22 +371,22 @@ mod tests {
 
         assert_eq!(
             send_rids_for_mid(&answer, Mid::from("cam")),
-            vec![NegotiatedRid {
+            Ok(vec![NegotiatedRid {
                 rid: Str0mRid::from("right"),
                 max_bitrate: Some(Bitrate::from_bps(222_000)),
-            }]
+            }])
         );
         assert_eq!(
             send_rids_for_mid(&answer, Mid::from("camera")),
-            vec![NegotiatedRid {
+            Ok(vec![NegotiatedRid {
                 rid: Str0mRid::from("wrong"),
                 max_bitrate: Some(Bitrate::from_bps(111_000)),
-            }]
+            }])
         );
     }
 
     #[test]
-    fn answer_send_rid_projection_ignores_invalid_rfc8852_ids() {
+    fn answer_send_rid_projection_rejects_invalid_rfc8852_ids() {
         let answer = format!(
             concat!(
                 "v=0\r\n",
@@ -409,14 +404,34 @@ mod tests {
             separator = webrtc::sdp::simulcast::STREAM_SEPARATOR,
         );
 
-        let rids = send_rids_for_mid(&answer, Mid::from("video_0"));
+        assert_eq!(
+            send_rids_for_mid(&answer, Mid::from("video_0")),
+            Err(SimulcastAnswerError)
+        );
+    }
+
+    #[test]
+    fn answer_send_rid_projection_rejects_extra_simulcast_streams() {
+        let answer = format!(
+            concat!(
+                "v=0\r\n",
+                "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n",
+                "a=mid:video_0\r\n",
+                "a={rid_attr}:lo {send} {max_br}=150000\r\n",
+                "a={rid_attr}:mid {send} {max_br}=450000\r\n",
+                "a={rid_attr}:hi {send} {max_br}=900000\r\n",
+                "a={simulcast_attr}:{send} lo{separator}mid{separator}hi\r\n"
+            ),
+            rid_attr = webrtc::sdp::attribute::RID,
+            simulcast_attr = webrtc::sdp::attribute::SIMULCAST,
+            send = webrtc::sdp::rid::DIRECTION_SEND,
+            max_br = webrtc::sdp::rid_restriction::MAX_BITRATE,
+            separator = webrtc::sdp::simulcast::STREAM_SEPARATOR,
+        );
 
         assert_eq!(
-            rids,
-            vec![NegotiatedRid {
-                rid: Str0mRid::from("hi2"),
-                max_bitrate: Some(ANSWER_HIGH_MAX_BITRATE),
-            }]
+            send_rids_for_mid(&answer, Mid::from("video_0")),
+            Err(SimulcastAnswerError)
         );
     }
 
