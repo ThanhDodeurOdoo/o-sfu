@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn h264_profile_accepts_only_the_promoted_chromium_matrix() {
-        let parameters = h264_parameters(1, "42e01f");
+        let parameters = h264_parameters(1, "42E01F");
         let profile = SimulcastCodecProfile::publish(
             MediaKind::Video,
             &parameters,
@@ -491,6 +491,7 @@ mod tests {
             h264_parameters(0, "42e01f"),
             h264_parameters(1, "42001f"),
             h264_parameters(1, "4d001f"),
+            h264_parameters(1, "4de01f"),
         ] {
             assert!(
                 publish_upload_encodings(MediaKind::Video, &parameters).is_empty(),
