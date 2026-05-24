@@ -14,55 +14,29 @@ import {
     type StreamType
 } from "./public_api.js";
 import type { NegotiationUploadSlot, TrackBinding } from "./protocol.js";
+import {
+    COMMAND_KIND,
+    NEGOTIATION_KIND,
+    PENDING_REQUEST_KIND,
+    RECORDING_STOP_CODES,
+    SOURCE_ENCODING_POLICY_ROLES,
+    STREAM_TYPES,
+    UPLOAD_KINDS
+} from "./generated/protocol_contract.js";
 
 const MIN_TEMPORAL_LAYER_ID = 0;
 const MAX_TEMPORAL_LAYER_ID = 7;
-const STREAM_TYPES = ["audio", "camera", "screen"] as const;
-const UPLOAD_KINDS = ["audio", "video"] as const;
-const SOURCE_ENCODING_POLICY_ROLES = ["featured", "thumbnail", "degradedThumbnail"] as const;
-const RECORDING_STOP_CODES = [
-    "user_request",
-    "channel_closed",
-    "recording_timeout",
-    "recording_failed",
-    "disk_space_exhausted"
-] as const;
+export { NEGOTIATION_KIND, PENDING_REQUEST_KIND };
 
-export const NEGOTIATION_KIND = {
-    OFFER: "offer",
-    RENEGOTIATE: "renegotiate"
-} as const;
 const NEGOTIATION_KINDS = Object.values(NEGOTIATION_KIND);
 
 export type NegotiationKind = (typeof NEGOTIATION_KIND)[keyof typeof NEGOTIATION_KIND];
 
-export const PENDING_REQUEST_KIND = {
-    START_RECORDING: "startRecording",
-    STOP_RECORDING: "stopRecording"
-} as const;
 const PENDING_REQUEST_KINDS = Object.values(PENDING_REQUEST_KIND);
 
 export type PendingRequestKind = (typeof PENDING_REQUEST_KIND)[keyof typeof PENDING_REQUEST_KIND];
 
-export const CommandKind = {
-    SEND_WEB_SOCKET: "sendWebSocket",
-    APPLY_NEGOTIATION: "applyNegotiation",
-    ATTACH_TRACK: "attachTrack",
-    DETACH_TRACK: "detachTrack",
-    CREATE_PEER_CONNECTION: "createPeerConnection",
-    CLOSE_PEER_CONNECTION: "closePeerConnection",
-    CLOSE_WEB_SOCKET: "closeWebSocket",
-    EMIT_STATE_CHANGE: "emitStateChange",
-    REPLACE_TRACK_BINDINGS: "replaceTrackBindings",
-    REPLACE_SOURCE_DESCRIPTORS: "replaceSourceDescriptors",
-    REMOVE_SESSION_TRACKS: "removeSessionTracks",
-    EMIT_UPDATE: "emitUpdate",
-    REGISTER_PENDING_REQUEST: "registerPendingRequest",
-    RESOLVE_PENDING_REQUEST: "resolvePendingRequest",
-    SCHEDULE_TIMER: "scheduleTimer",
-    CANCEL_TIMER: "cancelTimer",
-    CONNECT: "connect"
-} as const;
+export const CommandKind = COMMAND_KIND;
 
 export type HostCommandKind = (typeof CommandKind)[keyof typeof CommandKind];
 

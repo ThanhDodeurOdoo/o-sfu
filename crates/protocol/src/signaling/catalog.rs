@@ -7,13 +7,16 @@ use crate::shared::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 pub struct AuthPayload {
     pub jwt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
     pub channel: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 pub struct WelcomePayload {
     pub features: AvailableFeatures,
     pub recording: RecordingState,
@@ -21,6 +24,7 @@ pub struct WelcomePayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 pub struct SessionDescriptionPayload {
     pub sdp: String,
     #[serde(default, rename = "uploadSlots", skip_serializing_if = "Vec::is_empty")]
@@ -28,6 +32,7 @@ pub struct SessionDescriptionPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct NegotiationUploadSlot {
     pub mid: String,
@@ -39,6 +44,8 @@ pub struct NegotiationUploadSlot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-bindings", ts(optional_fields))]
 #[serde(rename_all = "camelCase")]
 pub struct NegotiationUploadEncoding {
     pub rid: String,
@@ -51,6 +58,7 @@ pub struct NegotiationUploadEncoding {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum UploadLayerPolicyRole {
     Featured,
@@ -59,12 +67,14 @@ pub enum UploadLayerPolicyRole {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 pub struct StreamIntentPayload {
     #[serde(rename = "type")]
     pub stream_type: StreamType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct SubscribePayload {
     /// Wire shape is intentionally flat: `{ sessionId, audio?, camera?, screen? }`.
@@ -76,6 +86,7 @@ pub struct SubscribePayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct TrackBinding {
     pub mid: String,
@@ -85,10 +96,12 @@ pub struct TrackBinding {
     pub stream_type: StreamType,
     pub active: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
     pub source: Option<SourceDescriptor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct SourceDescriptor {
     pub source_id: String,
@@ -98,11 +111,14 @@ pub struct SourceDescriptor {
     pub stream_type: StreamType,
     pub active: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
     pub mid: Option<String>,
     pub encodings: Vec<SourceEncodingDescriptor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-bindings", ts(optional_fields))]
 #[serde(rename_all = "camelCase")]
 pub struct SourceEncodingDescriptor {
     pub encoding_id: String,
@@ -121,6 +137,7 @@ pub struct SourceEncodingDescriptor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct PeerInfoPayload {
     #[serde(rename = "sessionId")]
@@ -129,6 +146,7 @@ pub struct PeerInfoPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct PeerLeftPayload {
     #[serde(rename = "sessionId")]
@@ -136,18 +154,23 @@ pub struct PeerLeftPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 pub struct ClientBroadcastPayload {
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown"))]
     pub message: JsonPayload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct ServerBroadcastPayload {
     pub sender_id: UserId,
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown"))]
     pub message: JsonPayload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 pub struct RecordingActionResult {
     pub ok: bool,
 }

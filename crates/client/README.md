@@ -1,7 +1,8 @@
 # o-sfu client
 
-`npm run build` now generates the default `ProtocolCoreWasm` runtime into `client/generated/` and
-compiles the TypeScript part.
+`npm run build` now generates the Rust-owned protocol contract into
+`client/src/generated/`, generates the default `ProtocolCoreWasm` runtime into
+`client/generated/` and compiles the TypeScript part.
 
 `npm run build:odoo` generates an Odoo-compatible bundle at `client/dist/odoo_sfu.js`. 
 
@@ -29,8 +30,8 @@ still heavily logging the sfu_client.ts, maybe need to cleanup at some point
 ### public parts:
 
 - `src/public_api.ts`: Odoo-facing client API, events, states, and compatibility types
-- `src/protocol.ts`: signaling envelope and payload types
-- `src/runtime_contract.ts`: protocol-core provider boundary, host-command types, and runtime validation.
+- `src/protocol.ts`: stable facade for generated signaling envelope and payload types
+- `src/runtime_contract.ts`: protocol-core provider boundary, host-command types, generated Rust-owned literal catalogs and runtime validation.
 - `src/sfu_client.ts`: public `SfuClient` facade exposed to Odoo and tests.
 - `src/wasm_runtime.ts`: default async `wasm-pack` bootstrap for the normal browser bundle.
 
@@ -49,4 +50,5 @@ still heavily logging the sfu_client.ts, maybe need to cleanup at some point
 - `test/`: Node unit tests
 - `playwright/`: full stack tests with playwright
 - `generated/`: wasm generated files (git ignored)
+- `src/generated/`: Rust-generated TypeScript protocol contract (git ignored)
 - `dist/`: compiled package output and the generated shipped Odoo bundle (git ignored)

@@ -38,6 +38,8 @@ pub type JsonPayload = Value;
 /// property in the new SFU, (if I remember correctly, it is the collaborative
 /// web editor that uses strings)
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-bindings", ts(rename = "SessionId"))]
 #[serde(untagged)]
 pub enum UserId {
     Integer(i64),
@@ -99,6 +101,7 @@ impl UserId {
     reason = "feature flags mirror the compatibility startup surface with explicit optional room capabilities"
 )]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct AvailableFeatures {
     /// Whether the room supports real-time media.
@@ -119,6 +122,8 @@ pub struct AvailableFeatures {
 /// Consumers must treat a missing field as "not asserted by this payload"
 /// rather than as `false`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-bindings", ts(optional_fields))]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingState {
     /// Whether the recording is active.
@@ -142,6 +147,8 @@ pub struct RecordingState {
 ///
 /// TODO: should probably rename it ``RecordingStopCode``
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-bindings", ts(rename = "RecordingStopCode"))]
 pub enum StopCode {
     /// A participant with permission requested the stop.
     #[serde(rename = "user_request")]
@@ -165,12 +172,14 @@ pub enum StopCode {
 /// The state carries the new room-visible recording flags. `stop_code` is only
 /// present when the update explains why a recording session stopped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 pub struct RecordingStateUpdate {
     /// New room-visible recording state.
     pub state: RecordingState,
     /// Optional business reason for a transition to an inactive recording
     /// state.
     #[serde(rename = "stopCode", skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-bindings", ts(optional))]
     pub stop_code: Option<StopCode>,
 }
 
@@ -180,6 +189,8 @@ pub struct RecordingStateUpdate {
 /// call. Missing values are treated as denied by the room runtime so omitted
 /// permissions never grant access by accident.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-bindings", ts(optional_fields))]
 #[serde(rename_all = "camelCase")]
 pub struct UserPermissions {
     /// Whether the user may toggle transcription.
@@ -203,6 +214,8 @@ pub struct UserPermissions {
 /// Fields are optional so callers can send partial updates. Use
 /// [`Self::snapshot_complete`] when serializing a full room snapshot.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-bindings", ts(optional_fields))]
 #[serde(rename_all = "camelCase")]
 pub struct UserInfo {
     /// Whether the participant is currently considered active speaker.
@@ -299,6 +312,7 @@ impl UserInfo {
 /// connection ids are intentionally absent because reconnection and replacement
 /// are server-local concerns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 pub struct PeerSnapshot {
     /// Odoo-facing participant identity for this peer.
     #[serde(rename = "sessionId")]
@@ -316,6 +330,8 @@ pub struct PeerSnapshot {
 /// effects. Missing fields mean the current receiver preference for that stream
 /// or layout should be left unchanged.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-bindings", ts(optional_fields))]
 pub struct DownloadStates {
     /// Desired audio receive state.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -357,6 +373,7 @@ impl DownloadStates {
 /// bandwidth pressure. It does not name an RTP encoding, simulcast RID or
 /// concrete packet gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum VideoLayoutIntent {
     /// Main speaker or call focus.
@@ -380,6 +397,7 @@ pub enum VideoLayoutIntent {
 /// model may contain encodings, RTP metadata and transport-local media ids,
 /// while `StreamType` only says which user-facing stream a caller means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 pub enum StreamType {
     /// Microphone audio.
     #[serde(rename = "audio")]
@@ -398,6 +416,8 @@ pub enum StreamType {
 /// these options with feature flags, current recording state and
 /// [`UserPermissions`] before mutating recording state.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-bindings", ts(optional_fields))]
 pub struct RecordingOptions {
     /// Request audio capture for a new recording.
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -1,3 +1,5 @@
+#[cfg(feature = "ts-bindings")]
+use super::EnvelopeSpec;
 use super::{
     Envelope, PeerInfoPayload, PeerLeftPayload, RecordingActionResult, RequestId,
     ServerBroadcastPayload, SessionDescriptionPayload, TrackBinding, WelcomePayload, tags,
@@ -10,6 +12,12 @@ pub enum ClientResponse {
     Renegotiate(SessionDescriptionPayload),
 }
 
+#[cfg(feature = "ts-bindings")]
+pub(crate) const CLIENT_RESPONSE_ENVELOPES: &[EnvelopeSpec] = &[
+    EnvelopeSpec::response(tags::OFFER, "SessionDescriptionPayload"),
+    EnvelopeSpec::response(tags::RENEGOTIATE, "SessionDescriptionPayload"),
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServerMessage {
     Welcome(WelcomePayload),
@@ -20,6 +28,17 @@ pub enum ServerMessage {
     Broadcast(ServerBroadcastPayload),
     RecordingChange(RecordingStateUpdate),
 }
+
+#[cfg(feature = "ts-bindings")]
+pub(crate) const SERVER_MESSAGE_ENVELOPES: &[EnvelopeSpec] = &[
+    EnvelopeSpec::message(tags::WELCOME, "WelcomePayload"),
+    EnvelopeSpec::message(tags::TRACKS, "TrackBinding[]"),
+    EnvelopeSpec::message(tags::PEER_INFO, "PeerInfoPayload"),
+    EnvelopeSpec::message(tags::PEER_JOINED, "PeerInfoPayload"),
+    EnvelopeSpec::message(tags::PEER_LEFT, "PeerLeftPayload"),
+    EnvelopeSpec::message(tags::BROADCAST, "ServerBroadcastPayload"),
+    EnvelopeSpec::message(tags::RECORDING_CHANGE, "RecordingChangePayload"),
+];
 
 impl ServerMessage {
     fn tag(&self) -> &'static str {
@@ -61,6 +80,12 @@ pub enum ServerResponse {
     StartRecording(RecordingActionResult),
     StopRecording(RecordingActionResult),
 }
+
+#[cfg(feature = "ts-bindings")]
+pub(crate) const SERVER_RESPONSE_ENVELOPES: &[EnvelopeSpec] = &[
+    EnvelopeSpec::response(tags::START_RECORDING, "RecordingActionResult"),
+    EnvelopeSpec::response(tags::STOP_RECORDING, "RecordingActionResult"),
+];
 
 impl ServerResponse {
     fn tag(&self) -> &'static str {

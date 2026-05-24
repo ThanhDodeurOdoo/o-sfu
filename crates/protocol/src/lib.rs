@@ -5,6 +5,8 @@ mod core;
 mod host_bridge;
 mod shared;
 mod signaling;
+#[cfg(feature = "ts-bindings")]
+pub mod typescript;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 

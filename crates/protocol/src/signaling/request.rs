@@ -1,3 +1,5 @@
+#[cfg(feature = "ts-bindings")]
+use super::EnvelopeSpec;
 use super::{
     ClientBroadcastPayload, Envelope, RecordingOptions, RequestId, SessionDescriptionPayload,
     StreamIntentPayload, SubscribePayload, tags,
@@ -13,6 +15,16 @@ pub enum ClientMessage {
     Info(UserInfo),
     Broadcast(ClientBroadcastPayload),
 }
+
+#[cfg(feature = "ts-bindings")]
+pub(crate) const CLIENT_MESSAGE_ENVELOPES: &[EnvelopeSpec] = &[
+    EnvelopeSpec::message(tags::AUTH, "AuthPayload"),
+    EnvelopeSpec::message(tags::PUBLISH, "StreamIntentPayload"),
+    EnvelopeSpec::message(tags::UNPUBLISH, "StreamIntentPayload"),
+    EnvelopeSpec::message(tags::SUBSCRIBE, "SubscribePayload"),
+    EnvelopeSpec::message(tags::INFO, "UserInfo"),
+    EnvelopeSpec::message(tags::BROADCAST, "ClientBroadcastPayload"),
+];
 
 impl ClientMessage {
     fn tag(&self) -> &'static str {
@@ -46,6 +58,12 @@ pub enum ClientRequest {
     StopRecording,
 }
 
+#[cfg(feature = "ts-bindings")]
+pub(crate) const CLIENT_REQUEST_ENVELOPES: &[EnvelopeSpec] = &[
+    EnvelopeSpec::request(tags::START_RECORDING, Some("RecordingOptions")),
+    EnvelopeSpec::request(tags::STOP_RECORDING, None),
+];
+
 impl ClientRequest {
     fn tag(&self) -> &'static str {
         match self {
@@ -74,6 +92,12 @@ pub enum ServerRequest {
     Offer(SessionDescriptionPayload),
     Renegotiate(SessionDescriptionPayload),
 }
+
+#[cfg(feature = "ts-bindings")]
+pub(crate) const SERVER_REQUEST_ENVELOPES: &[EnvelopeSpec] = &[
+    EnvelopeSpec::request(tags::OFFER, Some("SessionDescriptionPayload")),
+    EnvelopeSpec::request(tags::RENEGOTIATE, Some("SessionDescriptionPayload")),
+];
 
 impl ServerRequest {
     fn tag(&self) -> &'static str {
