@@ -669,6 +669,9 @@ pub mod h264 {
     /// FU-A start bit in the FU header.
     pub const FU_START_BIT: u8 = 0x80;
 
+    /// FU-A end bit in the FU header.
+    pub const FU_END_BIT: u8 = 0x40;
+
     /// Parsed H264 `profile-level-id` value.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct ProfileLevelId {
@@ -834,7 +837,9 @@ pub mod h264 {
         let Some((&fu_header, _fragment)) = payload.split_first() else {
             return false;
         };
-        fu_header & FU_START_BIT != 0 && fu_header & NAL_UNIT_TYPE_MASK == NAL_UNIT_TYPE_IDR
+        fu_header & FU_START_BIT != 0
+            && fu_header & FU_END_BIT == 0
+            && fu_header & NAL_UNIT_TYPE_MASK == NAL_UNIT_TYPE_IDR
     }
 
     impl TryFrom<u8> for LevelIdc {
@@ -1234,6 +1239,7 @@ mod tests {
             0x78, 0x00, 0x02, 0x67, 0x42, 0x00, 0x02, 0x65, 0x88
         ]));
         assert!(h264::payload_starts_idr(&[0x7c, 0x85, 0x88]));
+        assert!(!h264::payload_starts_idr(&[0x7c, 0xc5, 0x88]));
         assert!(!h264::payload_starts_idr(&[0x41, 0x9a]));
         assert!(!h264::payload_starts_idr(&[0x7c, 0x05, 0x88]));
     }
