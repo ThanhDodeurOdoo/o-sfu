@@ -89,6 +89,53 @@ fn local_destination_session<'a>(
         .map(|destination| &destination.dest_session)
 }
 
+enum ExpectedForward<'a> {
+    Local(&'a TransportSessionKey),
+    PacketSink,
+    Kind(RtpForwardDestinationKind),
+}
+
+fn plan_forwards(
+    state: &PacketLoopState,
+    packet_sinks: &impl PacketSinkLookup,
+    metrics: &RuntimeMetrics,
+    mut pending_packets: Vec<ForwardedPacket>,
+) -> Vec<PacketForward> {
+    let mut forwards = Vec::new();
+    populate_forward_routes(
+        state,
+        packet_sinks,
+        metrics,
+        &mut pending_packets,
+        &mut forwards,
+    );
+    forwards
+}
+
+fn assert_forward_plan(
+    state: &PacketLoopState,
+    forwards: &[PacketForward],
+    expected: &[(usize, ExpectedForward<'_>)],
+) {
+    assert_eq!(forwards.len(), expected.len());
+    for (forward, (packet_idx, destination)) in forwards.iter().zip(expected) {
+        assert_eq!(forward.packet_idx(), *packet_idx);
+        match destination {
+            ExpectedForward::Local(session) => assert!(matches!(
+                forward.destination(),
+                destination if local_destination_session(state, destination) == Some(*session)
+            )),
+            ExpectedForward::PacketSink => assert!(matches!(
+                forward.destination(),
+                ForwardingDestination::PacketSink(_)
+            )),
+            ExpectedForward::Kind(kind) => {
+                assert_eq!(forward.destination().metrics_kind(), *kind);
+            }
+        }
+    }
+}
+
 #[test]
 fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() {
     let producer_session = TransportSessionKey::new(
@@ -113,29 +160,22 @@ fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() 
         consumer_session.clone(),
         Mid::from("aud-down"),
     );
-    let pending_packets = vec![sample_forwarded_packet(
-        producer_session,
-        "aud-up",
-        b"payload",
-    )];
-    let mut forwards = Vec::new();
-    let mut pending_packets = pending_packets;
-
-    populate_forward_routes(
+    let forwards = plan_forwards(
         &state,
         &packet_sink_registry,
         &metrics,
-        &mut pending_packets,
-        &mut forwards,
+        vec![sample_forwarded_packet(
+            producer_session,
+            "aud-up",
+            b"payload",
+        )],
     );
 
-    assert_eq!(forwards.len(), 1);
-    assert_eq!(forwards.first().map(PacketForward::packet_idx), Some(0));
-    assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(destination)
-            if local_destination_session(&state, destination) == Some(&consumer_session)
-    ));
+    assert_forward_plan(
+        &state,
+        &forwards,
+        &[(0, ExpectedForward::Local(&consumer_session))],
+    );
 }
 
 #[test]
@@ -158,31 +198,28 @@ fn populate_forward_routes_keeps_recording_and_local_rtc_destinations_together()
         into_packet_sink(Arc::<CountingSink>::clone(&sink)),
         RtpForwardDestinationKind::Recording,
     );
-    let pending_packets = vec![sample_forwarded_packet(
-        producer_session,
-        "aud-up",
-        b"payload",
-    )];
-    let mut forwards = Vec::new();
-    let mut pending_packets = pending_packets;
-
-    populate_forward_routes(
+    let forwards = plan_forwards(
         &state,
         &packet_sink_registry,
         &metrics,
-        &mut pending_packets,
-        &mut forwards,
+        vec![sample_forwarded_packet(
+            producer_session,
+            "aud-up",
+            b"payload",
+        )],
     );
 
-    assert_eq!(forwards.len(), 2);
-    assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(ForwardingDestination::PacketSink(_))
-    ));
-    assert!(matches!(
-        forwards.get(1).map(PacketForward::destination),
-        Some(ForwardingDestination::LocalRtc(_))
-    ));
+    assert_forward_plan(
+        &state,
+        &forwards,
+        &[
+            (0, ExpectedForward::PacketSink),
+            (
+                0,
+                ExpectedForward::Kind(RtpForwardDestinationKind::LocalRtc),
+            ),
+        ],
+    );
 }
 
 #[test]
@@ -203,19 +240,15 @@ fn populate_forward_routes_reserves_dense_fanout_before_pushing_destinations() {
             Mid::from("cam-down"),
         );
     }
-    let mut pending_packets = vec![sample_forwarded_packet(
-        producer_session,
-        "cam-up",
-        b"payload",
-    )];
-    let mut forwards = Vec::new();
-
-    populate_forward_routes(
+    let forwards = plan_forwards(
         &state,
         &packet_sink_registry,
         &metrics,
-        &mut pending_packets,
-        &mut forwards,
+        vec![sample_forwarded_packet(
+            producer_session,
+            "cam-up",
+            b"payload",
+        )],
     );
 
     assert_eq!(forwards.len(), DESTINATION_COUNT);
@@ -256,41 +289,36 @@ fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc
         second_relay_mailbox.into(),
     );
     state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(2), true);
-    let pending_packets = vec![sample_forwarded_packet(
-        producer_session,
-        "aud-up",
-        b"payload",
-    )];
-    let mut forwards = Vec::new();
-    let mut pending_packets = pending_packets;
-
-    populate_forward_routes(
+    let forwards = plan_forwards(
         &state,
         &packet_sink_registry,
         &metrics,
-        &mut pending_packets,
-        &mut forwards,
+        vec![sample_forwarded_packet(
+            producer_session,
+            "aud-up",
+            b"payload",
+        )],
     );
 
-    assert_eq!(forwards.len(), 4);
-    assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(ForwardingDestination::PacketSink(_))
-    ));
-    assert!(matches!(
-        forwards.get(1).map(PacketForward::destination),
-        Some(destination)
-            if destination.metrics_kind() == RtpForwardDestinationKind::IntraNodeRelay
-    ));
-    assert!(matches!(
-        forwards.get(2).map(PacketForward::destination),
-        Some(destination)
-            if destination.metrics_kind() == RtpForwardDestinationKind::IntraNodeRelay
-    ));
-    assert!(matches!(
-        forwards.get(3).map(PacketForward::destination),
-        Some(ForwardingDestination::LocalRtc(_))
-    ));
+    assert_forward_plan(
+        &state,
+        &forwards,
+        &[
+            (0, ExpectedForward::PacketSink),
+            (
+                0,
+                ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
+            ),
+            (
+                0,
+                ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
+            ),
+            (
+                0,
+                ExpectedForward::Kind(RtpForwardDestinationKind::LocalRtc),
+            ),
+        ],
+    );
 }
 
 #[test]
@@ -321,27 +349,26 @@ fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_r
         relay_mailbox.into(),
     );
     state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(1), true);
-    let mut pending_packets = vec![sample_already_relayed_packet(
-        producer_session,
-        source_transport_media_id,
-        "aud-up",
-        b"payload",
-    )];
-    let mut forwards = Vec::new();
-
-    populate_forward_routes(
+    let forwards = plan_forwards(
         &state,
         &packet_sink_registry,
         &metrics,
-        &mut pending_packets,
-        &mut forwards,
+        vec![sample_already_relayed_packet(
+            producer_session,
+            source_transport_media_id,
+            "aud-up",
+            b"payload",
+        )],
     );
 
-    assert_eq!(forwards.len(), 1);
-    assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(ForwardingDestination::LocalRtc(_))
-    ));
+    assert_forward_plan(
+        &state,
+        &forwards,
+        &[(
+            0,
+            ExpectedForward::Kind(RtpForwardDestinationKind::LocalRtc),
+        )],
+    );
 }
 
 #[test]
@@ -384,16 +411,20 @@ fn populate_forward_routes_only_relays_the_registered_source_media() {
         &mut forwards,
     );
 
-    assert_eq!(forwards.len(), 2);
-    assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(destination)
-            if destination.metrics_kind() == RtpForwardDestinationKind::IntraNodeRelay
-    ));
-    assert!(matches!(
-        forwards.get(1).map(PacketForward::destination),
-        Some(ForwardingDestination::LocalRtc(_))
-    ));
+    assert_forward_plan(
+        &state,
+        &forwards,
+        &[
+            (
+                0,
+                ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
+            ),
+            (
+                0,
+                ExpectedForward::Kind(RtpForwardDestinationKind::LocalRtc),
+            ),
+        ],
+    );
     assert_eq!(
         pending_packets
             .get_mut(1)
@@ -419,28 +450,25 @@ fn populate_forward_routes_plans_inter_node_relay_targets_without_new_packet_sha
     );
     state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(9), true);
 
-    let pending_packets = vec![sample_forwarded_packet(
-        producer_session,
-        "aud-up",
-        b"payload",
-    )];
-    let mut forwards = Vec::new();
-    let mut pending_packets = pending_packets;
-
-    populate_forward_routes(
+    let forwards = plan_forwards(
         &state,
         &packet_sink_registry,
         &metrics,
-        &mut pending_packets,
-        &mut forwards,
+        vec![sample_forwarded_packet(
+            producer_session,
+            "aud-up",
+            b"payload",
+        )],
     );
 
-    assert_eq!(forwards.len(), 1);
-    assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(destination)
-            if destination.metrics_kind() == RtpForwardDestinationKind::InterNodeRelay
-    ));
+    assert_forward_plan(
+        &state,
+        &forwards,
+        &[(
+            0,
+            ExpectedForward::Kind(RtpForwardDestinationKind::InterNodeRelay),
+        )],
+    );
 }
 
 #[allow(
@@ -491,17 +519,14 @@ fn populate_forward_routes_enforces_per_consumer_rid_gates_after_aggregate_admit
         &mut forwards,
     );
 
-    assert_eq!(forwards.len(), 2);
-    assert_eq!(forwards.first().map(PacketForward::packet_idx), Some(0));
-    assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(destination) if local_destination_session(&state, destination) == Some(&hi_consumer_session)
-    ));
-    assert_eq!(forwards.get(1).map(PacketForward::packet_idx), Some(1));
-    assert!(matches!(
-        forwards.get(1).map(PacketForward::destination),
-        Some(destination) if local_destination_session(&state, destination) == Some(&lo_consumer_session)
-    ));
+    assert_forward_plan(
+        &state,
+        &forwards,
+        &[
+            (0, ExpectedForward::Local(&hi_consumer_session)),
+            (1, ExpectedForward::Local(&lo_consumer_session)),
+        ],
+    );
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_layer_allowed(), 2);
     assert_eq!(snapshot.rtc_route_control_layer_dropped(), 0);
@@ -565,22 +590,15 @@ fn populate_forward_routes_enforces_per_consumer_temporal_ceilings_after_aggrega
         &mut forwards,
     );
 
-    assert_eq!(forwards.len(), 3);
-    assert_eq!(forwards.first().map(PacketForward::packet_idx), Some(0));
-    assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(destination) if local_destination_session(&state, destination) == Some(&high_consumer_session)
-    ));
-    assert_eq!(forwards.get(1).map(PacketForward::packet_idx), Some(1));
-    assert!(matches!(
-        forwards.get(1).map(PacketForward::destination),
-        Some(destination) if local_destination_session(&state, destination) == Some(&base_consumer_session)
-    ));
-    assert_eq!(forwards.get(2).map(PacketForward::packet_idx), Some(1));
-    assert!(matches!(
-        forwards.get(2).map(PacketForward::destination),
-        Some(destination) if local_destination_session(&state, destination) == Some(&high_consumer_session)
-    ));
+    assert_forward_plan(
+        &state,
+        &forwards,
+        &[
+            (0, ExpectedForward::Local(&high_consumer_session)),
+            (1, ExpectedForward::Local(&base_consumer_session)),
+            (1, ExpectedForward::Local(&high_consumer_session)),
+        ],
+    );
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_layer_allowed(), 2);
     assert_eq!(snapshot.rtc_route_control_layer_dropped(), 0);
@@ -643,19 +661,20 @@ fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admit
         &mut forwards,
     );
 
-    assert_eq!(forwards.len(), 2);
-    assert_eq!(forwards.first().map(PacketForward::packet_idx), Some(0));
-    assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(destination)
-            if destination.metrics_kind() == RtpForwardDestinationKind::IntraNodeRelay
-    ));
-    assert_eq!(forwards.get(1).map(PacketForward::packet_idx), Some(1));
-    assert!(matches!(
-        forwards.get(1).map(PacketForward::destination),
-        Some(destination)
-            if destination.metrics_kind() == RtpForwardDestinationKind::InterNodeRelay
-    ));
+    assert_forward_plan(
+        &state,
+        &forwards,
+        &[
+            (
+                0,
+                ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
+            ),
+            (
+                1,
+                ExpectedForward::Kind(RtpForwardDestinationKind::InterNodeRelay),
+            ),
+        ],
+    );
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_layer_allowed(), 2);
     assert_eq!(snapshot.rtc_route_control_layer_dropped(), 0);
@@ -706,40 +725,30 @@ fn populate_forward_routes_gates_only_the_selected_source_media() {
         relay_mailbox.into(),
     );
     state.set_relay_target_active(gated_source_transport_media_id, RelayTargetId::new(1), true);
-    let pending_packets = vec![
-        sample_forwarded_packet_with_rid(
-            gated_producer_session,
-            "cam-up",
-            Some("lo"),
-            b"camera-packet",
-        ),
-        sample_forwarded_packet(open_producer_session, "screen-up", b"screen-packet"),
-    ];
-    let mut forwards = Vec::new();
-    let mut pending_packets = pending_packets;
-
-    populate_forward_routes(
+    let forwards = plan_forwards(
         &state,
         &packet_sink_registry,
         &metrics,
-        &mut pending_packets,
-        &mut forwards,
+        vec![
+            sample_forwarded_packet_with_rid(
+                gated_producer_session,
+                "cam-up",
+                Some("lo"),
+                b"camera-packet",
+            ),
+            sample_forwarded_packet(open_producer_session, "screen-up", b"screen-packet"),
+        ],
     );
 
-    assert_eq!(forwards.len(), 3);
-    assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(ForwardingDestination::PacketSink(_))
-    ));
-    assert!(matches!(
-        forwards.get(1).map(PacketForward::destination),
-        Some(ForwardingDestination::PacketSink(_))
-    ));
-    assert!(matches!(
-        forwards.get(2).map(PacketForward::destination),
-        Some(destination)
-            if local_destination_session(&state, destination) == Some(&open_consumer_session)
-    ));
+    assert_forward_plan(
+        &state,
+        &forwards,
+        &[
+            (0, ExpectedForward::PacketSink),
+            (1, ExpectedForward::PacketSink),
+            (1, ExpectedForward::Local(&open_consumer_session)),
+        ],
+    );
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_layer_dropped(), 1);
     assert_eq!(snapshot.rtc_route_control_layer_allowed(), 1);
@@ -763,37 +772,33 @@ fn populate_forward_routes_applies_operating_point_packet_gates() {
         source_transport_media_id,
         PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 1)),
     );
-    let mut pending_packets = vec![
-        sample_forwarded_packet_with_frame_mark(
-            producer_session.clone(),
-            "cam-up",
-            Some("hi"),
-            2_u32 << 24,
-            b"high-temporal",
-        ),
-        sample_forwarded_packet_with_frame_mark(
-            producer_session,
-            "cam-up",
-            Some("hi"),
-            1_u32 << 24,
-            b"selected-temporal",
-        ),
-    ];
-    let mut forwards = Vec::new();
-
-    populate_forward_routes(
+    let forwards = plan_forwards(
         &state,
         &packet_sink_registry,
         &metrics,
-        &mut pending_packets,
-        &mut forwards,
+        vec![
+            sample_forwarded_packet_with_frame_mark(
+                producer_session.clone(),
+                "cam-up",
+                Some("hi"),
+                2_u32 << 24,
+                b"high-temporal",
+            ),
+            sample_forwarded_packet_with_frame_mark(
+                producer_session,
+                "cam-up",
+                Some("hi"),
+                1_u32 << 24,
+                b"selected-temporal",
+            ),
+        ],
     );
 
-    assert_eq!(forwards.len(), 1);
-    assert!(matches!(
-        forwards.first().map(PacketForward::destination),
-        Some(destination) if local_destination_session(&state, destination) == Some(&consumer_session)
-    ));
+    assert_forward_plan(
+        &state,
+        &forwards,
+        &[(1, ExpectedForward::Local(&consumer_session))],
+    );
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_layer_dropped(), 1);
     assert_eq!(snapshot.rtc_route_control_layer_allowed(), 1);
