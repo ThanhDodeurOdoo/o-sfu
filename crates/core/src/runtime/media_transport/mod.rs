@@ -64,7 +64,7 @@ use crate::runtime::{RoomInstanceId, rtc_engine::RtcWorker};
 /// context such as session keys, media ids and SDP lengths.
 #[derive(Debug, Clone)]
 pub struct MediaTransport {
-    /// RTC workers addressed by media-worker id modulo worker count.
+    /// RTC workers indexed by canonical runtime media-worker ids.
     workers: Arc<[Arc<RtcWorker>]>,
     /// Shared wakeup signal used by every worker to notify room-level source
     /// policy tasks about transport-observed changes without polling every room.
