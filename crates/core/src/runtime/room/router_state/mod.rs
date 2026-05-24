@@ -230,20 +230,6 @@ impl RoomRouterState {
             .map_err(RoomRouterStateError::from)
     }
 
-    /// Remove a consumer from the pure router.
-    ///
-    /// # Errors
-    ///
-    /// Returns the underlying [`RouterError`] if the consumer does not exist.
-    pub(super) fn remove_consumer(
-        &mut self,
-        consumer_id: RouterConsumerId,
-    ) -> Result<(), RoomRouterStateError> {
-        self.router
-            .remove_consumer(consumer_id)
-            .map_err(RoomRouterStateError::from)
-    }
-
     /// Remove a producer from the pure router.
     ///
     /// The router tears down dependent consumers as part of the same transition.

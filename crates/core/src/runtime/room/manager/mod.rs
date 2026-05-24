@@ -382,7 +382,7 @@ impl RoomManager {
         room: &Arc<Room>,
         media_transport: &MediaTransport,
     ) -> JoinPlacement {
-        let room_snapshot = room.placement_usage_snapshot().await;
+        let room_snapshot = room.placement_usage_snapshot();
         let worker_loads = self.worker_load_index(media_transport).await;
         let policy = room.room_worker_policy();
         let planner = RoomPlacementPlanner::new(self.media_worker_count, policy);

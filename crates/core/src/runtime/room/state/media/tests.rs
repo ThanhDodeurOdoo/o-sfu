@@ -385,7 +385,7 @@ fn policy_paused_routes_do_not_count_as_effective_delivery() {
         two_user_consumer_route();
     let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
 
-    assert!(state.source_fanout_pressure(1));
+    assert!(state.source_fanout_pressure(1, |_| 0));
     assert_eq!(
         state.consumer_route_state(&consumer_user_id, &producer_user_id, &stream_id),
         Some(ConsumerRouteState::Active)
@@ -403,7 +403,7 @@ fn policy_paused_routes_do_not_count_as_effective_delivery() {
 
     set_test_consumer_policy_pause(&mut state, &key);
 
-    assert!(!state.source_fanout_pressure(1));
+    assert!(!state.source_fanout_pressure(1, |_| 0));
     assert_eq!(
         state.consumer_route_state(&consumer_user_id, &producer_user_id, &stream_id),
         Some(ConsumerRouteState::Inactive)

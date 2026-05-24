@@ -450,9 +450,12 @@ impl RoomState {
         let producer_target = self.producer_route_target(user_id, connection_id, stream_id)?;
         let transport_removals =
             self.unpublish_transport_removals(user_id, connection_id, stream_id)?;
+        let affected_consumers = self
+            .media
+            .routed_consumer_ids_for_source(producer_target.source_id());
         if self
             .topology
-            .remove_producer(producer_target.routed_producer_id())
+            .remove_producer(producer_target.routed_producer_id(), affected_consumers)
             .is_err()
         {
             error!(

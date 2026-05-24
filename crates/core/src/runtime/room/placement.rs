@@ -197,35 +197,59 @@ impl RoomRuntimeContext {
     }
 }
 
-/// room-local committed placement ledger
+/// committed room-local placement state
 ///
 /// joins register the selected router and media worker for each committed
 /// connection. later transport commands use the same mapping to build stable
-/// session keys without deriving placement from several room indexes
+/// session keys without deriving placement from topology internals
 #[derive(Debug)]
-pub(super) struct RoomPlacementLedger {
-    primary_placement: Mutex<LocalRouterRuntimeContext>,
-    placement_by_connection: Mutex<BTreeMap<ConnectionId, LocalRouterRuntimeContext>>,
+pub(super) struct RoomPlacementState {
+    instance_id: RoomInstanceId,
+    inner: Mutex<RoomPlacementStateInner>,
 }
 
-impl RoomPlacementLedger {
+#[derive(Debug)]
+struct RoomPlacementStateInner {
+    local_routers: LocalRoomRouterPlacements,
+    has_assigned_placements: bool,
+    placement_by_connection: BTreeMap<ConnectionId, LocalRouterRuntimeContext>,
+}
+
+/// placement data returned by a committed join transition
+///
+/// async finalization uses this receipt instead of rebuilding transport keys
+/// from topology state after the room lock has been released
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CommittedPlacementReceipt {
+    connection_id: ConnectionId,
+    placement: LocalRouterRuntimeContext,
+    transport_session_key: TransportSessionKey,
+}
+
+impl RoomPlacementState {
     #[must_use]
-    pub(super) fn new(primary: LocalRouterRuntimeContext) -> Self {
+    pub(super) fn new(
+        instance_id: RoomInstanceId,
+        local_routers: LocalRoomRouterPlacements,
+    ) -> Self {
         Self {
-            primary_placement: Mutex::new(primary),
-            placement_by_connection: Mutex::new(BTreeMap::new()),
+            instance_id,
+            inner: Mutex::new(RoomPlacementStateInner {
+                local_routers,
+                has_assigned_placements: false,
+                placement_by_connection: BTreeMap::new(),
+            }),
         }
     }
 
     #[must_use]
     pub(super) fn transport_user_key(
         &self,
-        instance_id: RoomInstanceId,
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> TransportSessionKey {
         TransportSessionKey::new(
-            instance_id,
+            self.instance_id,
             self.media_worker_id_for_connection(connection_id),
             connection_id,
             user_id.clone(),
@@ -234,28 +258,43 @@ impl RoomPlacementLedger {
 
     pub(super) fn register_committed_placement(
         &self,
+        user_id: &UserId,
         connection_id: ConnectionId,
         placement: LocalRouterRuntimeContext,
-    ) {
-        lock_unpoisoned(&self.placement_by_connection).insert(connection_id, placement);
-        let mut primary = lock_unpoisoned(&self.primary_placement);
-        if placement.router == primary.router {
-            *primary = placement;
+    ) -> CommittedPlacementReceipt {
+        {
+            let mut inner = lock_unpoisoned(&self.inner);
+            inner.local_routers.upsert(placement);
+            inner.has_assigned_placements = true;
+            inner
+                .placement_by_connection
+                .insert(connection_id, placement);
+        }
+        let transport_session_key = TransportSessionKey::new(
+            self.instance_id,
+            placement.media_worker,
+            connection_id,
+            user_id.clone(),
+        );
+        CommittedPlacementReceipt {
+            connection_id,
+            placement,
+            transport_session_key,
         }
     }
 
     pub(super) fn unregister_committed_placement(&self, connection_id: ConnectionId) {
-        lock_unpoisoned(&self.placement_by_connection).remove(&connection_id);
+        lock_unpoisoned(&self.inner)
+            .placement_by_connection
+            .remove(&connection_id);
     }
 
     fn placement_for_connection(&self, connection_id: ConnectionId) -> LocalRouterRuntimeContext {
-        if let Some(placement) = lock_unpoisoned(&self.placement_by_connection)
-            .get(&connection_id)
-            .copied()
-        {
+        let inner = lock_unpoisoned(&self.inner);
+        if let Some(placement) = inner.placement_by_connection.get(&connection_id).copied() {
             return placement;
         }
-        *lock_unpoisoned(&self.primary_placement)
+        inner.local_routers.primary()
     }
 
     pub(super) fn media_worker_id_for_connection(&self, connection_id: ConnectionId) -> usize {
@@ -263,7 +302,33 @@ impl RoomPlacementLedger {
     }
 
     pub(super) fn media_worker_id(&self) -> usize {
-        lock_unpoisoned(&self.primary_placement).media_worker
+        lock_unpoisoned(&self.inner)
+            .local_routers
+            .primary()
+            .media_worker
+    }
+
+    pub(super) fn usage_snapshot(&self) -> RoomPlacementUsageSnapshot {
+        let inner = lock_unpoisoned(&self.inner);
+        RoomPlacementUsageSnapshot::new(
+            inner.local_routers.primary().router,
+            inner.has_assigned_placements,
+            inner.local_routers.iter().collect(),
+        )
+    }
+}
+
+impl CommittedPlacementReceipt {
+    pub(super) const fn connection_id(&self) -> ConnectionId {
+        self.connection_id
+    }
+
+    pub(super) const fn media_worker_id(&self) -> usize {
+        self.placement.media_worker
+    }
+
+    pub(super) const fn transport_session_key(&self) -> &TransportSessionKey {
+        &self.transport_session_key
     }
 }
 

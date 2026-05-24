@@ -9,7 +9,6 @@ use super::{
     super::{
         RoomAdmissionPolicy, RoomMediaCounts, RoomUserPermissions,
         outbound::OutboundSender,
-        placement::RoomPlacementUsageSnapshot,
         topology::{RoomRouterStateFactory, RoomTopology},
         user_negotiation::UserNegotiation,
     },
@@ -197,15 +196,11 @@ impl RoomState {
         entries
     }
 
-    pub fn placement_usage_snapshot(&self) -> RoomPlacementUsageSnapshot {
-        RoomPlacementUsageSnapshot::new(
-            self.topology.primary_router_id(),
-            self.topology.has_assigned_local_placements(),
-            self.topology.local_placements(),
-        )
-    }
-
-    pub fn source_fanout_pressure(&self, max_fanout_per_source: usize) -> bool {
+    pub fn source_fanout_pressure(
+        &self,
+        max_fanout_per_source: usize,
+        media_worker_for_connection: impl Fn(ConnectionId) -> usize,
+    ) -> bool {
         if max_fanout_per_source == 0 {
             return false;
         }
@@ -229,12 +224,12 @@ impl RoomState {
                 {
                     continue;
                 }
-                let Some(placement) = self.topology.home_placement_for_user(&key.consumer_user_id)
-                else {
+                let Some(user) = self.users.get(&key.consumer_user_id) else {
                     continue;
                 };
+                let media_worker = media_worker_for_connection(user.connection_id);
                 deliveries_by_worker
-                    .entry(placement.media_worker)
+                    .entry(media_worker)
                     .and_modify(|count: &mut usize| *count = count.saturating_add(1))
                     .or_insert(1);
             }
