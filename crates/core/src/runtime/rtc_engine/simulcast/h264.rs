@@ -82,5 +82,7 @@ fn is_promoted_format(format: &MediaFormat) -> bool {
         }
     }
     packetization_mode == Some(CHROMIUM_PACKETIZATION_MODE)
-        && profile_level_id == Some(CHROMIUM_CONSTRAINED_BASELINE_PROFILE_LEVEL_ID)
+        && profile_level_id.is_some_and(|value| {
+            value.eq_ignore_ascii_case(CHROMIUM_CONSTRAINED_BASELINE_PROFILE_LEVEL_ID)
+        })
 }
