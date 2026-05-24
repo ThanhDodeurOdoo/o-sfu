@@ -440,6 +440,19 @@ async fn rtc_engine_workers_room_bootstrap_by_explicit_media_worker() {
 }
 
 #[tokio::test]
+async fn rtc_engine_rejects_noncanonical_media_worker_id() {
+    let adapter = test_media_transport(2, RtcPortRange::new(46_800, 46_803));
+    let session = test_session_key(13, 2, 1, UserId::Integer(4));
+
+    let offer = adapter.create_initial_session_offer(&session).await;
+
+    assert_eq!(
+        offer.err(),
+        Some(TransportAdapterError::TransportUnavailable)
+    );
+}
+
+#[tokio::test]
 async fn rtc_engine_allocates_disjoint_media_ids_across_workers() {
     let adapter = test_media_transport(2, RtcPortRange::new(46_700, 46_799));
     let first_source = test_session_key(50, 0, 1, UserId::Integer(1));

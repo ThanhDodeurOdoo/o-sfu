@@ -614,16 +614,11 @@ impl MediaTransport {
     }
 
     fn worker_for_media_worker_id(&self, media_worker_id: usize) -> Option<Arc<RtcWorker>> {
-        self.worker_index_for_media_worker_id(media_worker_id)
-            .and_then(|worker_index| self.worker_for_index(worker_index))
+        self.worker_for_index(media_worker_id)
     }
 
     fn worker_index_for_media_worker_id(&self, media_worker_id: usize) -> Option<usize> {
-        let worker_count = self.workers.len();
-        if worker_count == 0 {
-            return None;
-        }
-        Some(media_worker_id % worker_count)
+        self.workers.get(media_worker_id).map(|_| media_worker_id)
     }
 
     fn worker_for_index(&self, worker_index: usize) -> Option<Arc<RtcWorker>> {
