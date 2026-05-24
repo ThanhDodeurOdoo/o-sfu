@@ -255,3 +255,30 @@ fn protocol_core_terminal_close_enters_closed_with_cause() {
         ]
     );
 }
+
+#[test]
+fn protocol_core_protocol_error_close_is_terminal() {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.on_transport_ready();
+
+    let commands = core.on_ws_close(u16::from(WebSocketCloseCode::ProtocolError));
+
+    assert_eq!(core.state(), ConnectionState::Closed);
+    assert!(core.connect_context.is_none());
+    assert_eq!(
+        commands,
+        vec![
+            Command::CancelTimer {
+                id: RECOVERY_TIMER_ID,
+            },
+            Command::ClosePeerConnection,
+            Command::EmitStateChange {
+                state: ConnectionState::Closed,
+                cause: None,
+            },
+        ]
+    );
+    assert!(core.on_timer(RECOVERY_TIMER_ID).is_empty());
+}

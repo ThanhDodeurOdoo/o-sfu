@@ -137,6 +137,46 @@ fn protocol_core_closes_on_invalid_server_batch() {
 }
 
 #[test]
+fn protocol_core_rejects_malformed_batch_without_partial_state() -> serde_json::Result<()> {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+    let welcome = ServerEnvelope::Message(ServerMessage::Welcome(sample_welcome_payload()))
+        .into_envelope()?;
+    let mut batch = vec![welcome];
+    batch.push(Envelope {
+        tag: String::from("unknown-server-tag"),
+        payload: None,
+        request_id: None,
+        response_to: None,
+    });
+    let frame = serde_json::to_string(&batch)?;
+
+    let commands = core.on_ws_message(&frame);
+
+    assert_eq!(
+        commands,
+        vec![Command::CloseWebSocket {
+            code: u16::from(WebSocketCloseCode::ProtocolError),
+        }]
+    );
+    assert_eq!(core.state(), ConnectionState::Connecting);
+    assert_eq!(
+        core.features(),
+        &AvailableFeatures {
+            rtc: false,
+            transcription: false,
+            audio_recording: false,
+            video_recording: false,
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(core.recording_state()).unwrap_or_default(),
+        empty_recording_json()
+    );
+    Ok(())
+}
+
+#[test]
 fn protocol_core_ignores_unknown_or_stale_timers() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
