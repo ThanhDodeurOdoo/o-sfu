@@ -443,7 +443,10 @@ pub(super) fn on_ws_close_model(model: &mut LifecycleModel, close_code: u16) -> 
     }
 
     if let Some(
-        WebSocketCloseCode::AuthFailed | WebSocketCloseCode::Kicked | WebSocketCloseCode::RoomFull,
+        WebSocketCloseCode::ProtocolError
+        | WebSocketCloseCode::AuthFailed
+        | WebSocketCloseCode::Kicked
+        | WebSocketCloseCode::RoomFull,
     ) = WebSocketCloseCode::from_u16(close_code)
     {
         model.state = BundleConnectionState::Closed;

@@ -356,19 +356,23 @@ impl ProtocolCore {
 
     /// handle ws message
     ///
-    /// Malformed batches or envelopes are treated as protocol violations and
-    /// close the socket immediately so partially-applied server state cannot
-    /// survive atfer a framing error.
+    /// Malformed batches or envelopes are treated as protocol violations.
+    /// The whole batch is decoded before any envelope is applied so partially
+    /// applied server state cannot survive after a later decode error.
     pub fn on_ws_message(&mut self, frame: &str) -> CommandBatch {
         let Ok(batch) = serde_json::from_str::<EnvelopeBatch>(frame) else {
             return command_batch(protocol_error_commands());
         };
+        let Ok(envelopes) = batch
+            .into_iter()
+            .map(ServerEnvelope::decode)
+            .collect::<Result<Vec<_>, _>>()
+        else {
+            return command_batch(protocol_error_commands());
+        };
         let mut commands = Vec::new();
-        for envelope in batch {
-            let Ok(server_envelope) = ServerEnvelope::decode(envelope) else {
-                return command_batch(protocol_error_commands());
-            };
-            commands.extend(self.handle_server_envelope(server_envelope));
+        for envelope in envelopes {
+            commands.extend(self.handle_server_envelope(envelope));
         }
         command_batch(commands)
     }

@@ -11,7 +11,7 @@ pub(super) use crate::{
     },
     signaling::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest,
-        ClientResponse, EnvelopeBatch, PeerInfoPayload, PeerLeftPayload, PeerSnapshot,
+        ClientResponse, Envelope, EnvelopeBatch, PeerInfoPayload, PeerLeftPayload, PeerSnapshot,
         RecordingActionResult, RecordingOptions, RequestId, ServerBroadcastPayload, ServerEnvelope,
         ServerMessage, ServerRequest, ServerResponse, SessionDescriptionPayload, SourceDescriptor,
         SourceEncodingDescriptor, StreamIntentPayload, SubscribePayload, TrackBinding,
