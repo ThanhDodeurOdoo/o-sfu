@@ -106,11 +106,6 @@ impl Default for RoomConfig {
     }
 }
 
-pub(crate) struct RoomInitIdentity {
-    pub(crate) issuer: String,
-    pub(crate) key: String,
-}
-
 /// shared services injected into each room at construction time
 ///
 /// these handles are process-wide services rather than room policy
@@ -143,8 +138,10 @@ pub(crate) struct RoomInit {
     pub(crate) runtime_context: RoomRuntimeContext,
     /// validated room policy copied from runtime startup
     pub(crate) runtime_policy: RoomRuntimePolicy,
-    /// compatibility-facing identity captured at room creation
-    pub(crate) identity: RoomInitIdentity,
+    /// compatibility-facing issuer captured at room creation
+    pub(crate) issuer: String,
+    /// room key captured from the first create request
+    pub(crate) key: String,
     /// room-level compatibility configuration
     pub(crate) config: RoomConfig,
     /// process services needed by the room facade and observers

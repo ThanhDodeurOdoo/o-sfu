@@ -19,7 +19,7 @@ use crate::runtime::{
     UserId,
     media_transport::{TransportMediaId, TransportSessionKey},
     metrics::{RtcMetricsRecorder, RtpForwardDestinationKind, RtpMetricsRecorder, RuntimeMetrics},
-    packet_sink_registry::{PacketSink, RoomPacketSinkRegistry, into_packet_sink},
+    packet_sink_registry::{PacketSink, RoomPacketSinkRegistry},
 };
 
 pub const PACKET_SINK_FANOUT_TURNS: usize = 512;
@@ -85,7 +85,7 @@ impl PacketSinkFanoutBenchFixture {
         let sink = Arc::new(CountingPacketSink::new());
         packet_sinks.register_room(
             source_session.room_instance_id(),
-            into_packet_sink(Arc::<CountingPacketSink>::clone(&sink)),
+            Arc::<CountingPacketSink>::clone(&sink),
             RtpForwardDestinationKind::Recording,
         );
 

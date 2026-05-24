@@ -11,7 +11,7 @@ use crate::runtime::{
     media_transport::{TransportMediaId, TransportSessionKey},
     metrics::RtpForwardDestinationKind,
     packet_sink_registry::{PacketSinkLookup, PacketSinkRouteCache, RoomPacketSinkRegistry},
-    recording::{MediaPacketSink, into_packet_sink},
+    recording::MediaPacketSink,
     rtc_engine::test_support::{sample_forwarded_packet, test_transport_session_key},
     sync::lock_unpoisoned,
 };
@@ -71,11 +71,7 @@ fn register_recording_sink<T>(
 ) where
     T: MediaPacketSink + 'static,
 {
-    registry.register_room(
-        room_instance_id,
-        into_packet_sink(sink),
-        RtpForwardDestinationKind::Recording,
-    );
+    registry.register_room(room_instance_id, sink, RtpForwardDestinationKind::Recording);
 }
 
 #[test]

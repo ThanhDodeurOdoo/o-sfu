@@ -15,7 +15,7 @@ use super::{
     RoomUserStatsSnapshot, SourcePolicyEvent, UserOutboundSender,
     cleanup::UserCleanup,
     directory::{RoomDirectory, RoomDirectoryEntry, RoomLifecycleLease},
-    factory::{RoomCreationIntent, RoomFactory},
+    factory::RoomFactory,
     membership::JoinSessionIntent,
     placement::{JoinPlacement, RoomPlacementPlanner, WorkerLoadIndex},
 };
@@ -171,9 +171,7 @@ impl RoomManager {
         if let Some(room) = directory.get_by_issuer(issuer) {
             return room;
         }
-        let room = self
-            .factory
-            .create(RoomCreationIntent::new(issuer, key, config));
+        let room = self.factory.create(issuer, key, config);
         directory.insert(Arc::clone(&room), remote_address);
         drop(directory);
         self.metrics.add_active_rooms(1);

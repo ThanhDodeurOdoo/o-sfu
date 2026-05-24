@@ -11,4 +11,4 @@ mod user;
 
 pub(crate) use service::RecordingService;
 
-pub use crate::runtime::packet_sink_registry::{PacketSink as MediaPacketSink, into_packet_sink};
+pub use crate::runtime::packet_sink_registry::PacketSink as MediaPacketSink;

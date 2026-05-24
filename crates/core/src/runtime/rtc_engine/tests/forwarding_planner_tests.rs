@@ -17,7 +17,7 @@ use crate::runtime::{
     media_transport::{TransportMediaId, TransportSessionKey},
     metrics::{RtpForwardDestinationKind, RuntimeMetrics},
     packet_sink_registry::{
-        PacketSink as MediaPacketSink, PacketSinkLookup, RoomPacketSinkRegistry, into_packet_sink,
+        PacketSink as MediaPacketSink, PacketSinkLookup, RoomPacketSinkRegistry,
     },
     rtc_engine::{
         forwarded_packet::ForwardedPacket,
@@ -195,7 +195,7 @@ fn populate_forward_routes_keeps_recording_and_local_rtc_destinations_together()
     );
     packet_sink_registry.register_room(
         producer_session.room_instance_id(),
-        into_packet_sink(Arc::<CountingSink>::clone(&sink)),
+        Arc::<CountingSink>::clone(&sink),
         RtpForwardDestinationKind::Recording,
     );
     let forwards = plan_forwards(
@@ -274,7 +274,7 @@ fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc
     );
     packet_sink_registry.register_room(
         producer_session.room_instance_id(),
-        into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
+        Arc::<CountingSink>::clone(&recording_sink),
         RtpForwardDestinationKind::Recording,
     );
     state.add_relay_target(
@@ -340,7 +340,7 @@ fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_r
     );
     packet_sink_registry.register_room(
         producer_session.room_instance_id(),
-        into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
+        Arc::<CountingSink>::clone(&recording_sink),
         RtpForwardDestinationKind::Recording,
     );
     state.add_relay_target(
@@ -670,7 +670,7 @@ fn populate_forward_routes_gates_only_the_selected_source_media() {
     );
     packet_sink_registry.register_room(
         gated_producer_session.room_instance_id(),
-        into_packet_sink(Arc::<CountingSink>::clone(&recording_sink)),
+        Arc::<CountingSink>::clone(&recording_sink),
         RtpForwardDestinationKind::Recording,
     );
     state.add_relay_target(

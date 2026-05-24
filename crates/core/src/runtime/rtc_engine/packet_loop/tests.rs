@@ -53,7 +53,7 @@ use crate::{
         },
         packet_sink_registry::{
             PacketSink as MediaPacketSink, PacketSinkLookup, RegisteredPacketSink,
-            RoomPacketSinkRegistry, into_packet_sink,
+            RoomPacketSinkRegistry,
         },
         rtc_engine::{
             bitrate::BitrateRegistry,
@@ -524,7 +524,7 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
 
     packet_sink_registry.register_room(
         producer_session.room_instance_id(),
-        into_packet_sink(Arc::<CountingSink>::clone(&sink)),
+        Arc::<CountingSink>::clone(&sink),
         RtpForwardDestinationKind::Recording,
     );
     buffers.pending_packets.push(sample_forwarded_packet(
@@ -572,7 +572,7 @@ fn flush_forward_routes_writes_hot_rtp_metrics_only_to_the_worker_recorder() {
             0,
             source_transport_media_id,
             RegisteredPacketSink::new(
-                into_packet_sink(Arc::<CountingSink>::clone(&sink)),
+                Arc::<CountingSink>::clone(&sink),
                 RtpForwardDestinationKind::Recording,
             ),
         ),
@@ -660,7 +660,7 @@ fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
             0,
             source_transport_media_id,
             RegisteredPacketSink::new(
-                into_packet_sink(Arc::<CountingSink>::clone(&sink)),
+                Arc::<CountingSink>::clone(&sink),
                 RtpForwardDestinationKind::Recording,
             ),
         ),
@@ -732,7 +732,7 @@ fn flush_forward_routes_records_packet_sink_source_key_for_local_packet() {
             0,
             source_transport_media_id,
             RegisteredPacketSink::new(
-                into_packet_sink(Arc::<CountingSink>::clone(&sink)),
+                Arc::<CountingSink>::clone(&sink),
                 RtpForwardDestinationKind::Recording,
             ),
         ),
@@ -781,7 +781,7 @@ fn flush_forward_routes_records_closed_relays_and_keeps_later_destinations() {
             0,
             source_transport_media_id,
             RegisteredPacketSink::new(
-                into_packet_sink(Arc::<CountingSink>::clone(&sink)),
+                Arc::<CountingSink>::clone(&sink),
                 RtpForwardDestinationKind::Recording,
             ),
         ),

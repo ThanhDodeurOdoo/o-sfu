@@ -20,44 +20,12 @@ use o_sfu_router::RouterId;
 
 use super::{
     LocalRouterRuntimeContext, Room, RoomConfig, RoomRuntimeContext, RoomRuntimePolicy,
-    init::{RoomInit, RoomInitIdentity, RoomServices},
+    init::{RoomInit, RoomServices},
 };
 use crate::runtime::{
     RoomInstanceId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
     packet_sink_registry::RoomPacketSinkRegistry, sync::lock_unpoisoned,
 };
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RoomCreationIntent {
-    /// Compatibility-facing room identity used by manager lookup and the
-    /// room definition.
-    issuer: String,
-    /// Room key captured from the first create request.
-    ///
-    /// Later calls for the same issuer reuse the already-created room, so
-    /// this value is immutable for the room lifetime.
-    key: String,
-    /// Per-room compatibility knobs attached to the created room.
-    ///
-    /// This is copied into the room definition once. Repeated create calls
-    /// for the same issuer do not replace it.
-    config: RoomConfig,
-}
-
-impl RoomCreationIntent {
-    /// Captures one room creation request as owned runtime input.
-    ///
-    /// This is cold-path only. Cloning the small create parameters keeps the
-    /// factory independent from HTTP or websocket request lifetimes.
-    #[must_use]
-    pub(crate) fn new(issuer: &str, key: &str, config: &RoomConfig) -> Self {
-        Self {
-            issuer: issuer.to_owned(),
-            key: key.to_owned(),
-            config: config.clone(),
-        }
-    }
-}
 
 /// Monotonic placement counters assigned by the current process.
 ///
@@ -117,22 +85,20 @@ impl RoomFactory {
         }
     }
 
-    /// Creates an unpublished room from a manager intent.
+    /// Creates an unpublished room from one manager lookup miss.
     ///
     /// The returned `Arc` is not registered in the process directory, does not
     /// increment active-room metrics and does not emit creation diagnostics.
     /// `RoomManager` performs those steps after the directory write, which
     /// keeps publication and observability in one place.
     #[must_use]
-    pub(crate) fn create(&self, intent: RoomCreationIntent) -> Arc<Room> {
+    pub(crate) fn create(&self, issuer: &str, key: &str, config: &RoomConfig) -> Arc<Room> {
         Arc::new(Room::new(RoomInit {
             runtime_context: self.allocate_runtime_context(),
             runtime_policy: self.runtime_policy.clone(),
-            identity: RoomInitIdentity {
-                issuer: intent.issuer,
-                key: intent.key,
-            },
-            config: intent.config,
+            issuer: issuer.to_owned(),
+            key: key.to_owned(),
+            config: config.clone(),
             services: self.services.clone(),
         }))
     }

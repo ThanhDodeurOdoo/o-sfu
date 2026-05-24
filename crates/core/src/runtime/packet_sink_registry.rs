@@ -27,13 +27,6 @@ pub trait PacketSink: Send + Sync {
     );
 }
 
-pub fn into_packet_sink<T>(sink: Arc<T>) -> Arc<dyn PacketSink>
-where
-    T: PacketSink + 'static,
-{
-    sink
-}
-
 #[derive(Clone)]
 pub struct RegisteredPacketSink {
     sink: Arc<dyn PacketSink>,

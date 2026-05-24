@@ -250,17 +250,13 @@ impl Room {
         let RoomInit {
             runtime_context,
             runtime_policy,
-            identity,
+            issuer,
+            key,
             config,
             services,
         } = init;
-        let definition = RoomDefinition::new(
-            &runtime_context,
-            &runtime_policy,
-            identity.issuer,
-            identity.key,
-            config,
-        );
+        let definition =
+            RoomDefinition::new(&runtime_context, &runtime_policy, issuer, key, config);
         let recording_service = Arc::new(RecordingService::new(
             definition.instance_id(),
             services.packet_sink_registry,
