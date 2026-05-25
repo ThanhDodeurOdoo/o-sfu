@@ -7,6 +7,69 @@ type ProtocolPeerSetup = (
     ProtocolHarnessPeer,
 );
 
+type ProtocolSinglePeerSetup = (TestServer, Arc<Room>, ProtocolHarnessPeer);
+
+pub(crate) async fn connect_until_welcome(
+    server: &TestServer,
+    room: &Arc<Room>,
+    user_id: UserId,
+) -> TestResult<ProtocolHarnessPeer> {
+    let token = require_some(
+        signed_connect_claims(TEST_ROOM_KEY, room.uuid(), user_id),
+        "protocol peer token should sign",
+    )?;
+    let mut peer = ProtocolHarnessPeer::default();
+    require_some(
+        peer.connect(&server.url(), &token, None).await,
+        "protocol core should connect to test server",
+    )?;
+    require_some(
+        peer.read_server_frame().await,
+        "protocol peer should consume the welcome frame",
+    )?;
+    Ok(peer)
+}
+
+pub(crate) async fn setup_protocol_peer(
+    room_name: &str,
+    user_id: UserId,
+) -> TestResult<ProtocolSinglePeerSetup> {
+    let server = TestServerBuilder::new().spawn_required().await?;
+    let room = create_room(&server, room_name, CreateRoomQuery::default()).await;
+    let peer = connect_protocol_peer(&server, &room, user_id).await?;
+    Ok((server, room, peer))
+}
+
+pub(crate) async fn setup_protocol_peers(
+    room_name: &str,
+    alice_user_id: UserId,
+    bob_user_id: UserId,
+) -> TestResult<ProtocolPeerSetup> {
+    let server = TestServerBuilder::new().spawn_required().await?;
+    Box::pin(setup_protocol_peers_with(
+        server,
+        room_name,
+        alice_user_id,
+        bob_user_id,
+        ProtocolHarnessPeer::default(),
+        ProtocolHarnessPeer::default(),
+    ))
+    .await
+}
+
+pub(crate) async fn connect_protocol_peer(
+    server: &TestServer,
+    room: &Arc<Room>,
+    user_id: UserId,
+) -> TestResult<ProtocolHarnessPeer> {
+    let mut peer = connect_until_welcome(server, room, user_id).await?;
+    require_some(
+        peer.read_server_frame().await,
+        "protocol peer should consume the initial offer",
+    )?;
+    Ok(peer)
+}
+
 pub(crate) async fn publish_camera_and_bootstrap_subscriber(
     publisher: &mut ProtocolHarnessPeer,
     subscriber: &mut ProtocolHarnessPeer,
@@ -192,6 +255,7 @@ pub(crate) async fn setup_real_rtc_protocol_peers(
         bob,
     ))
     .await
+    .ok()
 }
 
 pub(crate) async fn setup_protocol_recovery_peers(
@@ -208,6 +272,7 @@ pub(crate) async fn setup_protocol_recovery_peers(
         ProtocolHarnessPeer::default(),
     ))
     .await
+    .ok()
 }
 
 async fn setup_protocol_peers_with(
@@ -217,18 +282,33 @@ async fn setup_protocol_peers_with(
     bob_user_id: UserId,
     mut alice: ProtocolHarnessPeer,
     mut bob: ProtocolHarnessPeer,
-) -> Option<ProtocolPeerSetup> {
+) -> TestResult<ProtocolPeerSetup> {
     let room = create_room(&server, room_name, CreateRoomQuery::default()).await;
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), alice_user_id)?;
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), bob_user_id.clone())?;
+    let alice_token = require_some(
+        signed_connect_claims(TEST_ROOM_KEY, room.uuid(), alice_user_id),
+        "alice protocol peer token should sign",
+    )?;
+    let bob_token = require_some(
+        signed_connect_claims(TEST_ROOM_KEY, room.uuid(), bob_user_id.clone()),
+        "bob protocol peer token should sign",
+    )?;
 
-    alice
-        .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
-        .await?;
-    bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
-        .await?;
-    consume_peer_joined_update(&mut alice, bob_user_id.clone()).await?;
-    Some((server, room, alice, bob))
+    require_some(
+        alice
+            .connect_and_finish_handshake(&server.url(), &alice_token, None)
+            .await,
+        "alice protocol peer should finish handshake",
+    )?;
+    require_some(
+        bob.connect_and_finish_handshake(&server.url(), &bob_token, None)
+            .await,
+        "bob protocol peer should finish handshake",
+    )?;
+    require_some(
+        consume_peer_joined_update(&mut alice, bob_user_id).await,
+        "alice should consume bob peer-joined update",
+    )?;
+    Ok((server, room, alice, bob))
 }
 
 pub(crate) async fn bob_update_info_and_deliver(
