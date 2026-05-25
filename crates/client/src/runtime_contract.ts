@@ -26,6 +26,17 @@ import {
 
 const MIN_TEMPORAL_LAYER_ID = 0;
 const MAX_TEMPORAL_LAYER_ID = 7;
+const FEATURE_BOOLEAN_FIELDS = ["rtc", "transcription", "audioRecording", "videoRecording"];
+const RECORDING_BOOLEAN_FIELDS = ["recording", "audio", "video", "transcription"];
+const SESSION_INFO_BOOLEAN_FIELDS = [
+    "isTalking",
+    "isFeatured",
+    "isCameraOn",
+    "isScreenSharingOn",
+    "isSelfMuted",
+    "isDeaf",
+    "isRaisingHand"
+];
 export { NEGOTIATION_KIND, PENDING_REQUEST_KIND };
 
 const NEGOTIATION_KINDS = Object.values(NEGOTIATION_KIND);
@@ -506,31 +517,19 @@ function validateOptionalPolicyRole(value: unknown, context: string): void {
 
 function validateAvailableFeatures(value: unknown, context: string): AvailableFeatures {
     const features = asRecord(value, context);
-    requireBoolean(features.rtc, `${context}.rtc`);
-    requireBoolean(features.transcription, `${context}.transcription`);
-    requireBoolean(features.audioRecording, `${context}.audioRecording`);
-    requireBoolean(features.videoRecording, `${context}.videoRecording`);
+    requireBooleanFields(features, FEATURE_BOOLEAN_FIELDS, context);
     return value as AvailableFeatures;
 }
 
 function validateRecordingState(value: unknown, context: string): RecordingState {
     const state = asRecord(value, context);
-    requireOptionalBoolean(state.recording, `${context}.recording`);
-    requireOptionalBoolean(state.audio, `${context}.audio`);
-    requireOptionalBoolean(state.video, `${context}.video`);
-    requireOptionalBoolean(state.transcription, `${context}.transcription`);
+    requireBooleanFields(state, RECORDING_BOOLEAN_FIELDS, context, true);
     return value as RecordingState;
 }
 
 function validateSessionInfo(value: unknown, context: string): SessionInfo {
     const info = asRecord(value, context);
-    requireOptionalBoolean(info.isTalking, `${context}.isTalking`);
-    requireOptionalBoolean(info.isFeatured, `${context}.isFeatured`);
-    requireOptionalBoolean(info.isCameraOn, `${context}.isCameraOn`);
-    requireOptionalBoolean(info.isScreenSharingOn, `${context}.isScreenSharingOn`);
-    requireOptionalBoolean(info.isSelfMuted, `${context}.isSelfMuted`);
-    requireOptionalBoolean(info.isDeaf, `${context}.isDeaf`);
-    requireOptionalBoolean(info.isRaisingHand, `${context}.isRaisingHand`);
+    requireBooleanFields(info, SESSION_INFO_BOOLEAN_FIELDS, context, true);
     return value as SessionInfo;
 }
 
@@ -584,16 +583,24 @@ function requireOptionalString(value: unknown, context: string): void {
     }
 }
 
-function requireBoolean(value: unknown, context: string): boolean {
+function requireBoolean(value: unknown, context: string, optional = false): boolean {
     if (typeof value !== "boolean") {
-        throw new Error(`${context} must be a boolean`);
+        throw new Error(`${context} must be a boolean${optional ? " when provided" : ""}`);
     }
     return value;
 }
 
-function requireOptionalBoolean(value: unknown, context: string): void {
-    if (value !== undefined && typeof value !== "boolean") {
-        throw new Error(`${context} must be a boolean when provided`);
+function requireBooleanFields(
+    record: Record<string, unknown>,
+    fields: readonly string[],
+    context: string,
+    optional = false
+): void {
+    for (const field of fields) {
+        const value = record[field];
+        if (!optional || value !== undefined) {
+            requireBoolean(value, `${context}.${field}`, optional);
+        }
     }
 }
 
