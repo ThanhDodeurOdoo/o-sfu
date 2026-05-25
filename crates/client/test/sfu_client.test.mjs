@@ -68,13 +68,30 @@ test("default runtime creates the protocol core from generated wasm bindings", (
     ]);
 });
 
-test("real protocol core replays sticky intents after recovery welcome", async () => {
+function createRecoveryHarness() {
     const timers = createManualTimers();
-    const { client, sockets, connect, emitMessage, open } = createSfuClientHarness({
-        clearTimer: (handle) => timers.clearTimer(handle),
-        createProtocolCore: () => createProtocolCore(),
-        setTimer: (callback, ms) => timers.setTimer(callback, ms)
-    });
+    return {
+        ...createSfuClientHarness({
+            clearTimer: timers.clearTimer,
+            createProtocolCore: () => createProtocolCore(),
+            setTimer: timers.setTimer
+        }),
+        timers
+    };
+}
+
+async function finishRecovery({ emitMessage, open, sockets, timers }) {
+    timers.fireByDelay(1000);
+    await tick();
+
+    assert.equal(sockets.length, 2);
+    await open(1);
+    await emitMessage(buildWelcomeFrame(), 1);
+}
+
+test("real protocol core replays sticky intents after recovery welcome", async () => {
+    const harness = createRecoveryHarness();
+    const { client, sockets, connect, emitMessage, open } = harness;
 
     const cameraTrack = createCameraTrack("camera-track-1");
 
@@ -94,12 +111,7 @@ test("real protocol core replays sticky intents after recovery welcome", async (
 
     sockets[0].close(1011);
     await tick();
-    timers.fireByDelay(1000);
-    await tick();
-
-    assert.equal(sockets.length, 2);
-    await open(1);
-    await emitMessage(buildWelcomeFrame(), 1);
+    await finishRecovery(harness);
 
     assert.deepEqual(decodeSentFrame(sockets[1], 0), [
         {
@@ -136,12 +148,8 @@ test("real protocol core replays sticky intents after recovery welcome", async (
 });
 
 test("real protocol core replays the latest sticky intents changed while recovering", async () => {
-    const timers = createManualTimers();
-    const { client, sockets, connect, emitMessage, open } = createSfuClientHarness({
-        clearTimer: (handle) => timers.clearTimer(handle),
-        createProtocolCore: () => createProtocolCore(),
-        setTimer: (callback, ms) => timers.setTimer(callback, ms)
-    });
+    const harness = createRecoveryHarness();
+    const { client, sockets, connect, emitMessage, open } = harness;
 
     await connect();
 
@@ -160,12 +168,7 @@ test("real protocol core replays the latest sticky intents changed while recover
     client.updateInfo({ isSelfMuted: true });
     await tick();
 
-    timers.fireByDelay(1000);
-    await tick();
-
-    assert.equal(sockets.length, 2);
-    await open(1);
-    await emitMessage(buildWelcomeFrame(), 1);
+    await finishRecovery(harness);
 
     assert.deepEqual(decodeSentFrame(sockets[1], 1), [
         {
@@ -826,61 +829,75 @@ test("renegotiation binds a newly published local track before answering", async
     });
 });
 
-test("renegotiation configures RID simulcast before answering supported video publishes", async () => {
-    const { client, core, emitMessage, peerConnections, logs, connectWithWelcome } =
-        createSfuClientHarness();
+const EXPECTED_RID_ENCODINGS = [
+    {
+        active: true,
+        maxBitrate: 150000,
+        rid: "lo",
+        scaleResolutionDownBy: 4
+    },
+    {
+        active: true,
+        maxBitrate: 900000,
+        rid: "hi",
+        scaleResolutionDownBy: 1
+    }
+];
 
-    const track = createCameraTrack("camera-track-simulcast");
+async function renegotiateCamera(frame, trackId, harnessOptions = {}) {
+    const harness = createSfuClientHarness(harnessOptions);
+    const track = createCameraTrack(trackId);
 
-    await connectWithWelcome();
-    await emitMessage("offer");
+    await harness.connectWithWelcome();
+    await harness.emitMessage("offer");
 
-    client.publish("camera", track);
+    harness.client.publish("camera", track);
     await tick();
-    await emitMessage("renegotiate-with-pending-simulcast-camera");
-
-    const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "2");
+    await harness.emitMessage(frame);
+    const transceiver = harness.peerConnections[0].transceivers.find(
+        (candidate) => candidate.mid === "2"
+    );
     assert.ok(transceiver);
-    assert.equal(transceiver.sender.track, track);
-    assert.deepEqual(transceiver.sender.setParametersCalls, [
-        {
-            encodings: [
-                {
-                    active: true,
-                    maxBitrate: 150000,
-                    rid: "lo",
-                    scaleResolutionDownBy: 4
-                },
-                {
-                    active: true,
-                    maxBitrate: 900000,
-                    rid: "hi",
-                    scaleResolutionDownBy: 1
-                }
-            ]
-        }
-    ]);
-    assert.deepEqual(peerConnections[0].answerSnapshots.at(-1)[2].senderParameters, {
-        encodings: [
-            {
-                active: true,
-                maxBitrate: 150000,
-                rid: "lo",
-                scaleResolutionDownBy: 4
-            },
-            {
-                active: true,
-                maxBitrate: 900000,
-                rid: "hi",
-                scaleResolutionDownBy: 1
-            }
-        ]
+
+    return {
+        ...harness,
+        track,
+        transceiver
+    };
+}
+
+function assertSenderEncodings(peerConnection, transceiver, expected) {
+    assert.deepEqual(
+        transceiver.sender.setParametersCalls,
+        expected.length > 0 ? [{ encodings: expected }] : []
+    );
+
+    const snapshot = peerConnection.answerSnapshots
+        .at(-1)
+        .find((candidate) => candidate.mid === transceiver.mid);
+    assert.ok(snapshot);
+    assert.deepEqual(snapshot.senderParameters, {
+        encodings: expected
     });
+}
+
+function assertSubmittedRenegotiation(core, requestId) {
     assert.deepEqual(core.submittedAnswers.at(-1), {
         negotiationKind: "renegotiate",
-        requestId: "12",
+        requestId,
         sdp: "answer-sdp"
     });
+}
+
+test("renegotiation configures RID simulcast before answering supported video publishes", async () => {
+    const { core, logs, peerConnections, track, transceiver } = await renegotiateCamera(
+        "renegotiate-with-pending-simulcast-camera",
+        "camera-track-simulcast"
+    );
+
+    assert.equal(transceiver.sender.track, track);
+    assertSenderEncodings(peerConnections[0], transceiver, EXPECTED_RID_ENCODINGS);
+    assertSubmittedRenegotiation(core, "12");
     assert.ok(
         logs.some(
             (entry) =>
@@ -892,102 +909,39 @@ test("renegotiation configures RID simulcast before answering supported video pu
 });
 
 test("renegotiation configures RID simulcast from server-owned upload slots", async () => {
-    const { client, core, emitMessage, peerConnections, connectWithWelcome } =
-        createSfuClientHarness();
+    const { core, peerConnections, track, transceiver } = await renegotiateCamera(
+        "renegotiate-with-pending-h264-simulcast-camera",
+        "camera-track-single"
+    );
 
-    const track = createCameraTrack("camera-track-single");
-
-    await connectWithWelcome();
-    await emitMessage("offer");
-
-    client.publish("camera", track);
-    await tick();
-    await emitMessage("renegotiate-with-pending-h264-simulcast-camera");
-
-    const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "2");
-    assert.ok(transceiver);
     assert.equal(transceiver.sender.track, track);
-    assert.deepEqual(transceiver.sender.setParametersCalls, [
-        {
-            encodings: [
-                {
-                    active: true,
-                    maxBitrate: 150000,
-                    rid: "lo",
-                    scaleResolutionDownBy: 4
-                },
-                {
-                    active: true,
-                    maxBitrate: 900000,
-                    rid: "hi",
-                    scaleResolutionDownBy: 1
-                }
-            ]
-        }
-    ]);
-    assert.deepEqual(peerConnections[0].answerSnapshots.at(-1)[2].senderParameters, {
-        encodings: [
-            {
-                active: true,
-                maxBitrate: 150000,
-                rid: "lo",
-                scaleResolutionDownBy: 4
-            },
-            {
-                active: true,
-                maxBitrate: 900000,
-                rid: "hi",
-                scaleResolutionDownBy: 1
-            }
-        ]
-    });
-    assert.deepEqual(core.submittedAnswers.at(-1), {
-        negotiationKind: "renegotiate",
-        requestId: "13",
-        sdp: "answer-sdp"
-    });
+    assertSenderEncodings(peerConnections[0], transceiver, EXPECTED_RID_ENCODINGS);
+    assertSubmittedRenegotiation(core, "13");
 });
 
 test("renegotiation falls back to single encoding when the server ladder is invalid", async () => {
-    const { client, emitMessage, peerConnections, connectWithWelcome } = createSfuClientHarness();
+    const { peerConnections, transceiver } = await renegotiateCamera(
+        "renegotiate-with-invalid-simulcast-camera",
+        "camera-track-invalid-profile"
+    );
 
-    await connectWithWelcome();
-    await emitMessage("offer");
-
-    client.publish("camera", createCameraTrack("camera-track-invalid-profile"));
-    await tick();
-    await emitMessage("renegotiate-with-invalid-simulcast-camera");
-
-    const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "2");
-    assert.ok(transceiver);
-    assert.deepEqual(transceiver.sender.setParametersCalls, []);
-    assert.deepEqual(peerConnections[0].answerSnapshots.at(-1)[2].senderParameters, {
-        encodings: []
-    });
+    assertSenderEncodings(peerConnections[0], transceiver, []);
 });
 
 test("renegotiation falls back to single encoding when sender parameters are rejected", async () => {
-    const { client, emitMessage, peerConnections, connectWithWelcome } = createSfuClientHarness({
-        peerConnectionOptions: {
-            senderOptionsByMid: {
-                2: { rejectSetParameters: true }
+    const { peerConnections, transceiver } = await renegotiateCamera(
+        "renegotiate-with-pending-simulcast-camera",
+        "camera-track-rejected-profile",
+        {
+            peerConnectionOptions: {
+                senderOptionsByMid: {
+                    2: { rejectSetParameters: true }
+                }
             }
         }
-    });
+    );
 
-    await connectWithWelcome();
-    await emitMessage("offer");
-
-    client.publish("camera", createCameraTrack("camera-track-rejected-profile"));
-    await tick();
-    await emitMessage("renegotiate-with-pending-simulcast-camera");
-
-    const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "2");
-    assert.ok(transceiver);
-    assert.deepEqual(transceiver.sender.setParametersCalls, []);
-    assert.deepEqual(peerConnections[0].answerSnapshots.at(-1)[2].senderParameters, {
-        encodings: []
-    });
+    assertSenderEncodings(peerConnections[0], transceiver, []);
 });
 
 test("initial offer binds a pending local track before answering", async () => {

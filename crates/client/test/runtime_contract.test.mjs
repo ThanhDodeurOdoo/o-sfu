@@ -1,13 +1,30 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { CLIENT_UPDATE } from "../dist/index.js";
 import {
     NEGOTIATION_KIND,
     PENDING_REQUEST_KIND,
-    configureProtocolCoreProvider,
-    createProtocolCore,
     wrapProtocolCoreBindings
 } from "../dist/runtime_contract.js";
+
+const VALID_FEATURES = {
+    rtc: true,
+    transcription: false,
+    audioRecording: false,
+    videoRecording: false
+};
+const REQUIRED_FEATURE_FIELDS = ["rtc", "transcription", "audioRecording", "videoRecording"];
+const OPTIONAL_RECORDING_FIELDS = ["recording", "audio", "video", "transcription"];
+const OPTIONAL_SESSION_INFO_FIELDS = [
+    "isTalking",
+    "isFeatured",
+    "isCameraOn",
+    "isScreenSharingOn",
+    "isSelfMuted",
+    "isDeaf",
+    "isRaisingHand"
+];
 
 function assertThrowsMessage(callback, expectedMessage) {
     assert.throws(callback, (error) => {
@@ -19,12 +36,7 @@ function assertThrowsMessage(callback, expectedMessage) {
 function validCore(overrides = {}) {
     return {
         state: "disconnected",
-        features: {
-            rtc: true,
-            transcription: false,
-            audioRecording: false,
-            videoRecording: false
-        },
+        features: { ...VALID_FEATURES },
         recordingState: {
             recording: false
         },
@@ -94,6 +106,11 @@ function validCore(overrides = {}) {
         },
         ...overrides
     };
+}
+
+function assertWrappedCoreThrows(overrides, read, expectedMessage) {
+    const core = wrapProtocolCoreBindings(validCore(overrides));
+    assertThrowsMessage(() => read(core), expectedMessage);
 }
 
 function validSourceDescriptor(encodingOverrides = {}) {
@@ -326,24 +343,38 @@ test("wrapped protocol core rejects NaN and infinite numeric session IDs", () =>
     );
 });
 
-test("createProtocolCore validates provider output at runtime", () => {
-    configureProtocolCoreProvider(() =>
-        validCore({
-            get features() {
-                return {
-                    rtc: true
-                };
-            }
-        })
-    );
-
-    try {
-        const core = createProtocolCore();
-        assertThrowsMessage(
-            () => core.features,
-            "protocol core features.transcription must be a boolean"
+test("wrapped protocol core validates boolean fields", () => {
+    for (const field of REQUIRED_FEATURE_FIELDS) {
+        assertWrappedCoreThrows(
+            { features: { ...VALID_FEATURES, [field]: "yes" } },
+            (core) => core.features,
+            `protocol core features.${field} must be a boolean`
         );
-    } finally {
-        configureProtocolCoreProvider(() => validCore());
+    }
+
+    for (const field of OPTIONAL_RECORDING_FIELDS) {
+        assertWrappedCoreThrows(
+            { recordingState: { [field]: "yes" } },
+            (core) => core.recordingState,
+            `protocol core recordingState.${field} must be a boolean when provided`
+        );
+    }
+
+    for (const field of OPTIONAL_SESSION_INFO_FIELDS) {
+        assertWrappedCoreThrows(
+            {
+                connect: () => [
+                    {
+                        kind: "emitUpdate",
+                        update: {
+                            name: CLIENT_UPDATE.INFO_CHANGE,
+                            payload: { 7: { [field]: "yes" } }
+                        }
+                    }
+                ]
+            },
+            (core) => core.connect("ws://example.test", "jwt", null),
+            `protocol core connect() command #0.update.payload.7.${field} must be a boolean when provided`
+        );
     }
 });
