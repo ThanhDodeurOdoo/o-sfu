@@ -18,13 +18,9 @@ use crate::{UnpublishOutcome, runtime::UserId};
 
 mod batch;
 mod source_policy;
-mod transport;
 pub(super) use batch::{MediaCountDelta, RoomEffectBatch, RoomEffectContext, TransportUserCleanup};
 use o_sfu_telemetry::schema::event as telemetry_event;
 pub(super) use source_policy::SourcePolicyEffectPlan;
-pub(in crate::runtime::room) use transport::{
-    ConsumerCreationContinuation, PublishReservationContinuation, RoomTransportEffect,
-};
 
 use super::{
     Room, RoomMediaCounts, SourcePolicyEvent,
@@ -43,7 +39,7 @@ use crate::runtime::{
 };
 
 #[derive(Debug)]
-struct SubscriptionTransportOp {
+struct SubscriptionRouteActivityOp {
     route: ConsumerRouteTransportRef,
     stream_id: UserStreamId,
     media_kind: o_sfu_router::MediaKind,
@@ -55,7 +51,6 @@ struct SubscriptionTransportOp {
 pub(super) struct SubscriptionEffectContext<'a> {
     pub(super) user_id: &'a UserId,
     pub(super) connection_id: ConnectionId,
-    pub(super) target_user_id: &'a UserId,
     pub(super) media_counts_before: RoomMediaCounts,
     pub(super) media_counts_after: RoomMediaCounts,
     pub(super) origin: ConsumerBootstrapOrigin,
@@ -65,7 +60,7 @@ pub(super) struct SubscriptionEffectContext<'a> {
 pub(super) struct SubscriptionEffectPlan {
     media_count_delta: Option<MediaCountDelta>,
     relay_ops: Vec<RelayRouteEffect>,
-    transport_ops: Vec<SubscriptionTransportOp>,
+    route_activity_ops: Vec<SubscriptionRouteActivityOp>,
     bootstrap_ops: Vec<ConsumerBootstrapOp>,
 }
 
@@ -86,10 +81,9 @@ impl SubscriptionEffectPlan {
         room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
-        _target_user_id: &UserId,
         route_updates: Vec<ConsumerRouteUpdate>,
     ) -> Self {
-        let transport_ops = route_updates
+        let route_activity_ops = route_updates
             .into_iter()
             .map(|route_update| {
                 let route = route_update.route().clone();
@@ -108,7 +102,7 @@ impl SubscriptionEffectPlan {
                 )
                 .insert_field("source_transport_media_id", route.source_media().as_u64())
                 .insert_field("stream_id", route_update.stream_id().to_string());
-                SubscriptionTransportOp {
+                SubscriptionRouteActivityOp {
                     route,
                     stream_id: route_update.stream_id().clone(),
                     media_kind: route_update.media_kind(),
@@ -120,7 +114,7 @@ impl SubscriptionEffectPlan {
         Self {
             media_count_delta: None,
             relay_ops: Vec::new(),
-            transport_ops,
+            route_activity_ops,
             bootstrap_ops: Vec::new(),
         }
     }
@@ -131,13 +125,8 @@ impl SubscriptionEffectPlan {
         planned_change: PlannedSubscriptionChange,
     ) -> Self {
         let (route_updates, planned_bootstraps, relay_effects) = planned_change.into_parts();
-        let mut effect_plan = Self::from_route_updates(
-            room,
-            context.user_id,
-            context.connection_id,
-            context.target_user_id,
-            route_updates,
-        );
+        let mut effect_plan =
+            Self::from_route_updates(room, context.user_id, context.connection_id, route_updates);
         effect_plan.media_count_delta = Some(MediaCountDelta::new(
             context.media_counts_before,
             context.media_counts_after,
@@ -162,7 +151,7 @@ impl SubscriptionEffectPlan {
                 media_counts_after,
             )),
             relay_ops: Vec::new(),
-            transport_ops: Vec::new(),
+            route_activity_ops: Vec::new(),
             bootstrap_ops: planned_bootstraps
                 .into_iter()
                 .map(|planned_bootstrap| ConsumerBootstrapOp::new(planned_bootstrap, origin))
@@ -182,42 +171,40 @@ impl SubscriptionEffectPlan {
             .with_relay_effects(self.relay_ops)
             .execute(room, RoomEffectContext::runtime(media_port))
             .await;
-        for transport_op in self.transport_ops {
-            let route = &transport_op.route;
+        for route_activity in self.route_activity_ops {
+            let route = &route_activity.route;
             let transport_route = room.transport_consumer_route(route);
             // Transport activity is best-effort here because the room intent has
             // already been committed, so the failure path is to surface it to
             // operators instead of trying to rebuild the previous room state.
-            if (RoomTransportEffect::ConsumerActivity {
-                route: transport_route.clone(),
-                activity: ConsumerActivity::from_active(transport_op.active),
-            })
-            .execute_unit(media_port)
-            .await
-            .is_err()
-            {
-                warn!(
-                    ?route,
-                    stream_id = %transport_op.stream_id,
-                    active = transport_op.active,
-                    "media transport failed to update consumer route activity"
-                );
-            } else if transport_op.active
-                && transport_op.media_kind == o_sfu_router::MediaKind::Video
-                && (RoomTransportEffect::KeyframeRequest {
-                    route: transport_route,
-                })
-                .execute_unit(media_port)
+            if media_port
+                .set_consumer_active(
+                    &transport_route,
+                    ConsumerActivity::from_active(route_activity.active),
+                )
                 .await
                 .is_err()
             {
                 warn!(
                     ?route,
-                    stream_id = %transport_op.stream_id,
+                    stream_id = %route_activity.stream_id,
+                    active = route_activity.active,
+                    "media transport failed to update consumer route activity"
+                );
+            } else if route_activity.active
+                && route_activity.media_kind == o_sfu_router::MediaKind::Video
+                && media_port
+                    .request_consumer_keyframe(&transport_route)
+                    .await
+                    .is_err()
+            {
+                warn!(
+                    ?route,
+                    stream_id = %route_activity.stream_id,
                     "media transport failed to request a consumer keyframe refresh"
                 );
             }
-            room.diagnostics.record(transport_op.diagnostics);
+            room.diagnostics.record(route_activity.diagnostics);
         }
         for bootstrap_op in self.bootstrap_ops {
             bootstrap_op.execute(room, media_port).await;
@@ -308,23 +295,27 @@ impl ConsumerBootstrapOp {
         room: &Room,
         media_port: &MediaTransport,
     ) -> Option<(TransportMediaId, Option<String>)> {
-        let effect = RoomTransportEffect::ConsumerCreation {
-            continuation: ConsumerCreationContinuation {
-                user: target.consumer_user_id().clone(),
-                connection: target.consumer_connection_id(),
-                stream: target.stream_id().clone(),
-            },
-            consumer_session_key: room
-                .transport_user_key(target.consumer_user_id(), target.consumer_connection_id()),
-            media_kind: target.media_kind(),
-            producer_session_key: room
-                .transport_user_key(target.producer_user_id(), target.producer_connection_id()),
-            source_transport_media_id: target.transport_media_id(),
-            consumer_rtp_parameters: prepared.consumer_rtp_parameters().clone(),
-            initial_activity,
-        };
-        match effect.execute_consumer_creation(media_port).await {
-            Ok(result) => Some(result),
+        let consumer_session_key =
+            room.transport_user_key(target.consumer_user_id(), target.consumer_connection_id());
+        let producer_session_key =
+            room.transport_user_key(target.producer_user_id(), target.producer_connection_id());
+        match media_port
+            .consume_media(
+                &consumer_session_key,
+                target.media_kind(),
+                &producer_session_key,
+                target.transport_media_id(),
+                prepared.consumer_rtp_parameters(),
+                initial_activity,
+            )
+            .await
+        {
+            Ok(consumer_transport_media_id) => {
+                let mid = media_port
+                    .transport_media_mid(&consumer_session_key, consumer_transport_media_id)
+                    .await;
+                Some((consumer_transport_media_id, mid))
+            }
             Err(error) => {
                 room.release_pending_consumer_bootstrap(target, media_port)
                     .await;

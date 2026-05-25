@@ -78,7 +78,7 @@ use std::{
 
 use tracing::warn;
 
-use super::{Room, effects::RoomTransportEffect, state::RelayRouteKey};
+use super::{Room, state::RelayRouteKey};
 use crate::{
     TransportEffectOutcome,
     runtime::{
@@ -527,7 +527,7 @@ impl Room {
     /// Executes one cleanup operation against the media transport.
     ///
     /// This method intentionally contains no retry or metric logic. Keeping the
-    /// transport effect separate from reconciliation makes it clear that room
+    /// transport call separate from reconciliation makes it clear that room
     /// cleanup state is updated synchronously, then async adapter work is
     /// attempted after the relevant room lock has been released.
     async fn execute_transport_cleanup_operation(
@@ -541,19 +541,12 @@ impl Room {
                 transport_media_id,
                 ..
             } => {
-                RoomTransportEffect::MediaRemoval {
-                    session_key: session_key.clone(),
-                    transport_media_id: *transport_media_id,
-                }
-                .execute_unit(media_transport)
-                .await
+                media_transport
+                    .remove_media(session_key, *transport_media_id)
+                    .await
             }
             TransportCleanupOperation::CloseUser { session_key, .. } => {
-                RoomTransportEffect::SessionClose {
-                    session_key: session_key.clone(),
-                }
-                .execute_unit(media_transport)
-                .await
+                media_transport.close_session(session_key).await
             }
             TransportCleanupOperation::ReleaseRelayRoute {
                 source_session_key,
@@ -565,9 +558,7 @@ impl Room {
                     target_media_worker_id: route.target_worker,
                     action: TransportRelayRouteAction::Release,
                 };
-                RoomTransportEffect::RelayRoute(effect)
-                    .execute_unit(media_transport)
-                    .await
+                media_transport.apply_relay_route_effect(&effect).await
             }
         }
     }
@@ -724,11 +715,7 @@ impl Room {
         if !operation.needs_owner_drop() {
             return;
         }
-        let close_result = RoomTransportEffect::SessionClose {
-            session_key: operation.session_key().clone(),
-        }
-        .execute_unit(media_transport)
-        .await;
+        let close_result = media_transport.close_session(operation.session_key()).await;
         warn!(
             user_id = ?operation.user_id(),
             connection_id = ?operation.connection_id(),

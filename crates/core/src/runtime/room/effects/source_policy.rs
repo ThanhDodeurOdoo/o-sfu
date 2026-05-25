@@ -6,19 +6,13 @@
 //! adapter, request keyframes for accepted upswitches, and commit only the
 //! updates that still match the live room route after those awaits.
 
-use std::collections::BTreeSet;
-
 use tracing::{debug, warn};
 
-use super::{
-    super::{
-        Room,
-        state::{
-            ConsumerPacketSelectionUpdate, FeaturedUserUpdate, RoomState,
-            rank_active_speaker_sources,
-        },
+use super::super::{
+    Room,
+    state::{
+        ConsumerPacketSelectionUpdate, FeaturedUserUpdate, RoomState, rank_active_speaker_sources,
     },
-    RoomTransportEffect,
 };
 use crate::runtime::{
     media_transport::{
@@ -126,14 +120,15 @@ impl SourcePolicyEffectPlan {
         media_port: &MediaTransport,
         updates: Vec<ConsumerPacketSelectionUpdate>,
     ) -> Vec<ConsumerPacketSelectionUpdate> {
-        let packet_gate_plan = Self::packet_gate_update_plan(room, &updates);
-        let rejected_packet_gate_update_offsets =
-            Self::rejected_packet_gate_updates(media_port, packet_gate_plan.updates()).await;
-        let rejected_packet_gate_updates =
-            packet_gate_plan.rejected_update_indexes(rejected_packet_gate_update_offsets);
+        let packet_gate_updates = Self::packet_gate_updates(room, &updates);
+        let mut packet_gate_results = media_port
+            .set_consumer_packet_gates(&packet_gate_updates)
+            .await
+            .into_iter();
         let mut applied_updates = Vec::with_capacity(updates.len());
-        for (index, update) in updates.into_iter().enumerate() {
-            if rejected_packet_gate_updates.contains(&index) {
+        for update in updates {
+            if update.packet_gate().is_some() && !matches!(packet_gate_results.next(), Some(Ok(())))
+            {
                 Self::warn_rejected_packet_update(&update);
                 continue;
             }
@@ -144,26 +139,23 @@ impl SourcePolicyEffectPlan {
         applied_updates
     }
 
-    fn packet_gate_update_plan(
+    fn packet_gate_updates(
         room: &Room,
         updates: &[ConsumerPacketSelectionUpdate],
-    ) -> PacketGateUpdatePlan {
-        let mut plan = PacketGateUpdatePlan::with_capacity(updates.len());
-        for (index, update) in updates.iter().enumerate() {
+    ) -> Vec<ConsumerPacketGateUpdate> {
+        let mut packet_gate_updates = Vec::with_capacity(updates.len());
+        for update in updates {
             Self::log_prepared_packet_update(update);
             let Some(packet_gate) = update.packet_gate() else {
                 continue;
             };
             let route = update.route();
-            plan.push(
-                index,
-                ConsumerPacketGateUpdate::new(
-                    room.transport_consumer_route(route),
-                    packet_gate.clone(),
-                ),
-            );
+            packet_gate_updates.push(ConsumerPacketGateUpdate::new(
+                room.transport_consumer_route(route),
+                packet_gate.clone(),
+            ));
         }
-        plan
+        packet_gate_updates
     }
 
     async fn accepted_packet_update(
@@ -200,29 +192,14 @@ impl SourcePolicyEffectPlan {
             return true;
         }
         let route = update.route();
-        RoomTransportEffect::ConsumerActivity {
-            route: room.transport_consumer_route(route),
-            activity: ConsumerActivity::from_active(update.route_active()),
-        }
-        .execute_unit(media_port)
-        .await
-        .is_ok()
-    }
-
-    async fn rejected_packet_gate_updates(
-        media_port: &MediaTransport,
-        packet_gate_updates: &[ConsumerPacketGateUpdate],
-    ) -> BTreeSet<usize> {
-        let mut rejected_updates = BTreeSet::new();
-        let results = RoomTransportEffect::PacketGateBatch(packet_gate_updates.to_vec())
-            .execute_packet_gate_batch(media_port)
-            .await;
-        for index in 0..packet_gate_updates.len() {
-            if !matches!(results.get(index), Some(Ok(()))) {
-                rejected_updates.insert(index);
-            }
-        }
-        rejected_updates
+        let transport_route = room.transport_consumer_route(route);
+        media_port
+            .set_consumer_active(
+                &transport_route,
+                ConsumerActivity::from_active(update.route_active()),
+            )
+            .await
+            .is_ok()
     }
 
     async fn request_adaptation_keyframe(
@@ -239,12 +216,11 @@ impl SourcePolicyEffectPlan {
             return true;
         }
         debug!(?route, "requesting adaptation keyframe refresh");
-        let accepted = RoomTransportEffect::KeyframeRequest {
-            route: room.transport_consumer_route(route),
-        }
-        .execute_unit(media_port)
-        .await
-        .is_ok();
+        let transport_route = room.transport_consumer_route(route);
+        let accepted = media_port
+            .request_consumer_keyframe(&transport_route)
+            .await
+            .is_ok();
         if accepted {
             debug!(
                 ?route,
@@ -284,35 +260,5 @@ impl SourcePolicyEffectPlan {
             ?route,
             "media transport rejected the receiver-driven packet selection update"
         );
-    }
-}
-
-struct PacketGateUpdatePlan {
-    updates: Vec<ConsumerPacketGateUpdate>,
-    update_indexes: Vec<usize>,
-}
-
-impl PacketGateUpdatePlan {
-    fn with_capacity(capacity: usize) -> Self {
-        Self {
-            updates: Vec::with_capacity(capacity),
-            update_indexes: Vec::with_capacity(capacity),
-        }
-    }
-
-    fn push(&mut self, update_index: usize, update: ConsumerPacketGateUpdate) {
-        self.update_indexes.push(update_index);
-        self.updates.push(update);
-    }
-
-    fn updates(&self) -> &[ConsumerPacketGateUpdate] {
-        &self.updates
-    }
-
-    fn rejected_update_indexes(&self, rejected_offsets: BTreeSet<usize>) -> BTreeSet<usize> {
-        rejected_offsets
-            .into_iter()
-            .filter_map(|offset| self.update_indexes.get(offset).copied())
-            .collect()
     }
 }
