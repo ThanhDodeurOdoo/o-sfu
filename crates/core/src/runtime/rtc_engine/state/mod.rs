@@ -683,9 +683,9 @@ impl PartialOrd for PendingRidKeyframeRefresh {
 ///
 /// this state mirrors facts that diagnostics, placement and transport policy
 /// need without exposing mutable [`PacketLoopState`]
-/// it is protected by a cold-path mutex while packet-path state remains
-/// worker-owned and single-threaded
-#[derive(Debug, Default)]
+/// packet-loop-owned state is published through immutable atomic snapshots
+/// so readers cannot block the worker
+#[derive(Debug, Default, Clone)]
 pub struct RtcSnapshotState {
     /// demux hints visible to diagnostics and recovery tooling
     pub(super) remote_addr_demux: RemoteAddrDemux,
@@ -701,8 +701,8 @@ pub struct RtcSnapshotState {
 
 impl RtcSnapshotState {
     /// mark a session as visible in read-side RTC state
-    pub(super) fn add_session(&mut self, session_key: &TransportSessionKey) {
-        self.live_sessions.insert(session_key.clone());
+    pub(super) fn add_session(&mut self, session_key: &TransportSessionKey) -> bool {
+        self.live_sessions.insert(session_key.clone())
     }
 
     /// remove every read-side fact owned by one session
@@ -712,16 +712,25 @@ impl RtcSnapshotState {
     pub(super) fn remove_session(
         &mut self,
         session_key: &TransportSessionKey,
-    ) -> Option<TransportSessionHealth> {
-        self.live_sessions.remove(session_key);
-        self.remote_addr_demux.forget_user_remote_addrs(session_key);
-        self.remote_addr_demux
+    ) -> (Option<TransportSessionHealth>, bool) {
+        let mut changed = self.live_sessions.remove(session_key);
+        changed |= self.remote_addr_demux.forget_user_remote_addrs(session_key);
+        changed |= self
+            .remote_addr_demux
             .forget_user_local_ice_ufrag(session_key);
-        self.remote_addr_demux
+        changed |= self
+            .remote_addr_demux
             .forget_user_remote_candidate_addrs(session_key);
-        self.receiver_bandwidth_by_session.remove(session_key);
-        self.transport_quality_by_session.remove(session_key);
-        self.transport_health_by_session.remove(session_key)
+        changed |= self
+            .receiver_bandwidth_by_session
+            .remove(session_key)
+            .is_some();
+        changed |= self
+            .transport_quality_by_session
+            .remove(session_key)
+            .is_some();
+        let previous = self.transport_health_by_session.remove(session_key);
+        (previous, changed || previous.is_some())
     }
 
     /// replace the latest transport health observation for one session

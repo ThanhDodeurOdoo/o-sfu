@@ -138,10 +138,12 @@ async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
             .is_ok()
     );
 
-    adapter.debug_set_session_transport_health(
-        &session_key,
-        super::super::state::TransportSessionHealth::Disconnected,
-    );
+    adapter
+        .debug_set_session_transport_health(
+            &session_key,
+            super::super::state::TransportSessionHealth::Disconnected,
+        )
+        .await;
     let metrics_snapshot = adapter.metrics.snapshot();
     assert_eq!(metrics_snapshot.connected_transport_users(), 0);
     assert_eq!(metrics_snapshot.disconnected_transport_users(), 1);
@@ -245,10 +247,12 @@ async fn rtc_transport_distinguishes_same_session_id_across_channels() {
             .is_ok()
     );
 
-    adapter.debug_set_session_transport_health(
-        &second_session_key,
-        super::super::state::TransportSessionHealth::Disconnected,
-    );
+    adapter
+        .debug_set_session_transport_health(
+            &second_session_key,
+            super::super::state::TransportSessionHealth::Disconnected,
+        )
+        .await;
     assert!(
         adapter
             .close_session_with_outcome(&first_session_key)

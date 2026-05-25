@@ -162,7 +162,7 @@ pub(super) type MediaRouteKey = TransportMediaId;
 /// mutating methods keep reverse indexes in sync so session teardown can remove
 /// every tuple, ufrag and candidate hint owned by one session without scanning
 /// unrelated sessions
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct RemoteAddrDemux {
     /// learned UDP source tuple to session pin
     remote_addr_index: HashMap<SocketAddr, TransportSessionKey>,
@@ -326,32 +326,38 @@ impl RemoteAddrDemux {
     ///
     /// this is used when the cached path no longer passes `Rtc::accepts()` or
     /// when snapshot state mirrors a worker cleanup
-    pub(super) fn forget_remote_addr(&mut self, source_addr: SocketAddr) {
+    pub(super) fn forget_remote_addr(&mut self, source_addr: SocketAddr) -> bool {
         let Some(session_key) = self.remote_addr_index.remove(&source_addr) else {
-            return;
+            return false;
         };
         self.remove_remote_addr_from_session(&session_key, source_addr);
+        true
     }
 
     /// removes every learned UDP source tuple owned by a session
     ///
     /// session teardown calls this on both worker and snapshot demux state so
     /// stale source pins cannot route packets to a removed user
-    pub(super) fn forget_user_remote_addrs(&mut self, session_key: &TransportSessionKey) {
+    pub(super) fn forget_user_remote_addrs(&mut self, session_key: &TransportSessionKey) -> bool {
         let Some(session_addrs) = self.remote_addrs_by_session.remove(session_key) else {
-            return;
+            return false;
         };
         for source_addr in session_addrs {
             self.remote_addr_index.remove(&source_addr);
         }
+        true
     }
 
     /// removes the local ICE ufrag recovery hint for a session
-    pub(super) fn forget_user_local_ice_ufrag(&mut self, session_key: &TransportSessionKey) {
+    pub(super) fn forget_user_local_ice_ufrag(
+        &mut self,
+        session_key: &TransportSessionKey,
+    ) -> bool {
         let Some(local_ice_ufrag) = self.local_ice_ufrag_by_session.remove(session_key) else {
-            return;
+            return false;
         };
         self.local_ice_ufrag_index.remove(&local_ice_ufrag);
+        true
     }
 
     /// removes all remote candidate recovery hints owned by a session
@@ -359,10 +365,13 @@ impl RemoteAddrDemux {
     /// candidate address indexes can contain several sessions for one address
     /// cleanup removes only the target session from each fanout list and drops
     /// empty address entries afterward
-    pub(super) fn forget_user_remote_candidate_addrs(&mut self, session_key: &TransportSessionKey) {
+    pub(super) fn forget_user_remote_candidate_addrs(
+        &mut self,
+        session_key: &TransportSessionKey,
+    ) -> bool {
         let Some(candidate_addrs) = self.remote_candidate_addrs_by_session.remove(session_key)
         else {
-            return;
+            return false;
         };
         for candidate_addr in candidate_addrs {
             let should_remove_index_entry = self
@@ -376,6 +385,7 @@ impl RemoteAddrDemux {
                 self.remote_candidate_addr_index.remove(&candidate_addr);
             }
         }
+        true
     }
 
     #[cfg(test)]

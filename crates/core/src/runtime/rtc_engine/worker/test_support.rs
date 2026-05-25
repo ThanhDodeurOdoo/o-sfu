@@ -1,11 +1,14 @@
-#[cfg(test)]
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-#[cfg(test)]
-use std::sync::Arc;
 use std::time::Instant;
+#[cfg(test)]
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Arc,
+};
 
 use str0m::media::Mid;
 
+#[cfg(any(test, feature = "testing-transport"))]
+use super::super::test_support::SetSessionTransportHealthProbe;
 #[cfg(test)]
 use super::super::test_support::{
     ActiveRelayTargetCountProbe, HasAnyRemoteAddrSessionProbe, RecordIncomingMediaProbe,
@@ -44,18 +47,20 @@ impl RtcWorker {
         RtcWorkerTestBuilder::default()
     }
 
-    pub fn debug_set_session_transport_health(
+    pub async fn debug_set_session_transport_health(
         &self,
         session_key: &TransportSessionKey,
         health: TransportSessionHealth,
     ) {
-        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
+        let Some(previous) = self
+            .probe_debug_worker(SetSessionTransportHealthProbe {
+                session_key: session_key.clone(),
+                health,
+            })
+            .await
+        else {
             return;
         };
-        let Ok(mut snapshot_state) = worker_handle.snapshot_state.lock() else {
-            return;
-        };
-        let previous = snapshot_state.set_transport_health(session_key, health);
         self.metrics.record_transport_health_transition(
             previous.map(metrics::transport_health_state),
             Some(metrics::transport_health_state(health)),

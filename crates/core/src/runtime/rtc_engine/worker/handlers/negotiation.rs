@@ -10,7 +10,6 @@ use std::{
     collections::BTreeMap,
     mem,
     net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -26,10 +25,9 @@ use tracing::debug;
 
 use super::{
     super::super::{
-        bitrate::BitrateRegistry,
-        bootstrap, simulcast,
-        state::{PacketLoopState, RtcSnapshotState},
+        bootstrap, observation::PacketLoopObservations, simulcast, state::PacketLoopState,
     },
+    WorkerCommandContext,
     publication::refresh_negotiated_producer_parameters,
 };
 use crate::{
@@ -60,19 +58,15 @@ pub(super) struct OfferBootstrapConfig<'a> {
 
 pub(super) fn respond_create_initial_session_offer(
     state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    context: &mut WorkerCommandContext<'_>,
     config: OfferBootstrapConfig<'_>,
     session_key: &TransportSessionKey,
     response: oneshot::Sender<Result<SessionOffer, TransportAdapterError>>,
 ) {
-    let _ = response.send(worker_create_initial_session_offer(
-        state,
-        bitrate_registry,
-        snapshot_state,
-        config,
-        session_key,
-    ));
+    let result =
+        worker_create_initial_session_offer(state, context.observations, config, session_key);
+    context.publish_observations();
+    let _ = response.send(result);
 }
 
 pub(super) fn respond_create_session_renegotiation_offer(
@@ -109,12 +103,11 @@ pub(super) fn respond_apply_session_answer(
 /// flight, callers must use the renegotiation path instead.
 fn worker_create_initial_session_offer(
     state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    observations: &mut PacketLoopObservations,
     config: OfferBootstrapConfig<'_>,
     session_key: &TransportSessionKey,
 ) -> Result<SessionOffer, TransportAdapterError> {
-    ensure_session_ready_for_offer(state, bitrate_registry, snapshot_state, config, session_key)?;
+    ensure_session_ready_for_offer(state, observations, config, session_key)?;
     if state.session_has_registered_media(session_key) {
         return Err(TransportAdapterError::UnsupportedFeature);
     }
@@ -465,8 +458,7 @@ pub(super) fn offered_codecs(
 
 fn ensure_session_ready_for_offer(
     state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    observations: &mut PacketLoopObservations,
     config: OfferBootstrapConfig<'_>,
     session_key: &TransportSessionKey,
 ) -> Result<(), TransportAdapterError> {
@@ -487,13 +479,9 @@ fn ensure_session_ready_for_offer(
         config.codec_flags,
         config.media_quality_interval,
     )?;
-    if let Ok(mut snapshot) = snapshot_state.lock() {
-        snapshot.add_session(session_key);
-    }
-    if let Ok(mut bitrate) = bitrate_registry.lock() {
-        let counter = bitrate.register_session_egress(session_key, Instant::now());
-        state.register_egress_bitrate_counter(session_key.clone(), counter);
-    }
+    observations.add_session(session_key);
+    let counter = observations.register_session_egress(session_key, Instant::now());
+    state.register_egress_bitrate_counter(session_key.clone(), counter);
     if let Some(session_state) = state.users.get(session_key) {
         let local_ice_ufrag_changed = state
             .remote_addr_demux

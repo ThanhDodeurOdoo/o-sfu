@@ -16,6 +16,7 @@ testing-transport = []
 worker-benchmarks = ["internal-benchmarks"]
 
 [dependencies]
+arc-swap.workspace = true
 bitflags = "2.6"
 futures-util.workspace = true
 o-sfu-rfc.workspace = true

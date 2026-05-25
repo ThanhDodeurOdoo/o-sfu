@@ -5,10 +5,7 @@
 //! that translation so session draining can stay focused on moving `str0m`
 //! outputs into packet-loop buffers.
 
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use o_sfu_telemetry::schema;
 use str0m::{
@@ -18,7 +15,7 @@ use str0m::{
 };
 use tracing::{debug, trace};
 
-use super::super::state::{RtcSnapshotState, TransportSessionHealth};
+use super::super::{observation::PacketLoopObservations, state::TransportSessionHealth};
 use crate::{
     Bitrate,
     runtime::{
@@ -26,7 +23,7 @@ use crate::{
             DiagnosticsStore, diagnostics_room_instance_id, health_json_value,
             maybe_health_json_value,
         },
-        media_transport::{SourcePolicySignal, TransportSessionKey},
+        media_transport::TransportSessionKey,
         metrics::{
             self, MediaQualityLossDirection, MediaQualitySample, RuntimeMetrics, TransportIceState,
         },
@@ -66,16 +63,14 @@ pub(super) fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
     }
 }
 
-/// Project selected `str0m` events into metrics, snapshots and diagnostics.
+/// project selected `str0m` events into metrics, snapshots and diagnostics
 ///
-/// Snapshot writes are best-effort. If the snapshot lock is unavailable, the
-/// packet loop keeps running because the worker-owned `PacketLoopState`
-/// remains authoritative for media behavior.
+/// snapshot writes update worker-owned observation state
+/// the driver publishes changed snapshots after the current turn
 pub(super) fn observe_rtc_event(
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    observations: &mut PacketLoopObservations,
     diagnostics: &Arc<DiagnosticsStore>,
     metrics: &RuntimeMetrics,
-    source_policy_signal: &SourcePolicySignal,
     session_key: &TransportSessionKey,
     event: &Event,
 ) {
@@ -87,26 +82,23 @@ pub(super) fn observe_rtc_event(
             metrics.record_transport_dtls_connected();
         }
         Event::EgressBitrateEstimate(kind) => {
-            observe_receiver_bandwidth(snapshot_state, source_policy_signal, session_key, kind);
+            observe_receiver_bandwidth(observations, session_key, kind);
         }
         Event::PeerStats(stats) => {
-            observe_peer_quality(snapshot_state, metrics, session_key, stats);
+            observe_peer_quality(observations, metrics, session_key, stats);
         }
         Event::MediaIngressStats(stats) => {
-            observe_media_ingress_quality(snapshot_state, metrics, session_key, stats);
+            observe_media_ingress_quality(observations, metrics, session_key, stats);
         }
         Event::MediaEgressStats(stats) => {
-            observe_media_egress_quality(snapshot_state, metrics, session_key, stats);
+            observe_media_egress_quality(observations, metrics, session_key, stats);
         }
         _ => {}
     }
     let Some(health) = transport_health_from_event(event) else {
         return;
     };
-    let Ok(mut snapshot_state) = snapshot_state.lock() else {
-        return;
-    };
-    let previous = snapshot_state.set_transport_health(session_key, health);
+    let previous = observations.set_transport_health(session_key, health);
     metrics.record_transport_health_transition(
         previous.map(metrics::transport_health_state),
         Some(metrics::transport_health_state(health)),
@@ -127,7 +119,7 @@ pub(super) fn observe_rtc_event(
 }
 
 fn observe_peer_quality(
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    observations: &mut PacketLoopObservations,
     metrics: &RuntimeMetrics,
     session_key: &TransportSessionKey,
     stats: &PeerStats,
@@ -145,10 +137,7 @@ fn observe_peer_quality(
     if let Some(loss_ppm) = loss_fraction_ppm(stats.egress_loss_fraction) {
         metrics.record_media_quality_loss_ppm(MediaQualityLossDirection::Egress, loss_ppm);
     }
-    let Ok(mut snapshot_state) = snapshot_state.lock() else {
-        return;
-    };
-    snapshot_state.update_transport_quality(session_key, |sample| {
+    observations.update_transport_quality(session_key, |sample| {
         if let Some(bwe_bps) = stats.bwe_tx.map(|bwe| bwe.as_u64()) {
             sample.latest_bwe_bps = Some(bwe_bps);
         }
@@ -165,7 +154,7 @@ fn observe_peer_quality(
 }
 
 fn observe_media_ingress_quality(
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    observations: &mut PacketLoopObservations,
     metrics: &RuntimeMetrics,
     session_key: &TransportSessionKey,
     stats: &MediaIngressStats,
@@ -177,10 +166,7 @@ fn observe_media_ingress_quality(
     if let Some(loss_ppm) = loss_fraction_ppm(stats.loss) {
         metrics.record_media_quality_loss_ppm(MediaQualityLossDirection::Ingress, loss_ppm);
     }
-    let Ok(mut snapshot_state) = snapshot_state.lock() else {
-        return;
-    };
-    snapshot_state.update_transport_quality(session_key, |sample| {
+    observations.update_transport_quality(session_key, |sample| {
         if let Some(rtt_ms) = stats.rtt.map(duration_millis) {
             sample.rtt_ms = Some(rtt_ms);
         }
@@ -191,7 +177,7 @@ fn observe_media_ingress_quality(
 }
 
 fn observe_media_egress_quality(
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    observations: &mut PacketLoopObservations,
     metrics: &RuntimeMetrics,
     session_key: &TransportSessionKey,
     stats: &MediaEgressStats,
@@ -206,10 +192,7 @@ fn observe_media_egress_quality(
     if let Some(remote) = stats.remote.as_ref() {
         metrics.record_media_quality_jitter_rtp_timestamp_units(u64::from(remote.jitter));
     }
-    let Ok(mut snapshot_state) = snapshot_state.lock() else {
-        return;
-    };
-    snapshot_state.update_transport_quality(session_key, |sample| {
+    observations.update_transport_quality(session_key, |sample| {
         if let Some(rtt_ms) = stats.rtt.map(duration_millis) {
             sample.rtt_ms = Some(rtt_ms);
         }
@@ -242,28 +225,21 @@ fn duration_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// Store receiver bandwidth estimates and wake source-policy recomputation.
+/// store receiver bandwidth estimates and stage source-policy recomputation
 ///
-/// Bandwidth estimates can change source selection, but that policy is owned by
-/// the room layer. The packet loop records the latest estimate in the snapshot
-/// and marks the room dirty only when the value changed.
+/// bandwidth estimates can change source selection, but that policy is owned by
+/// the room layer
+/// the packet loop records the latest estimate in the snapshot and wakes the
+/// room only after the snapshot has been published
 fn observe_receiver_bandwidth(
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    source_policy_signal: &SourcePolicySignal,
+    observations: &mut PacketLoopObservations,
     session_key: &TransportSessionKey,
     kind: &BweKind,
 ) {
-    match kind {
-        BweKind::Twcc(bitrate) | BweKind::Remb(_, bitrate)
-            if let Ok(mut snapshot_state) = snapshot_state.lock() =>
-        {
-            let estimate = Bitrate::from_bps(bitrate.as_u64());
-            if snapshot_state.set_receiver_bandwidth(session_key, estimate) != Some(estimate) {
-                source_policy_signal.mark_dirty(session_key.room_instance_id());
-            }
-        }
-        _ => {}
-    }
+    let (BweKind::Twcc(bitrate) | BweKind::Remb(_, bitrate)) = kind else {
+        return;
+    };
+    observations.set_receiver_bandwidth(session_key, Bitrate::from_bps(bitrate.as_u64()));
 }
 
 /// Convert `str0m` ICE connection state into the metrics enum.

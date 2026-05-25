@@ -11,10 +11,7 @@
 //!   to hand out a second local offer while the previous one still awaits an
 //!   answer
 
-use std::{
-    sync::{Arc, Mutex},
-    time::Instant,
-};
+use std::time::Instant;
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::{
@@ -27,16 +24,16 @@ use tracing::{debug, warn};
 use super::{
     super::{
         super::super::{
-            bitrate::BitrateRegistry,
             commands::RtcWorkerResponse,
             media_registry::{
                 DecoderRefreshCodec, RegisteredMediaHandle, RemoteSourceRegistration,
             },
+            observation::PacketLoopObservations,
             simulcast,
             slots::ConsumerStreamHandle,
             state::{PacketLoopState, PendingRecvStream, RtcSessionState},
         },
-        negotiation,
+        WorkerCommandContext, negotiation,
     },
     control::{
         ConsumerRouteRegistration, ensure_route_source_registered, register_consumer_route,
@@ -109,36 +106,35 @@ impl RemoteSourceRollback {
 
 pub fn respond_remove_media(
     state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
+    context: &mut WorkerCommandContext<'_>,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
     response: RtcWorkerResponse<()>,
 ) {
-    let _ = response.send(worker_remove_media(
-        state,
-        bitrate_registry,
-        session_key,
-        transport_media_id,
-    ));
+    let result = worker_remove_media(state, context.observations, session_key, transport_media_id);
+    context.publish_observations();
+    let _ = response.send(result);
 }
 
 pub fn respond_add_recv_media(
     state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
+    context: &mut WorkerCommandContext<'_>,
     policy: RecvMediaPolicy,
     session_key: &TransportSessionKey,
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
     response: RtcWorkerResponse<TransportMediaId>,
 ) {
-    let _ = response.send(worker_add_recv_media(
+    let result = worker_add_recv_media(
         state,
-        bitrate_registry,
+        context.observations,
         policy,
         session_key,
         media_kind,
         rtp_parameters,
-    ));
+    );
+    context.publish_observations();
+    let _ = response.send(result);
 }
 
 pub fn respond_add_send_media(
@@ -165,7 +161,7 @@ pub fn respond_resolve_media_mid(
 /// SDP, route, and remote-source side effect that still points at it.
 fn worker_remove_media(
     state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
+    observations: &mut PacketLoopObservations,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
 ) -> Result<(), TransportAdapterError> {
@@ -183,7 +179,7 @@ fn worker_remove_media(
             mid = ?handle.mid(),
             "released unnegotiated producer media without staging sdp removal"
         );
-        return unregister_media_handle(state, bitrate_registry, transport_media_id);
+        return unregister_media_handle(state, observations, transport_media_id);
     }
     if let Err(error) =
         stage_last_mid_removal_before_unregistering_handle(state, transport_media_id, &handle)
@@ -201,12 +197,12 @@ fn worker_remove_media(
             "released unnegotiated producer media after removal staging failed"
         );
     }
-    unregister_media_handle(state, bitrate_registry, transport_media_id)
+    unregister_media_handle(state, observations, transport_media_id)
 }
 
 fn unregister_media_handle(
     state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
+    observations: &mut PacketLoopObservations,
     transport_media_id: TransportMediaId,
 ) -> Result<(), TransportAdapterError> {
     let Some(handle) = state.remove_media_handle(transport_media_id) else {
@@ -214,9 +210,7 @@ fn unregister_media_handle(
     };
     match handle {
         RegisteredMediaHandle::Producer { session_key, mid } => {
-            if let Ok(mut bitrate) = bitrate_registry.lock() {
-                bitrate.remove_incoming_media(&session_key, transport_media_id);
-            }
+            observations.remove_incoming_media(&session_key, transport_media_id);
             if let Some(session_state) = state.users.get_mut(&session_key) {
                 session_state
                     .sdp_negotiation
@@ -366,7 +360,7 @@ fn worker_stage_native_media_removal(
 /// point every addition must stage the next renegotiation offer first.
 fn worker_add_recv_media(
     state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
+    observations: &mut PacketLoopObservations,
     policy: RecvMediaPolicy,
     session_key: &TransportSessionKey,
     media_kind: MediaKind,
@@ -410,11 +404,9 @@ fn worker_add_recv_media(
         session_key: session_key.clone(),
         mid,
     });
-    if let Ok(mut bitrate) = bitrate_registry.lock() {
-        let counter =
-            bitrate.register_incoming_media(session_key, transport_media_id, Instant::now());
-        state.register_incoming_bitrate_counter(transport_media_id, counter);
-    }
+    let counter =
+        observations.register_incoming_media(session_key, transport_media_id, Instant::now());
+    state.register_incoming_bitrate_counter(transport_media_id, counter);
     debug!(
         user_id = ?session_key.user_id(),
         media_worker_id = session_key.media_worker_id(),

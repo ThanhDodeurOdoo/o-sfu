@@ -22,7 +22,7 @@ pub use probe::{DebugPacketGate, DebugRouteDestination};
 #[cfg(any(test, feature = "testing-transport"))]
 pub(super) use probe::{
     DebugProbe, DebugProbeRequest, RouteEntryByConsumerMidProbe, RtcWorkerDebugChannels,
-    RtcWorkerDebugHandle, handle_debug_probe,
+    RtcWorkerDebugHandle, SetSessionTransportHealthProbe, handle_debug_probe,
 };
 #[cfg(any(test, feature = "testing-transport"))]
 pub(super) use probe::{ObserveAudioActivityProbe, RouteEntryByMediaIdProbe, RouteEntryProbe};

@@ -18,13 +18,7 @@
 //! fail to recover and be dropped, but this module must not recover traffic that
 //! `str0m` would reject downstream.
 
-use std::{
-    fmt,
-    net::SocketAddr,
-    slice::Iter,
-    sync::{Arc, Mutex},
-    time::Instant,
-};
+use std::{fmt, net::SocketAddr, slice::Iter, time::Instant};
 
 use str0m::{
     Input,
@@ -34,8 +28,9 @@ use str0m::{
 use tracing::{debug, trace, warn};
 
 use super::super::{
+    observation::PacketLoopObservations,
     routing_miss::{DemuxRecoveryState, PacketLoopRoutingMissKey},
-    state::{PacketLoopState, RtcSnapshotState},
+    state::PacketLoopState,
 };
 use crate::runtime::{
     media_transport::TransportSessionKey,
@@ -140,7 +135,7 @@ impl<'a> Iterator for CandidateSessionKeys<'a> {
 /// validity are separate concerns.
 pub(super) fn route_packet_to_matching_session(
     state: &mut PacketLoopState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    observations: &mut PacketLoopObservations,
     demux: &mut DemuxRecoveryState,
     metrics: &RtcMetricsRecorder,
     source_addr: SocketAddr,
@@ -149,7 +144,7 @@ pub(super) fn route_packet_to_matching_session(
 ) {
     route_packet_to_matching_session_at(
         state,
-        snapshot_state,
+        observations,
         demux,
         metrics,
         PacketRouteDatagram::new(source_addr, candidate_addr, packet, Instant::now()),
@@ -158,14 +153,14 @@ pub(super) fn route_packet_to_matching_session(
 
 pub(in crate::runtime::rtc_engine) fn route_packet_to_matching_session_at(
     state: &mut PacketLoopState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    observations: &mut PacketLoopObservations,
     demux: &mut DemuxRecoveryState,
     metrics: &RtcMetricsRecorder,
     datagram: PacketRouteDatagram<'_>,
 ) {
     match route_packet_with_cached_session(
         state,
-        snapshot_state,
+        observations,
         datagram.source_addr,
         datagram.candidate_addr,
         datagram.packet,
@@ -208,8 +203,8 @@ pub(in crate::runtime::rtc_engine) fn route_packet_to_matching_session_at(
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
         return;
     }
-    let route = PacketRouteContext {
-        snapshot_state,
+    let mut route = PacketRouteContext {
+        observations,
         metrics,
         source_addr: datagram.source_addr,
         candidate_addr: datagram.candidate_addr,
@@ -219,15 +214,15 @@ pub(in crate::runtime::rtc_engine) fn route_packet_to_matching_session_at(
     // With one live session, routing degenerates to one `accepts()` check.
     // No recovery index is needed to narrow the candidate set.
     if state.users.len() == 1 {
-        route_packet_by_single_session(state, demux, miss_key, &route);
+        route_packet_by_single_session(state, demux, miss_key, &mut route);
         return;
     }
-    route_packet_by_recovery_index(state, demux, miss_key, &route);
+    route_packet_by_recovery_index(state, demux, miss_key, &mut route);
 }
 
 fn route_packet_with_cached_session(
     state: &mut PacketLoopState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    observations: &mut PacketLoopObservations,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet: &[u8],
@@ -240,12 +235,8 @@ fn route_packet_with_cached_session(
         return CachedRouteOutcome::NotMatched;
     };
     let Some(session_state) = state.users.get_mut(session_key) else {
-        state.remote_addr_demux.forget_remote_addr(source_addr);
-        if let Ok(mut snapshot) = snapshot_state.lock() {
-            // Stale pins must be cleared in the shared snapshot so that any
-            // control-plane observation stays consistent with the worker's
-            // routing discovery.
-            snapshot.remote_addr_demux.forget_remote_addr(source_addr);
+        if state.remote_addr_demux.forget_remote_addr(source_addr) {
+            observations.forget_remote_addr(source_addr);
         }
         return CachedRouteOutcome::NotMatched;
     };
@@ -267,12 +258,8 @@ fn route_packet_with_cached_session(
             media_worker_id = session_key.media_worker_id(),
             "indexed rtc source address no longer matched the cached user; clearing source-address pin"
         );
-        state.remote_addr_demux.forget_remote_addr(source_addr);
-        if let Ok(mut snapshot) = snapshot_state.lock() {
-            // Stale pins must be cleared in the shared snapshot so that any
-            // control-plane observation stays consistent with the worker's
-            // routing discovery.
-            snapshot.remote_addr_demux.forget_remote_addr(source_addr);
+        if state.remote_addr_demux.forget_remote_addr(source_addr) {
+            observations.forget_remote_addr(source_addr);
         }
         return CachedRouteOutcome::NotMatched;
     }
@@ -475,7 +462,7 @@ fn record_unknown_source_miss(
 }
 
 struct PacketRouteContext<'a> {
-    snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
+    observations: &'a mut PacketLoopObservations,
     metrics: &'a RtcMetricsRecorder,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
@@ -491,7 +478,7 @@ struct PacketRouteContext<'a> {
 fn route_packet_to_session(
     state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
-    route: &PacketRouteContext<'_>,
+    route: &mut PacketRouteContext<'_>,
     input: Input<'_>,
     route_resolution: &'static str,
 ) -> bool {
@@ -518,13 +505,9 @@ fn route_packet_to_session(
     if state
         .remote_addr_demux
         .remember_remote_addr(route.source_addr, session_key)
-        && let Ok(mut snapshot) = route.snapshot_state.lock()
     {
-        // The worker is the source of truth for address pins. New pins must
-        // be mirrored in the snapshot state so they are visible to the rest
-        // of the application.
-        let _ = snapshot
-            .remote_addr_demux
+        route
+            .observations
             .remember_remote_addr(route.source_addr, session_key);
         match previous_session_key {
             Some(previous_session_key) => {
@@ -566,7 +549,7 @@ fn route_packet_by_single_session(
     state: &mut PacketLoopState,
     demux: &mut DemuxRecoveryState,
     miss_key: PacketLoopRoutingMissKey,
-    route: &PacketRouteContext<'_>,
+    route: &mut PacketRouteContext<'_>,
 ) {
     #[cfg(test)]
     demux.record_fallback_attempt();
@@ -615,7 +598,7 @@ fn route_packet_by_recovery_index(
     state: &mut PacketLoopState,
     demux: &mut DemuxRecoveryState,
     miss_key: PacketLoopRoutingMissKey,
-    route: &PacketRouteContext<'_>,
+    route: &mut PacketRouteContext<'_>,
 ) {
     #[cfg(test)]
     demux.record_fallback_attempt();

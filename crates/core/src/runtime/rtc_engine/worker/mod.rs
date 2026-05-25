@@ -48,6 +48,7 @@ use std::{
     time::Duration,
 };
 
+use arc_swap::ArcSwap;
 #[cfg(feature = "internal-benchmarks")]
 pub(in crate::runtime::rtc_engine) use handlers::worker_set_consumer_packet_gates_for_benchmark;
 pub(super) use handlers::{
@@ -109,8 +110,8 @@ impl RtcSendMediaSource {
 ///
 /// the handle is cloned by cold-path worker methods so they can enqueue work
 /// without holding the worker publication lock across `.await`
-/// it contains command channels plus the read-mostly snapshot state that can be
-/// observed without entering the packet-loop task
+/// it contains command channels plus atomically published read-mostly snapshots
+/// that can be observed without entering the packet-loop task
 ///
 /// dropping this handle does not stop the worker
 /// shutdown is explicit through `shutdown_token` after the worker reports that
@@ -121,8 +122,8 @@ pub struct RtcWorkerHandle {
     #[cfg(any(test, feature = "testing-transport"))]
     pub(super) debug_handle: super::test_support::RtcWorkerDebugHandle,
     pub(super) relay_mailbox: RelayPacketMailbox,
-    pub bitrate_registry: Arc<Mutex<BitrateRegistry>>,
-    pub snapshot_state: Arc<Mutex<RtcSnapshotState>>,
+    pub bitrate_registry: Arc<ArcSwap<BitrateRegistry>>,
+    pub snapshot_state: Arc<ArcSwap<RtcSnapshotState>>,
     pub(super) packet_loop_lag: Arc<PacketLoopLagSnapshot>,
     pub(super) shutdown_token: CancellationToken,
 }

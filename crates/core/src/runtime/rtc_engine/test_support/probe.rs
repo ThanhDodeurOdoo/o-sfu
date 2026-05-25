@@ -36,6 +36,8 @@ use {
     std::{net::SocketAddr, time::Instant},
 };
 
+#[cfg(any(test, feature = "testing-transport"))]
+use crate::runtime::rtc_engine::state::TransportSessionHealth;
 use crate::runtime::{
     media_transport::{TransportMediaId, TransportSessionKey},
     rtc_engine::{
@@ -117,8 +119,7 @@ impl RtcWorkerDebugChannels {
 ///
 /// [`Self::inspect`] runs on the packet-loop worker with exclusive access to
 /// [`PacketLoopState`]
-/// it may also use [`WorkerCommandContext`] for shared
-/// cold-path side stores such as snapshots or bitrate registries
+/// it may also use [`WorkerCommandContext`] for worker-owned observations
 pub(in crate::runtime::rtc_engine) trait DebugProbe:
     Send + 'static
 {
@@ -128,7 +129,7 @@ pub(in crate::runtime::rtc_engine) trait DebugProbe:
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        context: &WorkerCommandContext<'_>,
+        context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output;
 }
 
@@ -138,7 +139,11 @@ pub(in crate::runtime::rtc_engine) trait DebugProbe:
 /// the call site and the concrete probe implementation keep the exact response
 /// type through [`DebugProbe::Output`]
 trait ErasedDebugProbe: Send {
-    fn inspect(self: Box<Self>, state: &mut PacketLoopState, context: &WorkerCommandContext<'_>);
+    fn inspect(
+        self: Box<Self>,
+        state: &mut PacketLoopState,
+        context: &mut WorkerCommandContext<'_>,
+    );
 }
 
 struct DebugProbeEnvelope<P>
@@ -153,9 +158,15 @@ impl<P> ErasedDebugProbe for DebugProbeEnvelope<P>
 where
     P: DebugProbe,
 {
-    fn inspect(self: Box<Self>, state: &mut PacketLoopState, context: &WorkerCommandContext<'_>) {
+    fn inspect(
+        self: Box<Self>,
+        state: &mut PacketLoopState,
+        context: &mut WorkerCommandContext<'_>,
+    ) {
         let Self { probe, response } = *self;
-        let _ = response.send(probe.inspect(state, context));
+        let output = probe.inspect(state, context);
+        context.publish_observations();
+        let _ = response.send(output);
     }
 }
 
@@ -177,7 +188,7 @@ impl DebugProbeRequest {
         }
     }
 
-    pub fn inspect(self, state: &mut PacketLoopState, context: &WorkerCommandContext<'_>) {
+    pub fn inspect(self, state: &mut PacketLoopState, context: &mut WorkerCommandContext<'_>) {
         self.probe.inspect(state, context);
     }
 }
@@ -185,7 +196,7 @@ impl DebugProbeRequest {
 /// dispatches one test probe against the authoritative worker state
 pub(in crate::runtime::rtc_engine) fn handle_debug_probe(
     state: &mut PacketLoopState,
-    context: &WorkerCommandContext<'_>,
+    context: &mut WorkerCommandContext<'_>,
     probe: DebugProbeRequest,
 ) {
     probe.inspect(state, context);
@@ -203,7 +214,7 @@ impl DebugProbe for ResolveMidProbe {
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
+        _context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output {
         state.resolve_mid(self.transport_media_id)
     }
@@ -221,14 +232,14 @@ impl DebugProbe for RemoteAddrOwnerProbe {
     fn inspect(
         self,
         _state: &mut PacketLoopState,
-        context: &WorkerCommandContext<'_>,
+        context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output {
-        context.snapshot_state.lock().ok().and_then(|snapshot| {
-            snapshot
-                .remote_addr_demux
-                .session_key_for_remote_addr(self.source_addr)
-                .cloned()
-        })
+        context
+            .observations
+            .snapshot_state()
+            .remote_addr_demux
+            .session_key_for_remote_addr(self.source_addr)
+            .cloned()
     }
 }
 
@@ -242,13 +253,34 @@ impl DebugProbe for HasAnyRemoteAddrSessionProbe {
     fn inspect(
         self,
         _state: &mut PacketLoopState,
-        context: &WorkerCommandContext<'_>,
+        context: &mut WorkerCommandContext<'_>,
+    ) -> Self::Output {
+        !context
+            .observations
+            .snapshot_state()
+            .remote_addr_demux
+            .is_empty()
+    }
+}
+
+#[cfg(any(test, feature = "testing-transport"))]
+pub(in crate::runtime::rtc_engine) struct SetSessionTransportHealthProbe {
+    pub session_key: TransportSessionKey,
+    pub health: TransportSessionHealth,
+}
+
+#[cfg(any(test, feature = "testing-transport"))]
+impl DebugProbe for SetSessionTransportHealthProbe {
+    type Output = Option<TransportSessionHealth>;
+
+    fn inspect(
+        self,
+        _state: &mut PacketLoopState,
+        context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output {
         context
-            .snapshot_state
-            .lock()
-            .ok()
-            .is_some_and(|snapshot| !snapshot.remote_addr_demux.is_empty())
+            .observations
+            .set_transport_health(&self.session_key, self.health)
     }
 }
 
@@ -265,15 +297,14 @@ impl DebugProbe for RememberRemoteAddrProbe {
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        context: &WorkerCommandContext<'_>,
+        context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output {
         if state
             .remote_addr_demux
             .remember_remote_addr(self.source_addr, &self.session_key)
-            && let Ok(mut snapshot) = context.snapshot_state.lock()
         {
-            let _ = snapshot
-                .remote_addr_demux
+            context
+                .observations
                 .remember_remote_addr(self.source_addr, &self.session_key);
         }
     }
@@ -292,7 +323,7 @@ impl DebugProbe for SessionStreamRxSsrcProbe {
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
+        _context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output {
         state
             .users
@@ -319,7 +350,7 @@ impl DebugProbe for SessionStreamTxSsrcProbe {
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
+        _context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output {
         state
             .users
@@ -345,7 +376,7 @@ impl DebugProbe for SessionMaxBitrateInProbe {
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
+        _context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output {
         state
             .users
@@ -366,7 +397,7 @@ impl DebugProbe for SessionMaxBitrateOutProbe {
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
+        _context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output {
         state
             .users
@@ -388,7 +419,7 @@ impl DebugProbe for RouteEntryProbe {
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
+        _context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output {
         state
             .source_transport_media_id_for_mid(&self.source_session_key, self.source_mid)
@@ -409,7 +440,7 @@ impl DebugProbe for RouteEntryByConsumerMidProbe {
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
+        _context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output {
         state
             .consumer_source_transport_media_id_for_mid(
@@ -434,7 +465,7 @@ impl DebugProbe for RouteEntryByMediaIdProbe {
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
+        _context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output {
         debug_route_entry(state, self.source_transport_media_id)
     }
@@ -455,14 +486,13 @@ impl DebugProbe for RecordIncomingMediaProbe {
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        context: &WorkerCommandContext<'_>,
+        context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output {
         if state
             .record_incoming_bitrate(self.transport_media_id, self.now, self.payload_bytes)
             .is_none()
-            && let Ok(mut bitrate) = context.bitrate_registry.lock()
         {
-            let counter = bitrate.register_incoming_media(
+            let counter = context.observations.register_incoming_media(
                 &self.session_key,
                 self.transport_media_id,
                 self.now,
@@ -488,7 +518,7 @@ impl DebugProbe for ObserveAudioActivityProbe {
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
+        _context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output {
         state.route_control.observe_audio_activity(
             self.transport_media_id,
@@ -511,7 +541,7 @@ impl DebugProbe for RelayTargetCountProbe {
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
+        _context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output {
         state.relay_target_count_for_source(self.source_transport_media_id)
     }
@@ -529,7 +559,7 @@ impl DebugProbe for ActiveRelayTargetCountProbe {
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
+        _context: &mut WorkerCommandContext<'_>,
     ) -> Self::Output {
         state.active_relay_target_count_for_source(self.source_transport_media_id)
     }

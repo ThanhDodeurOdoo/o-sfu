@@ -45,6 +45,7 @@ mod local_forwarding;
 mod local_send_rewrite;
 mod media_registry;
 mod negotiated_capabilities;
+mod observation;
 mod packet_loop;
 mod relay_registry;
 mod route_control;

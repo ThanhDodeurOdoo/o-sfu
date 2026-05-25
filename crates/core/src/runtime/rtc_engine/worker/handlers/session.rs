@@ -5,20 +5,17 @@
 //! state, bitrate tracking, and lifetime metrics without leaving
 //! packet-loop-visible stuff behind
 
-use std::{
-    collections::BTreeSet,
-    sync::{Arc, Mutex},
-    time::Instant,
-};
+use std::{collections::BTreeSet, time::Instant};
 
 use tokio::sync::oneshot;
 
 use super::{
     super::super::{
-        bitrate::BitrateRegistry,
         commands::{CloseSessionOutcome, CloseSessionState},
-        state::{PacketLoopState, RtcSnapshotState},
+        observation::PacketLoopObservations,
+        state::PacketLoopState,
     },
+    WorkerCommandContext,
     media::{refresh_source_packet_gate, remove_source_route},
 };
 use crate::runtime::{
@@ -28,26 +25,19 @@ use crate::runtime::{
 
 pub(super) fn respond_close_session(
     state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    context: &mut WorkerCommandContext<'_>,
     session_key: &TransportSessionKey,
-    metrics: &RuntimeMetrics,
     response: oneshot::Sender<Result<CloseSessionOutcome, TransportAdapterError>>,
 ) {
-    let close_outcome = worker_close_session(
-        state,
-        bitrate_registry,
-        snapshot_state,
-        session_key,
-        metrics,
-    );
+    let close_outcome =
+        worker_close_session(state, context.observations, session_key, context.metrics);
+    context.publish_observations();
     let _ = response.send(Ok(close_outcome));
 }
 
 fn worker_close_session(
     state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    observations: &mut PacketLoopObservations,
     session_key: &TransportSessionKey,
     metrics: &RuntimeMetrics,
 ) -> CloseSessionOutcome {
@@ -64,12 +54,8 @@ fn worker_close_session(
         .remote_addr_demux
         .forget_user_remote_candidate_addrs(session_key);
     let removed_media_handles = state.remove_session_media_handles(session_key);
-    let removed_media_ids = removed_media_handles
-        .iter()
-        .map(|(transport_media_id, _handle)| *transport_media_id)
-        .collect::<Vec<_>>();
     let mut affected_route_sources = BTreeSet::new();
-    for source_transport_media_id in &removed_media_ids {
+    for (source_transport_media_id, _handle) in &removed_media_handles {
         remove_source_route(state, *source_transport_media_id);
     }
     state
@@ -96,16 +82,8 @@ fn worker_close_session(
     if state.users.is_empty() {
         state.shared_socket = None;
     }
-    if let Ok(mut snapshot) = snapshot_state.lock() {
-        let previous = snapshot.remove_session(session_key);
-        metrics.record_transport_health_transition(
-            previous.map(metrics::transport_health_state),
-            None,
-        );
-    }
-    if let Ok(mut bitrate) = bitrate_registry.lock() {
-        bitrate.remove_session(session_key);
-    }
+    let previous = observations.remove_session(session_key);
+    metrics.record_transport_health_transition(previous.map(metrics::transport_health_state), None);
     if let Some(removed_session) = removed_session {
         metrics.record_transport_user_lifetime(
             Instant::now().saturating_duration_since(removed_session.started_at),

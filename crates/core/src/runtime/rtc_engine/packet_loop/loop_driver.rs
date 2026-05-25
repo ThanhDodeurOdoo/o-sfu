@@ -22,7 +22,7 @@
 use std::{
     io::{Error as IoError, ErrorKind},
     net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -31,11 +31,11 @@ use tracing::warn;
 
 use super::{
     super::{
-        bitrate::BitrateRegistry,
         forwarded_packet::ForwardedPacket,
         forwarding_planner::populate_forward_routes_for_packet,
+        observation::{PacketLoopObservations, RtcObservationPublishers},
         routing_miss::DemuxRecoveryState,
-        state::{PacketLoopState, RtcSnapshotState},
+        state::PacketLoopState,
         worker::{WorkerCommandContext, drain_due_rid_keyframe_refreshes},
     },
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers, RECEIVE_BUFFER_LEN},
@@ -137,8 +137,7 @@ pub(super) struct PacketLoopTurn {
 /// making it clear that no await happens while the context exists
 pub(super) struct PacketLoopApplyContext<'a> {
     pub packet_loop_state: &'a mut PacketLoopState,
-    pub bitrate_registry: &'a Arc<Mutex<BitrateRegistry>>,
-    pub snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
+    pub observations: &'a mut PacketLoopObservations,
     pub config: &'a PacketLoopConfig,
     pub demux: &'a mut DemuxRecoveryState,
     pub inputs: &'a mut PacketLoopInputReceivers,
@@ -166,7 +165,7 @@ impl PacketLoopTurn {
     pub fn pump(
         &mut self,
         state: &mut PacketLoopState,
-        snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+        observations: &mut PacketLoopObservations,
         config: &PacketLoopConfig,
         relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
     ) -> Option<WaitPhaseSnapshot> {
@@ -187,14 +186,13 @@ impl PacketLoopTurn {
             self.buffers.pending_packets.push(packet);
         }
         let now = turn_started_at;
-        let session_drain_context = SessionDrainContext {
-            snapshot_state,
+        let mut session_drain_context = SessionDrainContext {
+            observations,
             diagnostics: &config.diagnostics,
             metrics: &config.metrics,
-            source_policy_signal: &config.source_policy_signal,
             socket: &socket,
         };
-        drain_ready_sessions(state, &session_drain_context, &mut self.buffers, now);
+        drain_ready_sessions(state, &mut session_drain_context, &mut self.buffers, now);
         drain_relay_packets(
             relay_rx,
             &mut self.buffers.pending_packets,
@@ -333,8 +331,7 @@ impl PacketLoopTurn {
             PacketLoopTurnInput::Control(command) => {
                 handle_control_input(
                     context.packet_loop_state,
-                    context.bitrate_registry,
-                    context.snapshot_state,
+                    context.observations,
                     context.config,
                     command,
                     context.demux,
@@ -512,8 +509,7 @@ const MAX_READY_NOW_INPUTS_BEFORE_YIELD: usize = 32;
 /// ingress indefinitely
 pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
     config: PacketLoopConfig,
-    bitrate_registry: Arc<Mutex<BitrateRegistry>>,
-    snapshot_state: Arc<Mutex<RtcSnapshotState>>,
+    publishers: RtcObservationPublishers,
     mut inputs: PacketLoopInputReceivers,
 ) {
     // transport media ids must start from the worker-assigned range so relay
@@ -529,6 +525,7 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
     // allocate while media is flowing
     let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
     let mut turn = PacketLoopTurn::new(Instant::now());
+    let mut observations = PacketLoopObservations::new(publishers);
     let mut next_input = None;
 
     loop {
@@ -536,8 +533,7 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
             turn.apply_input(
                 &mut PacketLoopApplyContext {
                     packet_loop_state: &mut packet_loop_state,
-                    bitrate_registry: &bitrate_registry,
-                    snapshot_state: &snapshot_state,
+                    observations: &mut observations,
                     config: &config,
                     demux: &mut demux,
                     inputs: &mut inputs,
@@ -549,10 +545,11 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
 
         let snapshot = turn.pump(
             &mut packet_loop_state,
-            &snapshot_state,
+            &mut observations,
             &config,
             inputs.relay_rx(),
         );
+        observations.publish_dirty_and_wake_policy(&config.source_policy_signal);
 
         turn.flush_outputs(snapshot.as_ref(), &config.packet_loop_lag)
             .await;
@@ -587,7 +584,7 @@ fn route_received_datagram(
     // packet can mutate a session
     route_packet_to_matching_session(
         context.packet_loop_state,
-        context.snapshot_state,
+        context.observations,
         context.demux,
         &context.config.rtc_metrics,
         source_addr,
@@ -602,17 +599,15 @@ fn route_received_datagram(
 /// source tuple or ICE username fragment
 fn handle_control_input(
     packet_loop_state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    observations: &mut PacketLoopObservations,
     config: &PacketLoopConfig,
     command: PacketLoopControlInput,
     demux: &mut DemuxRecoveryState,
 ) {
     command.dispatch(
         packet_loop_state,
-        &WorkerCommandContext {
-            bitrate_registry,
-            snapshot_state,
+        &mut WorkerCommandContext {
+            observations,
             now: Instant::now(),
             public_ip: config.public_ip,
             max_bitrate_in: config.max_bitrate_in,
@@ -623,6 +618,7 @@ fn handle_control_input(
             codec_preferences: config.codec_preferences,
             media_quality_interval: config.media_quality_interval,
             metrics: &config.metrics,
+            source_policy_signal: &config.source_policy_signal,
         },
     );
     demux.clear_on_topology_change();

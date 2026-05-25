@@ -573,15 +573,10 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
     let Some(worker_handle) = adapter.worker_handle().ok().flatten() else {
         return;
     };
-    let snapshot = {
-        let Ok(bitrate_registry) = worker_handle.bitrate_registry.lock() else {
-            return;
-        };
-        bitrate_registry.transport_bitrate_snapshot_at(
-            slice::from_ref(&session_key),
-            now + Duration::from_secs(2),
-        )
-    };
+    let snapshot = worker_handle
+        .bitrate_registry
+        .load()
+        .transport_bitrate_snapshot_at(slice::from_ref(&session_key), now + Duration::from_secs(2));
     assert_eq!(snapshot.total, Bitrate::zero());
     assert!(snapshot.per_media.is_empty());
 }

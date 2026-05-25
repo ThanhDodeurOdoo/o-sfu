@@ -6,8 +6,8 @@
 mod fixtures;
 
 use std::{
-    net::SocketAddr,
-    sync::{Arc, Mutex},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -30,26 +30,48 @@ use super::{
     respond_add_send_media, respond_remove_media, respond_set_consumer_packet_gates,
 };
 use crate::{
-    Bitrate, MediaCodecFlags,
+    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
     runtime::{
         UserId,
         media_transport::{
-            TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportSessionKey,
-            TransportSourceKey,
+            SourcePolicySignal, TransportAdapterError, TransportConsumerRoute, TransportMediaId,
+            TransportSessionKey, TransportSourceKey,
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
         rtc_engine::{
-            bitrate::BitrateRegistry,
             bootstrap,
             commands::{ConsumerPacketGateCommand, RemoteSourceControl, RouteControlRequest},
             media_registry::{RegisteredMediaHandle, RemoteSourceRegistration},
+            observation::{PacketLoopObservations, RtcObservationPublishers},
             relay_registry::{RelayPacketMailbox, RelayTargetId},
             route_control::{KeyframeRequestDecision, PacketLayerGate},
             state::PacketLoopState,
             test_support::{MediaWorkerScenario, test_transport_session_key},
+            worker::WorkerCommandContext,
         },
     },
 };
+
+fn worker_command_context_for_test<'a>(
+    observations: &'a mut PacketLoopObservations,
+    metrics: &'a RuntimeMetrics,
+    source_policy_signal: &'a SourcePolicySignal,
+) -> WorkerCommandContext<'a> {
+    WorkerCommandContext {
+        observations,
+        now: Instant::now(),
+        public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+        max_bitrate_in: Bitrate::from_mbps(8),
+        max_bitrate_out: Bitrate::from_mbps(10),
+        video_bitrate_limits: VideoBitrateLimits::default(),
+        rtc_port_range: RtcPortRange::new(40_000, 49_999),
+        codec_flags: MediaCodecFlags::default(),
+        codec_preferences: CodecPreferences::default(),
+        media_quality_interval: None,
+        metrics,
+        source_policy_signal,
+    }
+}
 
 #[test]
 fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
@@ -1123,12 +1145,14 @@ fn remove_media_releases_unnegotiated_producer_when_removal_cannot_stage() {
     let mut state = PacketLoopState::default();
     let transport_media_id =
         prepare_already_absent_producer_registration(&mut state, &session_key, producer_mid, None);
-    let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
+    let mut observations = PacketLoopObservations::new(RtcObservationPublishers::new());
+    let metrics = RuntimeMetrics::default();
+    let source_policy_signal = SourcePolicySignal::default();
     let (response_tx, response_rx) = oneshot::channel();
 
     respond_remove_media(
         &mut state,
-        &bitrate_registry,
+        &mut worker_command_context_for_test(&mut observations, &metrics, &source_policy_signal),
         &session_key,
         transport_media_id,
         response_tx,
@@ -1153,12 +1177,14 @@ fn remove_media_keeps_negotiated_handle_when_removal_cannot_stage() {
         producer_mid,
         Some(negotiated_parameters),
     );
-    let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
+    let mut observations = PacketLoopObservations::new(RtcObservationPublishers::new());
+    let metrics = RuntimeMetrics::default();
+    let source_policy_signal = SourcePolicySignal::default();
     let (response_tx, response_rx) = oneshot::channel();
 
     respond_remove_media(
         &mut state,
-        &bitrate_registry,
+        &mut worker_command_context_for_test(&mut observations, &metrics, &source_policy_signal),
         &session_key,
         transport_media_id,
         response_tx,

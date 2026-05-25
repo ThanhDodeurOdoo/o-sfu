@@ -1,8 +1,8 @@
 //! Worker-local bitrate accounting for RTC media.
 //!
-//! The packet loop owns the write side and updates counters through atomics. The
-//! shared state lock protects only cold registration and snapshot maps, so
-//! operator polling cannot contend with per-packet writes.
+//! The packet loop owns the write side and updates counters through atomics.
+//! read-side snapshots are published atomically, so operator polling cannot
+//! block packet-loop registration or per-packet writes.
 
 use std::{
     collections::BTreeMap,
@@ -81,7 +81,7 @@ impl MediaBitrateCounter {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct SessionIncomingBitrates {
     per_media: BTreeMap<TransportMediaId, Arc<MediaBitrateCounter>>,
 }
@@ -99,8 +99,8 @@ impl SessionIncomingBitrates {
         )
     }
 
-    fn remove(&mut self, transport_media_id: TransportMediaId) {
-        self.per_media.remove(&transport_media_id);
+    fn remove(&mut self, transport_media_id: TransportMediaId) -> bool {
+        self.per_media.remove(&transport_media_id).is_some()
     }
 
     fn is_empty(&self) -> bool {
@@ -129,7 +129,7 @@ impl SessionIncomingBitrates {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct BitrateRegistry {
     pub(super) incoming_bitrates_by_session: BTreeMap<TransportSessionKey, SessionIncomingBitrates>,
     pub(super) egress_bitrates_by_session: BTreeMap<TransportSessionKey, Arc<MediaBitrateCounter>>,
@@ -152,31 +152,44 @@ impl BitrateRegistry {
         &mut self,
         session_key: &TransportSessionKey,
         now: Instant,
-    ) -> Arc<MediaBitrateCounter> {
-        Arc::clone(
+    ) -> (Arc<MediaBitrateCounter>, bool) {
+        let mut inserted = false;
+        let counter = Arc::clone(
             self.egress_bitrates_by_session
                 .entry(session_key.clone())
-                .or_insert_with(|| Arc::new(MediaBitrateCounter::new(now))),
-        )
+                .or_insert_with(|| {
+                    inserted = true;
+                    Arc::new(MediaBitrateCounter::new(now))
+                }),
+        );
+        (counter, inserted)
     }
 
     pub(super) fn remove_incoming_media(
         &mut self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
-    ) {
+    ) -> bool {
         let Some(session_bitrates) = self.incoming_bitrates_by_session.get_mut(session_key) else {
-            return;
+            return false;
         };
-        session_bitrates.remove(transport_media_id);
+        let removed = session_bitrates.remove(transport_media_id);
         if session_bitrates.is_empty() {
             self.incoming_bitrates_by_session.remove(session_key);
         }
+        removed
     }
 
-    pub(super) fn remove_session(&mut self, session_key: &TransportSessionKey) {
-        self.incoming_bitrates_by_session.remove(session_key);
-        self.egress_bitrates_by_session.remove(session_key);
+    pub(super) fn remove_session(&mut self, session_key: &TransportSessionKey) -> bool {
+        let incoming_removed = self
+            .incoming_bitrates_by_session
+            .remove(session_key)
+            .is_some();
+        let egress_removed = self
+            .egress_bitrates_by_session
+            .remove(session_key)
+            .is_some();
+        incoming_removed || egress_removed
     }
 
     pub fn transport_bitrate_snapshot_at(
@@ -270,7 +283,7 @@ impl PacketLoopState {
 mod tests {
     use std::{
         sync::{
-            Arc, Mutex,
+            Arc,
             atomic::{AtomicBool, Ordering as AtomicOrdering},
         },
         thread,
@@ -335,8 +348,9 @@ mod tests {
         let now = Instant::now();
         let session_key = test_transport_session_key(0, 0, 0, UserId::Integer(7));
         let mut state = BitrateRegistry::default();
-        let counter = state.register_session_egress(&session_key, now);
+        let (counter, inserted) = state.register_session_egress(&session_key, now);
 
+        assert!(inserted);
         assert!(counter.record(now, 125));
 
         assert_eq!(
@@ -402,22 +416,26 @@ mod tests {
     }
 
     #[test]
-    fn packet_loop_counter_write_does_not_need_the_snapshot_lock() {
-        let mut shared_registry = BitrateRegistry::default();
+    fn cloned_registry_snapshot_observes_packet_loop_counter_writes() {
+        let mut registry = BitrateRegistry::default();
         let mut packet_loop_state = PacketLoopState::default();
         let now = Instant::now();
         let session_key = test_transport_session_key(1, 0, 2, UserId::Integer(3));
         let media_id = TransportMediaId::new(4);
-        let counter = shared_registry.register_incoming_media(&session_key, media_id, now);
+        let counter = registry.register_incoming_media(&session_key, media_id, now);
         packet_loop_state.register_incoming_bitrate_counter(media_id, counter);
-        let shared_registry = Mutex::new(shared_registry);
-        let Ok(_snapshot_guard) = shared_registry.lock() else {
-            return;
-        };
+        let snapshot = registry.clone();
 
         assert_eq!(
             packet_loop_state.record_incoming_bitrate(media_id, now, 32),
             Some(true)
+        );
+        assert_eq!(
+            snapshot.transport_bitrate_snapshot_at(&[session_key], now),
+            TransportBitrateSnapshot {
+                total: Bitrate::from_bps(256),
+                per_media: vec![(media_id, Bitrate::from_bps(256))],
+            }
         );
     }
 }

@@ -10,13 +10,7 @@
 //! `PacketLoopBuffers`. It avoids scanning all sessions on every
 //! turn.
 
-use std::{
-    io::ErrorKind,
-    mem::take,
-    net::SocketAddr,
-    sync::{Arc, Mutex},
-    time::Instant,
-};
+use std::{io::ErrorKind, mem::take, net::SocketAddr, sync::Arc, time::Instant};
 
 use str0m::{Event, Input, Output};
 use tokio::net::UdpSocket;
@@ -24,24 +18,22 @@ use tracing::{trace, warn};
 
 use super::{
     super::{
+        observation::PacketLoopObservations,
         slots::SessionHandle,
-        state::{PacketLoopState, RtcSessionState, RtcSnapshotState},
+        state::{PacketLoopState, RtcSessionState},
     },
     buffers::PacketLoopBuffers,
     event_observation::{log_rtc_event, observe_rtc_event},
     keyframe_requests::PendingKeyframeRequest,
 };
 use crate::runtime::{
-    diagnostics::DiagnosticsStore,
-    media_transport::{SourcePolicySignal, TransportSessionKey},
-    metrics::RuntimeMetrics,
+    diagnostics::DiagnosticsStore, media_transport::TransportSessionKey, metrics::RuntimeMetrics,
 };
 
 pub(super) struct SessionDrainContext<'a> {
-    pub(super) snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
+    pub(super) observations: &'a mut PacketLoopObservations,
     pub(super) diagnostics: &'a Arc<DiagnosticsStore>,
     pub(super) metrics: &'a RuntimeMetrics,
-    pub(super) source_policy_signal: &'a SourcePolicySignal,
     pub(super) socket: &'a UdpSocket,
 }
 
@@ -52,7 +44,7 @@ pub(super) struct SessionDrainContext<'a> {
 /// ignored, which keeps teardown races harmless for already queued wakeups.
 pub(super) fn drain_ready_sessions(
     state: &mut PacketLoopState,
-    context: &SessionDrainContext<'_>,
+    context: &mut SessionDrainContext<'_>,
     buffers: &mut PacketLoopBuffers,
     now: Instant,
 ) {
@@ -87,7 +79,7 @@ fn drain_single_session(
     session_handle: SessionHandle,
     session_key: &TransportSessionKey,
     session_state: &mut RtcSessionState,
-    context: &SessionDrainContext<'_>,
+    context: &mut SessionDrainContext<'_>,
     buffers: &mut PacketLoopBuffers,
 ) -> Option<Instant> {
     loop {
@@ -123,10 +115,9 @@ fn drain_single_session(
             }
             Ok(Output::Event(event)) => {
                 observe_rtc_event(
-                    context.snapshot_state,
+                    context.observations,
                     context.diagnostics,
                     context.metrics,
-                    context.source_policy_signal,
                     session_key,
                     &event,
                 );

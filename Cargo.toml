@@ -28,6 +28,7 @@ version = "0.3.0" # SFU basic feature is ready and can be used as a substitute f
 
 [workspace.dependencies]
 anyhow = "1.0"
+arc-swap = "1.9.1"
 base64 = "0.22"
 futures-util = "0.3"
 o-sfu-protocol = { path = "crates/protocol" }

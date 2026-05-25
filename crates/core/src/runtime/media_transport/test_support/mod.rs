@@ -38,13 +38,15 @@ impl MediaTransport {
     ///
     /// This is a route-test hook for failure injection and is not a production
     /// control-plane operation.
-    pub fn debug_set_session_transport_health(
+    pub async fn debug_set_session_transport_health(
         &self,
         session_key: &TransportSessionKey,
         health: TransportSessionHealth,
     ) {
         if let Some(worker) = self.worker_for_user(session_key) {
-            worker.debug_set_session_transport_health(session_key, health);
+            worker
+                .debug_set_session_transport_health(session_key, health)
+                .await;
         }
     }
 

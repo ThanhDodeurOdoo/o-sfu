@@ -9,6 +9,7 @@
 use std::{
     collections::BTreeSet,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    slice,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -17,6 +18,8 @@ use std::{
 };
 
 use str0m::{
+    Event,
+    bwe::{Bitrate as Str0mBitrate, BweKind},
     crypto::from_feature_flags,
     ice::{StunMessage, TransId},
     media::{KeyframeRequestKind, MediaKind, Mid, Rid},
@@ -31,6 +34,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers, RECEIVE_BUFFER_LEN},
+    event_observation::observe_rtc_event,
     forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
     ingress_routing::route_packet_to_matching_session,
     input::{PacketLoopInputReceivers, PacketLoopMailboxInput},
@@ -58,7 +62,6 @@ use crate::{
             RoomPacketSinkRegistry,
         },
         rtc_engine::{
-            bitrate::BitrateRegistry,
             bootstrap,
             commands::{
                 RemoteSourceControl, RouteControlRequest, RtcMediaControlCommand, RtcWorkerCommand,
@@ -66,16 +69,17 @@ use crate::{
             demux::{MediaRouteDestination, MediaRouteEntry},
             forwarding_destination::PacketForward,
             media_registry::RegisteredMediaHandle,
+            observation::{PacketLoopObservations, RtcObservationPublishers},
             relay_registry::{RelayPacketMailbox, RelayTargetId},
             route_control::{KeyframeRequestDecision, PacketLayerGate},
             slots::ConsumerStreamHandle,
-            state::{PacketLoopState, RtcSnapshotState, SharedRtcSocket},
+            state::{PacketLoopState, SharedRtcSocket, TransportSessionHealth},
             test_support::{
-                DebugProbe, DebugProbeRequest, collect_ready_session_keys,
-                sample_already_relayed_packet, sample_forwarded_packet,
-                sample_forwarded_packet_with_audio_activity, sample_forwarded_packet_with_rid,
-                sample_forwarded_packet_without_mid, sample_local_forwarded_packet,
-                test_transport_session_key,
+                DebugProbe, DebugProbeRequest, SetSessionTransportHealthProbe,
+                collect_ready_session_keys, handle_debug_probe, sample_already_relayed_packet,
+                sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
+                sample_forwarded_packet_with_rid, sample_forwarded_packet_without_mid,
+                sample_local_forwarded_packet, test_transport_session_key,
             },
         },
     },
@@ -120,7 +124,7 @@ impl MediaPacketSink for CountingSink {
 
 struct IngressRoutingHarness {
     packet_loop_state: PacketLoopState,
-    snapshot_state: Arc<Mutex<RtcSnapshotState>>,
+    observations: PacketLoopObservations,
     demux: super::super::routing_miss::DemuxRecoveryState,
     metrics: RuntimeMetrics,
     rtc_metrics: Arc<RtcMetricsRecorder>,
@@ -134,7 +138,7 @@ impl IngressRoutingHarness {
         let rtc_metrics = metrics.register_rtc_worker();
         Self {
             packet_loop_state: PacketLoopState::default(),
-            snapshot_state: Arc::new(Mutex::new(RtcSnapshotState::default())),
+            observations: PacketLoopObservations::new(RtcObservationPublishers::new()),
             demux: super::super::routing_miss::DemuxRecoveryState::new(),
             metrics,
             rtc_metrics,
@@ -146,12 +150,24 @@ impl IngressRoutingHarness {
     fn route(&mut self, packet: &[u8]) {
         route_packet_to_matching_session(
             &mut self.packet_loop_state,
-            &self.snapshot_state,
+            &mut self.observations,
             &mut self.demux,
             &self.rtc_metrics,
             self.source_addr,
             self.candidate_addr,
             packet,
+        );
+    }
+
+    fn remember_remote_addr(&mut self, session_key: &TransportSessionKey) {
+        assert!(
+            self.packet_loop_state
+                .remote_addr_demux
+                .remember_remote_addr(self.source_addr, session_key)
+        );
+        assert!(
+            self.observations
+                .remember_remote_addr(self.source_addr, session_key)
         );
     }
 }
@@ -166,7 +182,7 @@ impl DebugProbe for MarkSessionDirtyProbe {
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        _context: &super::super::worker::WorkerCommandContext<'_>,
+        _context: &mut super::super::worker::WorkerCommandContext<'_>,
     ) -> Self::Output {
         state.mark_session_dirty(&self.session_key);
     }
@@ -445,6 +461,26 @@ fn packet_loop_config_for_test() -> PacketLoopConfig {
     }
 }
 
+fn worker_command_context_for_test<'a>(
+    observations: &'a mut PacketLoopObservations,
+    config: &'a PacketLoopConfig,
+) -> super::super::worker::WorkerCommandContext<'a> {
+    super::super::worker::WorkerCommandContext {
+        observations,
+        now: Instant::now(),
+        public_ip: config.public_ip,
+        max_bitrate_in: config.max_bitrate_in,
+        max_bitrate_out: config.max_bitrate_out,
+        video_bitrate_limits: config.video_bitrate_limits,
+        rtc_port_range: config.rtc_port_range,
+        codec_flags: config.codec_flags,
+        codec_preferences: config.codec_preferences,
+        media_quality_interval: config.media_quality_interval,
+        metrics: &config.metrics,
+        source_policy_signal: &config.source_policy_signal,
+    }
+}
+
 fn valid_rtp_packet(sequence_number: u16, ssrc: u32) -> Vec<u8> {
     let sequence_number = sequence_number.to_be_bytes();
     let ssrc = ssrc.to_be_bytes();
@@ -462,6 +498,78 @@ fn valid_rtp_packet(sequence_number: u16, ssrc: u32) -> Vec<u8> {
         ssrc[2],
         ssrc[3],
     ]
+}
+
+#[test]
+fn receiver_bandwidth_wake_waits_for_snapshot_publication() {
+    let publishers = RtcObservationPublishers::new();
+    let mut observations = PacketLoopObservations::new(publishers.clone());
+    let source_policy_signal = SourcePolicySignal::default();
+    let subscription = source_policy_signal.subscribe();
+    let session_key = test_transport_session_key(70, 0, 71, UserId::Integer(72));
+    let diagnostics = Arc::new(DiagnosticsStore::default());
+    let metrics = RuntimeMetrics::default();
+    let receiver_bandwidth = || {
+        publishers
+            .snapshot_state()
+            .load()
+            .receiver_bandwidth_snapshot(slice::from_ref(&session_key))
+            .per_session
+    };
+
+    observe_rtc_event(
+        &mut observations,
+        &diagnostics,
+        &metrics,
+        &session_key,
+        &Event::EgressBitrateEstimate(BweKind::Twcc(Str0mBitrate::bps(320_000))),
+    );
+
+    assert!(subscription.take_pending_updates().is_empty());
+    assert!(receiver_bandwidth().is_empty());
+
+    observations.publish_dirty_and_wake_policy(&source_policy_signal);
+
+    assert!(
+        subscription
+            .take_pending_updates()
+            .contains(&session_key.room_instance_id())
+    );
+    assert_eq!(
+        receiver_bandwidth(),
+        vec![(session_key.clone(), Bitrate::from_bps(320_000))]
+    );
+}
+
+#[test]
+fn debug_probe_response_waits_for_observation_publication() {
+    let publishers = RtcObservationPublishers::new();
+    let mut observations = PacketLoopObservations::new(publishers.clone());
+    let mut state = PacketLoopState::default();
+    let config = packet_loop_config_for_test();
+    let session_key = test_transport_session_key(73, 0, 74, UserId::Integer(75));
+    let (response_tx, mut response_rx) = oneshot::channel();
+
+    handle_debug_probe(
+        &mut state,
+        &mut worker_command_context_for_test(&mut observations, &config),
+        DebugProbeRequest::new(
+            SetSessionTransportHealthProbe {
+                session_key: session_key.clone(),
+                health: TransportSessionHealth::Disconnected,
+            },
+            response_tx,
+        ),
+    );
+
+    assert!(response_rx.try_recv().is_ok());
+    assert_eq!(
+        publishers
+            .snapshot_state()
+            .load()
+            .transport_health(&session_key),
+        Some(TransportSessionHealth::Disconnected)
+    );
 }
 
 fn serialize_stun_message(message: &StunMessage<'_>, password: Option<&[u8]>) -> Option<Vec<u8>> {
@@ -602,22 +710,7 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
         .get_mut(&session_key)
         .map(|session_state| session_state.rtc.direct_api().local_ice_credentials())
         .ok_or("session state missing after creation")?;
-    assert!(
-        harness
-            .packet_loop_state
-            .remote_addr_demux
-            .remember_remote_addr(harness.source_addr, &session_key)
-    );
-    {
-        let Ok(mut snapshot) = harness.snapshot_state.lock() else {
-            return Err("snapshot state lock poisoned");
-        };
-        assert!(
-            snapshot
-                .remote_addr_demux
-                .remember_remote_addr(harness.source_addr, &session_key)
-        );
-    }
+    harness.remember_remote_addr(&session_key);
 
     let username = format!("{}:remote-ufrag", local_ice_credentials.ufrag);
     let packet = serialize_stun_message(
@@ -651,17 +744,14 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
             .session_key_for_remote_addr(harness.source_addr),
         Some(&session_key)
     );
-    {
-        let Ok(snapshot) = harness.snapshot_state.lock() else {
-            return Err("snapshot state lock poisoned");
-        };
-        assert_eq!(
-            snapshot
-                .remote_addr_demux
-                .session_key_for_remote_addr(harness.source_addr),
-            Some(&session_key)
-        );
-    }
+    assert_eq!(
+        harness
+            .observations
+            .snapshot_state()
+            .remote_addr_demux
+            .session_key_for_remote_addr(harness.source_addr),
+        Some(&session_key)
+    );
     assert!(harness.demux.should_skip_scan(miss_key, &packet));
     assert!(harness.demux.is_tracking_source(harness.source_addr));
     let snapshot = harness.metrics.snapshot();
@@ -672,26 +762,11 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
 }
 
 #[test]
-fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static str> {
+fn stale_indexed_route_clears_worker_and_snapshot_pins() {
     let mut harness = IngressRoutingHarness::new(45_048, 45_047);
     let stale_session_key = test_transport_session_key(51, 0, 58, UserId::Integer(59));
 
-    assert!(
-        harness
-            .packet_loop_state
-            .remote_addr_demux
-            .remember_remote_addr(harness.source_addr, &stale_session_key)
-    );
-    {
-        let Ok(mut snapshot) = harness.snapshot_state.lock() else {
-            return Err("snapshot state lock poisoned");
-        };
-        assert!(
-            snapshot
-                .remote_addr_demux
-                .remember_remote_addr(harness.source_addr, &stale_session_key)
-        );
-    }
+    harness.remember_remote_addr(&stale_session_key);
 
     harness.route(&valid_rtp_packet(11, 111));
 
@@ -702,22 +777,18 @@ fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static 
             .session_key_for_remote_addr(harness.source_addr)
             .is_none()
     );
-    {
-        let Ok(snapshot) = harness.snapshot_state.lock() else {
-            return Err("snapshot state lock poisoned");
-        };
-        assert!(
-            snapshot
-                .remote_addr_demux
-                .session_key_for_remote_addr(harness.source_addr)
-                .is_none()
-        );
-    }
+    assert!(
+        harness
+            .observations
+            .snapshot_state()
+            .remote_addr_demux
+            .session_key_for_remote_addr(harness.source_addr)
+            .is_none()
+    );
     assert_eq!(harness.demux.fallback_attempts(), 1);
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
-    Ok(())
 }
 
 #[test]
@@ -1097,8 +1168,7 @@ fn packet_loop_wakes_immediately_when_forwarding_marks_a_session_dirty() {
 async fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control()
 -> Result<(), &'static str> {
     let mut state = PacketLoopState::default();
-    let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
-    let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
+    let mut observations = PacketLoopObservations::new(RtcObservationPublishers::new());
     let config = packet_loop_config_for_test();
     let mut demux = super::super::routing_miss::DemuxRecoveryState::new();
     let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
@@ -1164,8 +1234,7 @@ async fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control()
     turn.apply_input(
         &mut PacketLoopApplyContext {
             packet_loop_state: &mut state,
-            bitrate_registry: &bitrate_registry,
-            snapshot_state: &snapshot_state,
+            observations: &mut observations,
             config: &config,
             demux: &mut demux,
             inputs: &mut inputs,
@@ -1179,7 +1248,7 @@ async fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control()
     assert!(state.has_dirty_sessions());
 
     let snapshot = turn
-        .pump(&mut state, &snapshot_state, &config, inputs.relay_rx())
+        .pump(&mut state, &mut observations, &config, inputs.relay_rx())
         .ok_or("packet loop should keep the socket snapshot")?;
 
     assert!(!state.has_dirty_sessions());

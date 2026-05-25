@@ -2,13 +2,12 @@
 //!
 //! This module exists to keep the mailbox match in one place while the actual
 //! state mutation lives in focused submodules. It should stay simple:
-//!  decode one worker command, forward it to the owning module, and passe
+//!  decode one worker command then forward it to the owning module and pass
 //! through the immutable runtime context that those handlers need.
 
 use std::{
     collections::BTreeSet,
     net::IpAddr,
-    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -18,9 +17,9 @@ use tokio::sync::oneshot;
 use super::publication;
 use super::{
     super::super::{
-        bitrate::BitrateRegistry,
         commands::{RtcMediaControlCommand, RtcWorkerCommand},
-        state::{PacketLoopState, RtcSnapshotState},
+        observation::PacketLoopObservations,
+        state::PacketLoopState,
     },
     media,
     negotiation::{self, OfferBootstrapConfig},
@@ -31,15 +30,15 @@ use crate::{
     runtime::{
         RoomInstanceId,
         media_transport::{
-            ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, TransportAdapterError,
+            ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, SourcePolicySignal,
+            TransportAdapterError,
         },
         metrics::RuntimeMetrics,
     },
 };
 
 pub struct WorkerCommandContext<'a> {
-    pub bitrate_registry: &'a Arc<Mutex<BitrateRegistry>>,
-    pub snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
+    pub observations: &'a mut PacketLoopObservations,
     pub now: Instant,
     pub public_ip: IpAddr,
     pub max_bitrate_in: Bitrate,
@@ -50,6 +49,14 @@ pub struct WorkerCommandContext<'a> {
     pub codec_preferences: CodecPreferences,
     pub media_quality_interval: Option<Duration>,
     pub metrics: &'a RuntimeMetrics,
+    pub source_policy_signal: &'a SourcePolicySignal,
+}
+
+impl WorkerCommandContext<'_> {
+    pub(in crate::runtime::rtc_engine) fn publish_observations(&mut self) {
+        self.observations
+            .publish_dirty_and_wake_policy(self.source_policy_signal);
+    }
 }
 
 /// Dispatch one production worker command against the worker-local RTC state.
@@ -58,7 +65,7 @@ pub struct WorkerCommandContext<'a> {
 /// runs on the packet-loop task that owns the worker.
 pub fn handle_worker_command(
     state: &mut PacketLoopState,
-    context: &WorkerCommandContext<'_>,
+    context: &mut WorkerCommandContext<'_>,
     command: RtcWorkerCommand,
 ) {
     match command {
@@ -74,14 +81,7 @@ pub fn handle_worker_command(
         RtcWorkerCommand::CloseSession {
             session_key,
             response,
-        } => session::respond_close_session(
-            state,
-            context.bitrate_registry,
-            context.snapshot_state,
-            &session_key,
-            context.metrics,
-            response,
-        ),
+        } => session::respond_close_session(state, context, &session_key, response),
         #[cfg(test)]
         RtcWorkerCommand::ResolveNegotiatedProducerParameters {
             session_key,
@@ -101,26 +101,14 @@ pub fn handle_worker_command(
         | RtcWorkerCommand::AddRecvMedia { .. }
         | RtcWorkerCommand::AddSendMedia { .. }
         | RtcWorkerCommand::MediaControl(_) => {
-            handle_media_command(
-                state,
-                context.bitrate_registry,
-                media::RecvMediaPolicy {
-                    max_bitrate_in: context.max_bitrate_in,
-                    video_bitrate_limits: context.video_bitrate_limits,
-                    codec_flags: context.codec_flags,
-                    codec_preferences: context.codec_preferences,
-                },
-                context.metrics,
-                context.now,
-                command,
-            );
+            handle_media_command(state, context, command);
         }
     }
 }
 
 fn handle_negotiation_command(
     state: &mut PacketLoopState,
-    context: &WorkerCommandContext<'_>,
+    context: &mut WorkerCommandContext<'_>,
     command: RtcWorkerCommand,
 ) {
     match command {
@@ -129,8 +117,7 @@ fn handle_negotiation_command(
             response,
         } => negotiation::respond_create_initial_session_offer(
             state,
-            context.bitrate_registry,
-            context.snapshot_state,
+            context,
             OfferBootstrapConfig {
                 public_ip: context.public_ip,
                 max_bitrate_out: context.max_bitrate_out,
@@ -212,10 +199,7 @@ fn respond_expired_active_speaker_room_instance_ids(
 
 fn handle_media_command(
     state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
-    recv_media_policy: media::RecvMediaPolicy,
-    metrics: &RuntimeMetrics,
-    now: Instant,
+    context: &mut WorkerCommandContext<'_>,
     command: RtcWorkerCommand,
 ) {
     match command {
@@ -223,27 +207,31 @@ fn handle_media_command(
             session_key,
             transport_media_id,
             response,
-        } => media::respond_remove_media(
-            state,
-            bitrate_registry,
-            &session_key,
-            transport_media_id,
-            response,
-        ),
+        } => {
+            media::respond_remove_media(state, context, &session_key, transport_media_id, response);
+        }
         RtcWorkerCommand::AddRecvMedia {
             session_key,
             media_kind,
             rtp_parameters,
             response,
-        } => media::respond_add_recv_media(
-            state,
-            bitrate_registry,
-            recv_media_policy,
-            &session_key,
-            media_kind,
-            &rtp_parameters,
-            response,
-        ),
+        } => {
+            let policy = media::RecvMediaPolicy {
+                max_bitrate_in: context.max_bitrate_in,
+                video_bitrate_limits: context.video_bitrate_limits,
+                codec_flags: context.codec_flags,
+                codec_preferences: context.codec_preferences,
+            };
+            media::respond_add_recv_media(
+                state,
+                context,
+                policy,
+                &session_key,
+                media_kind,
+                &rtp_parameters,
+                response,
+            );
+        }
         RtcWorkerCommand::AddSendMedia {
             consumer_session_key,
             media_kind,
@@ -262,11 +250,11 @@ fn handle_media_command(
                 consumer_rtp_parameters: &consumer_rtp_parameters,
                 active,
             },
-            now,
+            context.now,
             response,
         ),
         RtcWorkerCommand::MediaControl(command) => {
-            handle_media_route_control_command(state, metrics, now, command);
+            handle_media_route_control_command(state, context.metrics, context.now, command);
         }
         _ => {}
     }

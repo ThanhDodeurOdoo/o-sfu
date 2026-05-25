@@ -186,7 +186,11 @@ impl PacketLoopControlInput {
     /// The caller remains responsible for invalidating demux recovery hints
     /// after dispatch. Both variants may change ownership indexes that demux
     /// recovery relies on.
-    pub(super) fn dispatch(self, state: &mut PacketLoopState, context: &WorkerCommandContext<'_>) {
+    pub(super) fn dispatch(
+        self,
+        state: &mut PacketLoopState,
+        context: &mut WorkerCommandContext<'_>,
+    ) {
         match self {
             Self::Command(command) => handle_worker_command(state, context, command),
             #[cfg(any(test, feature = "testing-transport"))]
