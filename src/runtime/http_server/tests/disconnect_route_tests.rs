@@ -1,4 +1,8 @@
 use super::fixtures::*;
+use crate::core::server::{
+    room::{UserCloseReason, UserOutbound},
+    session::UserPermissions,
+};
 
 #[tokio::test]
 async fn disconnect_rejects_invalid_utf8_body() -> TestResult {
@@ -51,6 +55,75 @@ async fn disconnect_accepts_valid_jwt() -> TestResult {
         "disconnect request should complete",
     )
     .await
+}
+
+#[tokio::test]
+async fn disconnect_route_kicks_live_users() -> TestResult {
+    let test_state = test_state_with_handles();
+    let room = test_state
+        .room_manager
+        .serve_room(
+            "issuer-disconnect",
+            TEST_ROOM_KEY,
+            &RoomConfig::default(),
+            None,
+        )
+        .await;
+    let alice_id = UserId::Integer(1);
+    let bob_id = UserId::Integer(2);
+    let (alice_tx, mut alice_rx) = test_outbound_sender(&test_state.state);
+    let (bob_tx, _bob_rx) = test_outbound_sender(&test_state.state);
+
+    require_ok(
+        room.test_api()
+            .lifecycle()
+            .join_user(alice_id.clone(), None, UserPermissions::default(), alice_tx)
+            .await,
+        "alice should join",
+    )?;
+    require_ok(
+        room.test_api()
+            .lifecycle()
+            .join_user(bob_id.clone(), None, UserPermissions::default(), bob_tx)
+            .await,
+        "bob should join",
+    )?;
+
+    let token = require_some(
+        signed_disconnect_claims(BTreeMap::from([(
+            room.uuid().to_owned(),
+            vec![alice_id.clone()],
+        )])),
+        "disconnect JWT should sign",
+    )?;
+    route_status(
+        &test_state.state,
+        Request::post(DISCONNECT_PATH),
+        Body::from(token),
+        StatusCode::OK,
+        "disconnect request should complete",
+    )
+    .await?;
+
+    match require_ok(alice_rx.try_recv(), "alice should receive runtime close")? {
+        UserOutbound::Close(UserCloseReason::RemovedByRuntime) => {}
+        other => return Err(anyhow!("alice should receive runtime close: {other:?}")),
+    }
+    assert!(
+        !test_state
+            .room_manager
+            .test_api()
+            .has_session(room.uuid(), &alice_id)
+            .await
+    );
+    assert!(
+        test_state
+            .room_manager
+            .test_api()
+            .has_session(room.uuid(), &bob_id)
+            .await
+    );
+    Ok(())
 }
 
 #[tokio::test]

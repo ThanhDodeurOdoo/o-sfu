@@ -94,6 +94,49 @@ async fn room_returns_uuid_and_request_base_url() -> TestResult {
 }
 
 #[tokio::test]
+async fn room_route_persists_query_config() -> TestResult {
+    let token = room_token(Some("issuer-route-config"), Some(TEST_ROOM_KEY))?;
+    let test_state = test_state_with_handles();
+    let recording_address = "https://record.example.com/hook";
+    let payload: RoomResponse = route_json(
+        &test_state.state,
+        Request::get(format!(
+            "{CHANNEL_PATH}?webRTC=false&recordingAddress=https%3A%2F%2Frecord.example.com%2Fhook"
+        ))
+        .header(header::HOST, "sfu.example.com")
+        .header(header::AUTHORIZATION, format!("Bearer {token}")),
+        Body::empty(),
+        StatusCode::OK,
+        "room request should complete",
+    )
+    .await?;
+    let room = require_some(
+        test_state.room_manager.get_by_uuid(&payload.uuid).await,
+        "room should remain registered after route creation",
+    )?;
+
+    assert!(!room.web_rtc_enabled());
+    assert_eq!(
+        room.test_api().inspect().recording_address(),
+        Some(recording_address)
+    );
+    let stats: StatsResponse = route_json(
+        &test_state.state,
+        Request::get(STATS_PATH),
+        Body::empty(),
+        StatusCode::OK,
+        "stats request should succeed",
+    )
+    .await?;
+    let stats_room = require_some(
+        stats.iter().find(|room| room.uuid == payload.uuid),
+        "stats payload should contain created room",
+    )?;
+    assert!(!stats_room.web_rtc_enabled);
+    Ok(())
+}
+
+#[tokio::test]
 async fn room_ignores_forwarded_headers_when_proxy_trust_is_disabled() -> TestResult {
     let token = room_token(Some("issuer-a"), Some(TEST_ROOM_KEY))?;
     let state = test_state();

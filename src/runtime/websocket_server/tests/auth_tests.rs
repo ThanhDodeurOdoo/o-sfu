@@ -1,5 +1,6 @@
 use std::iter::repeat_n;
 
+use o_sfu_protocol::wire::WebSocketCloseCode;
 use tokio::net::TcpSocket;
 use tungstenite::http::StatusCode;
 
@@ -284,6 +285,93 @@ async fn websocket_authenticates_with_room_key_and_sends_welcome_payload() {
 }
 
 #[tokio::test]
+async fn websocket_closes_authenticated_user_when_room_is_full() -> TestResult {
+    let server = TestServerBuilder::new()
+        .room_size(1)
+        .spawn_required()
+        .await?;
+    let room = create_room(&server, "issuer-full-room", CreateRoomQuery::default()).await;
+    let alice_id = UserId::Integer(1);
+    let bob_id = UserId::Integer(2);
+    let alice_token = require_some(
+        signed_connect_claims(TEST_ROOM_KEY, room.uuid(), alice_id.clone()),
+        "alice connect JWT should sign",
+    )?;
+    let bob_token = require_some(
+        signed_connect_claims(TEST_ROOM_KEY, room.uuid(), bob_id.clone()),
+        "bob connect JWT should sign",
+    )?;
+    let wrong_key_token = require_some(
+        signed_connect_claims(OTHER_ROOM_KEY, room.uuid(), bob_id.clone()),
+        "wrong-key connect JWT should sign",
+    )?;
+    let (mut alice, _welcome) = require_some(
+        authenticate_and_read_welcome(&server, &alice_token).await,
+        "alice should authenticate",
+    )?;
+    let mut wrong_key = require_some(
+        authenticate_with_room(&server, &wrong_key_token, Some(room.uuid())).await,
+        "wrong-key websocket should connect before auth rejection",
+    )?;
+
+    assert_eq!(
+        read_close_code(&mut wrong_key).await,
+        Some(CloseCode::Library(u16::from(
+            WebSocketCloseCode::AuthFailed
+        )))
+    );
+    assert!(
+        !server
+            .room_manager
+            .test_api()
+            .has_session(room.uuid(), &bob_id)
+            .await
+    );
+    let metrics = server.state.metrics.snapshot();
+    assert_eq!(metrics.ws_handshake_credentials_received(), 2);
+    assert_eq!(metrics.ws_users_joined(), 1);
+    assert_eq!(metrics.ws_handshake_rejected_authentication_failed(), 1);
+    assert_eq!(metrics.ws_handshake_rejected_room_full(), 0);
+
+    let mut bob = require_some(
+        authenticate_with_jwt(&server, &bob_token).await,
+        "bob should connect before room-full rejection",
+    )?;
+
+    let close_code = timeout(Duration::from_secs(1), read_close_code(&mut bob)).await;
+    assert!(
+        close_code.is_ok(),
+        "room-full close should arrive promptly: {close_code:?}"
+    );
+    assert_eq!(
+        close_code.ok().flatten(),
+        Some(CloseCode::Library(u16::from(WebSocketCloseCode::RoomFull)))
+    );
+
+    assert!(
+        server
+            .room_manager
+            .test_api()
+            .has_session(room.uuid(), &alice_id)
+            .await
+    );
+    assert!(
+        !server
+            .room_manager
+            .test_api()
+            .has_session(room.uuid(), &bob_id)
+            .await
+    );
+    let metrics = server.state.metrics.snapshot();
+    assert_eq!(metrics.ws_handshake_credentials_received(), 3);
+    assert_eq!(metrics.ws_users_joined(), 1);
+    assert_eq!(metrics.ws_handshake_rejected_authentication_failed(), 1);
+    assert_eq!(metrics.ws_handshake_rejected_room_full(), 1);
+    assert!(alice.close(None).await.is_ok());
+    Ok(())
+}
+
+#[tokio::test]
 async fn websocket_pre_auth_permit_is_released_after_auth_success() {
     let server = TestServerBuilder::new()
         .pre_auth_capacity(1, 1)
@@ -441,7 +529,7 @@ async fn websocket_rejects_explicit_room_token_signed_with_another_key() {
         return;
     };
     let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
-    let token = signed_connect_claims("b3RoZXItcm9vbS1rZXk=", room.uuid(), UserId::Integer(19));
+    let token = signed_connect_claims(OTHER_ROOM_KEY, room.uuid(), UserId::Integer(19));
     assert!(token.is_some());
     let Some(token) = token else {
         return;

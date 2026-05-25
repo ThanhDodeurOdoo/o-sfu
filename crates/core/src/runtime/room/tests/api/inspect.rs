@@ -145,6 +145,11 @@ impl RoomTestInspect<'_> {
         self.room.state.read().await.has_session(user_id)
     }
 
+    #[must_use]
+    pub fn recording_address(&self) -> Option<&str> {
+        self.room.definition.recording_address()
+    }
+
     pub async fn topology_home_router_id(self, user_id: &UserId) -> Option<RouterId> {
         self.room
             .state
