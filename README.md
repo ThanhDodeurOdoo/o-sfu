@@ -16,11 +16,12 @@
 
 # o-sfu
 
-The goal is to be able to run it as an alternative to odoo/sfu (so the http and ws API and client bundle API are the same), but with:
+The goal is to runn it as an alternative to odoo/sfu (so the http and ws API and client bundle API are the same), but with:
 - higher control on routing
 - better recording integration
 - better scaling architecture (local and multi server sharding)
-- more observability (prometheus, open telemetry,...)
+- higher routing granularity (consumer hints, VAD based priority and simulcast degradation)
+- more observability
 - more?
 
 ### API documentation
@@ -128,12 +129,7 @@ Partial coverage
 | VP9 hybrid/layered forwarding | WIP. `CODEC_VP9=true` is codec negotiation only.                                                                          |
 | AV1 hybrid/layered forwarding | WIP. `CODEC_AV1=true` is codec negotiation only.                                                                          |
 
-The browser bundle configures RID send encodings only for upload slots that
-match a production simulcast path. Unsupported H.264 profiles, unsupported
-browsers and optional codec-only configurations fall back to single-encoding
-publication
-
-## Tooling
+## Side repos
 
 ## Monitoring
 
