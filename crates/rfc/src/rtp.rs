@@ -54,24 +54,26 @@ pub const RTP_SEQUENCE_NUMBER_MODULUS: u32 = 1_u32 << 16;
 /// Reference: RFC 3550 section 5.1.
 pub const RTP_TIMESTAMP_MODULUS: u64 = 1_u64 << 32;
 
+/// Maximum value representable by the 7-bit RTP payload type field.
+///
+/// Reference: RFC 3550 section 5.1.
+pub const RTP_PAYLOAD_TYPE_MAX: u8 = 127;
+
 /// Dynamic RTP payload type range in RTP/AVP.
 ///
 /// Reference: RFC 3551 section 6.
 pub const RTP_DYNAMIC_PAYLOAD_TYPE_START: u8 = 96;
 pub const RTP_DYNAMIC_PAYLOAD_TYPE_END: u8 = 127;
 
-/// Payload type values reserved to avoid confusion with RTCP packet types.
+/// Payload type range disallowed when RTP and RTCP share one port.
 ///
-/// When the marker bit is set, these payload types produce second-byte values
-/// that collide with RTCP packet types 200–204 (SR, RR, SDES, BYE, APP).
-/// This is critical for RTP/RTCP multiplexing per RFC 5761 section 4.
+/// RFC 5761 reserves the full 64 through 95 payload type range for muxed
+/// sessions so the second packet octet can unambiguously distinguish RTP from
+/// RTCP.
 ///
-/// Reference: RFC 3551 section 6.
-pub const RTP_RESERVED_PAYLOAD_TYPE_72: u8 = 72;
-pub const RTP_RESERVED_PAYLOAD_TYPE_73: u8 = 73;
-pub const RTP_RESERVED_PAYLOAD_TYPE_74: u8 = 74;
-pub const RTP_RESERVED_PAYLOAD_TYPE_75: u8 = 75;
-pub const RTP_RESERVED_PAYLOAD_TYPE_76: u8 = 76;
+/// Reference: RFC 5761 section 4.
+pub const RTP_RTCP_MUX_FORBIDDEN_PAYLOAD_TYPE_START: u8 = 64;
+pub const RTP_RTCP_MUX_FORBIDDEN_PAYLOAD_TYPE_END: u8 = 95;
 
 /// Common static RTP/AVP payload type assignments.
 ///
@@ -672,6 +674,38 @@ pub mod h264 {
     /// FU-A end bit in the FU header.
     pub const FU_END_BIT: u8 = 0x40;
 
+    /// H264 RTP packetization mode.
+    ///
+    /// Reference: RFC 6184 section 6.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum PacketizationMode {
+        SingleNalUnit,
+        NonInterleaved,
+    }
+
+    impl PacketizationMode {
+        #[must_use]
+        pub const fn from_fmtp_value(value: u8) -> Option<Self> {
+            match value {
+                0 => Some(Self::SingleNalUnit),
+                1 => Some(Self::NonInterleaved),
+                _ => None,
+            }
+        }
+
+        #[must_use]
+        pub const fn fmtp_value(self) -> u8 {
+            match self {
+                Self::SingleNalUnit => 0,
+                Self::NonInterleaved => 1,
+            }
+        }
+
+        const fn allows_aggregation_and_fragmentation(self) -> bool {
+            matches!(self, Self::NonInterleaved)
+        }
+    }
+
     /// Parsed H264 `profile-level-id` value.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct ProfileLevelId {
@@ -792,14 +826,18 @@ pub mod h264 {
     /// `false`. The helper does not parse a full access unit. It only answers
     /// whether this packet can refresh a decoder if forwarded.
     #[must_use]
-    pub fn payload_starts_idr(payload: &[u8]) -> bool {
+    pub fn payload_starts_idr(payload: &[u8], packetization_mode: PacketizationMode) -> bool {
         let Some((&nal_header, rest)) = payload.split_first() else {
             return false;
         };
         match nal_header & NAL_UNIT_TYPE_MASK {
             NAL_UNIT_TYPE_IDR => true,
-            NAL_UNIT_TYPE_STAP_A => stap_a_contains_idr(rest),
-            NAL_UNIT_TYPE_FU_A => fu_a_starts_idr(rest),
+            NAL_UNIT_TYPE_STAP_A if packetization_mode.allows_aggregation_and_fragmentation() => {
+                stap_a_contains_idr(rest)
+            }
+            NAL_UNIT_TYPE_FU_A if packetization_mode.allows_aggregation_and_fragmentation() => {
+                fu_a_starts_idr(rest)
+            }
             _ => false,
         }
     }
@@ -958,6 +996,24 @@ pub mod h264 {
 #[must_use]
 pub const fn is_dynamic_payload_type(payload_type: u8) -> bool {
     payload_type >= RTP_DYNAMIC_PAYLOAD_TYPE_START && payload_type <= RTP_DYNAMIC_PAYLOAD_TYPE_END
+}
+
+/// Returns `true` if `payload_type` fits in the RTP fixed-header PT field.
+///
+/// Reference: RFC 3550 section 5.1.
+#[must_use]
+pub const fn is_payload_type(payload_type: u8) -> bool {
+    payload_type <= RTP_PAYLOAD_TYPE_MAX
+}
+
+/// Returns `true` if `payload_type` can be used with RTP/RTCP mux.
+///
+/// Reference: RFC 5761 section 4.
+#[must_use]
+pub const fn is_rtcp_mux_payload_type(payload_type: u8) -> bool {
+    is_payload_type(payload_type)
+        && (payload_type < RTP_RTCP_MUX_FORBIDDEN_PAYLOAD_TYPE_START
+            || payload_type > RTP_RTCP_MUX_FORBIDDEN_PAYLOAD_TYPE_END)
 }
 
 /// RTCP packet type codes defined by RFC 3550 section 12.1.
@@ -1175,7 +1231,7 @@ pub mod frame_marking {
 mod tests {
     use super::{
         fmtp, frame_marking,
-        h264::{self, LevelIdc, Profile, ProfileLevelId},
+        h264::{self, LevelIdc, PacketizationMode, Profile, ProfileLevelId},
         header_extension, rtcp_feedback_format,
     };
 
@@ -1234,14 +1290,48 @@ mod tests {
 
     #[test]
     fn h264_payload_keyframe_detection_covers_idr_packetizations() {
-        assert!(h264::payload_starts_idr(&[0x65, 0x88]));
-        assert!(h264::payload_starts_idr(&[
-            0x78, 0x00, 0x02, 0x67, 0x42, 0x00, 0x02, 0x65, 0x88
-        ]));
-        assert!(h264::payload_starts_idr(&[0x7c, 0x85, 0x88]));
-        assert!(!h264::payload_starts_idr(&[0x7c, 0xc5, 0x88]));
-        assert!(!h264::payload_starts_idr(&[0x41, 0x9a]));
-        assert!(!h264::payload_starts_idr(&[0x7c, 0x05, 0x88]));
+        assert!(h264::payload_starts_idr(
+            &[0x65, 0x88],
+            PacketizationMode::SingleNalUnit
+        ));
+        assert!(h264::payload_starts_idr(
+            &[0x78, 0x00, 0x02, 0x67, 0x42, 0x00, 0x02, 0x65, 0x88],
+            PacketizationMode::NonInterleaved
+        ));
+        assert!(h264::payload_starts_idr(
+            &[0x7c, 0x85, 0x88],
+            PacketizationMode::NonInterleaved
+        ));
+        assert!(!h264::payload_starts_idr(
+            &[0x7c, 0xc5, 0x88],
+            PacketizationMode::NonInterleaved
+        ));
+        assert!(!h264::payload_starts_idr(
+            &[0x41, 0x9a],
+            PacketizationMode::NonInterleaved
+        ));
+        assert!(!h264::payload_starts_idr(
+            &[0x7c, 0x05, 0x88],
+            PacketizationMode::NonInterleaved
+        ));
+        assert!(!h264::payload_starts_idr(
+            &[0x78, 0x00, 0x02, 0x65, 0x88],
+            PacketizationMode::SingleNalUnit
+        ));
+        assert!(!h264::payload_starts_idr(
+            &[0x7c, 0x85, 0x88],
+            PacketizationMode::SingleNalUnit
+        ));
+    }
+
+    #[test]
+    fn rtcp_mux_payload_type_range_follows_rfc_5761() {
+        assert!(super::is_rtcp_mux_payload_type(63));
+        assert!(!super::is_rtcp_mux_payload_type(64));
+        assert!(!super::is_rtcp_mux_payload_type(95));
+        assert!(super::is_rtcp_mux_payload_type(96));
+        assert!(super::is_rtcp_mux_payload_type(127));
+        assert!(!super::is_rtcp_mux_payload_type(128));
     }
 
     #[test]

@@ -109,7 +109,7 @@ pub(super) struct RemoteSourceRegistration {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DecoderRefreshCodec {
     /// h264 source where IDR detection is available
-    H264,
+    H264(rtp::h264::PacketizationMode),
     /// vp8 source where keyframe detection is available
     Vp8,
     /// primary codec exists but packet-level refresh detection is not supported
@@ -126,7 +126,7 @@ impl DecoderRefreshCodec {
         let mut has_unsupported_primary = false;
         for format in parameters.formats() {
             match format.codec() {
-                &rtp::CodecName::H264 => return Some(Self::H264),
+                &rtp::CodecName::H264 => return Some(Self::from_h264_format(format)),
                 &rtp::CodecName::Vp8 => has_vp8 = true,
                 codec if !codec.is_rtx() => has_unsupported_primary = true,
                 _ => {}
@@ -137,6 +137,18 @@ impl DecoderRefreshCodec {
         } else {
             has_unsupported_primary.then_some(Self::Unsupported)
         }
+    }
+
+    fn from_h264_format(format: &o_sfu_router::MediaFormat) -> Self {
+        let packetization_mode = format
+            .settings()
+            .find_map(|setting| match setting {
+                o_sfu_router::CodecSetting::H264PacketizationMode(mode) => Some(*mode),
+                _ => None,
+            })
+            .unwrap_or(rtp::fmtp::H264_DEFAULT_PACKETIZATION_MODE);
+        rtp::h264::PacketizationMode::from_fmtp_value(packetization_mode)
+            .map_or(Self::Unsupported, Self::H264)
     }
 }
 

@@ -1,11 +1,47 @@
 use o_sfu_rfc::webrtc;
 
 use crate::{
-    HeaderExtension, MediaCapabilities, MediaCodecCapability, MediaFormat, MediaKind, MediaStream,
-    ParseDiagnostic, ParseDiagnosticKind, RtcpFeedback, RtcpFeedbackKind, RtpNegotiationError,
-    StreamBinding, can_consume, derive_consumable_rtp_parameters,
-    negotiate_consumer_rtp_parameters,
+    HeaderExtension, HeaderExtensionId, MediaCapabilities, MediaCodecCapability, MediaFormat,
+    MediaKind, MediaStream, ParseDiagnostic, ParseDiagnosticKind, PayloadType, Rid, RtcpFeedback,
+    RtcpFeedbackKind, RtpNegotiationError, StreamBinding, can_consume,
+    derive_consumable_rtp_parameters, negotiate_consumer_rtp_parameters,
 };
+
+#[test]
+fn rtp_identifiers_validate_rfc_ranges() {
+    assert_eq!(PayloadType::try_new(63).map(PayloadType::value), Some(63));
+    assert_eq!(PayloadType::try_new(64), None);
+    assert_eq!(PayloadType::try_new(95), None);
+    assert_eq!(PayloadType::try_new(96).map(PayloadType::value), Some(96));
+    assert_eq!(PayloadType::try_new(128), None);
+
+    assert_eq!(
+        HeaderExtensionId::try_new(1).map(HeaderExtensionId::value),
+        Some(1)
+    );
+    assert_eq!(
+        HeaderExtensionId::try_new(14).map(HeaderExtensionId::value),
+        Some(14)
+    );
+    assert_eq!(HeaderExtensionId::try_new(0), None);
+    assert_eq!(HeaderExtensionId::try_new(15), None);
+
+    assert_eq!(Rid::try_new("hi").as_ref().map(Rid::as_str), Some("hi"));
+    assert_eq!(Rid::try_new(""), None);
+    assert_eq!(Rid::try_new("bad-rid"), None);
+}
+
+#[test]
+fn invalid_rtx_apt_does_not_become_a_payload_type() {
+    let capability =
+        MediaCodecCapability::new(MediaKind::Video, "rtx", 90_000).with_parameter("apt", "64");
+
+    assert_eq!(capability.rtx_associated_payload_type(), None);
+    assert_eq!(
+        capability.parameters().collect::<Vec<_>>(),
+        vec![("apt".to_owned(), "64".to_owned())]
+    );
+}
 
 #[test]
 fn codec_capability_builder_keeps_optional_fields() {

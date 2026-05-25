@@ -100,7 +100,23 @@ pub struct PayloadType(u8);
 
 impl PayloadType {
     #[must_use]
+    pub const fn try_new(value: u8) -> Option<Self> {
+        if rfc_rtp::is_rtcp_mux_payload_type(value) {
+            Some(Self(value))
+        } else {
+            None
+        }
+    }
+
+    /// Builds a payload type for the muxed RTP sessions used by `o-sfu`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `value` does not fit the RTP payload type field or is in the
+    /// RTP/RTCP mux forbidden range from RFC 5761 section 4.
+    #[must_use]
     pub const fn new(value: u8) -> Self {
+        assert!(rfc_rtp::is_rtcp_mux_payload_type(value));
         Self(value)
     }
 
@@ -164,8 +180,22 @@ pub struct Rid(String);
 
 impl Rid {
     #[must_use]
+    pub fn try_new(value: impl Into<String>) -> Option<Self> {
+        let value = value.into();
+        rfc_webrtc::sdp::rid::is_id(value.as_str()).then_some(Self(value))
+    }
+
+    /// Builds a RID after applying the RFC 8852 stream-id grammar.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `value` is empty, too long or contains a non-alphanumeric
+    /// byte.
+    #[must_use]
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        let value = value.into();
+        assert!(rfc_webrtc::sdp::rid::is_id(value.as_str()));
+        Self(value)
     }
 
     #[must_use]
@@ -224,7 +254,23 @@ pub struct HeaderExtensionId(u8);
 
 impl HeaderExtensionId {
     #[must_use]
+    pub const fn try_new(value: u8) -> Option<Self> {
+        if rfc_rtp::header_extension::is_one_byte_id(value) {
+            Some(Self(value))
+        } else {
+            None
+        }
+    }
+
+    /// Builds a one-byte RTP header-extension id.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `value` is padding, reserved or outside the RFC 8285
+    /// one-byte element id range.
+    #[must_use]
     pub const fn new(value: u8) -> Self {
+        assert!(rfc_rtp::header_extension::is_one_byte_id(value));
         Self(value)
     }
 
@@ -773,10 +819,14 @@ impl MediaStream {
 
 fn codec_setting_from_wire(key: String, value: String) -> CodecSetting {
     match key.as_str() {
-        rfc_rtp::fmtp::RTX_ASSOCIATION => value.parse::<u8>().map(PayloadType::new).map_or(
-            CodecSetting::Other { key, value },
-            CodecSetting::RtxAssociation,
-        ),
+        rfc_rtp::fmtp::RTX_ASSOCIATION => value
+            .parse::<u8>()
+            .ok()
+            .and_then(PayloadType::try_new)
+            .map_or(
+                CodecSetting::Other { key, value },
+                CodecSetting::RtxAssociation,
+            ),
         rfc_rtp::fmtp::H264_PACKETIZATION_MODE => value.parse::<u8>().map_or(
             CodecSetting::Other { key, value },
             CodecSetting::H264PacketizationMode,
