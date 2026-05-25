@@ -27,7 +27,7 @@ use super::{
     buffers::PacketLoopBuffers,
 };
 use crate::runtime::{
-    media_transport::{TransportMediaId, TransportSessionKey},
+    media_transport::{TransportMediaId, TransportSessionKey, TransportSourceKey},
     metrics::{RtcRouteControlMetrics, RtcRouteControlOutcome},
 };
 
@@ -76,7 +76,7 @@ pub(super) enum ResolvedKeyframeRoute {
         source_session_key: TransportSessionKey,
     },
     Remote {
-        source_session_key: TransportSessionKey,
+        source: TransportSourceKey,
         source_control: RemoteSourceControl,
     },
 }
@@ -209,7 +209,7 @@ fn flush_coalesced_keyframe_request(
             );
         }
         ResolvedKeyframeRoute::Remote {
-            source_session_key,
+            source,
             source_control,
         } => {
             match state.route_control.decide_keyframe_request_for_rid(
@@ -219,15 +219,14 @@ fn flush_coalesced_keyframe_request(
             ) {
                 KeyframeRequestDecision::Forward => {
                     debug!(
-                        ?source_session_key,
+                        source_session_key = ?source.session_key(),
                         source_transport_media_id = ?coalesced_request.source_transport_media_id,
                         rid = ?coalesced_request.rid,
                         kind = ?coalesced_request.kind,
                         "forwarding remote keyframe request to source control"
                     );
                     source_control.request_keyframe(
-                        &source_session_key,
-                        coalesced_request.source_transport_media_id,
+                        &source,
                         coalesced_request.rid,
                         coalesced_request.kind,
                     );
@@ -235,7 +234,7 @@ fn flush_coalesced_keyframe_request(
                 }
                 KeyframeRequestDecision::Absorb => {
                     debug!(
-                        ?source_session_key,
+                        source_session_key = ?source.session_key(),
                         source_transport_media_id = ?coalesced_request.source_transport_media_id,
                         rid = ?coalesced_request.rid,
                         kind = ?coalesced_request.kind,
@@ -268,7 +267,7 @@ fn resolve_keyframe_route(
         .remote_source_registration(source_transport_media_id)
         .cloned()
         .map(|remote_source| ResolvedKeyframeRoute::Remote {
-            source_session_key: remote_source.source_session_key().clone(),
+            source: remote_source.source().clone(),
             source_control: remote_source.source_control().clone(),
         })
 }

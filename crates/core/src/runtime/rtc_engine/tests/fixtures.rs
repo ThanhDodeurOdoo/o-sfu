@@ -29,7 +29,7 @@ pub(super) use crate::{
         UserId,
         media_transport::{
             ActiveSpeakerSource, TransportAdapterError, TransportConsumerRoute, TransportMediaId,
-            TransportSessionKey,
+            TransportSessionKey, TransportSourceKey,
         },
         metrics::test_support::RuntimeMetricsSnapshotTestExt,
     },
@@ -61,8 +61,7 @@ pub(super) fn transport_consumer_route(
     TransportConsumerRoute::new(
         consumer_session_key.clone(),
         consumer_transport_media_id,
-        source_session_key.clone(),
-        source_transport_media_id,
+        TransportSourceKey::new(source_session_key.clone(), source_transport_media_id),
     )
 }
 

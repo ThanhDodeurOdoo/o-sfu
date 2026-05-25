@@ -62,7 +62,7 @@ use super::{
     bitrate::BitrateRegistry,
     commands::{
         CloseSessionOutcome, CloseSessionState, ConsumerPacketGateCommand, RemoteSourceControl,
-        RtcMediaControlCommand, RtcWorkerCommand,
+        RouteControlRequest, RtcMediaControlCommand, RtcWorkerCommand,
     },
     packet_loop::PacketLoopLagSnapshot,
     relay_registry::{RelayPacketMailbox, RelayTargetId},
@@ -76,7 +76,7 @@ use crate::{
             AppliedSessionAnswer, ConsumerPacketGateUpdate, MediaTransportConfig,
             MediaTransportDeps, SessionOffer, SourcePacketGate, SourcePolicySignal,
             TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportResult,
-            TransportSessionKey,
+            TransportSessionKey, TransportSourceKey,
         },
         metrics::{RtcMetricsRecorder, RtpMetricsRecorder, RuntimeMetrics},
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -85,21 +85,19 @@ use crate::{
 
 static NEXT_RELAY_TARGET_ID: AtomicU64 = AtomicU64::new(1);
 
-pub(in crate::runtime) struct RtcSendMediaSource<'a> {
-    pub source_session_key: &'a TransportSessionKey,
-    pub source_transport_media_id: TransportMediaId,
+pub(in crate::runtime) struct RtcSendMediaSource {
+    pub source: TransportSourceKey,
     pub remote_source_control: Option<RemoteSourceControl>,
 }
 
-impl RtcSendMediaSource<'_> {
+impl RtcSendMediaSource {
     #[cfg(test)]
-    pub const fn local(
+    pub fn local(
         source_session_key: &TransportSessionKey,
         source_transport_media_id: TransportMediaId,
-    ) -> RtcSendMediaSource<'_> {
-        RtcSendMediaSource {
-            source_session_key,
-            source_transport_media_id,
+    ) -> Self {
+        Self {
+            source: TransportSourceKey::new(source_session_key.clone(), source_transport_media_id),
             remote_source_control: None,
         }
     }
@@ -434,19 +432,31 @@ impl RtcWorker {
         &self,
         consumer_session_key: &TransportSessionKey,
         media_kind: MediaKind,
-        source: RtcSendMediaSource<'_>,
+        source: RtcSendMediaSource,
         consumer_rtp_parameters: &RouterRtpParameters,
         active: bool,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.request_worker(|response| RtcWorkerCommand::AddSendMedia {
             consumer_session_key: consumer_session_key.clone(),
             media_kind,
-            source_session_key: source.source_session_key.clone(),
-            source_transport_media_id: source.source_transport_media_id,
+            source: source.source,
             remote_source_control: source.remote_source_control,
             consumer_rtp_parameters: consumer_rtp_parameters.clone(),
             active,
             response,
+        })
+        .await
+    }
+
+    async fn request_media_control(
+        &self,
+        request: RouteControlRequest,
+    ) -> Result<(), TransportAdapterError> {
+        self.request_worker(|response| {
+            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+                request,
+                response: Some(response),
+            })
         })
         .await
     }
@@ -459,17 +469,12 @@ impl RtcWorker {
     /// command or the producer media handle is no longer valid for the session
     pub async fn set_producer_active(
         &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
+        source: &TransportSourceKey,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        self.request_worker(|response| {
-            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetProducerActive {
-                session_key: session_key.clone(),
-                transport_media_id,
-                active,
-                response,
-            })
+        self.request_media_control(RouteControlRequest::SetProducerActive {
+            source: source.clone(),
+            active,
         })
         .await
     }
@@ -485,12 +490,9 @@ impl RtcWorker {
         route: &TransportConsumerRoute,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        self.request_worker(|response| {
-            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetConsumerActive {
-                route: route.clone(),
-                active,
-                response,
-            })
+        self.request_media_control(RouteControlRequest::SetConsumerActive {
+            route: route.clone(),
+            active,
         })
         .await
     }
@@ -507,12 +509,9 @@ impl RtcWorker {
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
         let packet_gate = packet_layer_gate(packet_gate);
-        self.request_worker(|response| {
-            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetConsumerPacketGate {
-                route: route.clone(),
-                packet_gate,
-                response,
-            })
+        self.request_media_control(RouteControlRequest::SetConsumerPacketGate {
+            route: route.clone(),
+            packet_gate,
         })
         .await
     }
@@ -527,11 +526,8 @@ impl RtcWorker {
         &self,
         route: &TransportConsumerRoute,
     ) -> Result<(), TransportAdapterError> {
-        self.request_worker(|response| {
-            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::RequestConsumerKeyframe {
-                route: route.clone(),
-                response,
-            })
+        self.request_media_control(RouteControlRequest::RequestConsumerKeyframe {
+            route: route.clone(),
         })
         .await
     }
@@ -544,19 +540,14 @@ impl RtcWorker {
     /// the command or the target worker cannot publish its relay mailbox
     pub async fn activate_relay_route(
         &self,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        source: &TransportSourceKey,
         target: &Self,
     ) -> Result<(), TransportAdapterError> {
         let mailbox = target.ensure_packet_loop_started()?.relay_mailbox;
-        self.request_worker(|response| {
-            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::AddRelayTarget {
-                source_session_key: source_session_key.clone(),
-                source_transport_media_id,
-                target_id: target.relay_target_id,
-                target: mailbox,
-                response,
-            })
+        self.request_media_control(RouteControlRequest::AddRelayTarget {
+            source: source.clone(),
+            target_id: target.relay_target_id,
+            target: mailbox,
         })
         .await
     }
@@ -572,12 +563,9 @@ impl RtcWorker {
         source_transport_media_id: TransportMediaId,
         target: &Self,
     ) -> Result<(), TransportAdapterError> {
-        self.request_worker(|response| {
-            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::RemoveRelayTarget {
-                source_transport_media_id,
-                target_id: target.relay_target_id,
-                response,
-            })
+        self.request_media_control(RouteControlRequest::RemoveRelayTarget {
+            source_transport_media_id,
+            target_id: target.relay_target_id,
         })
         .await
     }
@@ -590,19 +578,14 @@ impl RtcWorker {
     /// the command or the relay target no longer matches worker-owned state
     pub async fn apply_relay_target_activity(
         &self,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        source: &TransportSourceKey,
         target: &Self,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        self.request_worker(|response| {
-            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetRelayTargetActive {
-                source_session_key: source_session_key.clone(),
-                source_transport_media_id,
-                target_id: target.relay_target_id,
-                active,
-                response,
-            })
+        self.request_media_control(RouteControlRequest::SetRelayTargetActive {
+            source: source.clone(),
+            target_id: target.relay_target_id,
+            active,
         })
         .await
     }
@@ -620,8 +603,7 @@ impl RtcWorker {
     /// answer the batch command
     pub async fn set_consumer_packet_gates<'a>(
         &self,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        source: &TransportSourceKey,
         updates: impl IntoIterator<Item = &'a ConsumerPacketGateUpdate>,
     ) -> Result<Vec<TransportResult<()>>, TransportAdapterError> {
         let updates = updates
@@ -636,8 +618,7 @@ impl RtcWorker {
             .collect();
         self.request_worker(|response| {
             RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetConsumerPacketGateBatch {
-                source_session_key: source_session_key.clone(),
-                source_transport_media_id,
+                source: source.clone(),
                 updates,
                 response,
             })

@@ -22,6 +22,7 @@ use crate::runtime::{
     media_transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, SessionOffer,
         TransportConsumerRoute, TransportMediaId, TransportResult, TransportSessionKey,
+        TransportSourceKey,
     },
     metrics::{RtcMetricsRecorder, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence},
 };
@@ -100,18 +101,19 @@ impl RemoteSourceControl {
     /// action than future media or control traffic triggering another request
     pub(super) fn request_keyframe(
         &self,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        source: &TransportSourceKey,
         rid: Option<Rid>,
         kind: KeyframeRequestKind,
     ) -> bool {
         self.send_command(
-            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::RequestRemoteKeyframe {
-                source_session_key: source_session_key.clone(),
-                source_transport_media_id,
-                target_id: self.target_id,
-                rid,
-                kind,
+            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+                request: RouteControlRequest::RequestRemoteKeyframe {
+                    source: source.clone(),
+                    target_id: self.target_id,
+                    rid,
+                    kind,
+                },
+                response: None,
             }),
             RtcRemoteControlDropKind::Keyframe,
         )
@@ -120,16 +122,17 @@ impl RemoteSourceControl {
     /// publishes the effective remote-source packet gate to the source worker
     pub(super) fn set_packet_gate(
         &self,
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        source: &TransportSourceKey,
         packet_gate: PacketLayerGate,
     ) -> bool {
         self.send_command(
-            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetRemoteSourcePacketGate {
-                source_session_key: source_session_key.clone(),
-                source_transport_media_id,
-                target_id: self.target_id,
-                packet_gate,
+            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+                request: RouteControlRequest::SetRemoteSourcePacketGate {
+                    source: source.clone(),
+                    target_id: self.target_id,
+                    packet_gate,
+                },
+                response: None,
             }),
             RtcRemoteControlDropKind::PacketGate,
         )
@@ -202,63 +205,57 @@ impl ConsumerPacketGateCommand {
 }
 
 pub(super) enum RtcMediaControlCommand {
+    Apply {
+        request: RouteControlRequest,
+        response: Option<RtcWorkerResponse<()>>,
+    },
+    SetConsumerPacketGateBatch {
+        source: TransportSourceKey,
+        updates: Vec<ConsumerPacketGateCommand>,
+        response: RtcWorkerResponse<Vec<TransportResult<()>>>,
+    },
+}
+
+pub(super) enum RouteControlRequest {
+    SetProducerActive {
+        source: TransportSourceKey,
+        active: bool,
+    },
+    SetConsumerActive {
+        route: TransportConsumerRoute,
+        active: bool,
+    },
+    SetConsumerPacketGate {
+        route: TransportConsumerRoute,
+        packet_gate: PacketLayerGate,
+    },
+    RequestConsumerKeyframe {
+        route: TransportConsumerRoute,
+    },
     AddRelayTarget {
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        source: TransportSourceKey,
         target_id: RelayTargetId,
         target: RelayPacketMailbox,
-        response: RtcWorkerResponse<()>,
     },
     RemoveRelayTarget {
         source_transport_media_id: TransportMediaId,
         target_id: RelayTargetId,
-        response: RtcWorkerResponse<()>,
     },
     SetRelayTargetActive {
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        source: TransportSourceKey,
         target_id: RelayTargetId,
         active: bool,
-        response: RtcWorkerResponse<()>,
     },
     RequestRemoteKeyframe {
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        source: TransportSourceKey,
         target_id: RelayTargetId,
         rid: Option<Rid>,
         kind: KeyframeRequestKind,
     },
     SetRemoteSourcePacketGate {
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        source: TransportSourceKey,
         target_id: RelayTargetId,
         packet_gate: PacketLayerGate,
-    },
-    SetProducerActive {
-        session_key: TransportSessionKey,
-        transport_media_id: TransportMediaId,
-        active: bool,
-        response: RtcWorkerResponse<()>,
-    },
-    SetConsumerActive {
-        route: TransportConsumerRoute,
-        active: bool,
-        response: RtcWorkerResponse<()>,
-    },
-    SetConsumerPacketGate {
-        route: TransportConsumerRoute,
-        packet_gate: PacketLayerGate,
-        response: RtcWorkerResponse<()>,
-    },
-    SetConsumerPacketGateBatch {
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-        updates: Vec<ConsumerPacketGateCommand>,
-        response: RtcWorkerResponse<Vec<TransportResult<()>>>,
-    },
-    RequestConsumerKeyframe {
-        route: TransportConsumerRoute,
-        response: RtcWorkerResponse<()>,
     },
 }
 
@@ -393,8 +390,7 @@ pub(super) enum RtcWorkerCommand {
     AddSendMedia {
         consumer_session_key: TransportSessionKey,
         media_kind: MediaKind,
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        source: TransportSourceKey,
         remote_source_control: Option<RemoteSourceControl>,
         consumer_rtp_parameters: RouterRtpParameters,
         active: bool,

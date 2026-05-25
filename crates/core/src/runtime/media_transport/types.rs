@@ -461,8 +461,7 @@ pub enum SourcePacketGate {
 /// Room-owned relay route mutation applied by the media transport.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportRelayRouteEffect {
-    pub source_session_key: TransportSessionKey,
-    pub source_transport_media_id: TransportMediaId,
+    pub source: TransportSourceKey,
     pub target_media_worker_id: usize,
     pub action: TransportRelayRouteAction,
 }
@@ -498,6 +497,41 @@ pub enum TransportRelayRouteAction {
     SetActivity(RelayRouteActivity),
 }
 
+/// producer-side source identity owned by the transport boundary
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TransportSourceKey {
+    source_session_key: TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+}
+
+impl TransportSourceKey {
+    #[must_use]
+    pub fn new(
+        source_session_key: TransportSessionKey,
+        source_transport_media_id: TransportMediaId,
+    ) -> Self {
+        Self {
+            source_session_key,
+            source_transport_media_id,
+        }
+    }
+
+    #[must_use]
+    pub fn session_key(&self) -> &TransportSessionKey {
+        &self.source_session_key
+    }
+
+    #[must_use]
+    pub const fn transport_media_id(&self) -> TransportMediaId {
+        self.source_transport_media_id
+    }
+
+    #[must_use]
+    pub const fn room_instance_id(&self) -> RoomInstanceId {
+        self.source_session_key.room_instance_id()
+    }
+}
+
 /// consumer-to-source route identity owned by the transport boundary
 ///
 /// carrying these fields together keeps room code from passing source and
@@ -506,8 +540,7 @@ pub enum TransportRelayRouteAction {
 pub struct TransportConsumerRoute {
     consumer_session_key: TransportSessionKey,
     consumer_transport_media_id: TransportMediaId,
-    source_session_key: TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    source: TransportSourceKey,
 }
 
 impl TransportConsumerRoute {
@@ -515,14 +548,12 @@ impl TransportConsumerRoute {
     pub fn new(
         consumer_session_key: TransportSessionKey,
         consumer_transport_media_id: TransportMediaId,
-        source_session_key: TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
+        source: TransportSourceKey,
     ) -> Self {
         Self {
             consumer_session_key,
             consumer_transport_media_id,
-            source_session_key,
-            source_transport_media_id,
+            source,
         }
     }
 
@@ -538,17 +569,22 @@ impl TransportConsumerRoute {
 
     #[must_use]
     pub fn source_session_key(&self) -> &TransportSessionKey {
-        &self.source_session_key
+        self.source.session_key()
     }
 
     #[must_use]
     pub const fn source_transport_media_id(&self) -> TransportMediaId {
-        self.source_transport_media_id
+        self.source.transport_media_id()
+    }
+
+    #[must_use]
+    pub fn source(&self) -> &TransportSourceKey {
+        &self.source
     }
 
     #[must_use]
     pub fn is_single_room(&self) -> bool {
-        self.consumer_session_key.room_instance_id() == self.source_session_key.room_instance_id()
+        self.consumer_session_key.room_instance_id() == self.source.room_instance_id()
     }
 }
 

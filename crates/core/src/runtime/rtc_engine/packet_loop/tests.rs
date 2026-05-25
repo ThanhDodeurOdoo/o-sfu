@@ -46,7 +46,9 @@ use crate::{
     runtime::{
         RoomInstanceId, UserId,
         diagnostics::DiagnosticsStore,
-        media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
+        media_transport::{
+            SourcePolicySignal, TransportMediaId, TransportSessionKey, TransportSourceKey,
+        },
         metrics::{
             RtcMetricsRecorder, RtcRouteControlMetrics, RtpForwardDestinationKind,
             RtpMetricsRecorder, RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt,
@@ -58,7 +60,9 @@ use crate::{
         rtc_engine::{
             bitrate::BitrateRegistry,
             bootstrap,
-            commands::{RemoteSourceControl, RtcMediaControlCommand, RtcWorkerCommand},
+            commands::{
+                RemoteSourceControl, RouteControlRequest, RtcMediaControlCommand, RtcWorkerCommand,
+            },
             demux::{MediaRouteDestination, MediaRouteEntry},
             forwarding_destination::PacketForward,
             media_registry::RegisteredMediaHandle,
@@ -309,12 +313,9 @@ fn remote_keyframe_source(
     capacity: usize,
 ) -> mpsc::Receiver<RtcWorkerCommand> {
     let (control_tx, control_rx) = mpsc::channel(capacity);
+    let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
     state
-        .register_remote_source(
-            source_transport_media_id,
-            source_session,
-            RemoteSourceControl::new(control_tx, target_id),
-        )
+        .register_remote_source(&source, RemoteSourceControl::new(control_tx, target_id))
         .expect("remote source should register");
     control_rx
 }
@@ -1652,15 +1653,17 @@ fn flush_pending_keyframe_requests_forwards_remote_sources_by_transport_media_id
     let command = control_rx.try_recv().ok();
     assert!(matches!(
         command,
-        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::RequestRemoteKeyframe {
-            source_session_key,
-            source_transport_media_id: forwarded_transport_media_id,
-            target_id,
-            rid: None,
-            kind: KeyframeRequestKind::Fir,
-        })) if source_session_key == source_session
+        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+            request: RouteControlRequest::RequestRemoteKeyframe {
+                source,
+                target_id,
+                rid: None,
+                kind: KeyframeRequestKind::Fir,
+            },
+            response: None,
+        })) if source.session_key() == &source_session
             && target_id == RelayTargetId::new(1)
-            && forwarded_transport_media_id == source_transport_media_id
+            && source.transport_media_id() == source_transport_media_id
     ));
     assert_eq!(harness.metrics.snapshot().rtc_route_control_forwarded(), 1);
 }
@@ -1714,15 +1717,17 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
     let command = control_rx.try_recv().ok();
     assert!(matches!(
         command,
-        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::RequestRemoteKeyframe {
-            source_session_key,
-            source_transport_media_id: forwarded_transport_media_id,
-            target_id,
-            rid: None,
-            kind: KeyframeRequestKind::Fir,
-        })) if source_session_key == source_session
+        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+            request: RouteControlRequest::RequestRemoteKeyframe {
+                source,
+                target_id,
+                rid: None,
+                kind: KeyframeRequestKind::Fir,
+            },
+            response: None,
+        })) if source.session_key() == &source_session
             && target_id == RelayTargetId::new(4)
-            && forwarded_transport_media_id == source_transport_media_id
+            && source.transport_media_id() == source_transport_media_id
     ));
     assert!(control_rx.try_recv().is_err());
     let snapshot = harness.metrics.snapshot();

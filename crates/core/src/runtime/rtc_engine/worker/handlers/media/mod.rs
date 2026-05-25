@@ -9,20 +9,16 @@ mod types;
 
 #[cfg(test)]
 use control::observe_source_rid_readiness;
+pub(super) use control::{
+    apply_route_control_request, refresh_source_packet_gate, remove_source_route,
+    respond_set_consumer_packet_gates,
+};
 pub(in crate::runtime::rtc_engine) use control::{
     apply_source_rid_readiness, drain_due_rid_keyframe_refreshes,
 };
-pub(super) use control::{
-    refresh_source_packet_gate, remove_source_route, respond_add_relay_target,
-    respond_remove_relay_target, respond_request_consumer_keyframe, respond_set_consumer_active,
-    respond_set_consumer_packet_gate, respond_set_consumer_packet_gates,
-    respond_set_producer_active, respond_set_relay_target_active,
-    respond_set_remote_source_packet_gate,
-};
 pub(in crate::runtime::rtc_engine) use keyframe::request_keyframe_for_source;
-pub(super) use keyframe::respond_request_remote_keyframe;
 pub(super) use lifecycle::{
     RecvMediaPolicy, respond_add_recv_media, respond_add_send_media, respond_remove_media,
     respond_resolve_media_mid,
 };
-pub(super) use types::{AddSendMediaRequest, ConsumerPacketGateRequest, RemoteKeyframeRequest};
+pub(super) use types::AddSendMediaRequest;

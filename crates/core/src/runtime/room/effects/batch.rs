@@ -24,7 +24,10 @@ use crate::{
     runtime::{
         ConnectionId, UserId,
         diagnostics::DiagnosticsEventData,
-        media_transport::{MediaTransport, TransportRelayRouteAction, TransportRelayRouteEffect},
+        media_transport::{
+            MediaTransport, TransportRelayRouteAction, TransportRelayRouteEffect,
+            TransportSourceKey,
+        },
         room::{
             Room, RoomEventRequest, RoomMediaCounts, SourcePolicyEvent, UserOutbound,
             cleanup::TransportCleanupOperation,
@@ -506,9 +509,10 @@ pub(super) async fn execute_relay_route_effects(
             continue;
         }
         let transport_effect = TransportRelayRouteEffect {
-            source_session_key: room
-                .transport_user_key(&effect.route.source_user, effect.route.source_connection),
-            source_transport_media_id: effect.route.source_media,
+            source: TransportSourceKey::new(
+                room.transport_user_key(&effect.route.source_user, effect.route.source_connection),
+                effect.route.source_media,
+            ),
             target_media_worker_id: effect.route.target_worker,
             action: effect.action,
         };

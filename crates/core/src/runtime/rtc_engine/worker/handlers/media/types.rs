@@ -1,14 +1,10 @@
 //! Small request and ownership transfer objects shared by worker media modules.
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
-use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
+use str0m::media::MediaKind;
 
-use super::super::super::super::{
-    commands::RemoteSourceControl, relay_registry::RelayTargetId, route_control::PacketLayerGate,
-};
-use crate::runtime::media_transport::{
-    TransportConsumerRoute, TransportMediaId, TransportSessionKey,
-};
+use super::super::super::super::commands::RemoteSourceControl;
+use crate::runtime::media_transport::{TransportSessionKey, TransportSourceKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RouteSourceKind {
@@ -19,25 +15,10 @@ pub(super) enum RouteSourceKind {
 pub struct AddSendMediaRequest<'a> {
     pub consumer_session_key: &'a TransportSessionKey,
     pub media_kind: MediaKind,
-    pub source_session_key: &'a TransportSessionKey,
-    pub source_transport_media_id: TransportMediaId,
+    pub source: &'a TransportSourceKey,
     pub remote_source_control: Option<RemoteSourceControl>,
     pub consumer_rtp_parameters: &'a RouterRtpParameters,
     pub active: bool,
-}
-
-#[derive(Clone, Copy)]
-pub struct ConsumerPacketGateRequest<'a> {
-    pub route: &'a TransportConsumerRoute,
-    pub packet_gate: PacketLayerGate,
-}
-
-pub struct RemoteKeyframeRequest<'a> {
-    pub source_session_key: &'a TransportSessionKey,
-    pub source_transport_media_id: TransportMediaId,
-    pub target_id: RelayTargetId,
-    pub rid: Option<Rid>,
-    pub kind: KeyframeRequestKind,
 }
 
 impl RouteSourceKind {

@@ -40,10 +40,7 @@ mod routes;
 mod selected_rid;
 
 pub(in crate::runtime::rtc_engine::worker) use responses::{
-    respond_add_relay_target, respond_remove_relay_target, respond_request_consumer_keyframe,
-    respond_set_consumer_active, respond_set_consumer_packet_gate,
-    respond_set_consumer_packet_gates, respond_set_producer_active,
-    respond_set_relay_target_active, respond_set_remote_source_packet_gate,
+    apply_route_control_request, respond_set_consumer_packet_gates,
 };
 pub(super) use routes::{
     ConsumerRouteRegistration, consumer_payload_type, ensure_existing_route_source,

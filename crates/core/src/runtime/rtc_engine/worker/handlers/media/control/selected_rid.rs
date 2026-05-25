@@ -560,11 +560,11 @@ fn request_live_rid_keyframe(
         );
         return;
     }
-    let Some((registered_source_session_key, source_control)) = state
+    let Some((registered_source, source_control)) = state
         .remote_source_registration(source_transport_media_id)
         .map(|registration| {
             (
-                registration.source_session_key().clone(),
+                registration.source().clone(),
                 registration.source_control().clone(),
             )
         })
@@ -578,12 +578,12 @@ fn request_live_rid_keyframe(
         );
         return;
     };
-    if registered_source_session_key != *source_session_key {
+    if registered_source.session_key() != source_session_key {
         warn!(
             observed_source_user_id = ?source_session_key.user_id(),
             observed_media_worker_id = source_session_key.media_worker_id(),
-            registered_source_user_id = ?registered_source_session_key.user_id(),
-            registered_media_worker_id = registered_source_session_key.media_worker_id(),
+            registered_source_user_id = ?registered_source.session_key().user_id(),
+            registered_media_worker_id = registered_source.session_key().media_worker_id(),
             ?source_transport_media_id,
             ?rid,
             "could not request selected RID keyframe because source ownership changed"
@@ -597,8 +597,7 @@ fn request_live_rid_keyframe(
     ) {
         KeyframeRequestDecision::Forward => {
             source_control.request_keyframe(
-                &registered_source_session_key,
-                source_transport_media_id,
+                &registered_source,
                 Some(rid),
                 KeyframeRequestKind::Pli,
             );

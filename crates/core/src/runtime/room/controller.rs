@@ -56,7 +56,7 @@ use crate::{
         },
         media_transport::{
             ActiveSpeakerSourceDiagnostic, MediaTransport, TransportConsumerRoute,
-            TransportMediaId, TransportQualitySample, TransportSessionKey,
+            TransportMediaId, TransportQualitySample, TransportSessionKey, TransportSourceKey,
         },
         metrics::RuntimeMetrics,
         recording::RecordingService,
@@ -332,8 +332,10 @@ impl Room {
         TransportConsumerRoute::new(
             self.transport_user_key(route.consumer_user_id(), route.consumer_connection_id()),
             route.consumer_media(),
-            self.transport_user_key(route.source_user_id(), route.source_connection_id()),
-            route.source_media(),
+            TransportSourceKey::new(
+                self.transport_user_key(route.source_user_id(), route.source_connection_id()),
+                route.source_media(),
+            ),
         )
     }
 

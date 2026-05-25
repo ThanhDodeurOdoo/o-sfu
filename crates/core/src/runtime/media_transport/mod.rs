@@ -46,7 +46,7 @@ pub use types::{
     TransportConsumerRoute, TransportMediaId, TransportPlacementPressureSnapshot,
     TransportQualitySample, TransportQualitySnapshot, TransportRelayRouteAction,
     TransportRelayRouteEffect, TransportResult, TransportSessionHealth, TransportSessionKey,
-    TransportWorkerPressureSnapshot,
+    TransportSourceKey, TransportWorkerPressureSnapshot,
 };
 
 use crate::runtime::{RoomInstanceId, rtc_engine::RtcWorker};
@@ -309,8 +309,7 @@ impl MediaTransport {
             .await
             .inspect_err(|error| {
                 warn!(
-                source_session_key = ?effect.source_session_key,
-                source_transport_media_id = ?effect.source_transport_media_id,
+                source = ?effect.source,
                 target_media_worker_id = effect.target_media_worker_id,
                 action = ?effect.action,
                 ?error,
@@ -330,16 +329,14 @@ impl MediaTransport {
     /// or the active backend cannot update producer activity.
     pub async fn set_producer_active(
         &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
+        source: &TransportSourceKey,
         activity: ProducerActivity,
     ) -> Result<(), TransportAdapterError> {
-        self.set_producer_active_on_worker(session_key, transport_media_id, activity)
+        self.set_producer_active_on_worker(source, activity)
             .await
             .inspect_err(|error| {
                 warn!(
-                    ?session_key,
-                    ?transport_media_id,
+                    ?source,
                     active = activity.is_active(),
                     ?error,
                     "media transport failed to update producer activity"

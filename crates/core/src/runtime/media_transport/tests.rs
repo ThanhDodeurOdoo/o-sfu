@@ -19,6 +19,7 @@ use crate::{
             ConsumerActivity, MediaTransportConfig, MediaTransportDeps, RelayRouteActivity,
             TransportAdapterError, TransportConsumerRoute, TransportMediaId,
             TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionKey,
+            TransportSourceKey,
         },
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -133,8 +134,7 @@ async fn apply_relay_route_effect(
     action: TransportRelayRouteAction,
 ) {
     let effect = TransportRelayRouteEffect {
-        source_session_key: source_session_key.clone(),
-        source_transport_media_id: source_media_id,
+        source: TransportSourceKey::new(source_session_key.clone(), source_media_id),
         target_media_worker_id: target_session_key.media_worker_id(),
         action,
     };
@@ -217,8 +217,7 @@ async fn set_remote_relay_and_consumer_active(
     let route = TransportConsumerRoute::new(
         remote_consumer_session.clone(),
         remote_consumer_media_id,
-        source_session.clone(),
-        source_media_id,
+        TransportSourceKey::new(source_session.clone(), source_media_id),
     );
     assert!(
         adapter
