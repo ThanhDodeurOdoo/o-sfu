@@ -17,9 +17,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tracing::{debug, error, warn};
 
+#[cfg(test)]
+use super::super::LocalRouterRuntimeContext;
 use super::{
     super::{
-        BroadcastPayload, BroadcastPayloadError, LocalRouterRuntimeContext, RoomEventMessage,
+        BroadcastPayload, BroadcastPayloadError, ResolvedPlacement, RoomEventMessage,
         RoomJoinError, RoomUserPermissions, UserCloseReason,
         outbound::{MessageFanout, OutboundSender},
         user_negotiation::{UserNegotiation, UserNegotiationUpdate},
@@ -97,7 +99,7 @@ pub(in crate::runtime::room) struct JoinUserOutcome {
     /// joined user id cloned for diagnostics after lock release
     pub user_id: UserId,
     /// authoritative router and media-worker placement for the new connection
-    pub transport_home_placement: LocalRouterRuntimeContext,
+    pub transport_home_placement: ResolvedPlacement,
     /// transport media owned by any connection replaced during the join
     pub transport_removals: Vec<TransportMediaRemoval>,
     /// relay routes that belonged to replaced media state
@@ -168,8 +170,8 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
         is_new: bool,
-        home_placement: LocalRouterRuntimeContext,
-    ) -> Result<LocalRouterRuntimeContext, RoomJoinError> {
+        home_placement: ResolvedPlacement,
+    ) -> Result<(), RoomJoinError> {
         let mut topology = self.topology.clone();
         let affected_consumers = if is_new {
             Vec::new()
@@ -194,27 +196,16 @@ impl RoomState {
             );
             return Err(RoomJoinError::RouterState);
         }
-        let Some(home_placement) = topology.home_placement_for_user(user_id) else {
-            error!(
-                ?user_id,
-                "joined user has no home placement in room topology"
-            );
-            return Err(RoomJoinError::RouterState);
-        };
         self.topology = topology;
-        Ok(home_placement)
+        Ok(())
     }
 
     #[cfg(test)]
-    fn fallback_join_placement(&self) -> LocalRouterRuntimeContext {
-        self.topology
-            .local_placements()
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| LocalRouterRuntimeContext {
-                router: self.topology.primary_router_id(),
-                media_worker: 0,
-            })
+    fn fallback_join_placement(&self) -> ResolvedPlacement {
+        ResolvedPlacement::for_test(LocalRouterRuntimeContext {
+            router: self.topology.primary_router_id(),
+            media_worker: 0,
+        })
     }
 
     fn join_transport_removals(
@@ -301,7 +292,7 @@ impl RoomState {
         permissions: impl Into<RoomUserPermissions>,
         sender: OutboundSender,
         emit_joined_fanout: bool,
-        home_placement: LocalRouterRuntimeContext,
+        home_placement: ResolvedPlacement,
     ) -> Result<JoinUserOutcome, RoomJoinError> {
         let permissions = permissions.into();
         let is_new = !self.users.contains_key(user_id);
@@ -309,8 +300,7 @@ impl RoomState {
             return Err(RoomJoinError::RoomFull);
         }
         let connection_id = ConnectionId::allocate(&mut self.next_connection_id);
-        let transport_home_placement =
-            self.apply_join_topology(user_id, connection_id, is_new, home_placement)?;
+        self.apply_join_topology(user_id, connection_id, is_new, home_placement)?;
         let transport_removals = self.join_transport_removals(user_id, is_new);
 
         let previous_sender =
@@ -356,7 +346,7 @@ impl RoomState {
             connection_id,
             effects,
             user_id: user_id.clone(),
-            transport_home_placement,
+            transport_home_placement: home_placement,
             transport_removals,
             relay_effects,
         })

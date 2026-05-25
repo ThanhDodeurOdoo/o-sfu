@@ -27,12 +27,11 @@
 //!
 //! # Spillover model
 //!
-//! A room starts with one primary router and grows local router placements when
-//! the room manager places a session on a new worker. Strict policy only uses
-//! the primary router. Bounded and load-triggered spillover may place home
-//! sessions on assigned spillover placements. Spillover router state is attached
-//! lazily when a placed session or cross-router consumer needs it, then detached
-//! once no live home session remains there.
+//! A room starts with one primary router and attaches spillover router state
+//! only when room placement hands a resolved join placement to topology. Strict
+//! policy only uses the primary router. Bounded and load-triggered spillover may
+//! place home sessions on assigned spillover placements. Spillover router state
+//! is detached once no live home session remains there.
 //!
 //! Cross-router subscriptions use a shadow session on the source router. The
 //! receiver keeps its home router for transport ownership, while the consumer
@@ -56,7 +55,7 @@ use o_sfu_router::{
 };
 
 use super::{
-    LocalRoomRouterPlacements,
+    LocalRoomRouterPlacements, ResolvedPlacement,
     router_state::{RoomRouterState, RoomRouterStateError},
 };
 use crate::runtime::{UserId, router_events::RoomRouterEventSink};
@@ -87,9 +86,6 @@ pub(in crate::runtime::room) enum RoomTopologyError {
     /// A user-scoped routing operation was requested before topology admitted
     /// that user.
     MissingSessionPlacement { user_id: UserId },
-    /// A topology mutation targeted a router outside this room's reserved
-    /// process-local placement set.
-    UnreservedRouter { router_id: RouterId },
     /// The pure router rejected a topology mutation.
     ///
     /// Callers should treat this as a room-internal consistency failure. The
@@ -193,12 +189,12 @@ impl RoutedConsumerId {
     }
 }
 
-/// Room-local routing placement over one or more pure router instances.
+/// Room-local routing over one or more pure router instances.
 ///
-/// The topology is authoritative for router placement inside one room. It
-/// records the home router for each live user, keeps routed producer and
-/// consumer ids tied to their owning router and controls when spillover routers
-/// are attached or detached.
+/// The topology records the attached router state for each live user, keeps
+/// routed producer and consumer ids tied to their owning router and controls
+/// when spillover routers are attached or detached. Room placement owns the
+/// reserved router set and hands topology a resolved placement during join.
 ///
 /// # Invariants
 ///
@@ -231,11 +227,6 @@ impl RoutedConsumerId {
 pub(super) struct RoomTopology {
     /// Router that exists for the full room lifetime.
     primary_router: RouterId,
-    /// Local router placements assigned to this room.
-    ///
-    /// The first placement is the primary router. Spillover placements are
-    /// added only after the room manager resolves them from live worker load.
-    local_routers: LocalRoomRouterPlacements,
     /// Builder for router state attached after room construction.
     ///
     /// Lazy spillover attachment needs the same router event sink as the
@@ -244,8 +235,8 @@ pub(super) struct RoomTopology {
     router_state_factory: RoomRouterStateFactory,
     /// Currently attached pure router states.
     ///
-    /// This map can be smaller than `local_routers` because idle spillover
-    /// routers are detached. The primary router is the only permanent entry.
+    /// Idle spillover routers can be detached. The primary router is the only
+    /// permanent entry.
     routers: BTreeMap<RouterId, RoomRouterState>,
     /// Attached-router membership class used for cleanup decisions.
     router_memberships: BTreeMap<RouterId, RouterMembershipState>,
@@ -318,16 +309,14 @@ impl RoomRouterStateFactory {
 }
 
 impl RoomTopology {
-    /// Build the room topology from its initial local placements.
+    /// Build the room topology from the room's initial local placement.
     ///
     /// The first placement becomes the primary router and is attached
     /// immediately. Production rooms start without spillover placements.
-    /// Test-only constructors may provide additional placements directly.
-    ///
     /// The returned topology owns router state only. It does not register users
     /// and it does not allocate transport sessions.
     pub(super) fn new_with_router_state_factory(
-        local_routers: LocalRoomRouterPlacements,
+        local_routers: &LocalRoomRouterPlacements,
         router_rtp_capabilities: MediaCapabilities,
         router_state_factory: &RoomRouterStateFactory,
     ) -> Self {
@@ -341,7 +330,6 @@ impl RoomTopology {
         router_memberships.insert(primary_router_id, RouterMembershipState::Primary);
         Self {
             primary_router: primary_router_id,
-            local_routers,
             router_state_factory: router_state_factory.clone(),
             routers,
             router_memberships,
@@ -381,7 +369,7 @@ impl RoomTopology {
         &mut self,
         user_id: &UserId,
         router_session_seed: u64,
-        placement: super::LocalRouterRuntimeContext,
+        placement: ResolvedPlacement,
     ) -> Result<(), RoomTopologyError> {
         self.ensure_session_on_placement(user_id, router_session_seed, placement)?;
         self.ensure_session_transports(user_id)?;
@@ -397,21 +385,11 @@ impl RoomTopology {
         &mut self,
         user_id: &UserId,
         router_session_seed: u64,
-        placement: super::LocalRouterRuntimeContext,
+        placement: ResolvedPlacement,
         affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
     ) -> Result<(), RoomTopologyError> {
         self.remove_session(user_id, affected_consumers)?;
         self.apply_client_join_on_placement(user_id, router_session_seed, placement)
-    }
-
-    pub(super) fn home_placement_for_user(
-        &self,
-        user_id: &UserId,
-    ) -> Option<super::LocalRouterRuntimeContext> {
-        let router_id = self.session_home_router.get(user_id).copied()?;
-        self.local_routers
-            .iter()
-            .find(|placement| placement.router == router_id)
     }
 
     #[cfg(test)]
@@ -419,22 +397,15 @@ impl RoomTopology {
         self.primary_router
     }
 
-    #[cfg(test)]
-    pub(super) fn local_placements(&self) -> Vec<super::LocalRouterRuntimeContext> {
-        self.local_routers.iter().collect()
-    }
-
-    /// Attach one reserved router if it is not already live.
+    /// Attach one resolved placement if it is not already live.
     ///
     /// Attachment is idempotent and cold-path. The method clones the primary
     /// RTP capability baseline so a spillover router starts with the same
     /// negotiation surface as the rest of the room.
-    pub(super) fn attach_router(&mut self, router_id: RouterId) -> Result<(), RoomTopologyError> {
-        if !self.local_routers.contains_router(router_id) {
-            return Err(RoomTopologyError::UnreservedRouter { router_id });
-        }
+    pub(super) fn attach_placement(&mut self, placement: ResolvedPlacement) {
+        let router_id = placement.router();
         if self.routers.contains_key(&router_id) {
-            return Ok(());
+            return;
         }
         let router_rtp_capabilities = self.rtp_capabilities().clone();
         self.routers.insert(
@@ -444,7 +415,6 @@ impl RoomTopology {
         );
         self.router_memberships
             .insert(router_id, RouterMembershipState::ActiveSpillover);
-        Ok(())
     }
 
     /// Add a producer on the publisher's home router.
@@ -654,20 +624,18 @@ impl RoomTopology {
         &mut self,
         user_id: &UserId,
         router_session_seed: u64,
-        placement: super::LocalRouterRuntimeContext,
+        placement: ResolvedPlacement,
     ) -> Result<(), RoomTopologyError> {
         if let Some(router_id) = self.session_home_router.get(user_id).copied() {
-            self.attach_router(router_id)?;
             let router = self.router_mut_for_user(user_id, router_id)?;
             router.ensure_session(user_id, router_session_seed)?;
             return Ok(());
         }
-        self.local_routers.upsert(placement);
-        self.attach_router(placement.router)?;
-        let router = self.router_mut_for_user(user_id, placement.router)?;
+        let router_id = placement.router();
+        self.attach_placement(placement);
+        let router = self.router_mut_for_user(user_id, router_id)?;
         router.ensure_session(user_id, router_session_seed)?;
-        self.session_home_router
-            .insert(user_id.clone(), placement.router);
+        self.session_home_router.insert(user_id.clone(), router_id);
         self.session_seed_by_user
             .insert(user_id.clone(), router_session_seed);
         Ok(())
@@ -692,7 +660,9 @@ impl RoomTopology {
         let home_router_id = self.require_home_router_id(user_id)?;
         let shadow_key = (home_router_id != router_id)
             .then(|| ShadowSessionKey::new(router_id, user_id.clone()));
-        self.attach_router(router_id)?;
+        if !self.routers.contains_key(&router_id) {
+            return Err(RoomTopologyError::MissingRouter { router_id });
+        }
         let created_untracked_shadow = shadow_key
             .as_ref()
             .is_some_and(|key| !self.shadow_sessions.contains_shadow_session(key));

@@ -31,8 +31,6 @@ use {
     },
 };
 
-#[cfg(any(test, feature = "testing-transport"))]
-use super::LocalRouterRuntimeContext;
 use super::{
     BroadcastPayloadError, Room, RoomJoinError, RoomMediaCounts, RoomUserOperation,
     SourcePolicyEvent, UserOutboundSender,
@@ -187,7 +185,7 @@ impl Room {
     pub(in crate::runtime::room) async fn local_join_placement_from_worker_pressure(
         &self,
         pressure_snapshots: Vec<TransportWorkerPressureSnapshot>,
-    ) -> LocalRouterRuntimeContext {
+    ) -> super::ResolvedPlacement {
         let room_snapshot = self.placement_usage_snapshot();
         let policy = self.room_worker_policy();
         let mut load_index = WorkerLoadIndex::new(policy.max_local_routers(), pressure_snapshots);

@@ -56,7 +56,7 @@ pub struct LocalRouterRuntimeContext {
 /// non-empty router placement set assigned to one live room
 ///
 /// this is the shared placement contract consumed by `RoomDefinition` and
-/// `RoomTopology`. keeping the primary placement inside this validated value
+/// `RoomPlacementState`. keeping the primary placement inside this validated value
 /// avoids an api where one field can disagree with the placement list
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalRoomRouterPlacements {
@@ -113,33 +113,6 @@ impl LocalRoomRouterPlacements {
             return;
         }
         self.spillover.push(placement);
-    }
-
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.spillover.len().saturating_add(1)
-    }
-
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        false
-    }
-
-    #[must_use]
-    pub fn get(&self, index: usize) -> Option<LocalRouterRuntimeContext> {
-        if index == 0 {
-            return Some(self.primary);
-        }
-        self.spillover.get(index.checked_sub(1)?).copied()
-    }
-
-    #[must_use]
-    pub fn contains_router(&self, router_id: RouterId) -> bool {
-        self.primary.router == router_id
-            || self
-                .spillover
-                .iter()
-                .any(|placement| placement.router == router_id)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = LocalRouterRuntimeContext> + '_ {
@@ -226,6 +199,9 @@ pub(super) struct CommittedPlacementReceipt {
     transport_session_key: TransportSessionKey,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::runtime::room) struct ResolvedPlacement(LocalRouterRuntimeContext);
+
 impl RoomPlacementState {
     #[must_use]
     pub(super) fn new(
@@ -260,8 +236,9 @@ impl RoomPlacementState {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        placement: LocalRouterRuntimeContext,
+        placement: ResolvedPlacement,
     ) -> CommittedPlacementReceipt {
+        let placement = placement.into_context();
         {
             let mut inner = lock_unpoisoned(&self.inner);
             inner.local_routers.upsert(placement);
@@ -308,6 +285,26 @@ impl RoomPlacementState {
             .media_worker
     }
 
+    pub(super) fn worker_lookup(&self) -> impl Fn(ConnectionId) -> usize {
+        let (primary_media_worker, media_worker_by_connection) = {
+            let inner = lock_unpoisoned(&self.inner);
+            (
+                inner.local_routers.primary().media_worker,
+                inner
+                    .placement_by_connection
+                    .iter()
+                    .map(|(connection_id, placement)| (*connection_id, placement.media_worker))
+                    .collect::<BTreeMap<_, _>>(),
+            )
+        };
+        move |connection_id| {
+            media_worker_by_connection
+                .get(&connection_id)
+                .copied()
+                .unwrap_or(primary_media_worker)
+        }
+    }
+
     pub(super) fn usage_snapshot(&self) -> RoomPlacementUsageSnapshot {
         let inner = lock_unpoisoned(&self.inner);
         RoomPlacementUsageSnapshot::new(
@@ -329,6 +326,21 @@ impl CommittedPlacementReceipt {
 
     pub(super) const fn transport_session_key(&self) -> &TransportSessionKey {
         &self.transport_session_key
+    }
+}
+
+impl ResolvedPlacement {
+    #[cfg(test)]
+    pub(in crate::runtime::room) const fn for_test(placement: LocalRouterRuntimeContext) -> Self {
+        Self(placement)
+    }
+
+    pub(in crate::runtime::room) const fn router(self) -> RouterId {
+        self.0.router
+    }
+
+    pub(in crate::runtime::room) const fn into_context(self) -> LocalRouterRuntimeContext {
+        self.0
     }
 }
 
@@ -425,7 +437,7 @@ pub(super) enum RoomPlacementDecision {
 #[derive(Debug)]
 pub(super) enum JoinPlacement {
     #[cfg(any(test, feature = "testing-transport"))]
-    Resolved(LocalRouterRuntimeContext),
+    Resolved(ResolvedPlacement),
     Planned {
         decision: RoomPlacementDecision,
         worker_loads: WorkerLoadIndex,
@@ -525,16 +537,11 @@ impl JoinPlacement {
         }
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub(super) const fn resolved(placement: LocalRouterRuntimeContext) -> Self {
-        Self::Resolved(placement)
-    }
-
     pub(super) fn resolve_for_commit(
         self,
         room: &RoomPlacementUsageSnapshot,
         allocate_spillover_router: impl FnOnce() -> RouterId,
-    ) -> LocalRouterRuntimeContext {
+    ) -> ResolvedPlacement {
         let (decision, worker_loads, media_worker_count, policy) = match self {
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Resolved(placement) => return placement,
@@ -552,44 +559,44 @@ impl JoinPlacement {
         match decision {
             RoomPlacementDecision::AssignPrimary { media_worker_id } => {
                 if assigned_placements.is_empty() {
-                    return LocalRouterRuntimeContext {
+                    return ResolvedPlacement(LocalRouterRuntimeContext {
                         router: room.primary_router(),
                         media_worker: media_worker_id,
-                    };
+                    });
                 }
-                existing_placement
+                ResolvedPlacement(existing_placement)
             }
             RoomPlacementDecision::UseExisting(placement) => {
                 if let Some(assigned) = assigned_placements
                     .iter()
                     .find(|assigned| assigned.router == placement.router)
                 {
-                    return *assigned;
+                    return ResolvedPlacement(*assigned);
                 }
                 if assigned_placements.is_empty() {
-                    return LocalRouterRuntimeContext {
+                    return ResolvedPlacement(LocalRouterRuntimeContext {
                         router: room.primary_router(),
                         media_worker: placement.media_worker,
-                    };
+                    });
                 }
-                existing_placement
+                ResolvedPlacement(existing_placement)
             }
             RoomPlacementDecision::AllocateSpillover { media_worker_id } => {
                 if assigned_placements.is_empty() {
-                    return LocalRouterRuntimeContext {
+                    return ResolvedPlacement(LocalRouterRuntimeContext {
                         router: room.primary_router(),
                         media_worker: media_worker_id,
-                    };
+                    });
                 }
                 let placement_cap = policy.max_local_routers().min(media_worker_count).max(1);
                 if assigned_placements.len() >= placement_cap {
-                    return existing_placement;
+                    return ResolvedPlacement(existing_placement);
                 }
-                LocalRouterRuntimeContext {
+                ResolvedPlacement(LocalRouterRuntimeContext {
                     router: allocate_spillover_router(),
                     media_worker: worker_loads
                         .least_loaded_worker(assigned_placements, score_policy),
-                }
+                })
             }
         }
     }
@@ -1191,8 +1198,8 @@ mod tests {
                 },
             );
 
-        assert_eq!(first_placement, placement(8, 1));
-        assert_eq!(second_placement, placement(8, 1));
+        assert_eq!(first_placement.into_context(), placement(8, 1));
+        assert_eq!(second_placement.into_context(), placement(8, 1));
         assert_eq!(allocation_count, 1);
         Ok(())
     }
@@ -1213,7 +1220,7 @@ mod tests {
             RouterId(8)
         });
 
-        assert_eq!(placement, primary_placement());
+        assert_eq!(placement.into_context(), primary_placement());
         assert_eq!(allocation_count, 0);
     }
 
@@ -1233,7 +1240,7 @@ mod tests {
             RouterId(8)
         });
 
-        assert_eq!(placement, primary_placement());
+        assert_eq!(placement.into_context(), primary_placement());
         assert_eq!(allocation_count, 0);
     }
 

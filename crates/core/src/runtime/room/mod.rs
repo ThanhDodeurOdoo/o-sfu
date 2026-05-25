@@ -65,6 +65,7 @@ pub use outbound::{
     UserOutboundOverflowKind, UserOutboundQueueLimits, UserOutboundReceiver, UserOutboundSendError,
     UserOutboundSender,
 };
+pub(in crate::runtime::room) use placement::ResolvedPlacement;
 pub use placement::{
     LocalRoomRouterPlacements, LocalRoomRouterPlacementsError, LocalRouterRuntimeContext,
     RoomRuntimeContext,
