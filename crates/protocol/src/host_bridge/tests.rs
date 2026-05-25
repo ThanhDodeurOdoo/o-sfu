@@ -5,7 +5,9 @@
 
 use serde_json::json;
 
-use super::{CoreSnapshot, HostCommand, connection_state_tag, host_commands};
+use super::{
+    BROWSER_RECOVERABLE_CLOSE_CODE, CoreSnapshot, HostCommand, connection_state_tag, host_commands,
+};
 use crate::{
     bundle_api::BundleConnectionState,
     core::{
@@ -14,6 +16,7 @@ use crate::{
     shared::{StreamType, UserId},
     signaling::{
         RequestId, SourceDescriptor, SourceEncodingDescriptor, TrackBinding, UploadLayerPolicyRole,
+        WebSocketCloseCode,
     },
 };
 
@@ -216,6 +219,27 @@ fn host_command_bridge_preserves_simple_commands() {
         json!({
             "kind": "closeWebSocket",
             "code": 4107
+        })
+    );
+}
+
+#[test]
+fn host_command_bridge_maps_server_only_close_codes_for_browser_use() {
+    let command = host_commands(
+        CommandBatch::try_from_vec(vec![Command::CloseWebSocket {
+            code: u16::from(WebSocketCloseCode::ProtocolError),
+        }])
+        .expect("valid test command batch"),
+    )
+    .into_iter()
+    .next()
+    .unwrap_or(HostCommand::ClosePeerConnection);
+
+    assert_eq!(
+        serde_json::to_value(command).unwrap_or_default(),
+        json!({
+            "kind": "closeWebSocket",
+            "code": BROWSER_RECOVERABLE_CLOSE_CODE
         })
     );
 }

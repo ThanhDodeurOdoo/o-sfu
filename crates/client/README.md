@@ -31,7 +31,7 @@ still heavily logging the sfu_client.ts, maybe need to cleanup at some point
 
 - `src/public_api.ts`: Odoo-facing client API, events, states, and compatibility types
 - `src/protocol.ts`: stable facade for generated signaling envelope and payload types
-- `src/runtime_contract.ts`: protocol-core provider boundary, host-command types, generated Rust-owned literal catalogs and runtime validation.
+- `src/runtime_contract.ts`: protocol-core provider boundary, generated host-command types, generated Rust-owned validation schemas and runtime validation.
 - `src/sfu_client.ts`: public `SfuClient` facade exposed to Odoo and tests.
 - `src/wasm_runtime.ts`: default async `wasm-pack` bootstrap for the normal browser bundle.
 

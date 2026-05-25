@@ -365,7 +365,7 @@ export class BrowserRuntime {
                     CLIENT_LOG_LEVEL.WARN,
                     "received non-text websocket frame; closing with protocol error"
                 );
-                socket.close(1002);
+                socket.close(CLIENT_RECOVERABLE_CLOSE_CODE);
                 return;
             }
             const frame = event.data;

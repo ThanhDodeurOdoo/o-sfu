@@ -216,13 +216,16 @@ pub fn bundle_session_info_key(user_id: &UserId) -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 pub struct BundleBroadcastUpdate {
     #[serde(rename = "senderId")]
     pub sender_id: UserId,
+    #[cfg_attr(feature = "ts-bindings", ts(type = "unknown"))]
     pub message: JsonPayload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 pub struct BundleDisconnectUpdate {
     #[serde(rename = "sessionId")]
     pub user_id: UserId,

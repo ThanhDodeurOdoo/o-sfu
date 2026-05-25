@@ -3,15 +3,21 @@ use serde::Serialize;
 use crate::{
     bundle_api::{
         BundleBroadcastUpdate, BundleConnectionState, BundleDisconnectUpdate,
-        BundleSessionInfoSnapshotById, BundleUpdate, bundle_session_info_key,
+        BundleSessionInfoSnapshotById, bundle_session_info_key,
     },
     core::{
         Command, CommandBatch, ConnectionState, NegotiationKind, PendingRequestKind, ProtocolCore,
         ProtocolEvent,
     },
-    shared::{AvailableFeatures, RecordingState, StreamType, UserId},
-    signaling::{NegotiationUploadSlot, RequestId, SourceDescriptor, TrackBinding},
+    shared::{AvailableFeatures, RecordingState, RecordingStateUpdate, StreamType, UserId},
+    signaling::{
+        NegotiationUploadSlot, RequestId, SourceDescriptor, TrackBinding, WebSocketCloseCode,
+    },
 };
+
+const BROWSER_RECOVERABLE_CLOSE_CODE: u16 = 4000;
+const BROWSER_CUSTOM_CLOSE_CODE_START: u16 = 3000;
+const BROWSER_CUSTOM_CLOSE_CODE_END: u16 = 4999;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +38,7 @@ impl From<&ProtocolCore> for CoreSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum HostNegotiationKind {
     Offer,
@@ -48,6 +55,7 @@ impl From<NegotiationKind> for HostNegotiationKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum HostPendingRequestKind {
     StartRecording,
@@ -59,6 +67,31 @@ impl From<PendingRequestKind> for HostPendingRequestKind {
         match value {
             PendingRequestKind::StartRecording => Self::StartRecording,
             PendingRequestKind::StopRecording => Self::StopRecording,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum HostConnectionState {
+    Disconnected,
+    Connecting,
+    Authenticated,
+    Connected,
+    Recovering,
+    Closed,
+}
+
+impl From<ConnectionState> for HostConnectionState {
+    fn from(value: ConnectionState) -> Self {
+        match value {
+            BundleConnectionState::Disconnected => Self::Disconnected,
+            BundleConnectionState::Connecting => Self::Connecting,
+            BundleConnectionState::Authenticated => Self::Authenticated,
+            BundleConnectionState::Connected => Self::Connected,
+            BundleConnectionState::Recovering => Self::Recovering,
+            BundleConnectionState::Closed => Self::Closed,
         }
     }
 }
@@ -85,6 +118,21 @@ pub(crate) const HOST_COMMAND_KINDS: &[(&str, &str)] = &[
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
+#[serde(tag = "name", content = "payload")]
+pub enum HostUpdate {
+    #[serde(rename = "broadcast")]
+    Broadcast(BundleBroadcastUpdate),
+    #[serde(rename = "disconnect")]
+    Disconnect(BundleDisconnectUpdate),
+    #[serde(rename = "info_change")]
+    SessionInfoChange(BundleSessionInfoSnapshotById),
+    #[serde(rename = "channel_info_change")]
+    ChannelInfoChange(RecordingStateUpdate),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts-bindings", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum HostCommand {
     SendWebSocket {
@@ -92,6 +140,7 @@ pub enum HostCommand {
     },
     ApplyNegotiation {
         #[serde(rename = "requestId")]
+        #[cfg_attr(feature = "ts-bindings", ts(type = "RequestId"))]
         request_id: RequestId,
         #[serde(rename = "negotiationKind")]
         negotiation_kind: HostNegotiationKind,
@@ -114,7 +163,8 @@ pub enum HostCommand {
         code: u16,
     },
     EmitStateChange {
-        state: String,
+        state: HostConnectionState,
+        #[cfg_attr(feature = "ts-bindings", ts(optional))]
         cause: Option<String>,
     },
     ReplaceTrackBindings {
@@ -128,16 +178,18 @@ pub enum HostCommand {
         user_id: UserId,
     },
     EmitUpdate {
-        update: BundleUpdate,
+        update: HostUpdate,
     },
     RegisterPendingRequest {
         #[serde(rename = "requestId")]
+        #[cfg_attr(feature = "ts-bindings", ts(type = "RequestId"))]
         request_id: RequestId,
         #[serde(rename = "requestKind")]
         request_kind: HostPendingRequestKind,
     },
     ResolvePendingRequest {
         #[serde(rename = "requestId")]
+        #[cfg_attr(feature = "ts-bindings", ts(type = "RequestId"))]
         request_id: RequestId,
         ok: bool,
     },
@@ -166,7 +218,7 @@ fn host_commands_for_event(event: ProtocolEvent) -> Vec<HostCommand> {
                 user_id: user_id.clone(),
             },
             HostCommand::EmitUpdate {
-                update: BundleUpdate::Disconnect(BundleDisconnectUpdate { user_id }),
+                update: HostUpdate::Disconnect(BundleDisconnectUpdate { user_id }),
             },
         ],
         other_event => project_bundle_update(other_event)
@@ -204,11 +256,13 @@ pub fn host_commands(commands: CommandBatch) -> Vec<HostCommand> {
             Command::CreatePeerConnection => host_commands.push(HostCommand::CreatePeerConnection),
             Command::ClosePeerConnection => host_commands.push(HostCommand::ClosePeerConnection),
             Command::CloseWebSocket { code } => {
-                host_commands.push(HostCommand::CloseWebSocket { code });
+                host_commands.push(HostCommand::CloseWebSocket {
+                    code: browser_close_code(code),
+                });
             }
             Command::EmitStateChange { state, cause } => {
                 host_commands.push(HostCommand::EmitStateChange {
-                    state: connection_state_tag(state).to_owned(),
+                    state: state.into(),
                     cause,
                 });
             }
@@ -232,6 +286,16 @@ pub fn host_commands(commands: CommandBatch) -> Vec<HostCommand> {
     host_commands
 }
 
+fn browser_close_code(code: u16) -> u16 {
+    if code == u16::from(WebSocketCloseCode::Clean)
+        || (BROWSER_CUSTOM_CLOSE_CODE_START..=BROWSER_CUSTOM_CLOSE_CODE_END).contains(&code)
+    {
+        code
+    } else {
+        BROWSER_RECOVERABLE_CLOSE_CODE
+    }
+}
+
 #[must_use]
 pub fn connection_state_tag(state: ConnectionState) -> &'static str {
     match state {
@@ -249,27 +313,27 @@ pub fn cloned_track_binding(core: &ProtocolCore, mid: &str) -> Option<TrackBindi
     core.track_binding(mid).cloned()
 }
 
-fn project_bundle_update(event: ProtocolEvent) -> Option<BundleUpdate> {
+fn project_bundle_update(event: ProtocolEvent) -> Option<HostUpdate> {
     Some(match event {
-        ProtocolEvent::PeerSnapshot { peers } => BundleUpdate::SessionInfoChange(
+        ProtocolEvent::PeerSnapshot { peers } => HostUpdate::SessionInfoChange(
             peers
                 .into_iter()
                 .map(|peer| (bundle_session_info_key(&peer.user_id), peer.info))
                 .collect::<BundleSessionInfoSnapshotById>(),
         ),
         ProtocolEvent::TrackSnapshot { .. } | ProtocolEvent::SourceSnapshot { .. } => return None,
-        ProtocolEvent::PeerInfo { user_id, info } => BundleUpdate::SessionInfoChange(
+        ProtocolEvent::PeerInfo { user_id, info } => HostUpdate::SessionInfoChange(
             [(bundle_session_info_key(&user_id), info)]
                 .into_iter()
                 .collect::<BundleSessionInfoSnapshotById>(),
         ),
         ProtocolEvent::PeerLeft { user_id } => {
-            BundleUpdate::Disconnect(BundleDisconnectUpdate { user_id })
+            HostUpdate::Disconnect(BundleDisconnectUpdate { user_id })
         }
         ProtocolEvent::Broadcast { sender_id, message } => {
-            BundleUpdate::Broadcast(BundleBroadcastUpdate { sender_id, message })
+            HostUpdate::Broadcast(BundleBroadcastUpdate { sender_id, message })
         }
-        ProtocolEvent::RecordingStateChanged { state } => BundleUpdate::ChannelInfoChange(state),
+        ProtocolEvent::RecordingStateChanged { state } => HostUpdate::ChannelInfoChange(state),
     })
 }
 

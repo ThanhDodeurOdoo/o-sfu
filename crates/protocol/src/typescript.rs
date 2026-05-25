@@ -14,7 +14,11 @@ use serde::Serialize;
 use ts_rs::{Config, TS};
 
 use crate::{
-    host_bridge::{HOST_COMMAND_KINDS, HostNegotiationKind, HostPendingRequestKind},
+    bundle_api::{BundleBroadcastUpdate, BundleDisconnectUpdate},
+    host_bridge::{
+        HOST_COMMAND_KINDS, HostCommand, HostConnectionState, HostNegotiationKind,
+        HostPendingRequestKind, HostUpdate,
+    },
     signaling::{
         AuthPayload, CLIENT_MESSAGE_ENVELOPES, CLIENT_REQUEST_ENVELOPES, CLIENT_RESPONSE_ENVELOPES,
         ClientBroadcastPayload, EnvelopeKind, EnvelopeSpec, NegotiationUploadEncoding,
@@ -59,6 +63,7 @@ fn contract() -> ExportResult<String> {
     let mut output = String::new();
     push_types(&mut output);
     push_constants(&mut output)?;
+    push_runtime_schemas(&mut output);
     push_envelopes(&mut output)?;
     Ok(output)
 }
@@ -77,6 +82,8 @@ fn push_types(output: &mut String) {
     push_decl::<StreamType>(output, &config);
     push_decl::<RecordingOptions>(output, &config);
     push_decl::<MediaKind>(output, &config);
+    push_decl::<BundleBroadcastUpdate>(output, &config);
+    push_decl::<BundleDisconnectUpdate>(output, &config);
     push_decl::<AuthPayload>(output, &config);
     push_decl::<WelcomePayload>(output, &config);
     push_decl::<SessionDescriptionPayload>(output, &config);
@@ -93,6 +100,11 @@ fn push_types(output: &mut String) {
     push_decl::<ClientBroadcastPayload>(output, &config);
     push_decl::<ServerBroadcastPayload>(output, &config);
     push_decl::<RecordingActionResult>(output, &config);
+    push_decl::<HostConnectionState>(output, &config);
+    push_decl::<HostNegotiationKind>(output, &config);
+    push_decl::<HostPendingRequestKind>(output, &config);
+    push_decl::<HostUpdate>(output, &config);
+    push_decl::<HostCommand>(output, &config);
     output.push_str("export type RequestId = string;\n");
     output.push_str("export type RecordingChangePayload = RecordingStateUpdate;\n\n");
 }
@@ -167,6 +179,129 @@ fn push_constants(output: &mut String) -> ExportResult<()> {
     )?;
     push_string_object(output, "WIRE_TAG", WIRE_TAGS)?;
     Ok(())
+}
+
+fn push_runtime_schemas(output: &mut String) {
+    push_runtime_schema_types(output);
+    push_runtime_schema_values(output);
+}
+
+fn push_runtime_schema_types(output: &mut String) {
+    output.push_str(
+        r#"export type HostCommandKind = HostCommand["kind"];
+
+export type ProtocolValidationSchema =
+    | "boolean"
+    | "browserCloseCode"
+    | "finiteNumber"
+    | "nonNegativeInteger"
+    | "positiveNumber"
+    | "sessionId"
+    | "string"
+    | "temporalLayerId"
+    | "unknown"
+    | { kind: "array"; items: ProtocolValidationSchema }
+    | { kind: "enum"; values: readonly string[]; message?: string }
+    | { kind: "literal"; value: string }
+    | { kind: "object"; fields: Record<string, ProtocolValidationSchema> }
+    | { kind: "optional"; value: ProtocolValidationSchema }
+    | { kind: "record"; values: ProtocolValidationSchema }
+    | { kind: "taggedUnion"; tag: string; variants: Record<string, ProtocolValidationSchema> };
+
+const objectSchema = (fields: Record<string, ProtocolValidationSchema>): ProtocolValidationSchema => ({ kind: "object", fields });
+const optionalSchema = (value: ProtocolValidationSchema): ProtocolValidationSchema => ({ kind: "optional", value });
+const arraySchema = (items: ProtocolValidationSchema): ProtocolValidationSchema => ({ kind: "array", items });
+const enumSchema = (values: readonly string[], message?: string): ProtocolValidationSchema =>
+    message === undefined ? { kind: "enum", values } : { kind: "enum", values, message };
+const literalSchema = (value: string): ProtocolValidationSchema => ({ kind: "literal", value });
+const recordSchema = (values: ProtocolValidationSchema): ProtocolValidationSchema => ({ kind: "record", values });
+const taggedUnionSchema = (tag: string, variants: Record<string, ProtocolValidationSchema>): ProtocolValidationSchema =>
+    ({ kind: "taggedUnion", tag, variants });
+
+"#,
+    );
+}
+
+fn push_runtime_schema_values(output: &mut String) {
+    output.push_str(
+        r#"const streamTypeSchema = enumSchema(STREAM_TYPES);
+const negotiationKindSchema = enumSchema(Object.values(NEGOTIATION_KIND));
+const pendingRequestKindSchema = enumSchema(Object.values(PENDING_REQUEST_KIND));
+const recordingStopCodeSchema = enumSchema(RECORDING_STOP_CODES);
+const policyRoleSchema = enumSchema(SOURCE_ENCODING_POLICY_ROLES, "must be a supported upload layer policy role");
+const connectionStateSchema = enumSchema(["disconnected", "connecting", "authenticated", "connected", "recovering", "closed"]);
+const userInfoSchema = objectSchema({
+    isTalking: optionalSchema("boolean"), isFeatured: optionalSchema("boolean"), isCameraOn: optionalSchema("boolean"),
+    isScreenSharingOn: optionalSchema("boolean"), isSelfMuted: optionalSchema("boolean"), isDeaf: optionalSchema("boolean"),
+    isRaisingHand: optionalSchema("boolean"),
+});
+const recordingStateSchema = objectSchema({
+    recording: optionalSchema("boolean"), audio: optionalSchema("boolean"), video: optionalSchema("boolean"),
+    transcription: optionalSchema("boolean"),
+});
+const recordingStateUpdateSchema = objectSchema({ state: recordingStateSchema, stopCode: optionalSchema(recordingStopCodeSchema) });
+const sourceEncodingSchema = objectSchema({
+    encodingId: "string", rid: optionalSchema("string"), maxBitrate: optionalSchema("nonNegativeInteger"),
+    resolutionScale: optionalSchema("positiveNumber"), maxFramerate: optionalSchema("nonNegativeInteger"),
+    policyRole: optionalSchema(policyRoleSchema), maxTemporalLayerId: optionalSchema("temporalLayerId"),
+});
+const sourceDescriptorSchema = objectSchema({
+    sourceId: "string", sessionId: "sessionId", type: streamTypeSchema, active: "boolean",
+    mid: optionalSchema("string"), encodings: arraySchema(sourceEncodingSchema),
+});
+const trackBindingSchema = objectSchema({
+    mid: "string", sessionId: "sessionId", type: streamTypeSchema, active: "boolean",
+    source: optionalSchema(sourceDescriptorSchema),
+});
+const uploadEncodingSchema = objectSchema({
+    rid: "string", maxBitrate: optionalSchema("nonNegativeInteger"), resolutionScale: optionalSchema("finiteNumber"),
+    maxFramerate: optionalSchema("nonNegativeInteger"),
+});
+const uploadSlotSchema = objectSchema({
+    mid: "string", kind: enumSchema(UPLOAD_KINDS), codecs: optionalSchema(arraySchema("string")),
+    simulcastEncodings: optionalSchema(arraySchema(uploadEncodingSchema)),
+});
+
+export const RUNTIME_SCHEMAS = {
+    availableFeatures: objectSchema({ rtc: "boolean", transcription: "boolean", audioRecording: "boolean", videoRecording: "boolean" }),
+    recordingState: recordingStateSchema,
+    trackBinding: trackBindingSchema,
+} as const satisfies Record<string, ProtocolValidationSchema>;
+
+export const HOST_UPDATE_SCHEMA = taggedUnionSchema("name", {
+    disconnect: objectSchema({ name: literalSchema("disconnect"), payload: objectSchema({ sessionId: "sessionId" }) }),
+    info_change: objectSchema({ name: literalSchema("info_change"), payload: recordSchema(userInfoSchema) }),
+    broadcast: objectSchema({ name: literalSchema("broadcast"), payload: objectSchema({ senderId: "sessionId", message: "unknown" }) }),
+    channel_info_change: objectSchema({ name: literalSchema("channel_info_change"), payload: recordingStateUpdateSchema }),
+});
+
+export const HOST_COMMAND_SCHEMAS = {
+    [COMMAND_KIND.CONNECT]: objectSchema({ kind: literalSchema(COMMAND_KIND.CONNECT), url: "string" }),
+    [COMMAND_KIND.SEND_WEB_SOCKET]: objectSchema({ kind: literalSchema(COMMAND_KIND.SEND_WEB_SOCKET), frame: "string" }),
+    [COMMAND_KIND.CLOSE_WEB_SOCKET]: objectSchema({ kind: literalSchema(COMMAND_KIND.CLOSE_WEB_SOCKET), code: "browserCloseCode" }),
+    [COMMAND_KIND.APPLY_NEGOTIATION]: objectSchema({
+        kind: literalSchema(COMMAND_KIND.APPLY_NEGOTIATION), requestId: "string", negotiationKind: negotiationKindSchema,
+        sdp: "string", uploadSlots: arraySchema(uploadSlotSchema),
+    }),
+    [COMMAND_KIND.CREATE_PEER_CONNECTION]: objectSchema({ kind: literalSchema(COMMAND_KIND.CREATE_PEER_CONNECTION) }),
+    [COMMAND_KIND.CLOSE_PEER_CONNECTION]: objectSchema({ kind: literalSchema(COMMAND_KIND.CLOSE_PEER_CONNECTION) }),
+    [COMMAND_KIND.ATTACH_TRACK]: objectSchema({ kind: literalSchema(COMMAND_KIND.ATTACH_TRACK), mid: "string", streamType: streamTypeSchema }),
+    [COMMAND_KIND.DETACH_TRACK]: objectSchema({ kind: literalSchema(COMMAND_KIND.DETACH_TRACK), streamType: streamTypeSchema }),
+    [COMMAND_KIND.REPLACE_TRACK_BINDINGS]: objectSchema({ kind: literalSchema(COMMAND_KIND.REPLACE_TRACK_BINDINGS), bindings: arraySchema(trackBindingSchema) }),
+    [COMMAND_KIND.REPLACE_SOURCE_DESCRIPTORS]: objectSchema({ kind: literalSchema(COMMAND_KIND.REPLACE_SOURCE_DESCRIPTORS), sources: arraySchema(sourceDescriptorSchema) }),
+    [COMMAND_KIND.REMOVE_SESSION_TRACKS]: objectSchema({ kind: literalSchema(COMMAND_KIND.REMOVE_SESSION_TRACKS), sessionId: "sessionId" }),
+    [COMMAND_KIND.EMIT_STATE_CHANGE]: objectSchema({ kind: literalSchema(COMMAND_KIND.EMIT_STATE_CHANGE), state: connectionStateSchema, cause: optionalSchema("string") }),
+    [COMMAND_KIND.EMIT_UPDATE]: objectSchema({ kind: literalSchema(COMMAND_KIND.EMIT_UPDATE), update: HOST_UPDATE_SCHEMA }),
+    [COMMAND_KIND.REGISTER_PENDING_REQUEST]: objectSchema({
+        kind: literalSchema(COMMAND_KIND.REGISTER_PENDING_REQUEST), requestId: "string", requestKind: pendingRequestKindSchema,
+    }),
+    [COMMAND_KIND.RESOLVE_PENDING_REQUEST]: objectSchema({ kind: literalSchema(COMMAND_KIND.RESOLVE_PENDING_REQUEST), requestId: "string", ok: "boolean" }),
+    [COMMAND_KIND.SCHEDULE_TIMER]: objectSchema({ kind: literalSchema(COMMAND_KIND.SCHEDULE_TIMER), id: "nonNegativeInteger", ms: "nonNegativeInteger" }),
+    [COMMAND_KIND.CANCEL_TIMER]: objectSchema({ kind: literalSchema(COMMAND_KIND.CANCEL_TIMER), id: "nonNegativeInteger" }),
+} as const satisfies Record<HostCommandKind, ProtocolValidationSchema>;
+
+"#,
+    );
 }
 
 fn push_envelopes(output: &mut String) -> ExportResult<()> {
@@ -358,6 +493,9 @@ mod tests {
         assert!(contract.contains(r#"MessageEnvelope<"auth", AuthPayload>"#));
         assert!(contract.contains(r#"RequestEnvelope<"stoprecording">"#));
         assert!(contract.contains(r#"ResponseEnvelope<"startrecording", RecordingActionResult>"#));
+        assert!(contract.contains(r#"export type HostCommandKind = HostCommand["kind"];"#));
+        assert!(contract.contains(r#""browserCloseCode""#));
+        assert!(contract.contains("HOST_COMMAND_SCHEMAS"));
 
         assert_eq!(command_kind("APPLY_NEGOTIATION"), Some("applyNegotiation"));
         assert_eq!(

@@ -1,84 +1,37 @@
 import {
-    CLIENT_UPDATE,
     SFU_CLIENT_STATE,
     type AvailableFeatures,
-    type ClientUpdateDetail,
     type ConnectionState,
     type DownloadStates,
-    type InfoChangeUpdateDetail,
     type RecordingOptions,
     type RecordingState,
     type SessionId,
     type SessionInfo,
-    type SourceDescriptor,
     type StreamType
 } from "./public_api.js";
-import type { NegotiationUploadSlot, TrackBinding } from "./protocol.js";
+import type { TrackBinding } from "./protocol.js";
 import {
     COMMAND_KIND,
+    HOST_COMMAND_SCHEMAS,
     NEGOTIATION_KIND,
     PENDING_REQUEST_KIND,
-    RECORDING_STOP_CODES,
-    SOURCE_ENCODING_POLICY_ROLES,
-    STREAM_TYPES,
-    UPLOAD_KINDS
+    RUNTIME_SCHEMAS,
+    type HostCommand as GeneratedHostCommand,
+    type HostCommandKind,
+    type ProtocolValidationSchema
 } from "./generated/protocol_contract.js";
 
-const MIN_TEMPORAL_LAYER_ID = 0;
-const MAX_TEMPORAL_LAYER_ID = 7;
-const FEATURE_BOOLEAN_FIELDS = ["rtc", "transcription", "audioRecording", "videoRecording"];
-const RECORDING_BOOLEAN_FIELDS = ["recording", "audio", "video", "transcription"];
-const SESSION_INFO_BOOLEAN_FIELDS = [
-    "isTalking",
-    "isFeatured",
-    "isCameraOn",
-    "isScreenSharingOn",
-    "isSelfMuted",
-    "isDeaf",
-    "isRaisingHand"
-];
 export { NEGOTIATION_KIND, PENDING_REQUEST_KIND };
 
-const NEGOTIATION_KINDS = Object.values(NEGOTIATION_KIND);
-
 export type NegotiationKind = (typeof NEGOTIATION_KIND)[keyof typeof NEGOTIATION_KIND];
-
-const PENDING_REQUEST_KINDS = Object.values(PENDING_REQUEST_KIND);
 
 export type PendingRequestKind = (typeof PENDING_REQUEST_KIND)[keyof typeof PENDING_REQUEST_KIND];
 
 export const CommandKind = COMMAND_KIND;
 
-export type HostCommandKind = (typeof CommandKind)[keyof typeof CommandKind];
+export type { HostCommandKind };
 
-export type HostCommand =
-    | { kind: typeof CommandKind.SEND_WEB_SOCKET; frame: string }
-    | {
-          kind: typeof CommandKind.APPLY_NEGOTIATION;
-          requestId: string;
-          negotiationKind: NegotiationKind;
-          sdp: string;
-          uploadSlots: NegotiationUploadSlot[];
-      }
-    | { kind: typeof CommandKind.ATTACH_TRACK; mid: string; streamType: StreamType }
-    | { kind: typeof CommandKind.DETACH_TRACK; streamType: StreamType }
-    | { kind: typeof CommandKind.CREATE_PEER_CONNECTION }
-    | { kind: typeof CommandKind.CLOSE_PEER_CONNECTION }
-    | { kind: typeof CommandKind.CLOSE_WEB_SOCKET; code: number }
-    | { kind: typeof CommandKind.EMIT_STATE_CHANGE; state: ConnectionState; cause?: string }
-    | { kind: typeof CommandKind.REPLACE_TRACK_BINDINGS; bindings: TrackBinding[] }
-    | { kind: typeof CommandKind.REPLACE_SOURCE_DESCRIPTORS; sources: SourceDescriptor[] }
-    | { kind: typeof CommandKind.REMOVE_SESSION_TRACKS; sessionId: SessionId }
-    | { kind: typeof CommandKind.EMIT_UPDATE; update: ClientUpdateDetail }
-    | {
-          kind: typeof CommandKind.REGISTER_PENDING_REQUEST;
-          requestId: string;
-          requestKind: PendingRequestKind;
-      }
-    | { kind: typeof CommandKind.RESOLVE_PENDING_REQUEST; requestId: string; ok: boolean }
-    | { kind: typeof CommandKind.SCHEDULE_TIMER; id: number; ms: number }
-    | { kind: typeof CommandKind.CANCEL_TIMER; id: number }
-    | { kind: typeof CommandKind.CONNECT; url: string };
+export type HostCommand = GeneratedHostCommand;
 
 export interface ProtocolCoreBindings {
     readonly state: ConnectionState;
@@ -277,136 +230,11 @@ function validateHostCommandOrder(commands: HostCommand[], context: string): voi
 function validateHostCommand(value: unknown, context: string): HostCommand {
     const command = asRecord(value, context);
     const kind = requireString(command.kind, `${context}.kind`);
-    switch (kind) {
-        case CommandKind.SEND_WEB_SOCKET:
-            requireString(command.frame, `${context}.frame`);
-            return command as HostCommand;
-        case CommandKind.APPLY_NEGOTIATION:
-            requireString(command.requestId, `${context}.requestId`);
-            validateStringEnum(
-                command.negotiationKind,
-                NEGOTIATION_KINDS,
-                `${context}.negotiationKind`
-            );
-            requireString(command.sdp, `${context}.sdp`);
-            validateArray(
-                command.uploadSlots,
-                `${context}.uploadSlots`,
-                validateNegotiationUploadSlot
-            );
-            return command as HostCommand;
-        case CommandKind.ATTACH_TRACK:
-            requireString(command.mid, `${context}.mid`);
-            validateStreamType(command.streamType, `${context}.streamType`);
-            return command as HostCommand;
-        case CommandKind.DETACH_TRACK:
-            validateStreamType(command.streamType, `${context}.streamType`);
-            return command as HostCommand;
-        case CommandKind.CREATE_PEER_CONNECTION:
-        case CommandKind.CLOSE_PEER_CONNECTION:
-            return command as HostCommand;
-        case CommandKind.CLOSE_WEB_SOCKET:
-            requireInteger(command.code, `${context}.code`);
-            return command as HostCommand;
-        case CommandKind.EMIT_STATE_CHANGE:
-            validateConnectionState(command.state, `${context}.state`);
-            requireOptionalString(command.cause, `${context}.cause`);
-            return command as HostCommand;
-        case CommandKind.REPLACE_TRACK_BINDINGS:
-            validateArray(command.bindings, `${context}.bindings`, validateTrackBinding);
-            return command as HostCommand;
-        case CommandKind.REPLACE_SOURCE_DESCRIPTORS:
-            validateArray(command.sources, `${context}.sources`, validateSourceDescriptor);
-            return command as HostCommand;
-        case CommandKind.REMOVE_SESSION_TRACKS:
-            validateSessionId(command.sessionId, `${context}.sessionId`);
-            return command as HostCommand;
-        case CommandKind.EMIT_UPDATE:
-            return {
-                kind,
-                update: validateClientUpdate(command.update, `${context}.update`)
-            };
-        case CommandKind.REGISTER_PENDING_REQUEST:
-            requireString(command.requestId, `${context}.requestId`);
-            validateStringEnum(
-                command.requestKind,
-                PENDING_REQUEST_KINDS,
-                `${context}.requestKind`
-            );
-            return command as HostCommand;
-        case CommandKind.RESOLVE_PENDING_REQUEST:
-            requireString(command.requestId, `${context}.requestId`);
-            requireBoolean(command.ok, `${context}.ok`);
-            return command as HostCommand;
-        case CommandKind.SCHEDULE_TIMER:
-            requireInteger(command.id, `${context}.id`);
-            requireInteger(command.ms, `${context}.ms`);
-            return command as HostCommand;
-        case CommandKind.CANCEL_TIMER:
-            requireInteger(command.id, `${context}.id`);
-            return command as HostCommand;
-        case CommandKind.CONNECT:
-            requireString(command.url, `${context}.url`);
-            return command as HostCommand;
-        default:
-            throw new Error(`${context}.kind is invalid: ${String(kind)}`);
+    const schema = (HOST_COMMAND_SCHEMAS as Record<string, ProtocolValidationSchema>)[kind];
+    if (!schema) {
+        throw new Error(`${context}.kind is invalid: ${String(kind)}`);
     }
-}
-
-function validateClientUpdate(value: unknown, context: string): ClientUpdateDetail {
-    const update = asRecord(value, context);
-    const name = requireString(update.name, `${context}.name`);
-    switch (name) {
-        case CLIENT_UPDATE.TRACK: {
-            const payload = asRecord(update.payload, `${context}.payload`);
-            validateSessionId(payload.sessionId, `${context}.payload.sessionId`);
-            validateStreamType(payload.type, `${context}.payload.type`);
-            requireBoolean(payload.active, `${context}.payload.active`);
-            if (payload.track === null || typeof payload.track !== "object") {
-                throw new Error(`${context}.payload.track must be an object`);
-            }
-            return update as ClientUpdateDetail;
-        }
-        case CLIENT_UPDATE.SOURCE: {
-            const payload = asRecord(update.payload, `${context}.payload`);
-            validateArray(payload.sources, `${context}.payload.sources`, validateSourceDescriptor);
-            return update as ClientUpdateDetail;
-        }
-        case CLIENT_UPDATE.DISCONNECT: {
-            const payload = asRecord(update.payload, `${context}.payload`);
-            validateSessionId(payload.sessionId, `${context}.payload.sessionId`);
-            return update as ClientUpdateDetail;
-        }
-        case CLIENT_UPDATE.INFO_CHANGE: {
-            const payload = asStringKeyedRecord(update.payload, `${context}.payload`);
-            for (const [sessionId, info] of Object.entries(payload)) {
-                validateSessionInfo(info, `${context}.payload.${sessionId}`);
-            }
-            return {
-                name: CLIENT_UPDATE.INFO_CHANGE,
-                payload: payload as InfoChangeUpdateDetail
-            };
-        }
-        case CLIENT_UPDATE.BROADCAST: {
-            const payload = asRecord(update.payload, `${context}.payload`);
-            validateSessionId(payload.senderId, `${context}.payload.senderId`);
-            return update as ClientUpdateDetail;
-        }
-        case CLIENT_UPDATE.CHANNEL_INFO_CHANGE: {
-            const payload = asRecord(update.payload, `${context}.payload`);
-            validateRecordingState(payload.state, `${context}.payload.state`);
-            if (payload.stopCode !== undefined) {
-                validateStringEnum(
-                    payload.stopCode,
-                    RECORDING_STOP_CODES,
-                    `${context}.payload.stopCode`
-                );
-            }
-            return update as ClientUpdateDetail;
-        }
-        default:
-            throw new Error(`${context}.name is invalid: ${String(name)}`);
-    }
+    return validateSchema(schema, value, context) as HostCommand;
 }
 
 function validateOptionalTrackBinding(
@@ -416,129 +244,164 @@ function validateOptionalTrackBinding(
     if (value === null || value === undefined) {
         return value;
     }
-    const binding = asRecord(value, context);
-    requireString(binding.mid, `${context}.mid`);
-    validateSessionId(binding.sessionId, `${context}.sessionId`);
-    validateStreamType(binding.type, `${context}.type`);
-    requireBoolean(binding.active, `${context}.active`);
-    if (binding.source !== undefined) {
-        requirePresent(
-            validateOptionalSourceDescriptor(binding.source, `${context}.source`),
-            `${context}.source`,
-            "source descriptor when provided"
-        );
-    }
-    return value as TrackBinding;
-}
-
-function validateTrackBinding(value: unknown, context: string): TrackBinding {
-    return requirePresent(validateOptionalTrackBinding(value, context), context, "track binding");
-}
-
-function validateOptionalSourceDescriptor(
-    value: unknown,
-    context: string
-): SourceDescriptor | null | undefined {
-    if (value === null || value === undefined) {
-        return value;
-    }
-    const source = asRecord(value, context);
-    requireString(source.sourceId, `${context}.sourceId`);
-    validateSessionId(source.sessionId, `${context}.sessionId`);
-    validateStreamType(source.type, `${context}.type`);
-    requireBoolean(source.active, `${context}.active`);
-    requireOptionalString(source.mid, `${context}.mid`);
-    validateArray(source.encodings, `${context}.encodings`, validateSourceEncodingDescriptor);
-    return value as SourceDescriptor;
-}
-
-function validateSourceDescriptor(value: unknown, context: string): SourceDescriptor {
-    return requirePresent(
-        validateOptionalSourceDescriptor(value, context),
-        context,
-        "source descriptor"
-    );
-}
-
-function validateSourceEncodingDescriptor(value: unknown, context: string): void {
-    const descriptor = asRecord(value, context);
-    requireString(descriptor.encodingId, `${context}.encodingId`);
-    requireOptionalString(descriptor.rid, `${context}.rid`);
-    requireOptionalNonNegativeInteger(descriptor.maxBitrate, `${context}.maxBitrate`);
-    requireOptionalPositiveNumber(descriptor.resolutionScale, `${context}.resolutionScale`);
-    requireOptionalNonNegativeInteger(descriptor.maxFramerate, `${context}.maxFramerate`);
-    validateOptionalPolicyRole(descriptor.policyRole, `${context}.policyRole`);
-    requireOptionalTemporalLayerId(descriptor.maxTemporalLayerId, `${context}.maxTemporalLayerId`);
-}
-
-function validateNegotiationUploadSlot(value: unknown, context: string): void {
-    const uploadSlot = asRecord(value, context);
-    requireString(uploadSlot.mid, `${context}.mid`);
-    validateStringEnum(uploadSlot.kind, UPLOAD_KINDS, `${context}.kind`);
-    validateOptionalArray(uploadSlot.codecs, `${context}.codecs`, requireString);
-    validateOptionalArray(
-        uploadSlot.simulcastEncodings,
-        `${context}.simulcastEncodings`,
-        validateNegotiationUploadEncoding
-    );
-}
-
-function validateNegotiationUploadEncoding(value: unknown, context: string): void {
-    const uploadEncoding = asRecord(value, context);
-    requireString(uploadEncoding.rid, `${context}.rid`);
-    requireOptionalNonNegativeInteger(uploadEncoding.maxBitrate, `${context}.maxBitrate`);
-    requireOptionalFiniteNumber(uploadEncoding.resolutionScale, `${context}.resolutionScale`);
-    requireOptionalNonNegativeInteger(uploadEncoding.maxFramerate, `${context}.maxFramerate`);
-}
-
-function requireOptionalPositiveNumber(value: unknown, context: string): void {
-    requireOptionalNumber(
-        value,
-        context,
-        "must be a positive number",
-        (number) => Number.isFinite(number) && number > 0
-    );
-}
-
-function requireOptionalFiniteNumber(value: unknown, context: string): void {
-    requireOptionalNumber(value, context, "must be a finite number", Number.isFinite);
-}
-
-function validateOptionalPolicyRole(value: unknown, context: string): void {
-    if (value !== undefined) {
-        validateStringEnum(
-            value,
-            SOURCE_ENCODING_POLICY_ROLES,
-            context,
-            `${context} must be a supported upload layer policy role`
-        );
-    }
+    return validateSchema(RUNTIME_SCHEMAS.trackBinding, value, context) as TrackBinding;
 }
 
 function validateAvailableFeatures(value: unknown, context: string): AvailableFeatures {
-    const features = asRecord(value, context);
-    requireBooleanFields(features, FEATURE_BOOLEAN_FIELDS, context);
-    return value as AvailableFeatures;
+    return validateSchema(RUNTIME_SCHEMAS.availableFeatures, value, context) as AvailableFeatures;
 }
 
 function validateRecordingState(value: unknown, context: string): RecordingState {
-    const state = asRecord(value, context);
-    requireBooleanFields(state, RECORDING_BOOLEAN_FIELDS, context, true);
-    return value as RecordingState;
-}
-
-function validateSessionInfo(value: unknown, context: string): SessionInfo {
-    const info = asRecord(value, context);
-    requireBooleanFields(info, SESSION_INFO_BOOLEAN_FIELDS, context, true);
-    return value as SessionInfo;
+    return validateSchema(RUNTIME_SCHEMAS.recordingState, value, context) as RecordingState;
 }
 
 function validateConnectionState(value: unknown, context: string): ConnectionState {
     return validateStringEnum(value, Object.values(SFU_CLIENT_STATE), context);
 }
 
-function validateStreamType(value: unknown, context: string): StreamType {
-    return validateStringEnum(value, STREAM_TYPES, context);
+function validateSchema(
+    schema: ProtocolValidationSchema,
+    value: unknown,
+    context: string,
+    optional = false
+): unknown {
+    if (typeof schema === "string") {
+        return validatePrimitiveSchema(schema, value, context, optional);
+    }
+    switch (schema.kind) {
+        case "array":
+            return validateArray(value, context, schema.items, optional);
+        case "enum":
+            return validateStringEnum(
+                value,
+                schema.values,
+                context,
+                schema.message ? `${context} ${schema.message}` : undefined
+            );
+        case "literal":
+            return validateStringEnum(value, [schema.value], context);
+        case "object":
+            return validateObjectSchema(schema.fields, value, context);
+        case "optional":
+            if (value === undefined) {
+                return undefined;
+            }
+            return validateSchema(schema.value, value, context, true);
+        case "record":
+            return validateRecordSchema(schema.values, value, context);
+        case "taggedUnion":
+            return validateTaggedUnionSchema(schema.tag, schema.variants, value, context);
+    }
+}
+
+function validatePrimitiveSchema(
+    schema: string,
+    value: unknown,
+    context: string,
+    optional: boolean
+): unknown {
+    switch (schema) {
+        case "boolean":
+            return requireBoolean(value, context, optional);
+        case "browserCloseCode":
+            requireNumber(
+                value,
+                context,
+                "must be 1000 or an integer from 3000 through 4999",
+                isBrowserCloseCode,
+                optional
+            );
+            return value;
+        case "finiteNumber":
+            requireNumber(value, context, "must be a finite number", Number.isFinite, optional);
+            return value;
+        case "nonNegativeInteger":
+            requireNumber(
+                value,
+                context,
+                "must be a non-negative integer",
+                (number) => Number.isInteger(number) && number >= 0,
+                optional
+            );
+            return value;
+        case "positiveNumber":
+            requireNumber(
+                value,
+                context,
+                "must be a positive number",
+                (number) => Number.isFinite(number) && number > 0,
+                optional
+            );
+            return value;
+        case "sessionId":
+            return validateSessionId(value, context);
+        case "string":
+            return requireString(value, context, optional);
+        case "temporalLayerId":
+            requireNumber(
+                value,
+                context,
+                "must be an integer from 0 through 7",
+                (number) => Number.isInteger(number) && number >= 0 && number <= 7,
+                optional
+            );
+            return value;
+        case "unknown":
+            return value;
+        default:
+            throw new Error(`unsupported protocol validation schema: ${schema}`);
+    }
+}
+
+function validateObjectSchema(
+    fields: Record<string, ProtocolValidationSchema>,
+    value: unknown,
+    context: string
+): Record<string, unknown> {
+    const record = asRecord(value, context);
+    const result: Record<string, unknown> = { ...record };
+    for (const [field, fieldSchema] of Object.entries(fields)) {
+        if (!hasOwn(record, field)) {
+            if (isOptionalSchema(fieldSchema)) {
+                continue;
+            }
+            throw new Error(`${context}.${field} is required`);
+        }
+        const normalized = validateSchema(fieldSchema, record[field], `${context}.${field}`);
+        result[field] = normalized;
+    }
+    return result;
+}
+
+function validateRecordSchema(
+    schema: ProtocolValidationSchema,
+    value: unknown,
+    context: string
+): Record<string, unknown> {
+    const record = asStringKeyedRecord(value, context);
+    const result: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(record)) {
+        if (isUnsafeRecordKey(key)) {
+            throw new Error(`${context}.${key} is not a supported record key`);
+        }
+        result[key] = validateSchema(schema, item, `${context}.${key}`);
+    }
+    return result;
+}
+
+function validateTaggedUnionSchema(
+    tag: string,
+    variants: Record<string, ProtocolValidationSchema>,
+    value: unknown,
+    context: string
+): unknown {
+    const record = asRecord(value, context);
+    const tagValue = requireString(record[tag], `${context}.${tag}`);
+    const variant = variants[tagValue];
+    if (!variant) {
+        throw new Error(`${context}.${tag} is invalid: ${String(tagValue)}`);
+    }
+    return validateSchema(variant, value, context);
 }
 
 function validateSessionId(value: unknown, context: string): SessionId {
@@ -549,6 +412,22 @@ function validateSessionId(value: unknown, context: string): SessionId {
         throw new Error(`${context} number session ID must be finite`);
     }
     return value;
+}
+
+function hasOwn(record: Record<string, unknown>, field: string): boolean {
+    return Object.prototype.hasOwnProperty.call(record, field);
+}
+
+function isBrowserCloseCode(value: number): boolean {
+    return Number.isInteger(value) && (value === 1000 || (value >= 3000 && value <= 4999));
+}
+
+function isOptionalSchema(schema: ProtocolValidationSchema): boolean {
+    return typeof schema !== "string" && schema.kind === "optional";
+}
+
+function isUnsafeRecordKey(key: string): boolean {
+    return key === "__proto__" || key === "prototype" || key === "constructor";
 }
 
 function asRecord(value: unknown, context: string): Record<string, unknown> {
@@ -570,17 +449,11 @@ function asStringKeyedRecord(value: unknown, context: string): Record<string, un
     return asRecord(value, context);
 }
 
-function requireString(value: unknown, context: string): string {
+function requireString(value: unknown, context: string, optional = false): string {
     if (typeof value !== "string") {
-        throw new Error(`${context} must be a string`);
+        throw new Error(`${context} must be a string${optional ? " when provided" : ""}`);
     }
     return value;
-}
-
-function requireOptionalString(value: unknown, context: string): void {
-    if (value !== undefined && typeof value !== "string") {
-        throw new Error(`${context} must be a string when provided`);
-    }
 }
 
 function requireBoolean(value: unknown, context: string, optional = false): boolean {
@@ -590,69 +463,16 @@ function requireBoolean(value: unknown, context: string, optional = false): bool
     return value;
 }
 
-function requireBooleanFields(
-    record: Record<string, unknown>,
-    fields: readonly string[],
-    context: string,
-    optional = false
-): void {
-    for (const field of fields) {
-        const value = record[field];
-        if (!optional || value !== undefined) {
-            requireBoolean(value, `${context}.${field}`, optional);
-        }
-    }
-}
-
-function requireInteger(value: unknown, context: string): number {
-    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-        throw new Error(`${context} must be a non-negative integer`);
-    }
-    return value;
-}
-
-function requireOptionalNonNegativeInteger(value: unknown, context: string): void {
-    requireOptionalNumber(
-        value,
-        context,
-        "must be a non-negative integer when provided",
-        (number) => Number.isInteger(number) && number >= 0
-    );
-}
-
-function requireOptionalTemporalLayerId(value: unknown, context: string): void {
-    requireOptionalNumber(
-        value,
-        context,
-        `must be an integer from ${MIN_TEMPORAL_LAYER_ID} through ${MAX_TEMPORAL_LAYER_ID} when provided`,
-        (number) =>
-            Number.isInteger(number) &&
-            number >= MIN_TEMPORAL_LAYER_ID &&
-            number <= MAX_TEMPORAL_LAYER_ID
-    );
-}
-
-function validateArray<T>(
+function validateArray(
     value: unknown,
     context: string,
-    itemValidator: (item: unknown, context: string) => T,
-    arrayExpectation = "must be an array"
-): T[] {
+    itemSchema: ProtocolValidationSchema,
+    optional: boolean
+): unknown[] {
     if (!Array.isArray(value)) {
-        throw new Error(`${context} ${arrayExpectation}`);
+        throw new Error(`${context} must be an array${optional ? " when provided" : ""}`);
     }
-    return value.map((item, index) => itemValidator(item, `${context}[${index}]`));
-}
-
-function validateOptionalArray<T>(
-    value: unknown,
-    context: string,
-    itemValidator: (item: unknown, context: string) => T
-): T[] | undefined {
-    if (value === undefined) {
-        return undefined;
-    }
-    return validateArray(value, context, itemValidator, "must be an array when provided");
+    return value.map((item, index) => validateSchema(itemSchema, item, `${context}[${index}]`));
 }
 
 function validateStringEnum<T extends string>(
@@ -667,20 +487,14 @@ function validateStringEnum<T extends string>(
     return value as T;
 }
 
-function requirePresent<T>(value: T | null | undefined, context: string, label: string): T {
-    if (value === null || value === undefined) {
-        throw new Error(`${context} must be a ${label}`);
-    }
-    return value;
-}
-
-function requireOptionalNumber(
+function requireNumber(
     value: unknown,
     context: string,
     expectation: string,
-    isValid: (value: number) => boolean
+    isValid: (value: number) => boolean,
+    optional: boolean
 ): void {
-    if (value !== undefined && (typeof value !== "number" || !isValid(value))) {
-        throw new Error(`${context} ${expectation}`);
+    if (typeof value !== "number" || !isValid(value)) {
+        throw new Error(`${context} ${expectation}${optional ? " when provided" : ""}`);
     }
 }

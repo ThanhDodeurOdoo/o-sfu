@@ -3,9 +3,9 @@ pub(super) use std::{collections::BTreeMap, sync::Arc, time::Duration};
 pub(super) use o_sfu_protocol::{
     bundle::{
         BundleBroadcastUpdate, BundleConnectionState, BundleDisconnectUpdate, BundleStateChange,
-        BundleUpdate, bundle_session_info_key,
+        bundle_session_info_key,
     },
-    host::HostPendingRequestKind,
+    host::{HostPendingRequestKind, HostUpdate as BundleUpdate},
     wire::{
         AvailableFeatures, DownloadStates as ProtocolDownloadStates, EnvelopeBatch, RecordingState,
         RequestId, ServerMessage, StreamType as ProtocolStreamType, TrackBinding,

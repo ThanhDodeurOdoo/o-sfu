@@ -138,6 +138,29 @@ test("wrapped protocol core rejects malformed host commands", () => {
     );
 });
 
+test("wrapped protocol core rejects missing required unknown fields", () => {
+    const core = wrapProtocolCoreBindings(
+        validCore({
+            connect() {
+                return [
+                    {
+                        kind: "emitUpdate",
+                        update: {
+                            name: CLIENT_UPDATE.BROADCAST,
+                            payload: { senderId: 7 }
+                        }
+                    }
+                ];
+            }
+        })
+    );
+
+    assertThrowsMessage(
+        () => core.connect("ws://example.test", "jwt", null),
+        "protocol core connect() command #0.update.payload.message is required"
+    );
+});
+
 test("wrapped protocol core requires initial negotiation after peer connection creation", () => {
     const core = wrapProtocolCoreBindings(
         validCore({
@@ -215,6 +238,23 @@ test("wrapped protocol core validates close and recovery ordering", () => {
         "protocol core onWsClose() must close the peer connection before scheduling recovery"
     );
 });
+
+for (const code of [999, 1002, 2999, 5000]) {
+    test(`wrapped protocol core rejects browser-invalid close code ${String(code)}`, () => {
+        const core = wrapProtocolCoreBindings(
+            validCore({
+                disconnect() {
+                    return [{ kind: "closeWebSocket", code }];
+                }
+            })
+        );
+
+        assertThrowsMessage(
+            () => core.disconnect(),
+            "protocol core disconnect() command #0.code must be 1000 or an integer from 3000 through 4999"
+        );
+    });
+}
 
 test("wrapped protocol core rejects malformed track bindings", () => {
     const core = wrapProtocolCoreBindings(
@@ -377,4 +417,24 @@ test("wrapped protocol core validates boolean fields", () => {
             `protocol core connect() command #0.update.payload.7.${field} must be a boolean when provided`
         );
     }
+});
+
+test("wrapped protocol core rejects prototype-sensitive info keys", () => {
+    const payload = JSON.parse('{"__proto__":{"isTalking":true}}');
+
+    assertWrappedCoreThrows(
+        {
+            connect: () => [
+                {
+                    kind: "emitUpdate",
+                    update: {
+                        name: CLIENT_UPDATE.INFO_CHANGE,
+                        payload
+                    }
+                }
+            ]
+        },
+        (core) => core.connect("ws://example.test", "jwt", null),
+        "protocol core connect() command #0.update.payload.__proto__ is not a supported record key"
+    );
 });
