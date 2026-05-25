@@ -144,7 +144,7 @@ impl RoomUserOperation<'_> {
                 telemetry_event::PUBLICATION_ACTIVITY_CHANGED,
             )
             .with_connection_id(self.connection_id().as_u64())
-            .with_media_worker_id(room.media_worker_id())
+            .with_media_worker_id(transport_user_key.media_worker_id())
             .with_transport_media_id(outcome.transport_media_id.as_u64())
             .insert_field("active", outcome.active)
             .insert_field("stream_id", stream_id.to_string()),

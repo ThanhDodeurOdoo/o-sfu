@@ -1,8 +1,18 @@
 use std::{sync::Arc, time::Duration};
 
+use o_sfu_telemetry::schema::event as telemetry_event;
 use tokio::{sync::Notify, task::yield_now, time::timeout};
 
-use super::{super::placement::RoomPlacementDecisionReason, fixtures::*};
+use super::{
+    super::{
+        effects::SubscriptionEffectPlan,
+        placement::RoomPlacementDecisionReason,
+        state::{ConsumerRouteTransportRef, ConsumerRouteUpdate},
+        user_negotiation::UserTransportReady,
+    },
+    api::NegotiatedPublish,
+    fixtures::*,
+};
 use crate::{
     LocalSpilloverPolicy, MediaCodecFlags, RoomWorkerPolicy, RuntimeFeatureFlags,
     prelude::LocalSpilloverPolicyParts,
@@ -141,6 +151,45 @@ fn assert_last_decision_reason(room: &Arc<TestRoom>, reason: RoomPlacementDecisi
             .load_triggered_last_decision_reason(),
         Some(reason)
     );
+}
+
+fn assert_event_worker(
+    room: &TestRoom,
+    user_id: &UserId,
+    connection_id: ConnectionId,
+    event_name: &str,
+    transport_media_id: TransportMediaId,
+    media_worker_id: usize,
+) {
+    let events = room.diagnostics.user_recent_events(room.uuid(), user_id);
+    let event = events
+        .iter()
+        .find(|event| {
+            event.event == event_name
+                && event.connection_id == Some(connection_id.as_u64())
+                && event.transport_media_id == Some(transport_media_id.as_u64())
+        })
+        .unwrap_or_else(|| panic!("expected recent diagnostics event {event_name}"));
+    assert_eq!(event.media_worker_id, Some(media_worker_id));
+}
+
+async fn mark_publish_ready(room: &TestRoom, user_id: &UserId, connection_id: ConnectionId) {
+    let mut state = room.state.write().await;
+    assert!(
+        state
+            .set_transport_ready_for_test(user_id, connection_id, UserTransportReady::Publish)
+            .session_present
+    );
+    assert!(
+        state
+            .set_client_rtp_capabilities_for_test(
+                user_id,
+                connection_id,
+                &test_client_rtp_capabilities(),
+            )
+            .session_present
+    );
+    drop(state);
 }
 
 async fn seed_source_fanout_pressure(
@@ -464,6 +513,90 @@ async fn load_triggered_large_room_reaches_but_does_not_exceed_local_router_cap(
         assert_home_worker(&room, user_id, media_worker).await;
     }
     assert_last_decision_reason(&room, RoomPlacementDecisionReason::LocalRouterCapReached);
+}
+
+#[tokio::test]
+async fn spillover_media_diagnostics_use_connection_worker() {
+    let manager = manager_with_room_worker_policy(RoomWorkerPolicy::bounded_local_spillover(2));
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-spillover-diagnostics").await;
+    manager_join_user(&manager, &room, 1, &media_transport).await;
+    let publisher_connection_id = manager_join_user(&manager, &room, 2, &media_transport).await;
+    let publisher_id = UserId::Integer(2);
+    let media_worker_id = 1;
+    assert_home_worker(&room, 2, media_worker_id).await;
+    mark_publish_ready(&room, &publisher_id, publisher_connection_id).await;
+
+    let transport_media_id = TransportMediaId::new(99);
+    let stream_id = room
+        .test_api()
+        .media()
+        .publish_negotiated_track(
+            &publisher_id,
+            NegotiatedPublish {
+                connection_id: publisher_connection_id,
+                stream_type: TestSourceKind::AudioDetector,
+                media_kind: MediaKind::Audio,
+                transport_media_id,
+                consumable_rtp_parameters: test_audio_rtp_parameters(),
+            },
+            &media_transport,
+        )
+        .await
+        .expect("synthetic negotiated publish should commit");
+    assert_event_worker(
+        &room,
+        &publisher_id,
+        publisher_connection_id,
+        telemetry_event::PUBLISH_COMMITTED,
+        transport_media_id,
+        media_worker_id,
+    );
+
+    assert_eq!(
+        room.user_operation(&publisher_id, publisher_connection_id, &media_transport)
+            .set_publication_activity(&stream_id, PublicationActivity::Inactive)
+            .await,
+        PublicationActivityOutcome::Applied {
+            transport_update: crate::TransportEffectOutcome::Failed
+        }
+    );
+    assert_event_worker(
+        &room,
+        &publisher_id,
+        publisher_connection_id,
+        telemetry_event::PUBLICATION_ACTIVITY_CHANGED,
+        transport_media_id,
+        media_worker_id,
+    );
+
+    let consumer_media_id = TransportMediaId::new(199);
+    let route = ConsumerRouteTransportRef::from_parts(
+        publisher_id.clone(),
+        publisher_connection_id,
+        consumer_media_id,
+        UserId::Integer(1),
+        user_connection_id(&room, &UserId::Integer(1)).await,
+        TransportMediaId::new(11),
+    );
+    let subscription_update =
+        ConsumerRouteUpdate::new(route, stream_id.clone(), MediaKind::Audio, false);
+    SubscriptionEffectPlan::from_route_updates(
+        &room,
+        &publisher_id,
+        publisher_connection_id,
+        vec![subscription_update],
+    )
+    .execute(&room, &media_transport)
+    .await;
+    assert_event_worker(
+        &room,
+        &publisher_id,
+        publisher_connection_id,
+        telemetry_event::SUBSCRIPTION_ACTIVITY_CHANGED,
+        consumer_media_id,
+        media_worker_id,
+    );
 }
 
 #[tokio::test]

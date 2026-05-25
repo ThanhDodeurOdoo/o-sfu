@@ -83,6 +83,9 @@ impl SubscriptionEffectPlan {
         connection_id: ConnectionId,
         route_updates: Vec<ConsumerRouteUpdate>,
     ) -> Self {
+        let media_worker_id = room
+            .transport_user_key(user_id, connection_id)
+            .media_worker_id();
         let route_activity_ops = route_updates
             .into_iter()
             .map(|route_update| {
@@ -93,7 +96,7 @@ impl SubscriptionEffectPlan {
                     telemetry_event::SUBSCRIPTION_ACTIVITY_CHANGED,
                 )
                 .with_connection_id(connection_id.as_u64())
-                .with_media_worker_id(room.media_worker_id())
+                .with_media_worker_id(media_worker_id)
                 .with_transport_media_id(route.consumer_media().as_u64())
                 .insert_field("active", route_update.active())
                 .insert_field(
@@ -376,7 +379,13 @@ impl ConsumerBootstrapOp {
                     telemetry_event::SUBSCRIBE_SUCCEEDED,
                 )
                 .with_connection_id(target.consumer_connection_id().as_u64())
-                .with_media_worker_id(room.media_worker_id())
+                .with_media_worker_id(
+                    room.transport_user_key(
+                        target.consumer_user_id(),
+                        target.consumer_connection_id(),
+                    )
+                    .media_worker_id(),
+                )
                 .with_transport_media_id(consumer_transport_media_id.as_u64())
                 .insert_field(
                     "producer_user_id",
