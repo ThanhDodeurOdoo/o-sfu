@@ -165,7 +165,7 @@ jobs:
               if (!Array.isArray(both) || both.length !== 2) {
                 return null;
               }
-              // iai-callgrind reports comparison metrics as [head, base] for the Both variant
+              // Gungraun reports comparison metrics as [head, base] for the Both variant
               const head = metricValue(both[0]);
               const base = metricValue(both[1]);
               const labels = benchmarkLabels(summary);
