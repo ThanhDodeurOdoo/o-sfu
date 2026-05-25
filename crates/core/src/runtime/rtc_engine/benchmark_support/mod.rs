@@ -15,7 +15,7 @@ mod relay;
 mod scheduler;
 mod sinks;
 mod video;
-#[cfg(feature = "worker-benchmarks")]
+#[cfg(feature = "internal-benchmarks")]
 mod worker;
 
 pub use active_speaker::ActiveSpeakerBenchFixture;
@@ -31,7 +31,10 @@ pub use video::{
     KEYFRAME_COALESCING_REQUESTS, KeyframeCoalescingBenchFixture, RidReadinessBenchFixture,
     SELECTED_RID_DESTINATIONS,
 };
-#[cfg(feature = "worker-benchmarks")]
-pub use worker::{WORKER_COMMAND_ROUNDTRIPS, WorkerLoopBenchFixture};
+#[cfg(feature = "internal-benchmarks")]
+pub use worker::{
+    WORKER_COMMAND_ROUNDTRIPS, WORKER_PACKET_COMMAND_MIX_PACKETS, WorkerLoopBenchFixture,
+    WorkerPacketCommandMixBenchFixture,
+};
 
 pub use super::routing_miss::packet_fingerprint_for_benchmark as routing_miss_packet_fingerprint;

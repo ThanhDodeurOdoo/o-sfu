@@ -52,6 +52,9 @@ large-packet recent-miss cache routing, ready-session scheduler churn,
 routing-miss fingerprinting, packet-sink fanout, consumer packet-gate batches,
 selected-RID readiness, local RTP identity rewriting, active-speaker route
 control and keyframe-request coalescing
+The `packet_cmd_mix` scenario also covers fanout packet sends interleaved with
+worker lifecycle commands at a fixed ratio, so packet-loop publication changes
+can be compared in the regular Callgrind table
 
 local Callgrind execution requires `gungraun-runner` plus Valgrind. on
 hosts without Valgrind support, use `--no-run` as the local build check and run
