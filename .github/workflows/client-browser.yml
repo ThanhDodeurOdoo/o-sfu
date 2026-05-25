@@ -1,4 +1,4 @@
-name: Client Browser
+name: Playwright
 
 on:
   push:
