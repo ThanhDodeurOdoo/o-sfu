@@ -19,7 +19,6 @@
 
 use tracing::warn;
 
-use super::RoomTransportEffect;
 use crate::{
     TransportEffectOutcome,
     runtime::{
@@ -513,9 +512,7 @@ pub(super) async fn execute_relay_route_effects(
             target_media_worker_id: effect.route.target_worker,
             action: effect.action,
         };
-        let result = RoomTransportEffect::RelayRoute(transport_effect)
-            .execute_unit(media_port)
-            .await;
+        let result = media_port.apply_relay_route_effect(&transport_effect).await;
         if let Err(error) = result {
             applied = false;
             warn!(

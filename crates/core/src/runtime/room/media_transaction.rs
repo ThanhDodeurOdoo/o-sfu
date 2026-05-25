@@ -34,9 +34,7 @@ use tracing::warn;
 use super::{
     Room, RoomMediaCounts, RoomUserOperation, SourcePolicyEvent,
     cleanup::TransportCleanupOperation,
-    effects::{
-        PublishReservationContinuation, RoomEffectBatch, RoomEffectContext, RoomTransportEffect,
-    },
+    effects::{RoomEffectBatch, RoomEffectContext},
     state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, ValidatedPublishDescriptor},
 };
 use crate::{
@@ -607,18 +605,11 @@ impl RoomUserOperation<'_> {
         ) {
             return Ok(PublishStageOutcome::Duplicate);
         }
-        let publish_effect = RoomTransportEffect::PublishReservation {
-            continuation: PublishReservationContinuation {
-                user: self.user_id().clone(),
-                connection: self.connection_id(),
-                stream: intent.stream_id().clone(),
-            },
-            session_key: self.transport_user_key(),
-            media_kind: intent.media_kind(),
-            rtp_parameters: answer_derived_publish_parameters(),
-        };
-        let transport_media_id = match publish_effect
-            .execute_publish_reservation(self.media_transport())
+        let session_key = self.transport_user_key();
+        let rtp_parameters = answer_derived_publish_parameters();
+        let transport_media_id = match self
+            .media_transport()
+            .publish_media(&session_key, intent.media_kind(), &rtp_parameters)
             .await
         {
             Ok(transport_media_id) => transport_media_id,
