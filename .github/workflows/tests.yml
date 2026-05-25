@@ -47,22 +47,31 @@ jobs:
         run: cargo fmt --check
 
       - name: Run library crates with nextest
-        run: cargo nextest run -p o-sfu-cluster -p o-sfu-core -p o-sfu-protocol -p o-sfu-rfc -p o-sfu-router
+        run: >-
+          cargo nextest run --locked
+          -p o-sfu-cluster
+          -p o-sfu-core
+          -p o-sfu-model
+          -p o-sfu-protocol
+          -p o-sfu-rfc
+          -p o-sfu-router
+          -p o-sfu-telemetry
+          -p o-sfu-telemetry-macros
 
       - name: Run root crate tests
-        run: cargo test -p o-sfu
+        run: cargo test --locked -p o-sfu
 
       - name: Run integration and verification crate tests
-        run: cargo test -p o-sfu-tests -p o-sfu-proofs
+        run: cargo test --locked -p o-sfu-tests -p o-sfu-proofs
 
       - name: Run workspace doctests
-        run: cargo test --workspace --doc
+        run: cargo test --locked --workspace --doc
 
       - name: Check fuzz targets build
         run: cargo check --manifest-path tests/fuzz/Cargo.toml --locked
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: Prepare trybuild cache cleanup
         if: always()
@@ -93,7 +102,7 @@ jobs:
           shared-key: rust-1.95-mainline
 
       - name: Run release workspace tests
-        run: cargo test --workspace --release
+        run: cargo test --locked --workspace --release
 
       - name: Prepare trybuild cache cleanup
         if: always()
@@ -127,7 +136,7 @@ jobs:
           shared-key: rust-1.95-mainline
 
       - name: Generate workspace coverage report
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+        run: cargo llvm-cov --locked --workspace --lcov --output-path lcov.info
 
       - name: Export coverage summary
         run: cargo llvm-cov report --json --summary-only --output-path coverage-summary.json

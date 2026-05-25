@@ -33,13 +33,13 @@ jobs:
           shared-key: rust-1.95-mainline
 
       - name: Check workspace without OpenTelemetry feature
-        run: cargo check --workspace --no-default-features
+        run: cargo check --locked --workspace --no-default-features
 
       - name: Run workspace tests without OpenTelemetry feature
-        run: cargo test --workspace --release --no-default-features
+        run: cargo test --locked --workspace --release --no-default-features
 
       - name: Run clippy without OpenTelemetry feature
-        run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --no-default-features -- -D warnings
 
       - name: Prepare trybuild cache cleanup
         if: always()
