@@ -298,12 +298,12 @@ impl RoomState {
                 );
                 continue;
             }
-            accepted_updates.push(ConsumerRouteUpdate {
-                route: route_ref,
-                stream_id: stream_id.clone(),
+            accepted_updates.push(ConsumerRouteUpdate::new(
+                route_ref,
+                stream_id.clone(),
                 media_kind,
                 active,
-            });
+            ));
             relay_effects.extend(self.media.set_relay_consumer_active(
                 user_id,
                 connection_id,
@@ -756,6 +756,20 @@ impl PlannedSubscriptionChange {
 }
 
 impl ConsumerRouteUpdate {
+    pub(in crate::runtime::room) const fn new(
+        route: ConsumerRouteTransportRef,
+        stream_id: UserStreamId,
+        media_kind: RouterMediaKind,
+        active: bool,
+    ) -> Self {
+        Self {
+            route,
+            stream_id,
+            media_kind,
+            active,
+        }
+    }
+
     pub fn route(&self) -> &ConsumerRouteTransportRef {
         &self.route
     }

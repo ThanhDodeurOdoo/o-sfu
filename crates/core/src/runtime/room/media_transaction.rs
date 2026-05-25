@@ -364,7 +364,10 @@ impl PendingPublishTransaction {
                     telemetry_event::PUBLISH_COMMITTED,
                 )
                 .with_connection_id(owner_connection_id.as_u64())
-                .with_media_worker_id(room.media_worker_id())
+                .with_media_worker_id(
+                    room.transport_user_key(&owner_user_id, owner_connection_id)
+                        .media_worker_id(),
+                )
                 .with_transport_media_id(transport_media_id.as_u64()),
             })
         };
