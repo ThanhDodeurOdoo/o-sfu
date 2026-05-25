@@ -104,11 +104,14 @@ mod tests;
 #[cfg(test)]
 pub use event_observation::{transport_health_from_event, transport_ice_state};
 
+#[cfg(any(test, feature = "internal-benchmarks", feature = "fuzzing"))]
+pub(in crate::runtime::rtc_engine) use self::ingress_routing::{
+    PacketRouteDatagram, route_packet_to_matching_session_at,
+};
 #[cfg(feature = "internal-benchmarks")]
 pub(in crate::runtime::rtc_engine) use self::{
     buffers::PacketLoopBuffers,
     forward_flush::flush_forward_routes,
-    ingress_routing::{PacketRouteDatagram, route_packet_to_matching_session_at},
     keyframe_requests::{PendingKeyframeRequest, flush_pending_keyframe_requests_at},
 };
 pub(in crate::runtime::rtc_engine) use self::{

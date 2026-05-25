@@ -387,19 +387,24 @@ pub(super) async fn apply_offer_answer(
     remote: &mut Rtc,
     offer_sdp: String,
 ) {
-    let answer = remote
-        .sdp_api()
-        .accept_offer(
-            SdpOffer::from_sdp_string(&offer_sdp)
-                .expect("adapter should return parseable SDP offer"),
-        )
-        .expect("remote answer should build");
+    let answer_sdp = remote_answer_sdp(remote, &offer_sdp);
     assert!(
         adapter
-            .apply_session_answer(session_key, &answer.to_sdp_string())
+            .apply_session_answer(session_key, &answer_sdp)
             .await
             .is_ok()
     );
+}
+
+pub(super) fn remote_answer_sdp(remote: &mut Rtc, offer_sdp: &str) -> String {
+    remote
+        .sdp_api()
+        .accept_offer(
+            SdpOffer::from_sdp_string(offer_sdp)
+                .expect("adapter should return parseable SDP offer"),
+        )
+        .expect("remote answer should build")
+        .to_sdp_string()
 }
 
 pub(super) fn video_rtp_parameters_with_mid(mid: &str, ssrc: u32) -> MediaStream {

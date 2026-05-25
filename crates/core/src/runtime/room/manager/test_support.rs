@@ -1,9 +1,16 @@
+#[cfg(test)]
+use std::fmt;
 use std::sync::Arc;
+
+#[cfg(test)]
+use tokio::sync::Barrier;
 
 use super::{
     super::{RoomAdmissionPolicy, RoomRuntimePolicy, rtp_capabilities::router_rtp_capabilities},
     RoomManager, RoomManagerConfig, RoomManagerDeps,
 };
+#[cfg(test)]
+use crate::runtime::sync::lock_unpoisoned;
 use crate::{
     MediaCodecFlags, RoomMediaLimits, RuntimeFeatureFlags,
     runtime::{
@@ -67,5 +74,59 @@ impl RoomManager {
                 metrics: Arc::new(RuntimeMetrics::default()),
             },
         )
+    }
+
+    #[cfg(test)]
+    pub(in crate::runtime::room) fn set_join_placement_gate_for_test(
+        &self,
+        gate: Arc<JoinPlacementTestGate>,
+    ) {
+        *lock_unpoisoned(&self.join_placement_gate) = Some(gate);
+    }
+
+    #[cfg(test)]
+    pub(super) async fn wait_after_join_placement_for_test(&self) {
+        let gate = lock_unpoisoned(&self.join_placement_gate).as_ref().cloned();
+        if let Some(gate) = gate {
+            gate.wait_after_planning().await;
+        }
+    }
+}
+
+#[cfg(test)]
+pub(in crate::runtime::room) struct JoinPlacementTestGate {
+    planned: Barrier,
+    release: Barrier,
+}
+
+#[cfg(test)]
+impl JoinPlacementTestGate {
+    pub(in crate::runtime::room) fn new(expected: usize) -> Self {
+        Self {
+            planned: Barrier::new(expected + 1),
+            release: Barrier::new(expected + 1),
+        }
+    }
+
+    async fn wait_after_planning(&self) {
+        self.planned.wait().await;
+        self.release.wait().await;
+    }
+
+    pub(in crate::runtime::room) async fn hold_all_planned(&self) {
+        self.planned.wait().await;
+    }
+
+    pub(in crate::runtime::room) async fn release_all(&self) {
+        self.release.wait().await;
+    }
+}
+
+#[cfg(test)]
+impl fmt::Debug for JoinPlacementTestGate {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("JoinPlacementTestGate")
+            .finish_non_exhaustive()
     }
 }

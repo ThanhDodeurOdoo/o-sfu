@@ -231,6 +231,10 @@ pub struct Room {
     /// that has not become live room state yet. A publish only becomes real
     /// room state after the later commit path succeeds.
     pub(super) pending_publish_transactions: StdMutex<PendingPublishTransactions>,
+    #[cfg(test)]
+    pub(super) duplicate_staged_publish_after_reservation: StdMutex<Option<TransportMediaId>>,
+    #[cfg(test)]
+    pub(super) duplicate_staged_publish_cleanup_target: StdMutex<Option<TransportMediaId>>,
     /// Pure room state plus room-owned indexes.
     ///
     /// Callers must snapshot what they need and drop this lock before async
@@ -277,6 +281,10 @@ impl Room {
             metrics: services.metrics,
             cleanup_reconciler: StdMutex::new(CleanupReconciler::default()),
             pending_publish_transactions: StdMutex::new(PendingPublishTransactions::default()),
+            #[cfg(test)]
+            duplicate_staged_publish_after_reservation: StdMutex::new(None),
+            #[cfg(test)]
+            duplicate_staged_publish_cleanup_target: StdMutex::new(None),
             state: RwLock::new(RoomState::new(
                 &runtime_context,
                 runtime_policy.admission_policy,

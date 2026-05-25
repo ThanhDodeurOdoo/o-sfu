@@ -1,4 +1,5 @@
 use super::support::*;
+use crate::runtime::room::effects::SourcePolicyEffectPlan;
 
 #[tokio::test]
 async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
@@ -266,4 +267,145 @@ async fn screen_share_layout_uses_screen_specific_priority_in_diagnostics() {
         DiagnosticsVideoRoutePriority::ReadableDetail,
     )
     .await;
+}
+
+#[tokio::test]
+async fn source_policy_removed_route_does_not_commit_stale_selector_update() {
+    let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
+        &[1, 2, 3],
+        RoomMediaLimits::try_new(4, 1).unwrap(),
+    )
+    .await;
+    scenario.publish_audio_and_camera_for_users(&[1, 3]).await;
+    let third_audio_media_id = scenario.audio_media_id(3).await;
+
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(3),
+        TestSourceKind::ScalableVideo,
+        Some(DiagnosticsPolicyPauseReason::VideoDownloadLimit),
+    )
+    .await;
+    scenario.mark_active_speaker(third_audio_media_id).await;
+    let third_camera_source_id = scenario
+        .room
+        .test_api()
+        .inspect()
+        .source_id_for_owner_stream(&UserId::Integer(3), TestSourceKind::ScalableVideo)
+        .await
+        .expect("third camera should have a source id before unpublish");
+    let mut effect_plan = source_policy_effect_plan_from_transport_snapshot(&scenario).await;
+    assert!(
+        effect_plan.retain_updates_for_consumer_source_for_test(
+            &UserId::Integer(2),
+            third_camera_source_id
+        )
+    );
+
+    assert_eq!(
+        scenario
+            .room
+            .user_operation(
+                &UserId::Integer(3),
+                user_connection_id(&scenario.room, &UserId::Integer(3)).await,
+                &scenario.adapter,
+            )
+            .unpublish(&stream_id_for_source(TestSourceKind::ScalableVideo))
+            .await,
+        UnpublishOutcome::Unpublished {
+            cleanup: crate::TransportEffectOutcome::Applied
+        }
+    );
+    effect_plan.execute(&scenario.room, &scenario.adapter).await;
+
+    assert!(
+        !scenario
+            .room
+            .test_api()
+            .inspect()
+            .contains_consumer_source_selection(&UserId::Integer(2), third_camera_source_id)
+            .await
+    );
+}
+
+#[tokio::test]
+async fn source_policy_rejected_transport_gate_does_not_commit_selector_update() {
+    let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
+        &[1, 2, 3],
+        RoomMediaLimits::try_new(4, 1).unwrap(),
+    )
+    .await;
+    scenario.publish_audio_and_camera_for_users(&[1, 3]).await;
+    let third_audio_media_id = scenario.audio_media_id(3).await;
+
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(3),
+        TestSourceKind::ScalableVideo,
+        Some(DiagnosticsPolicyPauseReason::VideoDownloadLimit),
+    )
+    .await;
+    scenario.mark_active_speaker(third_audio_media_id).await;
+    let third_camera_source_id = scenario
+        .room
+        .test_api()
+        .inspect()
+        .source_id_for_owner_stream(&UserId::Integer(3), TestSourceKind::ScalableVideo)
+        .await
+        .expect("third camera should have a source id before transport close");
+    let mut effect_plan = source_policy_effect_plan_from_transport_snapshot(&scenario).await;
+    assert!(
+        effect_plan.retain_updates_for_consumer_source_for_test(
+            &UserId::Integer(2),
+            third_camera_source_id
+        )
+    );
+    let receiver_connection_id = user_connection_id(&scenario.room, &UserId::Integer(2)).await;
+    let receiver_session_key = scenario
+        .room
+        .transport_user_key(&UserId::Integer(2), receiver_connection_id);
+
+    scenario
+        .adapter
+        .close_session(&receiver_session_key)
+        .await
+        .expect("test should close receiver transport before source policy commit");
+    effect_plan.execute(&scenario.room, &scenario.adapter).await;
+
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(3),
+        TestSourceKind::ScalableVideo,
+        Some(DiagnosticsPolicyPauseReason::VideoDownloadLimit),
+    )
+    .await;
+}
+
+async fn source_policy_effect_plan_from_transport_snapshot(
+    scenario: &SourcePolicyScenario,
+) -> SourcePolicyEffectPlan {
+    let active_speaker_sources = scenario.adapter.active_speaker_source_snapshot().await;
+    let session_keys = {
+        let state = scenario.room.state.read().await;
+        state
+            .transport_user_entries()
+            .into_iter()
+            .map(|(user_id, connection_id)| {
+                scenario.room.transport_user_key(&user_id, connection_id)
+            })
+            .collect::<Vec<_>>()
+    };
+    let receiver_bandwidth_snapshot = scenario.adapter.receiver_bandwidth_snapshot(&session_keys);
+    let state = scenario.room.state.read().await;
+    SourcePolicyEffectPlan::from_state(
+        &state,
+        &active_speaker_sources,
+        &receiver_bandwidth_snapshot,
+    )
 }

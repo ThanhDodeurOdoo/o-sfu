@@ -628,6 +628,11 @@ impl RoomUserOperation<'_> {
             }
         };
         let transaction = PendingPublishTransaction::new(validated_descriptor, transport_media_id);
+        #[cfg(test)]
+        room.inject_duplicate_staged_publish_after_reservation_for_test(
+            &transaction.descriptor,
+            transport_media_id,
+        );
         let duplicate_stage = {
             let mut pending_publish_transactions = room.pending_publish_transactions();
             pending_publish_transactions.stage(transaction).err()

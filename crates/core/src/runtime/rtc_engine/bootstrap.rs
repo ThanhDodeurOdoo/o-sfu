@@ -117,7 +117,7 @@ fn bind_ip_for_public_ip(public_ip: IpAddr) -> IpAddr {
 ///
 /// returns `TransportUnavailable` if the local candidate cannot be represented
 /// by str0m or cannot be attached to the newly created rtc state
-#[cfg(any(test, feature = "internal-benchmarks"))]
+#[cfg(any(test, feature = "internal-benchmarks", feature = "fuzzing"))]
 pub(super) fn ensure_session_rtc_state(
     users: &mut SessionStore,
     session_key: &TransportSessionKey,
