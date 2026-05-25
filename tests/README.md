@@ -56,14 +56,17 @@ the baseline comparison on Linux
 
 ## CI tests
 
-The default CI test workflow uses locked `cargo nextest` for `o-sfu-cluster`,
-`o-sfu-core`, `o-sfu-model`, `o-sfu-protocol`, `o-sfu-rfc`, `o-sfu-router`,
-`o-sfu-telemetry` plus `o-sfu-telemetry-macros`. The root `o-sfu` crate plus
-the `o-sfu-tests` integration crate and doctests stay on locked plain
-`cargo test`. Scheduled and manually dispatched CI also runs
-`cargo test --locked --workspace --release` with default features, matching the
-local default baseline without making every pull request pay the release build
-cost.
+The default CI test workflow runs Rust checks as separate matrix entries so a
+formatting, test, doctest, fuzz-build or clippy failure reports on its own job.
+The `library nextest` entry uses locked `cargo nextest --profile ci` for
+`o-sfu-cluster`, `o-sfu-core`, `o-sfu-model`, `o-sfu-protocol`, `o-sfu-rfc`,
+`o-sfu-router`, `o-sfu-telemetry` plus `o-sfu-telemetry-macros`. It writes a
+JUnit report to `target/nextest/ci/junit.xml`, which CI uploads as a short-lived
+artifact. The root `o-sfu` crate plus the `o-sfu-tests` integration crate and
+doctests stay on locked plain `cargo test`. Scheduled and manually dispatched CI
+also runs `cargo test --locked --workspace --release` with default features,
+matching the local default baseline without making every pull request pay the
+release build cost.
 
 Install
 
@@ -74,7 +77,7 @@ cargo install cargo-nextest --locked
 Run the same split locally:
 
 ```bash
-cargo nextest run --locked -p o-sfu-cluster -p o-sfu-core -p o-sfu-model -p o-sfu-protocol -p o-sfu-rfc -p o-sfu-router -p o-sfu-telemetry -p o-sfu-telemetry-macros
+cargo nextest run --locked --profile ci -p o-sfu-cluster -p o-sfu-core -p o-sfu-model -p o-sfu-protocol -p o-sfu-rfc -p o-sfu-router -p o-sfu-telemetry -p o-sfu-telemetry-macros
 cargo test --locked -p o-sfu
 cargo test --locked -p o-sfu-tests -p o-sfu-proofs
 cargo test --locked --workspace --doc

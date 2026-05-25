@@ -17,8 +17,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  workspace-checks:
+  rust-checks:
+    name: Rust ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: fmt
+            name: fmt
+            nextest: false
+            command: cargo fmt --check
+          - id: library-nextest
+            name: library nextest
+            nextest: true
+            command: >-
+              cargo nextest run --locked --profile ci
+              -p o-sfu-cluster
+              -p o-sfu-core
+              -p o-sfu-model
+              -p o-sfu-protocol
+              -p o-sfu-rfc
+              -p o-sfu-router
+              -p o-sfu-telemetry
+              -p o-sfu-telemetry-macros
+          - id: root-tests
+            name: root tests
+            nextest: false
+            command: cargo test --locked -p o-sfu
+          - id: integration-proofs
+            name: integration and proof tests
+            nextest: false
+            command: cargo test --locked -p o-sfu-tests -p o-sfu-proofs
+          - id: doctests
+            name: doctests
+            nextest: false
+            command: cargo test --locked --workspace --doc
+          - id: fuzz-build
+            name: fuzz build
+            nextest: false
+            command: cargo check --manifest-path tests/fuzz/Cargo.toml --locked
+          - id: clippy
+            name: clippy
+            nextest: false
+            command: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
     steps:
       - name: Checkout repository
@@ -35,43 +77,27 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install cargo-nextest
+        if: matrix.nextest
         run: cargo install cargo-nextest --version 0.9.136 --locked
 
       - name: Cache Rust build artifacts
         # Swatinem/rust-cache v2
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          shared-key: rust-1.95-mainline
+          shared-key: rust-1.95-${{ matrix.id }}
 
-      - name: Check formatting
-        run: cargo fmt --check
+      - name: Run ${{ matrix.name }}
+        run: ${{ matrix.command }}
 
-      - name: Run library crates with nextest
-        run: >-
-          cargo nextest run --locked
-          -p o-sfu-cluster
-          -p o-sfu-core
-          -p o-sfu-model
-          -p o-sfu-protocol
-          -p o-sfu-rfc
-          -p o-sfu-router
-          -p o-sfu-telemetry
-          -p o-sfu-telemetry-macros
-
-      - name: Run root crate tests
-        run: cargo test --locked -p o-sfu
-
-      - name: Run integration and verification crate tests
-        run: cargo test --locked -p o-sfu-tests -p o-sfu-proofs
-
-      - name: Run workspace doctests
-        run: cargo test --locked --workspace --doc
-
-      - name: Check fuzz targets build
-        run: cargo check --manifest-path tests/fuzz/Cargo.toml --locked
-
-      - name: Run clippy
-        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Upload nextest JUnit report
+        if: always() && matrix.id == 'library-nextest'
+        # actions/upload-artifact v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rust-library-nextest-junit
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Prepare trybuild cache cleanup
         if: always()
