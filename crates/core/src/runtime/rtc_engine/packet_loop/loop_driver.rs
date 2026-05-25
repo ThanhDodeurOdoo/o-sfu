@@ -34,7 +34,7 @@ use super::{
         bitrate::BitrateRegistry,
         forwarded_packet::ForwardedPacket,
         forwarding_planner::populate_forward_routes_for_packet,
-        routing_miss::PacketLoopRoutingState,
+        routing_miss::DemuxRecoveryState,
         state::{PacketLoopState, RtcSnapshotState},
         worker::{WorkerCommandContext, drain_due_rid_keyframe_refreshes},
     },
@@ -97,12 +97,12 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopConfig {
 /// turn start time used for lag accounting
 ///
 /// keeping this type narrow makes it visible when a future change tries to
-/// carry session state, routing state or reusable buffers across `.await`
+/// carry session state, demux recovery state or reusable buffers across `.await`
 pub(super) struct WaitPhaseSnapshot {
-    pub(super) socket: Arc<UdpSocket>,
-    pub(super) candidate_addr: SocketAddr,
-    pub(super) next_timeout: Option<Instant>,
-    pub(super) turn_started_at: Instant,
+    pub socket: Arc<UdpSocket>,
+    pub candidate_addr: SocketAddr,
+    pub next_timeout: Option<Instant>,
+    pub turn_started_at: Instant,
 }
 
 pub(super) enum PacketLoopTurnInput {
@@ -136,17 +136,17 @@ pub(super) struct PacketLoopTurn {
 /// grouping these borrows keeps the ingress function signatures small while
 /// making it clear that no await happens while the context exists
 pub(super) struct PacketLoopApplyContext<'a> {
-    pub(super) packet_loop_state: &'a mut PacketLoopState,
-    pub(super) bitrate_registry: &'a Arc<Mutex<BitrateRegistry>>,
-    pub(super) snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
-    pub(super) config: &'a PacketLoopConfig,
-    pub(super) routing_state: &'a mut PacketLoopRoutingState,
-    pub(super) inputs: &'a mut PacketLoopInputReceivers,
-    pub(super) receive_buffer: &'a mut [u8],
+    pub packet_loop_state: &'a mut PacketLoopState,
+    pub bitrate_registry: &'a Arc<Mutex<BitrateRegistry>>,
+    pub snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
+    pub config: &'a PacketLoopConfig,
+    pub demux: &'a mut DemuxRecoveryState,
+    pub inputs: &'a mut PacketLoopInputReceivers,
+    pub receive_buffer: &'a mut [u8],
 }
 
 impl PacketLoopTurn {
-    pub(super) fn new(started_at: Instant) -> Self {
+    pub fn new(started_at: Instant) -> Self {
         Self {
             buffers: PacketLoopBuffers::new(),
             packet_sink_cache: PacketSinkRouteCache::default(),
@@ -163,7 +163,7 @@ impl PacketLoopTurn {
     /// state
     /// it returns only the cloned socket and next deadline needed after that borrow
     /// ends
-    pub(super) fn pump(
+    pub fn pump(
         &mut self,
         state: &mut PacketLoopState,
         snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
@@ -267,7 +267,7 @@ impl PacketLoopTurn {
     /// shutdown and control input are biased ahead of socket receive
     /// when no socket has been opened yet, only mailbox input or shutdown can wake
     /// the worker
-    pub(super) async fn wait_for_next_input(
+    pub async fn wait_for_next_input(
         &mut self,
         snapshot: Option<WaitPhaseSnapshot>,
         inputs: &mut PacketLoopInputReceivers,
@@ -312,12 +312,12 @@ impl PacketLoopTurn {
     /// applies the event that woke the worker after the pump phase
     ///
     /// control inputs mutate authoritative worker state and conservatively
-    /// invalidate ingress routing hints
+    /// invalidate ingress demux recovery hints
     /// queued UDP datagrams can resume following turns without another socket await
     /// but every datagram still gets a pump between inputs
     /// relay input is staged for the next pump so it reuses the same bounded relay
     /// drain path as already queued relay packets
-    pub(super) fn apply_input(
+    pub fn apply_input(
         &mut self,
         context: &mut PacketLoopApplyContext<'_>,
         next_input: PacketLoopTurnInput,
@@ -331,13 +331,13 @@ impl PacketLoopTurn {
         match next_input {
             PacketLoopTurnInput::Timeout => {}
             PacketLoopTurnInput::Control(command) => {
-                handle_control_input_and_clear_routing_cache(
+                handle_control_input(
                     context.packet_loop_state,
                     context.bitrate_registry,
                     context.snapshot_state,
                     context.config,
                     command,
-                    context.routing_state,
+                    context.demux,
                 );
             }
             PacketLoopTurnInput::RelayPacket => {
@@ -497,8 +497,8 @@ const MAX_READY_NOW_INPUTS_BEFORE_YIELD: usize = 32;
 ///
 /// # Concurrency
 ///
-/// this task owns `PacketLoopState`, routing hints, the UDP receive buffer and
-/// `PacketLoopBuffers`
+/// this task owns `PacketLoopState`, demux recovery hints, the UDP receive
+/// buffer and `PacketLoopBuffers`
 /// other tasks communicate with it through channels, shared read-side snapshots
 /// and cancellation
 /// no `MutexGuard` is held across socket sends or receives
@@ -522,9 +522,9 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
         next_media_id: config.media_id_base,
         ..PacketLoopState::default()
     };
-    // routing recovery is cached outside durable RTC state because any topology
+    // demux recovery is cached outside durable RTC state because any topology
     // command can invalidate source-address or ICE-fragment ownership
-    let mut routing_state = PacketLoopRoutingState::new();
+    let mut demux = DemuxRecoveryState::new();
     // datagram bytes are kept in a fixed buffer so socket receive does not
     // allocate while media is flowing
     let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
@@ -539,7 +539,7 @@ pub(in crate::runtime::rtc_engine) async fn run_packet_loop(
                     bitrate_registry: &bitrate_registry,
                     snapshot_state: &snapshot_state,
                     config: &config,
-                    routing_state: &mut routing_state,
+                    demux: &mut demux,
                     inputs: &mut inputs,
                     receive_buffer: &mut receive_buffer,
                 },
@@ -588,7 +588,7 @@ fn route_received_datagram(
     route_packet_to_matching_session(
         context.packet_loop_state,
         context.snapshot_state,
-        context.routing_state,
+        context.demux,
         &context.config.rtc_metrics,
         source_addr,
         candidate_addr,
@@ -600,13 +600,13 @@ fn route_received_datagram(
 ///
 /// this is conservative because control input can change which session owns a
 /// source tuple or ICE username fragment
-fn handle_control_input_and_clear_routing_cache(
+fn handle_control_input(
     packet_loop_state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: &PacketLoopConfig,
     command: PacketLoopControlInput,
-    routing_state: &mut PacketLoopRoutingState,
+    demux: &mut DemuxRecoveryState,
 ) {
     command.dispatch(
         packet_loop_state,
@@ -625,7 +625,7 @@ fn handle_control_input_and_clear_routing_cache(
             metrics: &config.metrics,
         },
     );
-    routing_state.clear_on_topology_change();
+    demux.clear_on_topology_change();
 }
 
 /// returns the next time the loop must wake without external input

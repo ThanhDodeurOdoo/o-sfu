@@ -183,7 +183,7 @@ impl PacketLoopInputReceivers {
 impl PacketLoopControlInput {
     /// Apply this control input to authoritative worker state.
     ///
-    /// The caller remains responsible for invalidating packet-routing hints
+    /// The caller remains responsible for invalidating demux recovery hints
     /// after dispatch. Both variants may change ownership indexes that demux
     /// recovery relies on.
     pub(super) fn dispatch(self, state: &mut PacketLoopState, context: &WorkerCommandContext<'_>) {

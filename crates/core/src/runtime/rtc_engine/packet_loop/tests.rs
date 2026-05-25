@@ -121,7 +121,7 @@ impl MediaPacketSink for CountingSink {
 struct IngressRoutingHarness {
     packet_loop_state: PacketLoopState,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
-    routing_state: super::super::routing_miss::PacketLoopRoutingState,
+    demux: super::super::routing_miss::DemuxRecoveryState,
     metrics: RuntimeMetrics,
     rtc_metrics: Arc<RtcMetricsRecorder>,
     source_addr: SocketAddr,
@@ -135,7 +135,7 @@ impl IngressRoutingHarness {
         Self {
             packet_loop_state: PacketLoopState::default(),
             snapshot_state: Arc::new(Mutex::new(RtcSnapshotState::default())),
-            routing_state: super::super::routing_miss::PacketLoopRoutingState::new(),
+            demux: super::super::routing_miss::DemuxRecoveryState::new(),
             metrics,
             rtc_metrics,
             source_addr: SocketAddr::from(([127, 0, 0, 1], source_port)),
@@ -147,7 +147,7 @@ impl IngressRoutingHarness {
         route_packet_to_matching_session(
             &mut self.packet_loop_state,
             &self.snapshot_state,
-            &mut self.routing_state,
+            &mut self.demux,
             &self.rtc_metrics,
             self.source_addr,
             self.candidate_addr,
@@ -482,7 +482,7 @@ fn recent_miss_cache_skips_repeated_scans_for_the_same_source() {
     harness.route(&packet);
     harness.route(&packet);
 
-    assert_eq!(harness.routing_state.fallback_attempts(), 1);
+    assert_eq!(harness.demux.fallback_attempts(), 1);
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
@@ -496,10 +496,10 @@ fn recent_miss_cache_clears_on_topology_change() {
     let packet = valid_rtp_packet(2, 22);
 
     harness.route(&packet);
-    harness.routing_state.clear_on_topology_change();
+    harness.demux.clear_on_topology_change();
     harness.route(&packet);
 
-    assert_eq!(harness.routing_state.fallback_attempts(), 2);
+    assert_eq!(harness.demux.fallback_attempts(), 2);
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 2);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 2);
@@ -513,7 +513,7 @@ fn recent_miss_cache_does_not_skip_different_packets_from_the_same_source() {
     harness.route(&valid_rtp_packet(3, 33));
     harness.route(&valid_rtp_packet(4, 44));
 
-    assert_eq!(harness.routing_state.fallback_attempts(), 2);
+    assert_eq!(harness.demux.fallback_attempts(), 2);
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 2);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 2);
@@ -536,7 +536,7 @@ fn source_rate_limiter_bounds_varied_unknown_source_misses() {
         harness.route(&valid_rtp_packet(sequence, ssrc));
     }
 
-    assert_eq!(harness.routing_state.fallback_attempts(), 4);
+    assert_eq!(harness.demux.fallback_attempts(), 4);
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 4);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 4);
@@ -551,7 +551,7 @@ fn malformed_udp_datagram_counts_as_malformed_drop_without_scan_metrics() {
     harness.route(&[0x01, 0x02, 0x03]);
 
     let snapshot = harness.metrics.snapshot();
-    assert_eq!(harness.routing_state.fallback_attempts(), 1);
+    assert_eq!(harness.demux.fallback_attempts(), 1);
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 0);
     assert_eq!(snapshot.rtc_datagram_scan_users(), 0);
     assert_eq!(snapshot.rtc_datagram_drops_malformed(), 1);
@@ -580,7 +580,7 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
     harness.route(&packet);
 
     let snapshot = harness.metrics.snapshot();
-    assert_eq!(harness.routing_state.fallback_attempts(), 1);
+    assert_eq!(harness.demux.fallback_attempts(), 1);
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
     assert_eq!(snapshot.rtc_datagram_scan_users(), 0);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
@@ -631,15 +631,11 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
         &packet,
     );
     harness
-        .routing_state
+        .demux
         .record_miss(miss_key, &packet, harness.source_addr, Instant::now());
 
-    assert!(harness.routing_state.should_skip_scan(miss_key, &packet));
-    assert!(
-        harness
-            .routing_state
-            .is_tracking_source(harness.source_addr)
-    );
+    assert!(harness.demux.should_skip_scan(miss_key, &packet));
+    assert!(harness.demux.is_tracking_source(harness.source_addr));
 
     harness.route(&packet);
 
@@ -647,7 +643,7 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
         drain_ready_sessions(&mut harness.packet_loop_state),
         vec![session_key.clone()]
     );
-    assert_eq!(harness.routing_state.fallback_attempts(), 0);
+    assert_eq!(harness.demux.fallback_attempts(), 0);
     assert_eq!(
         harness
             .packet_loop_state
@@ -666,12 +662,8 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
             Some(&session_key)
         );
     }
-    assert!(harness.routing_state.should_skip_scan(miss_key, &packet));
-    assert!(
-        harness
-            .routing_state
-            .is_tracking_source(harness.source_addr)
-    );
+    assert!(harness.demux.should_skip_scan(miss_key, &packet));
+    assert!(harness.demux.is_tracking_source(harness.source_addr));
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_routes_indexed(), 1);
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 0);
@@ -721,7 +713,7 @@ fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static 
                 .is_none()
         );
     }
-    assert_eq!(harness.routing_state.fallback_attempts(), 1);
+    assert_eq!(harness.demux.fallback_attempts(), 1);
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
@@ -1108,7 +1100,7 @@ async fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control()
     let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
     let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
     let config = packet_loop_config_for_test();
-    let mut routing_state = super::super::routing_miss::PacketLoopRoutingState::new();
+    let mut demux = super::super::routing_miss::DemuxRecoveryState::new();
     let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
     let mut turn = PacketLoopTurn::new(Instant::now());
     let (_command_tx, command_rx) = mpsc::channel(1);
@@ -1175,7 +1167,7 @@ async fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control()
             bitrate_registry: &bitrate_registry,
             snapshot_state: &snapshot_state,
             config: &config,
-            routing_state: &mut routing_state,
+            demux: &mut demux,
             inputs: &mut inputs,
             receive_buffer: &mut receive_buffer,
         },

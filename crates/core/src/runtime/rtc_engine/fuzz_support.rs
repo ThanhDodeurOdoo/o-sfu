@@ -7,7 +7,7 @@ use std::{
 use super::{
     bootstrap,
     packet_loop::{PacketRouteDatagram, route_packet_to_matching_session_at},
-    routing_miss::PacketLoopRoutingState,
+    routing_miss::DemuxRecoveryState,
     state::{PacketLoopState, RtcSnapshotState},
 };
 use crate::{
@@ -53,7 +53,7 @@ pub fn route_packet_loop_ingress_demux(
 struct IngressDemuxFuzzFixture {
     state: PacketLoopState,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
-    routing_state: PacketLoopRoutingState,
+    demux: DemuxRecoveryState,
     rtc_metrics: Arc<RtcMetricsRecorder>,
     session_key: TransportSessionKey,
     source_addr: SocketAddr,
@@ -81,7 +81,7 @@ impl IngressDemuxFuzzFixture {
         Self {
             state,
             snapshot_state: Arc::new(Mutex::new(RtcSnapshotState::default())),
-            routing_state: PacketLoopRoutingState::new(),
+            demux: DemuxRecoveryState::new(),
             rtc_metrics: metrics.register_rtc_worker(),
             session_key,
             source_addr,
@@ -118,7 +118,7 @@ impl IngressDemuxFuzzFixture {
         route_packet_to_matching_session_at(
             &mut self.state,
             &self.snapshot_state,
-            &mut self.routing_state,
+            &mut self.demux,
             &self.rtc_metrics,
             PacketRouteDatagram::new(self.source_addr, self.candidate_addr, packet, self.now),
         );

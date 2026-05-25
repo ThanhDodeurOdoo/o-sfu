@@ -12,7 +12,7 @@ use str0m::{
 use super::super::{
     bootstrap,
     packet_loop::{PacketRouteDatagram, route_packet_to_matching_session_at},
-    routing_miss::PacketLoopRoutingState,
+    routing_miss::DemuxRecoveryState,
     state::{PacketLoopState, RtcSnapshotState},
     test_support::test_transport_session_key,
 };
@@ -44,7 +44,7 @@ pub struct IngressRoutingBenchFixture {
     mode: IngressRoutingMode,
     state: PacketLoopState,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
-    routing_state: PacketLoopRoutingState,
+    demux: DemuxRecoveryState,
     _metrics: RuntimeMetrics,
     rtc_metrics: Arc<RtcMetricsRecorder>,
     source_addr: SocketAddr,
@@ -101,7 +101,7 @@ impl IngressRoutingBenchFixture {
             mode: IngressRoutingMode::CachedAccepted,
             state,
             snapshot_state,
-            routing_state: PacketLoopRoutingState::new(),
+            demux: DemuxRecoveryState::new(),
             _metrics: metrics,
             rtc_metrics,
             source_addr,
@@ -133,7 +133,7 @@ impl IngressRoutingBenchFixture {
             mode: IngressRoutingMode::UnknownSourceMiss,
             state,
             snapshot_state,
-            routing_state: PacketLoopRoutingState::new(),
+            demux: DemuxRecoveryState::new(),
             _metrics: metrics,
             rtc_metrics,
             source_addr,
@@ -160,7 +160,7 @@ impl IngressRoutingBenchFixture {
         route_packet_to_matching_session_at(
             &mut self.state,
             &self.snapshot_state,
-            &mut self.routing_state,
+            &mut self.demux,
             &self.rtc_metrics,
             PacketRouteDatagram::new(
                 self.source_addr,

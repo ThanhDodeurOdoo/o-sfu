@@ -375,9 +375,9 @@ impl UnknownSourceRateLimiter {
     }
 }
 
-/// Packet-loop routing hints for UDP datagrams that miss the fast path.
+/// Packet-loop demux recovery hints for datagrams that miss the fast path.
 ///
-/// `PacketLoopRoutingState` is owned by the packet-loop task, next to
+/// `DemuxRecoveryState` is owned by the packet-loop task, next to
 /// `PacketLoopState`. It has no async work and no authority over routing. Its
 /// only job is to help `ingress_routing` decide whether fallback recovery should
 /// run for an unknown source tuple.
@@ -389,7 +389,7 @@ impl UnknownSourceRateLimiter {
 /// that completed fallback recovery and found no session. A packet that routes
 /// successfully through fallback must call `record_fallback_route_success` so
 /// stale miss and rate-limit state do not outlive the learned source tuple.
-pub(super) struct PacketLoopRoutingState {
+pub(super) struct DemuxRecoveryState {
     /// Exact recent packets that failed fallback routing.
     miss_cache: PacketLoopRoutingMissCache,
     /// Source-address throttle for varied traffic that keeps missing.
@@ -399,8 +399,8 @@ pub(super) struct PacketLoopRoutingState {
     fallback_attempts: usize,
 }
 
-impl PacketLoopRoutingState {
-    /// Creates empty routing hints for one packet-loop worker.
+impl DemuxRecoveryState {
+    /// Creates empty demux recovery hints for one packet-loop worker.
     pub(super) fn new() -> Self {
         Self {
             miss_cache: PacketLoopRoutingMissCache::default(),
@@ -410,7 +410,7 @@ impl PacketLoopRoutingState {
         }
     }
 
-    /// Invalidates all negative routing memory after a topology change.
+    /// Invalidates all negative demux recovery memory after a topology change.
     ///
     /// This should be called after worker commands that can add, remove or
     /// retarget sessions, candidates or ICE ufrags. The next packet will pay
@@ -504,7 +504,7 @@ mod tests {
     };
 
     use super::{
-        PacketLoopRoutingMissKey, PacketLoopRoutingState, UNKNOWN_SOURCE_MISS_BURST_LIMIT,
+        DemuxRecoveryState, PacketLoopRoutingMissKey, UNKNOWN_SOURCE_MISS_BURST_LIMIT,
         UnknownSourceRateLimiter,
     };
 
@@ -533,7 +533,7 @@ mod tests {
     fn route_success_clears_source_rate_limit_state() {
         let source_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 44_010));
         let candidate_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 44_011));
-        let mut routing_state = PacketLoopRoutingState::new();
+        let mut demux = DemuxRecoveryState::new();
         let start = Instant::now();
         let packet = [0x80, 0x60, 0x00, 0x01];
         let miss_key = PacketLoopRoutingMissKey::new(source_addr, candidate_addr, &packet);
@@ -541,22 +541,18 @@ mod tests {
         let mut now = start;
         for offset in 0..UNKNOWN_SOURCE_MISS_BURST_LIMIT {
             assert_eq!(
-                routing_state.record_miss(miss_key, &packet, source_addr, now),
+                demux.record_miss(miss_key, &packet, source_addr, now),
                 offset == UNKNOWN_SOURCE_MISS_BURST_LIMIT - 1
             );
             now += Duration::from_millis(1);
         }
 
-        assert!(routing_state.is_tracking_source(source_addr));
-        assert!(
-            routing_state.should_rate_limit_source(source_addr, start + Duration::from_millis(4),)
-        );
+        assert!(demux.is_tracking_source(source_addr));
+        assert!(demux.should_rate_limit_source(source_addr, start + Duration::from_millis(4),));
 
-        routing_state.record_fallback_route_success(miss_key, &packet, source_addr);
+        demux.record_fallback_route_success(miss_key, &packet, source_addr);
 
-        assert!(!routing_state.is_tracking_source(source_addr));
-        assert!(
-            !routing_state.should_rate_limit_source(source_addr, start + Duration::from_millis(5),)
-        );
+        assert!(!demux.is_tracking_source(source_addr));
+        assert!(!demux.should_rate_limit_source(source_addr, start + Duration::from_millis(5),));
     }
 }

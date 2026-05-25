@@ -34,7 +34,7 @@ use str0m::{
 use tracing::{debug, trace, warn};
 
 use super::super::{
-    routing_miss::{PacketLoopRoutingMissKey, PacketLoopRoutingState},
+    routing_miss::{DemuxRecoveryState, PacketLoopRoutingMissKey},
     state::{PacketLoopState, RtcSnapshotState},
 };
 use crate::runtime::{
@@ -141,7 +141,7 @@ impl<'a> Iterator for CandidateSessionKeys<'a> {
 pub(super) fn route_packet_to_matching_session(
     state: &mut PacketLoopState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    routing_state: &mut PacketLoopRoutingState,
+    demux: &mut DemuxRecoveryState,
     metrics: &RtcMetricsRecorder,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
@@ -150,7 +150,7 @@ pub(super) fn route_packet_to_matching_session(
     route_packet_to_matching_session_at(
         state,
         snapshot_state,
-        routing_state,
+        demux,
         metrics,
         PacketRouteDatagram::new(source_addr, candidate_addr, packet, Instant::now()),
     );
@@ -159,7 +159,7 @@ pub(super) fn route_packet_to_matching_session(
 pub(in crate::runtime::rtc_engine) fn route_packet_to_matching_session_at(
     state: &mut PacketLoopState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    routing_state: &mut PacketLoopRoutingState,
+    demux: &mut DemuxRecoveryState,
     metrics: &RtcMetricsRecorder,
     datagram: PacketRouteDatagram<'_>,
 ) {
@@ -181,7 +181,7 @@ pub(in crate::runtime::rtc_engine) fn route_packet_to_matching_session_at(
         }
         CachedRouteOutcome::NotMatched => {}
     }
-    if routing_state.is_source_blocked(datagram.source_addr, datagram.now) {
+    if demux.is_source_blocked(datagram.source_addr, datagram.now) {
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
         return;
     }
@@ -193,7 +193,7 @@ pub(in crate::runtime::rtc_engine) fn route_packet_to_matching_session_at(
     // The recent-miss cache proves that no session accepted an identical packet
     // from this source recently. It must be cleared on topology or ICE changes
     // or a stale negative result could hide a newly valid route.
-    if routing_state.should_skip_scan(miss_key, datagram.packet) {
+    if demux.should_skip_scan(miss_key, datagram.packet) {
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::RecentMissCache);
         trace!(
             source = %datagram.source_addr,
@@ -204,7 +204,7 @@ pub(in crate::runtime::rtc_engine) fn route_packet_to_matching_session_at(
     // This is purely a defensive mechanism against unknown-source traffic.
     // It is not part of ICE or RTP correctness.
     // Legitimate traffic should have been learned via STUN before hitting this path.
-    if routing_state.should_rate_limit_source(datagram.source_addr, datagram.now) {
+    if demux.should_rate_limit_source(datagram.source_addr, datagram.now) {
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
         return;
     }
@@ -219,10 +219,10 @@ pub(in crate::runtime::rtc_engine) fn route_packet_to_matching_session_at(
     // With one live session, routing degenerates to one `accepts()` check.
     // No recovery index is needed to narrow the candidate set.
     if state.users.len() == 1 {
-        route_packet_by_single_session(state, routing_state, miss_key, &route);
+        route_packet_by_single_session(state, demux, miss_key, &route);
         return;
     }
-    route_packet_by_recovery_index(state, routing_state, miss_key, &route);
+    route_packet_by_recovery_index(state, demux, miss_key, &route);
 }
 
 fn route_packet_with_cached_session(
@@ -462,11 +462,11 @@ fn log_malformed_datagram(source_addr: SocketAddr) {
 }
 
 fn record_unknown_source_miss(
-    routing_state: &mut PacketLoopRoutingState,
+    demux: &mut DemuxRecoveryState,
     miss_key: PacketLoopRoutingMissKey,
     route: &PacketRouteContext<'_>,
 ) {
-    if routing_state.record_miss(miss_key, route.packet, route.source_addr, route.now) {
+    if demux.record_miss(miss_key, route.packet, route.source_addr, route.now) {
         trace!(
             source = %route.source_addr,
             "entering rtc unknown-source recovery cooldown after sustained routing misses"
@@ -564,12 +564,12 @@ fn route_packet_to_session(
 /// narrow.
 fn route_packet_by_single_session(
     state: &mut PacketLoopState,
-    routing_state: &mut PacketLoopRoutingState,
+    demux: &mut DemuxRecoveryState,
     miss_key: PacketLoopRoutingMissKey,
     route: &PacketRouteContext<'_>,
 ) {
     #[cfg(test)]
-    routing_state.record_fallback_attempt();
+    demux.record_fallback_attempt();
     let Some(session_key) = state.users.keys().next().cloned() else {
         return;
     };
@@ -594,7 +594,7 @@ fn route_packet_by_single_session(
         route
             .metrics
             .record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
-        record_unknown_source_miss(routing_state, miss_key, route);
+        record_unknown_source_miss(demux, miss_key, route);
         trace!(
             source = %route.source_addr,
             "dropping UDP datagram because no rtc user accepted it"
@@ -602,7 +602,7 @@ fn route_packet_by_single_session(
         return;
     }
     if route_packet_to_session(state, &session_key, route, input, "single-user-scan") {
-        routing_state.record_fallback_route_success(miss_key, route.packet, route.source_addr);
+        demux.record_fallback_route_success(miss_key, route.packet, route.source_addr);
     }
 }
 
@@ -613,12 +613,12 @@ fn route_packet_by_single_session(
 /// candidate sessions with `Rtc::accepts()`.
 fn route_packet_by_recovery_index(
     state: &mut PacketLoopState,
-    routing_state: &mut PacketLoopRoutingState,
+    demux: &mut DemuxRecoveryState,
     miss_key: PacketLoopRoutingMissKey,
     route: &PacketRouteContext<'_>,
 ) {
     #[cfg(test)]
-    routing_state.record_fallback_attempt();
+    demux.record_fallback_attempt();
     let Some(input) = receive_input(
         route.now,
         route.source_addr,
@@ -654,7 +654,7 @@ fn route_packet_by_recovery_index(
             route
                 .metrics
                 .record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
-            record_unknown_source_miss(routing_state, miss_key, route);
+            record_unknown_source_miss(demux, miss_key, route);
             trace!(
                 source = %route.source_addr,
                 "dropping UDP datagram because no rtc user accepted it"
@@ -670,7 +670,7 @@ fn route_packet_by_recovery_index(
         }
     };
     if route_packet_to_session(state, &session_key, route, input, "recovery-index") {
-        routing_state.record_fallback_route_success(miss_key, route.packet, route.source_addr);
+        demux.record_fallback_route_success(miss_key, route.packet, route.source_addr);
     }
 }
 
