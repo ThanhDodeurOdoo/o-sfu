@@ -1,250 +1,157 @@
 use super::support::*;
 
 #[tokio::test]
-async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish_removal() {
-    let server = TestServerBuilder::new().spawn().await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
-    let room = create_room(
-        &server,
+async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish_removal()
+-> TestResult {
+    let (server, room, mut alice, mut bob) = Box::pin(setup_protocol_peers(
         "issuer-protocol-tracks",
-        CreateRoomQuery::default(),
-    )
-    .await;
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(51));
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(52));
-    assert!(alice_token.is_some());
-    assert!(bob_token.is_some());
-    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
-        return;
-    };
+        UserId::Integer(51),
+        UserId::Integer(52),
+    ))
+    .await?;
 
-    let mut alice = ProtocolHarnessPeer::default();
-    let mut bob = ProtocolHarnessPeer::default();
-    assert!(
-        alice
-            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
-            .await
-            .is_some()
-    );
-    assert!(
-        bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
-            .await
-            .is_some()
-    );
-    assert!(
-        consume_peer_joined_update(&mut alice, ProtocolSessionId::Integer(52))
-            .await
-            .is_some()
-    );
+    require_some(
+        room.test_api()
+            .media()
+            .publish_intent(
+                &UserId::Integer(51),
+                &source_publish_intent_for_stream_type(StreamType::Camera),
+                MediaKind::Video,
+                sample_video_rtp_parameters("cam-0"),
+                &server.media_transport,
+            )
+            .await,
+        "protocol publisher should be ready",
+    )?;
 
-    let producer_id = room
-        .test_api()
-        .media()
-        .publish_intent(
-            &UserId::Integer(51),
-            &source_publish_intent_for_stream_type(StreamType::Camera),
-            MediaKind::Video,
-            sample_video_rtp_parameters("cam-0"),
-            &server.media_transport,
-        )
-        .await;
-    assert!(producer_id.is_some(), "protocol publisher should be ready");
-
-    let Some(track_bindings) = read_track_snapshot(&mut bob).await else {
-        return;
-    };
-    let Some(track_binding) = track_bindings.into_iter().find(|binding| {
-        binding.user_id == ProtocolSessionId::Integer(51)
-            && binding.stream_type == ProtocolStreamType::Camera
-            && binding
-                .source
-                .as_ref()
-                .and_then(|source| source.mid.as_deref())
-                == Some("cam-0")
-    }) else {
-        panic!("subscriber should keep the camera track binding");
-    };
+    let track_bindings = require_some(
+        read_track_snapshot(&mut bob).await,
+        "subscriber should receive the translated track snapshot",
+    )?;
+    let track_binding = require_some(
+        track_bindings.into_iter().find(|binding| {
+            binding.user_id == ProtocolSessionId::Integer(51)
+                && binding.stream_type == ProtocolStreamType::Camera
+                && binding
+                    .source
+                    .as_ref()
+                    .and_then(|source| source.mid.as_deref())
+                    == Some("cam-0")
+        }),
+        "subscriber should keep the camera track binding",
+    )?;
     assert_eq!(track_binding.user_id, ProtocolSessionId::Integer(51));
     assert_eq!(track_binding.stream_type, ProtocolStreamType::Camera);
     assert!(track_binding.active);
-    let Some(source) = track_binding.source.as_ref() else {
-        panic!("track binding should carry the additive source descriptor");
-    };
+    let source = require_some(
+        track_binding.source.as_ref(),
+        "track binding should carry the additive source descriptor",
+    )?;
     assert_eq!(source.source_id, "source-1");
     assert_eq!(source.user_id, ProtocolSessionId::Integer(51));
     assert_eq!(source.stream_type, ProtocolStreamType::Camera);
     assert_eq!(source.mid.as_deref(), Some("cam-0"));
     assert_eq!(source.encodings.len(), 1);
     let track_mid = track_binding.mid.clone();
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "bob should consume the serialized renegotiation request after track bootstrap"
-    );
+    require_some(
+        bob.read_server_frame().await,
+        "bob should consume the serialized renegotiation request after track bootstrap",
+    )?;
 
-    assert!(
-        alice
-            .publish(ProtocolStreamType::Camera, false)
-            .await
-            .is_some()
-    );
-    assert!(
-        alice.read_server_frame().await.is_some(),
-        "publisher should receive the removal renegotiation request"
-    );
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "bob should consume the translated track-removal snapshot"
-    );
+    require_some(
+        alice.publish(ProtocolStreamType::Camera, false).await,
+        "alice should unpublish camera",
+    )?;
+    require_some(
+        alice.read_server_frame().await,
+        "publisher should receive the removal renegotiation request",
+    )?;
+    require_some(
+        bob.read_server_frame().await,
+        "bob should consume the translated track-removal snapshot",
+    )?;
     assert_eq!(bob.core.track_binding(&track_mid), None);
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "subscriber should receive the removal renegotiation request"
-    );
+    require_some(
+        bob.read_server_frame().await,
+        "subscriber should receive the removal renegotiation request",
+    )?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn protocol_core_publish_round_trips_through_real_rtc_server_user_protocol() {
-    let server = TestServerBuilder::new()
-        .media_transport(build_real_rtc_media_transport())
-        .spawn()
-        .await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
-    let room = create_room(
-        &server,
-        "issuer-protocol-rtc-publish",
-        CreateRoomQuery::default(),
-    )
-    .await;
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(71));
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(72));
-    assert!(alice_token.is_some());
-    assert!(bob_token.is_some());
-    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
-        return;
-    };
+async fn protocol_core_publish_round_trips_through_real_rtc_server_user_protocol() -> TestResult {
+    let (_server, _room, mut alice, mut bob) = require_some(
+        Box::pin(setup_real_rtc_protocol_peers(
+            "issuer-protocol-rtc-publish",
+            UserId::Integer(71),
+            UserId::Integer(72),
+            56_301,
+            56_302,
+        ))
+        .await,
+        "real RTC protocol peers should start",
+    )?;
 
-    let Some(mut alice) = ProtocolHarnessPeer::with_real_rtc_negotiation(56_301) else {
-        return;
-    };
-    let Some(mut bob) = ProtocolHarnessPeer::with_real_rtc_negotiation(56_302) else {
-        return;
-    };
-    assert!(
-        alice
-            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
-            .await
-            .is_some()
-    );
-    assert!(
-        bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
-            .await
-            .is_some()
-    );
-    assert!(
-        consume_peer_joined_update(&mut alice, ProtocolSessionId::Integer(72))
-            .await
-            .is_some()
-    );
+    require_some(
+        alice.publish(ProtocolStreamType::Camera, true).await,
+        "publisher should stage camera publish",
+    )?;
+    require_some(
+        alice.read_server_frame().await,
+        "publisher should consume the rtc-backed renegotiation request and answer it",
+    )?;
 
-    assert!(
-        alice
-            .publish(ProtocolStreamType::Camera, true)
-            .await
-            .is_some()
-    );
-    assert!(
-        alice.read_server_frame().await.is_some(),
-        "publisher should consume the rtc-backed renegotiation request and answer it"
-    );
-
-    let Some(bob_websocket) = bob.websocket.as_mut() else {
-        return;
-    };
-    let Some(track_snapshot_payload) =
-        timeout(Duration::from_secs(1), read_text_message(bob_websocket))
-            .await
-            .ok()
-            .flatten()
-    else {
-        return;
-    };
-    let track_batch = serde_json::from_str::<EnvelopeBatch>(&track_snapshot_payload).ok();
-    assert!(track_batch.is_some());
-    let Some(track_batch) = track_batch else {
-        return;
-    };
-    let track_messages = protocol_server_messages(&track_batch);
-    assert!(track_messages.is_some());
-    let Some(track_messages) = track_messages else {
-        return;
-    };
-    let Some(first_track_message) = track_messages.first() else {
-        return;
-    };
-    assert_eq!(track_messages.len(), 1);
-    assert!(matches!(first_track_message, ServerMessage::Tracks(_)));
-    let Some(ServerMessage::Tracks(track_bindings)) = track_messages.into_iter().next() else {
-        return;
-    };
+    let track_bindings = require_some(
+        read_track_snapshot(&mut bob).await,
+        "subscriber should receive the rtc-backed translated track snapshot",
+    )?;
     assert_eq!(track_bindings.len(), 1);
-    let Some(published_track) = track_bindings.first() else {
-        return;
-    };
+    let published_track = require_some(
+        track_bindings.first(),
+        "subscriber should keep one published track",
+    )?;
     assert_eq!(published_track.user_id, ProtocolSessionId::Integer(71));
     assert_eq!(published_track.stream_type, ProtocolStreamType::Camera);
     assert!(published_track.active);
-    let track_commands = bob.core.on_ws_message(&track_snapshot_payload);
-    assert!(bob.run_commands(track_commands).await.is_some());
     assert_eq!(
         bob.core.track_binding(&published_track.mid),
         Some(published_track)
     );
 
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "subscriber should receive the rtc-backed follow-up renegotiation request"
-    );
+    require_some(
+        bob.read_server_frame().await,
+        "subscriber should receive the rtc-backed follow-up renegotiation request",
+    )?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn protocol_handshake_uses_answer_derived_client_capabilities_for_user_state() {
+async fn protocol_handshake_uses_answer_derived_client_capabilities_for_user_state() -> TestResult {
     let server = TestServerBuilder::new()
         .media_transport(build_real_rtc_media_transport())
-        .spawn()
-        .await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
+        .spawn_required()
+        .await?;
     let room = create_room(
         &server,
         "issuer-protocol-rtc-capabilities",
         CreateRoomQuery::default(),
     )
     .await;
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(75));
-    assert!(alice_token.is_some());
-    let Some(alice_token) = alice_token else {
-        return;
-    };
-    let Some(mut alice) =
-        ProtocolHarnessPeer::with_custom_rtc_negotiation(56_305, reduced_capability_rtc)
-    else {
-        return;
-    };
+    let mut alice = require_some(
+        ProtocolHarnessPeer::with_custom_rtc_negotiation(56_305, reduced_capability_rtc),
+        "custom RTC protocol peer should build",
+    )?;
+    let alice_token = require_some(
+        signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(75)),
+        "alice token should sign",
+    )?;
 
-    assert!(
+    require_some(
         alice
-            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
-            .await
-            .is_some()
-    );
+            .connect_and_finish_handshake(&server.url(), &alice_token, None)
+            .await,
+        "alice should finish protocol handshake",
+    )?;
 
     let client_rtp_codec_names = timeout(Duration::from_secs(1), async {
         loop {
@@ -264,9 +171,7 @@ async fn protocol_handshake_uses_answer_derived_client_capabilities_for_user_sta
         client_rtp_codec_names.is_ok(),
         "protocol handshake should store parsed client RTP capabilities"
     );
-    let Some(codec_names) = client_rtp_codec_names.ok() else {
-        return;
-    };
+    let codec_names = require_some(client_rtp_codec_names.ok(), "codec names should resolve")?;
     assert_eq!(codec_names, vec![String::from("opus"), String::from("VP8")]);
     assert!(
         codec_names.iter().all(|codec| codec != "rtx"),
@@ -276,6 +181,7 @@ async fn protocol_handshake_uses_answer_derived_client_capabilities_for_user_sta
         codec_names.iter().all(|codec| codec != "H264"),
         "the stored client RTP capabilities must reflect the real RTC answer"
     );
+    Ok(())
 }
 
 #[tokio::test]
@@ -658,22 +564,23 @@ async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_a
             "subscriber should receive the translated peer-info update for the unpublished track"
         );
     };
-    let peer_info_batch = serde_json::from_str::<EnvelopeBatch>(&peer_info_payload).ok();
-    assert!(peer_info_batch.is_some());
-    let Some(peer_info_batch) = peer_info_batch else {
-        return;
-    };
-    let peer_info_messages = protocol_server_messages(&peer_info_batch);
-    assert!(peer_info_messages.is_some());
-    let Some(peer_info_messages) = peer_info_messages else {
-        return;
-    };
-    assert!(
-        matches!(peer_info_messages.as_slice(), [ServerMessage::PeerInfo(_)]),
-        "the frame before the queued removal renegotiation should be the translated peer-info update"
-    );
     let peer_info_commands = bob.core.on_ws_message(&peer_info_payload);
-    assert!(bob.run_commands(peer_info_commands).await.is_some());
+    assert!(
+        bob.run_commands(peer_info_commands).await.is_some(),
+        "subscriber should consume the queued-unpublish peer-info update"
+    );
+    assert_eq!(
+        bob.updates.last(),
+        Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
+            bundle_session_info_key(&ProtocolSessionId::Integer(79)),
+            ProtocolSessionInfo {
+                is_camera_on: Some(false),
+                is_screen_sharing_on: Some(true),
+                ..ProtocolSessionInfo::snapshot_defaults()
+            },
+        )]))),
+        "queued removal should immediately update the publisher's observable stream info"
+    );
     assert!(
         no_server_frame(&mut bob, Duration::from_millis(150)).await,
         "subscriber removal should stay queued until the in-flight addition answer lands"
@@ -681,24 +588,23 @@ async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_a
 
     assert!(
         bob.answer_next_negotiation().await.is_some(),
-        "subscriber should answer the second renegotiation before the queued removal can flush"
+        "subscriber should answer the pending addition negotiation"
     );
     assert!(
         bob.read_server_frame().await.is_some(),
-        "subscriber should receive the queued follow-up renegotiation after answering the in-flight addition offer"
+        "subscriber should receive the queued removal renegotiation after the addition answer lands"
     );
     assert_eq!(
         bob.pending_negotiations.len(),
         1,
-        "queued consumer removal should surface exactly one follow-up renegotiation request"
+        "queued removal should surface exactly one follow-up negotiation request after the pending answer lands"
     );
-
     assert!(
         bob.answer_next_negotiation().await.is_some(),
-        "subscriber should answer the queued removal renegotiation"
+        "subscriber should answer the queued removal negotiation"
     );
     assert!(
         no_server_frame(&mut bob, Duration::from_millis(150)).await,
-        "consumer removal should not leave further rtc follow-up frames queued"
+        "queued subscriber removal should not leave more websocket frames after the removal answer"
     );
 }

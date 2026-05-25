@@ -1,48 +1,11 @@
 use super::support::*;
 
 #[tokio::test]
-async fn protocol_core_replays_real_server_welcome_peer_snapshot() {
-    let server = TestServerBuilder::new().spawn().await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
+async fn protocol_core_replays_real_server_welcome_peer_snapshot() -> TestResult {
+    let server = TestServerBuilder::new().spawn_required().await?;
     let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
-    let existing_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(31));
-    let joining_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(32));
-    assert!(existing_token.is_some());
-    assert!(joining_token.is_some());
-    let Some(existing_token) = existing_token else {
-        return;
-    };
-    let Some(joining_token) = joining_token else {
-        return;
-    };
-
-    let existing_socket = authenticate_with_jwt(&server, &existing_token).await;
-    assert!(existing_socket.is_some());
-    let Some(mut existing_socket) = existing_socket else {
-        return;
-    };
-    let existing_welcome = read_welcome(&mut existing_socket).await;
-    assert!(
-        existing_welcome.is_some(),
-        "existing peer should complete handshake"
-    );
-
-    let mut peer = ProtocolHarnessPeer::default();
-    let connected = peer
-        .connect(&format!("ws://{}/", server.addr), &joining_token, None)
-        .await;
-    assert!(
-        connected.is_some(),
-        "protocol core should connect to test server"
-    );
-    let read_frame = peer.read_server_frame().await;
-    assert!(
-        read_frame.is_some(),
-        "protocol core should receive the welcome frame"
-    );
+    let _existing = connect_until_welcome(&server, &room, UserId::Integer(31)).await?;
+    let peer = connect_until_welcome(&server, &room, UserId::Integer(32)).await?;
 
     assert_eq!(peer.core.state(), BundleConnectionState::Authenticated);
     assert_eq!(
@@ -83,39 +46,38 @@ async fn protocol_core_replays_real_server_welcome_peer_snapshot() {
             ProtocolSessionInfo::snapshot_defaults(),
         )]))]
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn protocol_core_maps_real_server_auth_failure_to_closed_state() {
-    let server = TestServerBuilder::new().spawn().await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
+async fn protocol_core_maps_real_server_auth_failure_to_closed_state() -> TestResult {
+    let server = TestServerBuilder::new().spawn_required().await?;
     let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
 
     let mut peer = ProtocolHarnessPeer::default();
-    let connected = peer
-        .connect(
-            &format!("ws://{}/", server.addr),
+    require_some(
+        peer.connect(
+            &server.url(),
             "invalid.jwt.payload",
             Some(room.uuid().to_owned()),
         )
-        .await;
-    assert!(connected.is_some(), "protocol core should open websocket");
+        .await,
+        "protocol core should open websocket",
+    )?;
 
-    let close_code = read_close_code(match peer.websocket.as_mut() {
-        Some(websocket) => websocket,
-        None => return,
-    })
-    .await;
+    let close_code = {
+        let websocket = require_some(
+            peer.websocket.as_mut(),
+            "protocol core should keep the websocket until close",
+        )?;
+        read_close_code(websocket).await
+    };
     assert_eq!(close_code, Some(CloseCode::Library(4106)));
 
-    let observed = peer.observe_close(4106).await;
-    assert!(
-        observed.is_some(),
-        "protocol core should consume the auth failure close code"
-    );
+    require_some(
+        peer.observe_close(4106).await,
+        "protocol core should consume the auth failure close code",
+    )?;
 
     assert_eq!(peer.core.state(), BundleConnectionState::Closed);
     assert_eq!(
@@ -132,38 +94,13 @@ async fn protocol_core_maps_real_server_auth_failure_to_closed_state() {
         ]
     );
     assert!(peer.timers.is_empty());
+    Ok(())
 }
 
 #[tokio::test]
-async fn protocol_core_answers_real_server_offer_when_enabled() {
-    let server = TestServerBuilder::new().spawn().await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
-    let room = create_room(&server, "issuer-protocol", CreateRoomQuery::default()).await;
-    let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(33));
-    assert!(token.is_some());
-    let Some(token) = token else {
-        return;
-    };
-
-    let mut peer = ProtocolHarnessPeer::default();
-    let connected = peer
-        .connect(&format!("ws://{}/", server.addr), &token, None)
-        .await;
-    assert!(
-        connected.is_some(),
-        "protocol core should connect to the protocol test server"
-    );
-    assert!(
-        peer.read_server_frame().await.is_some(),
-        "protocol core should consume the welcome frame"
-    );
-    assert!(
-        peer.read_server_frame().await.is_some(),
-        "protocol core should consume and answer the protocol offer"
-    );
+async fn protocol_core_answers_real_server_offer_when_enabled() -> TestResult {
+    let (_server, _room, peer) =
+        setup_protocol_peer("issuer-protocol", UserId::Integer(33)).await?;
 
     assert_eq!(peer.core.state(), BundleConnectionState::Connected);
     assert!(
@@ -172,55 +109,27 @@ async fn protocol_core_answers_real_server_offer_when_enabled() {
         }),
         "protocol offer handling should drive the protocol core into the connected state"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn protocol_core_receives_protocol_broadcast_and_peer_updates() {
-    let server = TestServerBuilder::new().spawn().await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
-    let room = create_room(
-        &server,
+async fn protocol_core_receives_protocol_broadcast_and_peer_updates() -> TestResult {
+    let (_server, _room, mut alice, mut bob) = Box::pin(setup_protocol_peers(
         "issuer-protocol-events",
-        CreateRoomQuery::default(),
-    )
-    .await;
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(41));
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(42));
-    assert!(alice_token.is_some());
-    assert!(bob_token.is_some());
-    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
-        return;
-    };
-
-    let mut alice = ProtocolHarnessPeer::default();
-    let mut bob = ProtocolHarnessPeer::default();
-    assert!(
-        alice
-            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
-            .await
-            .is_some()
-    );
-    assert!(
-        bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
-            .await
-            .is_some()
-    );
-    assert!(
-        consume_peer_joined_update(&mut alice, ProtocolSessionId::Integer(42))
-            .await
-            .is_some(),
-        "existing peers should consume the protocol peer-joined update after a new user joins"
-    );
+        UserId::Integer(41),
+        UserId::Integer(42),
+    ))
+    .await?;
     bob.updates.clear();
 
-    assert!(alice.broadcast(json!({ "text": "hello" })).await.is_some());
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "bob should consume translated broadcast"
-    );
+    require_some(
+        alice.broadcast(json!({ "text": "hello" })).await,
+        "alice should broadcast through the protocol core",
+    )?;
+    require_some(
+        bob.read_server_frame().await,
+        "bob should consume translated broadcast",
+    )?;
     assert_eq!(
         bob.updates.last(),
         Some(&BundleUpdate::Broadcast(BundleBroadcastUpdate {
@@ -229,19 +138,19 @@ async fn protocol_core_receives_protocol_broadcast_and_peer_updates() {
         }))
     );
 
-    assert!(
+    require_some(
         alice
             .update_info(ProtocolSessionInfo {
                 is_talking: Some(true),
                 ..ProtocolSessionInfo::default()
             })
-            .await
-            .is_some()
-    );
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "bob should consume translated peer info"
-    );
+            .await,
+        "alice should emit protocol info update",
+    )?;
+    require_some(
+        bob.read_server_frame().await,
+        "bob should consume translated peer info",
+    )?;
     assert_eq!(
         bob.updates.last(),
         Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
@@ -252,160 +161,79 @@ async fn protocol_core_receives_protocol_broadcast_and_peer_updates() {
             },
         )])))
     );
-    assert!(
-        alice.read_server_frame().await.is_some(),
-        "alice should consume its own translated peer info frame before disconnect assertions"
-    );
+    require_some(
+        alice.read_server_frame().await,
+        "alice should consume its own translated peer info frame before disconnect assertions",
+    )?;
 
-    let close_result = match bob.websocket.as_mut() {
-        Some(websocket) => websocket.close(None).await,
-        None => return,
-    };
+    let close_result = require_some(
+        bob.websocket.as_mut(),
+        "bob websocket should stay connected before close",
+    )?
+    .close(None)
+    .await;
     assert!(close_result.is_ok());
     bob.websocket = None;
     sleep(Duration::from_millis(50)).await;
 
-    assert!(
-        alice.read_server_frame().await.is_some(),
-        "alice should consume translated peer disconnect"
-    );
+    require_some(
+        alice.read_server_frame().await,
+        "alice should consume translated peer disconnect",
+    )?;
     assert_eq!(
         alice.updates.last(),
         Some(&BundleUpdate::Disconnect(BundleDisconnectUpdate {
             user_id: ProtocolSessionId::Integer(42),
         }))
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn protocol_user_emits_peerjoined_message_for_existing_peers() {
-    let server = TestServerBuilder::new().spawn().await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
-    let room = create_room(
-        &server,
-        "issuer-protocol-peerjoined",
-        CreateRoomQuery::default(),
-    )
-    .await;
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(43));
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(44));
-    assert!(alice_token.is_some());
-    assert!(bob_token.is_some());
-    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
-        return;
-    };
+async fn protocol_user_emits_peerjoined_message_for_existing_peers() -> TestResult {
+    let (server, room, mut alice) =
+        setup_protocol_peer("issuer-protocol-peerjoined", UserId::Integer(43)).await?;
+    let _bob = connect_protocol_peer(&server, &room, UserId::Integer(44)).await?;
 
-    let mut alice = ProtocolHarnessPeer::default();
-    let mut bob = ProtocolHarnessPeer::default();
+    let peer_joined = require_some(
+        read_single_protocol_server_message(&mut alice).await,
+        "existing peer should receive a peerjoined message",
+    )?;
     assert!(
-        alice
-            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
-            .await
-            .is_some()
-    );
-    assert!(
-        bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
-            .await
-            .is_some()
-    );
-
-    let Some(alice_websocket) = alice.websocket.as_mut() else {
-        return;
-    };
-    let Some(peer_joined_payload) =
-        timeout(Duration::from_secs(1), read_text_message(alice_websocket))
-            .await
-            .ok()
-            .flatten()
-    else {
-        panic!("existing peer should receive a peerjoined message");
-    };
-    let peer_joined_batch = serde_json::from_str::<EnvelopeBatch>(&peer_joined_payload).ok();
-    assert!(peer_joined_batch.is_some());
-    let Some(peer_joined_batch) = peer_joined_batch else {
-        return;
-    };
-    let peer_joined_messages = protocol_server_messages(&peer_joined_batch);
-    assert!(peer_joined_messages.is_some());
-    let Some(peer_joined_messages) = peer_joined_messages else {
-        return;
-    };
-    assert!(
-        matches!(
-            peer_joined_messages.as_slice(),
-            [ServerMessage::PeerJoined(_)]
-        ),
+        matches!(peer_joined, ServerMessage::PeerJoined(_)),
         "existing peers should receive peerjoined rather than a generic peerinfo frame on join"
     );
-
-    let peer_joined_commands = alice.core.on_ws_message(&peer_joined_payload);
-    assert!(alice.run_commands(peer_joined_commands).await.is_some());
+    Ok(())
 }
 
 #[tokio::test]
-async fn protocol_user_replacement_emits_peerleft_then_peerjoined_for_existing_peers() {
-    let server = TestServerBuilder::new().spawn().await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
-    let room = create_room(
-        &server,
+async fn protocol_user_replacement_emits_peerleft_then_peerjoined_for_existing_peers() -> TestResult
+{
+    let (server, room, mut alice, mut bob) = Box::pin(setup_protocol_peers(
         "issuer-protocol-peer-replacement",
-        CreateRoomQuery::default(),
-    )
-    .await;
-    let alice_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(45));
-    let bob_token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(46));
-    assert!(alice_token.is_some());
-    assert!(bob_token.is_some());
-    let (Some(alice_token), Some(bob_token)) = (alice_token, bob_token) else {
-        return;
-    };
-
-    let mut alice = ProtocolHarnessPeer::default();
-    let mut bob = ProtocolHarnessPeer::default();
-    assert!(
-        alice
-            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &alice_token, None)
-            .await
-            .is_some()
-    );
-    assert!(
-        bob.connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
-            .await
-            .is_some()
-    );
-    assert!(
-        consume_peer_joined_update(&mut alice, ProtocolSessionId::Integer(46))
-            .await
-            .is_some()
-    );
+        UserId::Integer(45),
+        UserId::Integer(46),
+    ))
+    .await?;
     alice.updates.clear();
 
-    let mut replacement = ProtocolHarnessPeer::default();
-    assert!(
-        replacement
-            .connect_and_finish_handshake(&format!("ws://{}/", server.addr), &bob_token, None)
-            .await
-            .is_some()
-    );
+    let _replacement = connect_protocol_peer(&server, &room, UserId::Integer(46)).await?;
 
-    let close_code = read_close_code(match bob.websocket.as_mut() {
-        Some(websocket) => websocket,
-        None => return,
-    })
-    .await;
+    let close_code = {
+        let websocket = require_some(
+            bob.websocket.as_mut(),
+            "bob websocket should remain until replacement close",
+        )?;
+        read_close_code(websocket).await
+    };
     assert_eq!(close_code, Some(CloseCode::Library(4108)));
 
+    let peer_left = require_some(
+        read_single_protocol_server_message(&mut alice).await,
+        "replacement should send peerleft",
+    )?;
     assert!(
-        matches!(
-            read_single_protocol_server_message(&mut alice).await,
-            Some(ServerMessage::PeerLeft(_))
-        ),
+        matches!(peer_left, ServerMessage::PeerLeft(_)),
         "replacement should emit peerleft before rejoin"
     );
     assert_eq!(
@@ -415,11 +243,12 @@ async fn protocol_user_replacement_emits_peerleft_then_peerjoined_for_existing_p
         }))
     );
 
+    let peer_joined = require_some(
+        read_single_protocol_server_message(&mut alice).await,
+        "replacement should send peerjoined",
+    )?;
     assert!(
-        matches!(
-            read_single_protocol_server_message(&mut alice).await,
-            Some(ServerMessage::PeerJoined(_))
-        ),
+        matches!(peer_joined, ServerMessage::PeerJoined(_)),
         "replacement should emit peerjoined after peerleft"
     );
     assert_eq!(
@@ -429,4 +258,5 @@ async fn protocol_user_replacement_emits_peerleft_then_peerjoined_for_existing_p
             ProtocolSessionInfo::snapshot_defaults(),
         )]))),
     );
+    Ok(())
 }
