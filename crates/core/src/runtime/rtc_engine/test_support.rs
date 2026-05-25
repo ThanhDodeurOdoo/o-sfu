@@ -31,11 +31,17 @@ pub(in crate::runtime::rtc_engine) use route_graph::MediaWorkerScenario;
 
 #[cfg(any(test, feature = "internal-benchmarks"))]
 pub use super::forwarded_packet::test_support::sample_forwarded_packet;
+#[cfg(any(test, feature = "internal-benchmarks"))]
+pub(in crate::runtime::rtc_engine) use super::forwarded_packet::test_support::sample_forwarded_packet_without_mid;
+#[cfg(feature = "internal-benchmarks")]
+pub(in crate::runtime::rtc_engine) use super::forwarded_packet::test_support::{
+    reset_packet_resolution, sample_forwarded_packet_with_rid_and_audio_activity,
+};
 #[cfg(test)]
 pub(in crate::runtime::rtc_engine) use super::forwarded_packet::test_support::{
     sample_already_relayed_packet, sample_forwarded_packet_with_audio_activity,
     sample_forwarded_packet_with_frame_mark, sample_forwarded_packet_with_rid,
-    sample_forwarded_packet_without_mid, sample_local_forwarded_packet,
+    sample_local_forwarded_packet,
 };
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::runtime::{ConnectionId, RoomInstanceId, UserId, media_transport::TransportSessionKey};

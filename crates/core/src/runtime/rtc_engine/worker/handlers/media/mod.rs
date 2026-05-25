@@ -9,6 +9,8 @@ mod types;
 
 #[cfg(test)]
 use control::observe_source_rid_readiness;
+#[cfg(feature = "internal-benchmarks")]
+pub(in crate::runtime::rtc_engine) use control::worker_set_consumer_packet_gates_for_benchmark;
 pub(super) use control::{
     apply_route_control_request, refresh_source_packet_gate, remove_source_route,
     respond_set_consumer_packet_gates,

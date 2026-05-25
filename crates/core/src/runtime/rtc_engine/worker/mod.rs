@@ -48,6 +48,8 @@ use std::{
     time::Duration,
 };
 
+#[cfg(feature = "internal-benchmarks")]
+pub(in crate::runtime::rtc_engine) use handlers::worker_set_consumer_packet_gates_for_benchmark;
 pub(super) use handlers::{
     WorkerCommandContext, apply_source_rid_readiness, drain_due_rid_keyframe_refreshes,
     handle_worker_command, request_keyframe_for_source,

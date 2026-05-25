@@ -98,6 +98,29 @@ pub fn sample_forwarded_packet_with_audio_activity(
     )
 }
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
+#[must_use]
+pub fn sample_forwarded_packet_with_rid_and_audio_activity(
+    source_session_key: TransportSessionKey,
+    mid: &str,
+    rid: Option<&str>,
+    voice_activity: Option<bool>,
+    audio_level: Option<i8>,
+    payload: &[u8],
+) -> ForwardedPacket {
+    sample_forwarded_packet_with_extensions(
+        source_session_key,
+        mid,
+        rid,
+        ExtensionValues {
+            audio_level,
+            voice_activity,
+            ..ExtensionValues::default()
+        },
+        payload,
+    )
+}
+
 #[cfg(test)]
 #[must_use]
 pub fn sample_forwarded_packet_with_frame_mark(
@@ -174,7 +197,7 @@ fn sample_forwarded_packet_with_source(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "internal-benchmarks"))]
 #[must_use]
 pub fn sample_forwarded_packet_without_mid(
     source_session_key: TransportSessionKey,
@@ -207,4 +230,11 @@ pub fn sample_forwarded_packet_without_mid(
             },
         }),
     }
+}
+
+#[cfg(any(test, feature = "internal-benchmarks"))]
+pub fn reset_packet_resolution(packet: &mut ForwardedPacket) {
+    packet.facts = None;
+    packet.source_transport_media_id = None;
+    packet.resolved_source_rid = None;
 }
