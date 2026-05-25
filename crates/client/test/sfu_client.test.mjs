@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CLIENT_UPDATE, createProtocolCore } from "../dist/index.js";
+import {
+    CLIENT_UPDATE,
+    CommandKind,
+    PENDING_REQUEST_KIND,
+    createProtocolCore
+} from "../dist/index.js";
+import { PendingRequests } from "../dist/internals/pending_requests.js";
 import { FakeMediaTrack, FakePeerConnection, FakeSender } from "./support/browser_fakes.mjs";
 import {
     EMPTY_FEATURES,
@@ -43,6 +49,120 @@ test("startRecording resolves through the protocol request lifecycle", async () 
     await emitMessage("recording-ok");
 
     assert.equal(await resultPromise, true);
+});
+
+test("stopRecording resolves through the protocol request lifecycle", async () => {
+    const { client, emitMessage, connectWithWelcome } = createSfuClientHarness();
+
+    await connectWithWelcome();
+
+    const resultPromise = client.stopRecording();
+    await tick();
+    await emitMessage("recording-ok");
+
+    assert.equal(await resultPromise, true);
+});
+
+test("recording request refusal resolves false", async () => {
+    const { client, emitMessage, connectWithWelcome } = createSfuClientHarness();
+
+    await connectWithWelcome();
+
+    const resultPromise = client.startRecording({ audio: true });
+    await tick();
+    await emitMessage("recording-refused");
+
+    assert.equal(await resultPromise, false);
+});
+
+test("recording requests without protocol registration resolve false", async () => {
+    const core = new FakeProtocolCore();
+    core.startRecording = () => [];
+    core.stopRecording = () => [];
+    const { client } = createSfuClientHarness({ protocolCore: core });
+
+    assert.equal(await client.startRecording({ audio: true }), false);
+    assert.equal(await client.stopRecording(), false);
+});
+
+test("duplicate recording request registration is handled as a runtime error", async () => {
+    const core = new FakeProtocolCore();
+    core.startRecording = () => [
+        {
+            kind: "registerPendingRequest",
+            requestId: "record-1",
+            requestKind: "startRecording"
+        },
+        {
+            kind: "registerPendingRequest",
+            requestId: "record-2",
+            requestKind: "startRecording"
+        }
+    ];
+    const { client, handledErrors } = createSfuClientHarness({ protocolCore: core });
+
+    await assert.rejects(
+        client.startRecording({ audio: true }),
+        /pending request command batches must register at most one request/
+    );
+
+    assert.equal(client.errors.length, 1);
+    assert.equal(handledErrors[0], client.errors[0]);
+});
+
+test("runtime errors reject registered recording requests", async () => {
+    const core = new FakeProtocolCore();
+    const onWsMessage = core.onWsMessage.bind(core);
+    core.onWsMessage = (frame) => {
+        if (frame === "recording-runtime-failure") {
+            throw new Error("recording runtime failure");
+        }
+        return onWsMessage(frame);
+    };
+    const { client, emitMessage, connectWithWelcome } = createSfuClientHarness({
+        protocolCore: core
+    });
+
+    await connectWithWelcome();
+
+    const registeredPromise = client.startRecording({ audio: true });
+    await tick();
+    const recordingRejection = assert.rejects(registeredPromise, /recording runtime failure/);
+
+    await emitMessage("recording-runtime-failure");
+    await recordingRejection;
+});
+
+test("pending request rejection includes queued recording waiters", async () => {
+    const pendingRequests = new PendingRequests();
+    const registeredPromise = pendingRequests.begin(
+        () => [
+            {
+                kind: CommandKind.REGISTER_PENDING_REQUEST,
+                requestId: "registered-recording",
+                requestKind: PENDING_REQUEST_KIND.START_RECORDING
+            }
+        ],
+        () => undefined,
+        () => undefined
+    );
+    pendingRequests.register("registered-recording", PENDING_REQUEST_KIND.START_RECORDING);
+    const queuedPromise = pendingRequests.begin(
+        () => [
+            {
+                kind: CommandKind.REGISTER_PENDING_REQUEST,
+                requestId: "queued-recording",
+                requestKind: PENDING_REQUEST_KIND.STOP_RECORDING
+            }
+        ],
+        () => undefined,
+        () => undefined
+    );
+
+    pendingRequests.rejectAll(new Error("recording runtime failure"));
+
+    await assert.rejects(registeredPromise, /recording runtime failure/);
+    await assert.rejects(queuedPromise, /recording runtime failure/);
 });
 
 test("default runtime creates the protocol core from generated wasm bindings", () => {
@@ -186,6 +306,52 @@ test("real protocol core replays the latest sticky intents changed while recover
             }
         }
     ]);
+});
+
+test("explicit disconnect neutralizes a stale recovery timer", async () => {
+    const harness = createRecoveryHarness();
+    const { client, sockets, connect, emitMessage, open, timers } = harness;
+
+    await connect();
+    await open();
+    await emitMessage(buildWelcomeFrame());
+
+    sockets[0].close(1011);
+    await tick();
+    assert.equal(timers.hasDelay(1000), true);
+
+    client.disconnect();
+    await tick();
+    assert.equal(timers.hasDelay(1000), false);
+
+    timers.fireLastByDelay(1000);
+    await tick();
+
+    assert.equal(sockets.length, 1);
+});
+
+test("new connect neutralizes a stale recovery timer", async () => {
+    const harness = createRecoveryHarness();
+    const { client, sockets, connect, emitMessage, open, timers } = harness;
+
+    await connect("ws://example.test/old", "old-token");
+    await open();
+    await emitMessage(buildWelcomeFrame());
+
+    sockets[0].close(1011);
+    await tick();
+    assert.equal(timers.hasDelay(1000), true);
+
+    client.connect("ws://example.test/new", "new-token");
+    await tick();
+    assert.equal(sockets.length, 2);
+    assert.equal(sockets[1].url, "ws://example.test/new");
+    assert.equal(timers.hasDelay(1000), false);
+
+    timers.fireLastByDelay(1000);
+    await tick();
+
+    assert.equal(sockets.length, 2);
 });
 
 test("negotiation creates a peer connection and emits lowercase track updates", async () => {
@@ -594,6 +760,53 @@ test("peer connection disconnected does not tear down the websocket session", as
     assert.equal(sockets[0].closeCode, null);
     assert.deepEqual(core.wsCloseCodes, []);
     assert.equal(client.state, "connected");
+});
+
+test("stale peer connection callbacks cannot affect the active session", async () => {
+    const core = new FakeProtocolCore();
+    core.transportFailureState = "recovering";
+    const { client, emitMessage, open, peerConnections, sockets, updates, connect } =
+        createSfuClientHarness({
+            protocolCore: core
+        });
+
+    await connect();
+    await open();
+    await emitMessage("welcome");
+
+    core.trackBindings.set("0", {
+        active: true,
+        mid: "0",
+        sessionId: 42,
+        type: "camera"
+    });
+    await emitMessage("offer");
+
+    const stalePeerConnection = peerConnections[0];
+    assert.equal(client.state, "connected");
+
+    core.trackBindings.set("0", {
+        active: true,
+        mid: "0",
+        sessionId: 84,
+        type: "screen"
+    });
+    await emitMessage("offer");
+
+    assert.equal(peerConnections.length, 2);
+    assert.equal(stalePeerConnection.closed, true);
+
+    stalePeerConnection.emitTrack(createCameraTrack("stale-camera"), "0");
+    stalePeerConnection.emitConnectionState("connected");
+    stalePeerConnection.emitConnectionState("failed");
+    await tick();
+
+    assert.deepEqual(updates, []);
+    assert.equal(core.transportReadyCalls, 2);
+    assert.equal(sockets.length, 1);
+    assert.equal(sockets[0].closeCode, null);
+    assert.equal(client.state, "connected");
+    assert.equal(client._consumers.size, 0);
 });
 
 test("track rebinding waits for a fresh track event before re-emitting state", async () => {

@@ -254,6 +254,8 @@ export class FakeProtocolCore {
                 return [{ kind: "closePeerConnection" }];
             case "recording-ok":
                 return [{ kind: "resolvePendingRequest", ok: true, requestId: "record-1" }];
+            case "recording-refused":
+                return [{ kind: "resolvePendingRequest", ok: false, requestId: "record-1" }];
             case "explode":
                 throw new Error("boom");
             default:
@@ -276,7 +278,13 @@ export class FakeProtocolCore {
     }
 
     stopRecording() {
-        return [];
+        return [
+            {
+                kind: "registerPendingRequest",
+                requestId: "record-1",
+                requestKind: "stopRecording"
+            }
+        ];
     }
 
     submitNegotiationAnswer(requestId, negotiationKind, sdp) {
@@ -342,24 +350,37 @@ export const decodeSentFrame = (socket, index) => JSON.parse(socket.sent[index])
 
 export const createManualTimers = () => {
     let nextHandleId = 1;
+    const allHandles = [];
     const handles = new Map();
     return {
         clearTimer(handle) {
+            handle.active = false;
             handles.delete(handle.id);
+        },
+        fireLastByDelay(ms) {
+            const handle = allHandles.findLast((candidate) => candidate.ms === ms);
+            assert.ok(handle, `expected timer with delay ${ms}`);
+            handle.callback();
         },
         fireByDelay(ms) {
             const handle = [...handles.values()].find((candidate) => candidate.ms === ms);
             assert.ok(handle, `expected timer with delay ${ms}`);
+            handle.active = false;
             handles.delete(handle.id);
             handle.callback();
         },
+        hasDelay(ms) {
+            return [...handles.values()].some((candidate) => candidate.ms === ms);
+        },
         setTimer(callback, ms) {
             const handle = {
+                active: true,
                 callback,
                 id: nextHandleId++,
                 ms
             };
             handles.set(handle.id, handle);
+            allHandles.push(handle);
             return handle;
         }
     };

@@ -205,6 +205,52 @@ fn protocol_core_recovery_timer_retries_the_saved_url() {
 }
 
 #[test]
+fn protocol_core_fresh_connect_supersedes_pending_recovery() {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.on_transport_ready();
+    let _ = core.on_ws_close(1011);
+
+    let commands = core.connect(
+        "wss://other.example.com/socket",
+        "other-token",
+        Some(String::from("other-room")),
+    );
+
+    assert_eq!(core.state(), ConnectionState::Connecting);
+    assert_eq!(
+        commands,
+        vec![
+            Command::CancelTimer {
+                id: RECOVERY_TIMER_ID,
+            },
+            Command::EmitStateChange {
+                state: ConnectionState::Connecting,
+                cause: None,
+            },
+            Command::Connect {
+                url: String::from("wss://other.example.com/socket"),
+            },
+        ]
+    );
+    assert!(core.on_timer(RECOVERY_TIMER_ID).is_empty());
+
+    let auth_commands = core.on_ws_open();
+    let mut batch = decode_sent_batch(&auth_commands).into_iter();
+    assert_eq!(
+        batch.next().map(ClientEnvelope::decode),
+        Some(Ok(ClientEnvelope::Message(ClientMessage::Auth(
+            AuthPayload {
+                jwt: String::from("other-token"),
+                channel: Some(String::from("other-room")),
+            }
+        ))))
+    );
+    assert_eq!(batch.next(), None);
+}
+
+#[test]
 fn protocol_core_successful_recovery_resets_backoff_delay() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
