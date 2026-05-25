@@ -111,9 +111,9 @@ pub mod transport {
 
     #[cfg(any(test, feature = "fuzzing"))]
     pub mod fuzz_support {
-        //! Fuzz-only RTC answer projection seam.
-
-        pub use crate::runtime::rtc_engine::client_rtp_capabilities_from_answer;
+        pub use crate::runtime::rtc_engine::{
+            client_rtp_capabilities_from_answer, fuzz_support::route_packet_loop_ingress_demux,
+        };
     }
 
     pub use crate::{

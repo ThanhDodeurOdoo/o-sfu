@@ -7,7 +7,8 @@ use crate::runtime::source_model::UserStreamId;
 #[cfg(test)]
 use crate::runtime::{
     ConnectionId, TestSourceKind, UserId, media_transport::TransportMediaId,
-    source_model::test_support::stream_id_for_source, sync::lock_unpoisoned,
+    room::state::ValidatedPublishDescriptor, source_model::test_support::stream_id_for_source,
+    sync::lock_unpoisoned,
 };
 
 impl PendingPublishTransaction {
@@ -56,6 +57,43 @@ impl PendingPublishTransactions {
 
 #[cfg(test)]
 impl Room {
+    pub(in crate::runtime::room) fn stage_duplicate_after_next_publish_reservation_for_test(
+        &self,
+        transport_media_id: TransportMediaId,
+    ) {
+        *lock_unpoisoned(&self.duplicate_staged_publish_after_reservation) =
+            Some(transport_media_id);
+        *lock_unpoisoned(&self.duplicate_staged_publish_cleanup_target) = None;
+    }
+
+    pub(in crate::runtime::room) fn duplicate_staged_publish_cleanup_target_for_test(
+        &self,
+    ) -> Option<TransportMediaId> {
+        *lock_unpoisoned(&self.duplicate_staged_publish_cleanup_target)
+    }
+
+    pub(in crate::runtime::room) fn inject_duplicate_staged_publish_after_reservation_for_test(
+        &self,
+        descriptor: &ValidatedPublishDescriptor,
+        cleanup_target: TransportMediaId,
+    ) {
+        let Some(staged_transport_media_id) =
+            lock_unpoisoned(&self.duplicate_staged_publish_after_reservation).take()
+        else {
+            return;
+        };
+        *lock_unpoisoned(&self.duplicate_staged_publish_cleanup_target) = Some(cleanup_target);
+        let transaction =
+            PendingPublishTransaction::new(descriptor.clone(), staged_transport_media_id);
+        let key = transaction.key();
+        let mut pending_publish_transactions = lock_unpoisoned(&self.pending_publish_transactions);
+        assert!(
+            !pending_publish_transactions.staged.contains_key(&key),
+            "test duplicate staged publish slot should be empty before injection"
+        );
+        pending_publish_transactions.staged.insert(key, transaction);
+    }
+
     #[allow(
         clippy::unused_async,
         reason = "test facade stays async to match room inspection helpers used by existing scenarios"

@@ -22,6 +22,9 @@ use crate::runtime::{
     metrics::{self, BudgetSolverOutcome},
 };
 
+#[cfg(test)]
+mod test_support;
+
 /// Executes one source-policy refresh after pure room planning.
 ///
 /// Consumer packet updates touch the transport before room state records the

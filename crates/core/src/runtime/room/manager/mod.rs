@@ -5,11 +5,15 @@
 //! keyed by issuer, UUID and instance id, and turns stale directory handles into
 //! no-ops before caller work runs.
 
+#[cfg(test)]
+use std::sync::Mutex as StdMutex;
 use std::{collections::BTreeSet, future::Future, sync::Arc};
 
 use o_sfu_telemetry::schema::event as telemetry_event;
 use tokio::sync::RwLock;
 
+#[cfg(test)]
+pub(in crate::runtime::room) use self::test_support::JoinPlacementTestGate;
 use super::{
     Room, RoomConfig, RoomJoinError, RoomManagerJoinError, RoomRuntimePolicy,
     RoomUserStatsSnapshot, SourcePolicyEvent, UserOutboundSender,
@@ -127,6 +131,8 @@ pub struct RoomManager {
     directory: RwLock<RoomDirectory>,
     diagnostics: Arc<DiagnosticsStore>,
     factory: RoomFactory,
+    #[cfg(test)]
+    join_placement_gate: StdMutex<Option<Arc<JoinPlacementTestGate>>>,
     media_worker_count: usize,
     metrics: Arc<RuntimeMetrics>,
 }
@@ -144,6 +150,8 @@ impl RoomManager {
             directory: RwLock::new(RoomDirectory::default()),
             diagnostics: deps.diagnostics,
             factory,
+            #[cfg(test)]
+            join_placement_gate: StdMutex::new(None),
             media_worker_count: config.media_worker_count.max(1),
             metrics: deps.metrics,
         }
@@ -348,6 +356,8 @@ impl RoomManager {
                 room_id,
                 |room| async move {
                     let placement = self.prepare_join_placement(&room, media_transport).await;
+                    #[cfg(test)]
+                    self.wait_after_join_placement_for_test().await;
                     room.join_session_with_cleanup(
                         JoinSessionIntent {
                             user_id: request.user_id,

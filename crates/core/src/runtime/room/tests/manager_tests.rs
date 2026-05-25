@@ -6,6 +6,7 @@ use tokio::{sync::Notify, task::yield_now, time::timeout};
 use super::{
     super::{
         effects::SubscriptionEffectPlan,
+        manager::JoinPlacementTestGate,
         placement::RoomPlacementDecisionReason,
         state::{ConsumerRouteTransportRef, ConsumerRouteUpdate},
         user_negotiation::UserTransportReady,
@@ -513,6 +514,64 @@ async fn load_triggered_large_room_reaches_but_does_not_exceed_local_router_cap(
         assert_home_worker(&room, user_id, media_worker).await;
     }
     assert_last_decision_reason(&room, RoomPlacementDecisionReason::LocalRouterCapReached);
+}
+
+#[tokio::test]
+async fn manager_concurrent_load_triggered_joins_revalidate_local_router_cap_at_commit() {
+    const LOCAL_ROUTER_CAP: usize = 2;
+    const WORKER_COUNT: usize = 4;
+    const CONCURRENT_JOINS: usize = 12;
+
+    let manager = Arc::new(manager_with_room_worker_policy_and_worker_count(
+        load_triggered_policy_with_cap(LOCAL_ROUTER_CAP, 1, 1, 1, 1, 48),
+        WORKER_COUNT,
+    ));
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-concurrent-large-room-cap").await;
+    manager_join_user(&manager, &room, 1, &media_transport).await;
+    let placement_gate = Arc::new(JoinPlacementTestGate::new(CONCURRENT_JOINS));
+    manager.set_join_placement_gate_for_test(Arc::clone(&placement_gate));
+
+    let mut join_tasks = Vec::with_capacity(CONCURRENT_JOINS);
+    for user_offset in 0..CONCURRENT_JOINS {
+        let manager = Arc::clone(&manager);
+        let room_id = room.uuid().to_owned();
+        let media_transport = media_transport.clone();
+        join_tasks.push(tokio::spawn(async move {
+            let (sender, _receiver) = test_sender();
+            manager
+                .join_user(
+                    &room_id,
+                    JoinUserRequest {
+                        user_id: UserId::Integer(i64::try_from(user_offset + 2).unwrap()),
+                        label: None,
+                        permissions: UserPermissions::default(),
+                        sender,
+                    },
+                    &media_transport,
+                )
+                .await
+                .expect("concurrent user should join through manager");
+        }));
+    }
+
+    timeout(Duration::from_secs(5), placement_gate.hold_all_planned())
+        .await
+        .expect("all concurrent joins should reach placement planning");
+    assert_router_count(&room, 1).await;
+    assert_last_decision_reason(&room, RoomPlacementDecisionReason::ReceiverCountPressure);
+    placement_gate.release_all().await;
+
+    for join_task in join_tasks {
+        join_task.await.expect("join task should not panic");
+        assert!(
+            room.test_api().inspect().topology_router_count().await <= LOCAL_ROUTER_CAP,
+            "concurrent placement should not exceed the configured local router cap"
+        );
+    }
+
+    assert_router_count(&room, LOCAL_ROUTER_CAP).await;
+    assert_last_decision_reason(&room, RoomPlacementDecisionReason::ReceiverCountPressure);
 }
 
 #[tokio::test]
