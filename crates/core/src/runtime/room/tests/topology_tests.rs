@@ -3,6 +3,7 @@ use o_sfu_router::{ProducerId as RouterProducerId, RouterError};
 use super::fixtures::*;
 use crate::runtime::room::{
     LocalRoomRouterPlacements, LocalRoomRouterPlacementsError, LocalRouterRuntimeContext,
+    ResolvedPlacement,
     router_state::RoomRouterStateError,
     topology::{RoomTopologyError, RoutedProducerId},
 };
@@ -21,7 +22,11 @@ fn join_on_router(
     router: u64,
     media_worker: usize,
 ) -> Result<(), RoomTopologyError> {
-    topology.apply_client_join_on_placement(user_id, seed, placement(router, media_worker))
+    topology.apply_client_join_on_placement(
+        user_id,
+        seed,
+        ResolvedPlacement::for_test(placement(router, media_worker)),
+    )
 }
 
 fn replace_on_router(
@@ -31,7 +36,12 @@ fn replace_on_router(
     router: u64,
     media_worker: usize,
 ) -> Result<(), RoomTopologyError> {
-    topology.replace_client_session_on_placement(user_id, seed, placement(router, media_worker), [])
+    topology.replace_client_session_on_placement(
+        user_id,
+        seed,
+        ResolvedPlacement::for_test(placement(router, media_worker)),
+        [],
+    )
 }
 
 #[test]
@@ -308,7 +318,7 @@ fn topology_rejects_shadow_consumer_without_receiver_home_placement() {
 }
 
 #[test]
-fn topology_rejects_consumer_on_unreserved_router() {
+fn topology_rejects_consumer_on_missing_attached_router() {
     let mut topology = RoomTopology::new(RouterId(9));
     let consumer_user_id = UserId::Integer(20);
     assert!(join_on_router(&mut topology, &consumer_user_id, 0, 9, 0).is_ok());
@@ -320,7 +330,7 @@ fn topology_rejects_consumer_on_unreserved_router() {
             RouterMediaKind::Audio,
             ConsumerCapability::Compatible,
         ),
-        Err(RoomTopologyError::UnreservedRouter {
+        Err(RoomTopologyError::MissingRouter {
             router_id: RouterId(99),
         })
     );

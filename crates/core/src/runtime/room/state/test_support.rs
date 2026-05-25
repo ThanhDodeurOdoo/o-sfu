@@ -50,12 +50,6 @@ impl RoomState {
         self.topology.home_router_id_for_user(user_id)
     }
 
-    pub fn topology_home_media_worker_id(&self, user_id: &UserId) -> Option<usize> {
-        self.topology
-            .home_placement_for_user(user_id)
-            .map(|placement| placement.media_worker)
-    }
-
     pub fn topology_router_count(&self) -> usize {
         self.topology.router_count()
     }

@@ -34,11 +34,14 @@ use crate::{
 impl RoomUserOperation<'_> {
     pub(crate) async fn bootstrap_missing_consumers(self) -> bool {
         let room = self.room();
+        let worker_lookup = room.placement_state.worker_lookup();
         let mut state = room.state.write().await;
         let media_counts_before = state.media_counts();
-        let Some(planned_bootstraps) = state
-            .plan_missing_consumer_bootstraps_for_connection(self.user_id(), self.connection_id())
-        else {
+        let Some(planned_bootstraps) = state.plan_missing_consumer_bootstraps_for_connection(
+            self.user_id(),
+            self.connection_id(),
+            worker_lookup,
+        ) else {
             return false;
         };
         let media_counts_after = state.media_counts();
@@ -67,9 +70,11 @@ impl Room {
         targets: Vec<super::state::PendingConsumerBootstrapTarget>,
     ) {
         let effect_plan = {
+            let worker_lookup = self.placement_state.worker_lookup();
             let mut state = self.state.write().await;
             let media_counts_before = state.media_counts();
-            let planned_bootstraps = state.plan_consumer_bootstraps_for_targets(targets);
+            let planned_bootstraps =
+                state.plan_consumer_bootstraps_for_targets(targets, worker_lookup);
             let media_counts_after = state.media_counts();
             drop(state);
             SubscriptionEffectPlan::from_planned_bootstraps(
@@ -167,6 +172,7 @@ impl RoomUserOperation<'_> {
     ) -> SubscriptionUpdateOutcome {
         let room = self.room();
         let (effect_plan, source_policy_event) = {
+            let worker_lookup = room.placement_state.worker_lookup();
             let mut state = room.state.write().await;
             if state
                 .user_for_connection(self.user_id(), self.connection_id())
@@ -180,6 +186,7 @@ impl RoomUserOperation<'_> {
                 self.connection_id(),
                 target_user_id,
                 intents,
+                worker_lookup,
             );
             let source_policy_event = if planned_change.touches_route_graph() {
                 SourcePolicyEvent::RouteGraphChanged

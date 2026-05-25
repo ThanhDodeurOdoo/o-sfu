@@ -49,8 +49,9 @@ impl RoomTopology {
                 media_worker: offset,
             })
             .collect::<Vec<_>>();
+        let local_routers = LocalRoomRouterPlacements::new(primary, spillover);
         Self::new_with_router_state_factory(
-            LocalRoomRouterPlacements::new(primary, spillover),
+            &local_routers,
             router_rtp_capabilities(MediaCodecFlags::default()),
             &RoomRouterStateFactory::new(event_sink),
         )

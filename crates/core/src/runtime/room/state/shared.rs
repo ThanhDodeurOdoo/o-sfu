@@ -122,7 +122,7 @@ impl RoomState {
             },
             media: RoomMediaGraph::default(),
             topology: RoomTopology::new_with_router_state_factory(
-                runtime_context.local_routers().clone(),
+                runtime_context.local_routers(),
                 router_rtp_capabilities,
                 &RoomRouterStateFactory::new(router_event_sink),
             ),

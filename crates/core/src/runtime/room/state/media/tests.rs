@@ -503,6 +503,7 @@ fn stale_replaced_connection_cannot_update_download_state() {
             stale_connection_id,
             &producer_user_id,
             &intents,
+            |_| 0,
         )
         .into_parts();
 
@@ -555,6 +556,7 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
             subscriber_connection_id,
             &publisher_user_id,
             &intents,
+            |_| 0,
         )
         .into_parts();
 
@@ -612,6 +614,7 @@ fn missing_consumer_bootstrap_applies_video_download_cap_before_effects() {
         .plan_missing_consumer_bootstraps_for_connection(
             &subscriber_user_id,
             subscriber_connection_id,
+            |_| 0,
         )
         .expect("subscriber session should still exist");
 

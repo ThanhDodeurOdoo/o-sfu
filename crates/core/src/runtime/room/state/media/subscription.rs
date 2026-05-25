@@ -151,6 +151,7 @@ impl RoomState {
         connection_id: ConnectionId,
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
+        media_worker_for_connection: impl Fn(ConnectionId) -> usize,
     ) -> PlannedSubscriptionChange {
         if self.user_for_connection(user_id, connection_id).is_none() {
             return PlannedSubscriptionChange::default();
@@ -160,6 +161,7 @@ impl RoomState {
             self.apply_subscription_route_updates(user_id, connection_id, target_user_id, intents);
         let bootstraps = self.plan_consumer_bootstraps_for_targets(
             self.collect_missing_consumer_targets_for_peer(user_id, connection_id, target_user_id),
+            media_worker_for_connection,
         );
         PlannedSubscriptionChange {
             route_updates,
@@ -197,6 +199,7 @@ impl RoomState {
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
+        media_worker_for_connection: impl Fn(ConnectionId) -> usize,
     ) -> Option<Vec<PlannedConsumerBootstrap>> {
         let user = self.users.get(user_id)?;
         if user.connection_id != connection_id {
@@ -207,12 +210,14 @@ impl RoomState {
         }
         Some(self.plan_consumer_bootstraps_for_targets(
             self.collect_missing_consumer_targets(user_id, connection_id),
+            media_worker_for_connection,
         ))
     }
 
     pub fn plan_consumer_bootstraps_for_targets(
         &mut self,
         targets: Vec<PendingConsumerBootstrapTarget>,
+        media_worker_for_connection: impl Fn(ConnectionId) -> usize,
     ) -> Vec<PlannedConsumerBootstrap> {
         let mut targets = targets;
         let active_speaker_source_user_ids = BTreeSet::new();
@@ -221,7 +226,9 @@ impl RoomState {
         });
         targets
             .into_iter()
-            .filter_map(|target| self.plan_consumer_bootstrap(&target))
+            .filter_map(|target| {
+                self.plan_consumer_bootstrap(&target, &media_worker_for_connection)
+            })
             .collect()
     }
 
@@ -396,6 +403,7 @@ impl RoomState {
     fn plan_consumer_bootstrap(
         &mut self,
         target: &PendingConsumerBootstrapTarget,
+        media_worker_for_connection: &impl Fn(ConnectionId) -> usize,
     ) -> Option<PlannedConsumerBootstrap> {
         let (sender, client_capabilities) = {
             let user = self.users.get(&target.consumer_user_id)?;
@@ -442,7 +450,8 @@ impl RoomState {
             .ensure_consumer_source_selection(&consumer_key, consumer_selection);
         self.media.reserve_consumer_bootstrap(consumer_key.clone());
         let consumer_id = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
-        let relay_effects = self.reserve_relay_route(target, consumer_active);
+        let relay_effects =
+            self.reserve_relay_route(target, consumer_active, media_worker_for_connection);
         Some(PlannedConsumerBootstrap {
             target: target.clone(),
             prepared: PreparedConsumerBootstrap {
@@ -475,9 +484,10 @@ impl RoomState {
         &mut self,
         target: &PendingConsumerBootstrapTarget,
         consumer_active: bool,
+        media_worker_for_connection: &impl Fn(ConnectionId) -> usize,
     ) -> Vec<RelayRouteEffect> {
         let Some((source_connection, source_media, target_worker)) =
-            self.relay_route_for_target(target)
+            Self::relay_route_for_target(target, media_worker_for_connection)
         else {
             return Vec::new();
         };
@@ -491,17 +501,11 @@ impl RoomState {
     }
 
     fn relay_route_for_target(
-        &self,
         target: &PendingConsumerBootstrapTarget,
+        media_worker_for_connection: &impl Fn(ConnectionId) -> usize,
     ) -> Option<(ConnectionId, TransportMediaId, usize)> {
-        let source_worker = self
-            .topology
-            .home_placement_for_user(target.producer_user_id())?
-            .media_worker;
-        let target_worker = self
-            .topology
-            .home_placement_for_user(target.consumer_user_id())?
-            .media_worker;
+        let source_worker = media_worker_for_connection(target.producer_connection_id());
+        let target_worker = media_worker_for_connection(target.consumer_connection_id());
         if source_worker == target_worker {
             return None;
         }
