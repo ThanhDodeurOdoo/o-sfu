@@ -189,6 +189,68 @@ MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p o-sfu-tests --tar
 cargo +nightly miri test -p o-sfu-tests --target s390x-unknown-linux-gnu --test miri_rtp_negotiation
 ```
 
+## AddressSanitizer
+
+AddressSanitizer complements Miri by running compiled native code. Use it for
+runtime, networking, `str0m` and `aws-lc-rs` adjacent paths that Miri cannot
+exercise. The suite is intentionally bounded to pure crate coverage plus exact
+live-server smoke tests until broader sanitizer runtime coverage is stable.
+
+Install once on Linux:
+
+```bash
+rustup toolchain install nightly-2026-04-01
+rustup target add --toolchain nightly-2026-04-01 x86_64-unknown-linux-gnu
+sudo apt-get update && sudo apt-get install -y llvm
+```
+
+Run the same environment used by CI:
+
+```bash
+export RUSTFLAGS="-Zsanitizer=address -C force-frame-pointers=yes"
+export ASAN_OPTIONS="detect_leaks=0:halt_on_error=1:abort_on_error=1"
+export RUST_BACKTRACE=1
+export ASAN_SYMBOLIZER_PATH="$(command -v llvm-symbolizer)"
+```
+
+`detect_leaks=0` is intentional while the integration harness aborts server
+tasks during cleanup. Re-enable leak detection only after those smoke tests have
+graceful shutdown coverage.
+
+Run the pure crate suite:
+
+```bash
+cargo +nightly-2026-04-01 test --locked --target x86_64-unknown-linux-gnu \
+  -p o-sfu-model -p o-sfu-rfc -p o-sfu-router -p o-sfu-protocol \
+  --lib --tests -- --test-threads=1 --nocapture
+```
+
+Run core runtime tests:
+
+```bash
+cargo +nightly-2026-04-01 test --locked --target x86_64-unknown-linux-gnu \
+  -p o-sfu-core --lib --tests -- --test-threads=1 --nocapture
+```
+
+Run the exact live server smoke tests:
+
+```bash
+cargo +nightly-2026-04-01 test --locked --target x86_64-unknown-linux-gnu \
+  -p o-sfu-tests --test control_plane \
+  websocket_welcome_and_initial_offer_work_from_integration_test \
+  -- --exact --test-threads=1 --nocapture
+
+cargo +nightly-2026-04-01 test --locked --target x86_64-unknown-linux-gnu \
+  -p o-sfu-tests --test full_stack \
+  video_routing::fake_rtc_peers_forward_vp8_high_rid_keyframe_without_browsers \
+  -- --exact --test-threads=1 --nocapture
+
+cargo +nightly-2026-04-01 test --locked --target x86_64-unknown-linux-gnu \
+  -p o-sfu-tests --test full_stack \
+  relay_spillover::fake_rtc_cross_worker_vp8_selected_rid_survives_relay \
+  -- --exact --test-threads=1 --nocapture
+```
+
 ## Fuzzing
 
 Install once:
