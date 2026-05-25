@@ -67,10 +67,15 @@ impl FanoutBenchTopology {
     pub fn plan_route_turns(&mut self) -> usize {
         let mut planned_forwards = 0;
         for _ in 0..ROUTE_PLANNING_TURNS {
-            self.forwards.clear();
-            planned_forwards += self.plan_single_turn();
+            planned_forwards += self.plan_packet_send();
         }
         planned_forwards
+    }
+
+    #[must_use]
+    pub fn plan_packet_send(&mut self) -> usize {
+        self.forwards.clear();
+        self.plan_single_turn()
     }
 
     fn warm_route_facts(&mut self) {

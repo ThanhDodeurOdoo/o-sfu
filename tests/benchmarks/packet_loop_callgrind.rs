@@ -32,7 +32,8 @@ use o_sfu_core::server::transport::benchmark_support::{
     ActiveSpeakerBenchFixture, ConsumerGateBatchBenchFixture, FanoutBenchTopology,
     IncomingObservationBenchFixture, IngressRoutingBenchFixture, KeyframeCoalescingBenchFixture,
     LocalRewriteBenchFixture, PacketSinkFanoutBenchFixture, RelayPressureBenchFixture,
-    RidReadinessBenchFixture, SchedulerBenchFixture, routing_miss_packet_fingerprint,
+    RidReadinessBenchFixture, SchedulerBenchFixture, WorkerPacketCommandMixBenchFixture,
+    routing_miss_packet_fingerprint,
 };
 
 const ROUTING_MISS_FINGERPRINT_ATTEMPTS: usize = 4096;
@@ -130,7 +131,7 @@ fn relay_mailbox_256(fixture: RelayPressureBenchFixture) -> usize {
 #[library_benchmark(config = callgrind_config(1.0))]
 #[bench::cached_route(IngressRoutingBenchFixture::cached_accepted_route())]
 #[bench::unknown_source(IngressRoutingBenchFixture::repeated_unknown_source_miss())]
-#[bench::unknown_source_rtp_1200(IngressRoutingBenchFixture::repeated_large_unknown_source_miss())]
+#[bench::unknown_rtp_1200(IngressRoutingBenchFixture::repeated_large_unknown_source_miss())]
 fn ingress_demux_256(mut fixture: IngressRoutingBenchFixture) -> usize {
     black_box(fixture.route_datagrams())
 }
@@ -153,7 +154,7 @@ fn scheduler_churn_128(mut fixture: SchedulerBenchFixture) -> usize {
 // benchmark that includes recent-miss cache lookup and drop accounting
 #[library_benchmark(config = callgrind_config(1.0))]
 #[bench::rtp_1200(args = (1200usize), setup = fingerprint_packet)]
-fn routing_miss_fingerprint_4096(packet: Vec<u8>) -> u64 {
+fn fingerprint_4096(packet: Vec<u8>) -> u64 {
     let mut fingerprint = 0_u64;
     for _ in 0..ROUTING_MISS_FINGERPRINT_ATTEMPTS {
         fingerprint = fingerprint.wrapping_add(routing_miss_packet_fingerprint(black_box(
@@ -234,6 +235,18 @@ fn keyframe_coalesce_512(mut fixture: KeyframeCoalescingBenchFixture) -> usize {
     black_box(fixture.flush_requests())
 }
 
+// measures packet work interleaved with worker lifecycle commands
+//
+// the packet side reuses the deterministic fanout planner while the command
+// side goes through the real worker mailbox
+// this keeps the observation-lock cost visible in the regular base-versus-head
+// Callgrind suite without adding fake peer negotiation to the measured window
+#[library_benchmark(config = callgrind_config(1.0))]
+#[bench::packet_cmd_mix(WorkerPacketCommandMixBenchFixture::packet_command_mix_current_thread())]
+fn interleaved_fanout(mut fixture: WorkerPacketCommandMixBenchFixture) -> usize {
+    black_box(fixture.run_packet_command_mix())
+}
+
 library_benchmark_group!(
     name = packet_loop_callgrind;
     benchmarks =
@@ -242,13 +255,14 @@ library_benchmark_group!(
         relay_mailbox_256,
         ingress_demux_256,
         scheduler_churn_128,
-        routing_miss_fingerprint_4096,
+        fingerprint_4096,
         packet_sink_512,
         route_gate_batch,
         rid_readiness_256,
         local_rewrite_4096,
         active_speaker_policy,
-        keyframe_coalesce_512
+        keyframe_coalesce_512,
+        interleaved_fanout
 );
 
 main!(library_benchmark_groups = packet_loop_callgrind);
