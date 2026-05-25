@@ -13,9 +13,10 @@
 ## Style guidelines
 
 ### General Rules
+(some of the rules are enforced by lint like clippy)
 
 - **No Low-Value Comments**: Avoid trivial comments that describe obvious code or that is just a rephrase of a function or variable name. Only write comments for necessary complex logic or obscure implementation / standard docstring / header comment (for files that need a global explanation).
-- **Justify Overrides**: Any override of a linter rule or the use of `unsafe` code MUST be justified with a descriptive comment.
+- **Justify Overrides**: Any override of a linter rule MUST be justified with a descriptive comment.
 - **Avoid literals**: use constants or enums with a meaningful name instead. Magic numbers and strings, for example from RFCs have their dedicated rfc crate.
 - **Document unhandled errors**: Errors that are thrown, or `Result` types in Rust, must have their errors documented.
 - **Tests**: Every new feature must include corresponding tests.
@@ -27,15 +28,11 @@
 
 ### Rust
 
-We follow standard Rust idioms and enforce strict safety.
-
-- **Formatting**: Always run `cargo fmt` before committing.
-- **Linting**: We use Clippy with strict rules. The enforced rules can be found in [Cargo.toml](../Cargo.toml), see the [Clippy documentation](https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html) for explanations.
+- **Formatting**: `cargo +nightly fmt`, Always run it before committing (we use nightly for the import ordering).
+- **Linting**: `cargo clippy --workspace --all-targets --all-features -- -D warnings`, We use Clippy with strict rules. The enforced rules can be found in [Cargo.toml](../Cargo.toml), see the [Clippy documentation](https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html) for explanations.
 - **Justify overrides**: Any override of a rule MUST be justified with a "reason".
-- **Unsafe Code**: Use of `unsafe` is discouraged. If absolutely necessary, it must be locally scoped (as narrow as possible) and justified.
-- **Avoid dead_code**: for example if you write a test helper, use the cfg=test flag
 
-### TypeScript & JavaScript (Frontend & Extension)
+### TypeScript & JavaScript (Bundle)
 
 - **No lazy typing**: The use of the `any` type is strictly forbidden. Use proper interfaces or types.
 - **No double Assertions**: Avoid `as unknown as`. If you must use it, provide a justifying comment (it id jusifiable when the type is really unknown (eg: external API)).
@@ -81,6 +78,15 @@ RTC_MAX_PORT=40031 \
 cargo run --release -p o-sfu
 ```
 
+I also recomend using this worker config if you're not testing a specific spillover mode,
+it distributes users between all workers which is useful for testing the cross worker relay.
+```
+RTC_MEDIA_WORKER_COUNT=4
+ROOM_MAX_LOCAL_ROUTERS=4
+ROOM_SPILLOVER_MODE=bounded
+```
+
+
 the command above do: the HTTP and WebSocket listener on `BIND_ADDRESS` and uses the
 configured UDP range for RTC traffic. 
 
@@ -88,7 +94,7 @@ use `PROXY=false` for direct-exposed development.
 uet `PROXY=true` only when `o-sfu` sits behind a trusted reverse
 proxy that overwrites `x-forwarded-*` headers before forwarding requests.
 
-For reverse-proxy deployments, keep two networking rules in mind:
+For reverse-proxy deployments, keep this in mind:
 
 - expose the TCP listener at `BIND_ADDRESS` for HTTP and WebSocket traffic
 - expose the full UDP range from `RTC_MIN_PORT` through `RTC_MAX_PORT`
