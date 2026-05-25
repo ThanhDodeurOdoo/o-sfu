@@ -261,6 +261,64 @@ fn consumer_negotiation_keeps_abs_send_time_and_filters_transport_cc_feedback() 
 }
 
 #[test]
+fn consumer_negotiation_keeps_transport_cc_and_filters_goog_remb_feedback() {
+    let consumable_parameters = MediaStream::new(
+        vec![
+            MediaFormat::new(MediaKind::Video, "VP8", 96, 90_000)
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None))
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::GoogRemb, None)),
+            MediaFormat::new(MediaKind::Video, "rtx", 97, 90_000).with_parameter("apt", "96"),
+        ],
+        vec![HeaderExtension::new(
+            webrtc::rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01,
+            5,
+        )],
+        vec![StreamBinding::new().with_ssrc(5678)],
+    );
+    let consumer_capabilities = MediaCapabilities::new(
+        vec![
+            MediaCodecCapability::new(MediaKind::Video, "VP8", 90_000)
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None))
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::GoogRemb, None)),
+            MediaCodecCapability::new(MediaKind::Video, "rtx", 90_000).with_parameter("apt", "96"),
+        ],
+        vec![HeaderExtension::new(
+            webrtc::rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01,
+            5,
+        )],
+    );
+
+    let negotiated_result =
+        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+    assert!(negotiated_result.is_ok());
+    let Ok(negotiated) = negotiated_result else {
+        return;
+    };
+    let codecs = negotiated.codecs().collect::<Vec<_>>();
+    assert_eq!(codecs.len(), 2);
+    let [media_codec, _rtx_codec] = codecs.as_slice() else {
+        return;
+    };
+    let media_codec_feedback = media_codec
+        .rtcp_feedback()
+        .map(RtcpFeedback::kind)
+        .collect::<Vec<_>>();
+    assert!(media_codec_feedback.contains(&&RtcpFeedbackKind::NackPli));
+    assert!(media_codec_feedback.contains(&&RtcpFeedbackKind::TransportCc));
+    assert!(!media_codec_feedback.contains(&&RtcpFeedbackKind::GoogRemb));
+    let header_extension_uris = negotiated
+        .header_extensions()
+        .map(HeaderExtension::uri)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        header_extension_uris,
+        vec![webrtc::rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01]
+    );
+}
+
+#[test]
 fn consumer_negotiation_fails_when_no_media_codec_matches() {
     let consumable_parameters = MediaStream::new(
         vec![MediaFormat::new(MediaKind::Audio, "opus", 111, 48_000)],
@@ -319,6 +377,44 @@ fn invalid_rtx_apt_is_reported_as_invalid_diagnostic() {
     let diagnostic = error.diagnostic();
     assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
     assert_eq!(diagnostic.rfc_reference().document(), "RFC 4588",);
+    assert_eq!(diagnostic.rfc_reference().section(), "section 8.1");
+}
+
+#[test]
+fn missing_rtx_associated_media_codec_is_reported_as_invalid_diagnostic() {
+    let capabilities = MediaCapabilities::new(
+        vec![
+            MediaCodecCapability::new(MediaKind::Video, "VP8", 90_000)
+                .with_preferred_payload_type(100),
+            MediaCodecCapability::new(MediaKind::Video, "rtx", 90_000)
+                .with_preferred_payload_type(101)
+                .with_parameter("apt", "100"),
+        ],
+        vec![],
+    );
+    let producer_parameters = MediaStream::new(
+        vec![
+            MediaFormat::new(MediaKind::Video, "VP8", 96, 90_000),
+            MediaFormat::new(MediaKind::Video, "rtx", 97, 90_000).with_parameter("apt", "98"),
+        ],
+        vec![],
+        vec![],
+    );
+
+    let negotiation = derive_consumable_rtp_parameters(&producer_parameters, &capabilities);
+    assert_eq!(
+        negotiation,
+        Err(RtpNegotiationError::MissingAssociatedMediaCodecForRtx {
+            payload_type: 97,
+            associated_payload_type: 98,
+        })
+    );
+    let Err(error) = negotiation else {
+        return;
+    };
+    let diagnostic = error.diagnostic();
+    assert_eq!(diagnostic.kind(), ParseDiagnosticKind::InvalidInput);
+    assert_eq!(diagnostic.rfc_reference().document(), "RFC 4588");
     assert_eq!(diagnostic.rfc_reference().section(), "section 8.1");
 }
 

@@ -395,6 +395,76 @@ fn consumers_must_use_send_transports() {
 }
 
 #[test]
+fn failed_consumer_additions_do_not_mutate_router_state() {
+    let mut router = prepare_publisher_topology(MediaKind::Audio);
+
+    let add_consumer_rejections = [
+        (
+            Consumer::new(CONSUMER, PRODUCER, TransportId(999), MediaKind::Audio),
+            ConsumerCapability::Compatible,
+            RouterError::MissingTransport(TransportId(999)),
+        ),
+        (
+            Consumer::new(
+                CONSUMER,
+                PRODUCER,
+                PUBLISHER_RECV_TRANSPORT,
+                MediaKind::Audio,
+            ),
+            ConsumerCapability::Compatible,
+            RouterError::ConsumerRequiresSendTransport(PUBLISHER_RECV_TRANSPORT),
+        ),
+        (
+            Consumer::new(
+                CONSUMER,
+                ProducerId(999),
+                SUBSCRIBER_SEND_TRANSPORT,
+                MediaKind::Audio,
+            ),
+            ConsumerCapability::Compatible,
+            RouterError::MissingProducer(ProducerId(999)),
+        ),
+        (
+            Consumer::new(
+                CONSUMER,
+                PRODUCER,
+                SUBSCRIBER_SEND_TRANSPORT,
+                MediaKind::Audio,
+            ),
+            ConsumerCapability::Incompatible,
+            RouterError::IncompatibleCapabilities {
+                producer_id: PRODUCER,
+            },
+        ),
+        (
+            Consumer::new(
+                CONSUMER,
+                PRODUCER,
+                SUBSCRIBER_SEND_TRANSPORT,
+                MediaKind::Video,
+            ),
+            ConsumerCapability::Compatible,
+            RouterError::ConsumerMediaKindMismatch {
+                producer_id: PRODUCER,
+                expected: MediaKind::Audio,
+                actual: MediaKind::Video,
+            },
+        ),
+    ];
+
+    for (consumer, capability, expected_error) in add_consumer_rejections {
+        let before = router_state_snapshot(&router);
+
+        assert_eq!(
+            router.add_consumer(consumer, capability),
+            Err(expected_error)
+        );
+        assert_eq!(router_state_snapshot(&router), before);
+        assert_router_is_consistent(&router);
+    }
+}
+
+#[test]
 fn consumers_must_match_their_producer_media_kind() {
     let mut router = prepare_publisher_topology(MediaKind::Audio);
 
@@ -435,6 +505,94 @@ fn consumers_are_rejected_when_capabilities_are_incompatible() {
             producer_id: PRODUCER,
         })
     );
+    assert_router_is_consistent(&router);
+}
+
+#[test]
+fn duplicate_ids_do_not_replace_existing_router_state() {
+    let mut router = Router::new(ROUTER);
+    join_session(&mut router, PUBLISHER_SESSION);
+
+    let before = router_state_snapshot(&router);
+    assert_eq!(
+        router.join_session(Session::new(PUBLISHER_SESSION)),
+        Err(RouterError::DuplicateSession(PUBLISHER_SESSION))
+    );
+    assert_eq!(router_state_snapshot(&router), before);
+    assert_router_is_consistent(&router);
+
+    join_session(&mut router, SUBSCRIBER_SESSION);
+    open_transport(
+        &mut router,
+        PUBLISHER_RECV_TRANSPORT,
+        PUBLISHER_SESSION,
+        TransportDirection::Receive,
+    );
+
+    let before = router_state_snapshot(&router);
+    assert_eq!(
+        router.open_transport(Transport::new(
+            PUBLISHER_RECV_TRANSPORT,
+            SUBSCRIBER_SESSION,
+            TransportDirection::Send,
+        )),
+        Err(RouterError::DuplicateTransport(PUBLISHER_RECV_TRANSPORT))
+    );
+    assert_eq!(router_state_snapshot(&router), before);
+    assert_router_is_consistent(&router);
+
+    add_producer(
+        &mut router,
+        PRODUCER,
+        PUBLISHER_RECV_TRANSPORT,
+        MediaKind::Audio,
+    );
+
+    let before = router_state_snapshot(&router);
+    assert_eq!(
+        router.add_producer(Producer::new(
+            PRODUCER,
+            PUBLISHER_RECV_TRANSPORT,
+            MediaKind::Video,
+        )),
+        Err(RouterError::DuplicateProducer(PRODUCER))
+    );
+    assert_eq!(router_state_snapshot(&router), before);
+    assert_router_is_consistent(&router);
+
+    open_transport(
+        &mut router,
+        SUBSCRIBER_SEND_TRANSPORT,
+        SUBSCRIBER_SESSION,
+        TransportDirection::Send,
+    );
+    add_compatible_consumer(
+        &mut router,
+        CONSUMER,
+        SUBSCRIBER_SEND_TRANSPORT,
+        MediaKind::Audio,
+    );
+    open_transport(
+        &mut router,
+        SECOND_SUBSCRIBER_SEND_TRANSPORT,
+        SUBSCRIBER_SESSION,
+        TransportDirection::Send,
+    );
+
+    let before = router_state_snapshot(&router);
+    assert_eq!(
+        router.add_consumer(
+            Consumer::new(
+                CONSUMER,
+                PRODUCER,
+                SECOND_SUBSCRIBER_SEND_TRANSPORT,
+                MediaKind::Audio,
+            ),
+            ConsumerCapability::Compatible,
+        ),
+        Err(RouterError::DuplicateConsumer(CONSUMER))
+    );
+    assert_eq!(router_state_snapshot(&router), before);
     assert_router_is_consistent(&router);
 }
 
@@ -573,6 +731,65 @@ fn joined_sessions_store_only_router_lifecycle_state() {
     };
     assert_eq!(session.state(), SessionState::Active);
     assert_router_is_consistent(&router);
+}
+
+#[test]
+fn explicit_producer_removal_emits_one_removal_event() {
+    let observer = EventCaptureObserver::default();
+    let inspector = observer.clone();
+    let mut router = Router::new_with_observer(ROUTER, observer);
+
+    join_session(&mut router, PUBLISHER_SESSION);
+    open_transport(
+        &mut router,
+        PUBLISHER_RECV_TRANSPORT,
+        PUBLISHER_SESSION,
+        TransportDirection::Receive,
+    );
+    add_producer(
+        &mut router,
+        PRODUCER,
+        PUBLISHER_RECV_TRANSPORT,
+        MediaKind::Video,
+    );
+
+    assert_eq!(router.remove_producer(PRODUCER), Ok(()));
+
+    assert_eq!(
+        inspector.recorded_events(),
+        vec![
+            RouterEvent::SessionJoined {
+                session_id: PUBLISHER_SESSION,
+            },
+            RouterEvent::ProducerAdded {
+                session_id: PUBLISHER_SESSION,
+                transport_id: PUBLISHER_RECV_TRANSPORT,
+                producer_id: PRODUCER,
+                media_kind: MediaKind::Video,
+            },
+            RouterEvent::ProducerRemoved {
+                session_id: PUBLISHER_SESSION,
+                transport_id: PUBLISHER_RECV_TRANSPORT,
+                producer_id: PRODUCER,
+                media_kind: MediaKind::Video,
+            },
+        ]
+    );
+    assert!(!router_state_snapshot(&router).contains_producer(PRODUCER));
+}
+
+#[test]
+fn missing_producer_removal_emits_no_removal_event() {
+    let observer = EventCaptureObserver::default();
+    let inspector = observer.clone();
+    let mut router = Router::new_with_observer(ROUTER, observer);
+
+    assert_eq!(
+        router.remove_producer(PRODUCER),
+        Err(RouterError::MissingProducer(PRODUCER))
+    );
+
+    assert!(inspector.recorded_events().is_empty());
 }
 
 #[derive(Clone, Default)]
