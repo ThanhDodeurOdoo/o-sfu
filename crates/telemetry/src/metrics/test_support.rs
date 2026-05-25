@@ -64,7 +64,12 @@ pub trait RuntimeMetricsSnapshotLookup {
 
 impl RuntimeMetricsSnapshotLookup for RuntimeMetricsSnapshot {
     fn counter_value(&self, name: MetricName, labels: &[(&str, &str)]) -> u64 {
-        self.counter(name, labels).unwrap_or(0)
+        let value = self.counter(name, labels);
+        assert!(
+            value.is_some(),
+            "missing counter sample {name:?} with labels {labels:?}"
+        );
+        value.unwrap_or(0)
     }
 
     fn gauge_value(&self, name: MetricName, labels: &[(&str, &str)]) -> i64 {

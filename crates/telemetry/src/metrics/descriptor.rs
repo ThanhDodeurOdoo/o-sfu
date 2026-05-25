@@ -7,10 +7,7 @@ use super::{
         MetricBucketLabel, MetricLabel as MetricStorageLabel, UpDownCounterFamily,
     },
     labels::{
-        ControlPlaneDurationBucket, ExportedMetricLabelPair, HttpRoute, RtcDatagramDropReason,
-        RtcDatagramRoutePath, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
-        RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpFlowDirection,
-        RtpForwardDestinationKind,
+        ControlPlaneDurationBucket, ExportedMetricLabelPair, HttpRoute, RtcRelayEnqueueResult,
     },
     rtc::RtcMetricsSnapshot,
     rtp::{RtpMetricsSnapshot, RtpWorkerMetricsSnapshot},
@@ -318,7 +315,7 @@ metric_catalog! {
         name: "osfu_rtp_packets_total",
         help: "Total RTP packets processed by flow direction.",
         kind: Counter,
-        samples: |metrics| rtp_flow_samples(
+        samples: |metrics| snapshot_counter_samples(
             &metrics.rtp_metrics.snapshot(),
             "direction",
             RtpMetricsSnapshot::packets
@@ -328,7 +325,7 @@ metric_catalog! {
         name: "osfu_rtp_payload_bytes_total",
         help: "Total RTP payload bytes processed by flow direction.",
         kind: Counter,
-        samples: |metrics| rtp_flow_samples(
+        samples: |metrics| snapshot_counter_samples(
             &metrics.rtp_metrics.snapshot(),
             "direction",
             RtpMetricsSnapshot::payload_bytes
@@ -338,7 +335,7 @@ metric_catalog! {
         name: "osfu_rtp_forwarded_packets_total",
         help: "Total RTP packet fan-out operations by forwarding destination.",
         kind: Counter,
-        samples: |metrics| rtp_forward_destination_samples(
+        samples: |metrics| snapshot_counter_samples(
             &metrics.rtp_metrics.snapshot(),
             "destination",
             RtpMetricsSnapshot::forwarded_packets
@@ -348,7 +345,7 @@ metric_catalog! {
         name: "osfu_rtp_forwarded_payload_bytes_total",
         help: "Total RTP payload bytes fanned out by forwarding destination.",
         kind: Counter,
-        samples: |metrics| rtp_forward_destination_samples(
+        samples: |metrics| snapshot_counter_samples(
             &metrics.rtp_metrics.snapshot(),
             "destination",
             RtpMetricsSnapshot::forwarded_payload_bytes
@@ -358,7 +355,7 @@ metric_catalog! {
         name: "osfu_worker_rtp_packets_total",
         help: "Total RTP packets processed by media worker and flow direction.",
         kind: Counter,
-        samples: |metrics| rtp_worker_flow_samples(
+        samples: |metrics| rtp_worker_counter_samples(
             &metrics.rtp_metrics.snapshot(),
             "direction",
             RtpWorkerMetricsSnapshot::packets
@@ -368,7 +365,7 @@ metric_catalog! {
         name: "osfu_worker_rtp_payload_bytes_total",
         help: "Total RTP payload bytes processed by media worker and flow direction.",
         kind: Counter,
-        samples: |metrics| rtp_worker_flow_samples(
+        samples: |metrics| rtp_worker_counter_samples(
             &metrics.rtp_metrics.snapshot(),
             "direction",
             RtpWorkerMetricsSnapshot::payload_bytes
@@ -378,7 +375,7 @@ metric_catalog! {
         name: "osfu_worker_rtp_forwarded_packets_total",
         help: "Total RTP packet fan-out operations by media worker and forwarding destination.",
         kind: Counter,
-        samples: |metrics| rtp_worker_forward_destination_samples(
+        samples: |metrics| rtp_worker_counter_samples(
             &metrics.rtp_metrics.snapshot(),
             "destination",
             RtpWorkerMetricsSnapshot::forwarded_packets
@@ -388,7 +385,7 @@ metric_catalog! {
         name: "osfu_worker_rtp_forwarded_payload_bytes_total",
         help: "Total RTP payload bytes fanned out by media worker and forwarding destination.",
         kind: Counter,
-        samples: |metrics| rtp_worker_forward_destination_samples(
+        samples: |metrics| rtp_worker_counter_samples(
             &metrics.rtp_metrics.snapshot(),
             "destination",
             RtpWorkerMetricsSnapshot::forwarded_payload_bytes
@@ -490,7 +487,7 @@ metric_catalog! {
         name: "osfu_rtc_datagram_routes_total",
         help: "Total RTC UDP datagrams accepted by routing path.",
         kind: Counter,
-        samples: |metrics| rtc_datagram_route_samples(
+        samples: |metrics| snapshot_counter_samples(
             &metrics.rtc_metrics.snapshot(),
             "path",
             RtcMetricsSnapshot::datagram_routes
@@ -500,7 +497,7 @@ metric_catalog! {
         name: "osfu_rtc_datagram_drops_total",
         help: "Total RTC UDP datagrams dropped before reaching a live user.",
         kind: Counter,
-        samples: |metrics| rtc_datagram_drop_samples(
+        samples: |metrics| snapshot_counter_samples(
             &metrics.rtc_metrics.snapshot(),
             "reason",
             RtcMetricsSnapshot::datagram_drops
@@ -526,7 +523,7 @@ metric_catalog! {
         name: "osfu_rtc_route_control_total",
         help: "Total RTC route-control decisions observed at the transport boundary.",
         kind: Counter,
-        samples: |metrics| rtc_route_control_samples(
+        samples: |metrics| snapshot_counter_samples(
             &metrics.rtc_metrics.snapshot(),
             "outcome",
             RtcMetricsSnapshot::route_control
@@ -582,7 +579,7 @@ metric_catalog! {
         name: "osfu_rtc_remote_control_drops_total",
         help: "Total remote-source control commands dropped before enqueue by command kind.",
         kind: Counter,
-        samples: |metrics| rtc_remote_control_drop_samples(
+        samples: |metrics| snapshot_counter_samples(
             &metrics.rtc_metrics.snapshot(),
             "kind",
             RtcMetricsSnapshot::remote_control_drops
@@ -592,7 +589,7 @@ metric_catalog! {
         name: "osfu_rtc_remote_packet_gate_convergence_total",
         help: "Total remote packet-gate convergence retry attempts and successful pending flushes.",
         kind: Counter,
-        samples: |metrics| rtc_remote_packet_gate_convergence_samples(
+        samples: |metrics| snapshot_counter_samples(
             &metrics.rtc_metrics.snapshot(),
             "outcome",
             RtcMetricsSnapshot::remote_packet_gate_convergence
@@ -642,131 +639,46 @@ where
         .collect()
 }
 
-fn rtp_flow_samples(
-    snapshot: &RtpMetricsSnapshot,
+fn snapshot_counter_samples<S, L>(
+    snapshot: &S,
     label_name: &'static str,
-    read: fn(&RtpMetricsSnapshot, RtpFlowDirection) -> u64,
-) -> Vec<MetricSample> {
-    <RtpFlowDirection as MetricStorageLabel>::VARIANTS
+    read: fn(&S, L) -> u64,
+) -> Vec<MetricSample>
+where
+    L: ExportedMetricLabel,
+{
+    L::VARIANTS
         .iter()
         .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
         .collect()
 }
 
-fn rtp_forward_destination_samples(
+fn rtp_worker_counter_samples<L>(
     snapshot: &RtpMetricsSnapshot,
     label_name: &'static str,
-    read: fn(&RtpMetricsSnapshot, RtpForwardDestinationKind) -> u64,
-) -> Vec<MetricSample> {
-    <RtpForwardDestinationKind as MetricStorageLabel>::VARIANTS
-        .iter()
-        .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
-        .collect()
-}
-
-fn rtp_worker_flow_samples(
-    snapshot: &RtpMetricsSnapshot,
-    label_name: &'static str,
-    read: fn(&RtpWorkerMetricsSnapshot, RtpFlowDirection) -> u64,
-) -> Vec<MetricSample> {
+    read: fn(&RtpWorkerMetricsSnapshot, L) -> u64,
+) -> Vec<MetricSample>
+where
+    L: ExportedMetricLabel,
+{
     snapshot
         .worker_snapshots()
         .iter()
         .flat_map(|worker| {
-            <RtpFlowDirection as MetricStorageLabel>::VARIANTS
-                .iter()
-                .map(move |label| {
-                    worker_counter(
-                        worker.media_worker_id(),
-                        label_name,
-                        label.label_value(),
-                        read(worker, *label),
-                    )
-                })
+            L::VARIANTS.iter().map(move |label| {
+                worker_counter(
+                    worker.media_worker_id(),
+                    label_name,
+                    label.label_value(),
+                    read(worker, *label),
+                )
+            })
         })
-        .collect()
-}
-
-fn rtp_worker_forward_destination_samples(
-    snapshot: &RtpMetricsSnapshot,
-    label_name: &'static str,
-    read: fn(&RtpWorkerMetricsSnapshot, RtpForwardDestinationKind) -> u64,
-) -> Vec<MetricSample> {
-    snapshot
-        .worker_snapshots()
-        .iter()
-        .flat_map(|worker| {
-            <RtpForwardDestinationKind as MetricStorageLabel>::VARIANTS
-                .iter()
-                .map(move |label| {
-                    worker_counter(
-                        worker.media_worker_id(),
-                        label_name,
-                        label.label_value(),
-                        read(worker, *label),
-                    )
-                })
-        })
-        .collect()
-}
-
-fn rtc_datagram_route_samples(
-    snapshot: &RtcMetricsSnapshot,
-    label_name: &'static str,
-    read: fn(&RtcMetricsSnapshot, RtcDatagramRoutePath) -> u64,
-) -> Vec<MetricSample> {
-    <RtcDatagramRoutePath as MetricStorageLabel>::VARIANTS
-        .iter()
-        .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
-        .collect()
-}
-
-fn rtc_datagram_drop_samples(
-    snapshot: &RtcMetricsSnapshot,
-    label_name: &'static str,
-    read: fn(&RtcMetricsSnapshot, RtcDatagramDropReason) -> u64,
-) -> Vec<MetricSample> {
-    <RtcDatagramDropReason as MetricStorageLabel>::VARIANTS
-        .iter()
-        .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
-        .collect()
-}
-
-fn rtc_route_control_samples(
-    snapshot: &RtcMetricsSnapshot,
-    label_name: &'static str,
-    read: fn(&RtcMetricsSnapshot, RtcRouteControlOutcome) -> u64,
-) -> Vec<MetricSample> {
-    <RtcRouteControlOutcome as MetricStorageLabel>::VARIANTS
-        .iter()
-        .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
         .collect()
 }
 
 fn rtc_relay_enqueue_samples(snapshot: &RtcMetricsSnapshot) -> Vec<MetricSample> {
     label_pair_counter_samples(|result: RtcRelayEnqueueResult| snapshot.relay_enqueues(result))
-}
-
-fn rtc_remote_control_drop_samples(
-    snapshot: &RtcMetricsSnapshot,
-    label_name: &'static str,
-    read: fn(&RtcMetricsSnapshot, RtcRemoteControlDropKind) -> u64,
-) -> Vec<MetricSample> {
-    <RtcRemoteControlDropKind as MetricStorageLabel>::VARIANTS
-        .iter()
-        .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
-        .collect()
-}
-
-fn rtc_remote_packet_gate_convergence_samples(
-    snapshot: &RtcMetricsSnapshot,
-    label_name: &'static str,
-    read: fn(&RtcMetricsSnapshot, RtcRemotePacketGateConvergence) -> u64,
-) -> Vec<MetricSample> {
-    <RtcRemotePacketGateConvergence as MetricStorageLabel>::VARIANTS
-        .iter()
-        .map(|label| counter([(label_name, label.label_value())], read(snapshot, *label)))
-        .collect()
 }
 
 fn up_down_counter_family_samples<L>(
