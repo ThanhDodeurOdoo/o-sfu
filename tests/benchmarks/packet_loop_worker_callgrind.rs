@@ -21,7 +21,9 @@
 
 #![allow(
     clippy::exit,
-    reason = "iai-callgrind's generated benchmark harness exits with the measured runner status"
+    clippy::must_use_candidate,
+    clippy::needless_pass_by_value,
+    reason = "Gungraun's generated harness owns setup values, returns measured outputs and exits with the runner status"
 )]
 
 use std::{env, hint::black_box};
@@ -30,8 +32,8 @@ use std::{env, hint::black_box};
 // other targets compile no-op hooks so local checks do not require supported
 // valgrind client requests
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
-use iai_callgrind::client_requests::callgrind::{start_instrumentation, stop_instrumentation};
-use iai_callgrind::{
+use gungraun::client_requests::callgrind::{start_instrumentation, stop_instrumentation};
+use gungraun::{
     Callgrind, EntryPoint, FlamegraphConfig, LibraryBenchmarkConfig, library_benchmark,
     library_benchmark_group, main,
 };

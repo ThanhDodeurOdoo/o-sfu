@@ -17,6 +17,8 @@ allow-licenses:
   - Unicode-3.0
   - Unlicense
 allow-dependencies-licenses:
+  - pkg:cargo/bincode-next
+  - pkg:cargo/gungraun
   - pkg:cargo/o-sfu
   - pkg:cargo/o-sfu-cluster
   - pkg:cargo/o-sfu-core

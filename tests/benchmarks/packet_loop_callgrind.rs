@@ -17,12 +17,14 @@
 
 #![allow(
     clippy::exit,
-    reason = "iai-callgrind's generated benchmark harness exits with the measured runner status"
+    clippy::must_use_candidate,
+    clippy::needless_pass_by_value,
+    reason = "Gungraun's generated harness owns setup values, returns measured outputs and exits with the runner status"
 )]
 
 use std::hint::black_box;
 
-use iai_callgrind::{
+use gungraun::{
     Callgrind, EventKind, LibraryBenchmarkConfig, library_benchmark, library_benchmark_group, main,
 };
 use o_sfu_core::server::transport::benchmark_support::{

@@ -112,10 +112,10 @@ jobs:
         # Swatinem/rust-cache v2
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          shared-key: rust-1.95-callgrind
+          shared-key: rust-1.95-gungraun
 
-      - name: Install iai-callgrind runner
-        run: cargo install iai-callgrind-runner --version 0.16.1 --locked
+      - name: Install Gungraun runner
+        run: cargo install gungraun-runner --version 0.19.0 --locked
 
       - name: Configure manual investigation options
         id: investigation
@@ -185,13 +185,13 @@ jobs:
           callgrind_args='${{ steps.investigation.outputs.callgrind-args }}'
           tools='${{ steps.investigation.outputs.tools }}'
           if [[ -n "$callgrind_args" ]]; then
-            export IAI_CALLGRIND_CALLGRIND_ARGS="$callgrind_args"
+            export GUNGRAUN_CALLGRIND_ARGS="$callgrind_args"
           fi
           if [[ -n "$tools" ]]; then
-            export IAI_CALLGRIND_TOOLS="$tools"
+            export GUNGRAUN_TOOLS="$tools"
           fi
 
-          # iai-callgrind stores the named baseline under target/iai for the next step in this same job
+          # Gungraun stores the named baseline under target/gungraun for the next step in this same job
           git checkout --force "${{ steps.refs.outputs.base-ref }}"
           cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind -- --save-baseline=base --save-summary=json
 
@@ -200,10 +200,10 @@ jobs:
           callgrind_args='${{ steps.investigation.outputs.callgrind-args }}'
           tools='${{ steps.investigation.outputs.tools }}'
           if [[ -n "$callgrind_args" ]]; then
-            export IAI_CALLGRIND_CALLGRIND_ARGS="$callgrind_args"
+            export GUNGRAUN_CALLGRIND_ARGS="$callgrind_args"
           fi
           if [[ -n "$tools" ]]; then
-            export IAI_CALLGRIND_TOOLS="$tools"
+            export GUNGRAUN_TOOLS="$tools"
           fi
 
           # the head run loads the saved base baseline and emits JSON summaries with base-versus-head deltas
@@ -219,13 +219,13 @@ jobs:
           flamegraphs='${{ steps.investigation.outputs.flamegraphs }}'
           tools='${{ steps.investigation.outputs.tools }}'
           if [[ -n "$callgrind_args" ]]; then
-            export IAI_CALLGRIND_CALLGRIND_ARGS="$callgrind_args"
+            export GUNGRAUN_CALLGRIND_ARGS="$callgrind_args"
           fi
           if [[ -n "$flamegraphs" ]]; then
             export O_SFU_CALLGRIND_FLAMEGRAPHS="$flamegraphs"
           fi
           if [[ -n "$tools" ]]; then
-            export IAI_CALLGRIND_TOOLS="$tools"
+            export GUNGRAUN_TOOLS="$tools"
           fi
 
           # this target is diagnostic only
@@ -239,7 +239,7 @@ jobs:
         run: |
           # collect summaries even after failures so the PR comment and artifact show what happened
           mkdir -p performance-artifacts
-          mapfile -t summary_files < <(find target/iai -type f -name '*.json' | sort)
+          mapfile -t summary_files < <(find target/gungraun -type f -name '*.json' | sort)
           if ((${#summary_files[@]})); then
             jq -s '.' "${summary_files[@]}" > performance-artifacts/callgrind-summary.json
           else
@@ -264,10 +264,10 @@ jobs:
         # actions/upload-artifact v4
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          # keep the raw iai-callgrind output available for local inspection when the summary is not enough
+          # keep the raw Gungraun output available for local inspection when the summary is not enough
           name: packet-loop-callgrind-${{ github.run_id }}
           path: |
-            target/iai/**
+            target/gungraun/**
             performance-artifacts/callgrind-summary.json
             performance-artifacts/callgrind-refs.env
           if-no-files-found: warn
