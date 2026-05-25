@@ -31,14 +31,11 @@ use std::time::Instant;
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{MediaKind, Mid, Pt, Rid};
 
-use super::{
-    super::types::{ConsumerPacketGateRequest, RouteSourceKind},
-    remote_source, selected_rid,
-};
+use super::{super::types::RouteSourceKind, remote_source, selected_rid};
 use crate::runtime::{
     media_transport::{
         TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportResult,
-        TransportSessionKey,
+        TransportSessionKey, TransportSourceKey,
     },
     rtc_engine::{
         commands::{ConsumerPacketGateCommand, RemoteSourceControl},
@@ -138,15 +135,13 @@ fn consumer_packet_gate_for_source(
 pub(in crate::runtime::rtc_engine::worker::handlers::media) fn ensure_route_source_registered(
     state: &mut PacketLoopState,
     route_owner_session_key: &TransportSessionKey,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    source: &TransportSourceKey,
     remote_source_control: Option<RemoteSourceControl>,
 ) -> Result<RouteSourceKind, TransportAdapterError> {
     ensure_route_source(
         state,
         route_owner_session_key,
-        source_session_key,
-        source_transport_media_id,
+        source,
         RouteSourceAccess::Register(remote_source_control),
     )
 }
@@ -166,14 +161,12 @@ pub(in crate::runtime::rtc_engine::worker::handlers::media) fn ensure_route_sour
 pub(in crate::runtime::rtc_engine::worker::handlers::media) fn ensure_existing_route_source(
     state: &mut PacketLoopState,
     route_owner_session_key: &TransportSessionKey,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    source: &TransportSourceKey,
 ) -> Result<RouteSourceKind, TransportAdapterError> {
     ensure_route_source(
         state,
         route_owner_session_key,
-        source_session_key,
-        source_transport_media_id,
+        source,
         RouteSourceAccess::Existing,
     )
 }
@@ -371,14 +364,14 @@ pub(in crate::runtime::rtc_engine::worker::handlers::media) fn owned_local_produ
 /// returns `TransportUnavailable` when the producer or route entry is gone
 pub(super) fn worker_set_producer_active(
     state: &mut PacketLoopState,
-    session_key: &TransportSessionKey,
-    transport_media_id: TransportMediaId,
+    source: &TransportSourceKey,
     active: bool,
 ) -> Result<(), TransportAdapterError> {
-    ensure_owned_local_producer_mid(state, session_key, transport_media_id)?;
+    let source_transport_media_id = source.transport_media_id();
+    ensure_owned_local_producer_mid(state, source.session_key(), source_transport_media_id)?;
     let route_entry = state
         .media_route_index
-        .get_mut(&transport_media_id)
+        .get_mut(&source_transport_media_id)
         .ok_or(TransportAdapterError::TransportUnavailable)?;
     route_entry.source_active = active;
     Ok(())
@@ -423,15 +416,16 @@ pub(super) fn worker_set_consumer_active(
 /// destination is gone
 pub(super) fn worker_set_consumer_packet_gate(
     state: &mut PacketLoopState,
-    request: ConsumerPacketGateRequest<'_>,
+    route: &TransportConsumerRoute,
+    packet_gate: PacketLayerGate,
     now: Instant,
 ) -> Result<(), TransportAdapterError> {
     if update_consumer_route(
         state,
-        request.route,
-        ConsumerRouteMutation::PacketGate(request.packet_gate, now),
+        route,
+        ConsumerRouteMutation::PacketGate(packet_gate, now),
     )? {
-        refresh_source_packet_gate(state, request.route.source_transport_media_id());
+        refresh_source_packet_gate(state, route.source_transport_media_id());
     }
     Ok(())
 }
@@ -444,11 +438,11 @@ pub(super) fn worker_set_consumer_packet_gate(
 /// destination gate changed
 pub(super) fn worker_set_consumer_packet_gates(
     state: &mut PacketLoopState,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    source: &TransportSourceKey,
     updates: Vec<ConsumerPacketGateCommand>,
     now: Instant,
 ) -> Vec<TransportResult<()>> {
+    let source_transport_media_id = source.transport_media_id();
     let mut route_changed = false;
     let mut results = Vec::with_capacity(updates.len());
     for update in updates {
@@ -456,8 +450,7 @@ pub(super) fn worker_set_consumer_packet_gates(
         let route = TransportConsumerRoute::new(
             consumer_session_key,
             consumer_transport_media_id,
-            source_session_key.clone(),
-            source_transport_media_id,
+            source.clone(),
         );
         match update_consumer_route(
             state,
@@ -516,14 +509,8 @@ fn update_consumer_route(
 ) -> Result<bool, TransportAdapterError> {
     let consumer_session_key = route.consumer_session_key();
     let consumer_transport_media_id = route.consumer_transport_media_id();
-    let source_session_key = route.source_session_key();
     let source_transport_media_id = route.source_transport_media_id();
-    ensure_existing_route_source(
-        state,
-        consumer_session_key,
-        source_session_key,
-        source_transport_media_id,
-    )?;
+    ensure_existing_route_source(state, consumer_session_key, route.source())?;
     let (active, packet_gate_update) = match mutation {
         ConsumerRouteMutation::Active(active) => (Some(active), None),
         ConsumerRouteMutation::PacketGate(packet_gate, now) => (
@@ -608,10 +595,11 @@ pub(in crate::runtime::rtc_engine::worker::handlers::media) fn packet_gate_rid(
 fn ensure_route_source(
     state: &mut PacketLoopState,
     route_owner_session_key: &TransportSessionKey,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    source: &TransportSourceKey,
     access: RouteSourceAccess,
 ) -> Result<RouteSourceKind, TransportAdapterError> {
+    let source_session_key = source.session_key();
+    let source_transport_media_id = source.transport_media_id();
     if source_session_key.media_worker_id() == route_owner_session_key.media_worker_id() {
         ensure_owned_local_producer_mid(state, source_session_key, source_transport_media_id)?;
         return Ok(RouteSourceKind::Local);
@@ -630,11 +618,8 @@ fn ensure_route_source(
             let Some(remote_source_control) = remote_source_control else {
                 return Err(TransportAdapterError::InvalidInput);
             };
-            let _previous_registration = state.register_remote_source(
-                source_transport_media_id,
-                source_session_key,
-                remote_source_control,
-            )?;
+            let _previous_registration =
+                state.register_remote_source(source, remote_source_control)?;
             Ok(RouteSourceKind::Remote)
         }
     }

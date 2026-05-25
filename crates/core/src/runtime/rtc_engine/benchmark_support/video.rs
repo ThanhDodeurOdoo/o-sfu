@@ -18,7 +18,7 @@ use super::super::{
 };
 use crate::runtime::{
     UserId,
-    media_transport::{TransportMediaId, TransportSessionKey},
+    media_transport::{TransportMediaId, TransportSessionKey, TransportSourceKey},
     metrics::{RtcMetricsRecorder, RuntimeMetrics},
 };
 
@@ -56,9 +56,9 @@ impl RidReadinessBenchFixture {
         let metrics = RuntimeMetrics::default();
         let rtc_metrics = metrics.register_rtc_worker();
         let (control_tx, control_rx) = mpsc::channel(8);
+        let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
         let _ = state.register_remote_source(
-            source_transport_media_id,
-            &source_session,
+            &source,
             RemoteSourceControl::with_metrics(
                 control_tx,
                 RelayTargetId::new(1),
@@ -133,9 +133,9 @@ impl KeyframeCoalescingBenchFixture {
         let metrics = RuntimeMetrics::default();
         let rtc_metrics = metrics.register_rtc_worker();
         let (control_tx, control_rx) = mpsc::channel(1);
+        let source = TransportSourceKey::new(source_session, source_transport_media_id);
         let _ = state.register_remote_source(
-            source_transport_media_id,
-            &source_session,
+            &source,
             RemoteSourceControl::with_metrics(
                 control_tx,
                 RelayTargetId::new(2),

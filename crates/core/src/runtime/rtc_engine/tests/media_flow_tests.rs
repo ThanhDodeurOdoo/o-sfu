@@ -482,13 +482,9 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
     let Some(consumer_media_id) = consumer_media_id.ok() else {
         return;
     };
+    let source = TransportSourceKey::new(producer_session_key.clone(), source_media_id);
 
-    assert!(
-        adapter
-            .set_producer_active(&producer_session_key, source_media_id, false)
-            .await
-            .is_ok()
-    );
+    assert!(adapter.set_producer_active(&source, false).await.is_ok());
     assert!(
         adapter
             .set_consumer_active(
@@ -740,10 +736,11 @@ async fn rtc_relay_route_api_registers_and_removes_target_mailboxes() {
     let Some(source_transport_media_id) = source_transport_media_id.ok() else {
         return;
     };
+    let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
 
     assert!(
         source_adapter
-            .activate_relay_route(&source_session, source_transport_media_id, &target_adapter,)
+            .activate_relay_route(&source, &target_adapter)
             .await
             .is_ok()
     );
@@ -762,12 +759,7 @@ async fn rtc_relay_route_api_registers_and_removes_target_mailboxes() {
 
     assert!(
         source_adapter
-            .apply_relay_target_activity(
-                &source_session,
-                source_transport_media_id,
-                &target_adapter,
-                true,
-            )
+            .apply_relay_target_activity(&source, &target_adapter, true)
             .await
             .is_ok()
     );

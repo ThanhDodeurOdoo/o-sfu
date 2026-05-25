@@ -15,31 +15,36 @@ use super::{
         route_control::KeyframeRequestDecision, state::PacketLoopState,
     },
     control::{ensure_existing_route_source, owned_local_producer_mid, packet_gate_rid},
-    types::{RemoteKeyframeRequest, RouteSourceKind},
+    types::RouteSourceKind,
 };
 use crate::runtime::{
     media_transport::{
         TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportSessionKey,
+        TransportSourceKey,
     },
     metrics::{RtcRouteControlMetrics, RtcRouteControlOutcome, RuntimeMetrics},
+    rtc_engine::relay_registry::RelayTargetId,
 };
 
-pub fn respond_request_remote_keyframe(
+pub(in crate::runtime::rtc_engine::worker::handlers::media) fn worker_request_remote_keyframe(
     state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
-    request: &RemoteKeyframeRequest<'_>,
+    source: &TransportSourceKey,
+    target_id: RelayTargetId,
+    rid: Option<Rid>,
+    kind: KeyframeRequestKind,
 ) {
-    if !state.is_relay_target_active(request.source_transport_media_id, request.target_id) {
+    if !state.is_relay_target_active(source.transport_media_id(), target_id) {
         metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
         return;
     }
     request_keyframe_for_source(
         state,
         metrics,
-        request.source_session_key,
-        request.source_transport_media_id,
-        request.rid,
-        request.kind,
+        source.session_key(),
+        source.transport_media_id(),
+        rid,
+        kind,
         Instant::now(),
     );
 }
@@ -117,12 +122,7 @@ pub(in crate::runtime::rtc_engine::worker::handlers::media) fn worker_request_co
     let consumer_transport_media_id = route.consumer_transport_media_id();
     let source_session_key = route.source_session_key();
     let source_transport_media_id = route.source_transport_media_id();
-    let route_source = ensure_existing_route_source(
-        state,
-        consumer_session_key,
-        source_session_key,
-        source_transport_media_id,
-    )?;
+    let route_source = ensure_existing_route_source(state, consumer_session_key, route.source())?;
     match state.media_handle(consumer_transport_media_id) {
         Some(RegisteredMediaHandle::Consumer {
             session_key,
@@ -167,7 +167,7 @@ pub(in crate::runtime::rtc_engine::worker::handlers::media) fn worker_request_co
                 .remote_source_registration(source_transport_media_id)
                 .map(|registration| {
                     (
-                        registration.source_session_key().clone(),
+                        registration.source().clone(),
                         registration.source_control().clone(),
                     )
                 })
@@ -182,7 +182,6 @@ pub(in crate::runtime::rtc_engine::worker::handlers::media) fn worker_request_co
                 KeyframeRequestDecision::Forward => {
                     source_control.request_keyframe(
                         &source_session_key,
-                        source_transport_media_id,
                         destination_rid,
                         KeyframeRequestKind::Pli,
                     );

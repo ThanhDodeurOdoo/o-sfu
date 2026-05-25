@@ -26,7 +26,7 @@ use crate::{
     runtime::{
         UserId,
         diagnostics::DiagnosticsEventData,
-        media_transport::{MediaTransport, ProducerActivity},
+        media_transport::{MediaTransport, ProducerActivity, TransportSourceKey},
         source_model::{SourceSubscriptionIntent, UserStreamId},
     },
 };
@@ -122,13 +122,11 @@ impl RoomUserOperation<'_> {
         }) else {
             return PublicationActivityOutcome::StalePublication;
         };
+        let source =
+            TransportSourceKey::new(transport_user_key.clone(), outcome.transport_media_id);
         let transport_update = if self
             .media_transport()
-            .set_producer_active(
-                &transport_user_key,
-                outcome.transport_media_id,
-                ProducerActivity::from_active(outcome.active),
-            )
+            .set_producer_active(&source, ProducerActivity::from_active(outcome.active))
             .await
             .is_err()
         {

@@ -247,8 +247,7 @@ fn handle_media_command(
         RtcWorkerCommand::AddSendMedia {
             consumer_session_key,
             media_kind,
-            source_session_key,
-            source_transport_media_id,
+            source,
             remote_source_control,
             consumer_rtp_parameters,
             active,
@@ -258,8 +257,7 @@ fn handle_media_command(
             media::AddSendMediaRequest {
                 consumer_session_key: &consumer_session_key,
                 media_kind,
-                source_session_key: &source_session_key,
-                source_transport_media_id,
+                source: &source,
                 remote_source_control,
                 consumer_rtp_parameters: &consumer_rtp_parameters,
                 active,
@@ -281,132 +279,13 @@ fn handle_media_route_control_command(
     command: RtcMediaControlCommand,
 ) {
     match command {
-        RtcMediaControlCommand::AddRelayTarget { .. }
-        | RtcMediaControlCommand::RemoveRelayTarget { .. }
-        | RtcMediaControlCommand::SetRelayTargetActive { .. } => {
-            handle_relay_route_control_command(state, command);
+        RtcMediaControlCommand::Apply { request, response } => {
+            media::apply_route_control_request(state, metrics, request, now, response);
         }
-        RtcMediaControlCommand::RequestRemoteKeyframe {
-            source_session_key,
-            source_transport_media_id,
-            target_id,
-            rid,
-            kind,
-        } => media::respond_request_remote_keyframe(
-            state,
-            metrics,
-            &media::RemoteKeyframeRequest {
-                source_session_key: &source_session_key,
-                source_transport_media_id,
-                target_id,
-                rid,
-                kind,
-            },
-        ),
-        RtcMediaControlCommand::SetRemoteSourcePacketGate {
-            source_session_key,
-            source_transport_media_id,
-            target_id,
-            packet_gate,
-        } => media::respond_set_remote_source_packet_gate(
-            state,
-            &source_session_key,
-            source_transport_media_id,
-            target_id,
-            packet_gate,
-        ),
-        RtcMediaControlCommand::SetProducerActive {
-            session_key,
-            transport_media_id,
-            active,
-            response,
-        } => media::respond_set_producer_active(
-            state,
-            &session_key,
-            transport_media_id,
-            active,
-            response,
-        ),
-        RtcMediaControlCommand::SetConsumerActive {
-            route,
-            active,
-            response,
-        } => media::respond_set_consumer_active(state, &route, active, response),
-        RtcMediaControlCommand::SetConsumerPacketGate {
-            route,
-            packet_gate,
-            response,
-        } => media::respond_set_consumer_packet_gate(
-            state,
-            media::ConsumerPacketGateRequest {
-                route: &route,
-                packet_gate,
-            },
-            now,
-            response,
-        ),
         RtcMediaControlCommand::SetConsumerPacketGateBatch {
-            source_session_key,
-            source_transport_media_id,
+            source,
             updates,
             response,
-        } => media::respond_set_consumer_packet_gates(
-            state,
-            &source_session_key,
-            source_transport_media_id,
-            updates,
-            now,
-            response,
-        ),
-        RtcMediaControlCommand::RequestConsumerKeyframe { route, response } => {
-            media::respond_request_consumer_keyframe(state, metrics, &route, response);
-        }
-    }
-}
-
-fn handle_relay_route_control_command(
-    state: &mut PacketLoopState,
-    command: RtcMediaControlCommand,
-) {
-    match command {
-        RtcMediaControlCommand::AddRelayTarget {
-            source_session_key,
-            source_transport_media_id,
-            target_id,
-            target,
-            response,
-        } => media::respond_add_relay_target(
-            state,
-            &source_session_key,
-            source_transport_media_id,
-            target_id,
-            target,
-            response,
-        ),
-        RtcMediaControlCommand::RemoveRelayTarget {
-            source_transport_media_id,
-            target_id,
-            response,
-        } => media::respond_remove_relay_target(
-            state,
-            source_transport_media_id,
-            target_id,
-            response,
-        ),
-        RtcMediaControlCommand::SetRelayTargetActive {
-            source_session_key,
-            source_transport_media_id,
-            target_id,
-            active,
-            response,
-        } => media::respond_set_relay_target_active(
-            state,
-            &source_session_key,
-            source_transport_media_id,
-            target_id,
-            active,
-            response,
-        ),
-        _ => {}
+        } => media::respond_set_consumer_packet_gates(state, &source, updates, now, response),
     }
 }

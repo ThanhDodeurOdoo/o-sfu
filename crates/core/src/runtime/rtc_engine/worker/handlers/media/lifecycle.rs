@@ -504,12 +504,13 @@ fn worker_add_send_media(
     let AddSendMediaRequest {
         consumer_session_key,
         media_kind,
-        source_session_key,
-        source_transport_media_id,
+        source,
         remote_source_control,
         consumer_rtp_parameters,
         active,
     } = request;
+    let source_session_key = source.session_key();
+    let source_transport_media_id = source.transport_media_id();
     let remote_source_rollback = RemoteSourceRollback::capture(
         state,
         source_session_key.media_worker_id() != consumer_session_key.media_worker_id(),
@@ -518,8 +519,7 @@ fn worker_add_send_media(
     let route_source = match ensure_route_source_registered(
         state,
         consumer_session_key,
-        source_session_key,
-        source_transport_media_id,
+        source,
         remote_source_control,
     ) {
         Ok(route_source) => route_source,

@@ -41,7 +41,7 @@ use crate::runtime::{
     RoomInstanceId,
     media_transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, TransportAdapterError,
-        TransportMediaId, TransportSessionKey,
+        TransportMediaId, TransportSessionKey, TransportSourceKey,
     },
 };
 
@@ -93,8 +93,8 @@ impl RegisteredMediaHandle {
 /// for keyframe requests and relay-layer gates
 #[derive(Debug, Clone)]
 pub(super) struct RemoteSourceRegistration {
-    /// session that owns the producer on another worker
-    source_session_key: TransportSessionKey,
+    /// source identity owned by the producer worker
+    source: TransportSourceKey,
     /// best-effort command path back to the producer worker
     source_control: RemoteSourceControl,
     /// latest source gate still waiting for source-worker command acceptance
@@ -142,9 +142,9 @@ impl DecoderRefreshCodec {
 
 impl RemoteSourceRegistration {
     /// create a remote-source entry for one source owner and control handle
-    fn new(source_session_key: TransportSessionKey, source_control: RemoteSourceControl) -> Self {
+    fn new(source: TransportSourceKey, source_control: RemoteSourceControl) -> Self {
         Self {
-            source_session_key,
+            source,
             source_control,
             pending_packet_gate: None,
         }
@@ -152,7 +152,11 @@ impl RemoteSourceRegistration {
 
     /// returns the session that owns the remote producer
     pub(super) fn source_session_key(&self) -> &TransportSessionKey {
-        &self.source_session_key
+        self.source.session_key()
+    }
+
+    pub(super) fn source(&self) -> &TransportSourceKey {
+        &self.source
     }
 
     /// returns the command handle used to reach the remote producer worker
@@ -165,32 +169,26 @@ impl RemoteSourceRegistration {
         self.pending_packet_gate
     }
 
-    fn publish_packet_gate(
-        &mut self,
-        source_transport_media_id: TransportMediaId,
-        packet_gate: PacketLayerGate,
-    ) {
-        if self.source_control.set_packet_gate(
-            &self.source_session_key,
-            source_transport_media_id,
-            packet_gate,
-        ) {
+    fn publish_packet_gate(&mut self, packet_gate: PacketLayerGate) {
+        if self
+            .source_control
+            .set_packet_gate(&self.source, packet_gate)
+        {
             self.pending_packet_gate = None;
         } else {
             self.pending_packet_gate = Some(packet_gate);
         }
     }
 
-    fn flush_pending_packet_gate(&mut self, source_transport_media_id: TransportMediaId) {
+    fn flush_pending_packet_gate(&mut self) {
         let Some(packet_gate) = self.pending_packet_gate else {
             return;
         };
         self.source_control.record_packet_gate_retry();
-        if self.source_control.set_packet_gate(
-            &self.source_session_key,
-            source_transport_media_id,
-            packet_gate,
-        ) {
+        if self
+            .source_control
+            .set_packet_gate(&self.source, packet_gate)
+        {
             self.pending_packet_gate = None;
             self.source_control.record_packet_gate_flushed();
         }
@@ -483,16 +481,13 @@ impl PacketLoopState {
     /// different remote source session
     pub(super) fn register_remote_source(
         &mut self,
-        source_transport_media_id: TransportMediaId,
-        source_session_key: &TransportSessionKey,
+        source: &TransportSourceKey,
         source_control: RemoteSourceControl,
     ) -> Result<Option<RemoteSourceRegistration>, TransportAdapterError> {
-        let registration =
-            RemoteSourceRegistration::new(source_session_key.clone(), source_control);
+        let source_transport_media_id = source.transport_media_id();
+        let registration = RemoteSourceRegistration::new(source.clone(), source_control);
         match self.remote_source_registry.entry(source_transport_media_id) {
-            Entry::Occupied(mut entry)
-                if entry.get().source_session_key() == source_session_key =>
-            {
+            Entry::Occupied(mut entry) if entry.get().source() == source => {
                 Ok(Some(entry.insert(registration)))
             }
             Entry::Occupied(_entry) => Err(TransportAdapterError::InvalidInput),
@@ -542,13 +537,13 @@ impl PacketLoopState {
             .remote_source_registry
             .get_mut(&source_transport_media_id)
         {
-            registration.publish_packet_gate(source_transport_media_id, packet_gate);
+            registration.publish_packet_gate(packet_gate);
         }
     }
 
     pub(super) fn flush_pending_remote_source_packet_gates(&mut self) {
-        for (source_transport_media_id, registration) in &mut self.remote_source_registry {
-            registration.flush_pending_packet_gate(*source_transport_media_id);
+        for registration in self.remote_source_registry.values_mut() {
+            registration.flush_pending_packet_gate();
         }
     }
 

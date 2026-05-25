@@ -85,7 +85,7 @@ use crate::{
         ConnectionId, UserId,
         media_transport::{
             MediaTransport, TransportAdapterError, TransportMediaId, TransportRelayRouteAction,
-            TransportRelayRouteEffect, TransportSessionKey,
+            TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey,
         },
         metrics::TransportCleanupFailureKind::{
             self, QueueFull, RetryExhausted, Shutdown, Terminal,
@@ -553,8 +553,7 @@ impl Room {
                 route,
             } => {
                 let effect = TransportRelayRouteEffect {
-                    source_session_key: source_session_key.clone(),
-                    source_transport_media_id: route.source_media,
+                    source: TransportSourceKey::new(source_session_key.clone(), route.source_media),
                     target_media_worker_id: route.target_worker,
                     action: TransportRelayRouteAction::Release,
                 };

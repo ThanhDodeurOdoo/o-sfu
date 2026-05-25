@@ -129,7 +129,7 @@ pub mod transport {
             TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,
             TransportPlacementPressureSnapshot, TransportRelayRouteAction,
             TransportRelayRouteEffect, TransportResult, TransportSessionHealth,
-            TransportSessionKey, TransportWorkerPressureSnapshot,
+            TransportSessionKey, TransportSourceKey, TransportWorkerPressureSnapshot,
         },
     };
 }

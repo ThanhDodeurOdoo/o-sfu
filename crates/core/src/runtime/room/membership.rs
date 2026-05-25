@@ -45,7 +45,7 @@ use crate::{
     runtime::{
         ConnectionId, UserId, UserInfo, UserPermissions,
         diagnostics::DiagnosticsEventData,
-        media_transport::{MediaTransport, TransportConsumerRoute},
+        media_transport::{MediaTransport, TransportConsumerRoute, TransportSourceKey},
     },
 };
 
@@ -773,8 +773,13 @@ impl RoomUserOperation<'_> {
             let route = TransportConsumerRoute::new(
                 self.transport_user_key(),
                 target.consumer_media,
-                room.transport_user_key(&target.producer_user_id, target.producer_connection_id),
-                target.source_media,
+                TransportSourceKey::new(
+                    room.transport_user_key(
+                        &target.producer_user_id,
+                        target.producer_connection_id,
+                    ),
+                    target.source_media,
+                ),
             );
             if self
                 .media_transport()

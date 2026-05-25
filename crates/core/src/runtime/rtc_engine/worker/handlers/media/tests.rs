@@ -25,11 +25,9 @@ use str0m::{
 use tokio::sync::{mpsc, oneshot};
 
 use super::{
-    AddSendMediaRequest, ConsumerPacketGateRequest, RemoteKeyframeRequest,
-    drain_due_rid_keyframe_refreshes, observe_source_rid_readiness, refresh_source_packet_gate,
-    request_keyframe_for_source, respond_add_send_media, respond_remove_media,
-    respond_request_remote_keyframe, respond_set_consumer_packet_gate,
-    respond_set_consumer_packet_gates, respond_set_remote_source_packet_gate,
+    AddSendMediaRequest, apply_route_control_request, drain_due_rid_keyframe_refreshes,
+    observe_source_rid_readiness, refresh_source_packet_gate, request_keyframe_for_source,
+    respond_add_send_media, respond_remove_media, respond_set_consumer_packet_gates,
 };
 use crate::{
     Bitrate, MediaCodecFlags,
@@ -37,12 +35,13 @@ use crate::{
         UserId,
         media_transport::{
             TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportSessionKey,
+            TransportSourceKey,
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
         rtc_engine::{
             bitrate::BitrateRegistry,
             bootstrap,
-            commands::{ConsumerPacketGateCommand, RemoteSourceControl},
+            commands::{ConsumerPacketGateCommand, RemoteSourceControl, RouteControlRequest},
             media_registry::{RegisteredMediaHandle, RemoteSourceRegistration},
             relay_registry::{RelayPacketMailbox, RelayTargetId},
             route_control::{KeyframeRequestDecision, PacketLayerGate},
@@ -62,16 +61,17 @@ fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
     let source_transport_media_id =
         prepare_source_session(&mut state, &source_session, source_mid, 66_666);
 
-    respond_request_remote_keyframe(
+    apply_route_control_request(
         &mut state,
         &metrics,
-        &RemoteKeyframeRequest {
-            source_session_key: &source_session,
-            source_transport_media_id,
+        RouteControlRequest::RequestRemoteKeyframe {
+            source: TransportSourceKey::new(source_session.clone(), source_transport_media_id),
             target_id: RelayTargetId::new(7),
             rid: None,
             kind: KeyframeRequestKind::Pli,
         },
+        Instant::now(),
+        None,
     );
 
     assert!(drain_ready_sessions(&mut state).is_empty());
@@ -95,27 +95,29 @@ fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
     state.add_relay_target(source_transport_media_id, relay_target_id, mailbox);
     state.set_relay_target_active(source_transport_media_id, relay_target_id, true);
 
-    respond_request_remote_keyframe(
+    apply_route_control_request(
         &mut state,
         &metrics,
-        &RemoteKeyframeRequest {
-            source_session_key: &source_session,
-            source_transport_media_id,
+        RouteControlRequest::RequestRemoteKeyframe {
+            source: TransportSourceKey::new(source_session.clone(), source_transport_media_id),
             target_id: relay_target_id,
             rid: None,
             kind: KeyframeRequestKind::Pli,
         },
+        Instant::now(),
+        None,
     );
-    respond_request_remote_keyframe(
+    apply_route_control_request(
         &mut state,
         &metrics,
-        &RemoteKeyframeRequest {
-            source_session_key: &source_session,
-            source_transport_media_id,
+        RouteControlRequest::RequestRemoteKeyframe {
+            source: TransportSourceKey::new(source_session.clone(), source_transport_media_id),
             target_id: relay_target_id,
             rid: None,
             kind: KeyframeRequestKind::Fir,
         },
+        Instant::now(),
+        None,
     );
 
     assert_eq!(
@@ -255,18 +257,18 @@ fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate(
     let route = TransportConsumerRoute::new(
         first_consumer_session.clone(),
         first_consumer_transport_media_id,
-        source_session.clone(),
-        source_transport_media_id,
+        TransportSourceKey::new(source_session.clone(), source_transport_media_id),
     );
     let (response_tx, response_rx) = oneshot::channel();
-    respond_set_consumer_packet_gate(
+    apply_route_control_request(
         &mut state,
-        ConsumerPacketGateRequest {
-            route: &route,
+        &RuntimeMetrics::default(),
+        RouteControlRequest::SetConsumerPacketGate {
+            route,
             packet_gate: PacketLayerGate::Rid("lo".into()),
         },
         observed_at + Duration::from_millis(20),
-        response_tx,
+        Some(response_tx),
     );
 
     assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
@@ -305,14 +307,15 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
 
     let consumer_route = route.consumer_route();
     let (live_response_tx, live_response_rx) = oneshot::channel();
-    respond_set_consumer_packet_gate(
+    apply_route_control_request(
         &mut route.state,
-        ConsumerPacketGateRequest {
-            route: &consumer_route,
+        &RuntimeMetrics::default(),
+        RouteControlRequest::SetConsumerPacketGate {
+            route: consumer_route.clone(),
             packet_gate: PacketLayerGate::Rid(selected_rid),
         },
         observed_at + Duration::from_millis(500),
-        live_response_tx,
+        Some(live_response_tx),
     );
 
     assert_eq!(live_response_rx.blocking_recv(), Ok(Ok(())));
@@ -325,14 +328,15 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
     );
 
     let (stale_response_tx, stale_response_rx) = oneshot::channel();
-    respond_set_consumer_packet_gate(
+    apply_route_control_request(
         &mut route.state,
-        ConsumerPacketGateRequest {
-            route: &consumer_route,
+        &RuntimeMetrics::default(),
+        RouteControlRequest::SetConsumerPacketGate {
+            route: consumer_route,
             packet_gate: PacketLayerGate::Rid(selected_rid),
         },
         observed_at + Duration::from_secs(3),
-        stale_response_tx,
+        Some(stale_response_tx),
     );
 
     assert_eq!(stale_response_rx.blocking_recv(), Ok(Ok(())));
@@ -662,11 +666,11 @@ fn batched_consumer_packet_gates_keep_remote_relay_open_during_rid_bootstrap() {
     let mut state = PacketLoopState::default();
     let source_transport_media_id = TransportMediaId::new(41);
     let (command_tx, mut command_rx) = mpsc::channel(4);
+    let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
     assert!(
         state
             .register_remote_source(
-                source_transport_media_id,
-                &source_session,
+                &source,
                 RemoteSourceControl::new(command_tx, RelayTargetId::new(16)),
             )
             .is_ok()
@@ -687,8 +691,7 @@ fn batched_consumer_packet_gates_keep_remote_relay_open_during_rid_bootstrap() {
     let (response_tx, response_rx) = oneshot::channel();
     respond_set_consumer_packet_gates(
         &mut state,
-        &source_session,
-        source_transport_media_id,
+        &source,
         vec![
             ConsumerPacketGateCommand::new(
                 first_consumer_session,
@@ -893,14 +896,14 @@ fn add_send_media_rolls_back_remote_source_registration_when_consumer_session_is
     let remote_source_control = RemoteSourceControl::new(command_tx, RelayTargetId::new(10));
     let consumer_rtp_parameters = RouterRtpParameters::new(vec![], vec![], vec![]);
     let (response_tx, response_rx) = oneshot::channel();
+    let source = TransportSourceKey::new(source_session, source_transport_media_id);
 
     respond_add_send_media(
         &mut state,
         AddSendMediaRequest {
             consumer_session_key: &consumer_session,
             media_kind: MediaKind::Video,
-            source_session_key: &source_session,
-            source_transport_media_id,
+            source: &source,
             remote_source_control: Some(remote_source_control),
             consumer_rtp_parameters: &consumer_rtp_parameters,
             active: true,
@@ -955,14 +958,14 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
     )
     .with_mid(consumer_mid.to_string());
     let (response_tx, response_rx) = oneshot::channel();
+    let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
 
     respond_add_send_media(
         &mut state,
         AddSendMediaRequest {
             consumer_session_key: &consumer_session,
             media_kind: MediaKind::Video,
-            source_session_key: &source_session,
-            source_transport_media_id,
+            source: &source,
             remote_source_control: None,
             consumer_rtp_parameters: &consumer_rtp_parameters,
             active: true,
@@ -1046,14 +1049,14 @@ fn add_send_media_uses_supplied_time_for_initial_selected_rid_gate() {
     )
     .with_mid(consumer_mid.to_string());
     let (response_tx, response_rx) = oneshot::channel();
+    let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
 
     respond_add_send_media(
         &mut state,
         AddSendMediaRequest {
             consumer_session_key: &consumer_session,
             media_kind: MediaKind::Video,
-            source_session_key: &source_session,
-            source_transport_media_id,
+            source: &source,
             remote_source_control: None,
             consumer_rtp_parameters: &consumer_rtp_parameters,
             active: true,
@@ -1207,12 +1210,16 @@ fn remote_source_packet_gate_ignores_wrong_source_owner() {
     let source_transport_media_id =
         prepare_source_session(&mut state, &source_session, source_mid, 101_010);
 
-    respond_set_remote_source_packet_gate(
+    apply_route_control_request(
         &mut state,
-        &wrong_session,
-        source_transport_media_id,
-        RelayTargetId::new(9),
-        PacketLayerGate::Rid("hi".into()),
+        &RuntimeMetrics::default(),
+        RouteControlRequest::SetRemoteSourcePacketGate {
+            source: TransportSourceKey::new(wrong_session, source_transport_media_id),
+            target_id: RelayTargetId::new(9),
+            packet_gate: PacketLayerGate::Rid("hi".into()),
+        },
+        Instant::now(),
+        None,
     );
 
     assert_eq!(

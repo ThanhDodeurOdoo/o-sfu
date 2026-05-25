@@ -11,18 +11,20 @@ use str0m::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-use super::super::{
-    ConsumerPacketGateRequest, respond_request_consumer_keyframe, respond_set_consumer_packet_gate,
-};
+use super::super::apply_route_control_request;
 use crate::{
     Bitrate, MediaCodecFlags,
     runtime::{
         UserId,
-        media_transport::{TransportConsumerRoute, TransportMediaId, TransportSessionKey},
+        media_transport::{
+            TransportConsumerRoute, TransportMediaId, TransportSessionKey, TransportSourceKey,
+        },
         metrics::{RtcMetricsRecorder, RuntimeMetrics},
         rtc_engine::{
             bootstrap,
-            commands::{RemoteSourceControl, RtcMediaControlCommand, RtcWorkerCommand},
+            commands::{
+                RemoteSourceControl, RouteControlRequest, RtcMediaControlCommand, RtcWorkerCommand,
+            },
             media_registry::RegisteredMediaHandle,
             relay_registry::RelayTargetId,
             route_control::PacketLayerGate,
@@ -165,10 +167,15 @@ pub(super) fn request_consumer_keyframe(
     let route = TransportConsumerRoute::new(
         consumer_session.clone(),
         consumer_transport_media_id,
-        source_session.clone(),
-        source_transport_media_id,
+        TransportSourceKey::new(source_session.clone(), source_transport_media_id),
     );
-    respond_request_consumer_keyframe(state, metrics, &route, response_tx);
+    apply_route_control_request(
+        state,
+        metrics,
+        RouteControlRequest::RequestConsumerKeyframe { route },
+        Instant::now(),
+        Some(response_tx),
+    );
     assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
 }
 
@@ -195,11 +202,11 @@ pub(super) fn register_remote_source_with_metrics(
     rtc_metrics: Arc<RtcMetricsRecorder>,
 ) -> mpsc::Receiver<RtcWorkerCommand> {
     let (control_tx, control_rx) = mpsc::channel(1);
+    let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
     assert!(
         state
             .register_remote_source(
-                source_transport_media_id,
-                source_session,
+                &source,
                 RemoteSourceControl::with_metrics(control_tx, target_id, rtc_metrics),
             )
             .is_ok()
@@ -215,14 +222,17 @@ pub(super) fn register_saturated_remote_source(
     rtc_metrics: Arc<RtcMetricsRecorder>,
 ) -> mpsc::Receiver<RtcWorkerCommand> {
     let (control_tx, control_rx) = mpsc::channel(1);
+    let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
     assert!(
         control_tx
             .try_send(RtcWorkerCommand::MediaControl(
-                RtcMediaControlCommand::SetRemoteSourcePacketGate {
-                    source_session_key: source_session.clone(),
-                    source_transport_media_id,
-                    target_id,
-                    packet_gate: PacketLayerGate::Open,
+                RtcMediaControlCommand::Apply {
+                    request: RouteControlRequest::SetRemoteSourcePacketGate {
+                        source: source.clone(),
+                        target_id,
+                        packet_gate: PacketLayerGate::Open,
+                    },
+                    response: None,
                 },
             ))
             .is_ok()
@@ -230,8 +240,7 @@ pub(super) fn register_saturated_remote_source(
     assert!(
         state
             .register_remote_source(
-                source_transport_media_id,
-                source_session,
+                &source,
                 RemoteSourceControl::with_metrics(control_tx, target_id, rtc_metrics),
             )
             .is_ok()
@@ -248,14 +257,16 @@ pub(super) fn assert_remote_keyframe_command(
 ) {
     assert!(matches!(
         control_rx.try_recv().ok(),
-        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::RequestRemoteKeyframe {
-            source_session_key,
-            source_transport_media_id: forwarded_transport_media_id,
-            target_id: forwarded_target_id,
-            rid: forwarded_rid,
-            kind: KeyframeRequestKind::Pli,
-        })) if source_session_key == *source_session
-            && forwarded_transport_media_id == source_transport_media_id
+        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+            request: RouteControlRequest::RequestRemoteKeyframe {
+                source,
+                target_id: forwarded_target_id,
+                rid: forwarded_rid,
+                kind: KeyframeRequestKind::Pli,
+            },
+            response: None,
+        })) if source.session_key() == source_session
+            && source.transport_media_id() == source_transport_media_id
             && forwarded_target_id == target_id
             && forwarded_rid == rid
     ));
@@ -270,13 +281,15 @@ pub(super) fn assert_remote_packet_gate_command(
 ) {
     assert!(matches!(
         control_rx.try_recv().ok(),
-        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetRemoteSourcePacketGate {
-            source_session_key,
-            source_transport_media_id: forwarded_source_transport_media_id,
-            target_id: forwarded_target_id,
-            packet_gate: forwarded_packet_gate,
-        })) if source_session_key == *source_session
-            && forwarded_source_transport_media_id == source_transport_media_id
+        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+            request: RouteControlRequest::SetRemoteSourcePacketGate {
+                source,
+                target_id: forwarded_target_id,
+                packet_gate: forwarded_packet_gate,
+            },
+            response: None,
+        })) if source.session_key() == source_session
+            && source.transport_media_id() == source_transport_media_id
             && forwarded_target_id == target_id
             && forwarded_packet_gate == packet_gate
     ));
@@ -374,8 +387,7 @@ impl LocalVideoRoute {
         TransportConsumerRoute::new(
             self.consumer_session.clone(),
             self.consumer_transport_media_id,
-            self.source_session.clone(),
-            self.source_transport_media_id,
+            TransportSourceKey::new(self.source_session.clone(), self.source_transport_media_id),
         )
     }
 }
@@ -493,19 +505,19 @@ pub(super) fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
     let route = TransportConsumerRoute::new(
         consumer_session.clone(),
         consumer_transport_media_id,
-        source_session.clone(),
-        source_transport_media_id,
+        TransportSourceKey::new(source_session.clone(), source_transport_media_id),
     );
     let command_now = Instant::now();
     let (response_tx, response_rx) = oneshot::channel();
-    respond_set_consumer_packet_gate(
+    apply_route_control_request(
         &mut state,
-        ConsumerPacketGateRequest {
-            route: &route,
+        &metrics,
+        RouteControlRequest::SetConsumerPacketGate {
+            route,
             packet_gate: PacketLayerGate::Rid(selected_rid),
         },
         command_now,
-        response_tx,
+        Some(response_tx),
     );
     assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
     PendingSelectedRidRoute {

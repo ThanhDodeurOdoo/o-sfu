@@ -24,7 +24,7 @@ use crate::runtime::{
         SourcePolicySignal, SourcePolicyUpdateSubscription, TransportAdapterError,
         TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,
         TransportPlacementPressureSnapshot, TransportQualitySnapshot, TransportRelayRouteAction,
-        TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey,
+        TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey, TransportSourceKey,
         TransportWorkerPressureSnapshot,
     },
     rtc_engine::{RtcSendMediaSource, RtcWorker, client_rtp_capabilities_from_answer},
@@ -208,8 +208,7 @@ impl MediaTransport {
             };
             let key = ConsumerPacketGateBatchKey {
                 worker_index,
-                source_session_key: route.source_session_key().clone(),
-                source_transport_media_id: route.source_transport_media_id(),
+                source: route.source().clone(),
             };
             batches.entry(key).or_default().push(index);
         }
@@ -220,8 +219,7 @@ impl MediaTransport {
             let update_count = batch.len();
             let batch_results = worker
                 .set_consumer_packet_gates(
-                    &key.source_session_key,
-                    key.source_transport_media_id,
+                    &key.source,
                     batch.iter().filter_map(|index| updates.get(*index)),
                 )
                 .await
@@ -449,8 +447,7 @@ impl MediaTransport {
                 consumer_session_key,
                 signaling_to_str0m_media_kind(media_kind),
                 RtcSendMediaSource {
-                    source_session_key,
-                    source_transport_media_id: source_media_id,
+                    source: TransportSourceKey::new(source_session_key.clone(), source_media_id),
                     remote_source_control,
                 },
                 consumer_rtp_parameters,
@@ -468,12 +465,11 @@ impl MediaTransport {
 
     pub(super) async fn set_producer_active_on_worker(
         &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
+        source: &TransportSourceKey,
         activity: ProducerActivity,
     ) -> Result<(), TransportAdapterError> {
-        self.require_worker_for_user(session_key)?
-            .set_producer_active(session_key, transport_media_id, activity.is_active())
+        self.require_worker_for_user(source.session_key())?
+            .set_producer_active(source, activity.is_active())
             .await
     }
 
@@ -513,7 +509,7 @@ impl MediaTransport {
         &self,
         effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
-        let source_worker = self.require_worker_for_user(&effect.source_session_key)?;
+        let source_worker = self.require_worker_for_user(effect.source.session_key())?;
         let target_worker =
             self.require_worker_for_media_worker_id(effect.target_media_worker_id)?;
         if Arc::ptr_eq(&source_worker, &target_worker) {
@@ -522,17 +518,13 @@ impl MediaTransport {
         match effect.action {
             TransportRelayRouteAction::Install => {
                 source_worker
-                    .activate_relay_route(
-                        &effect.source_session_key,
-                        effect.source_transport_media_id,
-                        target_worker.as_ref(),
-                    )
+                    .activate_relay_route(&effect.source, target_worker.as_ref())
                     .await
             }
             TransportRelayRouteAction::Release => {
                 source_worker
                     .deactivate_relay_route(
-                        effect.source_transport_media_id,
+                        effect.source.transport_media_id(),
                         target_worker.as_ref(),
                     )
                     .await
@@ -540,8 +532,7 @@ impl MediaTransport {
             TransportRelayRouteAction::SetActivity(activity) => {
                 source_worker
                     .apply_relay_target_activity(
-                        &effect.source_session_key,
-                        effect.source_transport_media_id,
+                        &effect.source,
                         target_worker.as_ref(),
                         activity.is_active(),
                     )
@@ -667,6 +658,5 @@ fn signaling_to_str0m_media_kind(kind: MediaKind) -> Str0mMediaKind {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ConsumerPacketGateBatchKey {
     worker_index: usize,
-    source_session_key: TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    source: TransportSourceKey,
 }
