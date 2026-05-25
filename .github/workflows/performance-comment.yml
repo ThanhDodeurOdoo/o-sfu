@@ -369,19 +369,20 @@ jobs:
             const manualSection = manualInvestigationSection(summaries, refs);
             const body = [
               marker,
-              "## packet-loop Callgrind ([what is Callgrind?](https://valgrind.org/docs/manual/cl-manual.html))",
+              "## Performance benchmark summary",
+              "[what is Valgrind/callgrind?](https://valgrind.org/docs/manual/cl-manual.html)",
               "",
               `status: ${status}`,
               `benchmark job: ${benchmarkResult}`,
               `base ref: ${refs.base_ref || "n/a"}`,
               `head ref: ${refs.head_ref || "n/a"}`,
+              `artifact: \`${artifactName}\``,
               `[workflow run](${runUrl})`,
               "",
               comparisonTables,
               manualSection ? "" : null,
               manualSection,
               "",
-              `artifact: \`${artifactName}\``,
             ].filter(Boolean).join("\n");
 
             async function writeSummaryFallback(error) {
