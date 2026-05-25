@@ -57,6 +57,7 @@ pub(super) use crate::{
 };
 
 pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
+pub(super) const OTHER_ROOM_KEY: &str = "b3RoZXItcm9vbS1rZXk=";
 static NEXT_WEBSOCKET_TEST_RTC_PORT: AtomicU16 = AtomicU16::new(49_000);
 static NEXT_WEBSOCKET_TEST_PEER_PORT: AtomicU16 = AtomicU16::new(58_000);
 pub(super) type TestWebSocket =

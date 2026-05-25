@@ -115,6 +115,12 @@ impl RoomDefinition {
         persistent_recording_backend_available()
     }
 
+    #[cfg(any(test, feature = "testing-transport"))]
+    #[must_use]
+    pub(in crate::runtime::room) fn recording_address(&self) -> Option<&str> {
+        self.config.recording_address.as_deref()
+    }
+
     #[must_use]
     pub(crate) const fn feature_flags(&self) -> RuntimeFeatureFlags {
         self.feature_flags
