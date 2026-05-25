@@ -26,7 +26,7 @@
 //!   v
 //! PacketLoopTurn::apply_input
 //!   |
-//!   +--> control -> mutate PacketLoopState and clear routing hints
+//!   +--> control -> mutate PacketLoopState and clear demux recovery hints
 //!   |
 //!   +--> timeout -> keep already due sessions ready
 //!   |
