@@ -638,17 +638,26 @@ mod tests {
     #[test]
     fn synthetic_h264_idr_payloads_are_detected() {
         let single = synthetic_h264_single_nal_unit_idr_payload(&[0x01, 0x02]);
-        assert!(h264::payload_starts_idr(&single));
+        assert!(h264::payload_starts_idr(
+            &single,
+            h264::PacketizationMode::SingleNalUnit
+        ));
 
         let stap_a = synthetic_h264_stap_a_payload(&[single.as_slice()]);
         assert!(stap_a.is_some());
         let Some(stap_a) = stap_a else {
             return;
         };
-        assert!(h264::payload_starts_idr(&stap_a));
+        assert!(h264::payload_starts_idr(
+            &stap_a,
+            h264::PacketizationMode::NonInterleaved
+        ));
 
         let fua = synthetic_h264_fua_idr_start_payload(&[0x03, 0x04]);
-        assert!(h264::payload_starts_idr(&fua));
+        assert!(h264::payload_starts_idr(
+            &fua,
+            h264::PacketizationMode::NonInterleaved
+        ));
     }
 
     #[test]
@@ -658,7 +667,13 @@ mod tests {
         let non_idr = stream.next_packet(&mut clock);
         let idr = stream.next_packet(&mut clock);
 
-        assert!(!h264::payload_starts_idr(&non_idr.payload));
-        assert!(h264::payload_starts_idr(&idr.payload));
+        assert!(!h264::payload_starts_idr(
+            &non_idr.payload,
+            h264::PacketizationMode::SingleNalUnit
+        ));
+        assert!(h264::payload_starts_idr(
+            &idr.payload,
+            h264::PacketizationMode::SingleNalUnit
+        ));
     }
 }

@@ -405,7 +405,9 @@ impl ForwardedPacket {
         source_transport_media_id: TransportMediaId,
     ) -> bool {
         match state.source_decoder_refresh_codec(source_transport_media_id) {
-            Some(DecoderRefreshCodec::H264) => h264::payload_starts_idr(self.payload.as_slice()),
+            Some(DecoderRefreshCodec::H264(packetization_mode)) => {
+                h264::payload_starts_idr(self.payload.as_slice(), packetization_mode)
+            }
             Some(DecoderRefreshCodec::Vp8) | None => {
                 vp8::payload_starts_keyframe(self.payload.as_slice())
             }
@@ -443,8 +445,8 @@ mod tests {
 
     use o_sfu_rfc::rtp::CodecName;
     use o_sfu_router::{
-        MediaFormat, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters,
-        StreamBinding,
+        CodecSetting, MediaFormat, MediaKind as RouterMediaKind,
+        MediaStream as RouterRtpParameters, StreamBinding,
     };
     use str0m::media::{Mid, Rid};
 
@@ -583,6 +585,51 @@ mod tests {
 
         assert_eq!(facts.source_transport_media_id, transport_media_id);
         assert!(facts.decoder_refresh);
+    }
+
+    #[test]
+    fn forwarded_packet_h264_refresh_detection_uses_packetization_mode() {
+        let session_key = test_transport_session_key(48, 0, 16, UserId::Integer(14));
+        let producer_mid = Mid::from("cam-up");
+        let mut state = PacketLoopState::default();
+        let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: session_key.clone(),
+            mid: producer_mid,
+        });
+        let stap_a_idr = &[0x78, 0x00, 0x02, 0x65, 0x88];
+        let mode_0_parameters = RouterRtpParameters::new(
+            vec![
+                MediaFormat::new(RouterMediaKind::Video, CodecName::H264, 102, 90_000)
+                    .with_setting(CodecSetting::H264PacketizationMode(0)),
+            ],
+            vec![],
+            vec![],
+        );
+        state.refresh_source_decoder_refresh_codec(transport_media_id, &mode_0_parameters);
+        let mut mode_0_packet = sample_forwarded_packet(session_key.clone(), "cam-up", stap_a_idr);
+        let mode_0_facts = mode_0_packet.resolve_facts(&state);
+        assert!(mode_0_facts.is_some());
+        let Some(mode_0_facts) = mode_0_facts else {
+            return;
+        };
+        assert!(!mode_0_facts.decoder_refresh);
+
+        let mode_1_parameters = RouterRtpParameters::new(
+            vec![
+                MediaFormat::new(RouterMediaKind::Video, CodecName::H264, 102, 90_000)
+                    .with_setting(CodecSetting::H264PacketizationMode(1)),
+            ],
+            vec![],
+            vec![],
+        );
+        state.refresh_source_decoder_refresh_codec(transport_media_id, &mode_1_parameters);
+        let mut mode_1_packet = sample_forwarded_packet(session_key, "cam-up", stap_a_idr);
+        let mode_1_facts = mode_1_packet.resolve_facts(&state);
+        assert!(mode_1_facts.is_some());
+        let Some(mode_1_facts) = mode_1_facts else {
+            return;
+        };
+        assert!(mode_1_facts.decoder_refresh);
     }
 
     #[test]
