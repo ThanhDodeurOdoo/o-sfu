@@ -446,6 +446,9 @@ export class BrowserRuntime {
             );
         };
         peerConnection.ontrack = (event) => {
+            if (this._peerConnection !== peerConnection) {
+                return;
+            }
             emitRuntimeLog(
                 hooks,
                 CLIENT_LOG_LEVEL.DEBUG,

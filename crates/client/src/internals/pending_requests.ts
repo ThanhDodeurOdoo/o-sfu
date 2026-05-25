@@ -40,13 +40,17 @@ export class PendingRequests {
         onRuntimeError: (error: unknown) => void
     ): Promise<boolean> {
         let commands: HostCommand[];
+        let registration: Extract<
+            HostCommand,
+            { kind: typeof CommandKind.REGISTER_PENDING_REQUEST }
+        > | null;
         try {
             commands = getCommands();
+            registration = this.findRegistrationCommand(commands);
         } catch (error) {
             onRuntimeError(error);
             return Promise.reject(error);
         }
-        const registration = this.findRegistrationCommand(commands);
         if (!registration) {
             enqueue(commands);
             return Promise.resolve(false);

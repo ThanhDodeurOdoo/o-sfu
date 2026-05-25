@@ -283,8 +283,12 @@ impl LifecyclePlan {
     }
 
     #[must_use]
-    fn fresh_connect(state: BundleConnectionState) -> Self {
+    fn fresh_connect(
+        state: BundleConnectionState,
+        effects_before_cleanup: LifecycleEffects,
+    ) -> Self {
         Self {
+            effects_before_cleanup,
             effects_after_cleanup: LifecycleEffects::one(LifecycleEffect::EmitStateChange {
                 state,
                 cause: None,
@@ -294,7 +298,6 @@ impl LifecyclePlan {
             runtime_cleanup_mode: RuntimeCleanupMode::Silent,
             connect_context_update: ConnectContextUpdate::ReplaceFromInput,
             reset_session_state: true,
-            ..Self::none()
         }
     }
 
@@ -383,20 +386,23 @@ impl LifecyclePlan {
 
 /// plans a fresh connection attempt in the pure lifecycle model
 ///
-/// accepted only from `Disconnected` or `Closed`
+/// accepted only from `Disconnected`, `Closed` or `Recovering`
 /// accepted attempts reset recovery backoff, mark the saved connect context as
 /// present and move the lifecycle to `Connecting`
 pub(super) fn connect_model(model: &mut LifecycleModel) -> LifecyclePlan {
-    if !matches!(
-        model.state,
-        BundleConnectionState::Disconnected | BundleConnectionState::Closed
-    ) {
-        return LifecyclePlan::none();
-    }
+    let effects_before_cleanup = match model.state {
+        BundleConnectionState::Disconnected | BundleConnectionState::Closed => {
+            LifecycleEffects::new()
+        }
+        BundleConnectionState::Recovering => {
+            LifecycleEffects::one(LifecycleEffect::CancelRecoveryTimer)
+        }
+        _ => return LifecyclePlan::none(),
+    };
     model.has_connect_context = true;
     model.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
     model.state = BundleConnectionState::Connecting;
-    LifecyclePlan::fresh_connect(model.state)
+    LifecyclePlan::fresh_connect(model.state, effects_before_cleanup)
 }
 
 /// plans the protocol admission to media-ready transition
@@ -608,18 +614,22 @@ fn lifecycle_close_cause_label(cause: LifecycleCloseCause) -> &'static str {
     }
 }
 
-/// starts a fresh connection attempt from a disconnected or closed state
+/// starts a fresh connection attempt from an inactive or recovering state
 ///
 /// this is the only lifecycle entry point that intentionally wipes both
 /// runtime state and sticky replay state before reconnecting
 /// a brand-new `connect` means "start over with this endpoint and auth context",
 /// not "resume whatever the previous user was trying to do"
 ///
-/// calls from any other state are ignored so the host cannot accidentally stack
-/// overlapping connection attempts on top of an already-live user
+/// calls from live admission states are ignored so the host cannot accidentally
+/// stack overlapping connection attempts on top of an already-live user
+/// a call from `Recovering` also cancels the stale recovery timer before the
+/// new socket attempt starts
 ///
 /// ```text
 /// Disconnected --connect(url, jwt, room)--> Connecting
+/// Closed       --connect(url, jwt, room)--> Connecting
+/// Recovering  --connect(url, jwt, room)--> Connecting
 /// ```
 pub(super) fn connect(
     core: &mut ProtocolCore,

@@ -323,6 +323,89 @@ test("default browser runtime negotiates and emits remote track updates", async 
         );
 });
 
+test("odoo bundle embeds wasm and drives the browser runtime", async ({ page }) => {
+    try {
+        await page.evaluate(async () => {
+            const harness = globalThis.__browserHarness;
+            harness.fetchCalls = [];
+            harness.originalFetch = globalThis.fetch;
+            globalThis.fetch = (...args) => {
+                harness.fetchCalls.push(args.map((arg) => String(arg)));
+                return Promise.reject(new Error("unexpected Odoo bundle fetch"));
+            };
+            const { CLIENT_UPDATE, SFU_CLIENT_STATE, SfuClient, createProtocolCore } =
+                await import("/dist/odoo_sfu.js");
+            if (CLIENT_UPDATE.TRACK !== "track") {
+                throw new Error("unexpected client update export");
+            }
+            if (SFU_CLIENT_STATE.CONNECTED !== "connected") {
+                throw new Error("unexpected state export");
+            }
+            if (createProtocolCore().state !== "disconnected") {
+                throw new Error("embedded protocol core did not initialize");
+            }
+            const client = new SfuClient();
+            harness.client = client;
+            client.addEventListener("stateChange", (event) => {
+                harness.stateChanges.push(structuredClone(event.detail));
+            });
+            client.connect("https://example.test/ws", "jwt-token", {
+                channelUUID: "channel-a"
+            });
+        });
+
+        await expect
+            .poll(async () => page.evaluate(() => globalThis.__browserHarness.state.sockets.length))
+            .toBe(1);
+        await page.evaluate((frame) => {
+            const socket = globalThis.__browserHarness.state.sockets[0];
+            socket.open();
+            socket.emitMessage(frame);
+            socket.emitMessage(JSON.stringify([{ t: "offer", q: "7", p: { sdp: "offer-sdp" } }]));
+        }, WELCOME_FRAME);
+
+        await expect
+            .poll(async () =>
+                page.evaluate(() => ({
+                    fetchCalls: globalThis.__browserHarness.fetchCalls,
+                    peerConnections: globalThis.__browserHarness.state.peerConnections.length,
+                    sent: globalThis.__browserHarness.state.sockets[0].sent.map((payload) =>
+                        JSON.parse(payload)
+                    ),
+                    states: globalThis.__browserHarness.stateChanges
+                }))
+            )
+            .toEqual({
+                fetchCalls: [],
+                peerConnections: 1,
+                sent: [
+                    [
+                        {
+                            t: "auth",
+                            p: {
+                                channel: "channel-a",
+                                jwt: "jwt-token"
+                            }
+                        }
+                    ],
+                    [{ t: "offer", r: "7", p: { sdp: "browser-answer-sdp" } }]
+                ],
+                states: [
+                    { cause: undefined, state: "connecting" },
+                    { cause: undefined, state: "authenticated" },
+                    { cause: undefined, state: "connected" }
+                ]
+            });
+    } finally {
+        await page.evaluate(() => {
+            if (globalThis.__browserHarness.originalFetch) {
+                globalThis.fetch = globalThis.__browserHarness.originalFetch;
+                delete globalThis.__browserHarness.originalFetch;
+            }
+        });
+    }
+});
+
 test("default browser runtime reconnects and replays sticky intents", async ({ page }) => {
     await page.evaluate(async () => {
         const { SfuClient } = await import("/dist/index.js");

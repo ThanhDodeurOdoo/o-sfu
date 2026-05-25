@@ -10,7 +10,9 @@ export const TEST_SFU_WS_URL = "ws://127.0.0.1:18080/";
 const DIAGNOSTICS_ROOM_PATH = "/internal/diagnostics/rooms";
 const DIAGNOSTICS_POLL_INTERVAL_MS = 100;
 const DIAGNOSTICS_POLL_TIMEOUT_MS = 5_000;
+const AUDIO_OPERATION_TIMEOUT_MS = 250;
 const HARNESS_URL = "/playwright/fixtures/harness.html";
+const STREAM_TYPES = new Set(["audio", "camera", "screen"]);
 
 export async function createChannel({
     authKey = TEST_AUTH_KEY,
@@ -48,16 +50,52 @@ export function createConnectToken(channelUuid, sessionId, roomKey = TEST_ROOM_K
 export async function createPeerPage(context) {
     const page = await context.newPage();
     await page.goto(HARNESS_URL);
-    await page.evaluate(() => {
+    await page.evaluate((audioOperationTimeoutMs) => {
+        globalThis.__liveHarnessSettleAudio = (operation) =>
+            Promise.race([
+                operation.catch(() => null),
+                new Promise((resolve) => window.setTimeout(resolve, audioOperationTimeoutMs))
+            ]);
+        globalThis.__liveHarnessResumeAudio = (audioContext) => {
+            try {
+                void globalThis.__liveHarnessSettleAudio(audioContext.resume());
+            } catch (_error) {
+                void _error;
+            }
+        };
+        globalThis.__liveHarnessStopLocalMedia = async (harness, streamType) => {
+            const media = harness.localMedia?.[streamType] ?? null;
+            if (media?.ticker !== undefined) {
+                clearInterval(media.ticker);
+            }
+            if (media?.oscillator) {
+                try {
+                    media.oscillator.stop();
+                } catch (_error) {
+                    void _error;
+                }
+                media.oscillator.disconnect();
+            }
+            if (media?.audioContext && media.audioContext.state !== "closed") {
+                await globalThis.__liveHarnessSettleAudio(media.audioContext.close());
+            }
+            media?.track?.stop();
+            delete harness.localMedia[streamType];
+            if (streamType === "camera") {
+                harness.localTrack = null;
+                harness.localTrackTicker = null;
+            }
+        };
         globalThis.__liveHarness = {
             client: null,
             errors: [],
+            localMedia: {},
             localTrack: null,
             localTrackTicker: null,
             stateChanges: [],
             updates: []
         };
-    });
+    }, AUDIO_OPERATION_TIMEOUT_MS);
     return page;
 }
 
@@ -114,54 +152,116 @@ export async function connectPeer(page, { channelUuid, jwt, url = TEST_SFU_WS_UR
 }
 
 export async function publishSyntheticCamera(page, label) {
-    await page.evaluate((nextLabel) => {
+    return publishSyntheticVideo(page, "camera", label);
+}
+
+export async function publishSyntheticScreen(page, label) {
+    return publishSyntheticVideo(page, "screen", label);
+}
+
+export async function publishSyntheticAudio(page, label) {
+    await page.evaluate(async (nextLabel) => {
         const harness = globalThis.__liveHarness;
         if (!harness.client) {
             throw new Error("browser harness client is not connected");
         }
-        if (harness.localTrackTicker !== null) {
-            clearInterval(harness.localTrackTicker);
-            harness.localTrackTicker = null;
-        }
-        if (harness.localTrack) {
-            harness.localTrack.stop();
-            harness.localTrack = null;
-        }
+        await globalThis.__liveHarnessStopLocalMedia(harness, "audio");
 
-        const canvas = document.createElement("canvas");
-        canvas.width = 96;
-        canvas.height = 96;
-        const context = canvas.getContext("2d");
-        if (!context) {
-            throw new Error("expected 2D canvas context for synthetic video track");
-        }
-        let frame = 0;
-        const draw = () => {
-            context.fillStyle = frame % 2 === 0 ? "#14324a" : "#5b2d1f";
-            context.fillRect(0, 0, canvas.width, canvas.height);
-            context.fillStyle = "#f3f4f6";
-            context.font = "14px sans-serif";
-            context.fillText(nextLabel, 8, 28);
-            context.fillText(String(frame), 8, 56);
-            frame += 1;
-        };
-        draw();
-        harness.localTrackTicker = window.setInterval(draw, 100);
-        const stream = canvas.captureStream(10);
-        const [track] = stream.getVideoTracks();
+        const audioContext = new AudioContext();
+        const destination = audioContext.createMediaStreamDestination();
+        const gain = audioContext.createGain();
+        gain.gain.value = 0.02;
+        const oscillator = audioContext.createOscillator();
+        oscillator.frequency.value = 220 + (nextLabel.length % 12) * 20;
+        oscillator.connect(gain).connect(destination);
+        oscillator.start();
+        globalThis.__liveHarnessResumeAudio(audioContext);
+        const [track] = destination.stream.getAudioTracks();
         if (!track) {
-            throw new Error("expected synthetic canvas capture to expose a video track");
+            throw new Error("expected synthetic audio graph to expose an audio track");
         }
-        harness.localTrack = track;
-        harness.client.updateUpload("camera", track);
+        harness.localMedia.audio = {
+            audioContext,
+            oscillator,
+            track
+        };
+        harness.client.updateUpload("audio", track);
     }, label);
 }
 
-export async function setCameraDownload(page, targetSessionId, active, cameraLayout = undefined) {
+export async function publishSyntheticVideo(page, streamType, label) {
+    assertStreamType(streamType);
+    const colors = syntheticVideoColors(streamType, label);
+    const fillPixel = pixelFromHex(colors[0]);
+    return page.evaluate(
+        async ({
+            colors: nextColors,
+            fillPixel: nextFillPixel,
+            label: nextLabel,
+            streamType: nextStreamType
+        }) => {
+            const harness = globalThis.__liveHarness;
+            if (!harness.client) {
+                throw new Error("browser harness client is not connected");
+            }
+            await globalThis.__liveHarnessStopLocalMedia(harness, nextStreamType);
+
+            const canvas = document.createElement("canvas");
+            canvas.width = 96;
+            canvas.height = 96;
+            const context = canvas.getContext("2d");
+            if (!context) {
+                throw new Error("expected 2D canvas context for synthetic video track");
+            }
+            let frame = 0;
+            const draw = () => {
+                context.fillStyle = nextColors[frame % nextColors.length];
+                context.fillRect(0, 0, canvas.width, canvas.height);
+                context.fillStyle = "#f3f4f6";
+                context.font = "14px sans-serif";
+                context.fillText(nextLabel, 8, 28);
+                context.fillText(nextStreamType, 8, 42);
+                context.fillText(String(frame), 8, 56);
+                frame += 1;
+            };
+            draw();
+            const ticker = window.setInterval(draw, 100);
+            const stream = canvas.captureStream(10);
+            const [track] = stream.getVideoTracks();
+            if (!track) {
+                throw new Error("expected synthetic canvas capture to expose a video track");
+            }
+            harness.localMedia[nextStreamType] = {
+                ticker,
+                track
+            };
+            if (nextStreamType === "camera") {
+                harness.localTrack = track;
+                harness.localTrackTicker = ticker;
+            }
+            harness.client.updateUpload(nextStreamType, track);
+            return {
+                fillPixel: nextFillPixel,
+                trackId: track.id
+            };
+        },
+        { colors, fillPixel, label, streamType }
+    );
+}
+
+export async function setStreamDownload(
+    page,
+    targetSessionId,
+    streamType,
+    active,
+    layout = undefined
+) {
+    assertStreamType(streamType);
     await page.evaluate(
         ({
             active: nextActive,
-            cameraLayout: nextCameraLayout,
+            layout: nextLayout,
+            streamType: nextStreamType,
             targetSessionId: nextTargetSessionId
         }) => {
             const harness = globalThis.__liveHarness;
@@ -169,35 +269,35 @@ export async function setCameraDownload(page, targetSessionId, active, cameraLay
                 throw new Error("browser harness client is not connected");
             }
             const states = {
-                camera: nextActive
+                [nextStreamType]: nextActive
             };
-            if (nextCameraLayout !== undefined) {
-                states.cameraLayout = nextCameraLayout;
+            if (nextLayout !== undefined) {
+                states[`${nextStreamType}Layout`] = nextLayout;
             }
-            harness.client.updateDownload(nextTargetSessionId, {
-                ...states
-            });
+            harness.client.updateDownload(nextTargetSessionId, states);
         },
-        { active, cameraLayout, targetSessionId }
+        { active, layout, streamType, targetSessionId }
     );
 }
 
-export async function unpublishCamera(page) {
-    await page.evaluate(() => {
+export async function setCameraDownload(page, targetSessionId, active, cameraLayout = undefined) {
+    await setStreamDownload(page, targetSessionId, "camera", active, cameraLayout);
+}
+
+export async function unpublishStream(page, streamType) {
+    assertStreamType(streamType);
+    await page.evaluate(async (nextStreamType) => {
         const harness = globalThis.__liveHarness;
         if (!harness.client) {
             throw new Error("browser harness client is not connected");
         }
-        harness.client.updateUpload("camera", null);
-        if (harness.localTrackTicker !== null) {
-            clearInterval(harness.localTrackTicker);
-            harness.localTrackTicker = null;
-        }
-        if (harness.localTrack) {
-            harness.localTrack.stop();
-            harness.localTrack = null;
-        }
-    });
+        harness.client.updateUpload(nextStreamType, null);
+        await globalThis.__liveHarnessStopLocalMedia(harness, nextStreamType);
+    }, streamType);
+}
+
+export async function unpublishCamera(page) {
+    await unpublishStream(page, "camera");
 }
 
 export async function peerSnapshot(page) {
@@ -262,10 +362,17 @@ export async function peerLocalDescriptionSdp(page) {
 }
 
 export async function localCameraSenderEncodings(page) {
-    return page.evaluate(() => {
+    return localSenderEncodings(page, "camera");
+}
+
+export async function localSenderEncodings(page, streamType) {
+    assertStreamType(streamType);
+    return page.evaluate((targetStreamType) => {
         const harness = globalThis.__liveHarness;
         const peerConnection = harness.client?._runtime?._peerConnection;
-        const localTrack = harness.localTrack;
+        const localTrack =
+            harness.localMedia?.[targetStreamType]?.track ??
+            (targetStreamType === "camera" ? harness.localTrack : null);
         if (!peerConnection || !localTrack) {
             return [];
         }
@@ -278,7 +385,23 @@ export async function localCameraSenderEncodings(page) {
             rid: encoding.rid,
             scaleResolutionDownBy: encoding.scaleResolutionDownBy
         }));
-    });
+    }, streamType);
+}
+
+export async function localSenderTrackId(page, streamType) {
+    assertStreamType(streamType);
+    return page.evaluate((targetStreamType) => {
+        const harness = globalThis.__liveHarness;
+        const peerConnection = harness.client?._runtime?._peerConnection;
+        const localTrack = harness.localMedia?.[targetStreamType]?.track ?? null;
+        if (!peerConnection || !localTrack) {
+            return null;
+        }
+        const transceiver = peerConnection
+            .getTransceivers()
+            .find((candidate) => candidate.sender.track === localTrack);
+        return transceiver?.sender.track?.id ?? null;
+    }, streamType);
 }
 
 export async function waitForUserMediaWorker({
@@ -322,8 +445,23 @@ export async function waitForCameraSubscriptionSelectedRid({
 }
 
 export async function waitForDecodedRemoteCameraFrame(page, targetSessionId) {
+    return waitForDecodedRemoteVideoFrame(page, targetSessionId, "camera");
+}
+
+export async function waitForDecodedRemoteVideoFrame(
+    page,
+    targetSessionId,
+    streamType,
+    { expectedPixel = null, maxPixelDistance = 96 } = {}
+) {
+    assertStreamType(streamType);
     return page.evaluate(
-        async ({ sessionId }) => {
+        async ({
+            expectedPixel: nextExpectedPixel,
+            maxPixelDistance: nextMaxPixelDistance,
+            sessionId,
+            streamType: targetStreamType
+        }) => {
             const sleep = (ms) =>
                 new Promise((resolve) => {
                     window.setTimeout(resolve, ms);
@@ -368,14 +506,18 @@ export async function waitForDecodedRemoteCameraFrame(page, targetSessionId) {
                     width: video.videoWidth
                 };
             };
+            const pixelDistance = (left, right) =>
+                Math.hypot(left.red - right.red, left.green - right.green, left.blue - right.blue);
             const harness = globalThis.__liveHarness;
             const client = harness.client;
             const track =
-                client?._consumers?.get(sessionId)?.camera?.track ??
-                client?._consumers?.get(String(sessionId))?.camera?.track ??
+                client?._consumers?.get(sessionId)?.[targetStreamType]?.track ??
+                client?._consumers?.get(String(sessionId))?.[targetStreamType]?.track ??
                 null;
             if (!track) {
-                throw new Error(`remote camera track for session ${String(sessionId)} is missing`);
+                throw new Error(
+                    `remote ${targetStreamType} track for session ${String(sessionId)} is missing`
+                );
             }
 
             const video = document.createElement("video");
@@ -385,38 +527,88 @@ export async function waitForDecodedRemoteCameraFrame(page, targetSessionId) {
             video.srcObject = new MediaStream([track]);
             document.body.append(video);
 
-            const startedAt = performance.now();
-            const deadline = startedAt + 12_000;
-            requestPlayback(video);
-            const initialCurrentTime = video.currentTime;
-            const initialDecodedFrames = video.getVideoPlaybackQuality?.().totalVideoFrames ?? 0;
-            let usedVideoFrameCallback = false;
+            try {
+                const startedAt = performance.now();
+                const deadline = startedAt + 12_000;
+                requestPlayback(video);
+                const initialCurrentTime = video.currentTime;
+                const initialDecodedFrames =
+                    video.getVideoPlaybackQuality?.().totalVideoFrames ?? 0;
+                let usedVideoFrameCallback = false;
 
-            while (performance.now() < deadline) {
-                if (video.paused) {
-                    requestPlayback(video);
-                }
-                const metadata = await nextVideoFrameMetadata(video, deadline - performance.now());
-                usedVideoFrameCallback ||= metadata !== null;
-                if (video.videoWidth > 0 && video.videoHeight > 0) {
-                    const decodedFrames =
-                        video.getVideoPlaybackQuality?.().totalVideoFrames ??
-                        (metadata ? metadata.presentedFrames : 0);
-                    const decodedFrameObserved =
-                        decodedFrames > initialDecodedFrames ||
-                        metadata !== null ||
-                        video.currentTime > initialCurrentTime;
-                    if (decodedFrameObserved) {
-                        return drawDecodedFrame(video, usedVideoFrameCallback, decodedFrames);
+                while (performance.now() < deadline) {
+                    if (video.paused) {
+                        requestPlayback(video);
                     }
+                    const metadata = await nextVideoFrameMetadata(
+                        video,
+                        deadline - performance.now()
+                    );
+                    usedVideoFrameCallback ||= metadata !== null;
+                    if (video.videoWidth > 0 && video.videoHeight > 0) {
+                        const decodedFrames =
+                            video.getVideoPlaybackQuality?.().totalVideoFrames ??
+                            (metadata ? metadata.presentedFrames : 0);
+                        const decodedFrameObserved =
+                            decodedFrames > initialDecodedFrames ||
+                            metadata !== null ||
+                            video.currentTime > initialCurrentTime;
+                        if (decodedFrameObserved) {
+                            const frame = drawDecodedFrame(
+                                video,
+                                usedVideoFrameCallback,
+                                decodedFrames
+                            );
+                            if (
+                                !nextExpectedPixel ||
+                                pixelDistance(frame.pixel, nextExpectedPixel) <=
+                                    nextMaxPixelDistance
+                            ) {
+                                return frame;
+                            }
+                        }
+                    }
+                    await sleep(100);
                 }
-                await sleep(100);
-            }
 
-            throw new Error("remote camera video did not decode a frame before timeout");
+                throw new Error(
+                    `remote ${targetStreamType} video did not decode a matching frame before timeout`
+                );
+            } finally {
+                video.pause();
+                video.srcObject = null;
+                video.remove();
+            }
         },
-        { sessionId: targetSessionId }
+        {
+            expectedPixel,
+            maxPixelDistance,
+            sessionId: targetSessionId,
+            streamType
+        }
     );
+}
+
+function assertStreamType(streamType) {
+    if (!STREAM_TYPES.has(streamType)) {
+        throw new Error(`unsupported stream type ${String(streamType)}`);
+    }
+}
+
+function syntheticVideoColors(streamType, label) {
+    if (streamType !== "screen") {
+        return ["#14324a", "#5b2d1f"];
+    }
+    return label.includes("two") ? ["#d00068"] : ["#0060d4"];
+}
+
+function pixelFromHex(hex) {
+    const value = Number.parseInt(hex.slice(1), 16);
+    return {
+        blue: value & 0xff,
+        green: (value >> 8) & 0xff,
+        red: (value >> 16) & 0xff
+    };
 }
 
 export async function spawnLiveServer({
