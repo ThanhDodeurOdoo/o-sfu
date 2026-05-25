@@ -46,10 +46,12 @@ cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind -- --baseline=
 ```
 
 profiles and summaries are written under `target/gungraun`. the current scenarios
-cover local route-planning fanout, relay-mailbox enqueue pressure, cached
-ingress demux, repeated unknown-source misses, large-packet recent-miss cache
-routing, routing-miss fingerprinting, packet-sink fanout, selected-RID
-readiness and keyframe-request coalescing
+cover incoming packet observation, local route-planning fanout, relay-mailbox
+enqueue pressure, cached ingress demux, repeated unknown-source misses,
+large-packet recent-miss cache routing, ready-session scheduler churn,
+routing-miss fingerprinting, packet-sink fanout, consumer packet-gate batches,
+selected-RID readiness, local RTP identity rewriting, active-speaker route
+control and keyframe-request coalescing
 
 local Callgrind execution requires `gungraun-runner` plus Valgrind. on
 hosts without Valgrind support, use `--no-run` as the local build check and run

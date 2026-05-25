@@ -470,6 +470,16 @@ pub(super) fn worker_set_consumer_packet_gates(
     results
 }
 
+#[cfg(feature = "internal-benchmarks")]
+pub(in crate::runtime::rtc_engine) fn worker_set_consumer_packet_gates_for_benchmark(
+    state: &mut PacketLoopState,
+    source: &TransportSourceKey,
+    updates: Vec<ConsumerPacketGateCommand>,
+    now: Instant,
+) -> Vec<TransportResult<()>> {
+    worker_set_consumer_packet_gates(state, source, updates, now)
+}
+
 /// destination mutation requested by a route-control command
 ///
 /// both variants must pass through the same ownership checks before touching

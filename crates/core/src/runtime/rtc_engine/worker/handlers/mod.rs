@@ -20,6 +20,8 @@ mod publication;
 mod session;
 
 pub(in crate::runtime::rtc_engine) use dispatcher::{WorkerCommandContext, handle_worker_command};
+#[cfg(feature = "internal-benchmarks")]
+pub(in crate::runtime::rtc_engine) use media::worker_set_consumer_packet_gates_for_benchmark;
 pub(in crate::runtime::rtc_engine) use media::{
     apply_source_rid_readiness, drain_due_rid_keyframe_refreshes, request_keyframe_for_source,
 };

@@ -42,6 +42,8 @@ mod selected_rid;
 pub(in crate::runtime::rtc_engine::worker) use responses::{
     apply_route_control_request, respond_set_consumer_packet_gates,
 };
+#[cfg(feature = "internal-benchmarks")]
+pub(in crate::runtime::rtc_engine) use routes::worker_set_consumer_packet_gates_for_benchmark;
 pub(super) use routes::{
     ConsumerRouteRegistration, consumer_payload_type, ensure_existing_route_source,
     ensure_route_source_registered, owned_local_producer_mid, packet_gate_rid,

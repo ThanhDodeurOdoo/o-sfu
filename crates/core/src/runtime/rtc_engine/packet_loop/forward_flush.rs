@@ -120,6 +120,17 @@ pub(super) fn record_incoming_stats(
     buffers.flush_source_policy_dirty(source_policy_signal);
 }
 
+#[cfg(feature = "internal-benchmarks")]
+pub(in crate::runtime::rtc_engine) fn record_incoming_stats_for_benchmark(
+    state: &mut PacketLoopState,
+    source_policy_signal: &SourcePolicySignal,
+    metrics: &impl RtcRouteControlMetrics,
+    rtp_metrics: &RtpMetricsRecorder,
+    buffers: &mut PacketLoopBuffers,
+) {
+    record_incoming_stats(state, source_policy_signal, metrics, rtp_metrics, buffers);
+}
+
 fn flush_pending_rid_readiness(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,

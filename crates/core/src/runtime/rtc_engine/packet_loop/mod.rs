@@ -111,7 +111,7 @@ pub(in crate::runtime::rtc_engine) use self::ingress_routing::{
 #[cfg(feature = "internal-benchmarks")]
 pub(in crate::runtime::rtc_engine) use self::{
     buffers::PacketLoopBuffers,
-    forward_flush::flush_forward_routes,
+    forward_flush::{flush_forward_routes, record_incoming_stats_for_benchmark},
     keyframe_requests::{PendingKeyframeRequest, flush_pending_keyframe_requests_at},
 };
 pub(in crate::runtime::rtc_engine) use self::{

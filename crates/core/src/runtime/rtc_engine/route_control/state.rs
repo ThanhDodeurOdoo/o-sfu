@@ -361,7 +361,7 @@ impl RouteControlState {
     ///
     /// `None` means no gate is installed
     /// [`PacketLayerGate::Open`] means an explicit allow-all gate exists
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(any(test, feature = "testing-transport", feature = "internal-benchmarks"))]
     pub fn effective_packet_gate(
         &self,
         source_transport_media_id: TransportMediaId,
