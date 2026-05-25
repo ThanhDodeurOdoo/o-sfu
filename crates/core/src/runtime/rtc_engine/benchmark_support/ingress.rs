@@ -26,6 +26,9 @@ use crate::{
 
 pub const INGRESS_DEMUX_ATTEMPTS: usize = 256;
 
+const RTP_HEADER_LEN: usize = 12;
+const LARGE_RTP_PACKET_LEN: usize = 1200;
+
 enum IngressRoutingMode {
     CachedAccepted,
     UnknownSourceMiss,
@@ -89,9 +92,9 @@ impl IngressRoutingBenchFixture {
                         Some(local_ice_credentials.pass.as_bytes()),
                     )
                 })
-                .unwrap_or_else(|| valid_rtp_packet(1, 11))
+                .unwrap_or_else(|| valid_rtp_packet(1, 11, RTP_HEADER_LEN))
         } else {
-            valid_rtp_packet(1, 11)
+            valid_rtp_packet(1, 11, RTP_HEADER_LEN)
         };
 
         Self {
@@ -110,6 +113,16 @@ impl IngressRoutingBenchFixture {
 
     #[must_use]
     pub fn repeated_unknown_source_miss() -> Self {
+        Self::unknown_source_miss(valid_rtp_packet(1, 11, RTP_HEADER_LEN))
+    }
+
+    #[must_use]
+    pub fn repeated_large_unknown_source_miss() -> Self {
+        Self::unknown_source_miss(valid_rtp_packet(1, 11, LARGE_RTP_PACKET_LEN))
+    }
+
+    #[must_use]
+    fn unknown_source_miss(packet: Vec<u8>) -> Self {
         let source_addr = SocketAddr::from(([127, 0, 0, 1], 46_011));
         let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 46_010));
         let state = PacketLoopState::default();
@@ -125,7 +138,7 @@ impl IngressRoutingBenchFixture {
             rtc_metrics,
             source_addr,
             candidate_addr,
-            packet: valid_rtp_packet(1, 11),
+            packet,
             now: fixed_now(),
         };
         fixture.route_once();
@@ -163,10 +176,11 @@ fn fixed_now() -> Instant {
     Instant::now() + Duration::from_secs(1)
 }
 
-fn valid_rtp_packet(sequence_number: u16, ssrc: u32) -> Vec<u8> {
+fn valid_rtp_packet(sequence_number: u16, ssrc: u32, packet_len: usize) -> Vec<u8> {
     let sequence_number = sequence_number.to_be_bytes();
     let ssrc = ssrc.to_be_bytes();
-    vec![
+    let mut packet = Vec::with_capacity(packet_len);
+    packet.extend_from_slice(&[
         0x80,
         96,
         sequence_number[0],
@@ -179,7 +193,15 @@ fn valid_rtp_packet(sequence_number: u16, ssrc: u32) -> Vec<u8> {
         ssrc[1],
         ssrc[2],
         ssrc[3],
-    ]
+    ]);
+    for byte_index in packet.len()..packet_len {
+        let mixed = byte_index
+            .wrapping_mul(31)
+            .wrapping_add(byte_index.rotate_left(5))
+            .wrapping_add(17);
+        packet.push(u8::try_from(mixed & 0xff).unwrap_or(0));
+    }
+    packet
 }
 
 fn serialize_stun_message(message: &StunMessage<'_>, password: Option<&[u8]>) -> Option<Vec<u8>> {
