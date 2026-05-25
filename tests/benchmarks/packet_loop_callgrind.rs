@@ -28,7 +28,10 @@ use iai_callgrind::{
 use o_sfu_core::server::transport::benchmark_support::{
     FanoutBenchTopology, IngressRoutingBenchFixture, KeyframeCoalescingBenchFixture,
     PacketSinkFanoutBenchFixture, RelayPressureBenchFixture, RidReadinessBenchFixture,
+    routing_miss_packet_fingerprint,
 };
+
+const ROUTING_MISS_FINGERPRINT_ATTEMPTS: usize = 4096;
 
 fn callgrind_config(ir_soft_limit: f64) -> LibraryBenchmarkConfig {
     let mut callgrind = Callgrind::default();
@@ -42,6 +45,34 @@ fn callgrind_config(ir_soft_limit: f64) -> LibraryBenchmarkConfig {
 
 fn fanout_topology(destination_count: usize) -> FanoutBenchTopology {
     FanoutBenchTopology::with_local_destinations(destination_count)
+}
+
+fn fingerprint_packet(packet_len: usize) -> Vec<u8> {
+    let mut packet = Vec::with_capacity(packet_len);
+    let sequence_number = 1_u16.to_be_bytes();
+    let ssrc = 11_u32.to_be_bytes();
+    packet.extend_from_slice(&[
+        0x80,
+        96,
+        sequence_number[0],
+        sequence_number[1],
+        0,
+        0,
+        0,
+        1,
+        ssrc[0],
+        ssrc[1],
+        ssrc[2],
+        ssrc[3],
+    ]);
+    for byte_index in packet.len()..packet_len {
+        let mixed = byte_index
+            .wrapping_mul(31)
+            .wrapping_add(byte_index.rotate_left(5))
+            .wrapping_add(17);
+        packet.push(u8::try_from(mixed & 0xff).unwrap_or(0));
+    }
+    packet
 }
 
 // measures local fanout route planning for one producer and fixed local
@@ -83,8 +114,26 @@ fn relay_mailbox_256(fixture: RelayPressureBenchFixture) -> usize {
 #[library_benchmark(config = callgrind_config(1.0))]
 #[bench::cached_route(IngressRoutingBenchFixture::cached_accepted_route())]
 #[bench::unknown_source(IngressRoutingBenchFixture::repeated_unknown_source_miss())]
+#[bench::unknown_source_rtp_1200(IngressRoutingBenchFixture::repeated_large_unknown_source_miss())]
 fn ingress_demux_256(mut fixture: IngressRoutingBenchFixture) -> usize {
     black_box(fixture.route_datagrams())
+}
+
+// measures the routing-miss fingerprint helper directly with an RTP-shaped
+// packet large enough to represent the normal media packet case
+//
+// this keeps the fingerprint cost visible next to the broader ingress-demux
+// benchmark that includes recent-miss cache lookup and drop accounting
+#[library_benchmark(config = callgrind_config(1.0))]
+#[bench::rtp_1200(args = (1200usize), setup = fingerprint_packet)]
+fn routing_miss_fingerprint_4096(packet: Vec<u8>) -> u64 {
+    let mut fingerprint = 0_u64;
+    for _ in 0..ROUTING_MISS_FINGERPRINT_ATTEMPTS {
+        fingerprint = fingerprint.wrapping_add(routing_miss_packet_fingerprint(black_box(
+            packet.as_slice(),
+        )));
+    }
+    black_box(fingerprint)
 }
 
 // measures packet-sink fanout through production route planning and flush
@@ -130,6 +179,7 @@ library_benchmark_group!(
         route_plan_1024,
         relay_mailbox_256,
         ingress_demux_256,
+        routing_miss_fingerprint_4096,
         packet_sink_512,
         rid_readiness_256,
         keyframe_coalesce_512

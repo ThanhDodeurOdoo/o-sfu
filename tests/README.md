@@ -46,7 +46,8 @@ cargo bench -p o-sfu-tests --bench packet_loop_callgrind -- --baseline=local --s
 
 profiles and summaries are written under `target/iai`. the current scenarios
 cover local route-planning fanout, relay-mailbox enqueue pressure, cached
-ingress demux, repeated unknown-source misses, packet-sink fanout, selected-RID
+ingress demux, repeated unknown-source misses, large-packet recent-miss cache
+routing, routing-miss fingerprinting, packet-sink fanout, selected-RID
 readiness and keyframe-request coalescing
 
 local Callgrind execution requires `iai-callgrind-runner` plus Valgrind. on

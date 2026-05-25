@@ -117,6 +117,12 @@ fn packet_fingerprint(packet: &[u8]) -> u64 {
     len.rotate_left(17) ^ prefix.rotate_left(29) ^ suffix.rotate_left(43)
 }
 
+#[cfg(feature = "internal-benchmarks")]
+#[must_use]
+pub fn packet_fingerprint_for_benchmark(packet: &[u8]) -> u64 {
+    packet_fingerprint(packet)
+}
+
 /// Exact packet bytes for one cached negative route decision.
 ///
 /// The packet is stored in a `Vec<u8>` rather than `Box<[u8]>` on purpose.

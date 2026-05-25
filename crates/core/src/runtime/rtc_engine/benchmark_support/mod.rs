@@ -23,3 +23,5 @@ pub use video::{
 };
 #[cfg(feature = "worker-benchmarks")]
 pub use worker::{WORKER_COMMAND_ROUNDTRIPS, WorkerLoopBenchFixture};
+
+pub use super::routing_miss::packet_fingerprint_for_benchmark as routing_miss_packet_fingerprint;
