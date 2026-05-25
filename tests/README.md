@@ -15,9 +15,9 @@ Run from the repository root:
 
 ```bash
 cargo fmt
-cargo check -p o-sfu
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --release
+cargo check --locked -p o-sfu
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --release
 npm --prefix crates/client run verify
 ```
 
@@ -29,19 +29,19 @@ packet-loop hot-path slices
 Build the target without running Valgrind:
 
 ```bash
-cargo bench -p o-sfu-tests --bench packet_loop_callgrind --no-run
+cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind --no-run
 ```
 
 Save a local baseline on a Valgrind-supported host:
 
 ```bash
-cargo bench -p o-sfu-tests --bench packet_loop_callgrind -- --save-baseline=local --save-summary=json
+cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind -- --save-baseline=local --save-summary=json
 ```
 
 Compare local changes against that baseline:
 
 ```bash
-cargo bench -p o-sfu-tests --bench packet_loop_callgrind -- --baseline=local --save-summary=json
+cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind -- --baseline=local --save-summary=json
 ```
 
 profiles and summaries are written under `target/iai`. the current scenarios
@@ -56,12 +56,14 @@ the baseline comparison on Linux
 
 ## CI tests
 
-The default CI test workflow uses `cargo nextest` for `o-sfu-cluster`,
-`o-sfu-core`, `o-sfu-protocol`, `o-sfu-rfc` plus `o-sfu-router`. The root
-`o-sfu` crate plus the `o-sfu-tests` integration crate and doctests stay on
-plain `cargo test`. Scheduled and manually dispatched CI also runs
-`cargo test --workspace --release` with default features, matching the local
-default baseline without making every pull request pay the release build cost.
+The default CI test workflow uses locked `cargo nextest` for `o-sfu-cluster`,
+`o-sfu-core`, `o-sfu-model`, `o-sfu-protocol`, `o-sfu-rfc`, `o-sfu-router`,
+`o-sfu-telemetry` plus `o-sfu-telemetry-macros`. The root `o-sfu` crate plus
+the `o-sfu-tests` integration crate and doctests stay on locked plain
+`cargo test`. Scheduled and manually dispatched CI also runs
+`cargo test --locked --workspace --release` with default features, matching the
+local default baseline without making every pull request pay the release build
+cost.
 
 Install
 
@@ -72,10 +74,10 @@ cargo install cargo-nextest --locked
 Run the same split locally:
 
 ```bash
-cargo nextest run -p o-sfu-cluster -p o-sfu-core -p o-sfu-protocol -p o-sfu-rfc -p o-sfu-router
-cargo test -p o-sfu
-cargo test -p o-sfu-tests
-cargo test --workspace --doc
+cargo nextest run --locked -p o-sfu-cluster -p o-sfu-core -p o-sfu-model -p o-sfu-protocol -p o-sfu-rfc -p o-sfu-router -p o-sfu-telemetry -p o-sfu-telemetry-macros
+cargo test --locked -p o-sfu
+cargo test --locked -p o-sfu-tests -p o-sfu-proofs
+cargo test --locked --workspace --doc
 ```
 
 ## feature matrix
@@ -133,7 +135,7 @@ cargo install cargo-deny --locked
 Run the enforced policy checks:
 
 ```bash
-cargo deny check advisories bans licenses sources
+cargo deny --locked check advisories bans licenses sources
 mkdir -p target/cargo-deny
 cargo metadata --manifest-path tests/fuzz/Cargo.toml --locked --format-version 1 > target/cargo-deny/fuzz-metadata.json
 cargo deny check --metadata-path target/cargo-deny/fuzz-metadata.json advisories bans licenses sources

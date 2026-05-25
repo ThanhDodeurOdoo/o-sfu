@@ -193,7 +193,7 @@ jobs:
 
           # iai-callgrind stores the named baseline under target/iai for the next step in this same job
           git checkout --force "${{ steps.refs.outputs.base-ref }}"
-          cargo bench -p o-sfu-tests --bench packet_loop_callgrind -- --save-baseline=base --save-summary=json
+          cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind -- --save-baseline=base --save-summary=json
 
       - name: Compare head Callgrind baseline
         run: |
@@ -208,7 +208,7 @@ jobs:
 
           # the head run loads the saved base baseline and emits JSON summaries with base-versus-head deltas
           git checkout --force "${{ steps.refs.outputs.head-ref }}"
-          cargo bench -p o-sfu-tests --bench packet_loop_callgrind -- --baseline=base --save-summary=json
+          cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind -- --baseline=base --save-summary=json
 
       - name: Run manual worker Callgrind investigation
         if: github.event_name == 'workflow_dispatch' && inputs.worker_investigation
@@ -232,7 +232,7 @@ jobs:
           # normal pull_request runs never execute it
           # manual PR comments may show its top-level summary when this run maps to one open PR
           git checkout --force "${{ steps.refs.outputs.head-ref }}"
-          cargo bench -p o-sfu-tests --features worker-benchmarks --bench packet_loop_worker_callgrind -- --save-summary=json
+          cargo bench --locked -p o-sfu-tests --features worker-benchmarks --bench packet_loop_worker_callgrind -- --save-summary=json
 
       - name: Collect Callgrind summaries
         if: always()
