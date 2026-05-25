@@ -60,6 +60,7 @@ use crate::{
             bootstrap,
             commands::{RemoteSourceControl, RtcMediaControlCommand, RtcWorkerCommand},
             demux::{MediaRouteDestination, MediaRouteEntry},
+            forwarding_destination::PacketForward,
             media_registry::RegisteredMediaHandle,
             relay_registry::{RelayPacketMailbox, RelayTargetId},
             route_control::{KeyframeRequestDecision, PacketLayerGate},
@@ -171,6 +172,153 @@ fn drain_ready_sessions(state: &mut PacketLoopState) -> Vec<TransportSessionKey>
     collect_ready_session_keys(state, Instant::now())
 }
 
+#[allow(
+    clippy::expect_used,
+    reason = "test setup helpers should fail loudly when a required RTC fixture cannot be built"
+)]
+fn create_rtc_session(state: &mut PacketLoopState, session: &TransportSessionKey, port: u16) {
+    let created = bootstrap::ensure_session_rtc_state(
+        &mut state.users,
+        session,
+        SocketAddr::from(([127, 0, 0, 1], port)),
+        Bitrate::from_mbps(10),
+        MediaCodecFlags::default(),
+    )
+    .expect("test session should enter RTC state");
+    assert!(created, "test session should be newly created");
+}
+
+#[allow(
+    clippy::expect_used,
+    reason = "test setup helpers should fail loudly when a required RTC fixture is missing"
+)]
+fn declare_video_tx(
+    state: &mut PacketLoopState,
+    session: &TransportSessionKey,
+    port: u16,
+    mid: Mid,
+    ssrc: u32,
+) {
+    create_rtc_session(state, session, port);
+    let session_state = state
+        .users
+        .get_mut(session)
+        .expect("test session should be registered");
+    let mut direct_api = session_state.rtc.direct_api();
+    direct_api.declare_media(mid, MediaKind::Video);
+    direct_api.declare_stream_tx(Ssrc::from(ssrc), None, mid, None);
+}
+
+fn insert_open_route(
+    state: &mut PacketLoopState,
+    source_transport_media_id: TransportMediaId,
+    consumer_session: &TransportSessionKey,
+    consumer_transport_media_id: TransportMediaId,
+    consumer_stream: ConsumerStreamHandle,
+    consumer_mid: Mid,
+) {
+    let mut route_entry = MediaRouteEntry::new(true);
+    route_entry.push_destination(MediaRouteDestination {
+        dest_session: consumer_session.clone(),
+        dest_transport_media_id: consumer_transport_media_id,
+        dest_stream: consumer_stream,
+        dest_mid: consumer_mid,
+        dest_payload_type: None,
+        nackable: true,
+        active: true,
+        packet_gate: PacketLayerGate::Open,
+        pending_packet_gate: None,
+    });
+    state
+        .media_route_index
+        .insert(source_transport_media_id, route_entry);
+}
+
+fn register_producer_media(
+    state: &mut PacketLoopState,
+    producer_session: &TransportSessionKey,
+    producer_mid: &str,
+) -> TransportMediaId {
+    state.register_media_handle(RegisteredMediaHandle::Producer {
+        session_key: producer_session.clone(),
+        mid: Mid::from(producer_mid),
+    })
+}
+
+#[allow(
+    clippy::expect_used,
+    reason = "test setup helpers should fail loudly when a required keyframe fixture cannot be built"
+)]
+fn local_keyframe_source(
+    state: &mut PacketLoopState,
+    source_session: &TransportSessionKey,
+    port: u16,
+    source_mid: &str,
+    source_ssrc: u32,
+) -> TransportMediaId {
+    let mid = Mid::from(source_mid);
+    create_rtc_session(state, source_session, port);
+    let source_session_state = state
+        .users
+        .get_mut(source_session)
+        .expect("source session should be registered");
+    let mut direct_api = source_session_state.rtc.direct_api();
+    direct_api.declare_media(mid, MediaKind::Video);
+    direct_api.expect_stream_rx(Ssrc::from(source_ssrc), None, mid, None);
+    register_producer_media(state, source_session, source_mid)
+}
+
+fn register_consumer_media(
+    state: &mut PacketLoopState,
+    consumer_session: &TransportSessionKey,
+    consumer_mid: &str,
+    source_transport_media_id: TransportMediaId,
+) -> TransportMediaId {
+    state.register_media_handle(RegisteredMediaHandle::Consumer {
+        session_key: consumer_session.clone(),
+        mid: Mid::from(consumer_mid),
+        source_transport_media_id,
+    })
+}
+
+fn push_keyframe_request(
+    buffers: &mut PacketLoopBuffers,
+    consumer_session: TransportSessionKey,
+    consumer_mid: &str,
+    kind: KeyframeRequestKind,
+) {
+    buffers.pending_keyframe_requests.push((
+        consumer_session,
+        PendingKeyframeRequest {
+            consumer_mid: Mid::from(consumer_mid),
+            consumer_rid: None,
+            kind,
+        },
+    ));
+}
+
+#[allow(
+    clippy::expect_used,
+    reason = "test setup helpers should fail loudly when a required remote keyframe fixture cannot be built"
+)]
+fn remote_keyframe_source(
+    state: &mut PacketLoopState,
+    source_transport_media_id: TransportMediaId,
+    source_session: &TransportSessionKey,
+    target_id: RelayTargetId,
+    capacity: usize,
+) -> mpsc::Receiver<RtcWorkerCommand> {
+    let (control_tx, control_rx) = mpsc::channel(capacity);
+    state
+        .register_remote_source(
+            source_transport_media_id,
+            source_session,
+            RemoteSourceControl::new(control_tx, target_id),
+        )
+        .expect("remote source should register");
+    control_rx
+}
+
 fn populate_forward_routes(
     state: &PacketLoopState,
     packet_sinks: &impl PacketSinkLookup,
@@ -187,6 +335,88 @@ fn populate_forward_routes(
             packet,
             forwards,
         );
+    }
+}
+
+struct PacketLoopHarness {
+    state: PacketLoopState,
+    buffers: PacketLoopBuffers,
+    metrics: RuntimeMetrics,
+    rtp_metrics: Arc<RtpMetricsRecorder>,
+    rtc_metrics: Arc<RtcMetricsRecorder>,
+}
+
+impl PacketLoopHarness {
+    fn new() -> Self {
+        let metrics = RuntimeMetrics::default();
+        let rtp_metrics = metrics.register_rtp_worker();
+        let datagram_metrics = metrics.register_rtc_worker();
+        Self {
+            state: PacketLoopState::default(),
+            buffers: PacketLoopBuffers::new(),
+            metrics,
+            rtp_metrics,
+            rtc_metrics: datagram_metrics,
+        }
+    }
+
+    fn without_registered_worker_recorders() -> Self {
+        Self {
+            state: PacketLoopState::default(),
+            buffers: PacketLoopBuffers::new(),
+            metrics: RuntimeMetrics::default(),
+            rtp_metrics: Arc::new(RtpMetricsRecorder::default()),
+            rtc_metrics: Arc::new(RtcMetricsRecorder::default()),
+        }
+    }
+
+    fn only_packet_index(&self) -> usize {
+        assert_eq!(
+            self.buffers.pending_packets.len(),
+            1,
+            "forward fixture should contain exactly one packet"
+        );
+        0
+    }
+
+    fn add_recording_sink(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        sink: &Arc<CountingSink>,
+    ) {
+        let packet_index = self.only_packet_index();
+        self.buffers.forwards.push(PacketForward::from_packet_sink(
+            packet_index,
+            source_transport_media_id,
+            RegisteredPacketSink::new(
+                Arc::<CountingSink>::clone(sink),
+                RtpForwardDestinationKind::Recording,
+            ),
+        ));
+    }
+
+    fn add_relay(
+        &mut self,
+        source_transport_media_id: TransportMediaId,
+        target: RelayPacketMailbox,
+    ) {
+        let packet_index = self.only_packet_index();
+        self.buffers.forwards.push(PacketForward::from_relay_target(
+            packet_index,
+            source_transport_media_id,
+            target,
+        ));
+    }
+
+    fn add_local(&mut self, source_transport_media_id: TransportMediaId, destination_index: usize) {
+        let packet_index = self.only_packet_index();
+        self.buffers
+            .forwards
+            .push(PacketForward::from_local_route_destination(
+                packet_index,
+                source_transport_media_id,
+                destination_index,
+            ));
     }
 }
 
@@ -335,23 +565,16 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
     let second_session = test_transport_session_key(51, 0, 54, UserId::Integer(55));
     let packet = [22, 0, 0, 0];
 
-    let first_created = bootstrap::ensure_session_rtc_state(
-        &mut harness.packet_loop_state.users,
+    create_rtc_session(
+        &mut harness.packet_loop_state,
         &first_session,
-        harness.candidate_addr,
-        Bitrate::from_mbps(10),
-        MediaCodecFlags::default(),
+        harness.candidate_addr.port(),
     );
-    let second_created = bootstrap::ensure_session_rtc_state(
-        &mut harness.packet_loop_state.users,
+    create_rtc_session(
+        &mut harness.packet_loop_state,
         &second_session,
-        harness.candidate_addr,
-        Bitrate::from_mbps(10),
-        MediaCodecFlags::default(),
+        harness.candidate_addr.port(),
     );
-
-    assert_eq!(first_created, Ok(true));
-    assert_eq!(second_created, Ok(true));
 
     harness.route(&packet);
 
@@ -367,14 +590,11 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
     let mut harness = IngressRoutingHarness::new(45_046, 45_045);
     let session_key = test_transport_session_key(51, 0, 56, UserId::Integer(57));
 
-    let created = bootstrap::ensure_session_rtc_state(
-        &mut harness.packet_loop_state.users,
+    create_rtc_session(
+        &mut harness.packet_loop_state,
         &session_key,
-        harness.candidate_addr,
-        Bitrate::from_mbps(10),
-        MediaCodecFlags::default(),
+        harness.candidate_addr.port(),
     );
-    assert_eq!(created, Ok(true));
     let local_ice_credentials = harness
         .packet_loop_state
         .users
@@ -510,84 +730,74 @@ fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static 
 #[test]
 fn recording_forward_destination_captures_packets_without_bypassing_the_contract() {
     let producer_session = test_transport_session_key(18, 0, 19, UserId::Integer(20));
-    let mut state = PacketLoopState::default();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let sink = Arc::new(CountingSink::new());
-    let _source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: producer_session.clone(),
-        mid: Mid::from("aud-up"),
-    });
-    let mut buffers = PacketLoopBuffers::new();
-    let metrics = RuntimeMetrics::default();
-    let rtp_metrics = metrics.register_rtp_worker();
-    let rtc_packet_metrics = metrics.register_rtc_worker();
+    let mut harness = PacketLoopHarness::new();
+    register_producer_media(&mut harness.state, &producer_session, "aud-up");
 
     packet_sink_registry.register_room(
         producer_session.room_instance_id(),
         Arc::<CountingSink>::clone(&sink),
         RtpForwardDestinationKind::Recording,
     );
-    buffers.pending_packets.push(sample_forwarded_packet(
-        producer_session,
-        "aud-up",
-        b"payload",
-    ));
+    harness
+        .buffers
+        .pending_packets
+        .push(sample_forwarded_packet(
+            producer_session,
+            "aud-up",
+            b"payload",
+        ));
 
     populate_forward_routes(
-        &state,
+        &harness.state,
         &packet_sink_registry,
-        &*rtc_packet_metrics,
-        &mut buffers.pending_packets,
-        &mut buffers.forwards,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers.pending_packets,
+        &mut harness.buffers.forwards,
     );
     flush_forward_routes(
-        &mut state,
-        &metrics,
-        &rtp_metrics,
-        &rtc_packet_metrics,
-        &mut buffers,
+        &mut harness.state,
+        &harness.metrics,
+        &harness.rtp_metrics,
+        &harness.rtc_metrics,
+        &mut harness.buffers,
     );
 
-    assert_eq!(buffers.forwards.len(), 1);
+    assert_eq!(harness.buffers.forwards.len(), 1);
     assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
-    assert_eq!(metrics.snapshot().rtp_payload_bytes_egress(), 0);
-    assert_eq!(metrics.snapshot().rtp_forwarded_packets_recording(), 1);
+    let snapshot = harness.metrics.snapshot();
+    assert_eq!(snapshot.rtp_payload_bytes_egress(), 0);
+    assert_eq!(snapshot.rtp_forwarded_packets_recording(), 1);
 }
 
 #[test]
 fn flush_forward_routes_writes_hot_rtp_metrics_only_to_the_worker_recorder() {
     let source_session = test_transport_session_key(128, 0, 129, UserId::Integer(130));
     let source_transport_media_id = TransportMediaId::new(131);
-    let mut state = PacketLoopState::default();
+    let mut harness = PacketLoopHarness::without_registered_worker_recorders();
     let sink = Arc::new(CountingSink::new());
-    let mut buffers = PacketLoopBuffers::new();
-    let metrics = RuntimeMetrics::default();
-    let rtp_metrics = RtpMetricsRecorder::default();
-    let rtc_recorder = RtcMetricsRecorder::default();
-    let packet = sample_forwarded_packet(source_session, "aud-up", b"payload");
 
-    buffers.pending_packets.push(packet);
-    buffers.forwards.push(
-        super::super::forwarding_destination::PacketForward::from_packet_sink(
-            0,
-            source_transport_media_id,
-            RegisteredPacketSink::new(
-                Arc::<CountingSink>::clone(&sink),
-                RtpForwardDestinationKind::Recording,
-            ),
-        ),
-    );
+    harness
+        .buffers
+        .pending_packets
+        .push(sample_forwarded_packet(
+            source_session,
+            "aud-up",
+            b"payload",
+        ));
+    harness.add_recording_sink(source_transport_media_id, &sink);
 
     flush_forward_routes(
-        &mut state,
-        &metrics,
-        &rtp_metrics,
-        &rtc_recorder,
-        &mut buffers,
+        &mut harness.state,
+        &harness.metrics,
+        &harness.rtp_metrics,
+        &harness.rtc_metrics,
+        &mut harness.buffers,
     );
 
     assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
-    let snapshot = metrics.snapshot();
+    let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtp_forwarded_packets_recording(), 0);
     assert_eq!(snapshot.rtp_forwarded_payload_bytes_recording(), 0);
     assert_eq!(snapshot.rtp_payload_bytes_egress(), 0);
@@ -596,12 +806,9 @@ fn flush_forward_routes_writes_hot_rtp_metrics_only_to_the_worker_recorder() {
 #[test]
 fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() {
     let producer_session = test_transport_session_key(88, 0, 89, UserId::Integer(90));
-    let producer_mid = Mid::from("cam-up");
     let mut state = PacketLoopState::default();
-    let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: producer_session.clone(),
-        mid: producer_mid,
-    });
+    let source_transport_media_id =
+        register_producer_media(&mut state, &producer_session, "cam-up");
     let metrics = RuntimeMetrics::default();
     let rtp_metrics = metrics.register_rtp_worker();
     let mut buffers = PacketLoopBuffers::new();
@@ -640,50 +847,33 @@ fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() 
 fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
     let source_session = test_transport_session_key(118, 0, 119, UserId::Integer(120));
     let source_transport_media_id = TransportMediaId::new(121);
-    let mut state = PacketLoopState::default();
+    let mut harness = PacketLoopHarness::new();
     let sink = Arc::new(CountingSink::new());
     let (relay_mailbox, mut intra_node_rx) = RelayPacketMailbox::channel_for_test();
-    let mut buffers = PacketLoopBuffers::new();
-    let metrics = RuntimeMetrics::default();
-    let rtp_metrics = metrics.register_rtp_worker();
-    let rtc_recorder = metrics.register_rtc_worker();
-    let packet = sample_already_relayed_packet(
-        source_session,
-        source_transport_media_id,
-        "aud-up",
-        b"payload",
-    );
 
-    buffers.pending_packets.push(packet);
-    buffers.forwards.push(
-        super::super::forwarding_destination::PacketForward::from_packet_sink(
-            0,
+    harness
+        .buffers
+        .pending_packets
+        .push(sample_already_relayed_packet(
+            source_session,
             source_transport_media_id,
-            RegisteredPacketSink::new(
-                Arc::<CountingSink>::clone(&sink),
-                RtpForwardDestinationKind::Recording,
-            ),
-        ),
-    );
-    buffers.forwards.push(
-        super::super::forwarding_destination::PacketForward::from_relay_target(
-            0,
-            source_transport_media_id,
-            relay_mailbox,
-        ),
-    );
+            "aud-up",
+            b"payload",
+        ));
+    harness.add_recording_sink(source_transport_media_id, &sink);
+    harness.add_relay(source_transport_media_id, relay_mailbox);
     flush_forward_routes(
-        &mut state,
-        &metrics,
-        &rtp_metrics,
-        &rtc_recorder,
-        &mut buffers,
+        &mut harness.state,
+        &harness.metrics,
+        &harness.rtp_metrics,
+        &harness.rtc_metrics,
+        &mut harness.buffers,
     );
 
     assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
     assert!(intra_node_rx.try_recv().is_ok());
 
-    let snapshot = metrics.snapshot();
+    let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtp_forwarded_packets_local_rtc(), 0);
     assert_eq!(snapshot.rtp_forwarded_packets_recording(), 1);
     assert_eq!(snapshot.rtp_forwarded_packets_intra_node_relay(), 1);
@@ -697,105 +887,71 @@ fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
 }
 
 #[test]
-fn flush_forward_routes_records_packet_sink_source_key_for_local_packet() {
+fn flush_forward_routes_records_packet_sink_source_key_for_local_packet() -> Result<(), &'static str>
+{
     let source_session = test_transport_session_key(130, 0, 131, UserId::Integer(132));
     let source_transport_media_id = TransportMediaId::new(133);
-    let mut state = PacketLoopState::default();
-    assert!(
-        bootstrap::ensure_session_rtc_state(
-            &mut state.users,
-            &source_session,
-            SocketAddr::from(([127, 0, 0, 1], 9)),
-            Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
-        )
-        .is_ok()
-    );
-    let source_handle = state.users.handle_for_key(&source_session);
-    assert!(source_handle.is_some());
-    let Some(source_handle) = source_handle else {
-        return;
-    };
+    let mut harness = PacketLoopHarness::new();
+    create_rtc_session(&mut harness.state, &source_session, 9);
+    let source_handle = harness
+        .state
+        .users
+        .handle_for_key(&source_session)
+        .ok_or("source handle missing after session setup")?;
     let sink = Arc::new(CountingSink::new());
-    let mut buffers = PacketLoopBuffers::new();
-    let metrics = RuntimeMetrics::default();
-    let rtp_metrics = metrics.register_rtp_worker();
-    let rtc_recorder = metrics.register_rtc_worker();
 
-    buffers.pending_packets.push(sample_local_forwarded_packet(
-        source_handle,
-        "aud-up",
-        b"payload",
-    ));
-    buffers.forwards.push(
-        super::super::forwarding_destination::PacketForward::from_packet_sink(
-            0,
-            source_transport_media_id,
-            RegisteredPacketSink::new(
-                Arc::<CountingSink>::clone(&sink),
-                RtpForwardDestinationKind::Recording,
-            ),
-        ),
-    );
+    harness
+        .buffers
+        .pending_packets
+        .push(sample_local_forwarded_packet(
+            source_handle,
+            "aud-up",
+            b"payload",
+        ));
+    harness.add_recording_sink(source_transport_media_id, &sink);
 
     flush_forward_routes(
-        &mut state,
-        &metrics,
-        &rtp_metrics,
-        &rtc_recorder,
-        &mut buffers,
+        &mut harness.state,
+        &harness.metrics,
+        &harness.rtp_metrics,
+        &harness.rtc_metrics,
+        &mut harness.buffers,
     );
 
     assert_eq!(sink.last_session(), Some(source_session));
+    Ok(())
 }
 
 #[test]
 fn flush_forward_routes_records_closed_relays_and_keeps_later_destinations() {
     let source_session = test_transport_session_key(119, 0, 120, UserId::Integer(121));
     let source_transport_media_id = TransportMediaId::new(122);
-    let mut state = PacketLoopState::default();
+    let mut harness = PacketLoopHarness::new();
     let sink = Arc::new(CountingSink::new());
     let (relay_mailbox, relay_rx) = RelayPacketMailbox::channel_for_test();
-    let mut buffers = PacketLoopBuffers::new();
-    let metrics = RuntimeMetrics::default();
-    let rtp_metrics = metrics.register_rtp_worker();
-    let rtc_recorder = metrics.register_rtc_worker();
-    let packet = sample_already_relayed_packet(
-        source_session,
-        source_transport_media_id,
-        "aud-up",
-        b"payload",
-    );
+
+    harness
+        .buffers
+        .pending_packets
+        .push(sample_already_relayed_packet(
+            source_session,
+            source_transport_media_id,
+            "aud-up",
+            b"payload",
+        ));
 
     drop(relay_rx);
-    buffers.pending_packets.push(packet);
-    buffers.forwards.push(
-        super::super::forwarding_destination::PacketForward::from_relay_target(
-            0,
-            source_transport_media_id,
-            relay_mailbox,
-        ),
-    );
-    buffers.forwards.push(
-        super::super::forwarding_destination::PacketForward::from_packet_sink(
-            0,
-            source_transport_media_id,
-            RegisteredPacketSink::new(
-                Arc::<CountingSink>::clone(&sink),
-                RtpForwardDestinationKind::Recording,
-            ),
-        ),
-    );
-
+    harness.add_relay(source_transport_media_id, relay_mailbox);
+    harness.add_recording_sink(source_transport_media_id, &sink);
     flush_forward_routes(
-        &mut state,
-        &metrics,
-        &rtp_metrics,
-        &rtc_recorder,
-        &mut buffers,
+        &mut harness.state,
+        &harness.metrics,
+        &harness.rtp_metrics,
+        &harness.rtc_metrics,
+        &mut harness.buffers,
     );
 
-    let snapshot = metrics.snapshot();
+    let snapshot = harness.metrics.snapshot();
     assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
     assert_eq!(snapshot.rtc_relay_enqueue_intra_node_closed(), 1);
     assert_eq!(snapshot.rtc_relay_mailbox_depth_samples(), 1);
@@ -804,163 +960,119 @@ fn flush_forward_routes_records_closed_relays_and_keeps_later_destinations() {
 }
 
 #[test]
-fn flush_forward_routes_marks_local_consumer_sessions_dirty() {
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_051));
+fn flush_forward_routes_marks_local_consumer_sessions_dirty() -> Result<(), &'static str> {
     let producer_session = test_transport_session_key(218, 0, 219, UserId::Integer(220));
     let consumer_session = test_transport_session_key(218, 0, 221, UserId::Integer(222));
     let consumer_mid = Mid::from("cam-down");
-    let mut state = PacketLoopState::default();
-    let mut buffers = PacketLoopBuffers::new();
-    let metrics = RuntimeMetrics::default();
-    let rtp_metrics = metrics.register_rtp_worker();
-    let rtc_recorder = RtcMetricsRecorder::default();
-
-    assert!(
-        bootstrap::ensure_session_rtc_state(
-            &mut state.users,
-            &consumer_session,
-            candidate_addr,
-            Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
-        )
-        .is_ok()
+    let mut harness = PacketLoopHarness::new();
+    declare_video_tx(
+        &mut harness.state,
+        &consumer_session,
+        45_051,
+        consumer_mid,
+        223_001,
     );
-    let Some(consumer_session_state) = state.users.get_mut(&consumer_session) else {
-        return;
-    };
-    let consumer_stream = consumer_session_state.consumer_streams.allocate();
-    let mut direct_api = consumer_session_state.rtc.direct_api();
-    direct_api.declare_media(consumer_mid, MediaKind::Video);
-    direct_api.declare_stream_tx(Ssrc::from(223_001_u32), None, consumer_mid, None);
+    let consumer_stream = harness
+        .state
+        .users
+        .get_mut(&consumer_session)
+        .ok_or("consumer session missing after setup")?
+        .consumer_streams
+        .allocate();
 
-    buffers.pending_packets.push(sample_forwarded_packet(
-        producer_session,
-        "cam-up",
-        b"payload",
-    ));
+    harness
+        .buffers
+        .pending_packets
+        .push(sample_forwarded_packet(
+            producer_session,
+            "cam-up",
+            b"payload",
+        ));
     let source_transport_media_id = TransportMediaId::new(224);
-    let mut route_entry = MediaRouteEntry::new(true);
-    route_entry.push_destination(MediaRouteDestination {
-        dest_session: consumer_session.clone(),
-        dest_transport_media_id: TransportMediaId::new(223),
-        dest_stream: consumer_stream,
-        dest_mid: consumer_mid,
-        dest_payload_type: None,
-        nackable: true,
-        active: true,
-        packet_gate: PacketLayerGate::Open,
-        pending_packet_gate: None,
-    });
-    state
-        .media_route_index
-        .insert(source_transport_media_id, route_entry);
-    buffers.forwards.push(
-        super::super::forwarding_destination::PacketForward::from_local_route_destination(
-            0,
-            source_transport_media_id,
-            0,
-        ),
+    insert_open_route(
+        &mut harness.state,
+        source_transport_media_id,
+        &consumer_session,
+        TransportMediaId::new(223),
+        consumer_stream,
+        consumer_mid,
     );
+    harness.add_local(source_transport_media_id, 0);
 
     flush_forward_routes(
-        &mut state,
-        &metrics,
-        &rtp_metrics,
-        &rtc_recorder,
-        &mut buffers,
+        &mut harness.state,
+        &harness.metrics,
+        &harness.rtp_metrics,
+        &harness.rtc_metrics,
+        &mut harness.buffers,
     );
 
-    assert_eq!(drain_ready_sessions(&mut state), vec![consumer_session]);
-    assert_eq!(metrics.snapshot().rtp_forwarded_packets_local_rtc(), 1);
+    assert_eq!(
+        drain_ready_sessions(&mut harness.state),
+        vec![consumer_session]
+    );
+    assert_eq!(
+        harness.metrics.snapshot().rtp_forwarded_packets_local_rtc(),
+        1
+    );
+    Ok(())
 }
 
 #[test]
 fn flush_forward_routes_drops_stale_local_consumer_stream_handle() {
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_053));
     let producer_session = test_transport_session_key(219, 0, 220, UserId::Integer(221));
     let consumer_session = test_transport_session_key(219, 0, 222, UserId::Integer(223));
     let consumer_mid = Mid::from("cam-down");
-    let mut state = PacketLoopState::default();
-    let mut buffers = PacketLoopBuffers::new();
-    let metrics = RuntimeMetrics::default();
-    let rtp_metrics = metrics.register_rtp_worker();
-    let rtc_recorder = RtcMetricsRecorder::default();
-
-    assert!(
-        bootstrap::ensure_session_rtc_state(
-            &mut state.users,
-            &consumer_session,
-            candidate_addr,
-            Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
-        )
-        .is_ok()
+    let mut harness = PacketLoopHarness::new();
+    declare_video_tx(
+        &mut harness.state,
+        &consumer_session,
+        45_053,
+        consumer_mid,
+        224_001,
     );
-    let Some(consumer_session_state) = state.users.get_mut(&consumer_session) else {
-        return;
-    };
-    let mut direct_api = consumer_session_state.rtc.direct_api();
-    direct_api.declare_media(consumer_mid, MediaKind::Video);
-    direct_api.declare_stream_tx(Ssrc::from(224_001_u32), None, consumer_mid, None);
 
-    buffers.pending_packets.push(sample_forwarded_packet(
-        producer_session,
-        "cam-up",
-        b"payload",
-    ));
+    harness
+        .buffers
+        .pending_packets
+        .push(sample_forwarded_packet(
+            producer_session,
+            "cam-up",
+            b"payload",
+        ));
     let source_transport_media_id = TransportMediaId::new(225);
-    let mut route_entry = MediaRouteEntry::new(true);
-    route_entry.push_destination(MediaRouteDestination {
-        dest_session: consumer_session.clone(),
-        dest_transport_media_id: TransportMediaId::new(224),
-        dest_stream: ConsumerStreamHandle::default(),
-        dest_mid: consumer_mid,
-        dest_payload_type: None,
-        nackable: true,
-        active: true,
-        packet_gate: PacketLayerGate::Open,
-        pending_packet_gate: None,
-    });
-    state
-        .media_route_index
-        .insert(source_transport_media_id, route_entry);
-    buffers.forwards.push(
-        super::super::forwarding_destination::PacketForward::from_local_route_destination(
-            0,
-            source_transport_media_id,
-            0,
-        ),
+    insert_open_route(
+        &mut harness.state,
+        source_transport_media_id,
+        &consumer_session,
+        TransportMediaId::new(224),
+        ConsumerStreamHandle::default(),
+        consumer_mid,
     );
+    harness.add_local(source_transport_media_id, 0);
 
     flush_forward_routes(
-        &mut state,
-        &metrics,
-        &rtp_metrics,
-        &rtc_recorder,
-        &mut buffers,
+        &mut harness.state,
+        &harness.metrics,
+        &harness.rtp_metrics,
+        &harness.rtc_metrics,
+        &mut harness.buffers,
     );
 
-    assert!(drain_ready_sessions(&mut state).is_empty());
-    assert_eq!(metrics.snapshot().rtp_forwarded_packets_local_rtc(), 0);
+    assert!(drain_ready_sessions(&mut harness.state).is_empty());
+    assert_eq!(
+        harness.metrics.snapshot().rtp_forwarded_packets_local_rtc(),
+        0
+    );
 }
 
 #[test]
 fn packet_loop_dirty_marks_are_unique_until_the_session_is_drained() {
     let mut state = PacketLoopState::default();
     let session = test_transport_session_key(318, 0, 319, UserId::Integer(320));
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_052));
     let now = Instant::now();
 
-    assert!(
-        bootstrap::ensure_session_rtc_state(
-            &mut state.users,
-            &session,
-            candidate_addr,
-            Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
-        )
-        .is_ok()
-    );
+    create_rtc_session(&mut state, &session, 45_052);
     state.mark_session_dirty(&session);
     state.mark_session_dirty(&session);
     let ready_sessions = collect_ready_session_keys(&mut state, now);
@@ -977,19 +1089,9 @@ fn packet_loop_dirty_marks_are_unique_until_the_session_is_drained() {
 fn packet_loop_wakes_immediately_when_forwarding_marks_a_session_dirty() {
     let mut state = PacketLoopState::default();
     let session = test_transport_session_key(318, 0, 319, UserId::Integer(320));
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_053));
     let future_timeout = Instant::now() + Duration::from_secs(30);
 
-    assert!(
-        bootstrap::ensure_session_rtc_state(
-            &mut state.users,
-            &session,
-            candidate_addr,
-            Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
-        )
-        .is_ok()
-    );
+    create_rtc_session(&mut state, &session, 45_053);
     state.update_session_timeout(&session, Some(future_timeout));
     state.mark_session_dirty(&session);
 
@@ -1182,21 +1284,16 @@ async fn packet_loop_mailbox_wakes_for_relay_without_control_or_socket_input() {
 fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_tracking() {
     let producer_session = test_transport_session_key(28, 0, 29, UserId::Integer(30));
     let consumer_session = test_transport_session_key(28, 0, 31, UserId::Integer(32));
-    let mut state = PacketLoopState::default();
+    let mut harness = PacketLoopHarness::new();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
-    let metrics = RuntimeMetrics::default();
-    let rtp_metrics = metrics.register_rtp_worker();
-    let rtc_packet_metrics = metrics.register_rtc_worker();
-    let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: producer_session.clone(),
-        mid: Mid::from("aud-up"),
-    });
-    let consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: consumer_session.clone(),
-            mid: Mid::from("aud-down"),
-            source_transport_media_id,
-        });
+    let source_transport_media_id =
+        register_producer_media(&mut harness.state, &producer_session, "aud-up");
+    let consumer_transport_media_id = register_consumer_media(
+        &mut harness.state,
+        &consumer_session,
+        "aud-down",
+        source_transport_media_id,
+    );
     let mut route_entry = MediaRouteEntry::new(true);
     route_entry.push_destination(MediaRouteDestination {
         dest_session: consumer_session,
@@ -1209,11 +1306,12 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
         packet_gate: PacketLayerGate::Open,
         pending_packet_gate: None,
     });
-    state
+    harness
+        .state
         .media_route_index
         .insert(source_transport_media_id, route_entry);
-    let mut buffers = PacketLoopBuffers::new();
-    buffers
+    harness
+        .buffers
         .pending_packets
         .push(sample_forwarded_packet_with_audio_activity(
             producer_session,
@@ -1224,22 +1322,22 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
         ));
 
     record_incoming_stats(
-        &mut state,
+        &mut harness.state,
         &SourcePolicySignal::default(),
-        &metrics,
-        &rtp_metrics,
-        &mut buffers,
+        &harness.metrics,
+        &harness.rtp_metrics,
+        &mut harness.buffers,
     );
     populate_forward_routes(
-        &state,
+        &harness.state,
         &packet_sink_registry,
-        &*rtc_packet_metrics,
-        &mut buffers.pending_packets,
-        &mut buffers.forwards,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers.pending_packets,
+        &mut harness.buffers.forwards,
     );
 
-    assert!(buffers.forwards.is_empty());
-    let snapshot = metrics.snapshot();
+    assert!(harness.buffers.forwards.is_empty());
+    let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_layer_dropped(), 1);
     assert_eq!(snapshot.rtc_route_control_layer_allowed(), 0);
 }
@@ -1249,10 +1347,7 @@ fn repeated_active_audio_packets_do_not_republish_source_policy_dirty_room() {
     let producer_session = test_transport_session_key(39, 0, 40, UserId::Integer(41));
     let room_instance_id = producer_session.room_instance_id();
     let mut state = PacketLoopState::default();
-    state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: producer_session.clone(),
-        mid: Mid::from("aud-up"),
-    });
+    register_producer_media(&mut state, &producer_session, "aud-up");
     let metrics = RuntimeMetrics::default();
     let rtp_metrics = metrics.register_rtp_worker();
     let source_policy_signal = SourcePolicySignal::default();
@@ -1306,14 +1401,10 @@ fn active_audio_rank_change_publishes_source_policy_dirty_room() {
     let second_producer_session = test_transport_session_key(42, 0, 45, UserId::Integer(46));
     let room_instance_id = first_producer_session.room_instance_id();
     let mut state = PacketLoopState::default();
-    let first_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: first_producer_session.clone(),
-        mid: Mid::from("aud-first"),
-    });
-    let second_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: second_producer_session,
-        mid: Mid::from("aud-second"),
-    });
+    let first_transport_media_id =
+        register_producer_media(&mut state, &first_producer_session, "aud-first");
+    let second_transport_media_id =
+        register_producer_media(&mut state, &second_producer_session, "aud-second");
     let shared_observed_at = Instant::now();
     assert!(state.route_control.observe_audio_activity(
         first_transport_media_id,
@@ -1448,46 +1539,35 @@ fn drain_relay_packets_stops_at_the_configured_cap() {
 fn flush_forward_routes_records_relay_overload_drops() {
     let source_session = test_transport_session_key(29, 0, 30, UserId::Integer(31));
     let source_transport_media_id = TransportMediaId::new(32);
-    let mut state = PacketLoopState::default();
+    let mut harness = PacketLoopHarness::new();
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test_with_capacity(1);
-    let mut buffers = PacketLoopBuffers::new();
-    let metrics = RuntimeMetrics::default();
-    let rtp_metrics = metrics.register_rtp_worker();
-    let rtc_recorder = metrics.register_rtc_worker();
-    let packet = sample_already_relayed_packet(
-        source_session,
-        source_transport_media_id,
-        "aud-up",
-        b"payload",
-    );
+
+    harness
+        .buffers
+        .pending_packets
+        .push(sample_already_relayed_packet(
+            source_session.clone(),
+            source_transport_media_id,
+            "aud-up",
+            b"payload",
+        ));
 
     relay_mailbox.forward_packet(
-        &state,
-        &sample_forwarded_packet(
-            test_transport_session_key(29, 0, 30, UserId::Integer(31)),
-            "aud-up",
-            b"prefill",
-        ),
+        &harness.state,
+        &sample_forwarded_packet(source_session, "aud-up", b"prefill"),
         source_transport_media_id,
     );
-    buffers.pending_packets.push(packet);
-    buffers.forwards.push(
-        super::super::forwarding_destination::PacketForward::from_relay_target(
-            0,
-            source_transport_media_id,
-            relay_mailbox,
-        ),
-    );
+    harness.add_relay(source_transport_media_id, relay_mailbox);
 
     flush_forward_routes(
-        &mut state,
-        &metrics,
-        &rtp_metrics,
-        &rtc_recorder,
-        &mut buffers,
+        &mut harness.state,
+        &harness.metrics,
+        &harness.rtp_metrics,
+        &harness.rtc_metrics,
+        &mut harness.buffers,
     );
 
-    let snapshot = metrics.snapshot();
+    let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtp_forwarded_packets_intra_node_relay(), 0);
     assert_eq!(snapshot.rtp_relay_overload_drops_intra_node_relay(), 1);
     assert_eq!(snapshot.rtc_relay_enqueue_intra_node_overloaded(), 1);
@@ -1497,59 +1577,41 @@ fn flush_forward_routes_records_relay_overload_drops() {
 
 #[test]
 fn flush_pending_keyframe_requests_marks_local_source_sessions_dirty() {
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_050));
     let source_session = test_transport_session_key(61, 0, 62, UserId::Integer(63));
     let consumer_session = test_transport_session_key(61, 0, 64, UserId::Integer(65));
-    let source_mid = Mid::from("cam-up");
-    let consumer_mid = Mid::from("cam-down");
-    let mut state = PacketLoopState::default();
-    let mut buffers = PacketLoopBuffers::new();
-    let metrics = RuntimeMetrics::default();
-    let rtc_metrics = metrics.register_rtc_worker();
+    let mut harness = PacketLoopHarness::new();
 
-    assert!(
-        bootstrap::ensure_session_rtc_state(
-            &mut state.users,
-            &source_session,
-            candidate_addr,
-            Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
-        )
-        .is_ok()
+    let source_transport_media_id = local_keyframe_source(
+        &mut harness.state,
+        &source_session,
+        45_050,
+        "cam-up",
+        44_444,
     );
-    let Some(source_session_state) = state.users.get_mut(&source_session) else {
-        return;
-    };
-    let mut direct_api = source_session_state.rtc.direct_api();
-    direct_api.declare_media(source_mid, MediaKind::Video);
-    direct_api.expect_stream_rx(Ssrc::from(44_444_u32), None, source_mid, None);
-
-    let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: source_session.clone(),
-        mid: source_mid,
-    });
-    let _consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: consumer_session.clone(),
-            mid: consumer_mid,
-            source_transport_media_id,
-        });
-    buffers.pending_keyframe_requests.push((
+    register_consumer_media(
+        &mut harness.state,
+        &consumer_session,
+        "cam-down",
+        source_transport_media_id,
+    );
+    push_keyframe_request(
+        &mut harness.buffers,
         consumer_session,
-        PendingKeyframeRequest {
-            consumer_mid,
-            consumer_rid: None,
-            kind: KeyframeRequestKind::Pli,
-        },
-    ));
+        "cam-down",
+        KeyframeRequestKind::Pli,
+    );
 
-    flush_pending_keyframe_requests(&mut state, &*rtc_metrics, &mut buffers);
+    flush_pending_keyframe_requests(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+    );
 
     assert_eq!(
-        drain_ready_sessions(&mut state),
+        drain_ready_sessions(&mut harness.state),
         vec![source_session.clone()]
     );
-    let snapshot = metrics.snapshot();
+    let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
     assert_eq!(snapshot.rtc_route_control_absorbed(), 0);
 }
@@ -1558,39 +1620,34 @@ fn flush_pending_keyframe_requests_marks_local_source_sessions_dirty() {
 fn flush_pending_keyframe_requests_forwards_remote_sources_by_transport_media_id() {
     let source_session = test_transport_session_key(71, 0, 72, UserId::Integer(73));
     let consumer_session = test_transport_session_key(71, 1, 74, UserId::Integer(75));
-    let consumer_mid = Mid::from("cam-down");
     let source_transport_media_id = TransportMediaId::new(91);
-    let mut state = PacketLoopState::default();
-    let mut buffers = PacketLoopBuffers::new();
-    let metrics = RuntimeMetrics::default();
-    let rtc_metrics = metrics.register_rtc_worker();
-    let (control_tx, mut control_rx) = mpsc::channel(1);
-
-    assert!(
-        state
-            .register_remote_source(
-                source_transport_media_id,
-                &source_session,
-                RemoteSourceControl::new(control_tx, RelayTargetId::new(1)),
-            )
-            .is_ok()
+    let mut harness = PacketLoopHarness::new();
+    let mut control_rx = remote_keyframe_source(
+        &mut harness.state,
+        source_transport_media_id,
+        &source_session,
+        RelayTargetId::new(1),
+        1,
     );
-    let _consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: consumer_session.clone(),
-            mid: consumer_mid,
-            source_transport_media_id,
-        });
-    buffers.pending_keyframe_requests.push((
-        consumer_session,
-        PendingKeyframeRequest {
-            consumer_mid,
-            consumer_rid: None,
-            kind: KeyframeRequestKind::Fir,
-        },
-    ));
 
-    flush_pending_keyframe_requests(&mut state, &*rtc_metrics, &mut buffers);
+    register_consumer_media(
+        &mut harness.state,
+        &consumer_session,
+        "cam-down",
+        source_transport_media_id,
+    );
+    push_keyframe_request(
+        &mut harness.buffers,
+        consumer_session,
+        "cam-down",
+        KeyframeRequestKind::Fir,
+    );
+
+    flush_pending_keyframe_requests(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+    );
 
     let command = control_rx.try_recv().ok();
     assert!(matches!(
@@ -1605,7 +1662,7 @@ fn flush_pending_keyframe_requests_forwards_remote_sources_by_transport_media_id
             && target_id == RelayTargetId::new(1)
             && forwarded_transport_media_id == source_transport_media_id
     ));
-    assert_eq!(metrics.snapshot().rtc_route_control_forwarded(), 1);
+    assert_eq!(harness.metrics.snapshot().rtc_route_control_forwarded(), 1);
 }
 
 #[test]
@@ -1613,53 +1670,46 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
     let source_session = test_transport_session_key(81, 0, 82, UserId::Integer(83));
     let first_consumer_session = test_transport_session_key(81, 1, 84, UserId::Integer(85));
     let second_consumer_session = test_transport_session_key(81, 1, 86, UserId::Integer(87));
-    let consumer_mid = Mid::from("cam-down");
     let source_transport_media_id = TransportMediaId::new(101);
-    let mut state = PacketLoopState::default();
-    let mut buffers = PacketLoopBuffers::new();
-    let metrics = RuntimeMetrics::default();
-    let rtc_metrics = metrics.register_rtc_worker();
-    let (control_tx, mut control_rx) = mpsc::channel(2);
-
-    assert!(
-        state
-            .register_remote_source(
-                source_transport_media_id,
-                &source_session,
-                RemoteSourceControl::new(control_tx, RelayTargetId::new(4)),
-            )
-            .is_ok()
+    let mut harness = PacketLoopHarness::new();
+    let mut control_rx = remote_keyframe_source(
+        &mut harness.state,
+        source_transport_media_id,
+        &source_session,
+        RelayTargetId::new(4),
+        2,
     );
-    let _first_consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: first_consumer_session.clone(),
-            mid: consumer_mid,
-            source_transport_media_id,
-        });
-    let _second_consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: second_consumer_session.clone(),
-            mid: Mid::from("cam-down-2"),
-            source_transport_media_id,
-        });
-    buffers.pending_keyframe_requests.push((
-        first_consumer_session,
-        PendingKeyframeRequest {
-            consumer_mid,
-            consumer_rid: None,
-            kind: KeyframeRequestKind::Pli,
-        },
-    ));
-    buffers.pending_keyframe_requests.push((
-        second_consumer_session,
-        PendingKeyframeRequest {
-            consumer_mid: Mid::from("cam-down-2"),
-            consumer_rid: None,
-            kind: KeyframeRequestKind::Fir,
-        },
-    ));
 
-    flush_pending_keyframe_requests(&mut state, &*rtc_metrics, &mut buffers);
+    register_consumer_media(
+        &mut harness.state,
+        &first_consumer_session,
+        "cam-down",
+        source_transport_media_id,
+    );
+    register_consumer_media(
+        &mut harness.state,
+        &second_consumer_session,
+        "cam-down-2",
+        source_transport_media_id,
+    );
+    push_keyframe_request(
+        &mut harness.buffers,
+        first_consumer_session,
+        "cam-down",
+        KeyframeRequestKind::Pli,
+    );
+    push_keyframe_request(
+        &mut harness.buffers,
+        second_consumer_session,
+        "cam-down-2",
+        KeyframeRequestKind::Fir,
+    );
+
+    flush_pending_keyframe_requests(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+    );
 
     let command = control_rx.try_recv().ok();
     assert!(matches!(
@@ -1675,84 +1725,66 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
             && forwarded_transport_media_id == source_transport_media_id
     ));
     assert!(control_rx.try_recv().is_err());
-    let snapshot = metrics.snapshot();
+    let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
     assert_eq!(snapshot.rtc_route_control_absorbed(), 0);
 }
 
 #[test]
 fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_flush() {
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 45_060));
     let source_session = test_transport_session_key(91, 0, 92, UserId::Integer(93));
     let first_consumer_session = test_transport_session_key(91, 0, 94, UserId::Integer(95));
     let second_consumer_session = test_transport_session_key(91, 0, 96, UserId::Integer(97));
-    let source_mid = Mid::from("cam-up");
-    let mut state = PacketLoopState::default();
-    let mut buffers = PacketLoopBuffers::new();
-    let metrics = RuntimeMetrics::default();
-    let rtc_metrics = metrics.register_rtc_worker();
+    let mut harness = PacketLoopHarness::new();
 
-    assert!(
-        bootstrap::ensure_session_rtc_state(
-            &mut state.users,
-            &source_session,
-            candidate_addr,
-            Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
-        )
-        .is_ok()
+    let source_transport_media_id = local_keyframe_source(
+        &mut harness.state,
+        &source_session,
+        45_060,
+        "cam-up",
+        55_555,
     );
-    let Some(source_session_state) = state.users.get_mut(&source_session) else {
-        return;
-    };
-    let mut direct_api = source_session_state.rtc.direct_api();
-    direct_api.declare_media(source_mid, MediaKind::Video);
-    direct_api.expect_stream_rx(Ssrc::from(55_555_u32), None, source_mid, None);
-
-    let source_transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: source_session.clone(),
-        mid: source_mid,
-    });
-    let _first_consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: first_consumer_session.clone(),
-            mid: Mid::from("cam-down-1"),
-            source_transport_media_id,
-        });
-    let _second_consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: second_consumer_session.clone(),
-            mid: Mid::from("cam-down-2"),
-            source_transport_media_id,
-        });
-    buffers.pending_keyframe_requests.push((
+    register_consumer_media(
+        &mut harness.state,
+        &first_consumer_session,
+        "cam-down-1",
+        source_transport_media_id,
+    );
+    register_consumer_media(
+        &mut harness.state,
+        &second_consumer_session,
+        "cam-down-2",
+        source_transport_media_id,
+    );
+    push_keyframe_request(
+        &mut harness.buffers,
         first_consumer_session,
-        PendingKeyframeRequest {
-            consumer_mid: Mid::from("cam-down-1"),
-            consumer_rid: None,
-            kind: KeyframeRequestKind::Pli,
-        },
-    ));
-    buffers.pending_keyframe_requests.push((
+        "cam-down-1",
+        KeyframeRequestKind::Pli,
+    );
+    push_keyframe_request(
+        &mut harness.buffers,
         second_consumer_session,
-        PendingKeyframeRequest {
-            consumer_mid: Mid::from("cam-down-2"),
-            consumer_rid: None,
-            kind: KeyframeRequestKind::Fir,
-        },
-    ));
+        "cam-down-2",
+        KeyframeRequestKind::Fir,
+    );
 
-    flush_pending_keyframe_requests(&mut state, &*rtc_metrics, &mut buffers);
+    flush_pending_keyframe_requests(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+    );
 
-    let snapshot = metrics.snapshot();
+    let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
     assert_eq!(snapshot.rtc_route_control_absorbed(), 0);
     assert_eq!(
-        drain_ready_sessions(&mut state),
+        drain_ready_sessions(&mut harness.state),
         vec![source_session.clone()]
     );
     assert_eq!(
-        state
+        harness
+            .state
             .route_control
             .decide_keyframe_request(source_transport_media_id, Instant::now()),
         KeyframeRequestDecision::Absorb
