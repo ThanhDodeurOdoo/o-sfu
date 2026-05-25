@@ -278,18 +278,7 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
         rtc_engine_with_bitrate_limits(Bitrate::from_bps(2_222_222), Bitrate::from_bps(3_333_333));
     let session_key = transport_key(1, 135, UserId::Integer(135));
 
-    let mut remote = build_remote_rtc(55_135);
-    let initial_offer = adapter
-        .create_initial_session_offer(&session_key)
-        .await
-        .expect("initial offer should succeed");
-    apply_offer_answer(
-        &adapter,
-        &session_key,
-        &mut remote,
-        initial_offer.into_sdp(),
-    )
-    .await;
+    let mut remote = complete_initial_offer_answer(&adapter, &session_key, 55_135).await;
 
     let transport_media_id = adapter
         .add_recv_media(
@@ -342,7 +331,7 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
         .to_sdp_string();
     let answer_sdp = answer_with_simulcast_send_rids(
         &answer_sdp,
-        negotiated_mid.to_string().as_str(),
+        &negotiated_mid,
         &[("lo", Some(150_000)), ("hi", Some(900_000))],
     );
     let applied_answer = adapter
@@ -376,19 +365,7 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
 async fn rtc_simulcast_answer_rejects_unoffered_rid_alternatives() {
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 335, UserId::Integer(335));
-    let mut remote = build_remote_rtc(55_035);
-
-    let initial_offer = adapter
-        .create_initial_session_offer(&session_key)
-        .await
-        .expect("initial offer should succeed");
-    apply_offer_answer(
-        &adapter,
-        &session_key,
-        &mut remote,
-        initial_offer.into_sdp(),
-    )
-    .await;
+    let mut remote = complete_initial_offer_answer(&adapter, &session_key, 55_035).await;
 
     let transport_media_id = adapter
         .add_recv_media(
@@ -416,7 +393,7 @@ async fn rtc_simulcast_answer_rejects_unoffered_rid_alternatives() {
         .to_sdp_string();
     let answer_sdp = answer_with_simulcast_send_rids(
         &answer_sdp,
-        negotiated_mid.to_string().as_str(),
+        &negotiated_mid,
         &[("lo", Some(150_000)), ("hi", Some(900_000))],
     )
     .replacen(
@@ -462,18 +439,7 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
         rtc_engine_with_bitrate_limits(Bitrate::from_bps(2_222_222), Bitrate::from_bps(3_333_333));
     let session_key = transport_key(1, 45, UserId::Integer(45));
 
-    let mut remote = build_remote_rtc(55_006);
-    let initial_offer = adapter
-        .create_initial_session_offer(&session_key)
-        .await
-        .expect("initial offer should succeed");
-    apply_offer_answer(
-        &adapter,
-        &session_key,
-        &mut remote,
-        initial_offer.into_sdp(),
-    )
-    .await;
+    let mut remote = complete_initial_offer_answer(&adapter, &session_key, 55_006).await;
 
     let transport_media_id = adapter
         .add_recv_media(
@@ -516,10 +482,7 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
         .negotiated_producer_parameters(&session_key, transport_media_id)
         .await
         .expect("answered producer negotiation should project router RTP parameters");
-    assert_eq!(
-        negotiated_parameters.mid(),
-        Some(negotiated_mid.to_string().as_str())
-    );
+    assert_eq!(negotiated_parameters.mid(), Some(&*negotiated_mid));
     assert!(
         negotiated_parameters.formats().next().is_some(),
         "projected producer parameters should include negotiated media formats"
@@ -536,18 +499,7 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 46, UserId::Integer(46));
 
-    let mut remote = build_remote_rtc(55_007);
-    let initial_offer = adapter
-        .create_initial_session_offer(&session_key)
-        .await
-        .expect("initial offer should succeed");
-    apply_offer_answer(
-        &adapter,
-        &session_key,
-        &mut remote,
-        initial_offer.into_sdp(),
-    )
-    .await;
+    let mut remote = complete_initial_offer_answer(&adapter, &session_key, 55_007).await;
 
     let transport_media_id = adapter
         .add_recv_media(
@@ -584,7 +536,7 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
         .to_sdp_string();
     let answer_sdp = answer_with_simulcast_send_rids(
         &answer_sdp,
-        negotiated_mid.to_string().as_str(),
+        &negotiated_mid,
         &[("lo", Some(150_000)), ("hi", Some(4_000_000))],
     );
 
@@ -615,18 +567,7 @@ async fn rtc_session_renegotiation_projects_multiple_protocol_producers_from_one
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 48, UserId::Integer(48));
 
-    let mut remote = build_remote_rtc(55_048);
-    let initial_offer = adapter
-        .create_initial_session_offer(&session_key)
-        .await
-        .expect("initial offer should succeed");
-    apply_offer_answer(
-        &adapter,
-        &session_key,
-        &mut remote,
-        initial_offer.into_sdp(),
-    )
-    .await;
+    let mut remote = complete_initial_offer_answer(&adapter, &session_key, 55_048).await;
 
     let audio_media_id = adapter
         .add_recv_media(
@@ -694,18 +635,7 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
         .await
         .expect("source media should register");
 
-    let mut remote = build_remote_rtc(55_002);
-    let initial_offer = adapter
-        .create_initial_session_offer(&consumer_session_key)
-        .await
-        .expect("initial offer should succeed");
-    apply_offer_answer(
-        &adapter,
-        &consumer_session_key,
-        &mut remote,
-        initial_offer.into_sdp(),
-    )
-    .await;
+    let mut remote = complete_initial_offer_answer(&adapter, &consumer_session_key, 55_002).await;
 
     let consumer_media_id = adapter
         .add_send_media(
@@ -769,18 +699,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
         .await
         .expect("source media should register");
 
-    let mut remote = build_remote_rtc(55_004);
-    let initial_offer = adapter
-        .create_initial_session_offer(&consumer_session_key)
-        .await
-        .expect("initial offer should succeed");
-    apply_offer_answer(
-        &adapter,
-        &consumer_session_key,
-        &mut remote,
-        initial_offer.into_sdp(),
-    )
-    .await;
+    let mut remote = complete_initial_offer_answer(&adapter, &consumer_session_key, 55_004).await;
 
     let consumer_media_id = adapter
         .add_send_media(
@@ -825,7 +744,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
         .await
         .expect("removal should stage a renegotiation offer");
     let removal_sdp = removal_offer.into_sdp();
-    let removal_section = media_section_for_mid(&removal_sdp, &format!("{consumer_mid}"))
+    let removal_section = media_section_for_mid(&removal_sdp, &consumer_mid)
         .expect("removed consumer mid should remain in the renegotiation offer");
     assert!(removal_section.contains("a=inactive"));
 
@@ -843,18 +762,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_producer_removal() {
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 46, UserId::Integer(46));
 
-    let mut remote = build_remote_rtc(55_007);
-    let initial_offer = adapter
-        .create_initial_session_offer(&session_key)
-        .await
-        .expect("initial offer should succeed");
-    apply_offer_answer(
-        &adapter,
-        &session_key,
-        &mut remote,
-        initial_offer.into_sdp(),
-    )
-    .await;
+    let mut remote = complete_initial_offer_answer(&adapter, &session_key, 55_007).await;
 
     let (producer_media_id, producer_mid) = add_negotiated_producer_media(
         &adapter,
@@ -877,7 +785,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_producer_removal() {
         .await
         .expect("removal should stage a renegotiation offer");
     let removal_sdp = removal_offer.into_sdp();
-    let removal_section = media_section_for_mid(&removal_sdp, &format!("{producer_mid}"))
+    let removal_section = media_section_for_mid(&removal_sdp, &producer_mid)
         .expect("removed producer mid should remain in the renegotiation offer");
     assert!(removal_section.contains("a=inactive"));
 
@@ -901,18 +809,7 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 47, UserId::Integer(47));
 
-    let mut remote = build_remote_rtc(55_008);
-    let initial_offer = adapter
-        .create_initial_session_offer(&session_key)
-        .await
-        .expect("initial offer should succeed");
-    apply_offer_answer(
-        &adapter,
-        &session_key,
-        &mut remote,
-        initial_offer.into_sdp(),
-    )
-    .await;
+    let mut remote = complete_initial_offer_answer(&adapter, &session_key, 55_008).await;
 
     let producer_media_id = adapter
         .add_recv_media(
@@ -952,7 +849,7 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
         .await
         .expect("cancelled pending producer should stage a follow-up removal offer");
     let removal_sdp = removal_offer.into_sdp();
-    let removal_section = media_section_for_mid(&removal_sdp, &format!("{producer_mid}"))
+    let removal_section = media_section_for_mid(&removal_sdp, &producer_mid)
         .expect("cancelled producer mid should remain in the follow-up offer");
     assert!(removal_section.contains("a=inactive"));
     assert_eq!(
@@ -976,18 +873,7 @@ async fn rtc_session_cleanup_releases_declined_staged_producer_without_follow_up
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 48, UserId::Integer(48));
 
-    let mut remote = build_remote_rtc(55_009);
-    let initial_offer = adapter
-        .create_initial_session_offer(&session_key)
-        .await
-        .expect("initial offer should succeed");
-    apply_offer_answer(
-        &adapter,
-        &session_key,
-        &mut remote,
-        initial_offer.into_sdp(),
-    )
-    .await;
+    let mut remote = complete_initial_offer_answer(&adapter, &session_key, 55_009).await;
 
     let producer_media_id = adapter
         .add_recv_media(
@@ -1013,7 +899,7 @@ async fn rtc_session_cleanup_releases_declined_staged_producer_without_follow_up
         )
         .expect("remote answer should build")
         .to_sdp_string();
-    let declined_answer = answer_with_mid_direction(&answer, &producer_mid.to_string(), "inactive");
+    let declined_answer = answer_with_mid_direction(&answer, &producer_mid, "inactive");
 
     let applied_answer = adapter
         .apply_session_answer(&session_key, &declined_answer)
@@ -1052,18 +938,7 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
     let (first_source_media_id, second_source_media_id) =
         setup_queued_removal_sources(&adapter, &source_session_key).await;
 
-    let mut remote = build_remote_rtc(55_005);
-    let initial_offer = adapter
-        .create_initial_session_offer(&consumer_session_key)
-        .await
-        .expect("initial offer should succeed");
-    apply_offer_answer(
-        &adapter,
-        &consumer_session_key,
-        &mut remote,
-        initial_offer.into_sdp(),
-    )
-    .await;
+    let mut remote = complete_initial_offer_answer(&adapter, &consumer_session_key, 55_005).await;
 
     let (first_consumer_media_id, first_consumer_mid) = add_negotiated_consumer_media(
         &adapter,
@@ -1124,9 +999,8 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
         .await
         .expect("queued removal should stage after the in-flight answer lands");
     let queued_removal_sdp = queued_removal_offer.into_sdp();
-    let removal_section =
-        media_section_for_mid(&queued_removal_sdp, &format!("{first_consumer_mid}"))
-            .expect("queued removal mid should remain in the follow-up offer");
+    let removal_section = media_section_for_mid(&queued_removal_sdp, &first_consumer_mid)
+        .expect("queued removal mid should remain in the follow-up offer");
     assert!(removal_section.contains("a=inactive"));
 
     apply_offer_answer(
@@ -1149,12 +1023,7 @@ async fn rtc_session_renegotiation_offer_stays_blocked_after_initial_answer() {
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 41, UserId::Integer(41));
 
-    let offer = adapter
-        .create_initial_session_offer(&session_key)
-        .await
-        .expect("initial offer should succeed");
-    let mut remote = build_remote_rtc(55_003);
-    apply_offer_answer(&adapter, &session_key, &mut remote, offer.into_sdp()).await;
+    complete_initial_offer_answer(&adapter, &session_key, 55_003).await;
     assert_eq!(
         adapter
             .create_session_renegotiation_offer(&session_key)
@@ -1277,6 +1146,20 @@ fn build_remote_rtc(port: u16) -> Rtc {
                 .expect("test host candidate should build"),
         )
         .expect("remote candidate should register");
+    remote
+}
+
+async fn complete_initial_offer_answer(
+    adapter: &RtcWorker,
+    session_key: &TransportSessionKey,
+    port: u16,
+) -> Rtc {
+    let initial_offer = adapter
+        .create_initial_session_offer(session_key)
+        .await
+        .expect("initial offer should succeed");
+    let mut remote = build_remote_rtc(port);
+    apply_offer_answer(adapter, session_key, &mut remote, initial_offer.into_sdp()).await;
     remote
 }
 
