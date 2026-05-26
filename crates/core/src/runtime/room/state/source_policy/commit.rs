@@ -24,17 +24,19 @@ impl RoomState {
         updates: &[ConsumerPacketSelectionUpdate],
     ) {
         for update in updates {
-            let route = update.route();
-            self.media
-                .update_consumer_source_selection(route, update.source_id(), |selection| {
-                    selection.set_selector(update.selector());
-                    selection.set_policy_pause_reason(update.policy_pause_reason());
-                    selection.set_budget(update.budget());
+            self.media.update_consumer_source_selection(
+                &update.route,
+                update.source_id,
+                |selection| {
+                    selection.set_selector(update.selector);
+                    selection.set_policy_pause_reason(update.policy_pause_reason);
+                    selection.set_budget(update.budget);
                     selection.set_adaptation_observations(
-                        update.pressure_observations(),
-                        update.upgrade_observations(),
+                        update.pressure_observations,
+                        update.upgrade_observations,
                     );
-                });
+                },
+            );
         }
     }
 

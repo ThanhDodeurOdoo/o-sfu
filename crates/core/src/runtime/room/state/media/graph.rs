@@ -794,6 +794,7 @@ impl RoomMediaGraph {
     ///
     /// callers use this for tests and explicit cleanup planning where a copied
     /// route state is enough
+    #[cfg(test)]
     pub fn consumer_state(&self, key: &ConsumerKey) -> Option<ConsumerState> {
         self.consumer_index.get(key).copied()
     }
@@ -962,6 +963,7 @@ impl RoomMediaGraph {
     ///
     /// the returned vector is detached from the graph so callers can remove
     /// keys while iterating without borrowing conflicts
+    #[cfg(test)]
     pub fn consumer_keys_for_user(&self, user_id: &UserId) -> Vec<ConsumerKey> {
         self.consumer_keys_by_user
             .get(user_id)
@@ -988,18 +990,6 @@ impl RoomMediaGraph {
             .unwrap_or_default()
     }
 
-    /// routed consumer ids owned by a receiver user
-    ///
-    /// only committed routes are returned because pending bootstraps do not
-    /// have router consumer ids yet
-    pub fn routed_consumer_ids_for_user(&self, user_id: &UserId) -> Vec<RoutedConsumerId> {
-        self.consumer_keys_for_user(user_id)
-            .into_iter()
-            .filter_map(|key| self.consumer_index.get(&key))
-            .map(|consumer_state| consumer_state.routed_consumer_id)
-            .collect()
-    }
-
     /// routed consumer ids that receive from one published source
     ///
     /// source teardown passes this snapshot to topology before the media graph
@@ -1008,11 +998,7 @@ impl RoomMediaGraph {
         &self,
         source_id: PublishedSourceId,
     ) -> Vec<RoutedConsumerId> {
-        self.consumer_keys_for_source(source_id)
-            .into_iter()
-            .filter_map(|key| self.consumer_index.get(&key))
-            .map(|consumer_state| consumer_state.routed_consumer_id)
-            .collect()
+        self.routed_consumer_ids_for_keys(self.consumer_keys_for_source(source_id))
     }
 
     /// routed consumers affected when one room user leaves or is replaced
@@ -1020,15 +1006,37 @@ impl RoomMediaGraph {
     /// the result includes consumers owned by the departing receiver plus
     /// consumers attached to sources owned by the departing publisher
     pub fn routed_consumer_ids_affected_by_user(&self, user_id: &UserId) -> Vec<RoutedConsumerId> {
-        let mut consumer_ids = self.routed_consumer_ids_for_user(user_id);
-        if let Some(source_ids) = self.source_ids_by_owner.get(user_id) {
-            for source_id in source_ids {
-                consumer_ids.extend(self.routed_consumer_ids_for_source(*source_id));
-            }
-        }
+        let mut consumer_ids =
+            self.routed_consumer_ids_for_keys(self.consumer_keys_affected_by_user(user_id));
         consumer_ids.sort_unstable();
         consumer_ids.dedup();
         consumer_ids
+    }
+
+    fn routed_consumer_ids_for_keys(
+        &self,
+        keys: impl IntoIterator<Item = ConsumerKey>,
+    ) -> Vec<RoutedConsumerId> {
+        keys.into_iter()
+            .filter_map(|key| self.consumer_index.get(&key))
+            .map(|consumer_state| consumer_state.routed_consumer_id)
+            .collect()
+    }
+
+    fn consumer_keys_affected_by_user(&self, user_id: &UserId) -> BTreeSet<ConsumerKey> {
+        let mut keys = self
+            .consumer_keys_by_user
+            .get(user_id)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(source_ids) = self.source_ids_by_owner.get(user_id) {
+            for source_id in source_ids {
+                if let Some(source_keys) = self.consumer_keys_by_source.get(source_id) {
+                    keys.extend(source_keys.iter().cloned());
+                }
+            }
+        }
+        keys
     }
 
     fn producer_id_for_source_key(&self, source_key: &SourceKey) -> Option<ProducerRuntimeId> {
@@ -1098,6 +1106,28 @@ impl RoomMediaGraph {
             .collect()
     }
 
+    /// transport media removals needed before explicit source unpublish
+    pub fn transport_removals_for_producer_target(
+        &self,
+        user_id: &UserId,
+        producer_target: &ProducerRouteTarget,
+    ) -> Vec<TransportMediaRemoval> {
+        let mut removals = vec![TransportMediaRemoval::new(
+            user_id.clone(),
+            producer_target.owner_connection_id,
+            producer_target.transport_media_id,
+        )];
+        removals.extend(self.consumer_transport_removals_for_source(producer_target.source_id));
+        removals
+    }
+
+    fn consumer_transport_removals_for_source(
+        &self,
+        source_id: PublishedSourceId,
+    ) -> Vec<TransportMediaRemoval> {
+        self.consumer_transport_removals_for_keys(self.consumer_keys_for_source(source_id))
+    }
+
     /// consumer transport media affected by departing receivers or publishers
     ///
     /// publisher departures include consumers of the departed user's sources
@@ -1106,19 +1136,18 @@ impl RoomMediaGraph {
         &self,
         departing_user_ids: &BTreeSet<UserId>,
     ) -> Vec<TransportMediaRemoval> {
-        let mut keys = BTreeSet::new();
-        for user_id in departing_user_ids {
-            if let Some(user_keys) = self.consumer_keys_by_user.get(user_id) {
-                keys.extend(user_keys.iter().cloned());
-            }
-            if let Some(source_ids) = self.source_ids_by_owner.get(user_id) {
-                for source_id in source_ids {
-                    if let Some(source_keys) = self.consumer_keys_by_source.get(source_id) {
-                        keys.extend(source_keys.iter().cloned());
-                    }
-                }
-            }
-        }
+        let keys = departing_user_ids
+            .iter()
+            .flat_map(|user_id| self.consumer_keys_affected_by_user(user_id))
+            .collect::<BTreeSet<_>>();
+
+        self.consumer_transport_removals_for_keys(keys)
+    }
+
+    fn consumer_transport_removals_for_keys(
+        &self,
+        keys: impl IntoIterator<Item = ConsumerKey>,
+    ) -> Vec<TransportMediaRemoval> {
         keys.into_iter()
             .filter_map(|key| {
                 let consumer_state = self.consumer_index.get(&key)?;

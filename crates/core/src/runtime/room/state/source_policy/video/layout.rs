@@ -17,7 +17,9 @@ use super::{
 use crate::runtime::{
     UserId, VideoLayoutIntent,
     media_transport::ActiveSpeakerSource,
-    source_model::{PublishedSourceDescriptor, SourceRoomPolicySelector, SourceRoutePriority},
+    source_model::{
+        PublishedSourceDescriptor, PublishedSourceId, SourceRoomPolicySelector, SourceRoutePriority,
+    },
 };
 
 const ACTIVE_SPEAKER_FEATURED_CLEAR_LIMIT: usize = 5;
@@ -26,6 +28,13 @@ const ACTIVE_SPEAKER_FEATURED_CLEAR_LIMIT: usize = 5;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::runtime::room) struct ReceiverVideoLayoutIntent {
     role: SourceRoomPolicySelector,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(in crate::runtime::room) struct VideoAdmissionRank {
+    priority: u8,
+    active_speaker_rank: usize,
+    source_id: u64,
 }
 
 impl ReceiverVideoLayoutIntent {
@@ -67,6 +76,33 @@ impl ReceiverVideoLayoutIntent {
                 policy.resolve(preference, active_speaker)
             });
         Self::new(role)
+    }
+}
+
+impl VideoAdmissionRank {
+    pub const fn new(
+        priority: SourceRoutePriority,
+        active_speaker_rank: Option<usize>,
+        source_id: PublishedSourceId,
+    ) -> Self {
+        Self {
+            priority: video_admission_priority(priority),
+            active_speaker_rank: match active_speaker_rank {
+                Some(rank) => rank,
+                None => usize::MAX,
+            },
+            source_id: source_id.as_u64(),
+        }
+    }
+}
+
+const fn video_admission_priority(priority: SourceRoutePriority) -> u8 {
+    match priority {
+        SourceRoutePriority::PinnedOrFeatured => 0,
+        SourceRoutePriority::ReadableDetail => 1,
+        SourceRoutePriority::ActiveSpeaker => 2,
+        SourceRoutePriority::VisibleThumbnail => 3,
+        SourceRoutePriority::HiddenOrOverflow => 4,
     }
 }
 

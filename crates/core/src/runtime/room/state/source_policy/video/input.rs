@@ -25,22 +25,11 @@ use crate::{
 
 #[derive(Debug)]
 pub(in crate::runtime::room) struct ReceiverVideoPolicyInput<'a> {
-    routes: Vec<ReceiverVideoRouteInput<'a>>,
-    max_video_downloads_per_receiver: usize,
+    pub(in crate::runtime::room) routes: Vec<ReceiverVideoRouteInput<'a>>,
+    pub(in crate::runtime::room) max_video_downloads_per_receiver: usize,
 }
 
 impl<'a> ReceiverVideoPolicyInput<'a> {
-    #[must_use]
-    fn new(
-        routes: Vec<ReceiverVideoRouteInput<'a>>,
-        max_video_downloads_per_receiver: usize,
-    ) -> Self {
-        Self {
-            routes,
-            max_video_downloads_per_receiver,
-        }
-    }
-
     #[must_use]
     pub fn from_state(
         state: &'a RoomState,
@@ -75,7 +64,7 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
                     source,
                     &featured_source_user_ids,
                 );
-                Some(ReceiverVideoRouteInput::new(ReceiverVideoRouteInputParts {
+                Some(ReceiverVideoRouteInput {
                     user_count: state.user_count(),
                     source,
                     transport_ref: route.transport_ref(),
@@ -91,67 +80,29 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
                     receiver_bandwidth: receiver_bandwidth_by_user
                         .get(&route.consumer_user_id)
                         .copied(),
-                }))
+                })
             })
             .collect();
-        Self::new(
+        Self {
             routes,
-            state.media_limits.max_video_downloads_per_receiver(),
-        )
-    }
-
-    pub fn routes(&self) -> &[ReceiverVideoRouteInput<'a>] {
-        &self.routes
-    }
-
-    pub const fn max_video_downloads_per_receiver(&self) -> usize {
-        self.max_video_downloads_per_receiver
+            max_video_downloads_per_receiver: state.media_limits.max_video_downloads_per_receiver(),
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub(in crate::runtime::room) struct ReceiverVideoRouteInput<'a> {
-    user_count: usize,
-    source: &'a PublishedSourceDescriptor,
-    transport_ref: ConsumerRouteTransportRef,
-    current_selection: ConsumerSourceSelection,
-    layout_intent: ReceiverVideoLayoutIntent,
-    visible_scalable_route_count: usize,
-    active_speaker_rank: Option<usize>,
-    receiver_bandwidth: Option<Bitrate>,
+    pub(in crate::runtime::room) user_count: usize,
+    pub(in crate::runtime::room) source: &'a PublishedSourceDescriptor,
+    pub(in crate::runtime::room) transport_ref: ConsumerRouteTransportRef,
+    pub(in crate::runtime::room) current_selection: ConsumerSourceSelection,
+    pub(in crate::runtime::room) layout_intent: ReceiverVideoLayoutIntent,
+    pub(in crate::runtime::room) visible_scalable_route_count: usize,
+    pub(in crate::runtime::room) active_speaker_rank: Option<usize>,
+    pub(in crate::runtime::room) receiver_bandwidth: Option<Bitrate>,
 }
 
-#[derive(Debug, Clone)]
-pub(in crate::runtime::room) struct ReceiverVideoRouteInputParts<'a> {
-    pub user_count: usize,
-    pub source: &'a PublishedSourceDescriptor,
-    pub transport_ref: ConsumerRouteTransportRef,
-    pub current_selection: ConsumerSourceSelection,
-    pub layout_intent: ReceiverVideoLayoutIntent,
-    pub visible_scalable_route_count: usize,
-    pub active_speaker_rank: Option<usize>,
-    pub receiver_bandwidth: Option<Bitrate>,
-}
-
-impl<'a> ReceiverVideoRouteInput<'a> {
-    #[must_use]
-    pub fn new(parts: ReceiverVideoRouteInputParts<'a>) -> Self {
-        Self {
-            user_count: parts.user_count,
-            source: parts.source,
-            transport_ref: parts.transport_ref,
-            current_selection: parts.current_selection,
-            layout_intent: parts.layout_intent,
-            visible_scalable_route_count: parts.visible_scalable_route_count,
-            active_speaker_rank: parts.active_speaker_rank,
-            receiver_bandwidth: parts.receiver_bandwidth,
-        }
-    }
-
-    pub fn source(&self) -> &'a PublishedSourceDescriptor {
-        self.source
-    }
-
+impl ReceiverVideoRouteInput<'_> {
     pub const fn source_id(&self) -> PublishedSourceId {
         self.source.source_id()
     }
@@ -164,35 +115,7 @@ impl<'a> ReceiverVideoRouteInput<'a> {
         self.transport_ref.consumer_user_id()
     }
 
-    pub fn transport_ref(&self) -> &ConsumerRouteTransportRef {
-        &self.transport_ref
-    }
-
-    pub const fn current_selection(&self) -> ConsumerSourceSelection {
-        self.current_selection
-    }
-
-    pub const fn layout_intent(&self) -> ReceiverVideoLayoutIntent {
-        self.layout_intent
-    }
-
-    pub const fn user_count(&self) -> usize {
-        self.user_count
-    }
-
-    pub const fn visible_scalable_route_count(&self) -> usize {
-        self.visible_scalable_route_count
-    }
-
-    pub const fn active_speaker_rank(&self) -> Option<usize> {
-        self.active_speaker_rank
-    }
-
-    pub const fn receiver_bandwidth(&self) -> Option<Bitrate> {
-        self.receiver_bandwidth
-    }
-
-    pub fn encodings(&self) -> SelectableRouteEncodings<'a> {
+    pub fn encodings(&self) -> SelectableRouteEncodings<'_> {
         SelectableRouteEncodings::new(self.source)
     }
 }
@@ -378,7 +301,7 @@ mod tests {
                 ),
             ],
         })?;
-        let route = ReceiverVideoRouteInput::new(ReceiverVideoRouteInputParts {
+        let route = ReceiverVideoRouteInput {
             user_count: 2,
             source: &source,
             transport_ref: ConsumerRouteTransportRef::from_parts(
@@ -396,7 +319,7 @@ mod tests {
             visible_scalable_route_count: 1,
             active_speaker_rank: None,
             receiver_bandwidth: None,
-        });
+        };
 
         let selectable_encoding_ids = route
             .encodings()

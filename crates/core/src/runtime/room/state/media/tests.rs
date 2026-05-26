@@ -6,7 +6,7 @@
     reason = "test assertions use panic, unwrap, expect, and direct indexing for clear failure messages"
 )]
 
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use o_sfu_router::{
     ConsumerCapability, MediaKind as RouterMediaKind, ProducerId, RouterId,
@@ -1037,4 +1037,59 @@ fn purge_user_media_state_removes_only_indexed_user_and_source_entries() {
     );
     assert!(media.owner_producer_index_is_empty(&publisher_id));
     assert!(media.owner_source_index_is_empty(&publisher_id));
+}
+
+#[test]
+fn transport_removals_for_departing_users_deduplicate_overlapping_consumer_routes() {
+    let mut state = test_state();
+    let publisher_id = UserId::Integer(1);
+    let subscriber_id = UserId::Integer(2);
+    let source_media = TransportMediaId::new(10);
+    let consumer_media = TransportMediaId::new(20);
+
+    join_test_user(&mut state, &publisher_id);
+    join_test_user(&mut state, &subscriber_id);
+
+    let publisher_connection_id = state
+        .user_connection_id(&publisher_id)
+        .expect("publisher should have a connection id");
+    let (_producer_id, source_id) = install_test_published_producer(
+        &mut state,
+        &publisher_id,
+        TestSourceKind::ScalableVideo,
+        source_media,
+    );
+    install_test_consumer_state(
+        &mut state,
+        &subscriber_id,
+        source_id,
+        publisher_connection_id,
+        source_media,
+        consumer_media,
+    );
+
+    let transport_removals = state.collect_user_transport_removals(&BTreeSet::from([
+        publisher_id.clone(),
+        subscriber_id.clone(),
+    ]));
+
+    assert_eq!(transport_removals.len(), 2);
+    assert_eq!(
+        transport_removals
+            .iter()
+            .filter(|removal| {
+                removal.user() == &publisher_id && removal.transport_media() == source_media
+            })
+            .count(),
+        1
+    );
+    assert_eq!(
+        transport_removals
+            .iter()
+            .filter(|removal| {
+                removal.user() == &subscriber_id && removal.transport_media() == consumer_media
+            })
+            .count(),
+        1
+    );
 }

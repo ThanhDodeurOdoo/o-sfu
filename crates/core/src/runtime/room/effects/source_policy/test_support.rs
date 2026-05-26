@@ -8,7 +8,7 @@ impl SourcePolicyEffectPlan {
         source_id: PublishedSourceId,
     ) -> bool {
         self.consumer_packet_updates.retain(|update| {
-            update.route().consumer_user_id() == consumer_user_id && update.source_id() == source_id
+            update.route.consumer_user_id() == consumer_user_id && update.source_id == source_id
         });
         self.featured_users.clear();
         !self.consumer_packet_updates.is_empty()

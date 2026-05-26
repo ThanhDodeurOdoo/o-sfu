@@ -89,7 +89,12 @@ impl SubscriptionEffectPlan {
         let route_activity_ops = route_updates
             .into_iter()
             .map(|route_update| {
-                let route = route_update.route().clone();
+                let ConsumerRouteUpdate {
+                    route,
+                    stream_id,
+                    media_kind,
+                    active,
+                } = route_update;
                 let diagnostics = DiagnosticsEventData::for_user(
                     room.uuid(),
                     user_id,
@@ -98,18 +103,18 @@ impl SubscriptionEffectPlan {
                 .with_connection_id(connection_id.as_u64())
                 .with_media_worker_id(media_worker_id)
                 .with_transport_media_id(route.consumer_media().as_u64())
-                .insert_field("active", route_update.active())
+                .insert_field("active", active)
                 .insert_field(
                     "producer_user_id",
                     serde_json::to_value(route.source_user_id()).unwrap_or(serde_json::Value::Null),
                 )
                 .insert_field("source_transport_media_id", route.source_media().as_u64())
-                .insert_field("stream_id", route_update.stream_id().to_string());
+                .insert_field("stream_id", stream_id.to_string());
                 SubscriptionRouteActivityOp {
                     route,
-                    stream_id: route_update.stream_id().clone(),
-                    media_kind: route_update.media_kind(),
-                    active: route_update.active(),
+                    stream_id,
+                    media_kind,
+                    active,
                     diagnostics,
                 }
             })
@@ -308,7 +313,7 @@ impl ConsumerBootstrapOp {
                 target.media_kind(),
                 &producer_session_key,
                 target.transport_media_id(),
-                prepared.consumer_rtp_parameters(),
+                &prepared.consumer_rtp_parameters,
                 initial_activity,
             )
             .await
@@ -329,7 +334,7 @@ impl ConsumerBootstrapOp {
                     producer_connection_id = ?target.producer_connection_id(),
                     source_transport_media_id = ?target.transport_media_id(),
                     error = ?error,
-                    consumer_mid = prepared.consumer_rtp_parameters().mid(),
+                    consumer_mid = prepared.consumer_rtp_parameters.mid(),
                     ?origin,
                     "media transport rejected consume media declaration"
                 );

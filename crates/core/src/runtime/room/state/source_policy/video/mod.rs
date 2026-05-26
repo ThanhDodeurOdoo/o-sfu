@@ -8,3 +8,5 @@ mod budget;
 mod input;
 mod layout;
 mod projection;
+
+pub(in crate::runtime::room) use layout::VideoAdmissionRank;
