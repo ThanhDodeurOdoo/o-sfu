@@ -309,7 +309,13 @@ export class FakeProtocolCore {
     publish(type, active) {
         this.publicationUpdates.push({ active, type });
         this.lastPublicationUpdate = { active, type };
-        return [];
+        return [
+            {
+                active,
+                kind: "setLocalUploadIntent",
+                streamType: type
+            }
+        ];
     }
 
     _replaceTrackBindings() {

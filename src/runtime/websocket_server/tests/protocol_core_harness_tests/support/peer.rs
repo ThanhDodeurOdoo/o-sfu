@@ -243,7 +243,9 @@ impl ProtocolHarnessPeer {
                     self.rtc_peer = None;
                     Vec::new()
                 }
-                Command::AttachTrack { .. } | Command::DetachTrack { .. } => Vec::new(),
+                Command::AttachTrack { .. }
+                | Command::DetachTrack { .. }
+                | Command::SetLocalUploadIntent { .. } => Vec::new(),
                 Command::ApplyNegotiation {
                     request_id,
                     kind,

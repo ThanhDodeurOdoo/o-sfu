@@ -57,6 +57,7 @@ export type UploadSlot = {
 export class LocalUploads {
     private _localTracks = new Map<StreamType, MediaTrack | null>();
     private _senderMidByType = new Map<StreamType, string>();
+    private _uploadIntentByType = new Set<StreamType>();
 
     /**
      * updates the local track for a specific stream type
@@ -73,11 +74,22 @@ export class LocalUploads {
     setTrack(type: StreamType, track: MediaStreamTrack | null): UploadTransition {
         const previousTrack = this._localTracks.get(type) ?? null;
         this._localTracks.set(type, track);
+        if (track === null) {
+            this._uploadIntentByType.delete(type);
+        }
         return {
             hadTrack: previousTrack !== null,
             hasTrack: track !== null,
             knownMid: this._senderMidByType.get(type)
         };
+    }
+
+    setUploadIntent(type: StreamType, active: boolean): void {
+        if (active) {
+            this._uploadIntentByType.add(type);
+        } else {
+            this._uploadIntentByType.delete(type);
+        }
     }
 
     /**
@@ -88,6 +100,7 @@ export class LocalUploads {
      */
     clearPeerConnectionState(): void {
         this._senderMidByType.clear();
+        this._uploadIntentByType.clear();
     }
 
     /**
@@ -193,6 +206,7 @@ export class LocalUploads {
         const pendingTracks = orderedStreamTypes().filter(
             (streamType) =>
                 (this._localTracks.get(streamType) ?? null) !== null &&
+                this._uploadIntentByType.has(streamType) &&
                 !this._senderMidByType.has(streamType)
         );
         if (pendingTracks.length === 0) {
@@ -242,6 +256,7 @@ export class LocalUploads {
                 streamType,
                 slot
             );
+            this._uploadIntentByType.delete(streamType);
             attached.push({ mid: slot.mid, publicationPolicy, streamType });
         }
         return { attached, skipped };

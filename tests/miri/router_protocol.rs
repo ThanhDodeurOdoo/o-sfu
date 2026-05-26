@@ -1,10 +1,4 @@
-use o_sfu_protocol::{
-    host::{Command, ProtocolCore},
-    wire::{
-        AvailableFeatures, ClientEnvelope, ClientMessage, EnvelopeBatch, RecordingState,
-        StreamIntentPayload, StreamType, WelcomePayload,
-    },
-};
+use o_sfu_protocol::wire::{ClientEnvelope, ClientMessage, StreamIntentPayload, StreamType};
 use o_sfu_router::{
     Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, Router, RouterId,
     Session, SessionId as RouterSessionId, Transport, TransportDirection, TransportId,
@@ -12,16 +6,6 @@ use o_sfu_router::{
 
 fn user(id: RouterSessionId) -> Session {
     Session::new(id)
-}
-
-fn sent_frames(commands: &[Command]) -> Vec<&str> {
-    commands
-        .iter()
-        .filter_map(|command| match command {
-            Command::SendWebSocket(frame) => Some(frame.as_str()),
-            _ => None,
-        })
-        .collect()
 }
 
 #[test]
@@ -107,62 +91,6 @@ fn signaling_codec_round_trip_preserves_subscribe_payload() {
         Ok(ClientEnvelope::Message(ClientMessage::Publish(
             StreamIntentPayload {
                 stream_type: StreamType::Screen,
-            },
-        )))
-    );
-}
-
-#[test]
-fn protocol_core_replays_sticky_publish_after_welcome() {
-    let mut core = ProtocolCore::new();
-
-    let connect_commands = core.connect("wss://example.invalid/ws", "jwt-token", None);
-    assert!(connect_commands.iter().any(
-        |command| matches!(command, Command::Connect { url } if url == "wss://example.invalid/ws")
-    ));
-
-    assert!(core.publish(StreamType::Camera, true).is_empty());
-
-    let auth_commands = core.on_ws_open();
-    assert_eq!(sent_frames(&auth_commands).len(), 1);
-
-    let welcome_commands = core.on_welcome(WelcomePayload {
-        features: AvailableFeatures {
-            rtc: true,
-            transcription: false,
-            audio_recording: false,
-            video_recording: false,
-        },
-        recording: RecordingState::default(),
-        peers: Vec::new(),
-    });
-    let frames = sent_frames(&welcome_commands);
-    assert_eq!(frames.len(), 1);
-
-    let first_frame = frames.first();
-    assert!(first_frame.is_some());
-    let Some(first_frame) = first_frame else {
-        return;
-    };
-    let batch = serde_json::from_str::<EnvelopeBatch>(first_frame);
-    assert!(batch.is_ok());
-    let Ok(batch) = batch else {
-        return;
-    };
-    assert_eq!(batch.len(), 1);
-
-    let mut batch_iter = batch.into_iter();
-    let first_envelope = batch_iter.next();
-    assert!(first_envelope.is_some());
-    let Some(first_envelope) = first_envelope else {
-        return;
-    };
-    let decoded = ClientEnvelope::decode(first_envelope);
-    assert_eq!(
-        decoded,
-        Ok(ClientEnvelope::Message(ClientMessage::Publish(
-            StreamIntentPayload {
-                stream_type: StreamType::Camera,
             },
         )))
     );

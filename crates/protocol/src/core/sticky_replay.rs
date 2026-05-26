@@ -2,9 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     shared::{DownloadStates, StreamType, UserId, UserInfo},
-    signaling::{
-        ClientEnvelope, ClientMessage, EnvelopeBatch, StreamIntentPayload, SubscribePayload,
-    },
+    signaling::{ClientEnvelope, ClientMessage, EnvelopeBatch, SubscribePayload},
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -33,6 +31,10 @@ impl StickyReplayState {
         }
     }
 
+    pub(super) fn active_publications(&self) -> impl Iterator<Item = StreamType> + '_ {
+        self.active_publications.iter().copied()
+    }
+
     pub(super) fn remember_subscription_states(
         &mut self,
         user_id: &UserId,
@@ -53,21 +55,8 @@ impl StickyReplayState {
         merge_session_info(existing_info, info);
     }
 
-    pub(super) fn replay_batch(&self) -> Option<EnvelopeBatch> {
+    pub(super) fn replay_session_batch(&self) -> Option<EnvelopeBatch> {
         let mut replay_batch = Vec::new();
-
-        for &stream_type in &self.active_publications {
-            let Some(envelope) =
-                ClientEnvelope::Message(ClientMessage::Publish(StreamIntentPayload {
-                    stream_type,
-                }))
-                .into_envelope()
-                .ok()
-            else {
-                continue;
-            };
-            replay_batch.push(envelope);
-        }
 
         for (user_id, states) in &self.desired_subscriptions {
             let Some(envelope) =

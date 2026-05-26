@@ -238,6 +238,9 @@ export class BrowserRuntime {
                 }
                 this._webSocket.send(command.frame);
                 return [];
+            case CommandKind.SET_LOCAL_UPLOAD_INTENT:
+                hooks.localUploads.setUploadIntent(command.streamType, command.active);
+                return [];
             case CommandKind.APPLY_NEGOTIATION:
                 return this.applyNegotiation(
                     command.requestId,
@@ -465,12 +468,15 @@ export class BrowserRuntime {
      * @param hooks runtime hooks for state reset
      */
     private closePeerConnection(hooks: BrowserRuntimeHooks): void {
+        const hadPeerConnection = this._peerConnection !== null;
         if (this._peerConnection) {
             this._peerConnection.close();
             emitRuntimeLog(hooks, CLIENT_LOG_LEVEL.INFO, "closed RTCPeerConnection");
         }
         hooks.remoteTracks.clearPeerConnectionState();
-        hooks.localUploads.clearPeerConnectionState();
+        if (hadPeerConnection) {
+            hooks.localUploads.clearPeerConnectionState();
+        }
         this._peerConnection = null;
     }
 

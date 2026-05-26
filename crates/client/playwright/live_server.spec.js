@@ -1,10 +1,16 @@
 import { expect, test } from "@playwright/test";
 
 import {
+    broadcast,
+    cameraPublicationActive,
+    cameraSubscriptionRid,
     connectPeer,
     createChannel,
     createConnectToken,
     createPeerPage,
+    forceRecoverableClose,
+    latestBroadcastUpdate,
+    latestInfoUpdate,
     latestTrackUpdate,
     localCameraSenderEncodings,
     localSenderEncodings,
@@ -14,11 +20,13 @@ import {
     publishSyntheticAudio,
     publishSyntheticCamera,
     publishSyntheticScreen,
+    roomUserInfo,
     setCameraDownload,
     setStreamDownload,
     spawnLiveServer,
     unpublishCamera,
     unpublishStream,
+    updateInfo,
     waitForCameraSubscriptionSelectedRid,
     waitForDecodedRemoteCameraFrame,
     waitForDecodedRemoteVideoFrame,
@@ -28,7 +36,10 @@ import {
 const PUBLISHER_SESSION_ID = 41;
 const SUBSCRIBER_SESSION_ID = 42;
 
-test("default VP8 live publish applies RID simulcast and renders remotely", async ({ context }) => {
+test("default VP8 live publish applies RID simulcast and renders remotely", async ({
+    browserName,
+    context
+}) => {
     const channelUuid = await createChannel();
     const publisher = await createPeerPage(context);
     const subscriber = await createPeerPage(context);
@@ -72,6 +83,16 @@ test("default VP8 live publish applies RID simulcast and renders remotely", asyn
     expect(video.hasSendRidLo).toBeTruthy();
     expect(video.hasSendRidHi).toBeTruthy();
     expect(video.hasSendSimulcastLoHi).toBeTruthy();
+
+    if (browserName === "chromium") {
+        const decodedFrame = await waitForDecodedRemoteCameraFrame(
+            subscriber,
+            PUBLISHER_SESSION_ID
+        );
+        expect(decodedFrame.width).toBeGreaterThan(0);
+        expect(decodedFrame.height).toBeGreaterThan(0);
+        expect(decodedFrame.pixel.alpha).toBe(255);
+    }
 });
 
 test("browser compatibility upload and download flows survive live-server replacement", async ({
@@ -214,6 +235,14 @@ test("audio and screen streams publish, replace and clean up independently", asy
             readyState: "live"
         });
 
+    await setStreamDownload(subscriber, PUBLISHER_SESSION_ID, "audio", false);
+
+    await expectTrackUpdate(subscriber, PUBLISHER_SESSION_ID, "audio", false, "audio");
+
+    await setStreamDownload(subscriber, PUBLISHER_SESSION_ID, "audio", true);
+
+    await expectTrackUpdate(subscriber, PUBLISHER_SESSION_ID, "audio", true, "audio");
+
     const firstScreen = await publishSyntheticScreen(publisher, "screen-one");
 
     await expectTrackUpdate(subscriber, PUBLISHER_SESSION_ID, "screen", true, "video");
@@ -300,6 +329,167 @@ test("audio and screen streams publish, replace and clean up independently", asy
     await expect
         .poll(async () => (await peerSnapshot(subscriber)).consumers["41"]?.audio ?? null)
         .toBeNull();
+});
+
+test("broadcast and info fanout through the browser bundle", async ({ context }) => {
+    const channelUuid = await createChannel();
+    const publisher = await createPeerPage(context);
+    const subscriber = await createPeerPage(context);
+
+    await connectPeer(publisher, {
+        channelUuid,
+        jwt: createConnectToken(channelUuid, PUBLISHER_SESSION_ID)
+    });
+    await connectPeer(subscriber, {
+        channelUuid,
+        jwt: createConnectToken(channelUuid, SUBSCRIBER_SESSION_ID)
+    });
+
+    await expect.poll(async () => (await peerSnapshot(publisher)).state).toBe("connected");
+    await expect.poll(async () => (await peerSnapshot(subscriber)).state).toBe("connected");
+
+    await broadcast(publisher, {
+        kind: "sequence",
+        sequence: 17
+    });
+
+    await expect
+        .poll(async () => latestBroadcastUpdate(subscriber, PUBLISHER_SESSION_ID))
+        .toMatchObject({
+            name: "broadcast",
+            payload: {
+                message: {
+                    kind: "sequence",
+                    sequence: 17
+                },
+                senderId: PUBLISHER_SESSION_ID
+            }
+        });
+
+    await updateInfo(
+        publisher,
+        {
+            isRaisingHand: true,
+            isTalking: true
+        },
+        { needRefresh: true }
+    );
+
+    await expect
+        .poll(async () => latestInfoUpdate(subscriber, PUBLISHER_SESSION_ID))
+        .toMatchObject({
+            name: "info_change",
+            payload: {
+                [String(PUBLISHER_SESSION_ID)]: {
+                    isRaisingHand: true,
+                    isTalking: true
+                }
+            }
+        });
+});
+
+test("live recovery replays sticky publish subscribe and info intents", async ({ context }) => {
+    test.setTimeout(45_000);
+    const channelUuid = await createChannel();
+    const publisher = await createPeerPage(context);
+    const subscriber = await createPeerPage(context);
+
+    await connectPeer(publisher, {
+        channelUuid,
+        jwt: createConnectToken(channelUuid, PUBLISHER_SESSION_ID)
+    });
+    await connectPeer(subscriber, {
+        channelUuid,
+        jwt: createConnectToken(channelUuid, SUBSCRIBER_SESSION_ID)
+    });
+
+    await expect.poll(async () => (await peerSnapshot(publisher)).state).toBe("connected");
+    await expect.poll(async () => (await peerSnapshot(subscriber)).state).toBe("connected");
+
+    await publishSyntheticCamera(publisher, "recovery-publisher-camera");
+    await publishSyntheticCamera(subscriber, "recovery-subscriber-camera");
+    await setCameraDownload(publisher, SUBSCRIBER_SESSION_ID, true, "featured");
+    await updateInfo(
+        publisher,
+        {
+            isCameraOn: true,
+            isRaisingHand: true
+        },
+        { needRefresh: true }
+    );
+
+    await expect
+        .poll(() =>
+            cameraPublicationActive({ roomId: channelUuid, sessionId: PUBLISHER_SESSION_ID })
+        )
+        .toBeTruthy();
+    await expect
+        .poll(() =>
+            cameraSubscriptionRid({
+                consumerSessionId: PUBLISHER_SESSION_ID,
+                producerSessionId: SUBSCRIBER_SESSION_ID,
+                roomId: channelUuid
+            })
+        )
+        .toBe("hi");
+    await expect
+        .poll(() => roomUserInfo({ roomId: channelUuid, sessionId: PUBLISHER_SESSION_ID }))
+        .toMatchObject({
+            isCameraOn: true,
+            isRaisingHand: true
+        });
+
+    await forceRecoverableClose(publisher);
+
+    await expect
+        .poll(async () => {
+            const snapshot = await peerSnapshot(publisher);
+            return snapshot.stateChanges.some((change) => change.state === "recovering");
+        })
+        .toBeTruthy();
+    await expect.poll(async () => (await peerSnapshot(publisher)).state).toBe("connected");
+
+    await expect
+        .poll(
+            () =>
+                cameraPublicationActive({
+                    roomId: channelUuid,
+                    sessionId: PUBLISHER_SESSION_ID
+                }),
+            { timeout: 15_000 }
+        )
+        .toBeTruthy();
+    await setCameraDownload(subscriber, PUBLISHER_SESSION_ID, true, "featured");
+    await expect
+        .poll(
+            () =>
+                cameraSubscriptionRid({
+                    consumerSessionId: SUBSCRIBER_SESSION_ID,
+                    producerSessionId: PUBLISHER_SESSION_ID,
+                    roomId: channelUuid
+                }),
+            { timeout: 15_000 }
+        )
+        .toBe("hi");
+    await expect
+        .poll(
+            () =>
+                cameraSubscriptionRid({
+                    consumerSessionId: PUBLISHER_SESSION_ID,
+                    producerSessionId: SUBSCRIBER_SESSION_ID,
+                    roomId: channelUuid
+                }),
+            { timeout: 15_000 }
+        )
+        .toBe("hi");
+    await expect
+        .poll(() => roomUserInfo({ roomId: channelUuid, sessionId: PUBLISHER_SESSION_ID }), {
+            timeout: 15_000
+        })
+        .toMatchObject({
+            isCameraOn: true,
+            isRaisingHand: true
+        });
 });
 
 test("load-triggered spillover relays VP8 camera between real browsers", async ({

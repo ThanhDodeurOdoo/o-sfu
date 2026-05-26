@@ -54,6 +54,11 @@ export type HostCommandKind = (typeof CommandKind)[keyof typeof CommandKind];
 export type HostCommand =
     | { kind: typeof CommandKind.SEND_WEB_SOCKET; frame: string }
     | {
+          kind: typeof CommandKind.SET_LOCAL_UPLOAD_INTENT;
+          streamType: StreamType;
+          active: boolean;
+      }
+    | {
           kind: typeof CommandKind.APPLY_NEGOTIATION;
           requestId: string;
           negotiationKind: NegotiationKind;
@@ -280,6 +285,10 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
     switch (kind) {
         case CommandKind.SEND_WEB_SOCKET:
             requireString(command.frame, `${context}.frame`);
+            return command as HostCommand;
+        case CommandKind.SET_LOCAL_UPLOAD_INTENT:
+            validateStreamType(command.streamType, `${context}.streamType`);
+            requireBoolean(command.active, `${context}.active`);
             return command as HostCommand;
         case CommandKind.APPLY_NEGOTIATION:
             requireString(command.requestId, `${context}.requestId`);

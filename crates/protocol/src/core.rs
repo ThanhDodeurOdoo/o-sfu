@@ -84,6 +84,10 @@ const MAX_OUTBOUND_BATCH_LEN: usize = 16;
 pub enum Command {
     /// Serialize and send a JSON frame over the WebSocket.
     SendWebSocket(String),
+    SetLocalUploadIntent {
+        stream_type: StreamType,
+        active: bool,
+    },
     /// Apply a remote SDP offer to the local `RTCPeerConnection`.
     ApplyNegotiation {
         request_id: RequestId,
@@ -377,11 +381,12 @@ impl ProtocolCore {
         command_batch(commands)
     }
 
-    /// Commits the authenticated server snapshot and "replays" client wanted state
+    /// commits the authenticated server snapshot and replays room-level intent
     ///
-    /// The welcome payload is the point where feature flags and recording state
-    /// become authoritative again after a reconnect. Only after that snapshot is
-    /// accepted do we replay remembered uploads, downloads, and user info.
+    /// the welcome payload is the point where feature flags and recording state
+    /// become authoritative again after a reconnect. only after that snapshot is
+    /// accepted do we replay remembered downloads and user info. publish intent
+    /// waits for transport readiness because it consumes browser upload slots
     pub fn on_welcome(&mut self, payload: WelcomePayload) -> CommandBatch {
         command_batch(self.accept_welcome(payload))
     }
@@ -409,7 +414,7 @@ impl ProtocolCore {
                 },
             });
         }
-        commands.extend(self.replay_sticky_state());
+        commands.extend(self.replay_session_state());
         commands
     }
 
@@ -419,7 +424,12 @@ impl ProtocolCore {
     /// media, because it is what upgrades the core from authenticated signaling
     /// state to a fully connected user.
     pub fn on_transport_ready(&mut self) -> CommandBatch {
-        command_batch(connection_lifecycle::on_transport_ready(self))
+        let was_authenticated = self.state == BundleConnectionState::Authenticated;
+        let mut commands = connection_lifecycle::on_transport_ready(self);
+        if was_authenticated && self.state == BundleConnectionState::Connected {
+            commands.extend(self.replay_publication_state());
+        }
+        command_batch(commands)
     }
 
     /// Stores the desired publication state and sends it when signaling is ready.
@@ -436,7 +446,12 @@ impl ProtocolCore {
         } else {
             ClientMessage::Unpublish(StreamIntentPayload { stream_type })
         };
-        command_batch(self.enqueue_client_message(message, FlushMode::Batched))
+        let mut commands = vec![Command::SetLocalUploadIntent {
+            stream_type,
+            active,
+        }];
+        commands.extend(self.enqueue_client_message(message, FlushMode::Batched));
+        command_batch(commands)
     }
 
     /// Remembers the latest per-peer subscription intent for reconnect replay.
@@ -627,21 +642,50 @@ impl ProtocolCore {
         self.sticky_replay.clear();
     }
 
-    /// Flushes remembered client intent immediately after the server snapshot is known.
-    ///
-    /// Replayed envelopes bypass the normal batching delay so recovery converges on
-    /// the last desired publish/subscribe/info state before new incremental updates
-    /// start to accumulate again.
-    fn replay_sticky_state(&mut self) -> Commands {
+    /// Flushes room-level intent immediately after the server snapshot is known.
+    fn replay_session_state(&mut self) -> Commands {
         if !self.can_send_client_messages() {
             return Vec::new();
         }
-        let Some(replay_batch) = self.sticky_replay.replay_batch() else {
+        let Some(replay_batch) = self.sticky_replay.replay_session_batch() else {
             return Vec::new();
         };
 
         self.outbound_batch.extend(replay_batch);
         self.flush_pending_batch(true)
+    }
+
+    /// Flushes publish intent after the recovered media transport is ready.
+    fn replay_publication_state(&mut self) -> Commands {
+        if !self.can_send_client_messages() {
+            return Vec::new();
+        }
+
+        let mut commands = Vec::new();
+        let mut replay_batch = Vec::new();
+        for stream_type in self.sticky_replay.active_publications() {
+            commands.push(Command::SetLocalUploadIntent {
+                stream_type,
+                active: true,
+            });
+            let Some(envelope) =
+                ClientEnvelope::Message(ClientMessage::Publish(StreamIntentPayload {
+                    stream_type,
+                }))
+                .into_envelope()
+                .ok()
+            else {
+                continue;
+            };
+            replay_batch.push(envelope);
+        }
+        if replay_batch.is_empty() {
+            return commands;
+        }
+
+        self.outbound_batch.extend(replay_batch);
+        commands.extend(self.flush_pending_batch(true));
+        commands
     }
 
     fn can_send_client_messages(&self) -> bool {

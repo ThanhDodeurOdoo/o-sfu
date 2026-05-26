@@ -22,6 +22,7 @@ import {
     createSfuClientHarness,
     createScreenTrack
 } from "./support/sfu_client_harness.mjs";
+import { audioMedia, sdp, videoMedia, videoUploadSlot } from "./support/negotiation_fixtures.mjs";
 
 test("connect normalizes the URL and sends auth on WebSocket open", async () => {
     const { core, sockets, connect, open } = createSfuClientHarness();
@@ -209,9 +210,22 @@ async function finishRecovery({ emitMessage, open, sockets, timers }) {
     await emitMessage(buildWelcomeFrame(), 1);
 }
 
-test("real protocol core replays sticky intents after recovery welcome", async () => {
+function buildNegotiationFrame(tag, requestId, uploadMid) {
+    return JSON.stringify([
+        {
+            t: tag,
+            q: requestId,
+            p: {
+                sdp: sdp(audioMedia("0"), videoMedia(uploadMid)),
+                uploadSlots: [videoUploadSlot(uploadMid)]
+            }
+        }
+    ]);
+}
+
+test("real protocol core replays sticky publish after recovery transport readiness", async () => {
     const harness = createRecoveryHarness();
-    const { client, sockets, connect, emitMessage, open } = harness;
+    const { client, sockets, connect, emitMessage, open, peerConnections } = harness;
 
     const cameraTrack = createCameraTrack("camera-track-1");
 
@@ -221,13 +235,14 @@ test("real protocol core replays sticky intents after recovery welcome", async (
 
     await open();
     await emitMessage(buildWelcomeFrame());
+    await emitMessage(buildNegotiationFrame("offer", "server-initial", "1"));
 
     client.publish("camera", cameraTrack);
+    await tick();
+    await emitMessage(buildNegotiationFrame("renegotiate", "server-publish", "2"));
     client.subscribe(7, { audio: true, camera: false });
     client.updateInfo({ isCameraOn: true, isRaisingHand: true });
     await tick();
-
-    assert.equal(sockets[0].sent.length, 1);
 
     sockets[0].close(1011);
     await tick();
@@ -244,12 +259,6 @@ test("real protocol core replays sticky intents after recovery welcome", async (
     ]);
     assert.deepEqual(decodeSentFrame(sockets[1], 1), [
         {
-            t: "publish",
-            p: {
-                type: "camera"
-            }
-        },
-        {
             t: "subscribe",
             p: {
                 sessionId: 7,
@@ -262,6 +271,24 @@ test("real protocol core replays sticky intents after recovery welcome", async (
             p: {
                 isCameraOn: true,
                 isRaisingHand: true
+            }
+        }
+    ]);
+
+    await emitMessage(buildNegotiationFrame("offer", "server-0", "1"), 1);
+
+    assert.equal(
+        peerConnections
+            .at(-1)
+            .answerSnapshots.at(-1)
+            .some((section) => section.senderTrack === cameraTrack),
+        false
+    );
+    assert.deepEqual(decodeSentFrame(sockets[1], 3), [
+        {
+            t: "publish",
+            p: {
+                type: "camera"
             }
         }
     ]);

@@ -72,6 +72,10 @@ fn host_command_bridge_converts_commands_to_camel_case_payloads() {
             Command::DetachTrack {
                 stream_type: StreamType::Screen,
             },
+            Command::SetLocalUploadIntent {
+                stream_type: StreamType::Camera,
+                active: true,
+            },
         ])
         .expect("valid test command batch"),
     );
@@ -112,6 +116,11 @@ fn host_command_bridge_converts_commands_to_camel_case_payloads() {
             {
                 "kind": "detachTrack",
                 "streamType": "screen"
+            },
+            {
+                "kind": "setLocalUploadIntent",
+                "streamType": "camera",
+                "active": true
             }
         ])
     );
