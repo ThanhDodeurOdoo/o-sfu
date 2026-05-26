@@ -67,6 +67,7 @@ impl From<PendingRequestKind> for HostPendingRequestKind {
 pub(crate) const HOST_COMMAND_KINDS: &[(&str, &str)] = &[
     ("CONNECT", "connect"),
     ("SEND_WEB_SOCKET", "sendWebSocket"),
+    ("SET_LOCAL_UPLOAD_INTENT", "setLocalUploadIntent"),
     ("CLOSE_WEB_SOCKET", "closeWebSocket"),
     ("APPLY_NEGOTIATION", "applyNegotiation"),
     ("CREATE_PEER_CONNECTION", "createPeerConnection"),
@@ -89,6 +90,11 @@ pub(crate) const HOST_COMMAND_KINDS: &[(&str, &str)] = &[
 pub enum HostCommand {
     SendWebSocket {
         frame: String,
+    },
+    SetLocalUploadIntent {
+        #[serde(rename = "streamType")]
+        stream_type: StreamType,
+        active: bool,
     },
     ApplyNegotiation {
         #[serde(rename = "requestId")]
@@ -183,6 +189,15 @@ pub fn host_commands(commands: CommandBatch) -> Vec<HostCommand> {
         match command {
             Command::SendWebSocket(frame) => {
                 host_commands.push(HostCommand::SendWebSocket { frame });
+            }
+            Command::SetLocalUploadIntent {
+                stream_type,
+                active,
+            } => {
+                host_commands.push(HostCommand::SetLocalUploadIntent {
+                    stream_type,
+                    active,
+                });
             }
             Command::ApplyNegotiation {
                 request_id,

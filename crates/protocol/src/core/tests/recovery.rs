@@ -65,7 +65,7 @@ fn protocol_core_non_terminal_close_enters_recovering() {
 }
 
 #[test]
-fn protocol_core_replays_sticky_intents_after_recovery_authentication() {
+fn protocol_core_replays_sticky_session_intents_after_recovery_authentication() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.on_welcome(sample_welcome_payload());
@@ -102,9 +102,6 @@ fn protocol_core_replays_sticky_intents_after_recovery_authentication() {
     assert_eq!(
         envelopes,
         vec![
-            ClientEnvelope::Message(ClientMessage::Publish(StreamIntentPayload {
-                stream_type: StreamType::Camera,
-            })),
             ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
                 user_id: String::from("peer-7").into(),
                 states: DownloadStates {
@@ -120,6 +117,52 @@ fn protocol_core_replays_sticky_intents_after_recovery_authentication() {
                 ..UserInfo::default()
             })),
         ]
+    );
+}
+
+#[test]
+fn protocol_core_replays_sticky_publish_when_recovery_transport_is_ready() {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.on_transport_ready();
+    let _ = core.publish(StreamType::Camera, true);
+    let _ = core.subscribe(
+        String::from("peer-7").into(),
+        DownloadStates {
+            audio: Some(true),
+            camera: Some(false),
+            screen: None,
+            ..DownloadStates::default()
+        },
+    );
+    let _ = core.update_info(UserInfo {
+        is_camera_on: Some(true),
+        is_raising_hand: Some(true),
+        ..UserInfo::default()
+    });
+    let _ = core.on_ws_close(1011);
+    let _ = core.on_timer(RECOVERY_TIMER_ID);
+    let _ = core.on_welcome(sample_welcome_payload());
+
+    let commands = core.on_transport_ready();
+    let envelopes = decode_sent_client_envelopes(&commands);
+
+    assert_eq!(core.state(), ConnectionState::Connected);
+    assert_eq!(
+        commands.first(),
+        Some(&Command::EmitStateChange {
+            state: ConnectionState::Connected,
+            cause: None,
+        })
+    );
+    assert_eq!(
+        envelopes,
+        vec![ClientEnvelope::Message(ClientMessage::Publish(
+            StreamIntentPayload {
+                stream_type: StreamType::Camera,
+            },
+        ))]
     );
 }
 

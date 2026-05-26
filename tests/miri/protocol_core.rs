@@ -26,7 +26,7 @@ fn extract_registered_request(commands: &[Command]) -> Option<(RequestId, u32)> 
 }
 
 #[test]
-fn recovery_replay_flushes_sticky_state_once_after_welcome() {
+fn recovery_replay_splits_session_and_publication_phases() {
     let mut core = ProtocolCore::new();
 
     assert_eq!(
@@ -82,9 +82,6 @@ fn recovery_replay_flushes_sticky_state_once_after_welcome() {
     assert_eq!(
         decode_sent_client_envelopes(&welcome_commands),
         vec![
-            ClientEnvelope::Message(ClientMessage::Publish(StreamIntentPayload {
-                stream_type: StreamType::Camera,
-            })),
             ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
                 user_id: UserId::String("peer-7".to_owned()),
                 states: DownloadStates {
@@ -102,12 +99,21 @@ fn recovery_replay_flushes_sticky_state_once_after_welcome() {
         ]
     );
 
+    let transport_ready_commands = core.on_transport_ready();
     assert_eq!(
-        core.on_transport_ready(),
-        vec![Command::EmitStateChange {
+        transport_ready_commands.first(),
+        Some(&Command::EmitStateChange {
             state: ConnectionState::Connected,
             cause: None,
-        }]
+        })
+    );
+    assert_eq!(
+        decode_sent_client_envelopes(&transport_ready_commands),
+        vec![ClientEnvelope::Message(ClientMessage::Publish(
+            StreamIntentPayload {
+                stream_type: StreamType::Camera,
+            },
+        ))]
     );
 }
 

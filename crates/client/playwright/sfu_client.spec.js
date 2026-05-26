@@ -460,18 +460,11 @@ test("default browser runtime reconnects and replays sticky intents", async ({ p
                 {
                     t: "auth",
                     p: {
-                        channel: undefined,
                         jwt: "jwt-token"
                     }
                 }
             ],
             [
-                {
-                    t: "publish",
-                    p: {
-                        type: "camera"
-                    }
-                },
                 {
                     t: "subscribe",
                     p: {
@@ -489,4 +482,39 @@ test("default browser runtime reconnects and replays sticky intents", async ({ p
                 }
             ]
         ]);
+
+    await page.evaluate(() => {
+        globalThis.__browserHarness.state.sockets[1].emitMessage(
+            JSON.stringify([
+                {
+                    t: "offer",
+                    q: "recovery-offer",
+                    p: {
+                        sdp: "recovered-offer-sdp",
+                        uploadSlots: [{ mid: "0", kind: "video", codecs: ["vp8"] }]
+                    }
+                }
+            ])
+        );
+    });
+
+    await expect
+        .poll(async () =>
+            page.evaluate(() =>
+                globalThis.__browserHarness.state.sockets[1].sent.map((frame) => JSON.parse(frame))
+            )
+        )
+        .toEqual(
+            expect.arrayContaining([
+                [{ t: "offer", r: "recovery-offer", p: { sdp: "browser-answer-sdp" } }],
+                [
+                    {
+                        t: "publish",
+                        p: {
+                            type: "camera"
+                        }
+                    }
+                ]
+            ])
+        );
 });

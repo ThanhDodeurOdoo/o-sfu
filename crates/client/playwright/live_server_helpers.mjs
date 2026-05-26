@@ -11,6 +11,7 @@ const DIAGNOSTICS_ROOM_PATH = "/internal/diagnostics/rooms";
 const DIAGNOSTICS_POLL_INTERVAL_MS = 100;
 const DIAGNOSTICS_POLL_TIMEOUT_MS = 5_000;
 const AUDIO_OPERATION_TIMEOUT_MS = 250;
+const RECOVERABLE_BROWSER_CLOSE_CODE = 4000;
 const HARNESS_URL = "/playwright/fixtures/harness.html";
 const STREAM_TYPES = new Set(["audio", "camera", "screen"]);
 
@@ -127,8 +128,8 @@ export async function connectPeer(page, { channelUuid, jwt, url = TEST_SFU_WS_UR
                 return structuredClone(detail);
             };
 
-            const { SfuClient } = await import("/dist/index.js");
             const harness = globalThis.__liveHarness;
+            const { SfuClient } = await import("/dist/index.js");
             const client = new SfuClient();
             harness.client = client;
             harness.errors = [];
@@ -300,6 +301,39 @@ export async function unpublishCamera(page) {
     await unpublishStream(page, "camera");
 }
 
+export async function broadcast(page, message) {
+    await page.evaluate((nextMessage) => {
+        const harness = globalThis.__liveHarness;
+        if (!harness.client) {
+            throw new Error("browser harness client is not connected");
+        }
+        harness.client.broadcast(nextMessage);
+    }, message);
+}
+
+export async function updateInfo(page, info, options = { needRefresh: true }) {
+    await page.evaluate(
+        ({ nextInfo, nextOptions }) => {
+            const harness = globalThis.__liveHarness;
+            if (!harness.client) {
+                throw new Error("browser harness client is not connected");
+            }
+            harness.client.updateInfo(nextInfo, nextOptions);
+        },
+        { nextInfo: info, nextOptions: options }
+    );
+}
+
+export async function forceRecoverableClose(page) {
+    await page.evaluate((closeCode) => {
+        const websocket = globalThis.__liveHarness.client?._runtime?._webSocket;
+        if (!websocket || websocket.readyState >= WebSocket.CLOSING) {
+            throw new Error("browser harness websocket is not open");
+        }
+        websocket.close(closeCode);
+    }, RECOVERABLE_BROWSER_CLOSE_CODE);
+}
+
 export async function peerSnapshot(page) {
     return page.evaluate(() => {
         const serializeTrack = (track) =>
@@ -335,6 +369,33 @@ export async function peerSnapshot(page) {
     });
 }
 
+export async function latestBroadcastUpdate(page, senderId) {
+    return page.evaluate((expectedSenderId) => {
+        const harness = globalThis.__liveHarness;
+        return (
+            harness.updates
+                .filter(
+                    (update) =>
+                        update.name === "broadcast" &&
+                        String(update.payload.senderId) === String(expectedSenderId)
+                )
+                .at(-1) ?? null
+        );
+    }, senderId);
+}
+
+export async function latestInfoUpdate(page, sessionId) {
+    return page.evaluate((targetSessionId) => {
+        const harness = globalThis.__liveHarness;
+        const targetKey = String(targetSessionId);
+        return (
+            harness.updates
+                .filter((update) => update.name === "info_change" && update.payload[targetKey])
+                .at(-1) ?? null
+        );
+    }, sessionId);
+}
+
 export async function latestTrackUpdate(page, targetSessionId, targetType) {
     return page.evaluate(
         ({ sessionId: nextSessionId, type: nextType }) => {
@@ -352,6 +413,42 @@ export async function latestTrackUpdate(page, targetSessionId, targetType) {
         },
         { sessionId: targetSessionId, type: targetType }
     );
+}
+
+export async function cameraSubscriptionRid({
+    consumerSessionId,
+    httpBaseUrl = TEST_SFU_HTTP_BASE_URL,
+    producerSessionId,
+    roomId
+}) {
+    const room = await fetchRoomDiagnostics(httpBaseUrl, roomId);
+    const subscription = room
+        ? cameraSubscription(room, consumerSessionId, producerSessionId)
+        : null;
+    if (!subscription || subscription.state !== "active") {
+        return null;
+    }
+    return cameraSubscriptionSelectedRid(room, subscription);
+}
+
+export async function cameraPublicationActive({
+    httpBaseUrl = TEST_SFU_HTTP_BASE_URL,
+    roomId,
+    sessionId
+}) {
+    const room = await fetchRoomDiagnostics(httpBaseUrl, roomId);
+    const user = room?.users.find((candidate) => userIdsMatch(candidate.userId, sessionId));
+    return (
+        user?.publications.some(
+            (publication) => publication.streamId === "camera" && publication.active === true
+        ) ?? false
+    );
+}
+
+export async function roomUserInfo({ httpBaseUrl = TEST_SFU_HTTP_BASE_URL, roomId, sessionId }) {
+    const room = await fetchRoomDiagnostics(httpBaseUrl, roomId);
+    const user = room?.users.find((candidate) => userIdsMatch(candidate.userId, sessionId));
+    return user?.userInfo ?? null;
 }
 
 export async function peerLocalDescriptionSdp(page) {
