@@ -131,7 +131,7 @@ impl Drop for WorkerLoopBenchFixture {
     fn drop(&mut self) {
         let _ = self
             .runtime
-            .block_on(self.worker.close_session_with_outcome(&self.session_key));
+            .block_on(self.worker.close_session(&self.session_key));
     }
 }
 
@@ -232,10 +232,9 @@ impl WorkerPacketCommandMixBenchFixture {
 
 impl Drop for WorkerPacketCommandMixBenchFixture {
     fn drop(&mut self) {
-        let _ = self.runtime.block_on(
-            self.worker
-                .close_session_with_outcome(&self.base_session_key),
-        );
+        let _ = self
+            .runtime
+            .block_on(self.worker.close_session(&self.base_session_key));
     }
 }
 
@@ -259,7 +258,7 @@ async fn run_lifecycle_burst(worker: &RtcWorker, session_key: &TransportSessionK
         "temporary receive media removal failed",
     );
     require_ok(
-        worker.close_session_with_outcome(session_key).await,
+        worker.close_session(session_key).await,
         "temporary session close failed",
     );
     usize::try_from(media_id.as_u64()).unwrap_or(0)

@@ -371,9 +371,9 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
         self.require_worker_for_user(session_key)?
-            .close_session_with_outcome(session_key)
-            .await
-            .map(|_outcome| ())
+            .close_session(session_key)
+            .await?;
+        Ok(())
     }
 
     /// Removes one transport media handle from the owning worker.

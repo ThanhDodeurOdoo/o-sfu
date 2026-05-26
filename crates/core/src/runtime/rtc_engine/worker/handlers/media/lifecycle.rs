@@ -28,7 +28,6 @@ use super::{
     super::{
         super::super::{
             bitrate::BitrateRegistry,
-            commands::RtcWorkerResponse,
             media_registry::{
                 DecoderRefreshCodec, RegisteredMediaHandle, RemoteSourceRegistration,
             },
@@ -107,63 +106,9 @@ impl RemoteSourceRollback {
     }
 }
 
-pub fn respond_remove_media(
-    state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
-    session_key: &TransportSessionKey,
-    transport_media_id: TransportMediaId,
-    response: RtcWorkerResponse<()>,
-) {
-    let _ = response.send(worker_remove_media(
-        state,
-        bitrate_registry,
-        session_key,
-        transport_media_id,
-    ));
-}
-
-pub fn respond_add_recv_media(
-    state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
-    policy: RecvMediaPolicy,
-    session_key: &TransportSessionKey,
-    media_kind: MediaKind,
-    rtp_parameters: &RouterRtpParameters,
-    response: RtcWorkerResponse<TransportMediaId>,
-) {
-    let _ = response.send(worker_add_recv_media(
-        state,
-        bitrate_registry,
-        policy,
-        session_key,
-        media_kind,
-        rtp_parameters,
-    ));
-}
-
-pub fn respond_add_send_media(
-    state: &mut PacketLoopState,
-    request: AddSendMediaRequest<'_>,
-    now: Instant,
-    response: RtcWorkerResponse<TransportMediaId>,
-) {
-    let _ = response.send(worker_add_send_media(state, request, now));
-}
-
-pub fn respond_resolve_media_mid(
-    state: &PacketLoopState,
-    transport_media_id: TransportMediaId,
-    response: RtcWorkerResponse<Option<String>>,
-) {
-    let resolved_mid = state
-        .resolve_mid(transport_media_id)
-        .map(|mid| mid.to_string());
-    let _ = response.send(Ok(resolved_mid));
-}
-
 /// Remove one registered transport media handle and reconcile every dependent
 /// SDP, route, and remote-source side effect that still points at it.
-fn worker_remove_media(
+pub(in crate::runtime::rtc_engine::worker::handlers) fn worker_remove_media(
     state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     session_key: &TransportSessionKey,
@@ -254,12 +199,7 @@ fn stage_last_mid_removal_before_unregistering_handle(
     transport_media_id: TransportMediaId,
     handle: &RegisteredMediaHandle,
 ) -> Result<(), TransportAdapterError> {
-    if session_has_other_mid_user(
-        state,
-        handle.session_key(),
-        handle.mid(),
-        transport_media_id,
-    ) {
+    if state.session_has_other_media_mid(handle.session_key(), handle.mid(), transport_media_id) {
         return Ok(());
     }
     let session_state = state
@@ -291,22 +231,6 @@ fn can_unregister_unnegotiated_producer(
         }
         RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. } => false,
     }
-}
-
-fn session_has_other_mid_user(
-    state: &PacketLoopState,
-    session_key: &TransportSessionKey,
-    mid: Mid,
-    excluded_transport_media_id: TransportMediaId,
-) -> bool {
-    state
-        .mid_registry
-        .iter()
-        .any(|(transport_media_id, handle)| {
-            *transport_media_id != excluded_transport_media_id
-                && handle.session_key() == session_key
-                && handle.mid() == mid
-        })
 }
 
 /// Returns whether the worker already handed out a local offer and is still
@@ -364,7 +288,7 @@ fn worker_stage_native_media_removal(
 /// Before the first answer lands, the RTC state can be updated directly because
 /// there is no committed negotiated description to keep in sync yet. After that
 /// point every addition must stage the next renegotiation offer first.
-fn worker_add_recv_media(
+pub(in crate::runtime::rtc_engine::worker::handlers) fn worker_add_recv_media(
     state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     policy: RecvMediaPolicy,
@@ -496,7 +420,7 @@ fn worker_stage_native_recv_media(
 /// form one logical edge. If the consumer user is gone or media staging
 /// fails, any provisional remote-source registration is restored before the
 /// error escapes.
-fn worker_add_send_media(
+pub(in crate::runtime::rtc_engine::worker::handlers) fn worker_add_send_media(
     state: &mut PacketLoopState,
     request: AddSendMediaRequest<'_>,
     now: Instant,

@@ -104,7 +104,6 @@ impl SimulcastCodecProfile {
                 vp8::Vp8SimulcastProfile::upload_encodings_from_specs(&layers)
             }
             Self::H264(profile) => {
-                let _ = h264::H264SimulcastProfile::rtx_allowed();
                 let layers = rtp_parameters.map_or_else(
                     || profile.default_layers().to_vec(),
                     |parameters| {
@@ -500,8 +499,6 @@ mod tests {
             profile.default_layers(),
             common::default_layer_specs(VideoBitrateLimits::default())
         );
-        assert!(!h264::H264SimulcastProfile::rtx_allowed());
-
         for parameters in [
             h264_parameters(0, "42e01f"),
             h264_parameters(1, "42001f"),

@@ -27,7 +27,7 @@ use tokio::sync::{mpsc, oneshot};
 use super::{
     AddSendMediaRequest, apply_route_control_request, drain_due_rid_keyframe_refreshes,
     observe_source_rid_readiness, refresh_source_packet_gate, request_keyframe_for_source,
-    respond_add_send_media, respond_remove_media, respond_set_consumer_packet_gates,
+    respond_set_consumer_packet_gates, worker_add_send_media, worker_remove_media,
 };
 use crate::{
     Bitrate, MediaCodecFlags,
@@ -895,10 +895,9 @@ fn add_send_media_rolls_back_remote_source_registration_when_consumer_session_is
     let (command_tx, _command_rx) = mpsc::channel(1);
     let remote_source_control = RemoteSourceControl::new(command_tx, RelayTargetId::new(10));
     let consumer_rtp_parameters = RouterRtpParameters::new(vec![], vec![], vec![]);
-    let (response_tx, response_rx) = oneshot::channel();
     let source = TransportSourceKey::new(source_session, source_transport_media_id);
 
-    respond_add_send_media(
+    let result = worker_add_send_media(
         &mut state,
         AddSendMediaRequest {
             consumer_session_key: &consumer_session,
@@ -909,13 +908,9 @@ fn add_send_media_rolls_back_remote_source_registration_when_consumer_session_is
             active: true,
         },
         Instant::now(),
-        response_tx,
     );
 
-    assert_eq!(
-        response_rx.blocking_recv(),
-        Ok(Err(TransportAdapterError::TransportUnavailable))
-    );
+    assert_eq!(result, Err(TransportAdapterError::TransportUnavailable));
     assert!(
         state
             .remote_source_registration(source_transport_media_id)
@@ -957,24 +952,24 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
         ],
     )
     .with_mid(consumer_mid.to_string());
-    let (response_tx, response_rx) = oneshot::channel();
     let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
 
-    respond_add_send_media(
-        &mut state,
-        AddSendMediaRequest {
-            consumer_session_key: &consumer_session,
-            media_kind: MediaKind::Video,
-            source: &source,
-            remote_source_control: None,
-            consumer_rtp_parameters: &consumer_rtp_parameters,
-            active: true,
-        },
-        Instant::now(),
-        response_tx,
+    assert!(
+        worker_add_send_media(
+            &mut state,
+            AddSendMediaRequest {
+                consumer_session_key: &consumer_session,
+                media_kind: MediaKind::Video,
+                source: &source,
+                remote_source_control: None,
+                consumer_rtp_parameters: &consumer_rtp_parameters,
+                active: true,
+            },
+            Instant::now(),
+        )
+        .is_ok()
     );
 
-    assert!(matches!(response_rx.blocking_recv(), Ok(Ok(_))));
     let Some(consumer_session_state) = state.users.get_mut(&consumer_session) else {
         panic!("consumer session should exist after RTC state bootstrap");
     };
@@ -1048,24 +1043,24 @@ fn add_send_media_uses_supplied_time_for_initial_selected_rid_gate() {
         ],
     )
     .with_mid(consumer_mid.to_string());
-    let (response_tx, response_rx) = oneshot::channel();
     let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
 
-    respond_add_send_media(
-        &mut state,
-        AddSendMediaRequest {
-            consumer_session_key: &consumer_session,
-            media_kind: MediaKind::Video,
-            source: &source,
-            remote_source_control: None,
-            consumer_rtp_parameters: &consumer_rtp_parameters,
-            active: true,
-        },
-        observed_at + Duration::from_millis(250),
-        response_tx,
+    assert!(
+        worker_add_send_media(
+            &mut state,
+            AddSendMediaRequest {
+                consumer_session_key: &consumer_session,
+                media_kind: MediaKind::Video,
+                source: &source,
+                remote_source_control: None,
+                consumer_rtp_parameters: &consumer_rtp_parameters,
+                active: true,
+            },
+            observed_at + Duration::from_millis(250),
+        )
+        .is_ok()
     );
 
-    assert!(matches!(response_rx.blocking_recv(), Ok(Ok(_))));
     assert_consumer_packet_gate(
         &state,
         source_transport_media_id,
@@ -1124,17 +1119,17 @@ fn remove_media_releases_unnegotiated_producer_when_removal_cannot_stage() {
     let transport_media_id =
         prepare_already_absent_producer_registration(&mut state, &session_key, producer_mid, None);
     let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
-    let (response_tx, response_rx) = oneshot::channel();
 
-    respond_remove_media(
-        &mut state,
-        &bitrate_registry,
-        &session_key,
-        transport_media_id,
-        response_tx,
+    assert_eq!(
+        worker_remove_media(
+            &mut state,
+            &bitrate_registry,
+            &session_key,
+            transport_media_id,
+        ),
+        Ok(())
     );
 
-    assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
     assert!(state.media_handle(transport_media_id).is_none());
     assert_eq!(drain_ready_sessions(&mut state), vec![session_key.clone()]);
 }
@@ -1154,20 +1149,15 @@ fn remove_media_keeps_negotiated_handle_when_removal_cannot_stage() {
         Some(negotiated_parameters),
     );
     let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
-    let (response_tx, response_rx) = oneshot::channel();
 
-    respond_remove_media(
+    let result = worker_remove_media(
         &mut state,
         &bitrate_registry,
         &session_key,
         transport_media_id,
-        response_tx,
     );
 
-    assert_eq!(
-        response_rx.blocking_recv(),
-        Ok(Err(TransportAdapterError::InvalidInput))
-    );
+    assert_eq!(result, Err(TransportAdapterError::InvalidInput));
     assert!(matches!(
         state.media_handle(transport_media_id),
         Some(RegisteredMediaHandle::Producer { session_key: stored_session_key, mid })

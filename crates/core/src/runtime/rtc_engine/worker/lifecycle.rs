@@ -381,21 +381,7 @@ impl RtcWorker {
             Ok(bitrate_registry) => bitrate_registry.egress_bitrate_snapshot_at(session_keys, now),
             Err(_error) => Bitrate::zero(),
         };
-        let packet_loop_lag_ms = worker_handle.packet_loop_lag.packet_loop_lag_ms_at(now);
-        let command_backlog_depth = sender_backlog_depth(&worker_handle.command_tx);
-        let relay_mailbox_depth = worker_handle.relay_mailbox.backlog_depth();
-        TransportPlacementPressureSnapshot {
-            egress_bitrate,
-            packet_loop_lag_ms,
-            command_backlog_depth,
-            relay_mailbox_depth,
-            worker_pressure_score: worker_pressure_score(
-                command_backlog_depth,
-                worker_handle.command_tx.max_capacity(),
-                relay_mailbox_depth,
-                RELAY_MAILBOX_CAPACITY,
-            ),
-        }
+        pressure_snapshot(&worker_handle, egress_bitrate, now)
     }
 
     /// builds a pressure snapshot for the whole worker
@@ -418,23 +404,9 @@ impl RtcWorker {
             Ok(bitrate_registry) => bitrate_registry.total_egress_bitrate_snapshot_at(now),
             Err(_error) => Bitrate::zero(),
         };
-        let packet_loop_lag_ms = worker_handle.packet_loop_lag.packet_loop_lag_ms_at(now);
-        let command_backlog_depth = sender_backlog_depth(&worker_handle.command_tx);
-        let relay_mailbox_depth = worker_handle.relay_mailbox.backlog_depth();
         TransportWorkerPressureSnapshot::new(
             media_worker_id,
-            TransportPlacementPressureSnapshot {
-                egress_bitrate,
-                packet_loop_lag_ms,
-                command_backlog_depth,
-                relay_mailbox_depth,
-                worker_pressure_score: worker_pressure_score(
-                    command_backlog_depth,
-                    worker_handle.command_tx.max_capacity(),
-                    relay_mailbox_depth,
-                    RELAY_MAILBOX_CAPACITY,
-                ),
-            },
+            pressure_snapshot(&worker_handle, egress_bitrate, now),
         )
     }
 
@@ -535,6 +507,28 @@ fn worker_pressure_score(
         relay_mailbox_depth,
         relay_mailbox_capacity,
     ))
+}
+
+fn pressure_snapshot(
+    worker_handle: &RtcWorkerHandle,
+    egress_bitrate: Bitrate,
+    now: Instant,
+) -> TransportPlacementPressureSnapshot {
+    let packet_loop_lag_ms = worker_handle.packet_loop_lag.packet_loop_lag_ms_at(now);
+    let command_backlog_depth = sender_backlog_depth(&worker_handle.command_tx);
+    let relay_mailbox_depth = worker_handle.relay_mailbox.backlog_depth();
+    TransportPlacementPressureSnapshot {
+        egress_bitrate,
+        packet_loop_lag_ms,
+        command_backlog_depth,
+        relay_mailbox_depth,
+        worker_pressure_score: worker_pressure_score(
+            command_backlog_depth,
+            worker_handle.command_tx.max_capacity(),
+            relay_mailbox_depth,
+            RELAY_MAILBOX_CAPACITY,
+        ),
+    }
 }
 
 /// converts one bounded mailbox depth into a percentage pressure score

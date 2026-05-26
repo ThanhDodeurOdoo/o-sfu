@@ -272,38 +272,33 @@ fn learn_producer_ssrc_binding_for_session(
     }
     let mid = *mid;
 
-    let (inserted, previous_rid) = if let Some(session_lookup) = session_media.get_mut(session_key)
-    {
-        if let Some(existing_transport_media_id) = session_lookup.producer_ssrcs.get(&ssrc)
-            && existing_transport_media_id != transport_media_id
-        {
-            warn!(
-                user_id = ?session_key.user_id(),
-                media_worker_id = session_key.media_worker_id(),
-                ?transport_media_id,
-                ?existing_transport_media_id,
-                ?mid,
-                ?ssrc,
-                ?rid,
-                "ignored dynamic producer SSRC binding because SSRC already belongs to another media"
-            );
-            return;
-        }
-        let inserted = session_lookup
-            .producer_ssrcs
-            .insert(ssrc, transport_media_id)
-            .is_none();
-        let previous_rid = rid.and_then(|rid| session_lookup.producer_ssrc_rids.insert(ssrc, rid));
-        (inserted, previous_rid)
-    } else {
-        let session_lookup = session_media.entry(session_key.clone()).or_default();
-        let inserted = session_lookup
-            .producer_ssrcs
-            .insert(ssrc, transport_media_id)
-            .is_none();
-        let previous_rid = rid.and_then(|rid| session_lookup.producer_ssrc_rids.insert(ssrc, rid));
-        (inserted, previous_rid)
+    let Some(session_lookup) = session_media.get_mut(session_key) else {
+        debug_assert!(
+            session_media.contains_key(session_key),
+            "producer SSRC binding missing session media index for registered producer"
+        );
+        return;
     };
+    if let Some(existing_transport_media_id) = session_lookup.producer_ssrcs.get(&ssrc)
+        && existing_transport_media_id != transport_media_id
+    {
+        warn!(
+            user_id = ?session_key.user_id(),
+            media_worker_id = session_key.media_worker_id(),
+            ?transport_media_id,
+            ?existing_transport_media_id,
+            ?mid,
+            ?ssrc,
+            ?rid,
+            "ignored dynamic producer SSRC binding because SSRC already belongs to another media"
+        );
+        return;
+    }
+    let inserted = session_lookup
+        .producer_ssrcs
+        .insert(ssrc, transport_media_id)
+        .is_none();
+    let previous_rid = rid.and_then(|rid| session_lookup.producer_ssrc_rids.insert(ssrc, rid));
 
     let ssrcs = producer_ssrcs_by_media
         .entry(transport_media_id)
@@ -426,6 +421,45 @@ impl PacketLoopState {
         transport_media_id: TransportMediaId,
     ) -> Option<&RegisteredMediaHandle> {
         self.mid_registry.get(&transport_media_id)
+    }
+
+    pub(super) fn producer_media_snapshot_for_session(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Vec<(TransportMediaId, Mid)> {
+        self.session_media
+            .get(session_key)
+            .map_or_else(Vec::new, |session_lookup| {
+                session_lookup
+                    .producer_mids
+                    .entries
+                    .iter()
+                    .map(|(mid, transport_media_id)| (*transport_media_id, *mid))
+                    .collect()
+            })
+    }
+
+    pub(super) fn session_has_other_media_mid(
+        &self,
+        session_key: &TransportSessionKey,
+        mid: Mid,
+        excluded_transport_media_id: TransportMediaId,
+    ) -> bool {
+        self.session_media
+            .get(session_key)
+            .is_some_and(|session_lookup| {
+                session_lookup
+                    .owned_media
+                    .iter()
+                    .copied()
+                    .any(|transport_media_id| {
+                        transport_media_id != excluded_transport_media_id
+                            && self
+                                .mid_registry
+                                .get(&transport_media_id)
+                                .is_some_and(|handle| handle.mid() == mid)
+                    })
+            })
     }
 
     /// remove one media handle and every dependent reverse index owned by it
@@ -870,12 +904,13 @@ impl PacketLoopState {
     ) -> Vec<(TransportMediaId, RegisteredMediaHandle)> {
         let removed_ids = self.session_media.get(session_key).map_or_else(
             || {
-                self.mid_registry
-                    .iter()
-                    .filter_map(|(transport_media_id, handle)| {
-                        (handle.session_key() == session_key).then_some(*transport_media_id)
-                    })
-                    .collect::<Vec<_>>()
+                debug_assert!(
+                    self.mid_registry
+                        .iter()
+                        .all(|(_transport_media_id, handle)| handle.session_key() != session_key),
+                    "session media index missing handles for session"
+                );
+                Vec::new()
             },
             |session_lookup| session_lookup.owned_media.clone(),
         );
@@ -925,7 +960,13 @@ impl PacketLoopState {
                 .or_default();
             return;
         }
-        let session_lookup = self.session_media.entry(session_key.clone()).or_default();
+        let Some(session_lookup) = self.session_media.get_mut(session_key) else {
+            debug_assert!(
+                self.session_media.contains_key(session_key),
+                "producer SSRC refresh missing session media index for registered producer"
+            );
+            return;
+        };
         for (ssrc, rid) in &bindings {
             session_lookup
                 .producer_ssrcs
@@ -1040,6 +1081,51 @@ mod tests {
         assert_eq!(
             state.consumer_source_transport_media_id_for_mid(&consumer_session, consumer_mid),
             None
+        );
+    }
+
+    #[test]
+    fn session_media_index_drives_bulk_session_removal() {
+        let mut state = PacketLoopState::default();
+        let removed_session = test_transport_session_key(15, 0, 16, UserId::Integer(17));
+        let kept_session = test_transport_session_key(18, 0, 19, UserId::Integer(20));
+        let producer_mid = Mid::from("cam-up");
+        let consumer_mid = Mid::from("cam-down");
+        let kept_mid = Mid::from("kept-cam-up");
+        let producer_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: removed_session.clone(),
+            mid: producer_mid,
+        });
+        let consumer_media_id = state.register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: removed_session.clone(),
+            mid: consumer_mid,
+            source_transport_media_id: producer_media_id,
+        });
+        let kept_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: kept_session.clone(),
+            mid: kept_mid,
+        });
+
+        let removed_handles = state.remove_session_media_handles(&removed_session);
+
+        let mut removed_ids = removed_handles
+            .iter()
+            .map(|(transport_media_id, _handle)| *transport_media_id)
+            .collect::<Vec<_>>();
+        removed_ids.sort();
+        assert_eq!(removed_ids, vec![producer_media_id, consumer_media_id]);
+        assert!(!state.session_has_registered_media(&removed_session));
+        assert_eq!(
+            state.source_transport_media_id_for_mid(&removed_session, producer_mid),
+            None
+        );
+        assert_eq!(
+            state.consumer_source_transport_media_id_for_mid(&removed_session, consumer_mid),
+            None
+        );
+        assert_eq!(
+            state.source_transport_media_id_for_mid(&kept_session, kept_mid),
+            Some(kept_media_id)
         );
     }
 

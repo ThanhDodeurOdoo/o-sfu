@@ -14,8 +14,7 @@ use o_sfu_router::{
     RtcpFeedbackKind, StreamBinding,
 };
 use str0m::{
-    bwe::Bitrate as Str0mBitrate,
-    change::{DirectApi, SdpAnswer},
+    change::SdpAnswer,
     format::PayloadParams,
     media::{Direction, MediaKind as Str0mMediaKind, Mid, Rid},
     rtp::Extension,
@@ -23,31 +22,20 @@ use str0m::{
 #[cfg(test)]
 use {
     super::super::super::media_registry::RegisteredMediaHandle,
-    crate::runtime::media_transport::TransportMediaId, tokio::sync::oneshot, tracing::warn,
+    crate::runtime::media_transport::TransportMediaId, tracing::warn,
 };
 
-use super::super::super::{
-    simulcast,
-    state::{PacketLoopState, RtcSessionState},
+use super::{
+    super::super::{
+        simulcast,
+        state::{PacketLoopState, RtcSessionState},
+    },
+    recv_stream::{StaleSsrcPolicy, apply_recv_stream},
 };
 use crate::{
     Bitrate,
     runtime::media_transport::{TransportAdapterError, TransportSessionKey},
 };
-
-#[cfg(test)]
-pub(super) fn respond_resolve_negotiated_producer_parameters(
-    state: &PacketLoopState,
-    session_key: &TransportSessionKey,
-    transport_media_id: TransportMediaId,
-    response: oneshot::Sender<Result<RouterRtpParameters, TransportAdapterError>>,
-) {
-    let _ = response.send(worker_resolve_negotiated_producer_parameters(
-        state,
-        session_key,
-        transport_media_id,
-    ));
-}
 
 pub(super) fn refresh_negotiated_producer_parameters(
     state: &mut PacketLoopState,
@@ -165,7 +153,17 @@ fn apply_projected_recv_streams(
 ) {
     let mut api = session_state.rtc.direct_api();
     for binding in bindings {
-        apply_projected_recv_stream(&mut api, mid, binding, max_bitrate_in);
+        let Some(ssrc) = binding.ssrc() else {
+            continue;
+        };
+        apply_recv_stream(
+            &mut api,
+            mid,
+            binding.rid().map(Rid::from),
+            ssrc.into(),
+            max_bitrate_in,
+            StaleSsrcPolicy::KeepExisting,
+        );
     }
     #[cfg(test)]
     {
@@ -173,32 +171,10 @@ fn apply_projected_recv_streams(
     }
 }
 
-fn apply_projected_recv_stream(
-    api: &mut DirectApi<'_>,
-    mid: Mid,
-    binding: &StreamBinding,
-    max_bitrate_in: Bitrate,
-) {
-    let Some(ssrc) = binding.ssrc() else {
-        return;
-    };
-    let rid = binding.rid().map(Rid::from);
-    if api.stream_rx_by_mid(mid, rid).is_some() {
-        if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
-            stream_rx.request_remb(Str0mBitrate::bps(max_bitrate_in.as_bps()));
-        }
-        return;
-    }
-    api.expect_stream_rx(ssrc.into(), None, mid, rid);
-    if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
-        stream_rx.request_remb(Str0mBitrate::bps(max_bitrate_in.as_bps()));
-    }
-}
-
 /// Resolve the router-native RTP parameters for one producer after answer-side
 /// projection has populated them for the owning user.
 #[cfg(test)]
-fn worker_resolve_negotiated_producer_parameters(
+pub(super) fn worker_resolve_negotiated_producer_parameters(
     state: &PacketLoopState,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,

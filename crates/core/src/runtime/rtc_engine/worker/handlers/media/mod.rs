@@ -20,7 +20,6 @@ pub(in crate::runtime::rtc_engine) use control::{
 };
 pub(in crate::runtime::rtc_engine) use keyframe::request_keyframe_for_source;
 pub(super) use lifecycle::{
-    RecvMediaPolicy, respond_add_recv_media, respond_add_send_media, respond_remove_media,
-    respond_resolve_media_mid,
+    RecvMediaPolicy, worker_add_recv_media, worker_add_send_media, worker_remove_media,
 };
 pub(super) use types::AddSendMediaRequest;

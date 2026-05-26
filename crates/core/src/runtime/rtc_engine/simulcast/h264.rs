@@ -36,10 +36,6 @@ impl H264SimulcastProfile {
             .then(|| Self::new(video_bitrate_limits))
     }
 
-    pub(super) const fn rtx_allowed() -> bool {
-        false
-    }
-
     pub(super) fn default_layers(self) -> [SimulcastLayerSpec<'static>; 2] {
         common::default_layer_specs(self.video_bitrate_limits)
     }

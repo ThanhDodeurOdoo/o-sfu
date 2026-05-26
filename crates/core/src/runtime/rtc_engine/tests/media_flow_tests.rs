@@ -32,12 +32,7 @@ async fn rtc_metrics_track_live_transport_users_without_double_counting() {
     ));
     assert_eq!(adapter.metrics.snapshot().active_transport_users(), 1);
 
-    assert!(
-        adapter
-            .close_session_with_outcome(&session_key)
-            .await
-            .is_ok()
-    );
+    assert!(adapter.close_session(&session_key).await.is_ok());
     let snapshot = adapter.metrics.snapshot();
     assert_eq!(snapshot.active_transport_users(), 0);
     assert_eq!(snapshot.transport_user_lifetime_le_1_second(), 1);
@@ -613,12 +608,7 @@ async fn rtc_incoming_bitrate_snapshot_ignores_closed_sessions() {
         Bitrate::from_bps(960)
     );
 
-    assert!(
-        adapter
-            .close_session_with_outcome(&session_key)
-            .await
-            .is_ok()
-    );
+    assert!(adapter.close_session(&session_key).await.is_ok());
 
     let snapshot = adapter.transport_bitrate_snapshot(slice::from_ref(&session_key));
     assert_eq!(snapshot.total, Bitrate::zero());

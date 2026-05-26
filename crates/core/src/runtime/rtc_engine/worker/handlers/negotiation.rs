@@ -16,12 +16,9 @@ use std::{
 
 use o_sfu_rfc::webrtc::MediaKind as ProtocolMediaKind;
 use str0m::{
-    bwe::Bitrate as Str0mBitrate,
-    change::{DirectApi, SdpAnswer, SdpApi},
+    change::{SdpAnswer, SdpApi},
     media::{Direction, MediaKind, Mid},
-    rtp::Ssrc,
 };
-use tokio::sync::oneshot;
 use tracing::debug;
 
 use super::{
@@ -31,6 +28,7 @@ use super::{
         state::{PacketLoopState, RtcSnapshotState},
     },
     publication::refresh_negotiated_producer_parameters,
+    recv_stream::{StaleSsrcPolicy, apply_recv_stream},
 };
 use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
@@ -58,56 +56,13 @@ pub(super) struct OfferBootstrapConfig<'a> {
     pub(super) metrics: &'a RuntimeMetrics,
 }
 
-pub(super) fn respond_create_initial_session_offer(
-    state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    config: OfferBootstrapConfig<'_>,
-    session_key: &TransportSessionKey,
-    response: oneshot::Sender<Result<SessionOffer, TransportAdapterError>>,
-) {
-    let _ = response.send(worker_create_initial_session_offer(
-        state,
-        bitrate_registry,
-        snapshot_state,
-        config,
-        session_key,
-    ));
-}
-
-pub(super) fn respond_create_session_renegotiation_offer(
-    state: &mut PacketLoopState,
-    session_key: &TransportSessionKey,
-    response: oneshot::Sender<Result<SessionOffer, TransportAdapterError>>,
-) {
-    let _ = response.send(worker_create_session_renegotiation_offer(
-        state,
-        session_key,
-    ));
-}
-
-pub(super) fn respond_apply_session_answer(
-    state: &mut PacketLoopState,
-    max_bitrate_in: Bitrate,
-    session_key: &TransportSessionKey,
-    answer_sdp: &str,
-    response: oneshot::Sender<Result<AppliedSessionAnswer, TransportAdapterError>>,
-) {
-    let _ = response.send(worker_apply_session_answer(
-        state,
-        max_bitrate_in,
-        session_key,
-        answer_sdp,
-    ));
-}
-
 /// Create the first local offer for a user after ensuring the worker has
 /// packet-loop state and the user still has no negotiated media.
 ///
 /// The initial offer is reserved for the transport bootstrap and capability
 /// probe flow. Once media has been registered or an earlier initial offer is in
 /// flight, callers must use the renegotiation path instead.
-fn worker_create_initial_session_offer(
+pub(super) fn worker_create_initial_session_offer(
     state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
@@ -158,7 +113,7 @@ fn worker_create_initial_session_offer(
     )
 }
 
-fn worker_create_session_renegotiation_offer(
+pub(super) fn worker_create_session_renegotiation_offer(
     state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
 ) -> Result<SessionOffer, TransportAdapterError> {
@@ -185,58 +140,44 @@ fn worker_create_session_renegotiation_offer(
 /// must rebuild pending recv expectations, refresh negotiated producer
 /// parameters, stage any deferred removals, and index the remote candidate
 /// addresses that later packet-loop recovery depends on.
-fn worker_apply_session_answer(
+pub(super) fn worker_apply_session_answer(
     state: &mut PacketLoopState,
     max_bitrate_in: Bitrate,
     session_key: &TransportSessionKey,
     answer_sdp: &str,
 ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-    let producer_handles = state
-        .mid_registry
-        .iter()
-        .filter_map(|(transport_media_id, handle)| match handle {
-            super::super::super::media_registry::RegisteredMediaHandle::Producer {
-                session_key: owner_session_key,
-                mid,
-            } if owner_session_key == session_key => Some((*transport_media_id, *mid)),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let producer_mids = producer_handles
+    let producer_media_snapshot = state.producer_media_snapshot_for_session(session_key);
+    let producer_mids = producer_media_snapshot
         .iter()
         .map(|(_transport_media_id, mid)| *mid)
         .collect::<Vec<_>>();
     let answer = SdpAnswer::from_sdp_string(answer_sdp)
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
     let remote_candidate_addrs = answer_remote_candidate_addrs(&answer);
-    let Some(session_state) = state.users.get_mut(session_key) else {
-        return Err(TransportAdapterError::TransportUnavailable);
-    };
-    for producer_mid in &producer_mids {
-        simulcast::send_rids_for_mid(answer_sdp, *producer_mid)
+    let staged_upload_slots = {
+        let Some(session_state) = state.users.get_mut(session_key) else {
+            return Err(TransportAdapterError::TransportUnavailable);
+        };
+        for producer_mid in &producer_mids {
+            simulcast::send_rids_for_mid(answer_sdp, *producer_mid)
+                .map_err(|_error| TransportAdapterError::InvalidInput)?;
+        }
+        let Some(pending_offer) = session_state.sdp_negotiation.pending_offer.take() else {
+            return Err(TransportAdapterError::InvalidInput);
+        };
+        session_state
+            .rtc
+            .sdp_api()
+            .accept_answer(pending_offer, answer)
             .map_err(|_error| TransportAdapterError::InvalidInput)?;
-    }
-    let Some(pending_offer) = session_state.sdp_negotiation.pending_offer.take() else {
-        return Err(TransportAdapterError::InvalidInput);
+        session_state.sdp_negotiation.initial_offer_applied = true;
+        session_state.sdp_negotiation.staged_offer_sdp = None;
+        let staged_upload_slots =
+            mem::take(&mut session_state.sdp_negotiation.staged_offer_upload_slots);
+        apply_pending_recv_streams(session_state, max_bitrate_in);
+        session_state.dtls_started = true;
+        staged_upload_slots
     };
-    session_state
-        .rtc
-        .sdp_api()
-        .accept_answer(pending_offer, answer)
-        .map_err(|_error| TransportAdapterError::InvalidInput)?;
-    session_state.sdp_negotiation.initial_offer_applied = true;
-    session_state.sdp_negotiation.staged_offer_sdp = None;
-    let staged_upload_slots = session_state
-        .sdp_negotiation
-        .staged_offer_upload_slots
-        .clone();
-    session_state
-        .sdp_negotiation
-        .staged_offer_upload_slots
-        .clear();
-    apply_pending_recv_streams(session_state, max_bitrate_in);
-    session_state.dtls_started = true;
-    let _ = session_state;
     let refreshed_parameters = refresh_negotiated_producer_parameters(
         state,
         session_key,
@@ -256,7 +197,7 @@ fn worker_apply_session_answer(
             remote_candidate_addrs.iter().copied(),
         );
     Ok(AppliedSessionAnswer::from_negotiated_producer_details(
-        producer_handles
+        producer_media_snapshot
             .into_iter()
             .filter_map(|(transport_media_id, mid)| {
                 refreshed_by_mid.get(&mid).cloned().map(|parameters| {
@@ -308,51 +249,23 @@ fn apply_pending_recv_streams(
     {
         return;
     }
-    let pending_recv_streams = session_state
-        .sdp_negotiation
-        .pending_recv_streams
-        .iter()
-        .flat_map(|(mid, streams)| streams.iter().map(|stream| (*mid, stream.clone())))
-        .collect::<Vec<_>>();
+    let pending_recv_streams = mem::take(&mut session_state.sdp_negotiation.pending_recv_streams);
     let mut api = session_state.rtc.direct_api();
-    for (mid, stream) in &pending_recv_streams {
-        apply_pending_recv_stream(&mut api, *mid, stream, max_bitrate_in);
+    for (mid, streams) in pending_recv_streams {
+        for stream in streams {
+            apply_recv_stream(
+                &mut api,
+                mid,
+                stream.rid,
+                stream.ssrc,
+                max_bitrate_in,
+                StaleSsrcPolicy::ReplaceStale,
+            );
+        }
     }
     #[cfg(test)]
     {
         session_state.max_bitrate_in = Some(max_bitrate_in);
-    }
-    for (mid, _stream) in pending_recv_streams {
-        session_state
-            .sdp_negotiation
-            .pending_recv_streams
-            .remove(&mid);
-    }
-}
-
-fn apply_pending_recv_stream(
-    api: &mut DirectApi<'_>,
-    mid: Mid,
-    stream: &super::super::super::state::PendingRecvStream,
-    max_bitrate_in: Bitrate,
-) {
-    if let Some(existing_ssrc) = api
-        .stream_rx_by_mid(mid, stream.rid)
-        .map(|stream_rx| Ssrc::from(*stream_rx.ssrc()))
-        && existing_ssrc != stream.ssrc
-    {
-        api.remove_stream_rx(existing_ssrc);
-        debug!(
-            ?mid,
-            rid = ?stream.rid,
-            previous_ssrc = ?existing_ssrc,
-            next_ssrc = ?stream.ssrc,
-            "replaced stale recv stream SSRC while applying answer"
-        );
-    }
-    api.expect_stream_rx(stream.ssrc, None, mid, stream.rid);
-    if let Some(stream_rx) = api.stream_rx_by_mid(mid, stream.rid) {
-        stream_rx.request_remb(Str0mBitrate::bps(max_bitrate_in.as_bps()));
     }
 }
 
@@ -361,18 +274,12 @@ fn stage_queued_removal_offer(session_state: &mut super::super::super::state::Rt
         return;
     }
 
-    let queued_removal_mids = session_state
-        .sdp_negotiation
-        .queued_removal_mids
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
+    let queued_removal_mids = mem::take(&mut session_state.sdp_negotiation.queued_removal_mids);
     let mut sdp_api = session_state.rtc.sdp_api();
     for mid in &queued_removal_mids {
         sdp_api.set_direction(*mid, Direction::Inactive);
     }
     let Some((offer, pending_offer)) = sdp_api.apply() else {
-        session_state.sdp_negotiation.queued_removal_mids.clear();
         return;
     };
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
@@ -381,12 +288,6 @@ fn stage_queued_removal_offer(session_state: &mut super::super::super::state::Rt
         .sdp_negotiation
         .staged_offer_upload_slots
         .clear();
-    for mid in queued_removal_mids {
-        session_state
-            .sdp_negotiation
-            .queued_removal_mids
-            .remove(&mid);
-    }
 }
 
 fn ensure_initial_negotiation_media(

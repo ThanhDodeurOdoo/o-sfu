@@ -40,24 +40,6 @@ pub enum CloseSessionState {
     WorkerDrained,
 }
 
-/// close-session response shared with the worker lifecycle
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CloseSessionOutcome {
-    state: CloseSessionState,
-}
-
-impl CloseSessionOutcome {
-    /// builds a close outcome from the worker-local session cleanup result
-    pub(super) const fn new(state: CloseSessionState) -> Self {
-        Self { state }
-    }
-
-    /// returns the lifecycle state that the worker must apply after close
-    pub const fn state(&self) -> CloseSessionState {
-        self.state
-    }
-}
-
 /// command handle used by remote consumers to push control back to a source worker
 ///
 /// a route that consumes media from another worker keeps this handle beside the
@@ -334,7 +316,7 @@ pub(super) enum RtcWorkerCommand {
     /// `WorkerDrained` tells the worker lifecycle to clear the lazy handle
     CloseSession {
         session_key: TransportSessionKey,
-        response: RtcWorkerResponse<CloseSessionOutcome>,
+        response: RtcWorkerResponse<CloseSessionState>,
     },
     /// remove one producer or consumer media registration owned by a session
     ///
