@@ -280,12 +280,13 @@ cargo +nightly fuzz run protocol_decode
 cargo +nightly fuzz run http_disconnect_auth
 cargo +nightly fuzz run protocol_sequence
 cargo +nightly fuzz run sdp_answer
+cargo +nightly fuzz run packet_loop_ingress_demux
 ```
 
 pull requests touching protocol, auth, websocket, HTTP origin, SDP projection or
-fuzz code run `protocol_decode`, `protocol_sequence`, `http_disconnect_auth`
-and `sdp_answer` for 60 seconds each while scheduled and manually dispatched
-fuzz runs keep the full 300 second budget per target
+fuzz code run one matrix job per target. pull request jobs use a 60 second fuzz
+budget while scheduled and manually dispatched jobs use a 300 second budget per
+target
 
 ## Proofs
 
