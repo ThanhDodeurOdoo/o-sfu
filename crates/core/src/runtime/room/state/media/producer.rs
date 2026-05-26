@@ -400,40 +400,6 @@ impl RoomState {
         self.producer_route_target(user_id, connection_id, stream_id)
     }
 
-    /// Lists the transport media that must be removed for an explicit unpublish.
-    ///
-    /// The producer media go first, then every dependent consumer media for
-    /// the same source stream. Callers use this before mutating state so
-    /// cleanup can still target the live transport ids that matched the
-    /// current producer ownership.
-    pub fn unpublish_transport_removals(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-        stream_id: &UserStreamId,
-    ) -> Option<Vec<TransportMediaRemoval>> {
-        let producer_target = self.producer_route_target(user_id, connection_id, stream_id)?;
-        let mut transport_removals = vec![TransportMediaRemoval::new(
-            user_id.clone(),
-            connection_id,
-            producer_target.transport_media_id(),
-        )];
-        let consumer_removals = self
-            .media
-            .consumer_keys_for_source(producer_target.source_id())
-            .into_iter()
-            .filter_map(|key| {
-                let consumer_state = self.media.consumer_state(&key)?;
-                Some(TransportMediaRemoval::new(
-                    key.consumer_user_id,
-                    consumer_state.consumer_connection_id,
-                    consumer_state.consumer_media,
-                ))
-            });
-        transport_removals.extend(consumer_removals);
-        Some(transport_removals)
-    }
-
     /// Removes one published stream and its dependent consumer bookkeeping.
     ///
     /// This is the explicit unpublish state transition. It removes the router
@@ -448,8 +414,9 @@ impl RoomState {
         stream_id: &UserStreamId,
     ) -> Option<UnpublishTrackOutcome> {
         let producer_target = self.producer_route_target(user_id, connection_id, stream_id)?;
-        let transport_removals =
-            self.unpublish_transport_removals(user_id, connection_id, stream_id)?;
+        let transport_removals = self
+            .media
+            .transport_removals_for_producer_target(user_id, &producer_target);
         let affected_consumers = self
             .media
             .routed_consumer_ids_for_source(producer_target.source_id());

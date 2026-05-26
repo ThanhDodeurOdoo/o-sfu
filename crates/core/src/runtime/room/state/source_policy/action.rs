@@ -70,17 +70,17 @@ impl BudgetSolverOutcomes {
 /// replacement or cleanup events cannot write selector state onto a newer route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::room) struct ConsumerPacketSelectionUpdate {
-    pub(super) route: ConsumerRouteTransportRef,
-    pub(super) source_id: PublishedSourceId,
-    pub(super) selector: SourceSelector,
-    pub(super) policy_pause_reason: Option<PolicyPauseReason>,
-    pub(super) budget: ReceiverVideoBudgetDiagnostics,
-    pub(super) outcomes: BudgetSolverOutcomes,
-    pub(super) pressure_observations: u8,
-    pub(super) upgrade_observations: u8,
-    pub(super) packet_gate: Option<SourcePacketGate>,
-    pub(super) route_activity_update: bool,
-    pub(super) request_keyframe: bool,
+    pub(in crate::runtime::room) route: ConsumerRouteTransportRef,
+    pub(in crate::runtime::room) source_id: PublishedSourceId,
+    pub(in crate::runtime::room) selector: SourceSelector,
+    pub(in crate::runtime::room) policy_pause_reason: Option<PolicyPauseReason>,
+    pub(in crate::runtime::room) budget: ReceiverVideoBudgetDiagnostics,
+    pub(in crate::runtime::room) outcomes: BudgetSolverOutcomes,
+    pub(in crate::runtime::room) pressure_observations: u8,
+    pub(in crate::runtime::room) upgrade_observations: u8,
+    pub(in crate::runtime::room) packet_gate: Option<SourcePacketGate>,
+    pub(in crate::runtime::room) route_activity_update: bool,
+    pub(in crate::runtime::room) request_keyframe: bool,
 }
 
 impl ConsumerPacketSelectionUpdate {
@@ -106,52 +106,8 @@ impl ConsumerPacketSelectionUpdate {
         })
     }
 
-    pub fn route(&self) -> &ConsumerRouteTransportRef {
-        &self.route
-    }
-
-    pub const fn source_id(&self) -> PublishedSourceId {
-        self.source_id
-    }
-
-    pub const fn selector(&self) -> SourceSelector {
-        self.selector
-    }
-
-    pub const fn policy_pause_reason(&self) -> Option<PolicyPauseReason> {
-        self.policy_pause_reason
-    }
-
     pub const fn route_active(&self) -> bool {
         self.policy_pause_reason.is_none()
-    }
-
-    pub const fn budget(&self) -> ReceiverVideoBudgetDiagnostics {
-        self.budget
-    }
-
-    pub const fn outcomes(&self) -> BudgetSolverOutcomes {
-        self.outcomes
-    }
-
-    pub const fn pressure_observations(&self) -> u8 {
-        self.pressure_observations
-    }
-
-    pub const fn upgrade_observations(&self) -> u8 {
-        self.upgrade_observations
-    }
-
-    pub fn packet_gate(&self) -> Option<&SourcePacketGate> {
-        self.packet_gate.as_ref()
-    }
-
-    pub const fn route_activity_update(&self) -> bool {
-        self.route_activity_update
-    }
-
-    pub const fn request_keyframe(&self) -> bool {
-        self.request_keyframe
     }
 }
 

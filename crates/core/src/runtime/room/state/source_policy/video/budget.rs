@@ -17,7 +17,10 @@
 use std::collections::BTreeSet;
 
 use super::{
-    super::action::{BudgetSolverOutcomes, ConsumerPacketSelectionUpdate},
+    super::{
+        VideoAdmissionRank,
+        action::{BudgetSolverOutcomes, ConsumerPacketSelectionUpdate},
+    },
     input::{ReceiverVideoPolicyInput, ReceiverVideoRouteInput, SelectableRouteEncodings},
     projection::source_packet_gate_for_selector,
 };
@@ -61,6 +64,43 @@ struct ConsumerAdaptationPlan {
     request_keyframe: bool,
 }
 
+impl ConsumerAdaptationPlan {
+    const fn new(
+        selector: SourceSelector,
+        pressure_observations: u8,
+        upgrade_observations: u8,
+        request_keyframe: bool,
+    ) -> Self {
+        Self {
+            selector,
+            pressure_observations,
+            upgrade_observations,
+            request_keyframe,
+        }
+    }
+
+    const fn confirmed(selector: SourceSelector, request_keyframe: bool) -> Self {
+        Self::new(selector, 0, 0, request_keyframe)
+    }
+
+    const fn hold(
+        selector: SourceSelector,
+        pressure_observations: u8,
+        upgrade_observations: u8,
+    ) -> Self {
+        Self::new(selector, pressure_observations, upgrade_observations, false)
+    }
+
+    const fn from_current(current: ConsumerSourceSelection) -> Self {
+        Self::new(
+            current.selector(),
+            current.pressure_observations(),
+            current.upgrade_observations(),
+            false,
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PlannedReceiverRoute<'a> {
     route: &'a ReceiverVideoRouteInput<'a>,
@@ -68,6 +108,76 @@ struct PlannedReceiverRoute<'a> {
     selected_bitrate: Bitrate,
     action: VideoRouteAction,
     outcomes: BudgetSolverOutcomes,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RouteUpdatePlan {
+    action: VideoRouteAction,
+    outcomes: BudgetSolverOutcomes,
+    pressure_observations: u8,
+    upgrade_observations: u8,
+    request_keyframe: bool,
+}
+
+impl RouteUpdatePlan {
+    const fn send(
+        selector: SourceSelector,
+        outcomes: BudgetSolverOutcomes,
+        request_keyframe: bool,
+    ) -> Self {
+        Self::new(
+            VideoRouteAction::Send(selector),
+            outcomes,
+            0,
+            0,
+            request_keyframe,
+        )
+    }
+
+    const fn pause(reason: PolicyPauseReason, outcomes: BudgetSolverOutcomes) -> Self {
+        Self::new(VideoRouteAction::Pause(reason), outcomes, 0, 0, false)
+    }
+
+    const fn hold(
+        action: VideoRouteAction,
+        outcomes: BudgetSolverOutcomes,
+        pressure_observations: u8,
+        upgrade_observations: u8,
+    ) -> Self {
+        Self::new(
+            action,
+            outcomes,
+            pressure_observations,
+            upgrade_observations,
+            false,
+        )
+    }
+
+    const fn from_route(route: &PlannedReceiverRoute<'_>, outcomes: BudgetSolverOutcomes) -> Self {
+        Self::new(
+            route.action,
+            outcomes,
+            route.adaptation.pressure_observations,
+            route.adaptation.upgrade_observations,
+            route.adaptation.request_keyframe,
+        )
+    }
+
+    const fn new(
+        action: VideoRouteAction,
+        outcomes: BudgetSolverOutcomes,
+        pressure_observations: u8,
+        upgrade_observations: u8,
+        request_keyframe: bool,
+    ) -> Self {
+        Self {
+            action,
+            outcomes,
+            pressure_observations,
+            upgrade_observations,
+            request_keyframe,
+        }
+    }
 }
 
 impl super::super::super::shared::RoomState {
@@ -94,7 +204,7 @@ impl super::super::super::shared::RoomState {
 fn receiver_video_selection_updates(
     input: &ReceiverVideoPolicyInput<'_>,
 ) -> Vec<ConsumerPacketSelectionUpdate> {
-    let routes = input.routes();
+    let routes = input.routes.as_slice();
     let mut selection_updates = Vec::with_capacity(routes.len());
     let mut remaining_routes = routes;
     while let Some((first_route, rest)) = remaining_routes.split_first() {
@@ -109,7 +219,7 @@ fn receiver_video_selection_updates(
         };
         selection_updates.extend(plan_receiver_routes(
             receiver_routes,
-            input.max_video_downloads_per_receiver(),
+            input.max_video_downloads_per_receiver,
         ));
         remaining_routes = next_routes;
     }
@@ -120,9 +230,7 @@ fn plan_receiver_routes<'a>(
     routes: &'a [ReceiverVideoRouteInput<'a>],
     max_video_downloads_per_receiver: usize,
 ) -> Vec<ConsumerPacketSelectionUpdate> {
-    let receiver_bandwidth = routes
-        .iter()
-        .find_map(ReceiverVideoRouteInput::receiver_bandwidth);
+    let receiver_bandwidth = routes.iter().find_map(|route| route.receiver_bandwidth);
     let mut planned_routes = routes
         .iter()
         .filter_map(planned_receiver_route)
@@ -146,7 +254,7 @@ fn planned_receiver_route<'a>(
     let selected_bitrate = selector_bitrate(route.encodings(), adaptation.selector);
     let outcomes = adaptation_outcomes(
         route.encodings(),
-        route.current_selection(),
+        route.current_selection,
         adaptation.selector,
     );
     Some(PlannedReceiverRoute {
@@ -162,13 +270,13 @@ fn consumer_route_adaptation_plan(
     route: &ReceiverVideoRouteInput<'_>,
 ) -> Option<ConsumerAdaptationPlan> {
     consumer_adaptation_plan(
-        route.user_count(),
+        route.user_count,
         route.adaptation_policy(),
         route.encodings(),
-        route.current_selection(),
-        route.layout_intent().uses_featured_quality(),
-        route.visible_scalable_route_count(),
-        route.receiver_bandwidth(),
+        route.current_selection,
+        route.layout_intent.uses_featured_quality(),
+        route.visible_scalable_route_count,
+        route.receiver_bandwidth,
     )
 }
 
@@ -178,13 +286,9 @@ fn current_route_admission_plan(
     if route.adaptation_policy() == SourceAdaptationPolicy::None {
         return None;
     }
-    let current = route.current_selection();
-    Some(ConsumerAdaptationPlan {
-        selector: current.selector(),
-        pressure_observations: current.pressure_observations(),
-        upgrade_observations: current.upgrade_observations(),
-        request_keyframe: false,
-    })
+    Some(ConsumerAdaptationPlan::from_current(
+        route.current_selection,
+    ))
 }
 
 fn apply_receiver_video_download_limit(
@@ -274,138 +378,105 @@ fn planned_route_update(
     route: PlannedReceiverRoute<'_>,
     budget: ReceiverVideoBudgetDiagnostics,
 ) -> Option<ConsumerPacketSelectionUpdate> {
-    let current = route.route.current_selection();
+    let current = route.route.current_selection;
+    let current_pause_reason = current.policy_pause_reason();
     let outcomes = budget_outcomes(route.outcomes, budget);
-    match route.action {
-        VideoRouteAction::Send(selector) if current.policy_pause_reason().is_some() => {
-            if current.policy_pause_reason() == Some(PolicyPauseReason::VideoDownloadLimit) {
-                return consumer_selection_update(
-                    route.route,
-                    VideoRouteAction::Send(selector),
-                    budget,
-                    budget_outcomes(BudgetSolverOutcomes::resumed(), budget),
-                    0,
-                    0,
-                    true,
-                );
-            }
+    let update = match (route.action, current_pause_reason) {
+        (VideoRouteAction::Send(selector), Some(PolicyPauseReason::VideoDownloadLimit)) => {
+            RouteUpdatePlan::send(
+                selector,
+                budget_outcomes(BudgetSolverOutcomes::resumed(), budget),
+                true,
+            )
+        }
+        (VideoRouteAction::Send(selector), Some(reason)) => {
             let upgrade_observations = current
                 .upgrade_observations()
                 .saturating_add(1)
                 .min(UPSWITCH_STABLE_OBSERVATIONS);
             if upgrade_observations >= UPSWITCH_STABLE_OBSERVATIONS {
-                consumer_selection_update(
-                    route.route,
-                    VideoRouteAction::Send(selector),
-                    budget,
+                RouteUpdatePlan::send(
+                    selector,
                     budget_outcomes(BudgetSolverOutcomes::resumed(), budget),
-                    0,
-                    0,
                     true,
                 )
             } else {
-                consumer_selection_update(
-                    route.route,
-                    VideoRouteAction::Pause(current.policy_pause_reason()?),
-                    budget,
+                RouteUpdatePlan::hold(
+                    VideoRouteAction::Pause(reason),
                     outcomes,
                     0,
                     upgrade_observations,
-                    false,
                 )
             }
         }
-        VideoRouteAction::Pause(reason) if current.policy_pause_reason() != Some(reason) => {
+        (VideoRouteAction::Pause(reason), pause_reason) if pause_reason != Some(reason) => {
             if reason == PolicyPauseReason::VideoDownloadLimit {
-                return consumer_selection_update(
-                    route.route,
-                    VideoRouteAction::Pause(reason),
-                    budget,
+                RouteUpdatePlan::pause(
+                    reason,
                     budget_outcomes(BudgetSolverOutcomes::paused(), budget),
-                    0,
-                    0,
-                    false,
-                );
-            }
-            let pressure_observations = current
-                .pressure_observations()
-                .saturating_add(1)
-                .min(DOWNSWITCH_PRESSURE_OBSERVATIONS);
-            if pressure_observations >= DOWNSWITCH_PRESSURE_OBSERVATIONS {
-                consumer_selection_update(
-                    route.route,
-                    VideoRouteAction::Pause(reason),
-                    budget,
-                    budget_outcomes(BudgetSolverOutcomes::paused(), budget),
-                    0,
-                    0,
-                    false,
                 )
             } else {
-                consumer_selection_update(
-                    route.route,
-                    VideoRouteAction::Send(current.selector()),
-                    budget,
-                    outcomes,
-                    pressure_observations,
-                    0,
-                    false,
-                )
+                let pressure_observations = current
+                    .pressure_observations()
+                    .saturating_add(1)
+                    .min(DOWNSWITCH_PRESSURE_OBSERVATIONS);
+                if pressure_observations >= DOWNSWITCH_PRESSURE_OBSERVATIONS {
+                    RouteUpdatePlan::pause(
+                        reason,
+                        budget_outcomes(BudgetSolverOutcomes::paused(), budget),
+                    )
+                } else {
+                    RouteUpdatePlan::hold(
+                        VideoRouteAction::Send(current.selector()),
+                        outcomes,
+                        pressure_observations,
+                        0,
+                    )
+                }
             }
         }
-        _ => consumer_selection_update(
-            route.route,
-            route.action,
-            budget,
-            outcomes,
-            route.adaptation.pressure_observations,
-            route.adaptation.upgrade_observations,
-            route.adaptation.request_keyframe,
-        ),
-    }
+        _ => RouteUpdatePlan::from_route(&route, outcomes),
+    };
+    consumer_selection_update(route.route, update, budget)
 }
 
 fn consumer_selection_update(
     route: &ReceiverVideoRouteInput<'_>,
-    action: VideoRouteAction,
+    update: RouteUpdatePlan,
     budget: ReceiverVideoBudgetDiagnostics,
-    outcomes: BudgetSolverOutcomes,
-    pressure_observations: u8,
-    upgrade_observations: u8,
-    request_keyframe: bool,
 ) -> Option<ConsumerPacketSelectionUpdate> {
-    let current_selection = route.current_selection();
-    let (selector, policy_pause_reason, request_keyframe) = match action {
+    let current_selection = route.current_selection;
+    let (selector, policy_pause_reason, request_keyframe) = match update.action {
         VideoRouteAction::Send(selector) => (
             selector,
             None,
-            request_keyframe || !current_selection.policy_allows_delivery(),
+            update.request_keyframe || !current_selection.policy_allows_delivery(),
         ),
         VideoRouteAction::Pause(reason) => (current_selection.selector(), Some(reason), false),
     };
     let packet_gate = if selector == current_selection.selector() {
         None
     } else {
-        Some(source_packet_gate_for_selector(route.source(), selector).ok()?)
+        Some(source_packet_gate_for_selector(route.source, selector).ok()?)
     };
     let route_activity_update = policy_pause_reason != current_selection.policy_pause_reason();
     if packet_gate.is_none()
         && !route_activity_update
         && budget == current_selection.budget()
-        && pressure_observations == current_selection.pressure_observations()
-        && upgrade_observations == current_selection.upgrade_observations()
+        && update.pressure_observations == current_selection.pressure_observations()
+        && update.upgrade_observations == current_selection.upgrade_observations()
     {
         return None;
     }
     Some(ConsumerPacketSelectionUpdate {
-        route: route.transport_ref().clone(),
+        route: route.transport_ref.clone(),
         source_id: route.source_id(),
         selector,
         policy_pause_reason,
         budget,
-        outcomes,
-        pressure_observations,
-        upgrade_observations,
+        outcomes: update.outcomes,
+        pressure_observations: update.pressure_observations,
+        upgrade_observations: update.upgrade_observations,
         packet_gate,
         route_activity_update,
         request_keyframe,
@@ -491,20 +562,13 @@ fn consumer_adaptation_plan(
     let target_selector = SourceSelector::Encoding(encodings.get(target_index)?.encoding_id());
     let selector_changed = target_selector != current.selector();
     if target_index == current_index {
-        return Some(ConsumerAdaptationPlan {
-            selector: target_selector,
-            pressure_observations: 0,
-            upgrade_observations: 0,
-            request_keyframe: selector_changed,
-        });
+        return Some(ConsumerAdaptationPlan::confirmed(
+            target_selector,
+            selector_changed,
+        ));
     }
     if receiver_bandwidth.is_none() {
-        return Some(ConsumerAdaptationPlan {
-            selector: target_selector,
-            pressure_observations: 0,
-            upgrade_observations: 0,
-            request_keyframe: true,
-        });
+        return Some(ConsumerAdaptationPlan::confirmed(target_selector, true));
     }
     if target_index < current_index {
         let pressure_observations = current
@@ -512,46 +576,26 @@ fn consumer_adaptation_plan(
             .saturating_add(1)
             .min(DOWNSWITCH_PRESSURE_OBSERVATIONS);
         if pressure_observations >= DOWNSWITCH_PRESSURE_OBSERVATIONS {
-            return Some(ConsumerAdaptationPlan {
-                selector: target_selector,
-                pressure_observations: 0,
-                upgrade_observations: 0,
-                request_keyframe: true,
-            });
+            return Some(ConsumerAdaptationPlan::confirmed(target_selector, true));
         }
-        return Some(ConsumerAdaptationPlan {
-            selector: current.selector(),
+        return Some(ConsumerAdaptationPlan::hold(
+            current.selector(),
             pressure_observations,
-            upgrade_observations: 0,
-            request_keyframe: false,
-        });
+            0,
+        ));
     }
-    if target_index > current_index {
-        let upgrade_observations = current
-            .upgrade_observations()
-            .saturating_add(1)
-            .min(UPSWITCH_STABLE_OBSERVATIONS);
-        if upgrade_observations >= UPSWITCH_STABLE_OBSERVATIONS {
-            return Some(ConsumerAdaptationPlan {
-                selector: target_selector,
-                pressure_observations: 0,
-                upgrade_observations: 0,
-                request_keyframe: true,
-            });
-        }
-        return Some(ConsumerAdaptationPlan {
-            selector: current.selector(),
-            pressure_observations: 0,
-            upgrade_observations,
-            request_keyframe: false,
-        });
+    let upgrade_observations = current
+        .upgrade_observations()
+        .saturating_add(1)
+        .min(UPSWITCH_STABLE_OBSERVATIONS);
+    if upgrade_observations >= UPSWITCH_STABLE_OBSERVATIONS {
+        return Some(ConsumerAdaptationPlan::confirmed(target_selector, true));
     }
-    Some(ConsumerAdaptationPlan {
-        selector: current.selector(),
-        pressure_observations: 0,
-        upgrade_observations: 0,
-        request_keyframe: false,
-    })
+    Some(ConsumerAdaptationPlan::hold(
+        current.selector(),
+        0,
+        upgrade_observations,
+    ))
 }
 
 fn selected_receiver_bitrate(planned_routes: &[PlannedReceiverRoute<'_>]) -> Bitrate {
@@ -566,14 +610,14 @@ fn selected_receiver_bitrate(planned_routes: &[PlannedReceiverRoute<'_>]) -> Bit
 fn route_can_downgrade(route: &PlannedReceiverRoute<'_>) -> bool {
     route.route.adaptation_policy() == SourceAdaptationPolicy::ScalableVideo
         && matches!(
-            route.route.layout_intent().priority(),
+            route.route.layout_intent.priority(),
             SourceRoutePriority::VisibleThumbnail | SourceRoutePriority::HiddenOrOverflow
         )
 }
 
 fn route_is_protected(route: &PlannedReceiverRoute<'_>) -> bool {
     matches!(
-        route.route.layout_intent().priority(),
+        route.route.layout_intent.priority(),
         SourceRoutePriority::PinnedOrFeatured
             | SourceRoutePriority::ReadableDetail
             | SourceRoutePriority::ActiveSpeaker
@@ -581,7 +625,7 @@ fn route_is_protected(route: &PlannedReceiverRoute<'_>) -> bool {
 }
 
 fn pause_rank(route: &PlannedReceiverRoute<'_>) -> u8 {
-    match route.route.layout_intent().priority() {
+    match route.route.layout_intent.priority() {
         SourceRoutePriority::HiddenOrOverflow => 0,
         SourceRoutePriority::VisibleThumbnail => 1,
         SourceRoutePriority::ActiveSpeaker => 2,
@@ -590,24 +634,17 @@ fn pause_rank(route: &PlannedReceiverRoute<'_>) -> u8 {
     }
 }
 
-fn video_download_rank(route: &PlannedReceiverRoute<'_>) -> (u8, usize, u64) {
-    let policy_rank = match route.route.layout_intent().priority() {
-        SourceRoutePriority::PinnedOrFeatured => 0,
-        SourceRoutePriority::ReadableDetail => 1,
-        SourceRoutePriority::ActiveSpeaker => 2,
-        SourceRoutePriority::VisibleThumbnail => 3,
-        SourceRoutePriority::HiddenOrOverflow => 4,
-    };
-    (
-        policy_rank,
-        route.route.active_speaker_rank().unwrap_or(usize::MAX),
-        route.route.source_id().as_u64(),
+fn video_download_rank(route: &PlannedReceiverRoute<'_>) -> VideoAdmissionRank {
+    VideoAdmissionRank::new(
+        route.route.layout_intent.priority(),
+        route.route.active_speaker_rank,
+        route.route.source_id(),
     )
 }
 
 fn pause_reason_for_route(route: &PlannedReceiverRoute<'_>) -> PolicyPauseReason {
-    match route.route.layout_intent().priority() {
-        SourceRoutePriority::HiddenOrOverflow => match route.route.layout_intent().role() {
+    match route.route.layout_intent.priority() {
+        SourceRoutePriority::HiddenOrOverflow => match route.route.layout_intent.role() {
             SourceRoomPolicySelector::Hidden => PolicyPauseReason::HiddenTile,
             SourceRoomPolicySelector::Overflow => PolicyPauseReason::OverflowTile,
             _ => PolicyPauseReason::BudgetPressure,
@@ -663,12 +700,10 @@ fn readable_detail_adaptation_plan(
     }
     let target_index = encodings.len().saturating_sub(1);
     let target_selector = SourceSelector::Encoding(encodings.get(target_index)?.encoding_id());
-    Some(ConsumerAdaptationPlan {
-        selector: target_selector,
-        pressure_observations: 0,
-        upgrade_observations: 0,
-        request_keyframe: target_selector != current.selector(),
-    })
+    Some(ConsumerAdaptationPlan::confirmed(
+        target_selector,
+        target_selector != current.selector(),
+    ))
 }
 
 fn desired_encoding_index(
@@ -750,9 +785,7 @@ mod tests {
         media_transport::{SourcePacketGate, TransportMediaId},
         room::state::{
             media::ConsumerRouteTransportRef,
-            source_policy::video::{
-                input::ReceiverVideoRouteInputParts, layout::ReceiverVideoLayoutIntent,
-            },
+            source_policy::video::layout::ReceiverVideoLayoutIntent,
         },
         source_model::{
             PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
@@ -853,7 +886,7 @@ mod tests {
         current_selection: ConsumerSourceSelection,
         layout_selector: SourceRoomPolicySelector,
     ) -> ReceiverVideoRouteInput<'_> {
-        ReceiverVideoRouteInput::new(ReceiverVideoRouteInputParts {
+        ReceiverVideoRouteInput {
             user_count: 3,
             source,
             transport_ref: ConsumerRouteTransportRef::from_parts(
@@ -869,7 +902,7 @@ mod tests {
             visible_scalable_route_count: 2,
             active_speaker_rank: None,
             receiver_bandwidth: Some(Bitrate::from_kbps(21)),
-        })
+        }
     }
 
     #[test]
@@ -903,9 +936,9 @@ mod tests {
         let update = updates
             .first()
             .expect("budget plan should select the role-ranked thumbnail layer");
-        assert_eq!(update.selector(), SourceSelector::Encoding(low_encoding_id));
+        assert_eq!(update.selector, SourceSelector::Encoding(low_encoding_id));
         assert_eq!(
-            update.packet_gate(),
+            update.packet_gate.as_ref(),
             Some(&SourcePacketGate::Rid("lo".into()))
         );
         Ok(())
@@ -950,16 +983,16 @@ mod tests {
         let updates = plan_receiver_routes(&routes, 1);
         let hidden_update = updates
             .iter()
-            .find(|update| update.source_id() == hidden_source_id)
+            .find(|update| update.source_id == hidden_source_id)
             .expect("download cap should pause the RID-less overflow route");
 
         assert_eq!(
-            hidden_update.policy_pause_reason(),
+            hidden_update.policy_pause_reason,
             Some(PolicyPauseReason::VideoDownloadLimit)
         );
-        assert!(hidden_update.route_activity_update());
-        assert!(hidden_update.outcomes().is_paused());
-        assert_eq!(hidden_update.budget().active_video_route_count(), 1);
+        assert!(hidden_update.route_activity_update);
+        assert!(hidden_update.outcomes.is_paused());
+        assert_eq!(hidden_update.budget.active_video_route_count(), 1);
         Ok(())
     }
 }

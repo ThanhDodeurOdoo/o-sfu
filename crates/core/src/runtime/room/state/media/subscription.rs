@@ -24,6 +24,7 @@ use super::{
         super::{RoomEventRequest, outbound::OutboundSender, topology::RoutedProducerId},
         ids::{ConsumerRuntimeId, ProducerRuntimeId},
         shared::RoomState,
+        source_policy::VideoAdmissionRank,
     },
     ConsumerKey, ConsumerRouteTransportRef, ConsumerState, PublishedProducer,
     relay::RelayRouteEffect,
@@ -44,10 +45,10 @@ use crate::runtime::{
 /// activity is handled through producer state and is combined with this value
 /// when callers ask for the effective route.
 pub(in crate::runtime::room) struct ConsumerRouteUpdate {
-    route: ConsumerRouteTransportRef,
-    stream_id: UserStreamId,
-    media_kind: RouterMediaKind,
-    active: bool,
+    pub(in crate::runtime::room) route: ConsumerRouteTransportRef,
+    pub(in crate::runtime::room) stream_id: UserStreamId,
+    pub(in crate::runtime::room) media_kind: RouterMediaKind,
+    pub(in crate::runtime::room) active: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,7 +105,7 @@ pub(in crate::runtime::room) struct ConsumerBootstrapProducerSnapshot {
 
 #[derive(Debug, Clone)]
 pub(in crate::runtime::room) struct PreparedConsumerBootstrap {
-    consumer_rtp_parameters: RouterRtpParameters,
+    pub(in crate::runtime::room) consumer_rtp_parameters: RouterRtpParameters,
 }
 
 #[derive(Debug, Clone)]
@@ -236,27 +237,30 @@ impl RoomState {
         &self,
         target: &PendingConsumerBootstrapTarget,
         active_speaker_source_user_ids: &BTreeSet<UserId>,
-    ) -> (SourceRoutePriority, u64) {
+    ) -> VideoAdmissionRank {
         if target.media_kind() != RouterMediaKind::Video {
-            return (
+            return VideoAdmissionRank::new(
                 SourceRoutePriority::PinnedOrFeatured,
-                target.source_id().as_u64(),
+                None,
+                target.source_id(),
             );
         }
         let Some(source) = self.media.source(target.source_id()) else {
-            return (
+            return VideoAdmissionRank::new(
                 SourceRoutePriority::HiddenOrOverflow,
-                target.source_id().as_u64(),
+                None,
+                target.source_id(),
             );
         };
-        (
+        VideoAdmissionRank::new(
             self.receiver_video_layout_intent(
                 target.consumer_user_id(),
                 source,
                 active_speaker_source_user_ids,
             )
             .priority(),
-            target.source_id().as_u64(),
+            None,
+            target.source_id(),
         )
     }
 
@@ -773,22 +777,6 @@ impl ConsumerRouteUpdate {
             active,
         }
     }
-
-    pub fn route(&self) -> &ConsumerRouteTransportRef {
-        &self.route
-    }
-
-    pub fn stream_id(&self) -> &UserStreamId {
-        &self.stream_id
-    }
-
-    pub const fn media_kind(&self) -> RouterMediaKind {
-        self.media_kind
-    }
-
-    pub const fn active(&self) -> bool {
-        self.active
-    }
 }
 
 impl PendingConsumerBootstrapTarget {
@@ -834,12 +822,6 @@ impl PendingConsumerBootstrapTarget {
 
     pub fn stream_id(&self) -> &UserStreamId {
         &self.producer.stream_id
-    }
-}
-
-impl PreparedConsumerBootstrap {
-    pub fn consumer_rtp_parameters(&self) -> &RouterRtpParameters {
-        &self.consumer_rtp_parameters
     }
 }
 

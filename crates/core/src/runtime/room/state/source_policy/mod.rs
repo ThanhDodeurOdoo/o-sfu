@@ -17,4 +17,5 @@ mod video;
 pub(in crate::runtime::room) use self::{
     action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
     active_speaker::rank_active_speaker_sources,
+    video::VideoAdmissionRank,
 };

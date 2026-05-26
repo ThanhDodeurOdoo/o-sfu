@@ -92,13 +92,13 @@ impl SourcePolicyEffectPlan {
 
     fn record_source_selection_metrics(room: &Room, updates: &[ConsumerPacketSelectionUpdate]) {
         for update in updates {
-            if update.packet_gate().is_some() {
+            if update.packet_gate.is_some() {
                 room.metrics
                     .record_source_selection_update(metrics::source_selection_kind(
-                        update.selector(),
+                        update.selector,
                     ));
             }
-            let outcomes = update.outcomes();
+            let outcomes = update.outcomes;
             if outcomes.is_degraded() {
                 room.metrics
                     .record_budget_solver_outcome(BudgetSolverOutcome::Degraded);
@@ -130,8 +130,7 @@ impl SourcePolicyEffectPlan {
             .into_iter();
         let mut applied_updates = Vec::with_capacity(updates.len());
         for update in updates {
-            if update.packet_gate().is_some() && !matches!(packet_gate_results.next(), Some(Ok(())))
-            {
+            if update.packet_gate.is_some() && !matches!(packet_gate_results.next(), Some(Ok(()))) {
                 Self::warn_rejected_packet_update(&update);
                 continue;
             }
@@ -149,12 +148,11 @@ impl SourcePolicyEffectPlan {
         let mut packet_gate_updates = Vec::with_capacity(updates.len());
         for update in updates {
             Self::log_prepared_packet_update(update);
-            let Some(packet_gate) = update.packet_gate() else {
+            let Some(packet_gate) = update.packet_gate.as_ref() else {
                 continue;
             };
-            let route = update.route();
             packet_gate_updates.push(ConsumerPacketGateUpdate::new(
-                room.transport_consumer_route(route),
+                room.transport_consumer_route(&update.route),
                 packet_gate.clone(),
             ));
         }
@@ -167,10 +165,9 @@ impl SourcePolicyEffectPlan {
         update: ConsumerPacketSelectionUpdate,
     ) -> Option<ConsumerPacketSelectionUpdate> {
         Self::log_accepted_packet_update(&update);
-        let route = update.route();
         if !Self::apply_route_activity_update(room, media_port, &update).await {
             warn!(
-                ?route,
+                route = ?update.route,
                 route_active = update.route_active(),
                 "media transport failed to apply source policy route activity"
             );
@@ -180,7 +177,7 @@ impl SourcePolicyEffectPlan {
             return Some(update);
         }
         warn!(
-            ?route,
+            route = ?update.route,
             "media transport failed to request an adaptation keyframe refresh"
         );
         Some(update)
@@ -191,11 +188,10 @@ impl SourcePolicyEffectPlan {
         media_port: &MediaTransport,
         update: &ConsumerPacketSelectionUpdate,
     ) -> bool {
-        if !update.route_activity_update() {
+        if !update.route_activity_update {
             return true;
         }
-        let route = update.route();
-        let transport_route = room.transport_consumer_route(route);
+        let transport_route = room.transport_consumer_route(&update.route);
         media_port
             .set_consumer_active(
                 &transport_route,
@@ -210,23 +206,22 @@ impl SourcePolicyEffectPlan {
         media_port: &MediaTransport,
         update: &ConsumerPacketSelectionUpdate,
     ) -> bool {
-        let route = update.route();
-        if !update.request_keyframe() {
+        if !update.request_keyframe {
             debug!(
-                ?route,
+                route = ?update.route,
                 "receiver-driven packet selection did not request a keyframe refresh"
             );
             return true;
         }
-        debug!(?route, "requesting adaptation keyframe refresh");
-        let transport_route = room.transport_consumer_route(route);
+        debug!(route = ?update.route, "requesting adaptation keyframe refresh");
+        let transport_route = room.transport_consumer_route(&update.route);
         let accepted = media_port
             .request_consumer_keyframe(&transport_route)
             .await
             .is_ok();
         if accepted {
             debug!(
-                ?route,
+                route = ?update.route,
                 "media transport accepted adaptation keyframe refresh"
             );
         }
@@ -234,33 +229,30 @@ impl SourcePolicyEffectPlan {
     }
 
     fn log_prepared_packet_update(update: &ConsumerPacketSelectionUpdate) {
-        let route = update.route();
         debug!(
-            ?route,
-            selector = ?update.selector(),
-            policy_pause_reason = ?update.policy_pause_reason(),
-            packet_gate = ?update.packet_gate(),
-            request_keyframe = update.request_keyframe(),
+            route = ?update.route,
+            selector = ?update.selector,
+            policy_pause_reason = ?update.policy_pause_reason,
+            packet_gate = ?update.packet_gate,
+            request_keyframe = update.request_keyframe,
             "prepared receiver-driven packet selection update"
         );
     }
 
     fn log_accepted_packet_update(update: &ConsumerPacketSelectionUpdate) {
-        let route = update.route();
         debug!(
-            ?route,
-            selector = ?update.selector(),
-            policy_pause_reason = ?update.policy_pause_reason(),
-            packet_gate = ?update.packet_gate(),
-            request_keyframe = update.request_keyframe(),
+            route = ?update.route,
+            selector = ?update.selector,
+            policy_pause_reason = ?update.policy_pause_reason,
+            packet_gate = ?update.packet_gate,
+            request_keyframe = update.request_keyframe,
             "media transport accepted receiver-driven packet selection update"
         );
     }
 
     fn warn_rejected_packet_update(update: &ConsumerPacketSelectionUpdate) {
-        let route = update.route();
         warn!(
-            ?route,
+            route = ?update.route,
             "media transport rejected the receiver-driven packet selection update"
         );
     }
