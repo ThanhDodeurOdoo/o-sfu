@@ -17,6 +17,7 @@ mod dispatcher;
 mod media;
 mod negotiation;
 mod publication;
+mod recv_stream;
 mod session;
 
 pub(in crate::runtime::rtc_engine) use dispatcher::{WorkerCommandContext, handle_worker_command};

@@ -63,8 +63,8 @@ use tokio_util::sync::CancellationToken;
 use super::{
     bitrate::BitrateRegistry,
     commands::{
-        CloseSessionOutcome, CloseSessionState, ConsumerPacketGateCommand, RemoteSourceControl,
-        RouteControlRequest, RtcMediaControlCommand, RtcWorkerCommand,
+        CloseSessionState, ConsumerPacketGateCommand, RemoteSourceControl, RouteControlRequest,
+        RtcMediaControlCommand, RtcWorkerCommand,
     },
     packet_loop::PacketLoopLagSnapshot,
     relay_registry::{RelayPacketMailbox, RelayTargetId},
@@ -312,26 +312,26 @@ impl RtcWorker {
     ///
     /// returns [`TransportAdapterError::TransportUnavailable`] when the worker
     /// handle lock is poisoned or the worker mailbox cannot answer
-    pub async fn close_session_with_outcome(
+    pub async fn close_session(
         &self,
         session_key: &TransportSessionKey,
-    ) -> Result<CloseSessionOutcome, TransportAdapterError> {
+    ) -> Result<CloseSessionState, TransportAdapterError> {
         let Some(worker_handle) = self.worker_handle()? else {
-            return Ok(CloseSessionOutcome::new(CloseSessionState::SessionClosed));
+            return Ok(CloseSessionState::SessionClosed);
         };
-        let close_outcome = self
+        let close_state = self
             .send_worker_command(&worker_handle, |response| RtcWorkerCommand::CloseSession {
                 session_key: session_key.clone(),
                 response,
             })
             .await?;
-        if close_outcome.state() == CloseSessionState::WorkerDrained {
+        if close_state == CloseSessionState::WorkerDrained {
             worker_handle.shutdown_token.cancel();
             if let Ok(mut worker_slot) = self.worker_handle.lock() {
                 worker_slot.clear();
             }
         }
-        Ok(close_outcome)
+        Ok(close_state)
     }
 }
 

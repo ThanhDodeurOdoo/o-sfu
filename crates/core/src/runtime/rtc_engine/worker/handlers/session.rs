@@ -11,46 +11,26 @@ use std::{
     time::Instant,
 };
 
-use tokio::sync::oneshot;
-
 use super::{
     super::super::{
         bitrate::BitrateRegistry,
-        commands::{CloseSessionOutcome, CloseSessionState},
+        commands::CloseSessionState,
         state::{PacketLoopState, RtcSnapshotState},
     },
     media::{refresh_source_packet_gate, remove_source_route},
 };
 use crate::runtime::{
-    media_transport::{TransportAdapterError, TransportSessionKey},
+    media_transport::TransportSessionKey,
     metrics::{self, RuntimeMetrics},
 };
 
-pub(super) fn respond_close_session(
+pub(super) fn worker_close_session(
     state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     session_key: &TransportSessionKey,
     metrics: &RuntimeMetrics,
-    response: oneshot::Sender<Result<CloseSessionOutcome, TransportAdapterError>>,
-) {
-    let close_outcome = worker_close_session(
-        state,
-        bitrate_registry,
-        snapshot_state,
-        session_key,
-        metrics,
-    );
-    let _ = response.send(Ok(close_outcome));
-}
-
-fn worker_close_session(
-    state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    session_key: &TransportSessionKey,
-    metrics: &RuntimeMetrics,
-) -> CloseSessionOutcome {
+) -> CloseSessionState {
     state.clear_session_schedule(session_key);
     let removed_session = state.users.remove(session_key);
     state.remove_egress_bitrate_counter(session_key);
@@ -64,12 +44,8 @@ fn worker_close_session(
         .remote_addr_demux
         .forget_user_remote_candidate_addrs(session_key);
     let removed_media_handles = state.remove_session_media_handles(session_key);
-    let removed_media_ids = removed_media_handles
-        .iter()
-        .map(|(transport_media_id, _handle)| *transport_media_id)
-        .collect::<Vec<_>>();
     let mut affected_route_sources = BTreeSet::new();
-    for source_transport_media_id in &removed_media_ids {
+    for (source_transport_media_id, _handle) in &removed_media_handles {
         remove_source_route(state, *source_transport_media_id);
     }
     state
@@ -113,8 +89,8 @@ fn worker_close_session(
         metrics.add_active_transport_users(-1);
     }
     if state.users.is_empty() {
-        CloseSessionOutcome::new(CloseSessionState::WorkerDrained)
+        CloseSessionState::WorkerDrained
     } else {
-        CloseSessionOutcome::new(CloseSessionState::SessionClosed)
+        CloseSessionState::SessionClosed
     }
 }
