@@ -189,10 +189,8 @@ impl RoomState {
                 let layout_intent = self.diagnostics_video_layout_intent(user_id, source);
                 Some(DiagnosticsSubscription {
                     consumer_transport_media_id: Some(route.state.consumer_media.as_u64()),
-                    layout_priority: layout_intent
-                        .map(|intent| diagnostics_video_route_priority(intent.priority())),
-                    layout_role: layout_intent
-                        .map(|intent| diagnostics_video_layout_role(intent.role())),
+                    layout_priority: layout_intent.map(|intent| intent.priority().into()),
+                    layout_role: layout_intent.map(|intent| intent.role().into()),
                     producer_user_id: source.owner().user_id().clone(),
                     selection: diagnostics_source_selection(source, selection),
                     source_id: source.source_id().as_u64(),
@@ -218,10 +216,8 @@ impl RoomState {
                     let layout_intent = self.diagnostics_video_layout_intent(user_id, source);
                     DiagnosticsSubscription {
                         consumer_transport_media_id: None,
-                        layout_priority: layout_intent
-                            .map(|intent| diagnostics_video_route_priority(intent.priority())),
-                        layout_role: layout_intent
-                            .map(|intent| diagnostics_video_layout_role(intent.role())),
+                        layout_priority: layout_intent.map(|intent| intent.priority().into()),
+                        layout_role: layout_intent.map(|intent| intent.role().into()),
                         producer_user_id: source.owner().user_id().clone(),
                         selection: diagnostics_source_selection(source, selection),
                         source_id: source.source_id().as_u64(),
@@ -286,13 +282,9 @@ fn diagnostics_source_selection(
         latest_receiver_bandwidth_estimate_bps: budget
             .latest_receiver_bandwidth()
             .map(Bitrate::as_bps),
-        over_budget_exception_reason: budget
-            .over_budget_exception_reason()
-            .map(diagnostics_over_budget_exception_reason),
+        over_budget_exception_reason: budget.over_budget_exception_reason().map(Into::into),
         policy_allows_delivery: selection.policy_allows_delivery(),
-        policy_pause_reason: selection
-            .policy_pause_reason()
-            .map(diagnostics_policy_pause_reason),
+        policy_pause_reason: selection.policy_pause_reason().map(Into::into),
         pressure_observations: selection.pressure_observations(),
         selection_reason: diagnostics_source_selection_reason(selection.selector()),
         selector: diagnostics_source_selector(selection.selector()),
@@ -335,13 +327,6 @@ fn diagnostics_active_speaker(
     )
 }
 
-fn diagnostics_media_kind(value: o_sfu_router::MediaKind) -> DiagnosticsMediaKind {
-    match value {
-        o_sfu_router::MediaKind::Audio => DiagnosticsMediaKind::Audio,
-        o_sfu_router::MediaKind::Video => DiagnosticsMediaKind::Video,
-    }
-}
-
 fn diagnostics_source_selector(value: SourceSelector) -> DiagnosticsSourceSelector {
     match value {
         SourceSelector::Open => DiagnosticsSourceSelector::Open,
@@ -381,46 +366,10 @@ fn diagnostics_source_selection_reason(value: SourceSelector) -> DiagnosticsSour
     }
 }
 
-fn diagnostics_over_budget_exception_reason(
-    value: OverBudgetExceptionReason,
-) -> DiagnosticsOverBudgetExceptionReason {
+fn diagnostics_media_kind(value: o_sfu_router::MediaKind) -> DiagnosticsMediaKind {
     match value {
-        OverBudgetExceptionReason::ProtectedRoute => {
-            DiagnosticsOverBudgetExceptionReason::ProtectedRoute
-        }
-    }
-}
-
-fn diagnostics_policy_pause_reason(value: PolicyPauseReason) -> DiagnosticsPolicyPauseReason {
-    match value {
-        PolicyPauseReason::BudgetPressure => DiagnosticsPolicyPauseReason::BudgetPressure,
-        PolicyPauseReason::HiddenTile => DiagnosticsPolicyPauseReason::HiddenTile,
-        PolicyPauseReason::OverflowTile => DiagnosticsPolicyPauseReason::OverflowTile,
-        PolicyPauseReason::MissingUsableLayer => DiagnosticsPolicyPauseReason::MissingUsableLayer,
-        PolicyPauseReason::AudioSpeakerLimit => DiagnosticsPolicyPauseReason::AudioSpeakerLimit,
-        PolicyPauseReason::VideoDownloadLimit => DiagnosticsPolicyPauseReason::VideoDownloadLimit,
-    }
-}
-
-fn diagnostics_video_layout_role(value: SourceRoomPolicySelector) -> DiagnosticsVideoLayoutRole {
-    match value {
-        SourceRoomPolicySelector::Pinned => DiagnosticsVideoLayoutRole::Pinned,
-        SourceRoomPolicySelector::Featured => DiagnosticsVideoLayoutRole::Featured,
-        SourceRoomPolicySelector::ReadableDetail => DiagnosticsVideoLayoutRole::ReadableDetail,
-        SourceRoomPolicySelector::ActiveSpeaker => DiagnosticsVideoLayoutRole::ActiveSpeaker,
-        SourceRoomPolicySelector::VisibleThumbnail => DiagnosticsVideoLayoutRole::VisibleThumbnail,
-        SourceRoomPolicySelector::Hidden => DiagnosticsVideoLayoutRole::Hidden,
-        SourceRoomPolicySelector::Overflow => DiagnosticsVideoLayoutRole::Overflow,
-    }
-}
-
-fn diagnostics_video_route_priority(value: SourceRoutePriority) -> DiagnosticsVideoRoutePriority {
-    match value {
-        SourceRoutePriority::PinnedOrFeatured => DiagnosticsVideoRoutePriority::PinnedOrFeatured,
-        SourceRoutePriority::ReadableDetail => DiagnosticsVideoRoutePriority::ReadableDetail,
-        SourceRoutePriority::ActiveSpeaker => DiagnosticsVideoRoutePriority::ActiveSpeaker,
-        SourceRoutePriority::VisibleThumbnail => DiagnosticsVideoRoutePriority::VisibleThumbnail,
-        SourceRoutePriority::HiddenOrOverflow => DiagnosticsVideoRoutePriority::HiddenOrOverflow,
+        o_sfu_router::MediaKind::Audio => DiagnosticsMediaKind::Audio,
+        o_sfu_router::MediaKind::Video => DiagnosticsMediaKind::Video,
     }
 }
 
@@ -428,51 +377,90 @@ fn diagnostics_active_speaker_snapshot(
     diagnostic: ActiveSpeakerSourceDiagnostic,
 ) -> DiagnosticsActiveSpeaker {
     DiagnosticsActiveSpeaker {
-        state: diagnostics_active_speaker_state(diagnostic.state()),
-        reason: diagnostics_active_speaker_reason(diagnostic.reason()),
+        state: diagnostic.state().into(),
+        reason: diagnostic.reason().into(),
         last_audio_level_dbov: diagnostic.last_audio_level_dbov(),
         confidence_observations: diagnostic.confidence_observations(),
         hold_remaining_ms: diagnostic.hold_remaining().map(duration_millis),
     }
 }
 
-fn diagnostics_active_speaker_state(
-    state: ActiveSpeakerActivityState,
-) -> DiagnosticsActiveSpeakerState {
-    match state {
-        ActiveSpeakerActivityState::Active => DiagnosticsActiveSpeakerState::Active,
-        ActiveSpeakerActivityState::Idle => DiagnosticsActiveSpeakerState::Idle,
-        ActiveSpeakerActivityState::Blocked => DiagnosticsActiveSpeakerState::Blocked,
-        ActiveSpeakerActivityState::RecentlyExpired => {
-            DiagnosticsActiveSpeakerState::RecentlyExpired
-        }
-    }
-}
-
-fn diagnostics_active_speaker_reason(
-    reason: ActiveSpeakerActivityReason,
-) -> DiagnosticsActiveSpeakerReason {
-    match reason {
-        ActiveSpeakerActivityReason::Vad => DiagnosticsActiveSpeakerReason::Vad,
-        ActiveSpeakerActivityReason::AudioLevel => DiagnosticsActiveSpeakerReason::AudioLevel,
-        ActiveSpeakerActivityReason::AudioLevelWarmup => {
-            DiagnosticsActiveSpeakerReason::AudioLevelWarmup
-        }
-        ActiveSpeakerActivityReason::VadFalse => DiagnosticsActiveSpeakerReason::VadFalse,
-        ActiveSpeakerActivityReason::LowNoise => DiagnosticsActiveSpeakerReason::LowNoise,
-        ActiveSpeakerActivityReason::BelowSpeechThreshold => {
-            DiagnosticsActiveSpeakerReason::BelowSpeechThreshold
-        }
-        ActiveSpeakerActivityReason::MissingAudioMetadata => {
-            DiagnosticsActiveSpeakerReason::MissingAudioMetadata
-        }
-        ActiveSpeakerActivityReason::Expired => DiagnosticsActiveSpeakerReason::Expired,
-        ActiveSpeakerActivityReason::NoMetadata => DiagnosticsActiveSpeakerReason::NoMetadata,
-    }
-}
-
 fn duration_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+impl From<OverBudgetExceptionReason> for DiagnosticsOverBudgetExceptionReason {
+    fn from(value: OverBudgetExceptionReason) -> Self {
+        match value {
+            OverBudgetExceptionReason::ProtectedRoute => Self::ProtectedRoute,
+        }
+    }
+}
+
+impl From<PolicyPauseReason> for DiagnosticsPolicyPauseReason {
+    fn from(value: PolicyPauseReason) -> Self {
+        match value {
+            PolicyPauseReason::BudgetPressure => Self::BudgetPressure,
+            PolicyPauseReason::HiddenTile => Self::HiddenTile,
+            PolicyPauseReason::OverflowTile => Self::OverflowTile,
+            PolicyPauseReason::MissingUsableLayer => Self::MissingUsableLayer,
+            PolicyPauseReason::AudioSpeakerLimit => Self::AudioSpeakerLimit,
+            PolicyPauseReason::VideoDownloadLimit => Self::VideoDownloadLimit,
+        }
+    }
+}
+
+impl From<SourceRoomPolicySelector> for DiagnosticsVideoLayoutRole {
+    fn from(value: SourceRoomPolicySelector) -> Self {
+        match value {
+            SourceRoomPolicySelector::Pinned => Self::Pinned,
+            SourceRoomPolicySelector::Featured => Self::Featured,
+            SourceRoomPolicySelector::ReadableDetail => Self::ReadableDetail,
+            SourceRoomPolicySelector::ActiveSpeaker => Self::ActiveSpeaker,
+            SourceRoomPolicySelector::VisibleThumbnail => Self::VisibleThumbnail,
+            SourceRoomPolicySelector::Hidden => Self::Hidden,
+            SourceRoomPolicySelector::Overflow => Self::Overflow,
+        }
+    }
+}
+
+impl From<SourceRoutePriority> for DiagnosticsVideoRoutePriority {
+    fn from(value: SourceRoutePriority) -> Self {
+        match value {
+            SourceRoutePriority::PinnedOrFeatured => Self::PinnedOrFeatured,
+            SourceRoutePriority::ReadableDetail => Self::ReadableDetail,
+            SourceRoutePriority::ActiveSpeaker => Self::ActiveSpeaker,
+            SourceRoutePriority::VisibleThumbnail => Self::VisibleThumbnail,
+            SourceRoutePriority::HiddenOrOverflow => Self::HiddenOrOverflow,
+        }
+    }
+}
+
+impl From<ActiveSpeakerActivityState> for DiagnosticsActiveSpeakerState {
+    fn from(value: ActiveSpeakerActivityState) -> Self {
+        match value {
+            ActiveSpeakerActivityState::Active => Self::Active,
+            ActiveSpeakerActivityState::Idle => Self::Idle,
+            ActiveSpeakerActivityState::Blocked => Self::Blocked,
+            ActiveSpeakerActivityState::RecentlyExpired => Self::RecentlyExpired,
+        }
+    }
+}
+
+impl From<ActiveSpeakerActivityReason> for DiagnosticsActiveSpeakerReason {
+    fn from(value: ActiveSpeakerActivityReason) -> Self {
+        match value {
+            ActiveSpeakerActivityReason::Vad => Self::Vad,
+            ActiveSpeakerActivityReason::AudioLevel => Self::AudioLevel,
+            ActiveSpeakerActivityReason::AudioLevelWarmup => Self::AudioLevelWarmup,
+            ActiveSpeakerActivityReason::VadFalse => Self::VadFalse,
+            ActiveSpeakerActivityReason::LowNoise => Self::LowNoise,
+            ActiveSpeakerActivityReason::BelowSpeechThreshold => Self::BelowSpeechThreshold,
+            ActiveSpeakerActivityReason::MissingAudioMetadata => Self::MissingAudioMetadata,
+            ActiveSpeakerActivityReason::Expired => Self::Expired,
+            ActiveSpeakerActivityReason::NoMetadata => Self::NoMetadata,
+        }
+    }
 }
 
 #[cfg(test)]

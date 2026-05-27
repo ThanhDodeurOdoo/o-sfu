@@ -44,13 +44,6 @@ pub(super) fn drain_ready_sessions(state: &mut PacketLoopState) -> Vec<Transport
     collect_ready_session_keys(state, Instant::now())
 }
 
-pub(super) fn response_channel<T>() -> (
-    oneshot::Sender<TransportResult<T>>,
-    oneshot::Receiver<TransportResult<T>>,
-) {
-    oneshot::channel()
-}
-
 pub(super) fn expect_response<T>(
     response: oneshot::Receiver<TransportResult<T>>,
 ) -> TransportResult<T> {
@@ -533,7 +526,7 @@ pub(super) fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
         command_now,
         Some(response_tx),
     );
-    assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
+    assert_eq!(expect_response(response_rx), Ok(()));
     PendingSelectedRidRoute {
         state,
         metrics,

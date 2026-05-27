@@ -251,24 +251,24 @@ impl SessionMediaLookup {
     }
 }
 
-fn learn_producer_ssrc_binding_for_session(
+fn bind_producer_ssrc(
     mid_registry: &MediaStore,
     session_media: &mut SessionMediaRegistry,
-    producer_ssrcs_by_media: &mut BTreeMap<TransportMediaId, Vec<Ssrc>>,
+    producer_ssrcs_by_media: Option<&mut BTreeMap<TransportMediaId, Vec<Ssrc>>>,
     session_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
     ssrc: Ssrc,
     rid: Option<Rid>,
-) {
+) -> bool {
     let Some(RegisteredMediaHandle::Producer {
         session_key: registered_session_key,
         mid,
     }) = mid_registry.get(&transport_media_id)
     else {
-        return;
+        return false;
     };
     if registered_session_key != session_key {
-        return;
+        return false;
     }
     let mid = *mid;
 
@@ -277,7 +277,7 @@ fn learn_producer_ssrc_binding_for_session(
             session_media.contains_key(session_key),
             "producer SSRC binding missing session media index for registered producer"
         );
-        return;
+        return false;
     };
     if let Some(existing_transport_media_id) = session_lookup.producer_ssrcs.get(&ssrc)
         && existing_transport_media_id != transport_media_id
@@ -290,33 +290,35 @@ fn learn_producer_ssrc_binding_for_session(
             ?mid,
             ?ssrc,
             ?rid,
-            "ignored dynamic producer SSRC binding because SSRC already belongs to another media"
+            "ignored producer SSRC binding because SSRC already belongs to another media"
         );
-        return;
+        return false;
     }
     let inserted = session_lookup
         .producer_ssrcs
         .insert(ssrc, transport_media_id)
         .is_none();
     let previous_rid = rid.and_then(|rid| session_lookup.producer_ssrc_rids.insert(ssrc, rid));
-
-    let ssrcs = producer_ssrcs_by_media
-        .entry(transport_media_id)
-        .or_default();
-    if !ssrcs.contains(&ssrc) {
-        ssrcs.push(ssrc);
+    if let Some(producer_ssrcs_by_media) = producer_ssrcs_by_media {
+        let ssrcs = producer_ssrcs_by_media
+            .entry(transport_media_id)
+            .or_default();
+        if !ssrcs.contains(&ssrc) {
+            ssrcs.push(ssrc);
+        }
+        if inserted || previous_rid != rid {
+            debug!(
+                user_id = ?session_key.user_id(),
+                media_worker_id = session_key.media_worker_id(),
+                ?transport_media_id,
+                ?mid,
+                ?ssrc,
+                ?rid,
+                "learned dynamic producer SSRC binding from RTP header extensions"
+            );
+        }
     }
-    if inserted || previous_rid != rid {
-        debug!(
-            user_id = ?session_key.user_id(),
-            media_worker_id = session_key.media_worker_id(),
-            ?transport_media_id,
-            ?mid,
-            ?ssrc,
-            ?rid,
-            "learned dynamic producer SSRC binding from RTP header extensions"
-        );
-    }
+    true
 }
 
 /// small linear lookup used only behind one session
@@ -480,7 +482,7 @@ impl PacketLoopState {
                     session_lookup.remove_owned_media(transport_media_id);
                     session_lookup.producer_mids.remove(mid);
                 }
-                self.clear_producer_ssrc_bindings(transport_media_id, session_key);
+                self.clear_producer_ssrcs(session_key, transport_media_id);
                 self.forget_source_side_tables(transport_media_id);
                 self.remove_incoming_bitrate_counter(transport_media_id);
             }
@@ -810,10 +812,10 @@ impl PacketLoopState {
         ssrc: Ssrc,
         rid: Option<Rid>,
     ) {
-        learn_producer_ssrc_binding_for_session(
+        bind_producer_ssrc(
             &self.mid_registry,
             &mut self.session_media,
-            &mut self.producer_ssrcs_by_media,
+            Some(&mut self.producer_ssrcs_by_media),
             session_key,
             transport_media_id,
             ssrc,
@@ -855,10 +857,10 @@ impl PacketLoopState {
         let Some(session_key) = self.users.key_for_handle(session_handle) else {
             return;
         };
-        learn_producer_ssrc_binding_for_session(
+        bind_producer_ssrc(
             &self.mid_registry,
             &mut self.session_media,
-            &mut self.producer_ssrcs_by_media,
+            Some(&mut self.producer_ssrcs_by_media),
             session_key,
             transport_media_id,
             ssrc,
@@ -941,42 +943,29 @@ impl PacketLoopState {
         else {
             return;
         };
-        self.clear_producer_ssrc_bindings(transport_media_id, session_key);
+        self.clear_producer_ssrcs(session_key, transport_media_id);
         self.refresh_source_decoder_refresh_codec(transport_media_id, parameters);
-        let bindings = parameters
+        let accepted_ssrcs = parameters
             .bindings()
             .filter_map(|binding| {
                 let ssrc = binding.ssrc().map(Ssrc::from)?;
                 Some((ssrc, binding.rid().map(Rid::from)))
             })
+            .filter_map(|(ssrc, rid)| {
+                bind_producer_ssrc(
+                    &self.mid_registry,
+                    &mut self.session_media,
+                    None,
+                    session_key,
+                    transport_media_id,
+                    ssrc,
+                    rid,
+                )
+                .then_some(ssrc)
+            })
             .collect::<Vec<_>>();
-        let ssrcs = bindings
-            .iter()
-            .map(|(ssrc, _rid)| *ssrc)
-            .collect::<Vec<_>>();
-        if ssrcs.is_empty() {
-            self.producer_ssrcs_by_media
-                .entry(transport_media_id)
-                .or_default();
-            return;
-        }
-        let Some(session_lookup) = self.session_media.get_mut(session_key) else {
-            debug_assert!(
-                self.session_media.contains_key(session_key),
-                "producer SSRC refresh missing session media index for registered producer"
-            );
-            return;
-        };
-        for (ssrc, rid) in &bindings {
-            session_lookup
-                .producer_ssrcs
-                .insert(*ssrc, transport_media_id);
-            if let Some(rid) = rid {
-                session_lookup.producer_ssrc_rids.insert(*ssrc, *rid);
-            }
-        }
         self.producer_ssrcs_by_media
-            .insert(transport_media_id, ssrcs);
+            .insert(transport_media_id, accepted_ssrcs);
     }
 
     /// clear negotiated producer SSRC bindings for a MID while keeping media alive
@@ -995,7 +984,7 @@ impl PacketLoopState {
         else {
             return;
         };
-        self.clear_producer_ssrc_bindings(transport_media_id, session_key);
+        self.clear_producer_ssrcs(session_key, transport_media_id);
         self.set_source_decoder_refresh_codec(transport_media_id, None);
         self.producer_ssrcs_by_media
             .entry(transport_media_id)
@@ -1003,17 +992,21 @@ impl PacketLoopState {
     }
 
     /// remove every SSRC and RID lookup currently attached to a producer id
-    fn clear_producer_ssrc_bindings(
+    fn clear_producer_ssrcs(
         &mut self,
-        transport_media_id: TransportMediaId,
         session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
     ) {
-        if let Some(ssrcs) = self.producer_ssrcs_by_media.remove(&transport_media_id) {
-            for ssrc in ssrcs {
-                if let Some(session_lookup) = self.session_media.get_mut(session_key) {
-                    session_lookup.producer_ssrcs.remove(&ssrc);
-                    session_lookup.producer_ssrc_rids.remove(&ssrc);
-                }
+        let Some(ssrcs) = self.producer_ssrcs_by_media.remove(&transport_media_id) else {
+            return;
+        };
+        let Some(session_lookup) = self.session_media.get_mut(session_key) else {
+            return;
+        };
+        for ssrc in ssrcs {
+            if session_lookup.producer_ssrcs.get(&ssrc) == Some(transport_media_id) {
+                session_lookup.producer_ssrcs.remove(&ssrc);
+                session_lookup.producer_ssrc_rids.remove(&ssrc);
             }
         }
     }

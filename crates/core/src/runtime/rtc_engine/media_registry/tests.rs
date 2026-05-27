@@ -5,6 +5,11 @@ use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
 use super::*;
 use crate::runtime::{UserId, rtc_engine::test_support::test_transport_session_key};
 
+fn rtp_parameters_with_ssrc(mid: Mid, ssrc: u32) -> RouterRtpParameters {
+    RouterRtpParameters::new(vec![], vec![], vec![StreamBinding::new().with_ssrc(ssrc)])
+        .with_mid(mid.to_string())
+}
+
 #[test]
 fn consumer_media_lookup_uses_the_reverse_index() {
     let mut state = PacketLoopState::default();
@@ -154,12 +159,7 @@ fn producer_media_lookup_falls_back_to_negotiated_ssrc() {
     state.refresh_producer_ssrc_bindings(
         &producer_session,
         producer_mid,
-        &RouterRtpParameters::new(
-            vec![],
-            vec![],
-            vec![StreamBinding::new().with_ssrc(producer_ssrc)],
-        )
-        .with_mid(producer_mid.to_string()),
+        &rtp_parameters_with_ssrc(producer_mid, producer_ssrc),
     );
 
     assert_eq!(
@@ -223,12 +223,7 @@ fn producer_ssrc_lookup_refresh_replaces_stale_bindings() {
     state.refresh_producer_ssrc_bindings(
         &producer_session,
         producer_mid,
-        &RouterRtpParameters::new(
-            vec![],
-            vec![],
-            vec![StreamBinding::new().with_ssrc(first_ssrc)],
-        )
-        .with_mid(producer_mid.to_string()),
+        &rtp_parameters_with_ssrc(producer_mid, first_ssrc),
     );
     assert_eq!(
         state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(first_ssrc)),
@@ -238,12 +233,7 @@ fn producer_ssrc_lookup_refresh_replaces_stale_bindings() {
     state.refresh_producer_ssrc_bindings(
         &producer_session,
         producer_mid,
-        &RouterRtpParameters::new(
-            vec![],
-            vec![],
-            vec![StreamBinding::new().with_ssrc(second_ssrc)],
-        )
-        .with_mid(producer_mid.to_string()),
+        &rtp_parameters_with_ssrc(producer_mid, second_ssrc),
     );
 
     assert_eq!(
@@ -275,12 +265,7 @@ fn producer_mid_lookup_survives_ssrc_binding_refresh() {
     state.refresh_producer_ssrc_bindings(
         &producer_session,
         producer_mid,
-        &RouterRtpParameters::new(
-            vec![],
-            vec![],
-            vec![StreamBinding::new().with_ssrc(producer_ssrc)],
-        )
-        .with_mid(producer_mid.to_string()),
+        &rtp_parameters_with_ssrc(producer_mid, producer_ssrc),
     );
 
     assert_eq!(
@@ -314,6 +299,44 @@ fn dynamic_producer_ssrc_binding_cannot_steal_another_media_id() {
 
     assert_eq!(
         state.source_transport_media_id_for_ssrc(&producer_session, shared_ssrc),
+        Some(first_media_id)
+    );
+    assert_eq!(
+        state.source_transport_media_id_for_mid(&producer_session, second_mid),
+        Some(second_media_id)
+    );
+}
+
+#[test]
+fn rejected_negotiated_ssrc_binding_does_not_clear_existing_owner() {
+    let producer_session = test_transport_session_key(28, 0, 33, UserId::Integer(34));
+    let first_mid = Mid::from("cam-up-a");
+    let second_mid = Mid::from("cam-up-b");
+    let shared_ssrc = 66_667_u32;
+    let mut state = PacketLoopState::default();
+    let first_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+        session_key: producer_session.clone(),
+        mid: first_mid,
+    });
+    let second_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+        session_key: producer_session.clone(),
+        mid: second_mid,
+    });
+
+    state.refresh_producer_ssrc_bindings(
+        &producer_session,
+        first_mid,
+        &rtp_parameters_with_ssrc(first_mid, shared_ssrc),
+    );
+    state.refresh_producer_ssrc_bindings(
+        &producer_session,
+        second_mid,
+        &rtp_parameters_with_ssrc(second_mid, shared_ssrc),
+    );
+    state.clear_producer_ssrc_bindings_for_mid(&producer_session, second_mid);
+
+    assert_eq!(
+        state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(shared_ssrc)),
         Some(first_media_id)
     );
     assert_eq!(

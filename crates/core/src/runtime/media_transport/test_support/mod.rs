@@ -1,5 +1,6 @@
+#[cfg(any(test, feature = "testing-transport"))]
 use std::time::Instant;
-#[cfg(test)]
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use std::{
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
@@ -7,17 +8,22 @@ use std::{
 
 #[cfg(test)]
 use o_sfu_router::MediaStream as RouterRtpParameters;
+#[cfg(any(test, feature = "testing-transport"))]
 use str0m::media::Mid;
 
 #[cfg(test)]
-use super::TransportAdapterError;
-use super::{MediaTransport, TransportMediaId, TransportSessionHealth, TransportSessionKey};
+use super::MediaTransportBuilder;
 #[cfg(test)]
-use super::{MediaTransportBuilder, MediaTransportConfig, MediaTransportDeps};
+use super::TransportAdapterError;
+#[cfg(any(test, feature = "testing-transport"))]
+use super::{MediaTransport, TransportMediaId, TransportSessionHealth, TransportSessionKey};
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use super::{MediaTransportConfig, MediaTransportDeps};
 #[cfg(test)]
 use crate::runtime::rtc_engine::RtcWorker;
+#[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::rtc_engine::test_support::DebugRouteEntry;
-#[cfg(test)]
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
     VideoBitrateLimits,
@@ -28,10 +34,12 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy)]
+#[cfg(any(test, feature = "testing-transport"))]
 pub struct MediaTransportTestApi<'a> {
     transport: &'a MediaTransport,
 }
 
+#[cfg(any(test, feature = "testing-transport"))]
 impl MediaTransport {
     #[must_use]
     pub fn test_api(&self) -> MediaTransportTestApi<'_> {
@@ -39,6 +47,7 @@ impl MediaTransport {
     }
 }
 
+#[cfg(any(test, feature = "testing-transport"))]
 impl MediaTransportTestApi<'_> {
     #[cfg(test)]
     pub(crate) async fn negotiated_producer_parameters(
@@ -148,21 +157,28 @@ impl MediaTransportTestApi<'_> {
 #[cfg(test)]
 pub(crate) fn test_media_transport_builder(rtc_port_range: RtcPortRange) -> MediaTransportBuilder {
     MediaTransport::builder()
-        .transport_config(MediaTransportConfig {
-            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(
-                Bitrate::from_mbps(8),
-                Bitrate::from_mbps(10),
-            ),
-            video_bitrate_limits: VideoBitrateLimits::default(),
-            rtc_port_range,
-            codec_flags: MediaCodecFlags::default(),
-            codec_preferences: CodecPreferences::default(),
-            media_quality_interval: None,
-        })
-        .deps(MediaTransportDeps {
-            diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
-            metrics: Arc::new(RuntimeMetrics::default()),
-        })
+        .transport_config(test_media_transport_config(rtc_port_range))
+        .deps(test_media_transport_deps())
+}
+
+#[cfg(any(test, feature = "internal-benchmarks"))]
+pub(crate) fn test_media_transport_config(rtc_port_range: RtcPortRange) -> MediaTransportConfig {
+    MediaTransportConfig {
+        public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+        bitrate_limits: SessionBitrateLimits::new(Bitrate::from_mbps(8), Bitrate::from_mbps(10)),
+        video_bitrate_limits: VideoBitrateLimits::default(),
+        rtc_port_range,
+        codec_flags: MediaCodecFlags::default(),
+        codec_preferences: CodecPreferences::default(),
+        media_quality_interval: None,
+    }
+}
+
+#[cfg(any(test, feature = "internal-benchmarks"))]
+pub(crate) fn test_media_transport_deps() -> MediaTransportDeps {
+    MediaTransportDeps {
+        diagnostics: Arc::new(DiagnosticsStore::default()),
+        packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
+        metrics: Arc::new(RuntimeMetrics::default()),
+    }
 }

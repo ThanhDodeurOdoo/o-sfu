@@ -8,7 +8,7 @@
 //! measured methods expose repeatable command work without allocating new
 //! transport state or starting sockets
 
-use std::{net::IpAddr, sync::Arc};
+use std::sync::Arc;
 
 use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding as RouterRtpEncoding};
 use str0m::media::MediaKind;
@@ -19,17 +19,13 @@ use super::{
     FanoutBenchTopology,
 };
 use crate::{
-    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
-    VideoBitrateLimits,
+    RtcPortRange,
     runtime::{
         UserId,
-        diagnostics::DiagnosticsStore,
         media_transport::{
-            MediaTransportConfig, MediaTransportDeps, SourcePolicySignal, TransportResult,
-            TransportSessionKey,
+            SourcePolicySignal, TransportResult, TransportSessionKey,
+            test_support::{test_media_transport_config, test_media_transport_deps},
         },
-        metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
     },
 };
 
@@ -80,8 +76,8 @@ impl WorkerLoopBenchFixture {
         let fixture = Self {
             runtime,
             worker: RtcWorker::new(
-                &worker_config(),
-                &worker_deps(),
+                &test_media_transport_config(RtcPortRange::new(46_200, 46_220)),
+                &test_media_transport_deps(),
                 Arc::new(SourcePolicySignal::default()),
                 0,
                 0,
@@ -173,8 +169,8 @@ impl WorkerPacketCommandMixBenchFixture {
         let mut fixture = Self {
             runtime,
             worker: RtcWorker::new(
-                &worker_config(),
-                &worker_deps(),
+                &test_media_transport_config(RtcPortRange::new(46_200, 46_220)),
+                &test_media_transport_deps(),
                 Arc::new(SourcePolicySignal::default()),
                 0,
                 0,
@@ -282,18 +278,6 @@ fn audio_rtp_parameters(mid: &str, ssrc: u32) -> RouterRtpParameters {
     .with_mid(mid.to_owned())
 }
 
-fn worker_config() -> MediaTransportConfig {
-    MediaTransportConfig {
-        public_ip: IpAddr::from([127, 0, 0, 1]),
-        bitrate_limits: SessionBitrateLimits::new(Bitrate::from_mbps(8), Bitrate::from_mbps(10)),
-        video_bitrate_limits: VideoBitrateLimits::default(),
-        rtc_port_range: RtcPortRange::new(46_200, 46_220),
-        codec_flags: MediaCodecFlags::default(),
-        codec_preferences: CodecPreferences::default(),
-        media_quality_interval: None,
-    }
-}
-
 #[allow(
     clippy::panic,
     reason = "benchmark setup and measurement should fail loudly when required worker commands fail"
@@ -303,12 +287,4 @@ fn require_ok<T>(value: TransportResult<T>, context: &'static str) -> T {
         panic!("{context}")
     };
     value
-}
-
-fn worker_deps() -> MediaTransportDeps {
-    MediaTransportDeps {
-        diagnostics: Arc::new(DiagnosticsStore::default()),
-        packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
-        metrics: Arc::new(RuntimeMetrics::default()),
-    }
 }
