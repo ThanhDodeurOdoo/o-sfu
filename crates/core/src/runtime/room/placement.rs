@@ -486,7 +486,7 @@ impl LoadTriggeredPlacementState {
 
     fn record_pressure(&mut self, policy: LocalSpilloverPolicy) -> bool {
         self.activation_streak = self.activation_streak.saturating_add(1);
-        self.activation_streak >= policy.activation_window()
+        self.activation_streak >= policy.parts().activation_window
     }
 
     pub(in crate::runtime::room) fn cooldown_detachments(
@@ -658,34 +658,35 @@ impl WorkerPlacementLoad {
 
     #[cfg(test)]
     fn pressure_reason(self, policy: LocalSpilloverPolicy) -> Option<RoomPlacementDecisionReason> {
-        if self.session_count.saturating_add(1) >= policy.min_receiver_count() {
+        let policy = policy.parts();
+        if self.session_count.saturating_add(1) >= policy.min_receiver_count {
             return Some(RoomPlacementDecisionReason::ReceiverCountPressure);
         }
-        if self.consumer_count >= policy.max_active_consumers_per_router() {
+        if self.consumer_count >= policy.max_active_consumers_per_router {
             return Some(RoomPlacementDecisionReason::ConsumerPressure);
         }
-        if policy.egress_bitrate_threshold() > crate::Bitrate::zero()
-            && self.pressure.egress_bitrate >= policy.egress_bitrate_threshold()
+        if policy.egress_bitrate_threshold > crate::Bitrate::zero()
+            && self.pressure.egress_bitrate >= policy.egress_bitrate_threshold
         {
             return Some(RoomPlacementDecisionReason::EgressPressure);
         }
-        if policy.packet_loop_lag_threshold_ms() > 0
-            && self.pressure.packet_loop_lag_ms >= policy.packet_loop_lag_threshold_ms()
+        if policy.packet_loop_lag_threshold_ms > 0
+            && self.pressure.packet_loop_lag_ms >= policy.packet_loop_lag_threshold_ms
         {
             return Some(RoomPlacementDecisionReason::PacketLoopLagPressure);
         }
-        if policy.command_backlog_threshold() > 0
-            && self.pressure.command_backlog_depth >= policy.command_backlog_threshold()
+        if policy.command_backlog_threshold > 0
+            && self.pressure.command_backlog_depth >= policy.command_backlog_threshold
         {
             return Some(RoomPlacementDecisionReason::CommandBacklogPressure);
         }
-        if policy.relay_mailbox_depth_threshold() > 0
-            && self.pressure.relay_mailbox_depth >= policy.relay_mailbox_depth_threshold()
+        if policy.relay_mailbox_depth_threshold > 0
+            && self.pressure.relay_mailbox_depth >= policy.relay_mailbox_depth_threshold
         {
             return Some(RoomPlacementDecisionReason::RelayMailboxPressure);
         }
-        if policy.worker_pressure_threshold() > 0
-            && self.pressure.worker_pressure_score >= policy.worker_pressure_threshold()
+        if policy.worker_pressure_threshold > 0
+            && self.pressure.worker_pressure_score >= policy.worker_pressure_threshold
         {
             return Some(RoomPlacementDecisionReason::WorkerPressure);
         }
@@ -694,18 +695,19 @@ impl WorkerPlacementLoad {
 
     /// whether adding another receiver would cross any spillover trigger
     fn is_overloaded(self, policy: LocalSpilloverPolicy) -> bool {
-        self.session_count.saturating_add(1) >= policy.min_receiver_count()
-            || self.consumer_count >= policy.max_active_consumers_per_router()
-            || policy.egress_bitrate_threshold() > crate::Bitrate::zero()
-                && self.pressure.egress_bitrate >= policy.egress_bitrate_threshold()
-            || policy.packet_loop_lag_threshold_ms() > 0
-                && self.pressure.packet_loop_lag_ms >= policy.packet_loop_lag_threshold_ms()
-            || policy.command_backlog_threshold() > 0
-                && self.pressure.command_backlog_depth >= policy.command_backlog_threshold()
-            || policy.relay_mailbox_depth_threshold() > 0
-                && self.pressure.relay_mailbox_depth >= policy.relay_mailbox_depth_threshold()
-            || policy.worker_pressure_threshold() > 0
-                && self.pressure.worker_pressure_score >= policy.worker_pressure_threshold()
+        let policy = policy.parts();
+        self.session_count.saturating_add(1) >= policy.min_receiver_count
+            || self.consumer_count >= policy.max_active_consumers_per_router
+            || policy.egress_bitrate_threshold > crate::Bitrate::zero()
+                && self.pressure.egress_bitrate >= policy.egress_bitrate_threshold
+            || policy.packet_loop_lag_threshold_ms > 0
+                && self.pressure.packet_loop_lag_ms >= policy.packet_loop_lag_threshold_ms
+            || policy.command_backlog_threshold > 0
+                && self.pressure.command_backlog_depth >= policy.command_backlog_threshold
+            || policy.relay_mailbox_depth_threshold > 0
+                && self.pressure.relay_mailbox_depth >= policy.relay_mailbox_depth_threshold
+            || policy.worker_pressure_threshold > 0
+                && self.pressure.worker_pressure_score >= policy.worker_pressure_threshold
     }
 }
 

@@ -21,20 +21,6 @@ impl MediaTransport {
         MediaTransportBuilder::new()
     }
 
-    /// Builds a media transport from a prepared builder.
-    ///
-    /// This associated function exists for call sites that prefer passing the
-    /// builder as one value. Normal fluent construction can call
-    /// [`MediaTransportBuilder::build`] directly.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MediaTransportBuildError`] when the builder is missing required
-    /// inputs or describes an invalid worker topology.
-    pub fn build(builder: MediaTransportBuilder) -> Result<Self, MediaTransportBuildError> {
-        builder.build()
-    }
-
     /// Builds the runtime media transport from neutral core options and process
     /// dependencies.
     ///
@@ -96,15 +82,7 @@ impl MediaTransportBuilder {
     /// internals.
     #[must_use]
     pub fn core_options(mut self, options: &CoreOptions) -> Self {
-        self.transport = Some(MediaTransportConfig {
-            public_ip: options.media.public_ip,
-            bitrate_limits: options.media.bitrate_limits,
-            video_bitrate_limits: options.media.video_bitrate_limits,
-            rtc_port_range: options.media.rtc_port_range,
-            codec_flags: options.codecs.flags,
-            codec_preferences: options.codecs.preferences,
-            media_quality_interval: options.observability.media_quality_interval,
-        });
+        self.transport = Some(MediaTransportConfig::from_core_options(options));
         self.worker_count = options.routing.media_worker_count;
         self
     }
@@ -151,7 +129,7 @@ impl MediaTransportBuilder {
             .transport
             .ok_or(MediaTransportBuildError::MissingTransportConfig)?;
         let deps = self.deps.ok_or(MediaTransportBuildError::MissingDeps)?;
-        let worker_ranges = split_worker_ranges(transport.rtc_port_range(), self.worker_count)?;
+        let worker_ranges = split_worker_ranges(transport.rtc_port_range, self.worker_count)?;
         Ok(MediaTransport::new(&transport, &deps, worker_ranges))
     }
 }

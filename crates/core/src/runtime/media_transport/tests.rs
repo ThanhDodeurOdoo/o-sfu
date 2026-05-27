@@ -243,7 +243,7 @@ fn expect_worker_for_user(
     adapter: &MediaTransport,
     session_key: &TransportSessionKey,
 ) -> Arc<RtcWorker> {
-    let Some(worker) = adapter.debug_worker_for_user(session_key) else {
+    let Some(worker) = adapter.test_api().worker_for_user(session_key) else {
         panic!("test session should be assigned to a media worker");
     };
     worker
@@ -380,7 +380,11 @@ async fn rtc_engine_rejects_stale_session_removal_without_dropping_consumer_hand
             .await,
         Err(TransportAdapterError::InvalidInput)
     );
-    let Some(route_entry) = adapter.debug_route_entry_by_media_id(source_media_id).await else {
+    let Some(route_entry) = adapter
+        .test_api()
+        .route_entry_by_media_id(source_media_id)
+        .await
+    else {
         panic!("source route entry should survive stale removal");
     };
     assert!(route_entry.destinations.iter().any(|destination| {
@@ -396,7 +400,8 @@ async fn rtc_engine_rejects_stale_session_removal_without_dropping_consumer_hand
     );
     assert!(
         adapter
-            .debug_route_entry_by_media_id(source_media_id)
+            .test_api()
+            .route_entry_by_media_id(source_media_id)
             .await
             .is_none()
     );

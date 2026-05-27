@@ -177,7 +177,11 @@ pub(super) async fn active_destination_count_for_receiver(
 ) -> usize {
     let mut count = 0;
     for source_media_id in source_media_ids {
-        let Some(entry) = adapter.debug_route_entry_by_media_id(source_media_id).await else {
+        let Some(entry) = adapter
+            .test_api()
+            .route_entry_by_media_id(source_media_id)
+            .await
+        else {
             continue;
         };
         count += entry

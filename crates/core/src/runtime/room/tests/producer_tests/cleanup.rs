@@ -44,7 +44,8 @@ async fn explicit_unpublish_removes_state_and_transport_media() {
     assert_transport_media_mapping_is_missing(&room, transport_media_id).await;
     assert!(
         media_transport
-            .debug_route_entry_by_media_id(transport_media_id)
+            .test_api()
+            .route_entry_by_media_id(transport_media_id)
             .await
             .is_none()
     );

@@ -49,7 +49,11 @@ pub use types::{
     TransportSourceKey, TransportWorkerPressureSnapshot,
 };
 
-use crate::runtime::{RoomInstanceId, rtc_engine::RtcWorker};
+use self::workers::signaling_to_str0m_media_kind;
+use crate::runtime::{
+    RoomInstanceId,
+    rtc_engine::{RtcSendMediaSource, RtcWorker},
+};
 
 /// Opaque runtime media transport handle.
 ///
@@ -84,15 +88,19 @@ impl MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        self.create_initial_session_offer_on_worker(session_key)
-            .await
-            .inspect_err(|error| {
-                warn!(
-                    ?session_key,
-                    ?error,
-                    "media transport failed to create initial user offer"
-                );
-            })
+        async {
+            self.require_worker_for_user(session_key)?
+                .create_initial_session_offer(session_key)
+                .await
+        }
+        .await
+        .inspect_err(|error| {
+            warn!(
+                ?session_key,
+                ?error,
+                "media transport failed to create initial user offer"
+            );
+        })
     }
 
     /// Creates a new SDP offer after transport media state changed.
@@ -109,15 +117,19 @@ impl MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        self.create_session_renegotiation_offer_on_worker(session_key)
-            .await
-            .inspect_err(|error| {
-                warn!(
-                    ?session_key,
-                    ?error,
-                    "media transport failed to create renegotiation offer"
-                );
-            })
+        async {
+            self.require_worker_for_user(session_key)?
+                .create_session_renegotiation_offer(session_key)
+                .await
+        }
+        .await
+        .inspect_err(|error| {
+            warn!(
+                ?session_key,
+                ?error,
+                "media transport failed to create renegotiation offer"
+            );
+        })
     }
 
     /// Applies a browser SDP answer to a pending transport offer.
@@ -135,16 +147,20 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         answer_sdp: &str,
     ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-        self.apply_session_answer_on_worker(session_key, answer_sdp)
-            .await
-            .inspect_err(|error| {
-                warn!(
-                    ?session_key,
-                    answer_len = answer_sdp.len(),
-                    ?error,
-                    "media transport failed to apply user answer"
-                );
-            })
+        async {
+            self.require_worker_for_user(session_key)?
+                .apply_session_answer(session_key, answer_sdp)
+                .await
+        }
+        .await
+        .inspect_err(|error| {
+            warn!(
+                ?session_key,
+                answer_len = answer_sdp.len(),
+                ?error,
+                "media transport failed to apply user answer"
+            );
+        })
     }
 
     /// Projects the client's negotiated RTP capabilities from an SDP answer.
@@ -186,11 +202,16 @@ impl MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
-        self.close_session_on_worker(session_key)
-            .await
-            .inspect_err(|error| {
-                warn!(?session_key, ?error, "media transport failed to close user");
-            })
+        async {
+            self.require_worker_for_user(session_key)?
+                .close_session(session_key)
+                .await
+                .map(|_| ())
+        }
+        .await
+        .inspect_err(|error| {
+            warn!(?session_key, ?error, "media transport failed to close user");
+        })
     }
     /// Removes one producer or consumer handle from a transport session.
     ///
@@ -206,16 +227,20 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
-        self.remove_media_on_worker(session_key, transport_media_id)
-            .await
-            .inspect_err(|error| {
-                warn!(
-                    ?session_key,
-                    ?transport_media_id,
-                    ?error,
-                    "media transport failed to remove media"
-                );
-            })
+        async {
+            self.require_worker_for_user(session_key)?
+                .remove_media(session_key, transport_media_id)
+                .await
+        }
+        .await
+        .inspect_err(|error| {
+            warn!(
+                ?session_key,
+                ?transport_media_id,
+                ?error,
+                "media transport failed to remove media"
+            );
+        })
     }
 
     /// Declares a new producer on a transport session.
@@ -235,17 +260,25 @@ impl MediaTransport {
         media_kind: MediaKind,
         rtp_parameters: &RouterRtpParameters,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        self.publish_media_on_worker(session_key, media_kind, rtp_parameters)
-            .await
-            .inspect_err(|error| {
-                warn!(
-                    ?session_key,
-                    ?media_kind,
-                    mid = rtp_parameters.mid(),
-                    ?error,
-                    "media transport failed to declare producer media"
-                );
-            })
+        async {
+            self.require_worker_for_user(session_key)?
+                .add_recv_media(
+                    session_key,
+                    signaling_to_str0m_media_kind(media_kind),
+                    rtp_parameters,
+                )
+                .await
+        }
+        .await
+        .inspect_err(|error| {
+            warn!(
+                ?session_key,
+                ?media_kind,
+                mid = rtp_parameters.mid(),
+                ?error,
+                "media transport failed to declare producer media"
+            );
+        })
     }
 
     /// Declares a new consumer route from a source session to a consumer session.
@@ -269,14 +302,32 @@ impl MediaTransport {
         consumer_rtp_parameters: &RouterRtpParameters,
         initial_activity: ConsumerActivity,
     ) -> Result<TransportMediaId, TransportAdapterError> {
-        self.consume_media_on_worker(
-            consumer_session_key,
-            media_kind,
-            source_session_key,
-            source_media_id,
-            consumer_rtp_parameters,
-            initial_activity,
-        )
+        async {
+            Self::ensure_same_room(consumer_session_key, source_session_key)?;
+            let relay_route =
+                self.relay_registration_workers(consumer_session_key, source_session_key)?;
+            let remote_source_control = relay_route
+                .as_ref()
+                .map(|(source_worker, consumer_worker)| {
+                    source_worker.remote_source_control(consumer_worker.as_ref())
+                })
+                .transpose()?;
+            self.require_worker_for_user(consumer_session_key)?
+                .add_send_media(
+                    consumer_session_key,
+                    signaling_to_str0m_media_kind(media_kind),
+                    RtcSendMediaSource {
+                        source: TransportSourceKey::new(
+                            source_session_key.clone(),
+                            source_media_id,
+                        ),
+                        remote_source_control,
+                    },
+                    consumer_rtp_parameters,
+                    initial_activity.is_active(),
+                )
+                .await
+        }
         .await
         .inspect_err(|error| {
             warn!(
@@ -305,7 +356,7 @@ impl MediaTransport {
         &self,
         effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
-        self.apply_relay_route_effect_on_worker(effect)
+        self.execute_relay_route_effect(effect)
             .await
             .inspect_err(|error| {
                 warn!(
@@ -332,16 +383,20 @@ impl MediaTransport {
         source: &TransportSourceKey,
         activity: ProducerActivity,
     ) -> Result<(), TransportAdapterError> {
-        self.set_producer_active_on_worker(source, activity)
-            .await
-            .inspect_err(|error| {
-                warn!(
-                    ?source,
-                    active = activity.is_active(),
-                    ?error,
-                    "media transport failed to update producer activity"
-                );
-            })
+        async {
+            self.require_worker_for_user(source.session_key())?
+                .set_producer_active(source, activity.is_active())
+                .await
+        }
+        .await
+        .inspect_err(|error| {
+            warn!(
+                ?source,
+                active = activity.is_active(),
+                ?error,
+                "media transport failed to update producer activity"
+            );
+        })
     }
 
     /// Updates whether a consumer route may receive packets.
@@ -358,16 +413,20 @@ impl MediaTransport {
         route: &TransportConsumerRoute,
         activity: ConsumerActivity,
     ) -> Result<(), TransportAdapterError> {
-        self.set_consumer_active_on_worker(route, activity)
-            .await
-            .inspect_err(|error| {
-                warn!(
-                    ?route,
-                    active = activity.is_active(),
-                    ?error,
-                    "media transport failed to update consumer activity"
-                );
-            })
+        async {
+            self.require_consumer_worker_for_route(route)?
+                .set_consumer_active(route, activity.is_active())
+                .await
+        }
+        .await
+        .inspect_err(|error| {
+            warn!(
+                ?route,
+                active = activity.is_active(),
+                ?error,
+                "media transport failed to update consumer activity"
+            );
+        })
     }
 
     /// Applies source-policy packet gating to one consumer route.
@@ -386,16 +445,20 @@ impl MediaTransport {
         route: &TransportConsumerRoute,
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
-        self.set_consumer_packet_gate_on_worker(route, packet_gate.clone())
-            .await
-            .inspect_err(|error| {
-                warn!(
-                    ?route,
-                    ?packet_gate,
-                    ?error,
-                    "media transport failed to update consumer packet gate"
-                );
-            })
+        async {
+            self.require_consumer_worker_for_route(route)?
+                .set_consumer_packet_gate(route, packet_gate.clone())
+                .await
+        }
+        .await
+        .inspect_err(|error| {
+            warn!(
+                ?route,
+                ?packet_gate,
+                ?error,
+                "media transport failed to update consumer packet gate"
+            );
+        })
     }
 
     /// Applies packet gates for multiple routes and preserves input order in
@@ -432,15 +495,19 @@ impl MediaTransport {
         &self,
         route: &TransportConsumerRoute,
     ) -> Result<(), TransportAdapterError> {
-        self.request_consumer_keyframe_on_worker(route)
-            .await
-            .inspect_err(|error| {
-                warn!(
-                    ?route,
-                    ?error,
-                    "media transport failed to request a consumer keyframe refresh"
-                );
-            })
+        async {
+            self.require_consumer_worker_for_route(route)?
+                .request_consumer_keyframe(route)
+                .await
+        }
+        .await
+        .inspect_err(|error| {
+            warn!(
+                ?route,
+                ?error,
+                "media transport failed to request a consumer keyframe refresh"
+            );
+        })
     }
 
     /// Returns the negotiated MID for a transport media handle when known.

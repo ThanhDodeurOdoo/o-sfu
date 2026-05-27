@@ -358,16 +358,17 @@ mod tests {
         let RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) = spillover else {
             return;
         };
-        assert_eq!(policy.min_receiver_count(), 8);
-        assert_eq!(policy.max_active_consumers_per_router(), 9);
-        assert_eq!(policy.max_fanout_per_source(), 10);
-        assert_eq!(policy.egress_bitrate_threshold(), Bitrate::from_bps(1_200));
-        assert_eq!(policy.packet_loop_lag_threshold_ms(), 7);
-        assert_eq!(policy.command_backlog_threshold(), 11);
-        assert_eq!(policy.relay_mailbox_depth_threshold(), 12);
-        assert_eq!(policy.worker_pressure_threshold(), 50);
-        assert_eq!(policy.activation_window(), 1);
-        assert_eq!(policy.cooldown_window(), 4);
+        let policy = policy.parts();
+        assert_eq!(policy.min_receiver_count, 8);
+        assert_eq!(policy.max_active_consumers_per_router, 9);
+        assert_eq!(policy.max_fanout_per_source, 10);
+        assert_eq!(policy.egress_bitrate_threshold, Bitrate::from_bps(1_200));
+        assert_eq!(policy.packet_loop_lag_threshold_ms, 7);
+        assert_eq!(policy.command_backlog_threshold, 11);
+        assert_eq!(policy.relay_mailbox_depth_threshold, 12);
+        assert_eq!(policy.worker_pressure_threshold, 50);
+        assert_eq!(policy.activation_window, 1);
+        assert_eq!(policy.cooldown_window, 4);
     }
 
     #[test]

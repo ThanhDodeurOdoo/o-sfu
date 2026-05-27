@@ -12,22 +12,21 @@ use std::{
     time::Instant,
 };
 
-use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
+use o_sfu_router::MediaCapabilities;
 use str0m::media::MediaKind as Str0mMediaKind;
 
 use crate::runtime::{
     RoomInstanceId,
     media_transport::{
-        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, ConsumerActivity,
-        ConsumerPacketGateUpdate, MediaTransport, MediaTransportConfig, MediaTransportDeps,
-        ProducerActivity, ReceiverBandwidthSnapshot, SessionOffer, SourcePacketGate,
+        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ConsumerPacketGateUpdate,
+        MediaTransport, MediaTransportConfig, MediaTransportDeps, ReceiverBandwidthSnapshot,
         SourcePolicySignal, SourcePolicyUpdateSubscription, TransportAdapterError,
         TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,
         TransportPlacementPressureSnapshot, TransportQualitySnapshot, TransportRelayRouteAction,
         TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey, TransportSourceKey,
         TransportWorkerPressureSnapshot,
     },
-    rtc_engine::{RtcSendMediaSource, RtcWorker, client_rtp_capabilities_from_answer},
+    rtc_engine::{RtcWorker, client_rtp_capabilities_from_answer},
 };
 
 /// Distance between two worker media-id allocation ranges.
@@ -77,7 +76,7 @@ impl MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<Arc<RtcWorker>> {
-        self.worker_for_media_worker_id(session_key.media_worker_id())
+        self.worker_for_index(session_key.media_worker_id())
     }
 
     /// Returns the source and consumer workers needed for cross-worker relay.
@@ -109,13 +108,11 @@ impl MediaTransport {
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
         let mut snapshot = TransportBitrateSnapshot::default();
-        for (worker_index, worker_session_keys) in self.session_keys_by_worker(session_keys) {
-            if let Some(worker) = self.worker_for_index(worker_index) {
-                let worker_snapshot = worker.transport_bitrate_snapshot(&worker_session_keys);
-                snapshot.total = snapshot.total.saturating_add(worker_snapshot.total);
-                snapshot.per_media.extend(worker_snapshot.per_media);
-            }
-        }
+        self.for_session_workers(session_keys, |worker, worker_session_keys| {
+            let worker_snapshot = worker.transport_bitrate_snapshot(worker_session_keys);
+            snapshot.total = snapshot.total.saturating_add(worker_snapshot.total);
+            snapshot.per_media.extend(worker_snapshot.per_media);
+        });
         snapshot
     }
 
@@ -128,12 +125,10 @@ impl MediaTransport {
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
         let mut snapshot = ReceiverBandwidthSnapshot::default();
-        for (worker_index, worker_session_keys) in self.session_keys_by_worker(session_keys) {
-            if let Some(worker) = self.worker_for_index(worker_index) {
-                let worker_snapshot = worker.receiver_bandwidth_snapshot(&worker_session_keys);
-                snapshot.per_session.extend(worker_snapshot.per_session);
-            }
-        }
+        self.for_session_workers(session_keys, |worker, worker_session_keys| {
+            let worker_snapshot = worker.receiver_bandwidth_snapshot(worker_session_keys);
+            snapshot.per_session.extend(worker_snapshot.per_session);
+        });
         snapshot
     }
 
@@ -143,12 +138,10 @@ impl MediaTransport {
         session_keys: &[TransportSessionKey],
     ) -> TransportQualitySnapshot {
         let mut snapshot = TransportQualitySnapshot::default();
-        for (worker_index, worker_session_keys) in self.session_keys_by_worker(session_keys) {
-            if let Some(worker) = self.worker_for_index(worker_index) {
-                let worker_snapshot = worker.transport_quality_snapshot(&worker_session_keys);
-                snapshot.per_session.extend(worker_snapshot.per_session);
-            }
-        }
+        self.for_session_workers(session_keys, |worker, worker_session_keys| {
+            let worker_snapshot = worker.transport_quality_snapshot(worker_session_keys);
+            snapshot.per_session.extend(worker_snapshot.per_session);
+        });
         snapshot
     }
 
@@ -162,12 +155,10 @@ impl MediaTransport {
         session_keys: &[TransportSessionKey],
     ) -> TransportPlacementPressureSnapshot {
         let mut snapshot = TransportPlacementPressureSnapshot::default();
-        for (worker_index, worker_session_keys) in self.session_keys_by_worker(session_keys) {
-            if let Some(worker) = self.worker_for_index(worker_index) {
-                snapshot =
-                    snapshot.merged_with(worker.placement_pressure_snapshot(&worker_session_keys));
-            }
-        }
+        self.for_session_workers(session_keys, |worker, worker_session_keys| {
+            snapshot =
+                snapshot.merged_with(worker.placement_pressure_snapshot(worker_session_keys));
+        });
         snapshot
     }
 
@@ -309,46 +300,6 @@ impl MediaTransport {
         self.source_policy_signal.subscribe()
     }
 
-    /// Creates the first offer on the worker that owns the session.
-    ///
-    /// Offer state remains worker-local. The worker manager only applies the
-    /// deterministic session-to-worker mapping.
-    pub(super) async fn create_initial_session_offer_on_worker(
-        &self,
-        session_key: &TransportSessionKey,
-    ) -> Result<SessionOffer, TransportAdapterError> {
-        self.require_worker_for_user(session_key)?
-            .create_initial_session_offer(session_key)
-            .await
-    }
-
-    /// Creates a renegotiation offer on the session's owning worker.
-    ///
-    /// The worker enforces whether renegotiation is legal for the current RTC
-    /// state.
-    pub(super) async fn create_session_renegotiation_offer_on_worker(
-        &self,
-        session_key: &TransportSessionKey,
-    ) -> Result<SessionOffer, TransportAdapterError> {
-        self.require_worker_for_user(session_key)?
-            .create_session_renegotiation_offer(session_key)
-            .await
-    }
-
-    /// Applies an SDP answer on the session's owning worker.
-    ///
-    /// The returned producer parameters are transport-derived facts used by the
-    /// room to commit staged publications.
-    pub(super) async fn apply_session_answer_on_worker(
-        &self,
-        session_key: &TransportSessionKey,
-        answer_sdp: &str,
-    ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-        self.require_worker_for_user(session_key)?
-            .apply_session_answer(session_key, answer_sdp)
-            .await
-    }
-
     /// Projects answered client RTP capabilities from an SDP answer.
     ///
     /// This is a pure parsing/projection helper. It does not depend on worker
@@ -366,146 +317,7 @@ impl MediaTransport {
     /// Session cleanup starts on the owning worker. Any relay cleanup emitted by
     /// that worker is then replayed on source workers so no remote worker keeps
     /// forwarding to a closed target.
-    pub(super) async fn close_session_on_worker(
-        &self,
-        session_key: &TransportSessionKey,
-    ) -> Result<(), TransportAdapterError> {
-        self.require_worker_for_user(session_key)?
-            .close_session(session_key)
-            .await?;
-        Ok(())
-    }
-
-    /// Removes one transport media handle from the owning worker.
-    pub(super) async fn remove_media_on_worker(
-        &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-    ) -> Result<(), TransportAdapterError> {
-        self.require_worker_for_user(session_key)?
-            .remove_media(session_key, transport_media_id)
-            .await
-    }
-
-    /// Declares published media on the worker that owns the publishing session.
-    ///
-    /// The transport media id returned here is a local transport realization.
-    /// Room state remains responsible for mapping it back to a published source.
-    pub(super) async fn publish_media_on_worker(
-        &self,
-        session_key: &TransportSessionKey,
-        media_kind: MediaKind,
-        rtp_parameters: &RouterRtpParameters,
-    ) -> Result<TransportMediaId, TransportAdapterError> {
-        self.require_worker_for_user(session_key)?
-            .add_recv_media(
-                session_key,
-                signaling_to_str0m_media_kind(media_kind),
-                rtp_parameters,
-            )
-            .await
-    }
-
-    /// Declares consumed media and installs cross-worker relay state when
-    /// publisher and consumer live on different workers.
-    ///
-    /// Relay activation is staged on the source worker before the consumer media
-    /// is created. If consumer creation fails, the source-side relay
-    /// registration is removed before the error is returned.
-    ///
-    /// The setup order mirrors the packet path:
-    ///
-    /// ```text
-    /// source worker W0:
-    ///   source_media_id -> target W1 relay mailbox
-    ///
-    /// consumer worker W1:
-    ///   source_media_id -> remote source control for W0
-    ///   consumer media  -> local WebRTC send stream
-    /// ```
-    pub(super) async fn consume_media_on_worker(
-        &self,
-        consumer_session_key: &TransportSessionKey,
-        media_kind: MediaKind,
-        source_session_key: &TransportSessionKey,
-        source_media_id: TransportMediaId,
-        consumer_rtp_parameters: &RouterRtpParameters,
-        initial_activity: ConsumerActivity,
-    ) -> Result<TransportMediaId, TransportAdapterError> {
-        ensure_same_room_instance(consumer_session_key, source_session_key)?;
-        let relay_route =
-            self.relay_registration_workers(consumer_session_key, source_session_key)?;
-        let remote_source_control = relay_route
-            .as_ref()
-            .map(|(source_worker, consumer_worker)| {
-                source_worker.remote_source_control(consumer_worker.as_ref())
-            })
-            .transpose()?;
-        let consumer_worker = self.require_worker_for_user(consumer_session_key)?;
-        consumer_worker
-            .add_send_media(
-                consumer_session_key,
-                signaling_to_str0m_media_kind(media_kind),
-                RtcSendMediaSource {
-                    source: TransportSourceKey::new(source_session_key.clone(), source_media_id),
-                    remote_source_control,
-                },
-                consumer_rtp_parameters,
-                initial_activity.is_active(),
-            )
-            .await
-    }
-
-    pub(super) async fn apply_relay_route_effect_on_worker(
-        &self,
-        effect: &TransportRelayRouteEffect,
-    ) -> Result<(), TransportAdapterError> {
-        self.execute_relay_route_effect(effect).await
-    }
-
-    pub(super) async fn set_producer_active_on_worker(
-        &self,
-        source: &TransportSourceKey,
-        activity: ProducerActivity,
-    ) -> Result<(), TransportAdapterError> {
-        self.require_worker_for_user(source.session_key())?
-            .set_producer_active(source, activity.is_active())
-            .await
-    }
-
-    pub(super) async fn set_consumer_active_on_worker(
-        &self,
-        route: &TransportConsumerRoute,
-        activity: ConsumerActivity,
-    ) -> Result<(), TransportAdapterError> {
-        ensure_same_room_instance(route.consumer_session_key(), route.source_session_key())?;
-        self.require_worker_for_user(route.consumer_session_key())?
-            .set_consumer_active(route, activity.is_active())
-            .await
-    }
-
-    pub(super) async fn set_consumer_packet_gate_on_worker(
-        &self,
-        route: &TransportConsumerRoute,
-        packet_gate: SourcePacketGate,
-    ) -> Result<(), TransportAdapterError> {
-        ensure_same_room_instance(route.consumer_session_key(), route.source_session_key())?;
-        self.require_worker_for_user(route.consumer_session_key())?
-            .set_consumer_packet_gate(route, packet_gate)
-            .await
-    }
-
-    pub(super) async fn request_consumer_keyframe_on_worker(
-        &self,
-        route: &TransportConsumerRoute,
-    ) -> Result<(), TransportAdapterError> {
-        ensure_same_room_instance(route.consumer_session_key(), route.source_session_key())?;
-        self.require_worker_for_user(route.consumer_session_key())?
-            .request_consumer_keyframe(route)
-            .await
-    }
-
-    async fn execute_relay_route_effect(
+    pub(super) async fn execute_relay_route_effect(
         &self,
         effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
@@ -576,7 +388,7 @@ impl MediaTransport {
         self.worker_index_for_media_worker_id(session_key.media_worker_id())
     }
 
-    fn require_worker_for_user(
+    pub(super) fn require_worker_for_user(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<Arc<RtcWorker>, TransportAdapterError> {
@@ -588,7 +400,7 @@ impl MediaTransport {
         &self,
         media_worker_id: usize,
     ) -> Result<Arc<RtcWorker>, TransportAdapterError> {
-        self.worker_for_media_worker_id(media_worker_id)
+        self.worker_for_index(media_worker_id)
             .ok_or(TransportAdapterError::TransportUnavailable)
     }
 
@@ -608,8 +420,31 @@ impl MediaTransport {
         keys_by_worker
     }
 
-    fn worker_for_media_worker_id(&self, media_worker_id: usize) -> Option<Arc<RtcWorker>> {
-        self.worker_for_index(media_worker_id)
+    fn for_session_workers(
+        &self,
+        session_keys: &[TransportSessionKey],
+        mut visit: impl FnMut(&RtcWorker, &[TransportSessionKey]),
+    ) {
+        for (worker_index, worker_session_keys) in self.session_keys_by_worker(session_keys) {
+            if let Some(worker) = self.worker_for_index(worker_index) {
+                visit(worker.as_ref(), &worker_session_keys);
+            }
+        }
+    }
+
+    pub(super) fn ensure_same_room(
+        consumer_session_key: &TransportSessionKey,
+        source_session_key: &TransportSessionKey,
+    ) -> Result<(), TransportAdapterError> {
+        ensure_same_room_instance(consumer_session_key, source_session_key)
+    }
+
+    pub(super) fn require_consumer_worker_for_route(
+        &self,
+        route: &TransportConsumerRoute,
+    ) -> Result<Arc<RtcWorker>, TransportAdapterError> {
+        Self::ensure_same_room(route.consumer_session_key(), route.source_session_key())?;
+        self.require_worker_for_user(route.consumer_session_key())
     }
 
     fn worker_index_for_media_worker_id(&self, media_worker_id: usize) -> Option<usize> {
@@ -648,10 +483,10 @@ fn media_id_base_for_worker_index(worker_index: usize) -> u64 {
         .saturating_mul(MEDIA_ID_STRIDE)
 }
 
-fn signaling_to_str0m_media_kind(kind: MediaKind) -> Str0mMediaKind {
+pub(super) fn signaling_to_str0m_media_kind(kind: o_sfu_router::MediaKind) -> Str0mMediaKind {
     match kind {
-        MediaKind::Audio => Str0mMediaKind::Audio,
-        MediaKind::Video => Str0mMediaKind::Video,
+        o_sfu_router::MediaKind::Audio => Str0mMediaKind::Audio,
+        o_sfu_router::MediaKind::Video => Str0mMediaKind::Video,
     }
 }
 

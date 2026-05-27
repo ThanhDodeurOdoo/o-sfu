@@ -9,7 +9,7 @@
 use std::{net::IpAddr, sync::Arc, time::Duration};
 
 use crate::{
-    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
+    CodecPreferences, CoreOptions, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
     VideoBitrateLimits,
     runtime::{
         diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
@@ -53,6 +53,20 @@ pub struct MediaTransportConfig {
 }
 
 impl MediaTransportConfig {
+    /// Projects neutral core options into RTC transport policy.
+    #[must_use]
+    pub fn from_core_options(options: &CoreOptions) -> Self {
+        Self {
+            public_ip: options.media.public_ip,
+            bitrate_limits: options.media.bitrate_limits,
+            video_bitrate_limits: options.media.video_bitrate_limits,
+            rtc_port_range: options.media.rtc_port_range,
+            codec_flags: options.codecs.flags,
+            codec_preferences: options.codecs.preferences,
+            media_quality_interval: options.observability.media_quality_interval,
+        }
+    }
+
     /// Returns a copy scoped to one worker-owned UDP port range.
     ///
     /// This is used only during media transport construction. Callers should
@@ -69,46 +83,6 @@ impl MediaTransportConfig {
             codec_preferences: self.codec_preferences,
             media_quality_interval: self.media_quality_interval,
         }
-    }
-
-    #[must_use]
-    pub const fn public_ip(&self) -> IpAddr {
-        self.public_ip
-    }
-
-    #[must_use]
-    pub const fn max_bitrate_in(&self) -> Bitrate {
-        self.bitrate_limits.max_bitrate_in()
-    }
-
-    #[must_use]
-    pub const fn max_bitrate_out(&self) -> Bitrate {
-        self.bitrate_limits.max_bitrate_out()
-    }
-
-    #[must_use]
-    pub const fn video_bitrate_limits(&self) -> VideoBitrateLimits {
-        self.video_bitrate_limits
-    }
-
-    #[must_use]
-    pub const fn rtc_port_range(&self) -> RtcPortRange {
-        self.rtc_port_range
-    }
-
-    #[must_use]
-    pub const fn codec_flags(&self) -> MediaCodecFlags {
-        self.codec_flags
-    }
-
-    #[must_use]
-    pub const fn codec_preferences(&self) -> CodecPreferences {
-        self.codec_preferences
-    }
-
-    #[must_use]
-    pub const fn media_quality_interval(&self) -> Option<Duration> {
-        self.media_quality_interval
     }
 }
 
