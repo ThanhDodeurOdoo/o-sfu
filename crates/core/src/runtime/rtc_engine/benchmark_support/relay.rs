@@ -71,7 +71,7 @@ impl RelayPressureBenchFixture {
             if self
                 .target
                 .forward_packet(&self.state, &self.packet, self.source_transport_media_id)
-                .is_some_and(|report| report.outcome() == expected)
+                .is_some_and(|report| report.outcome == expected)
             {
                 matching_outcomes += 1;
             }

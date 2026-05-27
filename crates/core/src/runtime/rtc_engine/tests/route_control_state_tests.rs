@@ -13,12 +13,43 @@ use crate::runtime::media_transport::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource, TransportMediaId,
 };
 
-fn active_speaker_ids(state: &RouteControlState, now: Instant) -> Vec<TransportMediaId> {
-    state
+fn assert_active_speaker_ids(
+    state: &RouteControlState,
+    now: Instant,
+    expected: &[TransportMediaId],
+) {
+    let ids = state
         .active_speaker_sources(now)
         .into_iter()
         .map(ActiveSpeakerSource::transport_media_id)
-        .collect()
+        .collect::<Vec<_>>();
+    assert_eq!(ids.as_slice(), expected);
+}
+
+fn assert_single_active_speaker(
+    state: &RouteControlState,
+    now: Instant,
+    source_transport_media_id: TransportMediaId,
+    last_audio_level_dbov: Option<i8>,
+) {
+    let snapshot = state.active_speaker_sources(now);
+    assert_eq!(snapshot.len(), 1);
+    let source = &snapshot[0];
+    assert_eq!(source.transport_media_id(), source_transport_media_id);
+    assert_eq!(source.last_audio_level_dbov(), last_audio_level_dbov);
+}
+
+fn assert_single_active_speaker_diagnostic(
+    state: &RouteControlState,
+    now: Instant,
+    activity_state: ActiveSpeakerActivityState,
+    reason: ActiveSpeakerActivityReason,
+) {
+    let diagnostics = state.active_speaker_diagnostics(now);
+    assert_eq!(diagnostics.len(), 1);
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic.state(), activity_state);
+    assert_eq!(diagnostic.reason(), reason);
 }
 
 #[test]
@@ -223,28 +254,12 @@ fn route_control_vad_true_promotes_active_speaker_immediately() {
 
     assert!(state.observe_audio_activity(source_transport_media_id, Some(true), Some(-90), now));
 
-    let snapshot = state.active_speaker_sources(now);
-    assert_eq!(snapshot.len(), 1);
-    assert_eq!(
-        snapshot.first().map(|source| source.transport_media_id()),
-        Some(source_transport_media_id)
-    );
-    assert_eq!(
-        snapshot
-            .first()
-            .and_then(|source| source.last_audio_level_dbov()),
-        Some(-90)
-    );
-
-    let diagnostics = state.active_speaker_diagnostics(now);
-    assert_eq!(diagnostics.len(), 1);
-    assert_eq!(
-        diagnostics.first().map(|diagnostic| diagnostic.state()),
-        Some(ActiveSpeakerActivityState::Active)
-    );
-    assert_eq!(
-        diagnostics.first().map(|diagnostic| diagnostic.reason()),
-        Some(ActiveSpeakerActivityReason::Vad)
+    assert_single_active_speaker(&state, now, source_transport_media_id, Some(-90));
+    assert_single_active_speaker_diagnostic(
+        &state,
+        now,
+        ActiveSpeakerActivityState::Active,
+        ActiveSpeakerActivityReason::Vad,
     );
 }
 
@@ -263,10 +278,7 @@ fn route_control_vad_true_refresh_extends_deadline_without_dirtying_room_policy(
         state.next_active_speaker_deadline(refresh_at),
         Some(first_deadline + Duration::from_millis(20))
     );
-    assert_eq!(
-        active_speaker_ids(&state, refresh_at),
-        vec![source_transport_media_id]
-    );
+    assert_active_speaker_ids(&state, refresh_at, &[source_transport_media_id]);
 }
 
 #[test]
@@ -287,9 +299,10 @@ fn route_control_vad_false_inside_hold_window_does_not_dirty_room_policy() {
         state.effective_packet_gate(source_transport_media_id),
         Some(PacketLayerGate::Open)
     );
-    assert_eq!(
-        active_speaker_ids(&state, now + Duration::from_millis(100)),
-        vec![source_transport_media_id]
+    assert_active_speaker_ids(
+        &state,
+        now + Duration::from_millis(100),
+        &[source_transport_media_id],
     );
 }
 
@@ -307,12 +320,13 @@ fn route_control_newer_speaker_order_change_dirties_room_policy() {
         None,
         now + Duration::from_millis(10)
     ));
-    assert_eq!(
-        active_speaker_ids(&state, now + Duration::from_millis(10)),
-        vec![
+    assert_active_speaker_ids(
+        &state,
+        now + Duration::from_millis(10),
+        &[
             second_source_transport_media_id,
-            first_source_transport_media_id
-        ]
+            first_source_transport_media_id,
+        ],
     );
 
     assert!(state.observe_audio_activity(
@@ -321,12 +335,13 @@ fn route_control_newer_speaker_order_change_dirties_room_policy() {
         None,
         now + Duration::from_millis(20)
     ));
-    assert_eq!(
-        active_speaker_ids(&state, now + Duration::from_millis(20)),
-        vec![
+    assert_active_speaker_ids(
+        &state,
+        now + Duration::from_millis(20),
+        &[
             first_source_transport_media_id,
-            second_source_transport_media_id
-        ]
+            second_source_transport_media_id,
+        ],
     );
 }
 
@@ -366,14 +381,11 @@ fn route_control_vad_false_overrides_loud_audio_level() {
         state.effective_packet_gate(source_transport_media_id),
         Some(PacketLayerGate::Block)
     );
-    let diagnostics = state.active_speaker_diagnostics(now);
-    assert_eq!(
-        diagnostics.first().map(|diagnostic| diagnostic.state()),
-        Some(ActiveSpeakerActivityState::Blocked)
-    );
-    assert_eq!(
-        diagnostics.first().map(|diagnostic| diagnostic.reason()),
-        Some(ActiveSpeakerActivityReason::VadFalse)
+    assert_single_active_speaker_diagnostic(
+        &state,
+        now,
+        ActiveSpeakerActivityState::Blocked,
+        ActiveSpeakerActivityReason::VadFalse,
     );
 }
 
@@ -444,20 +456,13 @@ fn route_control_transport_audio_policy_uses_repeated_audio_level_fallback() {
         now + Duration::from_millis(20),
     );
 
-    let snapshot = state.active_speaker_sources(now + Duration::from_millis(20));
-    assert_eq!(snapshot.len(), 1);
-    assert_eq!(
-        snapshot.first().map(|source| source.transport_media_id()),
-        Some(source_transport_media_id)
-    );
-    let diagnostics = state.active_speaker_diagnostics(now + Duration::from_millis(20));
-    assert_eq!(
-        diagnostics.first().map(|diagnostic| diagnostic.state()),
-        Some(ActiveSpeakerActivityState::Active)
-    );
-    assert_eq!(
-        diagnostics.first().map(|diagnostic| diagnostic.reason()),
-        Some(ActiveSpeakerActivityReason::AudioLevel)
+    let observed_at = now + Duration::from_millis(20);
+    assert_single_active_speaker(&state, observed_at, source_transport_media_id, Some(-24));
+    assert_single_active_speaker_diagnostic(
+        &state,
+        observed_at,
+        ActiveSpeakerActivityState::Active,
+        ActiveSpeakerActivityReason::AudioLevel,
     );
 }
 
@@ -485,14 +490,11 @@ fn route_control_transport_audio_policy_rejects_persistent_low_noise() {
         state.effective_packet_gate(source_transport_media_id),
         Some(PacketLayerGate::Block)
     );
-    let diagnostics = state.active_speaker_diagnostics(now + Duration::from_millis(40));
-    assert_eq!(
-        diagnostics.first().map(|diagnostic| diagnostic.state()),
-        Some(ActiveSpeakerActivityState::Blocked)
-    );
-    assert_eq!(
-        diagnostics.first().map(|diagnostic| diagnostic.reason()),
-        Some(ActiveSpeakerActivityReason::LowNoise)
+    assert_single_active_speaker_diagnostic(
+        &state,
+        now + Duration::from_millis(40),
+        ActiveSpeakerActivityState::Blocked,
+        ActiveSpeakerActivityReason::LowNoise,
     );
 }
 
@@ -506,14 +508,11 @@ fn route_control_active_speaker_expiry_is_observable() {
 
     let expired_at = now + Duration::from_millis(300);
     assert!(state.active_speaker_sources(expired_at).is_empty());
-    let diagnostics = state.active_speaker_diagnostics(expired_at);
-    assert_eq!(
-        diagnostics.first().map(|diagnostic| diagnostic.state()),
-        Some(ActiveSpeakerActivityState::RecentlyExpired)
-    );
-    assert_eq!(
-        diagnostics.first().map(|diagnostic| diagnostic.reason()),
-        Some(ActiveSpeakerActivityReason::Expired)
+    assert_single_active_speaker_diagnostic(
+        &state,
+        expired_at,
+        ActiveSpeakerActivityState::RecentlyExpired,
+        ActiveSpeakerActivityReason::Expired,
     );
 }
 
@@ -527,12 +526,13 @@ fn route_control_active_speaker_order_is_deterministic_for_equal_observations() 
     state.observe_audio_activity(second_source_transport_media_id, Some(true), None, now);
     state.observe_audio_activity(first_source_transport_media_id, Some(true), None, now);
 
-    assert_eq!(
-        active_speaker_ids(&state, now),
-        vec![
+    assert_active_speaker_ids(
+        &state,
+        now,
+        &[
             first_source_transport_media_id,
-            second_source_transport_media_id
-        ]
+            second_source_transport_media_id,
+        ],
     );
 }
 

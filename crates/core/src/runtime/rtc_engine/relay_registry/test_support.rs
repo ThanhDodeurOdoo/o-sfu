@@ -24,14 +24,14 @@ impl RelayPacketMailbox {
 
 #[cfg(test)]
 impl ActiveRelayTarget {
-    pub fn forward_packet(
+    pub fn forward_packet_outcome(
         &self,
         state: &PacketLoopState,
         packet: &ForwardedPacket,
         source_transport_media_id: TransportMediaId,
     ) -> Option<RelayEnqueueOutcome> {
-        self.target()
+        self.target
             .forward_packet(state, packet, source_transport_media_id)
-            .map(super::RelayEnqueueReport::outcome)
+            .map(|report| report.outcome)
     }
 }

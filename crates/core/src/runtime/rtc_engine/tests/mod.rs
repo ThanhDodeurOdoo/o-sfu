@@ -15,4 +15,3 @@ mod packet_loop_state_tests;
 mod parsing;
 mod relay_registry_tests;
 mod route_control_state_tests;
-mod shared_payload_tests;

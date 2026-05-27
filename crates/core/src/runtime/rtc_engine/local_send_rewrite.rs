@@ -188,15 +188,15 @@ impl ConsumerStream {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ProjectedIdentity {
     /// the continuous sequence number for the packet
-    seq_no: SeqNo,
+    pub(super) seq_no: SeqNo,
     /// the continuous timestamp for the packet
-    rtp_timestamp: u32,
+    pub(super) rtp_timestamp: u32,
     /// smooth vp8 identifiers if the packet is vp8
-    vp8_payload: Vp8PayloadIdentity,
+    pub(super) vp8_payload: Vp8PayloadIdentity,
     /// the ssrc that was active before this packet
-    previous_source_ssrc: Option<Ssrc>,
+    pub(super) previous_source_ssrc: Option<Ssrc>,
     /// true if this packet is the first one from a new source
-    source_switched: bool,
+    pub(super) source_switched: bool,
 }
 
 /// vp8-specific identifiers that need smoothing
@@ -206,28 +206,6 @@ pub(super) struct Vp8PayloadIdentity {
     pub(super) picture_id: Option<u16>,
     /// temporal layer index used for layer decoding
     pub(super) tl0_pic_idx: Option<u8>,
-}
-
-impl ProjectedIdentity {
-    pub(super) const fn seq_no(self) -> SeqNo {
-        self.seq_no
-    }
-
-    pub(super) const fn rtp_timestamp(self) -> u32 {
-        self.rtp_timestamp
-    }
-
-    pub(super) const fn vp8_payload(self) -> Vp8PayloadIdentity {
-        self.vp8_payload
-    }
-
-    pub(super) const fn previous_source_ssrc(self) -> Option<Ssrc> {
-        self.previous_source_ssrc
-    }
-
-    pub(super) const fn source_switched(self) -> bool {
-        self.source_switched
-    }
 }
 
 /// calculates the next sequential identity for a packet
@@ -304,8 +282,8 @@ mod tests {
         );
 
         assert_eq!(source_seq.roc(), 2);
-        assert_eq!(first.seq_no().roc(), 0);
-        assert!(first.seq_no().is_next(second.seq_no()));
+        assert_eq!(first.seq_no.roc(), 0);
+        assert!(first.seq_no.is_next(second.seq_no));
     }
 
     #[test]
@@ -336,9 +314,9 @@ mod tests {
             Vp8PayloadIdentity::default(),
         );
 
-        assert_eq!(first.seq_no().roc(), 0);
-        assert!(first.seq_no().is_next(second.seq_no()));
-        assert_eq!(other.seq_no().roc(), 0);
+        assert_eq!(first.seq_no.roc(), 0);
+        assert!(first.seq_no.is_next(second.seq_no));
+        assert_eq!(other.seq_no.roc(), 0);
     }
 
     #[test]
@@ -371,9 +349,9 @@ mod tests {
             1234,
             Vp8PayloadIdentity::default(),
         );
-        assert_eq!(first.seq_no().roc(), 0);
-        assert_eq!(reset.seq_no().roc(), 0);
-        assert_eq!(reset.seq_no().roc(), first.seq_no().roc());
+        assert_eq!(first.seq_no.roc(), 0);
+        assert_eq!(reset.seq_no.roc(), 0);
+        assert_eq!(reset.seq_no.roc(), first.seq_no.roc());
     }
 
     #[test]
@@ -415,10 +393,10 @@ mod tests {
             Vp8PayloadIdentity::default(),
         );
 
-        assert_eq!(first.rtp_timestamp(), 10_000);
-        assert_eq!(second.rtp_timestamp(), 13_000);
-        assert!(!first.source_switched());
-        assert!(!second.source_switched());
+        assert_eq!(first.rtp_timestamp, 10_000);
+        assert_eq!(second.rtp_timestamp, 13_000);
+        assert!(!first.source_switched);
+        assert!(!second.source_switched);
     }
 
     #[test]
@@ -448,11 +426,11 @@ mod tests {
             Vp8PayloadIdentity::default(),
         );
 
-        assert_eq!(low.rtp_timestamp(), 90_000);
-        assert_eq!(high.rtp_timestamp(), 90_001);
-        assert_eq!(high_next.rtp_timestamp(), 93_001);
-        assert!(high.source_switched());
-        assert_eq!(high.previous_source_ssrc(), Some(Ssrc::from(111)));
+        assert_eq!(low.rtp_timestamp, 90_000);
+        assert_eq!(high.rtp_timestamp, 90_001);
+        assert_eq!(high_next.rtp_timestamp, 93_001);
+        assert!(high.source_switched);
+        assert_eq!(high.previous_source_ssrc, Some(Ssrc::from(111)));
     }
 
     #[test]
@@ -491,11 +469,11 @@ mod tests {
             },
         );
 
-        assert_eq!(low.vp8_payload().picture_id, Some(32_760));
-        assert_eq!(low.vp8_payload().tl0_pic_idx, Some(250));
-        assert_eq!(high.vp8_payload().picture_id, Some(32_761));
-        assert_eq!(high.vp8_payload().tl0_pic_idx, Some(251));
-        assert_eq!(high_next.vp8_payload().picture_id, Some(32_763));
-        assert_eq!(high_next.vp8_payload().tl0_pic_idx, Some(252));
+        assert_eq!(low.vp8_payload.picture_id, Some(32_760));
+        assert_eq!(low.vp8_payload.tl0_pic_idx, Some(250));
+        assert_eq!(high.vp8_payload.picture_id, Some(32_761));
+        assert_eq!(high.vp8_payload.tl0_pic_idx, Some(251));
+        assert_eq!(high_next.vp8_payload.picture_id, Some(32_763));
+        assert_eq!(high_next.vp8_payload.tl0_pic_idx, Some(252));
     }
 }

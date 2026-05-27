@@ -20,7 +20,6 @@ pub(super) use tokio::time::sleep;
 
 pub(super) use super::super::{
     RtcSendMediaSource, RtcWorker,
-    shared_payload::SharedPayload,
     test_support::{DebugPacketGate, test_transport_session_key},
 };
 pub(super) use crate::{

@@ -315,7 +315,7 @@ impl RelayPacketDestination {
 }
 
 pub(super) const fn relay_enqueue_result(report: RelayEnqueueReport) -> RtcRelayEnqueueResult {
-    match report.outcome() {
+    match report.outcome {
         RelayEnqueueOutcome::Enqueued => RtcRelayEnqueueResult::IntraNodeEnqueued,
         RelayEnqueueOutcome::Overloaded => RtcRelayEnqueueResult::IntraNodeOverloaded,
         RelayEnqueueOutcome::Closed => RtcRelayEnqueueResult::IntraNodeClosed,

@@ -48,7 +48,7 @@ fn worker_local_relay_targets_forward_packets_through_registered_mailboxes() {
     if let Some(relay_targets) = relay_targets {
         assert_eq!(relay_targets.len(), 1);
         if let Some(relay_target) = relay_targets.first() {
-            relay_target.forward_packet(&state, &packet, source_transport_media_id);
+            relay_target.forward_packet_outcome(&state, &packet, source_transport_media_id);
         }
     }
 
@@ -90,7 +90,7 @@ fn worker_local_relay_targets_keep_multiple_target_mailboxes_per_source() {
     if let Some(relay_targets) = relay_targets {
         assert_eq!(relay_targets.len(), 2);
         for relay_target in relay_targets {
-            relay_target.forward_packet(&state, &packet, source_transport_media_id);
+            relay_target.forward_packet_outcome(&state, &packet, source_transport_media_id);
         }
     }
 
@@ -219,25 +219,18 @@ fn worker_local_relay_targets_report_overload_when_a_bounded_mailbox_is_full() {
     let source_transport_media_id = TransportMediaId::new(42);
     let session_key = test_transport_session_key(36, 0, 37, UserId::Integer(38));
     let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
+    let state = PacketLoopState::default();
 
     assert_eq!(
         mailbox
-            .forward_packet(
-                &PacketLoopState::default(),
-                &packet,
-                source_transport_media_id
-            )
-            .map(super::super::relay_registry::RelayEnqueueReport::outcome),
+            .forward_packet(&state, &packet, source_transport_media_id)
+            .map(|report| report.outcome),
         Some(RelayEnqueueOutcome::Enqueued)
     );
     assert_eq!(
         mailbox
-            .forward_packet(
-                &PacketLoopState::default(),
-                &packet,
-                source_transport_media_id
-            )
-            .map(super::super::relay_registry::RelayEnqueueReport::outcome),
+            .forward_packet(&state, &packet, source_transport_media_id)
+            .map(|report| report.outcome),
         Some(RelayEnqueueOutcome::Overloaded)
     );
 }
