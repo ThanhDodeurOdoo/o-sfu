@@ -19,7 +19,9 @@ pub use o_sfu_model::{PeerSnapshot, RecordingOptions, WebSocketCloseCode};
 
 pub use self::{
     codec::{ClientEnvelope, EnvelopeDecodeError, ServerEnvelope},
-    envelope::{Envelope, EnvelopeBatch, RequestId},
+    envelope::{
+        Envelope, EnvelopeBatch, EnvelopeBatchDecodeError, RequestId, decode_envelope_batch,
+    },
     request::{ClientMessage, ClientRequest, ServerRequest},
     response::{ClientResponse, ServerMessage, ServerResponse},
 };

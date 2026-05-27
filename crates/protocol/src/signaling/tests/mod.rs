@@ -1,10 +1,11 @@
 pub(super) use super::{
     AuthPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse, Envelope,
-    EnvelopeDecodeError, NegotiationUploadEncoding, NegotiationUploadSlot, PeerInfoPayload,
+    EnvelopeBatchDecodeError, NegotiationUploadEncoding, NegotiationUploadSlot, PeerInfoPayload,
     PeerLeftPayload, PeerSnapshot, RecordingActionResult, RecordingOptions, RequestId,
     ServerBroadcastPayload, ServerEnvelope, ServerMessage, ServerRequest, ServerResponse,
     SessionDescriptionPayload, SourceDescriptor, SourceEncodingDescriptor, StreamIntentPayload,
     SubscribePayload, TrackBinding, UploadLayerPolicyRole, WebSocketCloseCode, WelcomePayload,
+    decode_envelope_batch,
 };
 pub(super) use crate::shared::{
     AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, StopCode, StreamType,

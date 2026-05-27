@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use super::{
     ClientMessage, ClientRequest, ClientResponse, Envelope, RequestId, ServerMessage,
-    ServerRequest, ServerResponse, tags,
+    ServerRequest, ServerResponse, envelope::EnvelopeRoute, tags,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,7 +34,6 @@ pub enum ServerEnvelope {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnvelopeDecodeError {
-    InvalidRoutingMetadata,
     UnknownTag(String),
     InvalidPayload(String),
     UnexpectedPayload(String),
@@ -75,18 +74,16 @@ impl ClientEnvelope {
     ///
     /// # Errors
     ///
-    /// Returns an error when the routing metadata is invalid, the tag is unknown,
-    /// or the payload does not match the declared message shape.
+    /// Returns an error when the tag is unknown or the payload does not match
+    /// the declared message shape.
     pub fn decode(envelope: Envelope) -> Result<Self, EnvelopeDecodeError> {
-        match (envelope.request_id, envelope.response_to) {
-            (Some(_), Some(_)) => Err(EnvelopeDecodeError::InvalidRoutingMetadata),
-            (None, Some(response_to)) => {
-                decode_client_response(response_to, &envelope.tag, envelope.payload)
+        let (tag, payload, route) = envelope.into_parts();
+        match route {
+            EnvelopeRoute::Message => decode_client_message(&tag, payload),
+            EnvelopeRoute::Request(request_id) => decode_client_request(request_id, &tag, payload),
+            EnvelopeRoute::Response(response_to) => {
+                decode_client_response(response_to, &tag, payload)
             }
-            (Some(request_id), None) => {
-                decode_client_request(request_id, &envelope.tag, envelope.payload)
-            }
-            (None, None) => decode_client_message(&envelope.tag, envelope.payload),
         }
     }
 }
@@ -115,18 +112,16 @@ impl ServerEnvelope {
     ///
     /// # Errors
     ///
-    /// Returns an error when the routing metadata is invalid, the tag is unknown,
-    /// or the payload does not match the declared message shape.
+    /// Returns an error when the tag is unknown or the payload does not match
+    /// the declared message shape.
     pub fn decode(envelope: Envelope) -> Result<Self, EnvelopeDecodeError> {
-        match (envelope.request_id, envelope.response_to) {
-            (Some(_), Some(_)) => Err(EnvelopeDecodeError::InvalidRoutingMetadata),
-            (None, Some(response_to)) => {
-                decode_server_response(response_to, &envelope.tag, envelope.payload)
+        let (tag, payload, route) = envelope.into_parts();
+        match route {
+            EnvelopeRoute::Message => decode_server_message(&tag, payload),
+            EnvelopeRoute::Request(request_id) => decode_server_request(request_id, &tag, payload),
+            EnvelopeRoute::Response(response_to) => {
+                decode_server_response(response_to, &tag, payload)
             }
-            (Some(request_id), None) => {
-                decode_server_request(request_id, &envelope.tag, envelope.payload)
-            }
-            (None, None) => decode_server_message(&envelope.tag, envelope.payload),
         }
     }
 }

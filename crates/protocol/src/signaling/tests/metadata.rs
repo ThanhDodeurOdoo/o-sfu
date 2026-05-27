@@ -19,12 +19,8 @@ fn protocol_close_codes_follow_phase_nine_contract() {
 
 #[test]
 fn protocol_decode_rejects_envelopes_with_both_request_and_response_ids() {
-    let decoded = ClientEnvelope::decode(Envelope {
-        tag: String::from("ping"),
-        payload: None,
-        request_id: Some(RequestId::new("1")),
-        response_to: Some(RequestId::new("2")),
-    });
-
-    assert_eq!(decoded, Err(EnvelopeDecodeError::InvalidRoutingMetadata));
+    assert_eq!(
+        decode_envelope_batch(r#"[{"t":"ping","q":"1","r":"2"}]"#, 1),
+        Err(EnvelopeBatchDecodeError::InvalidRoutingMetadata)
+    );
 }

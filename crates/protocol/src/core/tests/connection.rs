@@ -143,12 +143,7 @@ fn protocol_core_rejects_malformed_batch_without_partial_state() -> serde_json::
     let welcome = ServerEnvelope::Message(ServerMessage::Welcome(sample_welcome_payload()))
         .into_envelope()?;
     let mut batch = vec![welcome];
-    batch.push(Envelope {
-        tag: String::from("unknown-server-tag"),
-        payload: None,
-        request_id: None,
-        response_to: None,
-    });
+    batch.push(Envelope::message("unknown-server-tag", None));
     let frame = serde_json::to_string(&batch)?;
 
     let commands = core.on_ws_message(&frame);
