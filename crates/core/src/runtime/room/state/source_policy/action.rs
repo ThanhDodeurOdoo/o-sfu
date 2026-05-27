@@ -70,17 +70,17 @@ impl BudgetSolverOutcomes {
 /// replacement or cleanup events cannot write selector state onto a newer route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::room) struct ConsumerPacketSelectionUpdate {
-    pub(in crate::runtime::room) route: ConsumerRouteTransportRef,
-    pub(in crate::runtime::room) source_id: PublishedSourceId,
-    pub(in crate::runtime::room) selector: SourceSelector,
-    pub(in crate::runtime::room) policy_pause_reason: Option<PolicyPauseReason>,
-    pub(in crate::runtime::room) budget: ReceiverVideoBudgetDiagnostics,
-    pub(in crate::runtime::room) outcomes: BudgetSolverOutcomes,
-    pub(in crate::runtime::room) pressure_observations: u8,
-    pub(in crate::runtime::room) upgrade_observations: u8,
-    pub(in crate::runtime::room) packet_gate: Option<SourcePacketGate>,
-    pub(in crate::runtime::room) route_activity_update: bool,
-    pub(in crate::runtime::room) request_keyframe: bool,
+    pub route: ConsumerRouteTransportRef,
+    pub source_id: PublishedSourceId,
+    pub selector: SourceSelector,
+    pub policy_pause_reason: Option<PolicyPauseReason>,
+    pub budget: ReceiverVideoBudgetDiagnostics,
+    pub outcomes: BudgetSolverOutcomes,
+    pub pressure_observations: u8,
+    pub upgrade_observations: u8,
+    pub packet_gate: Option<SourcePacketGate>,
+    pub route_activity_update: bool,
+    pub request_keyframe: bool,
 }
 
 impl ConsumerPacketSelectionUpdate {

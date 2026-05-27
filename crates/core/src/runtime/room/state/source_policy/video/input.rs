@@ -25,8 +25,8 @@ use crate::{
 
 #[derive(Debug)]
 pub(in crate::runtime::room) struct ReceiverVideoPolicyInput<'a> {
-    pub(in crate::runtime::room) routes: Vec<ReceiverVideoRouteInput<'a>>,
-    pub(in crate::runtime::room) max_video_downloads_per_receiver: usize,
+    pub routes: Vec<ReceiverVideoRouteInput<'a>>,
+    pub max_video_downloads_per_receiver: usize,
 }
 
 impl<'a> ReceiverVideoPolicyInput<'a> {
@@ -92,14 +92,14 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
 
 #[derive(Debug, Clone)]
 pub(in crate::runtime::room) struct ReceiverVideoRouteInput<'a> {
-    pub(in crate::runtime::room) user_count: usize,
-    pub(in crate::runtime::room) source: &'a PublishedSourceDescriptor,
-    pub(in crate::runtime::room) transport_ref: ConsumerRouteTransportRef,
-    pub(in crate::runtime::room) current_selection: ConsumerSourceSelection,
-    pub(in crate::runtime::room) layout_intent: ReceiverVideoLayoutIntent,
-    pub(in crate::runtime::room) visible_scalable_route_count: usize,
-    pub(in crate::runtime::room) active_speaker_rank: Option<usize>,
-    pub(in crate::runtime::room) receiver_bandwidth: Option<Bitrate>,
+    pub user_count: usize,
+    pub source: &'a PublishedSourceDescriptor,
+    pub transport_ref: ConsumerRouteTransportRef,
+    pub current_selection: ConsumerSourceSelection,
+    pub layout_intent: ReceiverVideoLayoutIntent,
+    pub visible_scalable_route_count: usize,
+    pub active_speaker_rank: Option<usize>,
+    pub receiver_bandwidth: Option<Bitrate>,
 }
 
 impl ReceiverVideoRouteInput<'_> {

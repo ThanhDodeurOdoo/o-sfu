@@ -7,9 +7,7 @@ use str0m::{
 
 use super::{ForwardedPacket, ForwardedPacketData, ForwardedPacketSource, ForwardedRelayRtpData};
 #[cfg(test)]
-use crate::runtime::media_transport::TransportMediaId;
-#[cfg(test)]
-use crate::runtime::rtc_engine::slots::SessionHandle;
+use crate::runtime::{media_transport::TransportMediaId, rtc_engine::slots::SessionHandle};
 use crate::runtime::{
     media_transport::TransportSessionKey, rtc_engine::shared_payload::SharedPayload,
 };

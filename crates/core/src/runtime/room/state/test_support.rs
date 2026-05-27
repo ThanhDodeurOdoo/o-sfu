@@ -1,10 +1,8 @@
 use o_sfu_router::RouterId;
+#[cfg(test)]
+use {super::media::ConsumerKey, crate::runtime::source_model::PublishedSourceId};
 
-#[cfg(test)]
-use super::media::ConsumerKey;
 use super::{media::SourceTransportMediaIndexEntry, shared::RoomState};
-#[cfg(test)]
-use crate::runtime::source_model::PublishedSourceId;
 use crate::runtime::{
     ConnectionId, TestSourceKind, UserId,
     media_transport::TransportMediaId,

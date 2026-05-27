@@ -53,7 +53,7 @@ pub(in crate::runtime::room) struct RoomEffectContext<'a> {
 
 impl<'a> RoomEffectContext<'a> {
     /// build the production context for normal runtime room work
-    pub(in crate::runtime::room) const fn runtime(media_transport: &'a MediaTransport) -> Self {
+    pub const fn runtime(media_transport: &'a MediaTransport) -> Self {
         Self {
             media_transport: Some(media_transport),
             cleanup_media_transport: Some(media_transport),
@@ -62,9 +62,7 @@ impl<'a> RoomEffectContext<'a> {
 
     /// build a context that preserves room state effects without mutating transport cleanup state
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(in crate::runtime::room) const fn state_only(
-        media_transport: Option<&'a MediaTransport>,
-    ) -> Self {
+    pub const fn state_only(media_transport: Option<&'a MediaTransport>) -> Self {
         Self {
             media_transport,
             cleanup_media_transport: None,
@@ -83,10 +81,7 @@ pub(in crate::runtime::room) struct MediaCountDelta {
 }
 
 impl MediaCountDelta {
-    pub(in crate::runtime::room) const fn new(
-        before: RoomMediaCounts,
-        after: RoomMediaCounts,
-    ) -> Self {
+    pub const fn new(before: RoomMediaCounts, after: RoomMediaCounts) -> Self {
         Self { before, after }
     }
 
@@ -151,7 +146,7 @@ pub(in crate::runtime::room) struct TransportUserCleanup {
 }
 
 impl TransportUserCleanup {
-    pub(in crate::runtime::room) fn new(user_id: UserId, connection_id: ConnectionId) -> Self {
+    pub fn new(user_id: UserId, connection_id: ConnectionId) -> Self {
         Self {
             user_id,
             connection_id,
@@ -192,45 +187,34 @@ pub(in crate::runtime::room) struct RoomEffectExecution {
 }
 
 impl RoomEffectExecution {
-    pub(in crate::runtime::room) const fn cleanup(self) -> TransportEffectOutcome {
+    pub const fn cleanup(self) -> TransportEffectOutcome {
         self.cleanup
     }
 
-    pub(in crate::runtime::room) const fn relay_effects_applied(self) -> bool {
+    pub const fn relay_effects_applied(self) -> bool {
         self.relay_effects_applied
     }
 }
 
 impl RoomEffectBatch {
     /// start an empty batch for one committed transition
-    pub(in crate::runtime::room) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
     /// record the active-user gauge delta that belongs to this transition
-    pub(in crate::runtime::room) fn with_user_count_delta(
-        mut self,
-        before: usize,
-        after: usize,
-    ) -> Self {
+    pub fn with_user_count_delta(mut self, before: usize, after: usize) -> Self {
         self.mutation.user_count_delta = Some(UserCountDelta { before, after });
         self
     }
 
     /// record a media-count gauge delta from state snapshots
-    pub(in crate::runtime::room) fn with_media_count_delta(
-        self,
-        before: RoomMediaCounts,
-        after: RoomMediaCounts,
-    ) -> Self {
+    pub fn with_media_count_delta(self, before: RoomMediaCounts, after: RoomMediaCounts) -> Self {
         self.with_media_count_delta_value(MediaCountDelta::new(before, after))
     }
 
     /// record a media-count delta only when the caller planned one
-    pub(in crate::runtime::room) fn with_optional_media_count_delta(
-        mut self,
-        delta: Option<MediaCountDelta>,
-    ) -> Self {
+    pub fn with_optional_media_count_delta(mut self, delta: Option<MediaCountDelta>) -> Self {
         if let Some(delta) = delta {
             self.mutation.media_count_deltas.push(delta);
         }
@@ -238,16 +222,13 @@ impl RoomEffectBatch {
     }
 
     /// record a prebuilt media-count delta
-    pub(in crate::runtime::room) fn with_media_count_delta_value(
-        mut self,
-        delta: MediaCountDelta,
-    ) -> Self {
+    pub fn with_media_count_delta_value(mut self, delta: MediaCountDelta) -> Self {
         self.mutation.media_count_deltas.push(delta);
         self
     }
 
     /// queue relay route effects captured from room topology
-    pub(in crate::runtime::room) fn with_relay_effects(
+    pub fn with_relay_effects(
         mut self,
         effects: impl IntoIterator<Item = RelayRouteEffect>,
     ) -> Self {
@@ -256,7 +237,7 @@ impl RoomEffectBatch {
     }
 
     /// queue detached media removals under cleanup retry ownership
-    pub(in crate::runtime::room) fn with_transport_removals(
+    pub fn with_transport_removals(
         mut self,
         removals: impl IntoIterator<Item = TransportMediaRemoval>,
     ) -> Self {
@@ -265,34 +246,25 @@ impl RoomEffectBatch {
     }
 
     /// queue a transport user close after room state released ownership
-    pub(in crate::runtime::room) fn with_transport_user_close(
-        mut self,
-        cleanup: TransportUserCleanup,
-    ) -> Self {
+    pub fn with_transport_user_close(mut self, cleanup: TransportUserCleanup) -> Self {
         self.transport_user_closes.push(cleanup);
         self
     }
 
     /// record the source-policy consequence of the committed transition
-    pub(in crate::runtime::room) fn with_source_policy_event(
-        mut self,
-        event: SourcePolicyEvent,
-    ) -> Self {
+    pub fn with_source_policy_event(mut self, event: SourcePolicyEvent) -> Self {
         self.mutation.source_policy_event = Some(event);
         self
     }
 
     /// queue lifecycle notifications captured by room state
-    pub(in crate::runtime::room) fn with_lifecycle_effects(
-        mut self,
-        effects: LifecycleEffects,
-    ) -> Self {
+    pub fn with_lifecycle_effects(mut self, effects: LifecycleEffects) -> Self {
         self.lifecycle_effects.push(effects);
         self
     }
 
     /// register a user in diagnostics after the join transition commits
-    pub(in crate::runtime::room) fn register_diagnostics_user(mut self, user_id: UserId) -> Self {
+    pub fn register_diagnostics_user(mut self, user_id: UserId) -> Self {
         self.mutation
             .diagnostics
             .push(DiagnosticsEffect::RegisterUser(user_id));
@@ -300,10 +272,7 @@ impl RoomEffectBatch {
     }
 
     /// record a diagnostics event in the caller-selected position
-    pub(in crate::runtime::room) fn record_diagnostics(
-        mut self,
-        diagnostics: DiagnosticsEventData,
-    ) -> Self {
+    pub fn record_diagnostics(mut self, diagnostics: DiagnosticsEventData) -> Self {
         self.mutation
             .diagnostics
             .push(DiagnosticsEffect::Record(diagnostics));
@@ -311,7 +280,7 @@ impl RoomEffectBatch {
     }
 
     /// forget a user in diagnostics after the room session is gone
-    pub(in crate::runtime::room) fn forget_diagnostics_user(mut self, user_id: UserId) -> Self {
+    pub fn forget_diagnostics_user(mut self, user_id: UserId) -> Self {
         self.mutation
             .diagnostics
             .push(DiagnosticsEffect::ForgetUser(user_id));
@@ -319,7 +288,7 @@ impl RoomEffectBatch {
     }
 
     /// enqueue a room event request after transport-facing effects have run
-    pub(in crate::runtime::room) fn send_outbound_request(
+    pub fn send_outbound_request(
         mut self,
         sender: OutboundSender,
         request: RoomEventRequest,
@@ -348,11 +317,7 @@ impl RoomEffectBatch {
     /// bootstrap callers may still need to release pending consumer state
     /// cleanup failures stay owned by cleanup.rs retry state and are surfaced
     /// through the returned cleanup outcome
-    pub(in crate::runtime::room) async fn execute(
-        self,
-        room: &Room,
-        context: RoomEffectContext<'_>,
-    ) -> RoomEffectExecution {
+    pub async fn execute(self, room: &Room, context: RoomEffectContext<'_>) -> RoomEffectExecution {
         let Self {
             mutation,
             relay_effects,

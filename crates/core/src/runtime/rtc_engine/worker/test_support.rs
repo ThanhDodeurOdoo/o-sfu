@@ -1,18 +1,33 @@
-#[cfg(test)]
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-#[cfg(test)]
-use std::sync::Arc;
 use std::time::Instant;
 
 use str0m::media::Mid;
-
 #[cfg(test)]
-use super::super::test_support::{
-    RecordIncomingMediaProbe, RememberRemoteAddrProbe, SessionStreamRxSsrcProbe,
-    SessionStreamTxSsrcProbe,
+use {
+    super::{
+        super::{
+            state::PacketLoopState,
+            test_support::{
+                RecordIncomingMediaProbe, RememberRemoteAddrProbe, SessionStreamRxSsrcProbe,
+                SessionStreamTxSsrcProbe,
+            },
+        },
+        WorkerCommandContext,
+    },
+    crate::{
+        Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
+        runtime::{
+            diagnostics::DiagnosticsStore,
+            media_transport::{MediaTransportConfig, MediaTransportDeps, SourcePolicySignal},
+            metrics::RuntimeMetrics,
+            packet_sink_registry::RoomPacketSinkRegistry,
+        },
+    },
+    std::{
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+        sync::Arc,
+    },
 };
-#[cfg(test)]
-use super::{super::state::PacketLoopState, WorkerCommandContext};
+
 use super::{
     super::{
         state::TransportSessionHealth,
@@ -26,16 +41,6 @@ use super::{
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::runtime::media_transport::TransportMediaId;
 use crate::runtime::{media_transport::TransportSessionKey, metrics};
-#[cfg(test)]
-use crate::{
-    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
-    runtime::{
-        diagnostics::DiagnosticsStore,
-        media_transport::{MediaTransportConfig, MediaTransportDeps, SourcePolicySignal},
-        metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
-    },
-};
 
 impl RtcWorker {
     #[cfg(test)]

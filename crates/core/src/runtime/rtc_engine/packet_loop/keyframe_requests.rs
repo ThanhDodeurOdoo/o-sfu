@@ -53,11 +53,7 @@ impl PendingKeyframeRequest {
     }
 
     #[cfg(feature = "internal-benchmarks")]
-    pub(in crate::runtime::rtc_engine) const fn benchmark_request(
-        mid: Mid,
-        rid: Option<Rid>,
-        kind: KeyframeRequestKind,
-    ) -> Self {
+    pub const fn benchmark_request(mid: Mid, rid: Option<Rid>, kind: KeyframeRequestKind) -> Self {
         Self {
             consumer_mid: mid,
             consumer_rid: rid,

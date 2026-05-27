@@ -16,22 +16,18 @@ pub use catalog::{
     SubscribePayload, TrackBinding, UploadLayerPolicyRole, WelcomePayload,
 };
 pub use o_sfu_model::{PeerSnapshot, RecordingOptions, WebSocketCloseCode};
-#[cfg(feature = "ts-bindings")]
-pub(crate) use request::{
-    CLIENT_MESSAGE_ENVELOPES, CLIENT_REQUEST_ENVELOPES, SERVER_REQUEST_ENVELOPES,
-};
-#[cfg(feature = "ts-bindings")]
-pub(crate) use response::{
-    CLIENT_RESPONSE_ENVELOPES, SERVER_MESSAGE_ENVELOPES, SERVER_RESPONSE_ENVELOPES,
-};
-#[cfg(feature = "ts-bindings")]
-pub(crate) use tags::WIRE_TAGS;
 
 pub use self::{
     codec::{ClientEnvelope, EnvelopeDecodeError, ServerEnvelope},
     envelope::{Envelope, EnvelopeBatch, RequestId},
     request::{ClientMessage, ClientRequest, ServerRequest},
     response::{ClientResponse, ServerMessage, ServerResponse},
+};
+#[cfg(feature = "ts-bindings")]
+pub(crate) use self::{
+    request::{CLIENT_MESSAGE_ENVELOPES, CLIENT_REQUEST_ENVELOPES, SERVER_REQUEST_ENVELOPES},
+    response::{CLIENT_RESPONSE_ENVELOPES, SERVER_MESSAGE_ENVELOPES, SERVER_RESPONSE_ENVELOPES},
+    tags::WIRE_TAGS,
 };
 
 #[cfg(feature = "ts-bindings")]

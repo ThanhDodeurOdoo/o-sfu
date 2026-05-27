@@ -98,7 +98,7 @@ pub(in crate::runtime::rtc_engine) struct PacketRouteDatagram<'a> {
 }
 
 impl<'a> PacketRouteDatagram<'a> {
-    pub(in crate::runtime::rtc_engine) const fn new(
+    pub const fn new(
         source_addr: SocketAddr,
         candidate_addr: SocketAddr,
         packet: &'a [u8],

@@ -1,16 +1,12 @@
-#[cfg(test)]
-use std::fmt;
 use std::sync::Arc;
 
 #[cfg(test)]
-use tokio::sync::Barrier;
+use {crate::runtime::sync::lock_unpoisoned, std::fmt, tokio::sync::Barrier};
 
 use super::{
     super::{RoomAdmissionPolicy, RoomRuntimePolicy, rtp_capabilities::router_rtp_capabilities},
     RoomManager, RoomManagerConfig, RoomManagerDeps,
 };
-#[cfg(test)]
-use crate::runtime::sync::lock_unpoisoned;
 use crate::{
     MediaCodecFlags, RoomMediaLimits, RuntimeFeatureFlags,
     runtime::{
@@ -101,7 +97,7 @@ pub(in crate::runtime::room) struct JoinPlacementTestGate {
 
 #[cfg(test)]
 impl JoinPlacementTestGate {
-    pub(in crate::runtime::room) fn new(expected: usize) -> Self {
+    pub fn new(expected: usize) -> Self {
         Self {
             planned: Barrier::new(expected + 1),
             release: Barrier::new(expected + 1),
@@ -113,11 +109,11 @@ impl JoinPlacementTestGate {
         self.release.wait().await;
     }
 
-    pub(in crate::runtime::room) async fn hold_all_planned(&self) {
+    pub async fn hold_all_planned(&self) {
         self.planned.wait().await;
     }
 
-    pub(in crate::runtime::room) async fn release_all(&self) {
+    pub async fn release_all(&self) {
         self.release.wait().await;
     }
 }
