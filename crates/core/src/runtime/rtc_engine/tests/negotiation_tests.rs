@@ -20,16 +20,16 @@ use crate::{
     },
 };
 
+const CHROME_OFFER_AUDIO_ONLY: &str = include_str!("../testdata/chrome_offer_audio_only.sdp");
+const FIREFOX_OFFER_AUDIO_ONLY: &str = include_str!("../testdata/firefox_offer_audio_only.sdp");
+const SAFARI_DATA_CHANNEL_OFFER: &str = include_str!("../testdata/safari_datachannel_offer.sdp");
+
 #[tokio::test]
 async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 34, UserId::Integer(34));
 
-    let offer = adapter.create_initial_session_offer(&session_key).await;
-    assert!(offer.is_ok());
-    let Some(offer) = offer.ok() else {
-        return;
-    };
+    let offer = expect_initial_offer(&adapter, &session_key).await;
     let offer_sdp = offer.into_sdp();
     assert!(offer_sdp.contains("m=audio"));
     assert!(offer_sdp.contains("m=video"));
@@ -44,13 +44,13 @@ async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
             )
             .is_some()
     );
-    let answer = remote.sdp_api().accept_offer(
-        SdpOffer::from_sdp_string(&offer_sdp).expect("adapter should return parseable SDP offer"),
-    );
-    assert!(answer.is_ok());
-    let Some(answer) = answer.ok() else {
-        return;
-    };
+    let answer = remote
+        .sdp_api()
+        .accept_offer(
+            SdpOffer::from_sdp_string(&offer_sdp)
+                .expect("adapter should return parseable SDP offer"),
+        )
+        .expect("remote RTC should accept the adapter offer");
 
     assert!(
         adapter
@@ -61,6 +61,53 @@ async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
     assert_eq!(
         adapter.create_initial_session_offer(&session_key).await,
         Err(TransportAdapterError::UnsupportedFeature)
+    );
+}
+
+#[test]
+fn captured_browser_offer_fixtures_stay_str0m_parse_compatible() {
+    for (name, offer_sdp, expected_media_line) in [
+        (
+            "chrome audio offer",
+            CHROME_OFFER_AUDIO_ONLY,
+            "m=audio 9 UDP/TLS/RTP/SAVPF",
+        ),
+        (
+            "firefox audio offer",
+            FIREFOX_OFFER_AUDIO_ONLY,
+            "m=audio 9 UDP/TLS/RTP/SAVPF",
+        ),
+        (
+            "safari datachannel offer",
+            SAFARI_DATA_CHANNEL_OFFER,
+            "m=application 9 UDP/DTLS/SCTP webrtc-datachannel",
+        ),
+    ] {
+        let offer = SdpOffer::from_sdp_string(offer_sdp)
+            .unwrap_or_else(|error| panic!("{name} should parse through str0m: {error:?}"));
+        assert_eq!(
+            offer.media_lines.len(),
+            1,
+            "{name} should expose one captured media line"
+        );
+        assert!(
+            offer.to_sdp_string().contains(expected_media_line),
+            "{name} should preserve the expected media line"
+        );
+    }
+}
+
+#[tokio::test]
+async fn rtc_session_answer_rejects_invalid_sdp() {
+    let adapter = RtcWorker::default();
+    let session_key = transport_key(1, 40, UserId::Integer(40));
+    let _offer = expect_initial_offer(&adapter, &session_key).await;
+
+    assert_eq!(
+        adapter
+            .apply_session_answer(&session_key, "not an SDP answer")
+            .await,
+        Err(TransportAdapterError::InvalidInput)
     );
 }
 
@@ -228,10 +275,8 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 38, UserId::Integer(38));
 
-    let offer_sdp = adapter
-        .create_initial_session_offer(&session_key)
+    let offer_sdp = expect_initial_offer(&adapter, &session_key)
         .await
-        .expect("initial offer should succeed")
         .into_sdp();
     let mut remote = reduced_capability_probe_rtc();
     remote
@@ -1154,10 +1199,7 @@ async fn complete_initial_offer_answer(
     session_key: &TransportSessionKey,
     port: u16,
 ) -> Rtc {
-    let initial_offer = adapter
-        .create_initial_session_offer(session_key)
-        .await
-        .expect("initial offer should succeed");
+    let initial_offer = expect_initial_offer(adapter, session_key).await;
     let mut remote = build_remote_rtc(port);
     apply_offer_answer(adapter, session_key, &mut remote, initial_offer.into_sdp()).await;
     remote

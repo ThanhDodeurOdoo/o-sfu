@@ -4,12 +4,13 @@ use tokio::time::timeout;
 
 use super::fixtures::*;
 
-fn first_candidate_port(offer_sdp: &str) -> Option<u16> {
+fn expect_first_candidate_port(offer_sdp: &str) -> u16 {
     offer_sdp
         .lines()
         .find_map(|line| line.trim().strip_prefix("a=candidate:"))
         .and_then(|candidate| candidate.split_whitespace().nth(5))
         .and_then(|port| port.parse::<u16>().ok())
+        .expect("offer should expose at least one parseable candidate line")
 }
 
 #[tokio::test]
@@ -18,12 +19,10 @@ async fn rtc_initial_session_offer_starts_packet_loop() {
     let session_key = transport_key(1, 15, UserId::Integer(15));
 
     assert!(!adapter.packet_loop_started());
-    assert!(
-        adapter
-            .create_initial_session_offer(&session_key)
-            .await
-            .is_ok()
-    );
+    adapter
+        .create_initial_session_offer(&session_key)
+        .await
+        .expect("initial offer should start the packet loop");
     sleep(Duration::from_millis(5)).await;
     assert!(adapter.packet_loop_started());
 }
@@ -44,9 +43,7 @@ async fn rtc_initial_session_offer_contains_real_ice_and_dtls_parameters() {
     assert!(offer_sdp.contains("a=setup:actpass"));
     assert!(offer_sdp.contains("a=fingerprint:sha-256 "));
 
-    let Some(candidate_port) = first_candidate_port(&offer_sdp) else {
-        panic!("offer should expose at least one candidate line");
-    };
+    let candidate_port = expect_first_candidate_port(&offer_sdp);
     assert!((40_000..=49_999).contains(&candidate_port));
 }
 

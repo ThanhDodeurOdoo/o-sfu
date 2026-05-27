@@ -111,6 +111,27 @@ fn set_test_consumer_ready(state: &mut RoomState, user_id: &UserId) -> Connectio
     connection_id
 }
 
+fn set_test_publisher_ready(state: &mut RoomState, user_id: &UserId) -> ConnectionId {
+    let connection_id = state
+        .user_connection_id(user_id)
+        .expect("publisher should have a connection id");
+    assert!(
+        state
+            .set_client_rtp_capabilities_for_test(
+                user_id,
+                connection_id,
+                &sample_client_rtp_capabilities(),
+            )
+            .session_present
+    );
+    assert!(
+        state
+            .set_transport_ready_for_test(user_id, connection_id, UserTransportReady::Publish,)
+            .session_present
+    );
+    connection_id
+}
+
 fn test_upload_encodings() -> Vec<SessionUploadEncoding> {
     vec![
         SessionUploadEncoding {
@@ -658,23 +679,7 @@ fn commit_published_track_populates_transport_media_owner_index() {
     let user_id = UserId::Integer(1);
 
     join_test_user(&mut state, &user_id);
-    let connection_id = state
-        .user_connection_id(&user_id)
-        .expect("publisher should have a connection id");
-    assert!(
-        state
-            .set_client_rtp_capabilities_for_test(
-                &user_id,
-                connection_id,
-                &sample_client_rtp_capabilities(),
-            )
-            .session_present
-    );
-    assert!(
-        state
-            .set_transport_ready_for_test(&user_id, connection_id, UserTransportReady::Publish,)
-            .session_present
-    );
+    let connection_id = set_test_publisher_ready(&mut state, &user_id);
 
     let consumable_rtp_parameters = derive_consumable_rtp_parameters(
         &sample_video_rtp_parameters(None, 42_000),
@@ -733,23 +738,7 @@ fn commit_published_track_registers_all_source_encodings() {
     let user_id = UserId::Integer(1);
 
     join_test_user(&mut state, &user_id);
-    let connection_id = state
-        .user_connection_id(&user_id)
-        .expect("publisher should have a connection id");
-    assert!(
-        state
-            .set_client_rtp_capabilities_for_test(
-                &user_id,
-                connection_id,
-                &sample_client_rtp_capabilities(),
-            )
-            .session_present
-    );
-    assert!(
-        state
-            .set_transport_ready_for_test(&user_id, connection_id, UserTransportReady::Publish,)
-            .session_present
-    );
+    let connection_id = set_test_publisher_ready(&mut state, &user_id);
 
     let consumable_rtp_parameters = derive_consumable_rtp_parameters(
         &sample_simulcast_video_rtp_parameters(Some("camera-0")),
@@ -829,23 +818,7 @@ fn unpublish_track_clears_transport_media_owner_index() {
     let user_id = UserId::Integer(1);
 
     join_test_user(&mut state, &user_id);
-    let connection_id = state
-        .user_connection_id(&user_id)
-        .expect("publisher should have a connection id");
-    assert!(
-        state
-            .set_client_rtp_capabilities_for_test(
-                &user_id,
-                connection_id,
-                &sample_client_rtp_capabilities(),
-            )
-            .session_present
-    );
-    assert!(
-        state
-            .set_transport_ready_for_test(&user_id, connection_id, UserTransportReady::Publish,)
-            .session_present
-    );
+    let connection_id = set_test_publisher_ready(&mut state, &user_id);
 
     let consumable_rtp_parameters = derive_consumable_rtp_parameters(
         &sample_video_rtp_parameters(None, 43_000),
@@ -897,23 +870,7 @@ fn unpublish_track_repairs_missing_topology_router_and_clears_state() {
     let user_id = UserId::Integer(1);
 
     join_test_user(&mut state, &user_id);
-    let connection_id = state
-        .user_connection_id(&user_id)
-        .expect("publisher should have a connection id");
-    assert!(
-        state
-            .set_client_rtp_capabilities_for_test(
-                &user_id,
-                connection_id,
-                &sample_client_rtp_capabilities(),
-            )
-            .session_present
-    );
-    assert!(
-        state
-            .set_transport_ready_for_test(&user_id, connection_id, UserTransportReady::Publish,)
-            .session_present
-    );
+    let connection_id = set_test_publisher_ready(&mut state, &user_id);
 
     let consumable_rtp_parameters = derive_consumable_rtp_parameters(
         &sample_video_rtp_parameters(None, 43_000),

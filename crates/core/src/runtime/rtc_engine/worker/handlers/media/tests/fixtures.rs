@@ -17,7 +17,8 @@ use crate::{
     runtime::{
         UserId,
         media_transport::{
-            TransportConsumerRoute, TransportMediaId, TransportSessionKey, TransportSourceKey,
+            TransportConsumerRoute, TransportMediaId, TransportResult, TransportSessionKey,
+            TransportSourceKey,
         },
         metrics::{RtcMetricsRecorder, RuntimeMetrics},
         rtc_engine::{
@@ -41,6 +42,21 @@ const CONSUMER_MID: &str = "cam-down";
 
 pub(super) fn drain_ready_sessions(state: &mut PacketLoopState) -> Vec<TransportSessionKey> {
     collect_ready_session_keys(state, Instant::now())
+}
+
+pub(super) fn response_channel<T>() -> (
+    oneshot::Sender<TransportResult<T>>,
+    oneshot::Receiver<TransportResult<T>>,
+) {
+    oneshot::channel()
+}
+
+pub(super) fn expect_response<T>(
+    response: oneshot::Receiver<TransportResult<T>>,
+) -> TransportResult<T> {
+    response.blocking_recv().unwrap_or_else(|error| {
+        panic!("worker response channel should deliver a result: {error:?}")
+    })
 }
 
 pub(super) fn prepare_source_session(
@@ -89,17 +105,15 @@ pub(super) fn add_source_rid_stream(
     ssrc: u32,
     rid: Rid,
 ) {
-    assert!(state.users.contains_key(source_session));
-    if let Some(source_session_state) = state.users.get_mut(source_session) {
-        source_session_state.rtc.direct_api().expect_stream_rx(
-            Ssrc::from(ssrc),
-            None,
-            source_mid,
-            Some(rid),
-        );
-    } else {
+    let Some(source_session_state) = state.users.get_mut(source_session) else {
         panic!("source session should exist before adding RID stream");
-    }
+    };
+    source_session_state.rtc.direct_api().expect_stream_rx(
+        Ssrc::from(ssrc),
+        None,
+        source_mid,
+        Some(rid),
+    );
 }
 
 pub(super) fn assert_consumer_packet_gate(
@@ -176,7 +190,7 @@ pub(super) fn request_consumer_keyframe(
         Instant::now(),
         Some(response_tx),
     );
-    assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
+    assert_eq!(expect_response(response_rx), Ok(()));
 }
 
 pub(super) fn register_remote_source(

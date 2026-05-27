@@ -8,11 +8,11 @@ use str0m::media::Mid;
 
 #[cfg(test)]
 use super::super::test_support::{
-    ActiveRelayTargetCountProbe, HasAnyRemoteAddrSessionProbe, RecordIncomingMediaProbe,
-    RelayTargetCountProbe, RememberRemoteAddrProbe, RemoteAddrOwnerProbe, ResolveMidProbe,
-    SessionMaxBitrateInProbe, SessionMaxBitrateOutProbe, SessionStreamRxSsrcProbe,
+    RecordIncomingMediaProbe, RememberRemoteAddrProbe, SessionStreamRxSsrcProbe,
     SessionStreamTxSsrcProbe,
 };
+#[cfg(test)]
+use super::{super::state::PacketLoopState, WorkerCommandContext};
 use super::{
     super::{
         state::TransportSessionHealth,
@@ -71,8 +71,17 @@ impl RtcWorker {
     }
 
     #[cfg(test)]
+    async fn read_debug_worker<F, Output>(&self, read: F) -> Option<Output>
+    where
+        F: FnOnce(&PacketLoopState, &WorkerCommandContext<'_>) -> Output + Send + 'static,
+        Output: Send + 'static,
+    {
+        self.probe_debug_worker(read).await
+    }
+
+    #[cfg(test)]
     pub async fn debug_resolve_mid(&self, transport_media_id: TransportMediaId) -> Option<Mid> {
-        self.probe_debug_worker(ResolveMidProbe { transport_media_id })
+        self.read_debug_worker(move |state, _context| state.resolve_mid(transport_media_id))
             .await
             .flatten()
     }
@@ -82,16 +91,29 @@ impl RtcWorker {
         &self,
         source_addr: SocketAddr,
     ) -> Option<TransportSessionKey> {
-        self.probe_debug_worker(RemoteAddrOwnerProbe { source_addr })
-            .await
-            .flatten()
+        self.read_debug_worker(move |_state, context| {
+            context.snapshot_state.lock().ok().and_then(|snapshot| {
+                snapshot
+                    .remote_addr_demux
+                    .session_key_for_remote_addr(source_addr)
+                    .cloned()
+            })
+        })
+        .await
+        .flatten()
     }
 
     #[cfg(test)]
     pub async fn debug_has_any_remote_addr_session(&self) -> bool {
-        self.probe_debug_worker(HasAnyRemoteAddrSessionProbe)
-            .await
-            .unwrap_or(false)
+        self.read_debug_worker(|_state, context| {
+            context
+                .snapshot_state
+                .lock()
+                .ok()
+                .is_some_and(|snapshot| !snapshot.remote_addr_demux.is_empty())
+        })
+        .await
+        .unwrap_or(false)
     }
 
     #[cfg(test)]
@@ -141,8 +163,12 @@ impl RtcWorker {
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<Bitrate> {
-        self.probe_debug_worker(SessionMaxBitrateInProbe {
-            session_key: session_key.clone(),
+        let session_key = session_key.clone();
+        self.read_debug_worker(move |state, _context| {
+            state
+                .users
+                .get(&session_key)
+                .and_then(|session_state| session_state.max_bitrate_in)
         })
         .await
         .flatten()
@@ -153,8 +179,12 @@ impl RtcWorker {
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<Bitrate> {
-        self.probe_debug_worker(SessionMaxBitrateOutProbe {
-            session_key: session_key.clone(),
+        let session_key = session_key.clone();
+        self.read_debug_worker(move |state, _context| {
+            state
+                .users
+                .get(&session_key)
+                .and_then(|session_state| session_state.max_bitrate_out)
         })
         .await
         .flatten()
@@ -240,8 +270,8 @@ impl RtcWorker {
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> usize {
-        self.probe_debug_worker(RelayTargetCountProbe {
-            source_transport_media_id,
+        self.read_debug_worker(move |state, _context| {
+            state.relay_target_count_for_source(source_transport_media_id)
         })
         .await
         .unwrap_or(0)
@@ -252,8 +282,8 @@ impl RtcWorker {
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> usize {
-        self.probe_debug_worker(ActiveRelayTargetCountProbe {
-            source_transport_media_id,
+        self.read_debug_worker(move |state, _context| {
+            state.active_relay_target_count_for_source(source_transport_media_id)
         })
         .await
         .unwrap_or(0)

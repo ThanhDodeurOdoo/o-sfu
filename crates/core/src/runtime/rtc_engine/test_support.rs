@@ -1,3 +1,6 @@
+#[cfg(any(test, feature = "internal-benchmarks"))]
+#[path = "test_support/packets.rs"]
+mod packets;
 #[cfg(any(test, feature = "testing-transport"))]
 #[path = "test_support/probe.rs"]
 mod probe;
@@ -8,15 +11,14 @@ mod route_graph;
 #[cfg(test)]
 use std::time::Instant;
 
+#[cfg(test)]
+pub(in crate::runtime::rtc_engine) use packets::sample_rtp_packet;
+#[cfg(feature = "internal-benchmarks")]
+pub(in crate::runtime::rtc_engine) use packets::sample_rtp_packet_with_len;
+#[cfg(any(test, feature = "internal-benchmarks"))]
+pub(in crate::runtime::rtc_engine) use packets::serialize_stun_message;
 #[cfg(any(test, feature = "testing-transport"))]
 pub use probe::DebugRouteEntry;
-#[cfg(test)]
-pub(super) use probe::{
-    ActiveRelayTargetCountProbe, HasAnyRemoteAddrSessionProbe, RecordIncomingMediaProbe,
-    RelayTargetCountProbe, RememberRemoteAddrProbe, RemoteAddrOwnerProbe, ResolveMidProbe,
-    SessionMaxBitrateInProbe, SessionMaxBitrateOutProbe, SessionStreamRxSsrcProbe,
-    SessionStreamTxSsrcProbe,
-};
 #[cfg(test)]
 pub use probe::{DebugPacketGate, DebugRouteDestination};
 #[cfg(any(test, feature = "testing-transport"))]
@@ -26,6 +28,11 @@ pub(super) use probe::{
 };
 #[cfg(any(test, feature = "testing-transport"))]
 pub(super) use probe::{ObserveAudioActivityProbe, RouteEntryByMediaIdProbe, RouteEntryProbe};
+#[cfg(test)]
+pub(super) use probe::{
+    RecordIncomingMediaProbe, RememberRemoteAddrProbe, SessionStreamRxSsrcProbe,
+    SessionStreamTxSsrcProbe,
+};
 #[cfg(any(test, feature = "internal-benchmarks"))]
 pub(in crate::runtime::rtc_engine) use route_graph::MediaWorkerScenario;
 

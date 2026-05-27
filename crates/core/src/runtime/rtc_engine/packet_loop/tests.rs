@@ -17,7 +17,6 @@ use std::{
 };
 
 use str0m::{
-    crypto::from_feature_flags,
     ice::{StunMessage, TransId},
     media::{KeyframeRequestKind, MediaKind, Mid, Rid},
     rtp::Ssrc,
@@ -75,7 +74,7 @@ use crate::{
                 sample_already_relayed_packet, sample_forwarded_packet,
                 sample_forwarded_packet_with_audio_activity, sample_forwarded_packet_with_rid,
                 sample_forwarded_packet_without_mid, sample_local_forwarded_packet,
-                test_transport_session_key,
+                sample_rtp_packet, serialize_stun_message, test_transport_session_key,
             },
         },
     },
@@ -445,39 +444,10 @@ fn packet_loop_config_for_test() -> PacketLoopConfig {
     }
 }
 
-fn valid_rtp_packet(sequence_number: u16, ssrc: u32) -> Vec<u8> {
-    let sequence_number = sequence_number.to_be_bytes();
-    let ssrc = ssrc.to_be_bytes();
-    vec![
-        0x80,
-        96,
-        sequence_number[0],
-        sequence_number[1],
-        0,
-        0,
-        0,
-        1,
-        ssrc[0],
-        ssrc[1],
-        ssrc[2],
-        ssrc[3],
-    ]
-}
-
-fn serialize_stun_message(message: &StunMessage<'_>, password: Option<&[u8]>) -> Option<Vec<u8>> {
-    let mut buffer = [0_u8; 1024];
-    let crypto_provider = from_feature_flags();
-    let sha1_hmac = |key: &[u8], payloads: &[&[u8]]| {
-        crypto_provider.sha1_hmac_provider.sha1_hmac(key, payloads)
-    };
-    let len = message.to_bytes(password, &mut buffer, sha1_hmac).ok()?;
-    buffer.get(..len).map(<[u8]>::to_vec)
-}
-
 #[test]
 fn recent_miss_cache_skips_repeated_scans_for_the_same_source() {
     let mut harness = IngressRoutingHarness::new(45_001, 45_000);
-    let packet = valid_rtp_packet(1, 11);
+    let packet = sample_rtp_packet(1, 11);
 
     harness.route(&packet);
     harness.route(&packet);
@@ -493,7 +463,7 @@ fn recent_miss_cache_skips_repeated_scans_for_the_same_source() {
 #[test]
 fn recent_miss_cache_clears_on_topology_change() {
     let mut harness = IngressRoutingHarness::new(45_011, 45_010);
-    let packet = valid_rtp_packet(2, 22);
+    let packet = sample_rtp_packet(2, 22);
 
     harness.route(&packet);
     harness.demux.clear_on_topology_change();
@@ -510,8 +480,8 @@ fn recent_miss_cache_clears_on_topology_change() {
 fn recent_miss_cache_does_not_skip_different_packets_from_the_same_source() {
     let mut harness = IngressRoutingHarness::new(45_021, 45_020);
 
-    harness.route(&valid_rtp_packet(3, 33));
-    harness.route(&valid_rtp_packet(4, 44));
+    harness.route(&sample_rtp_packet(3, 33));
+    harness.route(&sample_rtp_packet(4, 44));
 
     assert_eq!(harness.demux.fallback_attempts(), 2);
     let snapshot = harness.metrics.snapshot();
@@ -533,7 +503,7 @@ fn source_rate_limiter_bounds_varied_unknown_source_misses() {
         (9, 99),
         (10, 110),
     ] {
-        harness.route(&valid_rtp_packet(sequence, ssrc));
+        harness.route(&sample_rtp_packet(sequence, ssrc));
     }
 
     assert_eq!(harness.demux.fallback_attempts(), 4);
@@ -693,7 +663,7 @@ fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static 
         );
     }
 
-    harness.route(&valid_rtp_packet(11, 111));
+    harness.route(&sample_rtp_packet(11, 111));
 
     assert!(
         harness

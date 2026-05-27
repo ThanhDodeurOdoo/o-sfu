@@ -688,19 +688,9 @@ mod tests {
     use str0m::ice::{StunMessage, TransId};
 
     use super::{PacketIndexProbe, packet_index_probe};
+    use crate::runtime::rtc_engine::test_support::serialize_stun_message;
 
     const STUN_TEST_PASSWORD: &[u8] = b"probe-password";
-
-    fn serialize_stun_message(
-        message: &StunMessage<'_>,
-        password: Option<&[u8]>,
-    ) -> Option<Vec<u8>> {
-        let mut buffer = [0_u8; 1024];
-        let len = message
-            .to_bytes(password, &mut buffer, |_key, _payloads| [0_u8; 20])
-            .ok()?;
-        buffer.get(..len).map(<[u8]>::to_vec)
-    }
 
     #[test]
     fn packet_index_probe_extracts_the_local_ice_ufrag_from_binding_requests() {

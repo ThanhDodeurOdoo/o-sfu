@@ -3,7 +3,6 @@ use std::{
     sync::atomic::{AtomicU16, Ordering},
 };
 pub(super) use std::{
-    net::{IpAddr, Ipv4Addr},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -26,18 +25,16 @@ pub(super) use super::super::{
 };
 use crate::runtime::room::user_negotiation::{UserNegotiationUpdate, UserTransportReady};
 pub(super) use crate::{
-    Bitrate, MediaCodecFlags, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
-    RollbackStagedPublishOutcome, RoomMediaLimits, RtcPortRange, SessionBitrateLimits,
-    SessionNegotiationOutcome, SubscriptionUpdateOutcome, UnpublishOutcome,
+    PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
+    RollbackStagedPublishOutcome, RoomMediaLimits, RtcPortRange, SessionNegotiationOutcome,
+    SubscriptionUpdateOutcome, UnpublishOutcome,
     runtime::{
         ConnectionId, TestSourceKind, UserId, UserPermissions, VideoLayoutIntent,
-        diagnostics::DiagnosticsStore,
         media_transport::{
-            AppliedSessionAnswer, MediaTransport, MediaTransportConfig, MediaTransportDeps,
-            TransportMediaId,
+            AppliedSessionAnswer, MediaTransport, TransportMediaId,
+            test_support::test_media_transport_builder,
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
-        packet_sink_registry::RoomPacketSinkRegistry,
         source_model::{
             SourceSubscriptionIntent, UserStreamId,
             test_support::{
@@ -83,24 +80,7 @@ pub(super) fn test_sender() -> (UserOutboundSender, UserOutboundReceiver) {
 pub(super) fn real_adapter() -> MediaTransport {
     let port_start = NEXT_RTC_TEST_PORT.fetch_add(100, Ordering::Relaxed);
     let port_end = port_start.saturating_add(99);
-    match MediaTransport::builder()
-        .transport_config(MediaTransportConfig {
-            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(
-                Bitrate::from_mbps(8),
-                Bitrate::from_mbps(10),
-            ),
-            video_bitrate_limits: crate::VideoBitrateLimits::default(),
-            rtc_port_range: RtcPortRange::new(port_start, port_end),
-            codec_flags: MediaCodecFlags::default(),
-            codec_preferences: crate::CodecPreferences::default(),
-            media_quality_interval: None,
-        })
-        .deps(MediaTransportDeps {
-            diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
-            metrics: Arc::new(RuntimeMetrics::default()),
-        })
+    match test_media_transport_builder(RtcPortRange::new(port_start, port_end))
         .worker_count(4)
         .build()
     {

@@ -1,7 +1,4 @@
-pub(super) use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    time::Instant,
-};
+pub(super) use std::{net::SocketAddr, time::Instant};
 
 pub(super) use o_sfu_router::{
     MediaKind,
@@ -11,18 +8,16 @@ pub(super) use str0m::{Candidate, Rtc, change::SdpOffer};
 
 pub(super) use super::super::{api::NegotiatedPublish, fixtures::*};
 pub(super) use crate::{
-    Bitrate, MediaCodecFlags, RoomMediaLimits, RtcPortRange, SessionBitrateLimits,
+    RoomMediaLimits, RtcPortRange,
     runtime::{
         diagnostics::{
             DiagnosticsPolicyPauseReason, DiagnosticsRouteState, DiagnosticsSourceSelector,
-            DiagnosticsStore, DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
+            DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
         },
         media_transport::{
-            MediaTransportConfig, MediaTransportDeps, SessionOffer, TransportMediaId,
-            TransportSessionKey,
+            SessionOffer, TransportMediaId, TransportSessionKey,
+            test_support::test_media_transport_builder,
         },
-        metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
         room::Room,
     },
 };
@@ -319,24 +314,7 @@ pub(super) async fn settle_refresh_offer(
     reason = "the RTC room test fixture uses a fixed valid configuration and should fail loudly if it stops being valid"
 )]
 pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
-    match MediaTransport::builder()
-        .transport_config(MediaTransportConfig {
-            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(
-                Bitrate::from_mbps(8),
-                Bitrate::from_mbps(10),
-            ),
-            video_bitrate_limits: crate::VideoBitrateLimits::default(),
-            rtc_port_range: RtcPortRange::new(46_200, 46_299),
-            codec_flags: MediaCodecFlags::default(),
-            codec_preferences: crate::CodecPreferences::default(),
-            media_quality_interval: None,
-        })
-        .deps(MediaTransportDeps {
-            diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
-            metrics: Arc::new(RuntimeMetrics::default()),
-        })
+    match test_media_transport_builder(RtcPortRange::new(46_200, 46_299))
         .worker_count(1)
         .build()
     {

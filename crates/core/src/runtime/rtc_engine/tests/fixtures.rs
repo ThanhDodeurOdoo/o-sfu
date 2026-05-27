@@ -27,8 +27,8 @@ pub(super) use crate::{
     runtime::{
         UserId,
         media_transport::{
-            ActiveSpeakerSource, TransportAdapterError, TransportConsumerRoute, TransportMediaId,
-            TransportSessionKey, TransportSourceKey,
+            ActiveSpeakerSource, SessionOffer, TransportAdapterError, TransportConsumerRoute,
+            TransportMediaId, TransportSessionKey, TransportSourceKey,
         },
         metrics::test_support::RuntimeMetricsSnapshotTestExt,
     },
@@ -106,4 +106,14 @@ pub(super) fn rtc_engine_with_codec_policy(
     RtcWorker::test_builder()
         .codec_policy(codec_flags, codec_preferences)
         .build()
+}
+
+pub(super) async fn expect_initial_offer(
+    adapter: &RtcWorker,
+    session_key: &TransportSessionKey,
+) -> SessionOffer {
+    adapter
+        .create_initial_session_offer(session_key)
+        .await
+        .expect("initial offer should succeed")
 }
