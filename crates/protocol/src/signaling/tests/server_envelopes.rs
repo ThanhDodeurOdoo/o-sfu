@@ -118,9 +118,9 @@ fn server_push_messages_round_trip() -> serde_json::Result<()> {
 
 #[test]
 fn protocol_server_welcome_message_decodes_without_routing_metadata() {
-    let decoded = ServerEnvelope::decode(Envelope {
-        tag: String::from("welcome"),
-        payload: Some(json!({
+    let decoded = ServerEnvelope::decode(Envelope::message(
+        "welcome",
+        Some(json!({
             "features": {
                 "rtc": true,
                 "transcription": false,
@@ -137,9 +137,7 @@ fn protocol_server_welcome_message_decodes_without_routing_metadata() {
                 },
             }],
         })),
-        request_id: None,
-        response_to: None,
-    });
+    ));
 
     assert_eq!(
         decoded,

@@ -24,14 +24,13 @@ fn protocol_client_auth_message_round_trips_to_wire_envelope() -> serde_json::Re
 
 #[test]
 fn protocol_offer_response_decodes_with_response_id() {
-    let decoded = ClientEnvelope::decode(Envelope {
-        tag: String::from("offer"),
-        payload: Some(json!({
+    let decoded = ClientEnvelope::decode(Envelope::response(
+        "offer",
+        RequestId::new("1"),
+        Some(json!({
             "sdp": "v=0\r\n",
         })),
-        request_id: None,
-        response_to: Some(RequestId::new("1")),
-    });
+    ));
 
     assert_eq!(
         decoded,
@@ -47,17 +46,15 @@ fn protocol_offer_response_decodes_with_response_id() {
 
 #[test]
 fn protocol_subscribe_message_decodes_flat_download_state_shape() {
-    let decoded = ClientEnvelope::decode(Envelope {
-        tag: String::from("subscribe"),
-        payload: Some(json!({
+    let decoded = ClientEnvelope::decode(Envelope::message(
+        "subscribe",
+        Some(json!({
             "sessionId": 7,
             "audio": true,
             "camera": false,
             "cameraLayout": "pinned",
         })),
-        request_id: None,
-        response_to: None,
-    });
+    ));
 
     assert_eq!(
         decoded,

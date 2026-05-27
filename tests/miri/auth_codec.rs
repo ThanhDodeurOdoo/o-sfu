@@ -1,7 +1,7 @@
-//! covers untrusted boundaris:
-//! JWT parsing and verification, websocket batch decoding and signaling envelope
-//! translation.
-//! serde, base64, and crypto internals are places we could catch UB with miri
+//! covers untrusted boundaries:
+//! jwt parsing and verification, websocket batch decoding and signaling envelope
+//! translation
+//! serde, base64 and crypto internals are places we could catch UB with miri
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use o_sfu::{
@@ -15,7 +15,7 @@ use o_sfu::{
     },
 };
 use o_sfu_protocol::wire::{
-    ClientEnvelope, ClientMessage, ClientResponse, DownloadStates, Envelope, EnvelopeDecodeError,
+    ClientEnvelope, ClientMessage, ClientResponse, DownloadStates, EnvelopeDecodeError,
     PeerInfoPayload, RecordingActionResult, RequestId, ServerEnvelope, ServerMessage,
     ServerResponse, SessionDescriptionPayload, StreamIntentPayload, StreamType, SubscribePayload,
     UserId, UserInfo, UserPermissions,
@@ -54,10 +54,6 @@ fn mutate_signature(token: &str) -> Option<String> {
     *last = if *last == 'A' { 'B' } else { 'A' };
     *signature = chars.into_iter().collect();
     Some(parts.join("."))
-}
-
-fn encode_batch(envelopes: &[Envelope]) -> Option<String> {
-    serde_json::to_string(envelopes).ok()
 }
 
 #[test]
@@ -189,56 +185,21 @@ fn decode_client_batch_rejects_oversized_frame_before_json_decode() {
 
 #[test]
 fn decode_client_batch_classifies_invalid_and_unsupported_inputs() {
-    let unknown_tag = encode_batch(&[Envelope {
-        tag: "not-a-real-message".to_owned(),
-        payload: Some(serde_json::json!({})),
-        request_id: None,
-        response_to: None,
-    }]);
-    assert_eq!(unknown_tag.as_ref().map(|_| ()), Some(()));
-    let Some(unknown_tag) = unknown_tag else {
-        return;
-    };
-
-    let invalid_routing = encode_batch(&[Envelope {
-        tag: "info".to_owned(),
-        payload: Some(serde_json::json!({})),
-        request_id: Some(RequestId::new("1")),
-        response_to: Some(RequestId::new("2")),
-    }]);
-    assert_eq!(invalid_routing.as_ref().map(|_| ()), Some(()));
-    let Some(invalid_routing) = invalid_routing else {
-        return;
-    };
-
-    let missing_payload = encode_batch(&[Envelope {
-        tag: "broadcast".to_owned(),
-        payload: None,
-        request_id: None,
-        response_to: None,
-    }]);
-    assert_eq!(missing_payload.as_ref().map(|_| ()), Some(()));
-    let Some(missing_payload) = missing_payload else {
-        return;
-    };
-
     let cases = [
         (
-            unknown_tag,
+            r#"[{"t":"not-a-real-message","p":{}}]"#,
             Err(ClientBatchDecodeError::InvalidEnvelope(
                 EnvelopeDecodeError::UnknownTag("not-a-real-message".to_owned()),
             )),
             ClientBatchDecodeFailureKind::UnsupportedFeature,
         ),
         (
-            invalid_routing,
-            Err(ClientBatchDecodeError::InvalidEnvelope(
-                EnvelopeDecodeError::InvalidRoutingMetadata,
-            )),
+            r#"[{"t":"info","p":{},"q":"1","r":"2"}]"#,
+            Err(ClientBatchDecodeError::InvalidRoutingMetadata),
             ClientBatchDecodeFailureKind::InvalidInput,
         ),
         (
-            missing_payload,
+            r#"[{"t":"broadcast"}]"#,
             Err(ClientBatchDecodeError::InvalidEnvelope(
                 EnvelopeDecodeError::InvalidPayload("broadcast".to_owned()),
             )),
@@ -247,7 +208,7 @@ fn decode_client_batch_classifies_invalid_and_unsupported_inputs() {
     ];
 
     for (payload, expected_error, expected_kind) in cases {
-        let error = decode_client_batch(&payload);
+        let error = decode_client_batch(payload);
         assert_eq!(error, expected_error);
         assert_eq!(
             error.err().map(|decode_error| decode_error.kind()),

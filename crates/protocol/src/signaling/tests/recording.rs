@@ -4,15 +4,14 @@ use super::*;
 
 #[test]
 fn protocol_start_recording_request_decodes_with_request_id() {
-    let decoded = ClientEnvelope::decode(Envelope {
-        tag: String::from("startrecording"),
-        payload: Some(json!({
+    let decoded = ClientEnvelope::decode(Envelope::request(
+        "startrecording",
+        RequestId::new("3"),
+        Some(json!({
             "audio": true,
             "video": false,
         })),
-        request_id: Some(RequestId::new("3")),
-        response_to: None,
-    });
+    ));
 
     assert_eq!(
         decoded,

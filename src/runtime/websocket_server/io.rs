@@ -9,8 +9,8 @@ use std::{future::Future, time::Duration};
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use futures_util::{SinkExt, stream::SplitSink};
 use o_sfu_protocol::wire::{
-    ClientEnvelope, Envelope, EnvelopeBatch, EnvelopeDecodeError, ServerEnvelope,
-    WebSocketCloseCode,
+    ClientEnvelope, Envelope, EnvelopeBatch, EnvelopeBatchDecodeError, EnvelopeDecodeError,
+    ServerEnvelope, WebSocketCloseCode, decode_envelope_batch,
 };
 use tokio::time::timeout;
 
@@ -38,6 +38,7 @@ pub enum ClientBatchDecodeError {
     FrameTooLarge { actual: usize, limit: usize },
     BatchTooLarge { actual: usize, limit: usize },
     InvalidJson,
+    InvalidRoutingMetadata,
     InvalidEnvelope(EnvelopeDecodeError),
 }
 
@@ -51,10 +52,9 @@ impl ClientBatchDecodeError {
             Self::FrameTooLarge { .. }
             | Self::BatchTooLarge { .. }
             | Self::InvalidJson
+            | Self::InvalidRoutingMetadata
             | Self::InvalidEnvelope(
-                EnvelopeDecodeError::InvalidRoutingMetadata
-                | EnvelopeDecodeError::InvalidPayload(_)
-                | EnvelopeDecodeError::UnexpectedPayload(_),
+                EnvelopeDecodeError::InvalidPayload(_) | EnvelopeDecodeError::UnexpectedPayload(_),
             ) => ClientBatchDecodeFailureKind::InvalidInput,
         }
     }
@@ -63,8 +63,9 @@ impl ClientBatchDecodeError {
 /// # Errors
 ///
 /// Returns an error when the frame exceeds the byte limit, the batch exceeds
-/// the envelope limit, the payload is not valid JSON, or any decoded envelope
-/// violates the protocol signaling contract.
+/// the envelope limit, the payload is not valid envelope JSON, the route
+/// metadata is mixed, or any decoded envelope violates the protocol signaling
+/// contract.
 pub fn decode_client_batch(payload: &str) -> Result<Vec<ClientEnvelope>, ClientBatchDecodeError> {
     if payload.len() > MAX_CLIENT_FRAME_BYTES {
         return Err(ClientBatchDecodeError::FrameTooLarge {
@@ -72,14 +73,18 @@ pub fn decode_client_batch(payload: &str) -> Result<Vec<ClientEnvelope>, ClientB
             limit: MAX_CLIENT_FRAME_BYTES,
         });
     }
-    let batch = serde_json::from_str::<EnvelopeBatch>(payload)
-        .map_err(|_error| ClientBatchDecodeError::InvalidJson)?;
-    if batch.len() > MAX_CLIENT_BATCH_ENVELOPES {
-        return Err(ClientBatchDecodeError::BatchTooLarge {
-            actual: batch.len(),
-            limit: MAX_CLIENT_BATCH_ENVELOPES,
-        });
-    }
+    let batch =
+        decode_envelope_batch(payload, MAX_CLIENT_BATCH_ENVELOPES).map_err(
+            |error| match error {
+                EnvelopeBatchDecodeError::InvalidJson => ClientBatchDecodeError::InvalidJson,
+                EnvelopeBatchDecodeError::BatchTooLarge { actual, limit } => {
+                    ClientBatchDecodeError::BatchTooLarge { actual, limit }
+                }
+                EnvelopeBatchDecodeError::InvalidRoutingMetadata => {
+                    ClientBatchDecodeError::InvalidRoutingMetadata
+                }
+            },
+        )?;
     batch
         .into_iter()
         .map(|envelope| {
@@ -263,50 +268,64 @@ mod tests {
     };
 
     #[test]
-    fn decode_client_batch_classifies_generated_failures() {
+    fn decode_client_batch_classifies_generated_failures() -> serde_json::Result<()> {
         let oversized_batch = serde_json::to_string(
             &(0..=MAX_CLIENT_BATCH_ENVELOPES)
                 .map(|_| json!({ "t": "info", "p": {} }))
                 .collect::<Vec<_>>(),
-        );
-        assert!(oversized_batch.is_ok());
-        let Some(oversized_batch) = oversized_batch.ok() else {
-            return;
-        };
+        )?;
         let cases = [
             (
                 "not-json".to_owned(),
                 ClientBatchDecodeFailureKind::InvalidInput,
             ),
             (
-                serde_json::to_string(&vec![json!({ "t": "not-a-real-message", "p": {} })])
-                    .unwrap_or_default(),
+                serde_json::to_string(&[json!({ "t": "not-a-real-message", "p": {} })])?,
                 ClientBatchDecodeFailureKind::UnsupportedFeature,
             ),
             (
-                serde_json::to_string(&vec![json!({
+                serde_json::to_string(&[json!({
                     "t": "ping",
                     "q": "1",
                     "r": "2",
-                })])
-                .unwrap_or_default(),
+                })])?,
                 ClientBatchDecodeFailureKind::InvalidInput,
             ),
             (
-                serde_json::to_string(&vec![json!({ "t": "broadcast" })]).unwrap_or_default(),
+                serde_json::to_string(&[json!({ "t": "broadcast" })])?,
                 ClientBatchDecodeFailureKind::InvalidInput,
             ),
             (oversized_batch, ClientBatchDecodeFailureKind::InvalidInput),
         ];
 
         for (payload, expected_kind) in cases {
-            let error = decode_client_batch(&payload);
-            assert!(error.is_err());
-            let Some(error) = error.err() else {
-                return;
-            };
-            assert_eq!(error.kind(), expected_kind);
+            assert_eq!(
+                decode_client_batch(&payload)
+                    .err()
+                    .map(|error| error.kind()),
+                Some(expected_kind)
+            );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn decode_client_batch_rejects_oversized_batch_before_routing_metadata()
+    -> serde_json::Result<()> {
+        let oversized_batch = serde_json::to_string(
+            &(0..=MAX_CLIENT_BATCH_ENVELOPES)
+                .map(|_| json!({ "t": "info", "p": {}, "q": "1", "r": "2" }))
+                .collect::<Vec<_>>(),
+        )?;
+
+        assert_eq!(
+            decode_client_batch(&oversized_batch),
+            Err(ClientBatchDecodeError::BatchTooLarge {
+                actual: MAX_CLIENT_BATCH_ENVELOPES + 1,
+                limit: MAX_CLIENT_BATCH_ENVELOPES,
+            })
+        );
+        Ok(())
     }
 
     #[test]
