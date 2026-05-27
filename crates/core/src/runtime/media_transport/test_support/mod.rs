@@ -27,47 +27,61 @@ use crate::{
     },
 };
 
+#[derive(Debug, Clone, Copy)]
+pub struct MediaTransportTestApi<'a> {
+    transport: &'a MediaTransport,
+}
+
 impl MediaTransport {
+    #[must_use]
+    pub fn test_api(&self) -> MediaTransportTestApi<'_> {
+        MediaTransportTestApi { transport: self }
+    }
+}
+
+impl MediaTransportTestApi<'_> {
     #[cfg(test)]
     pub(crate) async fn negotiated_producer_parameters(
-        &self,
+        self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Result<RouterRtpParameters, TransportAdapterError> {
-        self.worker_for_user(session_key)
+        self.transport
+            .worker_for_user(session_key)
             .ok_or(TransportAdapterError::TransportUnavailable)?
             .negotiated_producer_parameters(session_key, transport_media_id)
             .await
     }
 
     #[cfg(test)]
-    pub(super) fn debug_worker_for_user(
-        &self,
+    pub(super) fn worker_for_user(
+        self,
         session_key: &TransportSessionKey,
     ) -> Option<Arc<RtcWorker>> {
-        self.worker_for_user(session_key)
+        self.transport.worker_for_user(session_key)
     }
 
     /// Overrides a real RTC session health snapshot in test builds.
     ///
     /// This is a route-test hook for failure injection and is not a production
     /// control-plane operation.
-    pub fn debug_set_session_transport_health(
-        &self,
+    pub fn set_session_transport_health(
+        self,
         session_key: &TransportSessionKey,
         health: TransportSessionHealth,
     ) {
-        if let Some(worker) = self.worker_for_user(session_key) {
+        if let Some(worker) = self.transport.worker_for_user(session_key) {
             worker.debug_set_session_transport_health(session_key, health);
         }
     }
 
-    pub async fn debug_route_entry(
-        &self,
+    pub async fn route_entry(
+        self,
         source_session_key: &TransportSessionKey,
         source_mid: Mid,
     ) -> Option<DebugRouteEntry> {
-        self.worker_for_user(source_session_key)?
+        self.transport
+            .worker_for_user(source_session_key)?
             .debug_route_entry(source_session_key, source_mid)
             .await
     }
@@ -76,12 +90,12 @@ impl MediaTransport {
     ///
     /// This is exposed for integration assertions that need to prove routing
     /// state without exposing worker internals to production callers.
-    pub async fn debug_route_entry_by_consumer_mid(
-        &self,
+    pub async fn route_entry_by_consumer_mid(
+        self,
         consumer_session_key: &TransportSessionKey,
         consumer_mid: Mid,
     ) -> Option<DebugRouteEntry> {
-        for worker in self.all_workers() {
+        for worker in self.transport.all_workers() {
             if let Some(entry) = worker
                 .debug_route_entry_by_consumer_mid(consumer_session_key, consumer_mid)
                 .await
@@ -92,11 +106,11 @@ impl MediaTransport {
         None
     }
 
-    pub async fn debug_route_entry_by_media_id(
-        &self,
+    pub async fn route_entry_by_media_id(
+        self,
         source_transport_media_id: TransportMediaId,
     ) -> Option<DebugRouteEntry> {
-        for worker in self.all_workers() {
+        for worker in self.transport.all_workers() {
             if let Some(entry) = worker
                 .debug_route_entry_by_media_id(source_transport_media_id)
                 .await
@@ -107,22 +121,18 @@ impl MediaTransport {
         None
     }
 
-    pub async fn debug_observe_audio_activity(
-        &self,
-        transport_media_id: TransportMediaId,
-        now: Instant,
-    ) {
-        self.debug_observe_audio_activity_with_level(transport_media_id, -20, now)
+    pub async fn observe_audio_activity(self, transport_media_id: TransportMediaId, now: Instant) {
+        self.observe_audio_activity_with_level(transport_media_id, -20, now)
             .await;
     }
 
-    pub async fn debug_observe_audio_activity_with_level(
-        &self,
+    pub async fn observe_audio_activity_with_level(
+        self,
         transport_media_id: TransportMediaId,
         audio_level_dbov: i8,
         now: Instant,
     ) {
-        for worker in self.all_workers() {
+        for worker in self.transport.all_workers() {
             worker
                 .debug_observe_audio_activity(
                     transport_media_id,

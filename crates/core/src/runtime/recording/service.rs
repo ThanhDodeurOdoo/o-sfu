@@ -221,15 +221,10 @@ impl RecordingService {
             }
             RouterEvent::ProducerAdded {
                 session_id: user_id,
-                transport_id,
                 producer_id,
-                media_kind,
+                ..
             } => {
-                users.entry(user_id).or_default().add_producer(
-                    producer_id,
-                    transport_id,
-                    media_kind,
-                );
+                users.entry(user_id).or_default().add_producer(producer_id);
             }
             RouterEvent::ProducerRemoved {
                 session_id: user_id,

@@ -157,7 +157,8 @@ async fn active_audio_speaker_limit_pauses_overflow_audio_routes() {
     assert_eq!(
         scenario
             .adapter
-            .debug_route_entry_by_media_id(third_audio_media_id)
+            .test_api()
+            .route_entry_by_media_id(third_audio_media_id)
             .await
             .unwrap()
             .active_destination_count,

@@ -254,8 +254,9 @@ impl RoomState {
             }
             RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) => {
                 let idle_router_ids = self.topology.idle_spillover_routers();
+                let policy = policy.parts();
                 let detachments =
-                    placement.cooldown_detachments(&idle_router_ids, policy.cooldown_window());
+                    placement.cooldown_detachments(&idle_router_ids, policy.cooldown_window);
                 self.topology.detach_spillover_routers(&detachments);
             }
         }

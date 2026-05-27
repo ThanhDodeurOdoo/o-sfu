@@ -384,7 +384,8 @@ impl StagedPublishScenario {
         transport_media_id: TransportMediaId,
     ) -> bool {
         self.adapter
-            .debug_route_entry_by_media_id(transport_media_id)
+            .test_api()
+            .route_entry_by_media_id(transport_media_id)
             .await
             .is_some()
     }
@@ -583,7 +584,8 @@ impl SourcePolicyScenario {
         let observed_at = Instant::now();
         for transport_media_id in transport_media_ids {
             self.adapter
-                .debug_observe_audio_activity(transport_media_id, observed_at)
+                .test_api()
+                .observe_audio_activity(transport_media_id, observed_at)
                 .await;
         }
     }
@@ -595,7 +597,8 @@ impl SourcePolicyScenario {
         let observed_at = Instant::now();
         for (transport_media_id, audio_level_dbov) in speakers {
             self.adapter
-                .debug_observe_audio_activity_with_level(
+                .test_api()
+                .observe_audio_activity_with_level(
                     transport_media_id,
                     audio_level_dbov,
                     observed_at,

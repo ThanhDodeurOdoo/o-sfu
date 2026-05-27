@@ -207,6 +207,7 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
     .await;
     let negotiated_parameters = scenario
         .media_transport
+        .test_api()
         .negotiated_producer_parameters(&publisher_session_key, transport_media_id)
         .await
         .expect("answered protocol publish should expose negotiated producer parameters");

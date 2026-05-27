@@ -19,7 +19,7 @@ pub(in crate::runtime::rtc_engine) use packets::sample_rtp_packet_with_len;
 pub(in crate::runtime::rtc_engine) use packets::serialize_stun_message;
 #[cfg(any(test, feature = "testing-transport"))]
 pub use probe::DebugRouteEntry;
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 pub use probe::{DebugPacketGate, DebugRouteDestination};
 #[cfg(any(test, feature = "testing-transport"))]
 pub(super) use probe::{
