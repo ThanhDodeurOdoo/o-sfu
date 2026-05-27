@@ -1,7 +1,7 @@
 //! Async synchronization bridge for room-owned video source policy.
 //!
 //! This file connects `Room` to the pure source-selection policy in
-//! `state::source_policy`. Room state decides which source-domain selector
+//! `room::source_policy`. Room state decides which source-domain selector
 //! each receiver should use, while `SourcePolicyEffectPlan` applies the
 //! resulting transport gates after the room lock is released.
 //!
@@ -17,11 +17,12 @@
 //! lets the effect layer revalidate connection and media handles before any
 //! selector state is stored.
 
-use super::{Room, effects::SourcePolicyEffectPlan};
+use super::SourcePolicyEffectPlan;
 use crate::{
     RoomSpilloverMode,
     runtime::{
         media_transport::{ActiveSpeakerSource, MediaTransport},
+        room::Room,
         sync::lock_unpoisoned,
     },
 };
@@ -84,7 +85,7 @@ impl Room {
     ///
     /// Normal room transitions call this after publish, subscribe or user
     /// membership changes may have altered route pressure.
-    pub(super) async fn sync_source_packet_selection_policy(
+    pub(in crate::runtime::room) async fn sync_source_packet_selection_policy(
         &self,
         media_transport: &MediaTransport,
     ) {
@@ -109,7 +110,7 @@ impl Room {
     /// consulting observability. The second read builds the effect plan from
     /// the latest room state. Any change between the two snapshots is handled
     /// by the effect plan's stale-update checks.
-    pub(super) async fn sync_source_packet_selection_policy_from_observations(
+    pub(in crate::runtime::room) async fn sync_source_packet_selection_policy_from_observations(
         &self,
         active_speaker_sources: &[ActiveSpeakerSource],
         media_transport: &MediaTransport,

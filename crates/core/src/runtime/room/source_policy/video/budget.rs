@@ -180,7 +180,7 @@ impl RouteUpdatePlan {
     }
 }
 
-impl super::super::super::shared::RoomState {
+impl super::super::super::state::RoomState {
     /// Plans deterministic per-consumer source selectors for live video routes.
     ///
     /// The snapshot inputs are best-effort transport observations. They do not
@@ -783,9 +783,9 @@ mod tests {
     use crate::runtime::{
         ConnectionId, UserId,
         media_transport::{SourcePacketGate, TransportMediaId},
-        room::state::{
-            media::ConsumerRouteTransportRef,
+        room::{
             source_policy::video::layout::ReceiverVideoLayoutIntent,
+            state::ConsumerRouteTransportRef,
         },
         source_model::{
             PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,

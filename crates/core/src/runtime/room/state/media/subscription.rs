@@ -24,7 +24,6 @@ use super::{
         super::{RoomEventRequest, outbound::OutboundSender, topology::RoutedProducerId},
         ids::{ConsumerRuntimeId, ProducerRuntimeId},
         shared::RoomState,
-        source_policy::VideoAdmissionRank,
     },
     ConsumerKey, ConsumerRouteTransportRef, ConsumerState, PublishedProducer,
     relay::RelayRouteEffect,
@@ -32,6 +31,7 @@ use super::{
 use crate::runtime::{
     ConnectionId, UserId,
     media_transport::{RelayRouteActivity, TransportMediaId},
+    room::source_policy::VideoAdmissionRank,
     source_model::{
         ConsumerSourceSelection, PolicyPauseReason, PublishedSourceDescriptor, PublishedSourceId,
         SourceRoutePriority, SourceSubscriptionIntent, UserStreamId,

@@ -12,15 +12,21 @@ use super::{
         topology::{RoomRouterStateFactory, RoomTopology},
         user_negotiation::UserNegotiation,
     },
-    media::{ConsumerRouteView, RelayRouteEffect, RoomMediaGraph, TransportMediaRemoval},
+    media::{
+        ConsumerRouteTransportRef, ConsumerRouteView, RelayRouteEffect, RoomMediaGraph,
+        TransportMediaRemoval,
+    },
 };
 use crate::{
     RoomMediaLimits, RoomSpilloverMode,
     runtime::{
-        ConnectionId, PeerSnapshot, RecordingState, UserId, UserInfo,
+        ConnectionId, PeerSnapshot, RecordingState, UserId, UserInfo, VideoLayoutIntent,
         room::placement::LoadTriggeredPlacementState,
         router_events::RoomRouterEventSink,
-        source_model::{SourceSubscriptionIntent, UserStreamId},
+        source_model::{
+            ActiveSpeakerGroup, ConsumerSourceSelection, PublishedSourceDescriptor,
+            PublishedSourceId, SourceSubscriptionIntent, UserStreamId,
+        },
     },
 };
 
@@ -318,6 +324,78 @@ impl RoomState {
             self.user_connection_id(&route.consumer_user_id)
                 .is_some_and(|connection_id| connection_id == route.state.consumer_connection_id)
         })
+    }
+
+    pub(in crate::runtime::room) fn source_policy_live_consumer_routes(
+        &self,
+    ) -> impl Iterator<Item = ConsumerRouteView<'_>> {
+        self.current_live_consumer_routes()
+    }
+
+    pub(in crate::runtime::room) fn source_policy_media_limits(&self) -> RoomMediaLimits {
+        self.media_limits
+    }
+
+    pub(in crate::runtime::room) fn source_policy_source(
+        &self,
+        source_id: PublishedSourceId,
+    ) -> Option<&PublishedSourceDescriptor> {
+        self.media.source(source_id)
+    }
+
+    pub(in crate::runtime::room) fn source_policy_owner_has_promotable_source_in_group(
+        &self,
+        owner_user_id: &UserId,
+        group: ActiveSpeakerGroup,
+    ) -> bool {
+        self.media
+            .owner_has_promotable_source_in_group(owner_user_id, group)
+    }
+
+    pub(in crate::runtime::room) fn source_policy_layout_preference(
+        &self,
+        consumer_user_id: &UserId,
+        source_user_id: &UserId,
+        stream_id: &UserStreamId,
+    ) -> Option<VideoLayoutIntent> {
+        self.users
+            .get(consumer_user_id)
+            .and_then(|user| user.desired_source_subscriptions.get(source_user_id))
+            .and_then(|states| states.get(stream_id))
+            .and_then(|intent| intent.layout())
+    }
+
+    pub(in crate::runtime::room) fn source_policy_user_featured_states(
+        &self,
+    ) -> impl Iterator<Item = (&UserId, Option<bool>)> {
+        self.users
+            .iter()
+            .map(|(user_id, user)| (user_id, user.featured()))
+    }
+
+    pub(in crate::runtime::room) fn update_source_policy_consumer_selection(
+        &mut self,
+        route: &ConsumerRouteTransportRef,
+        source_id: PublishedSourceId,
+        update_selection: impl FnOnce(&mut ConsumerSourceSelection),
+    ) {
+        self.media
+            .update_consumer_source_selection(route, source_id, update_selection);
+    }
+
+    pub(in crate::runtime::room) fn update_source_policy_featured_user(
+        &mut self,
+        user_id: &UserId,
+        featured: Option<bool>,
+    ) -> bool {
+        let Some(user) = self.users.get_mut(user_id) else {
+            return false;
+        };
+        if user.featured() == featured {
+            return false;
+        }
+        user.set_featured(featured);
+        true
     }
 
     pub fn publication_count(&self) -> usize {

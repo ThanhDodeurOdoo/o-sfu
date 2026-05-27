@@ -6,10 +6,7 @@
 //! becomes authoritative.
 
 use super::{
-    super::{
-        super::{RoomEventMessage, outbound::MessageFanout},
-        shared::RoomState,
-    },
+    super::{RoomEventMessage, outbound::MessageFanout, state::RoomState},
     action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
 };
 
@@ -24,7 +21,7 @@ impl RoomState {
         updates: &[ConsumerPacketSelectionUpdate],
     ) {
         for update in updates {
-            self.media.update_consumer_source_selection(
+            self.update_source_policy_consumer_selection(
                 &update.route,
                 update.source_id,
                 |selection| {
@@ -49,17 +46,12 @@ impl RoomState {
         &mut self,
         updates: &[FeaturedUserUpdate],
     ) -> Option<MessageFanout> {
-        let changed_user_ids = updates
-            .iter()
-            .filter_map(|update| {
-                let user = self.users.get_mut(update.user_id())?;
-                if user.featured() == update.featured() {
-                    return None;
-                }
-                user.set_featured(update.featured());
-                Some(update.user_id().clone())
-            })
-            .collect::<Vec<_>>();
+        let mut changed_user_ids = Vec::new();
+        for update in updates {
+            if self.update_source_policy_featured_user(update.user_id(), update.featured()) {
+                changed_user_ids.push(update.user_id().clone());
+            }
+        }
         if changed_user_ids.is_empty() {
             return None;
         }

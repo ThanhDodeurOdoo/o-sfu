@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 use o_sfu_router::MediaKind;
 
-use super::{super::shared::RoomState, action::ConsumerPacketSelectionUpdate};
+use super::{super::state::RoomState, action::ConsumerPacketSelectionUpdate};
 use crate::runtime::{
     media_transport::{ActiveSpeakerSource, TransportMediaId},
     source_model::PolicyPauseReason,
@@ -24,9 +24,10 @@ impl RoomState {
             .collect::<BTreeSet<_>>();
         let admitted_speakers = admitted_audio_speakers(
             ranked_active_speaker_sources,
-            self.media_limits.max_active_audio_speakers(),
+            self.source_policy_media_limits()
+                .max_active_audio_speakers(),
         );
-        self.current_live_consumer_routes()
+        self.source_policy_live_consumer_routes()
             .filter_map(|route| {
                 if route.source.media_kind() != MediaKind::Audio || !route.producer.active {
                     return None;
@@ -76,7 +77,7 @@ fn admitted_audio_speakers(
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{super::active_speaker::rank_active_speaker_sources, *};
+    use super::{super::rank_active_speaker_sources, *};
 
     #[test]
     fn audio_admission_prefers_recent_then_louder_speaker_then_stable_id() {

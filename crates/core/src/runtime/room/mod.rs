@@ -15,9 +15,9 @@
 //!    |- media               -> room-wide consumer bootstrap and publication lookup
 //!    |- recording           -> room-scoped recording policy
 //!    |- router_state        -> bridge into the router core
+//!    |- source_policy       -> room-owned source selection and refresh bridge
 //!    |- topology            -> routing placement boundary
 //!    |- outbound            -> shared server-to-client fanout helpers
-//!    `- source_policy_sync -> room-owned source policy refresh bridge
 //! ```
 
 mod cleanup;
@@ -39,7 +39,7 @@ mod placement;
 mod recording;
 mod router_state;
 pub mod rtp_capabilities;
-mod source_policy_sync;
+mod source_policy;
 mod state;
 #[cfg(any(test, feature = "testing-transport"))]
 mod tests;
@@ -71,7 +71,7 @@ pub use placement::{
     LocalRoomRouterPlacements, LocalRoomRouterPlacementsError, LocalRouterRuntimeContext,
     RoomRuntimeContext,
 };
-pub(in crate::runtime::room) use source_policy_sync::SourcePolicyEvent;
+pub(in crate::runtime::room) use source_policy::SourcePolicyEvent;
 pub use state::{ConsumerRouteState, RemoteTrackBootstrap};
 #[cfg(any(test, feature = "testing-transport"))]
 pub use tests::api::{
