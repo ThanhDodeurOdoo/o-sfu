@@ -579,10 +579,7 @@ fn route_packet_by_single_session(
         route.candidate_addr,
         route.packet,
     ) else {
-        route
-            .metrics
-            .record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
-        log_malformed_datagram(route.source_addr);
+        drop_malformed_fallback(route);
         return;
     };
     let accepts_input = state
@@ -591,18 +588,11 @@ fn route_packet_by_single_session(
         .is_some_and(|session_state| session_state.rtc.accepts(&input));
     route.metrics.record_rtc_datagram_fallback_scan(1);
     if !accepts_input {
-        route
-            .metrics
-            .record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
-        record_unknown_source_miss(demux, miss_key, route);
-        trace!(
-            source = %route.source_addr,
-            "dropping UDP datagram because no rtc user accepted it"
-        );
+        record_no_user_fallback_miss(demux, miss_key, route);
         return;
     }
     if route_packet_to_session(state, &session_key, route, input, "single-user-scan") {
-        demux.record_fallback_route_success(miss_key, route.packet, route.source_addr);
+        record_successful_fallback_route(demux, miss_key, route);
     }
 }
 
@@ -625,10 +615,7 @@ fn route_packet_by_recovery_index(
         route.candidate_addr,
         route.packet,
     ) else {
-        route
-            .metrics
-            .record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
-        log_malformed_datagram(route.source_addr);
+        drop_malformed_fallback(route);
         return;
     };
     let session_key = match matching_indexed_session_key_for_packet(
@@ -651,27 +638,47 @@ fn route_packet_by_recovery_index(
             route
                 .metrics
                 .record_rtc_datagram_fallback_scan(examined_sessions);
-            route
-                .metrics
-                .record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
-            record_unknown_source_miss(demux, miss_key, route);
-            trace!(
-                source = %route.source_addr,
-                "dropping UDP datagram because no rtc user accepted it"
-            );
+            record_no_user_fallback_miss(demux, miss_key, route);
             return;
         }
         IndexedSessionRecoveryOutcome::Malformed => {
-            route
-                .metrics
-                .record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
-            log_malformed_datagram(route.source_addr);
+            drop_malformed_fallback(route);
             return;
         }
     };
     if route_packet_to_session(state, &session_key, route, input, "recovery-index") {
-        demux.record_fallback_route_success(miss_key, route.packet, route.source_addr);
+        record_successful_fallback_route(demux, miss_key, route);
     }
+}
+
+fn drop_malformed_fallback(route: &PacketRouteContext<'_>) {
+    route
+        .metrics
+        .record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
+    log_malformed_datagram(route.source_addr);
+}
+
+fn record_no_user_fallback_miss(
+    demux: &mut DemuxRecoveryState,
+    miss_key: PacketLoopRoutingMissKey,
+    route: &PacketRouteContext<'_>,
+) {
+    route
+        .metrics
+        .record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
+    record_unknown_source_miss(demux, miss_key, route);
+    trace!(
+        source = %route.source_addr,
+        "dropping UDP datagram because no rtc user accepted it"
+    );
+}
+
+fn record_successful_fallback_route(
+    demux: &mut DemuxRecoveryState,
+    miss_key: PacketLoopRoutingMissKey,
+    route: &PacketRouteContext<'_>,
+) {
+    demux.record_fallback_route_success(miss_key, route.packet, route.source_addr);
 }
 
 #[cfg(test)]

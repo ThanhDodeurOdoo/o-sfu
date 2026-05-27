@@ -19,25 +19,8 @@ pub(super) enum RelayEnqueueOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct RelayEnqueueReport {
-    outcome: RelayEnqueueOutcome,
-    mailbox_depth: usize,
-}
-
-impl RelayEnqueueReport {
-    const fn new(outcome: RelayEnqueueOutcome, mailbox_depth: usize) -> Self {
-        Self {
-            outcome,
-            mailbox_depth,
-        }
-    }
-
-    pub(super) const fn outcome(self) -> RelayEnqueueOutcome {
-        self.outcome
-    }
-
-    pub(super) const fn mailbox_depth(self) -> usize {
-        self.mailbox_depth
-    }
+    pub(super) outcome: RelayEnqueueOutcome,
+    pub(super) mailbox_depth: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -56,8 +39,11 @@ impl RelayPacketMailbox {
         packet: &ForwardedPacket,
         source_transport_media_id: TransportMediaId,
     ) -> Option<RelayEnqueueReport> {
-        forward_packet_to_target(state, &self.tx, packet, source_transport_media_id)
-            .map(|outcome| RelayEnqueueReport::new(outcome, self.backlog_depth()))
+        let outcome = forward_packet_to_target(state, &self.tx, packet, source_transport_media_id)?;
+        Some(RelayEnqueueReport {
+            outcome,
+            mailbox_depth: self.backlog_depth(),
+        })
     }
 
     pub(super) fn backlog_depth(&self) -> usize {
@@ -67,22 +53,8 @@ impl RelayPacketMailbox {
 
 #[derive(Debug, Clone)]
 pub(super) struct ActiveRelayTarget {
-    target_id: RelayTargetId,
-    target: RelayPacketMailbox,
-}
-
-impl ActiveRelayTarget {
-    fn new(target_id: RelayTargetId, target: RelayPacketMailbox) -> Self {
-        Self { target_id, target }
-    }
-
-    pub(super) const fn target_id(&self) -> RelayTargetId {
-        self.target_id
-    }
-
-    pub(super) const fn target(&self) -> &RelayPacketMailbox {
-        &self.target
-    }
+    pub(super) target_id: RelayTargetId,
+    pub(super) target: RelayPacketMailbox,
 }
 
 fn forward_packet_to_target(
@@ -191,11 +163,11 @@ impl RelaySourceRegistration {
             .targets
             .iter()
             .filter(|(_target_id, registration)| registration.active)
-            .map(|(target_id, registration)| {
-                ActiveRelayTarget::new(*target_id, registration.target.clone())
+            .map(|(target_id, registration)| ActiveRelayTarget {
+                target_id: *target_id,
+                target: registration.target.clone(),
             })
-            .collect::<Vec<_>>()
-            .into();
+            .collect();
     }
 }
 

@@ -186,7 +186,7 @@ fn populate_relay_forwards(
         if !relay_target_gate_permits(
             state,
             source_transport_media_id,
-            relay_target.target_id(),
+            relay_target.target_id,
             metadata,
         ) {
             continue;
@@ -215,7 +215,7 @@ fn push_relay_forward(
     forwards.push(PacketForward::from_relay_target(
         packet_idx,
         source_transport_media_id,
-        relay_target.target().clone(),
+        relay_target.target.clone(),
     ));
 }
 

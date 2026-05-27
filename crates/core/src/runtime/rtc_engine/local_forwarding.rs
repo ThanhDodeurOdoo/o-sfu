@@ -107,17 +107,6 @@ impl LocalPacketDestination {
         }
     }
 
-    pub(super) fn send(
-        &self,
-        session_state: &mut RtcSessionState,
-        packet: LocalForwardedRtp<'_>,
-        vp8_payload: Option<PacketVp8Payload>,
-        is_last_destination: bool,
-    ) -> Result<Option<usize>, RtcError> {
-        let mut rtp = packet;
-        self.send_rtp(session_state, &mut rtp, vp8_payload, is_last_destination)
-    }
-
     /// writes one routed RTP packet into the destination user's local `StreamTx`
     ///
     /// payload bytes stay source-derived, but MID and RID extensions, sequence
@@ -126,59 +115,58 @@ impl LocalPacketDestination {
     /// a missing destination stream is treated as a no-op because route updates
     /// and negotiated removal can race with packets already buffered for
     /// forwarding
-    fn send_rtp(
+    pub(super) fn send(
         &self,
         session_state: &mut RtcSessionState,
-        rtp: &mut LocalForwardedRtp<'_>,
+        packet: LocalForwardedRtp<'_>,
         vp8_payload: Option<PacketVp8Payload>,
         is_last_destination: bool,
     ) -> Result<Option<usize>, RtcError> {
+        let mut rtp = packet;
         let payload_len = rtp.payload.len();
-        let vp8_payload = vp8_payload.or_else(|| vp8_payload_from_rtp(rtp));
+        let vp8_payload = vp8_payload.or_else(|| vp8_payload_from_rtp(&rtp));
         let vp8_identity = vp8_payload
             .map(|vp8_payload| vp8_payload.identity)
             .unwrap_or_default();
         let local_send_streams = &mut session_state.consumer_streams;
         let rtc = &mut session_state.rtc;
-        let write_result = {
+        {
             let mut direct_api = rtc.direct_api();
-            if let Some(stream_tx) = direct_api.stream_tx_by_mid(self.mid, None) {
-                let Some(identity) = next_projected_rtp_identity(
-                    local_send_streams,
-                    self.stream_handle,
-                    rtp.header().ssrc,
-                    rtp.header().timestamp,
-                    vp8_identity,
-                ) else {
-                    return Ok(None);
-                };
-                if identity.source_switched() {
-                    debug!(
-                        ?self.transport_media_id,
-                        mid = ?self.mid,
-                        previous_source_ssrc = ?identity.previous_source_ssrc(),
-                        source_ssrc = ?rtp.header().ssrc,
-                        source_rtp_timestamp = rtp.header().timestamp,
-                        outbound_rtp_timestamp = identity.rtp_timestamp(),
-                        source_vp8_picture_id = ?vp8_identity.picture_id,
-                        outbound_vp8_picture_id = ?identity.vp8_payload().picture_id,
-                        "projected consumer RTP identity after producer SSRC switch"
-                    );
-                }
-                let write_context = RtpWriteContext {
-                    identity,
-                    nackable: self.nackable,
-                    is_last_destination,
-                    mid: self.mid,
-                    payload_type: self.payload_type,
-                    vp8_payload,
-                };
-                write_rtp(stream_tx, rtp, write_context)
-            } else {
+            let Some(stream_tx) = direct_api.stream_tx_by_mid(self.mid, None) else {
                 return Ok(None);
+            };
+            let Some(identity) = next_projected_rtp_identity(
+                local_send_streams,
+                self.stream_handle,
+                rtp.header().ssrc,
+                rtp.header().timestamp,
+                vp8_identity,
+            ) else {
+                return Ok(None);
+            };
+            if identity.source_switched {
+                debug!(
+                    ?self.transport_media_id,
+                    mid = ?self.mid,
+                    previous_source_ssrc = ?identity.previous_source_ssrc,
+                    source_ssrc = ?rtp.header().ssrc,
+                    source_rtp_timestamp = rtp.header().timestamp,
+                    outbound_rtp_timestamp = identity.rtp_timestamp,
+                    source_vp8_picture_id = ?vp8_identity.picture_id,
+                    outbound_vp8_picture_id = ?identity.vp8_payload.picture_id,
+                    "projected consumer RTP identity after producer SSRC switch"
+                );
             }
-        };
-        write_result?;
+            let write_context = RtpWriteContext {
+                identity,
+                nackable: self.nackable,
+                is_last_destination,
+                mid: self.mid,
+                payload_type: self.payload_type,
+                vp8_payload,
+            };
+            write_rtp(stream_tx, &mut rtp, write_context)?;
+        }
         Ok(Some(payload_len))
     }
 }
@@ -207,21 +195,20 @@ fn write_rtp(
     let ext_vals = outbound_extension_values(rtp.header(), context.mid);
     let mut payload = rtp.payload.take_write_payload(context.is_last_destination);
     if let Some(packet_vp8_payload) = context.vp8_payload {
-        let identity_vp8_payload = context.identity.vp8_payload();
         vp8::rewrite_payload_descriptor(
             &mut payload,
             packet_vp8_payload.descriptor,
             vp8::PayloadDescriptorRewrite {
-                picture_id: identity_vp8_payload.picture_id,
-                tl0_pic_idx: identity_vp8_payload.tl0_pic_idx,
+                picture_id: context.identity.vp8_payload.picture_id,
+                tl0_pic_idx: context.identity.vp8_payload.tl0_pic_idx,
             },
         );
     }
     stream_tx
         .write_rtp_with_csrc(
             payload_type,
-            context.identity.seq_no(),
-            context.identity.rtp_timestamp(),
+            context.identity.seq_no,
+            context.identity.rtp_timestamp,
             rtp.timestamp(),
             rtp.header().marker,
             ext_vals,

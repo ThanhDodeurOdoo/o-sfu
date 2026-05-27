@@ -352,8 +352,8 @@ pub(in crate::runtime::rtc_engine) fn flush_forward_routes(
             }
             Ok(ForwardSendOutcome::RelayEnqueue(report)) => {
                 rtc_recorder.record_rtc_relay_enqueue(relay_enqueue_result(report));
-                rtc_recorder.record_rtc_relay_mailbox_depth(report.mailbox_depth());
-                match report.outcome() {
+                rtc_recorder.record_rtc_relay_mailbox_depth(report.mailbox_depth);
+                match report.outcome {
                     RelayEnqueueOutcome::Enqueued => {
                         rtp_metrics.record_forwarded(destination_kind, payload_len);
                     }

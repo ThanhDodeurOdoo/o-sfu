@@ -61,12 +61,12 @@ impl LocalRewriteBenchFixture {
                 input.timestamp,
                 input.vp8_payload,
             ) {
-                let vp8_payload = identity.vp8_payload();
+                let vp8_payload = identity.vp8_payload;
                 checksum = checksum
-                    .wrapping_add(u64::from(identity.rtp_timestamp()))
+                    .wrapping_add(u64::from(identity.rtp_timestamp))
                     .wrapping_add(u64::from(vp8_payload.picture_id.unwrap_or_default()))
                     .wrapping_add(u64::from(vp8_payload.tl0_pic_idx.unwrap_or_default()))
-                    .wrapping_add(u64::from(u8::from(identity.source_switched())));
+                    .wrapping_add(u64::from(u8::from(identity.source_switched)));
             }
         }
         checksum
