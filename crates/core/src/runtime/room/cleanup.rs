@@ -103,66 +103,6 @@ fn warn_transport_cleanup_failure(operation: &TransportCleanupOperation, message
     );
 }
 
-/// Cleanup policy used by membership transitions after room state has moved on.
-///
-/// Production callers pass a media transport and allow the room to clean the
-/// matching transport resources once the state transition has committed. Tests
-/// and state-only callers can keep the same membership path while disabling
-/// adapter cleanup.
-///
-/// A missing transport means only the effects that do not need the adapter can
-/// run. That is useful for tests that want the authoritative room-state result
-/// without faking transport ownership.
-#[derive(Clone, Copy)]
-pub(in crate::runtime::room) struct UserCleanup<'a> {
-    /// Adapter boundary used for deferred cleanup, policy refresh and
-    /// transport-adjacent session work.
-    media_transport: Option<&'a MediaTransport>,
-    /// Whether the caller allows this transition to mutate transport state.
-    ///
-    /// This is distinct from `media_transport` because tests may still need a
-    /// transport handle for observation while keeping cleanup state unchanged.
-    clean_transport_state: bool,
-}
-
-impl<'a> UserCleanup<'a> {
-    /// Build the production cleanup policy for a runtime membership change.
-    ///
-    /// The room will close stale transport users and remove detached media
-    /// after the corresponding `RoomState` transition has committed.
-    pub const fn runtime(media_transport: &'a MediaTransport) -> Self {
-        Self {
-            media_transport: Some(media_transport),
-            clean_transport_state: true,
-        }
-    }
-
-    /// Build a cleanup policy that keeps transport state intact.
-    ///
-    /// This keeps tests focused on room-state lifecycle decisions while still
-    /// allowing optional transport-backed observations after the transition.
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub const fn state_only(media_transport: Option<&'a MediaTransport>) -> Self {
-        Self {
-            media_transport,
-            clean_transport_state: false,
-        }
-    }
-
-    pub const fn media_transport(self) -> Option<&'a MediaTransport> {
-        self.media_transport
-    }
-
-    /// return the adapter only when this policy allows transport mutation
-    ///
-    /// callers use this for cleanup effects that would alter adapter state
-    /// policy refresh may still use [`Self::media_transport`] because tests can
-    /// observe transport-derived state while keeping cleanup disabled
-    pub(in crate::runtime::room) fn cleaning_media_transport(self) -> Option<&'a MediaTransport> {
-        self.media_transport.filter(|_| self.clean_transport_state)
-    }
-}
-
 /// Maximum number of distinct cleanup operations one room may retain.
 ///
 /// Cleanup failures are rare cold-path work. A fixed cap prevents a broken

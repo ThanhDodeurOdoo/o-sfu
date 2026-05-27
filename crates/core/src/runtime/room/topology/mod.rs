@@ -238,8 +238,6 @@ pub(super) struct RoomTopology {
     /// Idle spillover routers can be detached. The primary router is the only
     /// permanent entry.
     routers: BTreeMap<RouterId, RoomRouterState>,
-    /// Attached-router membership class used for cleanup decisions.
-    router_memberships: BTreeMap<RouterId, RouterMembershipState>,
     /// Authoritative home router for each live user.
     ///
     /// Home placement decides where a user publishes and which local media
@@ -254,20 +252,6 @@ pub(super) struct RoomTopology {
     /// Tracks cross-router receiver sessions that exist only to host consumer
     /// edges on a producer's source router.
     shadow_sessions: ShadowSessionTracker,
-}
-
-/// Attachment role for one router inside a room topology.
-///
-/// Membership is separate from the router map because detach decisions care
-/// about why the router is present, not just whether it has state. The primary
-/// router cannot be detached. Spillover routers can be removed after their last
-/// home session leaves.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RouterMembershipState {
-    /// Permanent router for the room.
-    Primary,
-    /// Lazily attached router from the assigned local spillover set.
-    ActiveSpillover,
 }
 
 /// Factory for router states that need room-owned event sinks.
@@ -326,13 +310,10 @@ impl RoomTopology {
             primary_router_id,
             router_state_factory.build_router_state(primary_router_id, router_rtp_capabilities),
         );
-        let mut router_memberships = BTreeMap::new();
-        router_memberships.insert(primary_router_id, RouterMembershipState::Primary);
         Self {
             primary_router: primary_router_id,
             router_state_factory: router_state_factory.clone(),
             routers,
-            router_memberships,
             session_home_router: BTreeMap::new(),
             session_seed_by_user: BTreeMap::new(),
             shadow_sessions: ShadowSessionTracker::default(),
@@ -413,8 +394,6 @@ impl RoomTopology {
             self.router_state_factory
                 .build_router_state(router_id, router_rtp_capabilities),
         );
-        self.router_memberships
-            .insert(router_id, RouterMembershipState::ActiveSpillover);
     }
 
     /// Add a producer on the publisher's home router.
@@ -722,7 +701,7 @@ impl RoomTopology {
 
     /// Return idle spillover routers that may be detached by room policy.
     ///
-    /// Only active-spillover routers are candidates. Shadow sessions do not
+    /// Only attached non-primary routers are candidates. Shadow sessions do not
     /// make a router idle, so cross-router routes can finish cleanup before a
     /// delayed detach removes the attached router state.
     pub(in crate::runtime::room) fn idle_spillover_routers(&self) -> Vec<RouterId> {
@@ -731,18 +710,13 @@ impl RoomTopology {
             .values()
             .copied()
             .collect::<BTreeSet<_>>();
-        self.router_memberships
+        self.routers
             .iter()
-            .filter_map(|(router_id, membership)| {
-                if *membership != RouterMembershipState::ActiveSpillover
-                    || active_home_routers.contains(router_id)
-                {
+            .filter_map(|(router_id, router)| {
+                if *router_id == self.primary_router || active_home_routers.contains(router_id) {
                     return None;
                 }
-                self.routers
-                    .get(router_id)
-                    .is_some_and(|router| router.mapped_session_count() == 0)
-                    .then_some(*router_id)
+                (router.mapped_session_count() == 0).then_some(*router_id)
             })
             .collect()
     }
@@ -750,13 +724,10 @@ impl RoomTopology {
     /// Drop explicitly selected idle spillover router state.
     pub(in crate::runtime::room) fn detach_spillover_routers(&mut self, router_ids: &[RouterId]) {
         for router_id in router_ids {
-            if self.router_memberships.get(router_id)
-                != Some(&RouterMembershipState::ActiveSpillover)
-            {
+            if *router_id == self.primary_router {
                 continue;
             }
             self.routers.remove(router_id);
-            self.router_memberships.remove(router_id);
         }
     }
 

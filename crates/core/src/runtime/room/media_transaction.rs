@@ -2,18 +2,18 @@
 //!
 //! # Role
 //!
-//! This module contain the room-side unit of work for media changes that need
+//! This module contains the room-side unit of work for media changes that need
 //! transport calls. `RoomState` stays authoritative for live producers and
 //! consumers. The media transport stays authoritative for allocated media
-//! lines. This file owns the short-lived (only latts for transactions)
-//! bridge between those two layers so websocket publish and unpublish
-//! flows do not have to remember rollback  details
+//! lines. This file owns the short-lived transaction bridge between those two
+//! layers so websocket publish and unpublish
+//! flows do not have to remember rollback details
 //!
 //!
 //! # Staged publish lifecycle
 //!
 //! A publish is staged only after room state validates the current user and
-//! the media transport reserves a media line While the browser answers
+//! the media transport reserves a media line. While the browser answers
 //! renegotiation, that reservation lives in `PendingPublishTransactions`.
 //! Answer handling later drains the transaction and either commits it into
 //! room state or consumes it through transport cleanup.
@@ -25,7 +25,10 @@
 //! lock is held only for lookup, insertion and draining. Commit and cleanup run
 //! after the registry lock is released.
 
-use std::{collections::BTreeMap, sync::MutexGuard};
+use std::{
+    collections::{BTreeMap, btree_map::Entry},
+    sync::MutexGuard,
+};
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use o_sfu_telemetry::schema::event as telemetry_event;
@@ -38,15 +41,14 @@ use super::{
     state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, ValidatedPublishDescriptor},
 };
 use crate::{
-    PublishStageOutcome, RollbackStagedPublishOutcome, TransportEffectOutcome,
+    TransportEffectOutcome,
     runtime::{
         ConnectionId, UserId,
         diagnostics::DiagnosticsEventData,
         media_transport::{
-            AppliedSessionAnswer, MediaTransport, SessionUploadEncoding, TransportAdapterError,
-            TransportMediaId,
+            AppliedSessionAnswer, MediaTransport, SessionUploadEncoding, TransportMediaId,
         },
-        source_model::{SourcePublishIntent, UserStreamId},
+        source_model::UserStreamId,
         sync::lock_unpoisoned,
     },
 };
@@ -76,7 +78,7 @@ pub(super) struct PendingPublishTransactions {
 
 /// Stable key for one staged publish slot
 ///
-/// This uses the protocol user identity for room ownershio, the runtime
+/// This uses the protocol user identity for room ownership, the runtime
 /// connection id for stale-socket rejection and the orchestration stream id
 /// for the per-user media slot.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -166,7 +168,7 @@ struct CommittedPublish {
 }
 
 impl PendingPublishTransactions {
-    /// Returns weather this connection already has a staged publish for the
+    /// Returns whether this connection already has a staged publish for the
     /// stream.
     ///
     /// This is an idempotency check for websocket publish intents. It is only a
@@ -193,11 +195,13 @@ impl PendingPublishTransactions {
         transaction: PendingPublishTransaction,
     ) -> Result<(), PendingPublishTransaction> {
         let key = transaction.key();
-        if self.staged.contains_key(&key) {
-            return Err(transaction);
+        match self.staged.entry(key) {
+            Entry::Vacant(entry) => {
+                entry.insert(transaction);
+                Ok(())
+            }
+            Entry::Occupied(_) => Err(transaction),
         }
-        self.staged.insert(key, transaction);
-        Ok(())
     }
 
     /// Removes one staged publish from the registry and transfers ownership to
@@ -217,7 +221,7 @@ impl PendingPublishTransactions {
 
     /// Drains every staged publish owned by one websocket connection.
     ///
-    /// Conection cleanup and answered negotiation use this transfer so no
+    /// Connection cleanup and answered negotiation use this transfer so no
     /// later event can see the same staged reservation after cleanup or commit
     /// has started.
     pub(super) fn take_for_connection(
@@ -395,9 +399,9 @@ impl PendingPublishTransaction {
 
     /// Consumes a staged publish that cannot become live.
     ///
-    /// All rolback paths funnel through this method so the transport-media
+    /// All rollback paths funnel through this method so the transport-media
     /// owner and the failure log context stay consistent
-    async fn cleanup_reserved_media(
+    pub(in crate::runtime::room) async fn cleanup_reserved_media(
         self,
         operation: RoomUserOperation<'_>,
         failure_message: &str,
@@ -531,7 +535,9 @@ impl CommittedPublish {
 }
 
 impl Room {
-    fn pending_publish_transactions(&self) -> MutexGuard<'_, PendingPublishTransactions> {
+    pub(in crate::runtime::room) fn pending_publish_transactions(
+        &self,
+    ) -> MutexGuard<'_, PendingPublishTransactions> {
         lock_unpoisoned(&self.pending_publish_transactions)
     }
 
@@ -551,7 +557,7 @@ impl Room {
             .add_active_subscriptions(after_subscriptions.saturating_sub(before_subscriptions));
     }
 
-    /// Returns weather this connection already owns a staged publish for one
+    /// Returns whether this connection already owns a staged publish for one
     /// stream
     ///
     /// This is a websocket idempotency helper. It is not an authority for
@@ -569,165 +575,12 @@ impl Room {
     }
 }
 
-impl RoomUserOperation<'_> {
-    #[must_use]
-    pub(crate) fn has_staged_publish(self, stream_id: &UserStreamId) -> bool {
-        self.room().pending_publish_transactions().contains(
-            self.user_id(),
-            self.connection_id(),
-            stream_id,
-        )
-    }
-
-    /// Validates room ownership and reserves transport media for a negotiated publish.
-    ///
-    /// `PublishStageOutcome::Staged` means the publish is staged, not live.
-    /// The caller must still drive renegotiation and later call
-    /// `commit_staged_publishes` after the answer lands. The method avoids
-    /// holding room state or pending-registry locks across the transport call.
-    ///
-    /// If another task stages the same stream during the transport await, this
-    /// method consumes the duplicate reservation through cleanup and reports
-    /// `PublishStageOutcome::DuplicateAfterReservation`.
-    pub(crate) async fn stage_negotiated_publish(
-        self,
-        intent: &SourcePublishIntent,
-    ) -> Result<PublishStageOutcome, TransportAdapterError> {
-        let room = self.room();
-        let validated_descriptor = {
-            let state = room.state.read().await;
-            state.validate_publish_descriptor(self.user_id(), self.connection_id(), intent)
-        };
-        let Some(validated_descriptor) = validated_descriptor else {
-            return Ok(PublishStageOutcome::Rejected);
-        };
-        if room.pending_publish_transactions().contains(
-            self.user_id(),
-            self.connection_id(),
-            intent.stream_id(),
-        ) {
-            return Ok(PublishStageOutcome::Duplicate);
-        }
-        let session_key = self.transport_user_key();
-        let rtp_parameters = answer_derived_publish_parameters();
-        let transport_media_id = match self
-            .media_transport()
-            .publish_media(&session_key, intent.media_kind(), &rtp_parameters)
-            .await
-        {
-            Ok(transport_media_id) => transport_media_id,
-            Err(error) => {
-                warn!(
-                    user_id = ?self.user_id(),
-                    connection_id = ?self.connection_id(),
-                    stream_id = %intent.stream_id(),
-                    media_kind = ?intent.media_kind(),
-                    "failed to stage negotiated publish stream"
-                );
-                return Err(error);
-            }
-        };
-        let transaction = PendingPublishTransaction::new(validated_descriptor, transport_media_id);
-        #[cfg(test)]
-        room.inject_duplicate_staged_publish_after_reservation_for_test(
-            &transaction.descriptor,
-            transport_media_id,
-        );
-        let duplicate_stage = {
-            let mut pending_publish_transactions = room.pending_publish_transactions();
-            pending_publish_transactions.stage(transaction).err()
-        };
-        if let Some(staged_publish) = duplicate_stage {
-            let cleanup = staged_publish
-                .cleanup_reserved_media(
-                    self,
-                    "media transport failed to remove duplicated staged publish media",
-                )
-                .await;
-            return Ok(PublishStageOutcome::DuplicateAfterReservation { cleanup });
-        }
-        Ok(PublishStageOutcome::Staged)
-    }
-
-    /// Cancels one staged publish before it becomes a live producer.
-    ///
-    /// This is the explicit unpublish-before-answer path. A successful rollback
-    /// consumes the reservation even when transport cleanup fails, because the
-    /// publish must not remain commit-capable after the user requested removal.
-    pub(crate) async fn rollback_staged_publish(
-        self,
-        stream_id: &UserStreamId,
-    ) -> RollbackStagedPublishOutcome {
-        let staged_publish = self.room().pending_publish_transactions().take(
-            self.user_id(),
-            self.connection_id(),
-            stream_id,
-        );
-        let Some(staged_publish) = staged_publish else {
-            return RollbackStagedPublishOutcome::NotStaged;
-        };
-        let cleanup = staged_publish
-            .cleanup_reserved_media(
-                self,
-                "media transport failed to remove staged publish media during rollback",
-            )
-            .await;
-        RollbackStagedPublishOutcome::RolledBack { cleanup }
-    }
-
-    /// Cleans up every staged publish owned by a websocket connection.
-    ///
-    /// User replacement, logical disconnect and websocket drop use this to
-    /// drain all in-flight reservations before the connection can disapear.
-    /// Cleanup remains best-effort because transport teardown may already be in
-    /// progress
-    pub(crate) async fn rollback_staged_publishes_for_connection(self) {
-        let staged_publishes = self
-            .room()
-            .pending_publish_transactions()
-            .take_for_connection(self.user_id(), self.connection_id());
-        for staged_publish in staged_publishes {
-            staged_publish
-                .cleanup_reserved_media(
-                    self,
-                    "media transport failed to remove staged publish media during connection cleanup",
-                )
-                .await;
-        }
-    }
-
-    /// Commits every staged publish for a connection after negotiation
-    /// answered successfully
-    ///
-    /// The registry is drained before commit work starts so a later websocket
-    /// message cannot commit the same reservation twice. Each transaction then
-    /// re-checks current room state before creating a live producer. If that
-    /// state is stale, the transaction consumes its transport reservation
-    /// through cleanup instead.
-    pub(crate) async fn commit_staged_publishes(
-        self,
-        applied_answer: &AppliedSessionAnswer,
-    ) -> Vec<UserStreamId> {
-        let staged_publishes = self
-            .room()
-            .pending_publish_transactions()
-            .take_for_connection(self.user_id(), self.connection_id());
-        let mut committed_stream_ids = Vec::new();
-        for staged_publish in staged_publishes {
-            if let Some(stream_id) = staged_publish.commit(self, applied_answer).await {
-                committed_stream_ids.push(stream_id);
-            }
-        }
-        committed_stream_ids
-    }
-}
-
 impl Room {
     /// Releases a pending consumer-bootstrap reservation after the matching
     /// effect path no longer needs it.
     ///
     /// This mirrors staged-publish ownership on the subscriber side: room
-    /// state owns the reservation, while metrics are updated after unlock>
+    /// state owns the reservation, while metrics are updated after unlock.
     pub(super) async fn release_pending_consumer_bootstrap(
         &self,
         target: &PendingConsumerBootstrapTarget,
@@ -749,12 +602,6 @@ impl Room {
         self.handle_source_policy_event(SourcePolicyEvent::FanoutPressureChanged, Some(media_port))
             .await;
     }
-}
-
-/// Marker parameters for a protocol publish whose concrete SSRC/RID bindings
-/// are projected from the accepted SDP answer.
-fn answer_derived_publish_parameters() -> RouterRtpParameters {
-    RouterRtpParameters::new(vec![], vec![], vec![])
 }
 
 #[cfg(test)]

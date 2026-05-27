@@ -21,7 +21,6 @@
 
 use o_sfu_router::{MediaCapabilities, RouterId};
 use o_sfu_telemetry::schema::event as telemetry_event;
-use tracing::warn;
 #[cfg(any(test, feature = "testing-transport"))]
 use {
     super::placement::{RoomPlacementPlanner, WorkerLoadIndex},
@@ -32,20 +31,17 @@ use {
 };
 
 use super::{
-    BroadcastPayloadError, Room, RoomJoinError, RoomMediaCounts, RoomUserOperation,
-    SourcePolicyEvent, UserOutboundSender,
-    cleanup::UserCleanup,
+    BroadcastPayloadError, Room, RoomJoinError, RoomMediaCounts, SourcePolicyEvent,
+    UserOutboundSender,
     effects::{RoomEffectBatch, RoomEffectContext, TransportUserCleanup},
-    placement::{CommittedPlacementReceipt, JoinPlacement},
+    placement::{CommittedPlacementReceipt, JoinPlacementPlan},
     state::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, RoomState},
-    user_negotiation::UserNegotiationUpdate,
 };
 use crate::{
-    SessionNegotiationOutcome, UserInfoRefresh,
+    SessionNegotiationOutcome,
     runtime::{
-        ConnectionId, UserId, UserInfo, UserPermissions,
-        diagnostics::DiagnosticsEventData,
-        media_transport::{MediaTransport, TransportConsumerRoute, TransportSourceKey},
+        ConnectionId, UserId, UserPermissions, diagnostics::DiagnosticsEventData,
+        media_transport::MediaTransport,
     },
 };
 
@@ -67,7 +63,7 @@ pub(in crate::runtime::room) struct JoinSessionIntent {
     /// whether existing peers should receive a joined fan-out
     pub emit_joined_fanout: bool,
     /// router and media-worker placement resolved under the room-state lock
-    pub placement: JoinPlacement,
+    pub placement: JoinPlacementPlan,
 }
 
 /// Membership command applied under the `RoomState` lock.
@@ -208,7 +204,7 @@ impl Room {
                 planner.choose(&room_snapshot, &load_index)
             }
         };
-        JoinPlacement::planned(decision, load_index, policy.max_local_routers(), policy)
+        JoinPlacementPlan::planned(decision, load_index, policy)
             .resolve_for_commit(&room_snapshot, || room_snapshot.next_local_router_id())
     }
 
@@ -223,14 +219,14 @@ impl Room {
     pub(in crate::runtime::room) async fn join_session_with_cleanup(
         &self,
         intent: JoinSessionIntent,
-        cleanup: UserCleanup<'_>,
+        context: RoomEffectContext<'_>,
         allocate_spillover_router: impl FnOnce() -> RouterId,
     ) -> Result<ConnectionId, RoomJoinError> {
         let outcome = self
             .apply_join_state_transition(intent, allocate_spillover_router)
             .await?;
         let UserTransitionResult::Joined(connection_id) =
-            self.finalize_session_transition(outcome, cleanup).await
+            self.finalize_session_transition(outcome, context).await
         else {
             return Err(RoomJoinError::RouterState);
         };
@@ -253,7 +249,7 @@ impl Room {
         self.remove_user_with_cleanup(
             user_id,
             connection_id,
-            UserCleanup::runtime(media_transport),
+            RoomEffectContext::runtime(media_transport),
         )
         .await
     }
@@ -268,14 +264,14 @@ impl Room {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        cleanup: UserCleanup<'_>,
+        context: RoomEffectContext<'_>,
     ) -> bool {
         self.run_session_transition(
             UserTransition::Close {
                 user_id,
                 connection_id,
             },
-            cleanup,
+            context,
         )
         .await
         .is_ok_and(|result| !matches!(result, UserTransitionResult::Missing))
@@ -326,7 +322,7 @@ impl Room {
         user_ids: &[UserId],
         media_transport: &MediaTransport,
     ) {
-        self.disconnect_users_with_cleanup(user_ids, UserCleanup::runtime(media_transport))
+        self.disconnect_users_with_cleanup(user_ids, RoomEffectContext::runtime(media_transport))
             .await;
     }
 
@@ -338,10 +334,10 @@ impl Room {
     pub(in crate::runtime::room) async fn disconnect_users_with_cleanup(
         &self,
         user_ids: &[UserId],
-        cleanup: UserCleanup<'_>,
+        context: RoomEffectContext<'_>,
     ) {
         let _ = self
-            .run_session_transition(UserTransition::Disconnect { user_ids }, cleanup)
+            .run_session_transition(UserTransition::Disconnect { user_ids }, context)
             .await
             .ok();
     }
@@ -354,12 +350,12 @@ impl Room {
     async fn run_session_transition(
         &self,
         transition: UserTransition<'_>,
-        cleanup: UserCleanup<'_>,
+        context: RoomEffectContext<'_>,
     ) -> Result<UserTransitionResult, RoomJoinError> {
         let Some(outcome) = self.apply_state_transition(transition).await? else {
             return Ok(UserTransitionResult::Missing);
         };
-        Ok(self.finalize_session_transition(outcome, cleanup).await)
+        Ok(self.finalize_session_transition(outcome, context).await)
     }
 
     /// Mutate `RoomState` and capture all data needed after the lock is gone.
@@ -448,7 +444,7 @@ impl Room {
     async fn finalize_session_transition(
         &self,
         outcome: UserTransitionOutcome,
-        cleanup: UserCleanup<'_>,
+        context: RoomEffectContext<'_>,
     ) -> UserTransitionResult {
         let result = match outcome {
             UserTransitionOutcome::Join {
@@ -456,7 +452,7 @@ impl Room {
                 placement_receipt,
                 count_delta,
             } => {
-                self.finalize_join_transition(outcome, placement_receipt, count_delta, cleanup)
+                self.finalize_join_transition(outcome, placement_receipt, count_delta, context)
                     .await
             }
             UserTransitionOutcome::Close {
@@ -470,7 +466,7 @@ impl Room {
                     user_id,
                     connection_id,
                     count_delta,
-                    cleanup,
+                    context,
                 )
                 .await
             }
@@ -478,7 +474,7 @@ impl Room {
                 outcome,
                 count_delta,
             } => {
-                self.finalize_disconnect_transition(outcome, count_delta, cleanup)
+                self.finalize_disconnect_transition(outcome, count_delta, context)
                     .await
             }
         };
@@ -496,7 +492,7 @@ impl Room {
         outcome: JoinUserOutcome,
         placement_receipt: CommittedPlacementReceipt,
         count_delta: MembershipCountDelta,
-        cleanup: UserCleanup<'_>,
+        context: RoomEffectContext<'_>,
     ) -> UserTransitionResult {
         let JoinUserOutcome {
             connection_id: _,
@@ -525,7 +521,7 @@ impl Room {
                     .with_connection_id(connection_id.as_u64())
                     .with_media_worker_id(transport_session_key.media_worker_id()),
             )
-            .execute(self, Self::effect_context(cleanup))
+            .execute(self, context)
             .await;
         UserTransitionResult::Joined(connection_id)
     }
@@ -542,7 +538,7 @@ impl Room {
         user_id: UserId,
         connection_id: ConnectionId,
         count_delta: MembershipCountDelta,
-        cleanup: UserCleanup<'_>,
+        context: RoomEffectContext<'_>,
     ) -> UserTransitionResult {
         let had_state = outcome.is_some();
         let media_worker_id = self
@@ -569,7 +565,7 @@ impl Room {
                 .forget_diagnostics_user(user_id.clone())
                 .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged);
         }
-        batch.execute(self, Self::effect_context(cleanup)).await;
+        batch.execute(self, context).await;
         self.placement_state
             .unregister_committed_placement(connection_id);
         if had_state {
@@ -588,7 +584,7 @@ impl Room {
         &self,
         outcome: DisconnectUsersOutcome,
         count_delta: MembershipCountDelta,
-        cleanup: UserCleanup<'_>,
+        context: RoomEffectContext<'_>,
     ) -> UserTransitionResult {
         let mut batch = RoomEffectBatch::new()
             .with_user_count_delta(count_delta.users_before, count_delta.users_after)
@@ -618,19 +614,12 @@ impl Room {
                 .forget_diagnostics_user(disconnected_session.user_id.clone());
             disconnected_sessions.push(disconnected_session);
         }
-        batch.execute(self, Self::effect_context(cleanup)).await;
+        batch.execute(self, context).await;
         for disconnected_session in disconnected_sessions {
             self.placement_state
                 .unregister_committed_placement(disconnected_session.connection_id);
         }
         UserTransitionResult::Applied
-    }
-
-    fn effect_context(cleanup: UserCleanup<'_>) -> RoomEffectContext<'_> {
-        RoomEffectContext::new(
-            cleanup.media_transport(),
-            cleanup.cleaning_media_transport(),
-        )
     }
 
     /// Commit the answer-derived negotiated capability set for one live session.
@@ -664,138 +653,5 @@ impl Room {
     /// Return whether room state currently has no live users.
     pub(super) async fn is_empty(&self) -> bool {
         self.state.read().await.is_empty()
-    }
-}
-
-impl RoomUserOperation<'_> {
-    /// Apply client-visible user info for one live connection.
-    ///
-    /// Room state decides whether the update is still current, then returns a
-    /// fan-out plan that is emitted after the lock is released. A refresh may
-    /// trigger a full projection fan-out and a source selection policy sync
-    /// because layout or presence changes can affect video priority.
-    pub(crate) async fn update_user_info(self, info: UserInfo, refresh: UserInfoRefresh) {
-        let need_refresh = refresh.is_needed();
-        let room = self.room();
-        let outcome = {
-            let mut state = room.state.write().await;
-            state.apply_presence_update(self.user_id(), self.connection_id(), &info, need_refresh)
-        };
-        if let Some(outcome) = outcome {
-            room.handle_source_policy_event(
-                SourcePolicyEvent::ReceiverIntentChanged,
-                Some(self.media_transport()),
-            )
-            .await;
-            outcome.emit();
-        } else {
-            warn!(
-                user_id = ?self.user_id(),
-                connection_id = ?self.connection_id(),
-                ?info,
-                need_refresh,
-                "user info update was rejected by room state"
-            );
-        }
-    }
-
-    /// Commit the answer-derived negotiated capability set for one live session.
-    ///
-    /// This is called after the transport boundary has accepted the browser
-    /// answer and projected the negotiated RTP capabilities. Room state records
-    /// the session as consumer-ready, then any missing consumer bootstrap runs
-    /// outside the state lock.
-    pub(crate) async fn apply_session_negotiated(
-        self,
-        capabilities: MediaCapabilities,
-    ) -> SessionNegotiationOutcome {
-        let update = {
-            let mut state = self.room().state.write().await;
-            state.set_user_negotiated(self.user_id(), self.connection_id(), &capabilities)
-        };
-        self.apply_negotiation_update(update).await
-    }
-
-    /// Refresh consumer-side media after a renegotiation answer.
-    ///
-    /// This does not update the stored RTP capability set. It revalidates that
-    /// the connection is still current, requests keyframes for active video
-    /// consumers and bootstraps any consumers that became possible after the
-    /// renegotiation.
-    pub(crate) async fn apply_session_refreshed(self) -> SessionNegotiationOutcome {
-        if !self.request_active_video_consumer_keyframes().await {
-            return SessionNegotiationOutcome::StaleConnection;
-        }
-        if !self.bootstrap_missing_consumers().await {
-            return SessionNegotiationOutcome::StaleConnection;
-        }
-        SessionNegotiationOutcome::Applied
-    }
-
-    /// Apply the side effects that follow a negotiation state change.
-    ///
-    /// Consumer bootstrap is deferred until room state says the session became
-    /// ready to receive. Keyframe refresh requests are best-effort transport
-    /// hints and do not make the negotiation outcome fail.
-    async fn apply_negotiation_update(
-        self,
-        update: UserNegotiationUpdate,
-    ) -> SessionNegotiationOutcome {
-        if !update.session_present {
-            return SessionNegotiationOutcome::StaleConnection;
-        }
-        if update.became_consumer_ready {
-            if !self.bootstrap_missing_consumers().await {
-                return SessionNegotiationOutcome::StaleConnection;
-            }
-            self.request_active_video_consumer_keyframes().await;
-        }
-        SessionNegotiationOutcome::Applied
-    }
-
-    /// Request keyframes for active video consumers owned by one live session.
-    ///
-    /// The target list is an authoritative room-state snapshot for the current
-    /// connection. Individual transport request failures are logged but kept
-    /// best-effort because a later media packet or refresh can recover video.
-    async fn request_active_video_consumer_keyframes(self) -> bool {
-        let room = self.room();
-        let Some(keyframe_refresh_targets) = ({
-            let state = room.state.read().await;
-            state.active_video_consumer_keyframe_refresh_targets(
-                self.user_id(),
-                self.connection_id(),
-            )
-        }) else {
-            return false;
-        };
-        for target in keyframe_refresh_targets {
-            let route = TransportConsumerRoute::new(
-                self.transport_user_key(),
-                target.consumer_media,
-                TransportSourceKey::new(
-                    room.transport_user_key(
-                        &target.producer_user_id,
-                        target.producer_connection_id,
-                    ),
-                    target.source_media,
-                ),
-            );
-            if self
-                .media_transport()
-                .request_consumer_keyframe(&route)
-                .await
-                .is_err()
-            {
-                warn!(
-                    user_id = ?self.user_id(),
-                    connection_id = ?self.connection_id(),
-                    producer_user_id = ?target.producer_user_id,
-                    source_transport_media_id = ?target.source_media,
-                    "media transport failed to request a refreshed consumer keyframe"
-                );
-            }
-        }
-        true
     }
 }

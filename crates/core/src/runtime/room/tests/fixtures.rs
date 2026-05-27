@@ -20,9 +20,9 @@ pub(super) use o_sfu_router::{
 pub(super) use tokio::time::timeout;
 
 pub(super) use super::super::{
-    JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomEventMessage, RoomEventRequest,
-    RoomJoinError, RoomManager, RoomManagerJoinError, UserCleanup, UserCloseReason, UserOutbound,
-    UserOutboundReceiver, UserOutboundSender, topology::RoomTopology,
+    JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomEffectContext, RoomEventMessage,
+    RoomEventRequest, RoomJoinError, RoomManager, RoomManagerJoinError, UserCloseReason,
+    UserOutbound, UserOutboundReceiver, UserOutboundSender, topology::RoomTopology,
 };
 use crate::runtime::room::user_negotiation::{UserNegotiationUpdate, UserTransportReady};
 pub(super) use crate::{
@@ -370,8 +370,9 @@ impl StagedPublishScenario {
     }
 
     pub(super) async fn scalable_video_is_published(&self) -> bool {
-        self.operation()
-            .is_stream_published(&stream_id_for_source(TestSourceKind::ScalableVideo))
+        let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
+        self.room
+            .is_stream_published(&self.user_id, &stream_id)
             .await
     }
 

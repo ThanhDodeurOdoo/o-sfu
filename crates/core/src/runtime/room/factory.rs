@@ -1,7 +1,7 @@
 //! Room construction for rooms that are new to the runtime directory.
 //!
 //! `RoomManager` owns idempotent lookup, directory publication, metrics and
-//! creation diagnostics. This module contain the cold-path allocation step used
+//! creation diagnostics. This module contains the cold-path allocation step used
 //! after lookup misses, before the new room is visible to other runtime
 //! entrypoints.
 //!
