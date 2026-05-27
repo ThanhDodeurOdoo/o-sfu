@@ -142,7 +142,7 @@ fn default_header_extensions() -> Vec<HeaderExtension> {
 
 fn opus_codec_capability() -> MediaCodecCapability {
     MediaCodecCapability::new(MediaKind::Audio, rtp::CodecName::Opus, 48_000)
-        .with_preferred_payload_type(AUDIO_PAYLOAD_TYPE_OPUS)
+        .with_payload_type(AUDIO_PAYLOAD_TYPE_OPUS)
         .with_channels(2)
         .with_setting(CodecSetting::UseInBandFec(true))
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None))
@@ -159,7 +159,7 @@ fn video_codec_capability_without_transport_cc() -> MediaCodecCapability {
 
 fn video_codec_capability_with_feedback(include_transport_cc: bool) -> MediaCodecCapability {
     let codec = MediaCodecCapability::new(MediaKind::Video, rtp::CodecName::Vp8, 90_000)
-        .with_preferred_payload_type(VIDEO_PAYLOAD_TYPE_VP8)
+        .with_payload_type(VIDEO_PAYLOAD_TYPE_VP8)
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::Nack, None))
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::CcmFir, None))
@@ -173,7 +173,7 @@ fn video_codec_capability_with_feedback(include_transport_cc: bool) -> MediaCode
 
 fn video_rtx_codec_capability() -> MediaCodecCapability {
     MediaCodecCapability::new(MediaKind::Video, rtp::CodecName::Rtx, 90_000)
-        .with_preferred_payload_type(VIDEO_PAYLOAD_TYPE_VP8_RTX)
+        .with_payload_type(VIDEO_PAYLOAD_TYPE_VP8_RTX)
         .with_setting(CodecSetting::RtxAssociation(VIDEO_PAYLOAD_TYPE_VP8.into()))
 }
 

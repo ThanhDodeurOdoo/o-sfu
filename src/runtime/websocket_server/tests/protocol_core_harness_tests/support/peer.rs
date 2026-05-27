@@ -5,7 +5,7 @@ use std::{
 
 use futures_util::SinkExt;
 use o_sfu_protocol::{
-    host::{Command, CommandBatch, HostCommand, NegotiationKind, ProtocolCore, host_commands},
+    host::{Command, CommandBatch, HostCommand, NegotiationKind, ProtocolCore, project_commands},
     wire::RecordingOptions,
 };
 use tokio_tungstenite::{connect_async, tungstenite};
@@ -225,7 +225,7 @@ impl ProtocolHarnessPeer {
                 }
                 command @ Command::EmitEvent { .. } => {
                     let batch = CommandBatch::try_from_vec(vec![command]).ok()?;
-                    for host_command in host_commands(batch) {
+                    for host_command in project_commands(batch) {
                         if let HostCommand::EmitUpdate { update } = host_command {
                             self.updates.push(update);
                         }

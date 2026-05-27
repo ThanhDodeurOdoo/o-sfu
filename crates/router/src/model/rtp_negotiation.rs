@@ -121,7 +121,7 @@ pub fn derive_consumable_rtp_parameters(
     // - RTX `apt` must be rewritten to point at the negotiated primary PT.
     // - payload-type-bound stream bindings must keep pointing at the negotiated PT,
     //   not the producer's original PT.
-    let mut mapped_media_payload_by_original_payload = Vec::<(PayloadType, PayloadType)>::new();
+    let mut producer_to_router_payload_types = Vec::<(PayloadType, PayloadType)>::new();
     let mut consumable_formats = Vec::new();
 
     // Primary media codecs are the actual media contract.
@@ -142,14 +142,13 @@ pub fn derive_consumable_rtp_parameters(
                 payload_type: format.payload_type(),
             });
         };
-        let mapped_payload_type = mapped_payload_type(capability_format, format);
-        mapped_media_payload_by_original_payload
-            .push((format.payload_type_id(), mapped_payload_type));
+        let negotiated_payload_type = negotiated_payload_type(capability_format, format);
+        producer_to_router_payload_types.push((format.payload_type_id(), negotiated_payload_type));
         let feedback =
             intersect_feedback(format.rtcp_feedback(), capability_format.rtcp_feedback());
-        consumable_formats.push(clone_format_with_overrides(
+        consumable_formats.push(format_with_overrides(
             format,
-            mapped_payload_type,
+            negotiated_payload_type,
             None,
             &feedback,
         ));
@@ -160,7 +159,7 @@ pub fn derive_consumable_rtp_parameters(
             continue;
         }
         let associated_payload_type = parse_rtx_associated_payload(format)?;
-        let Some(mapped_associated_payload_type) = mapped_media_payload_by_original_payload
+        let Some(negotiated_associated_payload_type) = producer_to_router_payload_types
             .iter()
             .find_map(|(original, mapped)| {
                 (*original == associated_payload_type).then_some(*mapped)
@@ -173,7 +172,7 @@ pub fn derive_consumable_rtp_parameters(
             });
         };
         let Some(capability_format) =
-            find_matching_rtx_capability(format, mapped_associated_payload_type, capabilities)
+            find_matching_rtx_capability(format, negotiated_associated_payload_type, capabilities)
         else {
             // Unlike a primary media codec, RTX is an auxiliary retransmission format.
             // If the router does not support this RTX pairing, the media stream can still
@@ -181,13 +180,13 @@ pub fn derive_consumable_rtp_parameters(
             // the whole negotiation.
             continue;
         };
-        let mapped_payload_type = mapped_payload_type(capability_format, format);
+        let negotiated_payload_type = negotiated_payload_type(capability_format, format);
         let feedback =
             intersect_feedback(format.rtcp_feedback(), capability_format.rtcp_feedback());
-        consumable_formats.push(clone_format_with_overrides(
+        consumable_formats.push(format_with_overrides(
             format,
-            mapped_payload_type,
-            Some(mapped_associated_payload_type),
+            negotiated_payload_type,
+            Some(negotiated_associated_payload_type),
             &feedback,
         ));
     }
@@ -206,7 +205,7 @@ pub fn derive_consumable_rtp_parameters(
     let bindings = producer_parameters
         .bindings()
         .map(|binding| {
-            clone_binding_with_payload_mapping(binding, &mapped_media_payload_by_original_payload)
+            clone_binding_with_payload_mapping(binding, &producer_to_router_payload_types)
         })
         .collect::<Vec<_>>();
 
@@ -254,7 +253,7 @@ pub fn negotiate_consumer_rtp_parameters(
             let feedback =
                 intersect_feedback(format.rtcp_feedback(), capability_format.rtcp_feedback());
             let feedback = apply_bwe_feedback_policy(feedback, feedback_policy);
-            Some(clone_format_with_overrides(
+            Some(format_with_overrides(
                 format,
                 format.payload_type_id(),
                 None,
@@ -283,7 +282,7 @@ pub fn negotiate_consumer_rtp_parameters(
         let feedback =
             intersect_feedback(format.rtcp_feedback(), capability_format.rtcp_feedback());
         let feedback = apply_bwe_feedback_policy(feedback, feedback_policy);
-        negotiated_formats.push(clone_format_with_overrides(
+        negotiated_formats.push(format_with_overrides(
             format,
             format.payload_type_id(),
             None,
@@ -329,7 +328,7 @@ pub fn can_consume(
 ///
 /// This keeps PT assignment under capability control without forcing every
 /// capability entry to hardcode payload types.
-fn mapped_payload_type(
+fn negotiated_payload_type(
     capability_format: &MediaCodecCapability,
     format: &MediaFormat,
 ) -> PayloadType {
@@ -361,7 +360,7 @@ fn find_matching_media_capability<'a>(
 /// through `apt`
 fn find_matching_rtx_capability<'a>(
     format: &MediaFormat,
-    mapped_associated_payload_type: PayloadType,
+    negotiated_associated_payload_type: PayloadType,
     capabilities: &'a MediaCapabilities,
 ) -> Option<&'a MediaCodecCapability> {
     capabilities.codecs().find(|capability_format| {
@@ -371,7 +370,7 @@ fn find_matching_rtx_capability<'a>(
                 matches!(
                     setting,
                     CodecSetting::RtxAssociation(payload_type)
-                    if *payload_type == mapped_associated_payload_type
+                    if *payload_type == negotiated_associated_payload_type
                 )
             })
     })
@@ -551,7 +550,7 @@ fn parse_rtx_associated_payload(format: &MediaFormat) -> Result<PayloadType, Rtp
 /// to be rewritten after payload-type remapping. RTCP feedback is also rebuilt
 /// from the negotiated intersection rather than just copied, so the result
 /// only advertises mutually supported feedback mechanisms.
-fn clone_format_with_overrides(
+fn format_with_overrides(
     source: &MediaFormat,
     payload_type: PayloadType,
     apt_override: Option<PayloadType>,
@@ -618,7 +617,7 @@ fn clone_binding(source: &StreamBinding) -> StreamBinding {
 /// the producer's private PT numbering.
 fn clone_binding_with_payload_mapping(
     source: &StreamBinding,
-    mapped_media_payload_by_original_payload: &[(PayloadType, PayloadType)],
+    producer_to_router_payload_types: &[(PayloadType, PayloadType)],
 ) -> StreamBinding {
     let mut binding = StreamBinding::new();
     if let Some(ssrc) = source.ssrc_id() {
@@ -628,11 +627,11 @@ fn clone_binding_with_payload_mapping(
         binding = binding.with_rid(rid.clone());
     }
     if let Some(payload_type) = source.payload_type_id() {
-        let mapped_payload_type = mapped_media_payload_by_original_payload
+        let negotiated_payload_type = producer_to_router_payload_types
             .iter()
             .find_map(|(original, mapped)| (*original == payload_type).then_some(*mapped))
             .unwrap_or(payload_type);
-        binding = binding.with_payload_type(mapped_payload_type);
+        binding = binding.with_payload_type(negotiated_payload_type);
     }
     if let Some(max_bitrate) = source.max_bitrate() {
         binding = binding.with_max_bitrate(max_bitrate);

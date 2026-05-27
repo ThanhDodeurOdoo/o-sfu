@@ -438,11 +438,6 @@ impl MediaCodecCapability {
     }
 
     #[must_use]
-    pub fn with_preferred_payload_type(self, payload_type: u8) -> Self {
-        self.with_payload_type(payload_type)
-    }
-
-    #[must_use]
     pub fn with_channels(mut self, channels: u16) -> Self {
         self.channels = Some(channels);
         self
@@ -748,11 +743,6 @@ impl StreamBinding {
     }
 
     #[must_use]
-    pub fn with_codec_payload_type(self, payload_type: u8) -> Self {
-        self.with_payload_type(payload_type)
-    }
-
-    #[must_use]
     pub fn max_bitrate(&self) -> Option<u64> {
         self.max_bitrate
     }
@@ -795,20 +785,12 @@ impl MediaStream {
         self.formats.iter()
     }
 
-    pub fn codecs(&self) -> impl Iterator<Item = &MediaFormat> {
-        self.formats()
-    }
-
     pub fn header_extensions(&self) -> impl Iterator<Item = &HeaderExtension> {
         self.header_extensions.iter()
     }
 
     pub fn bindings(&self) -> impl Iterator<Item = &StreamBinding> {
         self.bindings.iter()
-    }
-
-    pub fn encodings(&self) -> impl Iterator<Item = &StreamBinding> {
-        self.bindings()
     }
 
     #[must_use]

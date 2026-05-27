@@ -61,7 +61,7 @@ pub(super) struct RegisteredRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RequestTracker {
     next_request_counter: u64,
-    next_request_timeout_timer_id: u32,
+    next_timeout_timer_id: u32,
     pending_requests: BTreeMap<RequestId, PendingRequestState>,
     request_timeouts: BTreeMap<u32, RequestId>,
 }
@@ -77,7 +77,7 @@ impl RequestTracker {
     pub(super) fn new() -> Self {
         Self {
             next_request_counter: 0,
-            next_request_timeout_timer_id: REQUEST_TIMEOUT_TIMER_ID_BASE,
+            next_timeout_timer_id: REQUEST_TIMEOUT_TIMER_ID_BASE,
             pending_requests: BTreeMap::new(),
             request_timeouts: BTreeMap::new(),
         }
@@ -99,7 +99,7 @@ impl RequestTracker {
     /// under `request_id` and schedule the timeout under `timeout_timer_id`.
     pub(super) fn register_request(&mut self, kind: PendingRequestKind) -> RegisteredRequest {
         let request_id = self.next_request_id();
-        let timeout_timer_id = self.next_request_timeout_timer_id();
+        let timeout_timer_id = self.next_timeout_timer_id();
         self.pending_requests.insert(
             request_id.clone(),
             PendingRequestState {
@@ -193,9 +193,10 @@ impl RequestTracker {
     /// one timer cancellation and one failed resolution, which keeps the host
     /// side from leaking promises or waiting on timers that no longer matter.
     pub(super) fn clear_with_commands(&mut self) -> Commands {
-        let pending_request_ids: Vec<RequestId> = self.pending_requests.keys().cloned().collect();
+        let negotiation_request_ids: Vec<RequestId> =
+            self.pending_requests.keys().cloned().collect();
         let mut commands = Vec::new();
-        for request_id in pending_request_ids {
+        for request_id in negotiation_request_ids {
             let Some(pending_request) = self.pending_requests.remove(&request_id) else {
                 continue;
             };
@@ -218,10 +219,10 @@ impl RequestTracker {
         request_id
     }
 
-    fn next_request_timeout_timer_id(&mut self) -> u32 {
-        let timer_id = self.next_request_timeout_timer_id;
-        self.next_request_timeout_timer_id = self
-            .next_request_timeout_timer_id
+    fn next_timeout_timer_id(&mut self) -> u32 {
+        let timer_id = self.next_timeout_timer_id;
+        self.next_timeout_timer_id = self
+            .next_timeout_timer_id
             .saturating_add(1)
             .max(REQUEST_TIMEOUT_TIMER_ID_BASE);
         timer_id

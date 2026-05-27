@@ -203,13 +203,13 @@ export class LocalUploads {
         if (!peerConnection) {
             return { attached: [], skipped: [] };
         }
-        const pendingTracks = orderedStreamTypes().filter(
+        const pendingStreamTypes = orderedStreamTypes().filter(
             (streamType) =>
                 (this._localTracks.get(streamType) ?? null) !== null &&
                 this._uploadIntentByType.has(streamType) &&
                 !this._senderMidByType.has(streamType)
         );
-        if (pendingTracks.length === 0) {
+        if (pendingStreamTypes.length === 0) {
             return { attached: [], skipped: [] };
         }
         const knownMids = new Set(this._senderMidByType.values());
@@ -237,7 +237,7 @@ export class LocalUploads {
         const remainingSlots = uploadSlots.filter((slot) => transceiverMidSet.has(slot.mid));
         const attached: PendingRenegotiationAttachment[] = [];
         const skipped: StreamType[] = [];
-        for (const streamType of pendingTracks) {
+        for (const streamType of pendingStreamTypes) {
             const slotIndex = remainingSlots.findIndex(
                 (slot) => slot.kind === STREAM_KIND[streamType]
             );

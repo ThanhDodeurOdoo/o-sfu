@@ -3,7 +3,7 @@ use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
 
 use crate::{
     core::{NegotiationKind, ProtocolCore},
-    host_bridge::{CoreSnapshot, cloned_track_binding, connection_state_tag, host_commands},
+    host_bridge::{CoreSnapshot, connection_state_tag, project_commands, track_binding},
     shared::StreamType,
 };
 
@@ -43,7 +43,7 @@ impl WasmProtocolCore {
 
     #[wasm_bindgen(js_name = trackBinding)]
     pub fn track_binding_js(&self, mid: String) -> Result<JsValue, JsValue> {
-        to_js(&cloned_track_binding(&self.inner, &mid))
+        to_js(&track_binding(&self.inner, &mid))
     }
 
     pub fn connect(
@@ -52,65 +52,65 @@ impl WasmProtocolCore {
         jwt: String,
         room: Option<String>,
     ) -> Result<JsValue, JsValue> {
-        to_js(&host_commands(self.inner.connect(url, jwt, room)))
+        to_js(&project_commands(self.inner.connect(url, jwt, room)))
     }
 
     #[wasm_bindgen(js_name = onWsOpen)]
     pub fn on_ws_open(&mut self) -> Result<JsValue, JsValue> {
-        to_js(&host_commands(self.inner.on_ws_open()))
+        to_js(&project_commands(self.inner.on_ws_open()))
     }
 
     #[wasm_bindgen(js_name = onWsMessage)]
     pub fn on_ws_message(&mut self, frame: String) -> Result<JsValue, JsValue> {
-        to_js(&host_commands(self.inner.on_ws_message(&frame)))
+        to_js(&project_commands(self.inner.on_ws_message(&frame)))
     }
 
     #[wasm_bindgen(js_name = onTransportReady)]
     pub fn on_transport_ready(&mut self) -> Result<JsValue, JsValue> {
-        to_js(&host_commands(self.inner.on_transport_ready()))
+        to_js(&project_commands(self.inner.on_transport_ready()))
     }
 
     #[wasm_bindgen(js_name = onWsClose)]
     pub fn on_ws_close(&mut self, code: u16) -> Result<JsValue, JsValue> {
-        to_js(&host_commands(self.inner.on_ws_close(code)))
+        to_js(&project_commands(self.inner.on_ws_close(code)))
     }
 
     #[wasm_bindgen(js_name = onTimer)]
     pub fn on_timer(&mut self, timer_id: u32) -> Result<JsValue, JsValue> {
-        to_js(&host_commands(self.inner.on_timer(timer_id)))
+        to_js(&project_commands(self.inner.on_timer(timer_id)))
     }
 
     pub fn publish(&mut self, stream_type: String, active: bool) -> Result<JsValue, JsValue> {
         let stream_type = parse_stream_type(&stream_type)?;
-        to_js(&host_commands(self.inner.publish(stream_type, active)))
+        to_js(&project_commands(self.inner.publish(stream_type, active)))
     }
 
     pub fn subscribe(&mut self, user_id: JsValue, states: JsValue) -> Result<JsValue, JsValue> {
         let user_id = from_js(user_id)?;
         let states = from_js(states)?;
-        to_js(&host_commands(self.inner.subscribe(user_id, states)))
+        to_js(&project_commands(self.inner.subscribe(user_id, states)))
     }
 
     #[wasm_bindgen(js_name = updateInfo)]
     pub fn update_info(&mut self, info: JsValue) -> Result<JsValue, JsValue> {
         let info = from_js(info)?;
-        to_js(&host_commands(self.inner.update_info(info)))
+        to_js(&project_commands(self.inner.update_info(info)))
     }
 
     pub fn broadcast(&mut self, message: JsValue) -> Result<JsValue, JsValue> {
         let message = from_js(message)?;
-        to_js(&host_commands(self.inner.broadcast(message)))
+        to_js(&project_commands(self.inner.broadcast(message)))
     }
 
     #[wasm_bindgen(js_name = startRecording)]
     pub fn start_recording(&mut self, options: Option<JsValue>) -> Result<JsValue, JsValue> {
         let options = from_optional_js(options)?;
-        to_js(&host_commands(self.inner.start_recording(options)))
+        to_js(&project_commands(self.inner.start_recording(options)))
     }
 
     #[wasm_bindgen(js_name = stopRecording)]
     pub fn stop_recording(&mut self) -> Result<JsValue, JsValue> {
-        to_js(&host_commands(self.inner.stop_recording()))
+        to_js(&project_commands(self.inner.stop_recording()))
     }
 
     #[wasm_bindgen(js_name = submitNegotiationAnswer)]
@@ -121,7 +121,7 @@ impl WasmProtocolCore {
         sdp: String,
     ) -> Result<JsValue, JsValue> {
         let kind = parse_negotiation_kind(&negotiation_kind)?;
-        to_js(&host_commands(self.inner.submit_negotiation_answer(
+        to_js(&project_commands(self.inner.submit_negotiation_answer(
             &crate::signaling::RequestId::new(request_id),
             kind,
             sdp,
@@ -129,7 +129,7 @@ impl WasmProtocolCore {
     }
 
     pub fn disconnect(&mut self) -> Result<JsValue, JsValue> {
-        to_js(&host_commands(self.inner.disconnect()))
+        to_js(&project_commands(self.inner.disconnect()))
     }
 }
 

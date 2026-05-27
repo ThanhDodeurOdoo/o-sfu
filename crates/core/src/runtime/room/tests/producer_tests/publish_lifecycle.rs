@@ -181,10 +181,10 @@ async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
         })
         .expect("subscriber should receive INIT_CONSUMER");
     let RoomEventRequest::BootstrapRemoteTrack(payload) = request;
-    let codecs = payload.rtp_parameters().codecs().collect::<Vec<_>>();
-    assert_eq!(codecs.len(), 1);
-    assert_eq!(codecs[0].codec_name(), "VP8");
-    assert_eq!(codecs[0].payload_type(), 96);
+    let formats = payload.rtp_parameters().formats().collect::<Vec<_>>();
+    assert_eq!(formats.len(), 1);
+    assert_eq!(formats[0].codec_name(), "VP8");
+    assert_eq!(formats[0].payload_type(), 96);
 }
 
 #[tokio::test]

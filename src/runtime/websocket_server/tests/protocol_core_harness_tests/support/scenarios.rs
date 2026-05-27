@@ -311,7 +311,7 @@ async fn setup_protocol_peers_with(
     Ok((server, room, alice, bob))
 }
 
-pub(crate) async fn bob_update_info_and_deliver(
+pub(crate) async fn update_info_and_deliver_to_peer(
     bob: &mut ProtocolHarnessPeer,
     alice: &mut ProtocolHarnessPeer,
     info: ProtocolSessionInfo,

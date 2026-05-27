@@ -116,14 +116,14 @@ fn handle_negotiation_request(
     if core.pending_negotiation.is_some() {
         return protocol_error_commands();
     }
-    let pending_request_id = request_id.clone();
+    let negotiation_request_id = request_id.clone();
     core.pending_negotiation = Some(PendingNegotiation { request_id, kind });
     let mut commands = Vec::new();
     if kind == NegotiationKind::Offer && core.state == BundleConnectionState::Authenticated {
         commands.push(Command::CreatePeerConnection);
     }
     commands.push(Command::ApplyNegotiation {
-        request_id: pending_request_id,
+        request_id: negotiation_request_id,
         kind,
         sdp: payload.sdp,
         upload_slots: payload.upload_slots,

@@ -72,7 +72,7 @@ fn project_codec_capability(
     let spec = payload.spec();
     let mut codec =
         MediaCodecCapability::new(media_kind, spec.codec.to_string(), spec.clock_rate.get())
-            .with_preferred_payload_type(*payload.pt());
+            .with_payload_type(*payload.pt());
     if let Some(channels) = spec.channels {
         codec = codec.with_channels(u16::from(channels));
     }
@@ -94,7 +94,7 @@ fn project_rtx_capability(
             Codec::Rtx.to_string(),
             payload.spec().clock_rate.get(),
         )
-        .with_preferred_payload_type(*resend_payload_type)
+        .with_payload_type(*resend_payload_type)
         .with_parameter(rfc_rtp::fmtp::RTX_ASSOCIATION, payload.pt().to_string()),
     )
 }

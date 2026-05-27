@@ -102,7 +102,7 @@ export async function createPeerPage(context) {
 
 export async function connectPeer(page, { channelUuid, jwt, url = TEST_SFU_WS_URL }) {
     await page.evaluate(
-        async ({ channelUuid: nextChannelUuid, jwt: nextJwt, url: nextUrl }) => {
+        async ({ channelUuid, jwt, url }) => {
             const serializeTrack = (track) =>
                 track
                     ? {
@@ -144,8 +144,8 @@ export async function connectPeer(page, { channelUuid, jwt, url = TEST_SFU_WS_UR
             client.addEventListener("update", (event) => {
                 harness.updates.push(serializeUpdate(event.detail));
             });
-            client.connect(nextUrl, nextJwt, {
-                channelUUID: nextChannelUuid
+            client.connect(url, jwt, {
+                channelUUID: channelUuid
             });
         },
         { channelUuid, jwt, url }
@@ -195,17 +195,12 @@ export async function publishSyntheticVideo(page, streamType, label) {
     const colors = syntheticVideoColors(streamType, label);
     const fillPixel = pixelFromHex(colors[0]);
     return page.evaluate(
-        async ({
-            colors: nextColors,
-            fillPixel: nextFillPixel,
-            label: nextLabel,
-            streamType: nextStreamType
-        }) => {
+        async ({ colors, fillPixel, label, streamType }) => {
             const harness = globalThis.__liveHarness;
             if (!harness.client) {
                 throw new Error("browser harness client is not connected");
             }
-            await globalThis.__liveHarnessStopLocalMedia(harness, nextStreamType);
+            await globalThis.__liveHarnessStopLocalMedia(harness, streamType);
 
             const canvas = document.createElement("canvas");
             canvas.width = 96;
@@ -216,12 +211,12 @@ export async function publishSyntheticVideo(page, streamType, label) {
             }
             let frame = 0;
             const draw = () => {
-                context.fillStyle = nextColors[frame % nextColors.length];
+                context.fillStyle = colors[frame % colors.length];
                 context.fillRect(0, 0, canvas.width, canvas.height);
                 context.fillStyle = "#f3f4f6";
                 context.font = "14px sans-serif";
-                context.fillText(nextLabel, 8, 28);
-                context.fillText(nextStreamType, 8, 42);
+                context.fillText(label, 8, 28);
+                context.fillText(streamType, 8, 42);
                 context.fillText(String(frame), 8, 56);
                 frame += 1;
             };
@@ -232,17 +227,17 @@ export async function publishSyntheticVideo(page, streamType, label) {
             if (!track) {
                 throw new Error("expected synthetic canvas capture to expose a video track");
             }
-            harness.localMedia[nextStreamType] = {
+            harness.localMedia[streamType] = {
                 ticker,
                 track
             };
-            if (nextStreamType === "camera") {
+            if (streamType === "camera") {
                 harness.localTrack = track;
                 harness.localTrackTicker = ticker;
             }
-            harness.client.updateUpload(nextStreamType, track);
+            harness.client.updateUpload(streamType, track);
             return {
-                fillPixel: nextFillPixel,
+                fillPixel,
                 trackId: track.id
             };
         },
@@ -259,23 +254,18 @@ export async function setStreamDownload(
 ) {
     assertStreamType(streamType);
     await page.evaluate(
-        ({
-            active: nextActive,
-            layout: nextLayout,
-            streamType: nextStreamType,
-            targetSessionId: nextTargetSessionId
-        }) => {
+        ({ active, layout, streamType, targetSessionId }) => {
             const harness = globalThis.__liveHarness;
             if (!harness.client) {
                 throw new Error("browser harness client is not connected");
             }
             const states = {
-                [nextStreamType]: nextActive
+                [streamType]: active
             };
-            if (nextLayout !== undefined) {
-                states[`${nextStreamType}Layout`] = nextLayout;
+            if (layout !== undefined) {
+                states[`${streamType}Layout`] = layout;
             }
-            harness.client.updateDownload(nextTargetSessionId, states);
+            harness.client.updateDownload(targetSessionId, states);
         },
         { active, layout, streamType, targetSessionId }
     );
@@ -287,13 +277,13 @@ export async function setCameraDownload(page, targetSessionId, active, cameraLay
 
 export async function unpublishStream(page, streamType) {
     assertStreamType(streamType);
-    await page.evaluate(async (nextStreamType) => {
+    await page.evaluate(async (streamType) => {
         const harness = globalThis.__liveHarness;
         if (!harness.client) {
             throw new Error("browser harness client is not connected");
         }
-        harness.client.updateUpload(nextStreamType, null);
-        await globalThis.__liveHarnessStopLocalMedia(harness, nextStreamType);
+        harness.client.updateUpload(streamType, null);
+        await globalThis.__liveHarnessStopLocalMedia(harness, streamType);
     }, streamType);
 }
 
@@ -646,11 +636,11 @@ export async function waitForDecodedRemoteVideoFrame(
                         const decodedFrames =
                             video.getVideoPlaybackQuality?.().totalVideoFrames ??
                             (metadata ? metadata.presentedFrames : 0);
-                        const decodedFrameObserved =
+                        const hasDecodedFrame =
                             decodedFrames > initialDecodedFrames ||
                             metadata !== null ||
                             video.currentTime > initialCurrentTime;
-                        if (decodedFrameObserved) {
+                        if (hasDecodedFrame) {
                             const frame = drawDecodedFrame(
                                 video,
                                 usedVideoFrameCallback,

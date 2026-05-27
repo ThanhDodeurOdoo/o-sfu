@@ -243,7 +243,7 @@ async fn protocol_core_replays_latest_info_after_real_server_recovery() -> TestR
         recovery_peers(UserId::Integer(71), UserId::Integer(72)).await?;
 
     require_some(
-        bob_update_info_and_deliver(
+        update_info_and_deliver_to_peer(
             &mut bob,
             &mut alice,
             ProtocolSessionInfo {
@@ -307,7 +307,7 @@ async fn protocol_core_propagates_raise_hand_info_over_real_server_user_flow() -
         ..ProtocolSessionInfo::default()
     };
     require_some(
-        bob_update_info_and_deliver(&mut bob, &mut alice, latest_info.clone()).await,
+        update_info_and_deliver_to_peer(&mut bob, &mut alice, latest_info.clone()).await,
         "raise-hand info should deliver",
     )?;
     assert_eq!(

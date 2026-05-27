@@ -41,12 +41,12 @@ pub(super) use routes::{
 };
 pub(super) use rtc::reduced_capability_rtc;
 pub(super) use scenarios::{
-    bob_update_info_and_deliver, close_peer_and_observe_recovery,
-    close_peer_and_wait_for_room_cleanup, connect_protocol_peer, connect_until_welcome,
-    consume_camera_publish_bootstrap, publish_camera_and_bootstrap_subscriber,
-    recover_peer_with_latest_info, recover_publisher_and_replay_camera_publish,
-    recover_subscriber_and_replay_track, setup_protocol_peer, setup_protocol_peers,
-    setup_protocol_recovery_peers, setup_real_rtc_protocol_peers,
+    close_peer_and_observe_recovery, close_peer_and_wait_for_room_cleanup, connect_protocol_peer,
+    connect_until_welcome, consume_camera_publish_bootstrap,
+    publish_camera_and_bootstrap_subscriber, recover_peer_with_latest_info,
+    recover_publisher_and_replay_camera_publish, recover_subscriber_and_replay_track,
+    setup_protocol_peer, setup_protocol_peers, setup_protocol_recovery_peers,
+    setup_real_rtc_protocol_peers, update_info_and_deliver_to_peer,
 };
 
 pub(super) use self::{

@@ -584,9 +584,9 @@ fn declare_direct_send_media(
     if !has_media {
         api.declare_media(mid, media_kind);
     }
-    let source_encoding_count = consumer_rtp_parameters.encodings().count();
+    let source_encoding_count = consumer_rtp_parameters.bindings().count();
     let negotiated_ssrc = consumer_rtp_parameters
-        .encodings()
+        .bindings()
         .find_map(|encoding| encoding.ssrc().map(Ssrc::from));
     let ssrc = negotiated_ssrc.unwrap_or_else(|| api.new_ssrc());
     api.declare_stream_tx(ssrc, None, mid, None);
@@ -606,7 +606,7 @@ fn transport_mid(rtp_parameters: &RouterRtpParameters) -> Option<Mid> {
 
 fn recv_encoding_identities(rtp_parameters: &RouterRtpParameters) -> Vec<(Ssrc, Option<Rid>)> {
     rtp_parameters
-        .encodings()
+        .bindings()
         .filter_map(|encoding| {
             let ssrc = encoding.ssrc().map(Ssrc::from)?;
             Some((ssrc, encoding.rid().map(Into::into)))

@@ -234,7 +234,7 @@ export class RemoteTracks {
         states: DownloadStates | undefined
     ): AppliedTrackBinding {
         return {
-            active: binding.active && this.downloadStateForStreamType(states, binding.type),
+            active: binding.active && this.isDownloadEnabled(states, binding.type),
             sessionId: binding.sessionId,
             type: binding.type
         };
@@ -260,10 +260,7 @@ export class RemoteTracks {
         return merged;
     }
 
-    private downloadStateForStreamType(
-        states: DownloadStates | undefined,
-        streamType: StreamType
-    ): boolean {
+    private isDownloadEnabled(states: DownloadStates | undefined, streamType: StreamType): boolean {
         return states?.[streamType] ?? true;
     }
 

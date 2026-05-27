@@ -9,7 +9,7 @@ pub(super) fn initial_packet_gate(
     let mut first_rid = None;
     let mut lowest_bitrate_rid = None;
     let mut all_encodings_have_bitrate = true;
-    for encoding in consumer_rtp_parameters.encodings() {
+    for encoding in consumer_rtp_parameters.bindings() {
         let Some(rid) = encoding.rid().map(Rid::from) else {
             return PacketLayerGate::Open;
         };

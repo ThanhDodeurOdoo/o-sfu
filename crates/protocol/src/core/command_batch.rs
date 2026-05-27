@@ -245,7 +245,7 @@ fn validate_request_resolution(commands: &[Command]) -> Result<(), CommandBatchE
         let Command::ResolvePendingRequest { request_id, .. } = command else {
             continue;
         };
-        if has_close_peer || has_prior_request_resolution_input(commands, request_id, index) {
+        if has_close_peer || has_resolution_cause(commands, request_id, index) {
             continue;
         }
         return Err(CommandBatchError::UnknownResolvedRequest {
@@ -256,7 +256,7 @@ fn validate_request_resolution(commands: &[Command]) -> Result<(), CommandBatchE
     Ok(())
 }
 
-fn has_prior_request_resolution_input(
+fn has_resolution_cause(
     commands: &[Command],
     request_id: &RequestId,
     resolve_index: usize,

@@ -315,7 +315,7 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
         case CommandKind.CLOSE_PEER_CONNECTION:
             return command as HostCommand;
         case CommandKind.CLOSE_WEB_SOCKET:
-            requireInteger(command.code, `${context}.code`);
+            requireNonNegativeInteger(command.code, `${context}.code`);
             return command as HostCommand;
         case CommandKind.EMIT_STATE_CHANGE:
             validateConnectionState(command.state, `${context}.state`);
@@ -348,11 +348,11 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
             requireBoolean(command.ok, `${context}.ok`);
             return command as HostCommand;
         case CommandKind.SCHEDULE_TIMER:
-            requireInteger(command.id, `${context}.id`);
-            requireInteger(command.ms, `${context}.ms`);
+            requireNonNegativeInteger(command.id, `${context}.id`);
+            requireNonNegativeInteger(command.ms, `${context}.ms`);
             return command as HostCommand;
         case CommandKind.CANCEL_TIMER:
-            requireInteger(command.id, `${context}.id`);
+            requireNonNegativeInteger(command.id, `${context}.id`);
             return command as HostCommand;
         case CommandKind.CONNECT:
             requireString(command.url, `${context}.url`);
@@ -387,7 +387,7 @@ function validateClientUpdate(value: unknown, context: string): ClientUpdateDeta
             return update as ClientUpdateDetail;
         }
         case CLIENT_UPDATE.INFO_CHANGE: {
-            const payload = asStringKeyedRecord(update.payload, `${context}.payload`);
+            const payload = toStringKeyedRecord(update.payload, `${context}.payload`);
             for (const [sessionId, info] of Object.entries(payload)) {
                 validateSessionInfo(info, `${context}.payload.${sessionId}`);
             }
@@ -567,7 +567,7 @@ function asRecord(value: unknown, context: string): Record<string, unknown> {
     return value as Record<string, unknown>;
 }
 
-function asStringKeyedRecord(value: unknown, context: string): Record<string, unknown> {
+function toStringKeyedRecord(value: unknown, context: string): Record<string, unknown> {
     if (value instanceof Map) {
         return Object.fromEntries(
             [...value.entries()].map(([key, entryValue]) => [
@@ -613,7 +613,7 @@ function requireBooleanFields(
     }
 }
 
-function requireInteger(value: unknown, context: string): number {
+function requireNonNegativeInteger(value: unknown, context: string): number {
     if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
         throw new Error(`${context} must be a non-negative integer`);
     }

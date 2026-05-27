@@ -35,7 +35,7 @@ where
 
     /// count dependents indexed under one owner key
     #[must_use]
-    pub fn count(&self, key: K) -> usize {
+    pub fn dependent_count(&self, key: K) -> usize {
         self.entries
             .iter()
             .find_map(|(relation_key, values)| (*relation_key == key).then_some(values.len()))
@@ -387,7 +387,7 @@ pub fn router_satisfies_invariants<O: RouterObserver>(router: &Router<O>) -> boo
         && reverse_indices_are_exact(router)
         && transport_directions_are_valid(router)
         && consumer_media_matches_producer(router)
-        && consumer_pause_shadows_producer(router)
+        && consumer_route_shadows_producer(router)
 }
 
 /// validate that every stored owner id points to a live primary entity
@@ -494,7 +494,7 @@ fn consumer_media_matches_producer<O: RouterObserver>(router: &Router<O>) -> boo
 }
 
 /// validate that each consumer shadow matches its producer route state
-fn consumer_pause_shadows_producer<O: RouterObserver>(router: &Router<O>) -> bool {
+fn consumer_route_shadows_producer<O: RouterObserver>(router: &Router<O>) -> bool {
     for consumer in router.consumers.values() {
         let Some(producer) = router.producers.get(&consumer.producer_id()) else {
             return false;

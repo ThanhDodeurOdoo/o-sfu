@@ -49,15 +49,15 @@ impl SourcePolicyEffectPlan {
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
     ) -> Self {
         let ranked_active_speaker_sources = rank_active_speaker_sources(active_speaker_sources);
-        let mut consumer_packets =
+        let mut consumer_packet_updates =
             state.audio_route_activity_updates(&ranked_active_speaker_sources);
-        consumer_packets.extend(state.consumer_packet_selection_updates(
+        consumer_packet_updates.extend(state.consumer_packet_selection_updates(
             &ranked_active_speaker_sources,
             receiver_bandwidth_snapshot,
         ));
         let featured_users = state.featured_user_updates(&ranked_active_speaker_sources);
         Self {
-            consumer_packet_updates: consumer_packets,
+            consumer_packet_updates,
             featured_users,
         }
     }

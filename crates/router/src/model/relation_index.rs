@@ -397,7 +397,7 @@ impl RouterIndexes {
     /// this intentionally does not drain the relation
     /// it only gives the router a detached id list so consumer state can be
     /// updated while the index remains intact
-    pub(super) fn producer_consumers_for_update(
+    pub(super) fn producer_consumers_snapshot(
         &self,
         producer_id: ProducerId,
     ) -> impl IntoIterator<Item = ConsumerId> {

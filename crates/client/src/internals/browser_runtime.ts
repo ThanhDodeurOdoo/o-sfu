@@ -542,12 +542,12 @@ export class BrowserRuntime {
             sdp,
             type: "offer"
         });
-        const pendingAttachment = await localUploads.attachPendingTracks(
+        const attachmentResult = await localUploads.attachPendingTracks(
             this._peerConnection,
             uploadSlots
         );
-        if (pendingAttachment.attached.length > 0 || pendingAttachment.skipped.length > 0) {
-            for (const attachment of pendingAttachment.attached) {
+        if (attachmentResult.attached.length > 0 || attachmentResult.skipped.length > 0) {
+            for (const attachment of attachmentResult.attached) {
                 emitRuntimeLog(
                     hooks,
                     CLIENT_LOG_LEVEL.DEBUG,
@@ -567,7 +567,7 @@ export class BrowserRuntime {
                     );
                 }
             }
-            for (const streamType of pendingAttachment.skipped) {
+            for (const streamType of attachmentResult.skipped) {
                 emitRuntimeLog(
                     hooks,
                     CLIENT_LOG_LEVEL.WARN,

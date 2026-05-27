@@ -5,7 +5,7 @@
 
 use serde_json::json;
 
-use super::{CoreSnapshot, HostCommand, connection_state_tag, host_commands};
+use super::{CoreSnapshot, HostCommand, connection_state_tag, project_commands};
 use crate::{
     bundle_api::BundleConnectionState,
     core::{
@@ -42,7 +42,7 @@ fn core_snapshot_uses_public_state_labels() {
 
 #[test]
 fn host_command_bridge_converts_commands_to_camel_case_payloads() {
-    let commands = host_commands(
+    let commands = project_commands(
         CommandBatch::try_from_vec(vec![
             Command::ApplyNegotiation {
                 request_id: RequestId::new("7"),
@@ -128,7 +128,7 @@ fn host_command_bridge_converts_commands_to_camel_case_payloads() {
 
 #[test]
 fn host_command_bridge_projects_source_snapshots() {
-    let commands = host_commands(
+    let commands = project_commands(
         CommandBatch::try_from_vec(vec![Command::EmitEvent {
             event: ProtocolEvent::SourceSnapshot {
                 sources: vec![SourceDescriptor {
@@ -177,7 +177,7 @@ fn host_command_bridge_projects_source_snapshots() {
 
 #[test]
 fn host_command_bridge_expands_peer_departure_into_track_cleanup_and_update() {
-    let commands = host_commands(
+    let commands = project_commands(
         CommandBatch::try_from_vec(vec![Command::EmitEvent {
             event: ProtocolEvent::PeerLeft {
                 user_id: UserId::Integer(9),
@@ -210,7 +210,7 @@ fn host_command_bridge_expands_peer_departure_into_track_cleanup_and_update() {
 
 #[test]
 fn host_command_bridge_preserves_simple_commands() {
-    let command = host_commands(
+    let command = project_commands(
         CommandBatch::try_from_vec(vec![Command::CloseWebSocket { code: 4107 }])
             .expect("valid test command batch"),
     )

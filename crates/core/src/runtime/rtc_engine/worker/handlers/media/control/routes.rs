@@ -234,15 +234,15 @@ pub(in crate::runtime::rtc_engine::worker::handlers::media) fn register_consumer
 
 /// returns the payload type to write on packets sent to a consumer
 ///
-/// encoding-level payload types are preferred because they are the most
+/// binding-level payload types are preferred because they are the most
 /// specific negotiated value
-/// when encodings do not carry one, the first primary codec supplies the
+/// when bindings do not carry one, the first primary codec supplies the
 /// rewrite target
 pub(in crate::runtime::rtc_engine::worker::handlers::media) fn consumer_payload_type(
     consumer_rtp_parameters: &RouterRtpParameters,
 ) -> Option<Pt> {
     consumer_rtp_parameters
-        .encodings()
+        .bindings()
         .find_map(|encoding| encoding.payload_type().map(Pt::from))
         .or_else(|| {
             consumer_rtp_parameters

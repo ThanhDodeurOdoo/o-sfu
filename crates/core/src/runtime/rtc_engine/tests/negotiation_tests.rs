@@ -394,7 +394,7 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
         .negotiated_producer_parameters(&session_key, transport_media_id)
         .await
         .expect("answered simulcast publish should project router RTP parameters");
-    let encodings = negotiated_parameters.encodings().collect::<Vec<_>>();
+    let encodings = negotiated_parameters.bindings().collect::<Vec<_>>();
     assert_eq!(encodings.len(), 2);
     assert_eq!(encodings[0].rid(), Some("lo"));
     assert_eq!(encodings[0].max_bitrate(), Some(150_000));
