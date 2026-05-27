@@ -23,7 +23,7 @@
 mod builder;
 mod config;
 mod policy_invalidation;
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(any(test, feature = "testing-transport", feature = "internal-benchmarks"))]
 pub mod test_support;
 mod types;
 mod workers;

@@ -16,14 +16,14 @@ use fixtures::{
     assert_remote_keyframe_command, assert_remote_packet_gate_command, drain_ready_sessions,
     expect_response, install_video_route, prepare_pending_selected_rid_route,
     prepare_source_session, prepare_source_session_with_rid, register_saturated_remote_source,
-    request_consumer_keyframe, response_channel,
+    request_consumer_keyframe,
 };
 use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
 use str0m::{
     media::{KeyframeRequestKind, MediaKind, Mid, Pt, Rid},
     rtp::Ssrc,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use super::{
     AddSendMediaRequest, apply_route_control_request, drain_due_rid_keyframe_refreshes,
@@ -260,7 +260,7 @@ fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate(
         first_consumer_transport_media_id,
         TransportSourceKey::new(source_session.clone(), source_transport_media_id),
     );
-    let (response_tx, response_rx) = response_channel();
+    let (response_tx, response_rx) = oneshot::channel();
     apply_route_control_request(
         &mut state,
         &RuntimeMetrics::default(),
@@ -307,7 +307,7 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
     );
 
     let consumer_route = route.consumer_route();
-    let (live_response_tx, live_response_rx) = response_channel();
+    let (live_response_tx, live_response_rx) = oneshot::channel();
     apply_route_control_request(
         &mut route.state,
         &RuntimeMetrics::default(),
@@ -328,7 +328,7 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
         None,
     );
 
-    let (stale_response_tx, stale_response_rx) = response_channel();
+    let (stale_response_tx, stale_response_rx) = oneshot::channel();
     apply_route_control_request(
         &mut route.state,
         &RuntimeMetrics::default(),
@@ -689,7 +689,7 @@ fn batched_consumer_packet_gates_keep_remote_relay_open_during_rid_bootstrap() {
         second_consumer_mid,
     );
 
-    let (response_tx, response_rx) = response_channel();
+    let (response_tx, response_rx) = oneshot::channel();
     respond_set_consumer_packet_gates(
         &mut state,
         &source,

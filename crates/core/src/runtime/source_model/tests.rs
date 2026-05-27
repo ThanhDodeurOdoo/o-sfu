@@ -66,6 +66,28 @@ fn source_encoding_with_policy_role(
     })
 }
 
+fn try_source_descriptor(
+    source_id: PublishedSourceId,
+    encodings: Vec<SourceEncodingDescriptor>,
+) -> Result<PublishedSourceDescriptor, SourceModelError> {
+    PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+        source_id,
+        owner: PublishedSourceOwner::new(UserId::Integer(42)),
+        stream_id: UserStreamId::new("main-video"),
+        media_kind: MediaKind::Video,
+        policy: SourcePolicy::hidden(),
+        mid: None,
+        encodings,
+    })
+}
+
+fn valid_source_descriptor(
+    source_id: PublishedSourceId,
+    encodings: Vec<SourceEncodingDescriptor>,
+) -> PublishedSourceDescriptor {
+    try_source_descriptor(source_id, encodings).expect("source descriptor should be valid")
+}
+
 fn selectable_encoding_ids(descriptor: &PublishedSourceDescriptor) -> Vec<SourceEncodingId> {
     descriptor
         .selectable_encodings()
@@ -145,14 +167,9 @@ fn descriptor_orders_selectable_encodings_by_bitrate() {
     let low_encoding_id = SourceEncodingId::from_raw(1);
     let middle_encoding_id = SourceEncodingId::from_raw(2);
     let high_encoding_id = SourceEncodingId::from_raw(3);
-    let descriptor = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+    let descriptor = valid_source_descriptor(
         source_id,
-        owner: PublishedSourceOwner::new(UserId::Integer(42)),
-        stream_id: UserStreamId::new("main-video"),
-        media_kind: MediaKind::Video,
-        policy: SourcePolicy::hidden(),
-        mid: None,
-        encodings: vec![
+        vec![
             source_encoding_with_options(
                 source_id,
                 high_encoding_id,
@@ -172,8 +189,7 @@ fn descriptor_orders_selectable_encodings_by_bitrate() {
                 Some(Bitrate::from_kbps(450)),
             ),
         ],
-    })
-    .expect("source descriptor should be valid");
+    );
 
     assert_eq!(
         selectable_encoding_ids(&descriptor),
@@ -193,20 +209,14 @@ fn descriptor_keeps_declared_selectable_order_without_bitrates() {
     let first_encoding_id = SourceEncodingId::from_raw(1);
     let second_encoding_id = SourceEncodingId::from_raw(2);
     let third_encoding_id = SourceEncodingId::from_raw(3);
-    let descriptor = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+    let descriptor = valid_source_descriptor(
         source_id,
-        owner: PublishedSourceOwner::new(UserId::Integer(42)),
-        stream_id: UserStreamId::new("main-video"),
-        media_kind: MediaKind::Video,
-        policy: SourcePolicy::hidden(),
-        mid: None,
-        encodings: vec![
+        vec![
             source_encoding_with_options(source_id, first_encoding_id, Some("a"), None),
             source_encoding_with_options(source_id, second_encoding_id, Some("b"), None),
             source_encoding_with_options(source_id, third_encoding_id, Some("c"), None),
         ],
-    })
-    .expect("source descriptor should be valid");
+    );
 
     assert_eq!(
         selectable_encoding_ids(&descriptor),
@@ -219,14 +229,9 @@ fn descriptor_orders_selectable_encodings_by_policy_role_without_bitrates() {
     let source_id = PublishedSourceId::from_raw(7);
     let high_encoding_id = SourceEncodingId::from_raw(1);
     let low_encoding_id = SourceEncodingId::from_raw(2);
-    let descriptor = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+    let descriptor = valid_source_descriptor(
         source_id,
-        owner: PublishedSourceOwner::new(UserId::Integer(42)),
-        stream_id: UserStreamId::new("main-video"),
-        media_kind: MediaKind::Video,
-        policy: SourcePolicy::hidden(),
-        mid: None,
-        encodings: vec![
+        vec![
             source_encoding_with_policy_role(
                 source_id,
                 high_encoding_id,
@@ -242,8 +247,7 @@ fn descriptor_orders_selectable_encodings_by_policy_role_without_bitrates() {
                 Some(UploadLayerPolicyRole::Thumbnail),
             ),
         ],
-    })
-    .expect("source descriptor should be valid");
+    );
 
     assert_eq!(
         selectable_encoding_ids(&descriptor),
@@ -254,14 +258,9 @@ fn descriptor_orders_selectable_encodings_by_policy_role_without_bitrates() {
 #[test]
 fn descriptor_excludes_selectable_encodings_when_rid_is_missing() {
     let source_id = PublishedSourceId::from_raw(7);
-    let descriptor = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+    let descriptor = valid_source_descriptor(
         source_id,
-        owner: PublishedSourceOwner::new(UserId::Integer(42)),
-        stream_id: UserStreamId::new("main-video"),
-        media_kind: MediaKind::Video,
-        policy: SourcePolicy::hidden(),
-        mid: None,
-        encodings: vec![
+        vec![
             source_encoding_with_options(
                 source_id,
                 SourceEncodingId::from_raw(1),
@@ -275,8 +274,7 @@ fn descriptor_excludes_selectable_encodings_when_rid_is_missing() {
                 Some(Bitrate::from_kbps(450)),
             ),
         ],
-    })
-    .expect("source descriptor should be valid");
+    );
 
     assert_eq!(descriptor.selectable_encoding_count(), 0);
     assert!(descriptor.selectable_encoding_by_rank(0).is_none());
@@ -287,18 +285,13 @@ fn descriptor_rejects_encoding_from_another_source() {
     let source_id = PublishedSourceId::from_raw(7);
     let other_source_id = PublishedSourceId::from_raw(8);
     let encoding_id = SourceEncodingId::from_raw(1);
-    let result = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
-        source_id,
-        owner: PublishedSourceOwner::new(UserId::Integer(42)),
-        stream_id: UserStreamId::new("main-video"),
-        media_kind: MediaKind::Video,
-        policy: SourcePolicy::hidden(),
-        mid: None,
-        encodings: vec![source_encoding(other_source_id, encoding_id, "lo")],
-    });
 
     assert_eq!(
-        result.unwrap_err(),
+        try_source_descriptor(
+            source_id,
+            vec![source_encoding(other_source_id, encoding_id, "lo")],
+        )
+        .unwrap_err(),
         SourceModelError::EncodingSourceMismatch {
             source_id,
             encoding_id,
@@ -311,21 +304,16 @@ fn descriptor_rejects_encoding_from_another_source() {
 fn descriptor_rejects_duplicate_encoding_ids() {
     let source_id = PublishedSourceId::from_raw(7);
     let encoding_id = SourceEncodingId::from_raw(1);
-    let result = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
-        source_id,
-        owner: PublishedSourceOwner::new(UserId::Integer(42)),
-        stream_id: UserStreamId::new("main-video"),
-        media_kind: MediaKind::Video,
-        policy: SourcePolicy::hidden(),
-        mid: None,
-        encodings: vec![
-            source_encoding(source_id, encoding_id, "lo"),
-            source_encoding(source_id, encoding_id, "hi"),
-        ],
-    });
 
     assert_eq!(
-        result.unwrap_err(),
+        try_source_descriptor(
+            source_id,
+            vec![
+                source_encoding(source_id, encoding_id, "lo"),
+                source_encoding(source_id, encoding_id, "hi"),
+            ],
+        )
+        .unwrap_err(),
         SourceModelError::DuplicateEncodingId {
             source_id,
             encoding_id,
