@@ -26,22 +26,22 @@ export async function applyUploadPublicationPolicy(
     plan: UploadPublicationPlan | undefined
 ): Promise<UploadPublicationPolicy> {
     if (streamType === "audio") {
-        return singleEncoding("audio uploads do not use simulcast");
+        return singleEncodingPolicy("audio uploads do not use simulcast");
     }
     if (!plan || plan.simulcastEncodings.length < MIN_SIMULCAST_ENCODINGS) {
-        return singleEncoding("offer did not advertise multiple simulcast encodings");
+        return singleEncodingPolicy("offer did not advertise multiple simulcast encodings");
     }
     if (!transceiver.sender.getParameters || !transceiver.sender.setParameters) {
-        return singleEncoding("sender parameter API is unavailable");
+        return singleEncodingPolicy("sender parameter API is unavailable");
     }
     if (!plan.simulcastEncodings.every(isValidSimulcastEncodingOffer)) {
-        return singleEncoding("offer advertised an invalid simulcast encoding profile");
+        return singleEncodingPolicy("offer advertised an invalid simulcast encoding profile");
     }
 
     const parameters = transceiver.sender.getParameters();
     const previousEncodings = Array.isArray(parameters.encodings) ? parameters.encodings : [];
     const encodings = plan.simulcastEncodings.map((encoding, index) =>
-        senderEncodingParameters(previousEncodings[index] ?? {}, encoding)
+        buildSenderEncodingParameters(previousEncodings[index] ?? {}, encoding)
     );
 
     try {
@@ -50,7 +50,7 @@ export async function applyUploadPublicationPolicy(
             encodings
         });
     } catch (error) {
-        return singleEncoding(
+        return singleEncodingPolicy(
             error instanceof Error
                 ? `sender rejected simulcast parameters: ${error.message}`
                 : "sender rejected simulcast parameters"
@@ -60,14 +60,14 @@ export async function applyUploadPublicationPolicy(
     return { kind: "simulcast" };
 }
 
-function singleEncoding(reason: string): UploadPublicationPolicy {
+function singleEncodingPolicy(reason: string): UploadPublicationPolicy {
     return {
         kind: "single",
         reason
     };
 }
 
-function senderEncodingParameters(
+function buildSenderEncodingParameters(
     previousEncoding: RTCRtpEncodingParameters,
     encoding: SimulcastEncodingOffer
 ): RTCRtpEncodingParameters {

@@ -326,8 +326,8 @@ fn apply_receiver_overload_policy(
     planned_routes: &mut [PlannedReceiverRoute<'_>],
     receiver_bandwidth: Bitrate,
 ) {
-    let mut selected_bitrate = selected_receiver_bitrate(planned_routes);
-    if selected_bitrate <= receiver_bandwidth {
+    let mut total_selected_bitrate = selected_receiver_bitrate(planned_routes);
+    if total_selected_bitrate <= receiver_bandwidth {
         return;
     }
     for route in planned_routes
@@ -336,12 +336,12 @@ fn apply_receiver_overload_policy(
     {
         let Some((selector, bitrate)) = cheapest_useful_selector(route.route.encodings()) else {
             route.action = VideoRouteAction::Pause(PolicyPauseReason::MissingUsableLayer);
-            selected_bitrate = selected_bitrate.saturating_sub(route.selected_bitrate);
+            total_selected_bitrate = total_selected_bitrate.saturating_sub(route.selected_bitrate);
             route.selected_bitrate = Bitrate::zero();
             continue;
         };
         if bitrate < route.selected_bitrate {
-            selected_bitrate = selected_bitrate
+            total_selected_bitrate = total_selected_bitrate
                 .saturating_sub(route.selected_bitrate)
                 .saturating_add(bitrate);
             route.selected_bitrate = bitrate;
@@ -349,7 +349,7 @@ fn apply_receiver_overload_policy(
             route.outcomes = BudgetSolverOutcomes::degraded();
         }
     }
-    if selected_bitrate <= receiver_bandwidth {
+    if total_selected_bitrate <= receiver_bandwidth {
         return;
     }
     let mut pause_order = planned_routes
@@ -363,13 +363,13 @@ fn apply_receiver_overload_policy(
         let Some(route) = planned_routes.get_mut(index) else {
             continue;
         };
-        if selected_bitrate <= receiver_bandwidth {
+        if total_selected_bitrate <= receiver_bandwidth {
             break;
         }
         let pause_reason = pause_reason_for_route(route);
         route.action = VideoRouteAction::Pause(pause_reason);
         route.outcomes = BudgetSolverOutcomes::paused();
-        selected_bitrate = selected_bitrate.saturating_sub(route.selected_bitrate);
+        total_selected_bitrate = total_selected_bitrate.saturating_sub(route.selected_bitrate);
         route.selected_bitrate = Bitrate::zero();
     }
 }
@@ -437,10 +437,10 @@ fn planned_route_update(
         }
         _ => RouteUpdatePlan::from_route(&route, outcomes),
     };
-    consumer_selection_update(route.route, update, budget)
+    consumer_packet_selection_update(route.route, update, budget)
 }
 
-fn consumer_selection_update(
+fn consumer_packet_selection_update(
     route: &ReceiverVideoRouteInput<'_>,
     update: RouteUpdatePlan,
     budget: ReceiverVideoBudgetDiagnostics,

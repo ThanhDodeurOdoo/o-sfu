@@ -42,13 +42,13 @@ fn derive_consumable_parameters_remap_primary_payloads_rtx_apt_and_bindings() {
     let capabilities = MediaCapabilities::new(
         vec![
             MediaCodecCapability::new(MediaKind::Video, "H264", 90_000)
-                .with_preferred_payload_type(101)
+                .with_payload_type(101)
                 .with_parameter(fmtp::H264_PACKETIZATION_MODE, "1")
                 .with_parameter(fmtp::H264_PROFILE_LEVEL_ID, "4d0032")
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None)),
             MediaCodecCapability::new(MediaKind::Video, "rtx", 90_000)
-                .with_preferred_payload_type(102)
+                .with_payload_type(102)
                 .with_parameter(fmtp::RTX_ASSOCIATION, "101"),
         ],
         vec![
@@ -78,7 +78,7 @@ fn derive_consumable_parameters_remap_primary_payloads_rtx_apt_and_bindings() {
             StreamBinding::new()
                 .with_rid("f")
                 .with_ssrc(1_234)
-                .with_codec_payload_type(111),
+                .with_payload_type(111),
         ],
     )
     .with_mid("video-0");
@@ -89,15 +89,18 @@ fn derive_consumable_parameters_remap_primary_payloads_rtx_apt_and_bindings() {
         return;
     };
 
-    let codecs = consumable.codecs().collect::<Vec<_>>();
-    assert_eq!(codecs.len(), 2);
+    let formats = consumable.formats().collect::<Vec<_>>();
+    assert_eq!(formats.len(), 2);
     assert_eq!(
-        codecs.first().map(|format| format.payload_type()),
+        formats.first().map(|format| format.payload_type()),
         Some(101)
     );
-    assert_eq!(codecs.get(1).map(|format| format.payload_type()), Some(102));
     assert_eq!(
-        codecs.get(1).and_then(|format| {
+        formats.get(1).map(|format| format.payload_type()),
+        Some(102)
+    );
+    assert_eq!(
+        formats.get(1).and_then(|format| {
             format
                 .parameters()
                 .find_map(|(name, value)| (name == fmtp::RTX_ASSOCIATION).then_some(value))
@@ -125,10 +128,9 @@ fn derive_consumable_parameters_remap_primary_payloads_rtx_apt_and_bindings() {
 fn derive_consumable_parameters_reject_invalid_rtx_apt_values() {
     let capabilities = MediaCapabilities::new(
         vec![
-            MediaCodecCapability::new(MediaKind::Video, "VP8", 90_000)
-                .with_preferred_payload_type(100),
+            MediaCodecCapability::new(MediaKind::Video, "VP8", 90_000).with_payload_type(100),
             MediaCodecCapability::new(MediaKind::Video, "rtx", 90_000)
-                .with_preferred_payload_type(101)
+                .with_payload_type(101)
                 .with_parameter(fmtp::RTX_ASSOCIATION, "100"),
         ],
         vec![],
@@ -172,12 +174,12 @@ fn consumer_negotiation_prunes_transport_cc_when_only_abs_send_time_survives() {
     let consumer_capabilities = MediaCapabilities::new(
         vec![
             MediaCodecCapability::new(MediaKind::Video, "VP8", 90_000)
-                .with_preferred_payload_type(100)
+                .with_payload_type(100)
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::GoogRemb, None)),
             MediaCodecCapability::new(MediaKind::Video, "rtx", 90_000)
-                .with_preferred_payload_type(101)
+                .with_payload_type(101)
                 .with_parameter(fmtp::RTX_ASSOCIATION, "96"),
         ],
         vec![HeaderExtension::new(
@@ -194,7 +196,7 @@ fn consumer_negotiation_prunes_transport_cc_when_only_abs_send_time_survives() {
     };
 
     let first_codec_feedback = negotiated
-        .codecs()
+        .formats()
         .next()
         .map(|format| {
             format
@@ -265,12 +267,8 @@ fn consumer_negotiation_filters_rtx_bindings_when_apt_does_not_match() {
         ],
         vec![],
         vec![
-            StreamBinding::new()
-                .with_ssrc(5_678)
-                .with_codec_payload_type(96),
-            StreamBinding::new()
-                .with_ssrc(5_679)
-                .with_codec_payload_type(97),
+            StreamBinding::new().with_ssrc(5_678).with_payload_type(96),
+            StreamBinding::new().with_ssrc(5_679).with_payload_type(97),
             StreamBinding::new().with_rid("fallback"),
         ],
     );
@@ -293,7 +291,7 @@ fn consumer_negotiation_filters_rtx_bindings_when_apt_does_not_match() {
 
     assert_eq!(
         negotiated
-            .codecs()
+            .formats()
             .map(MediaFormat::codec_name)
             .collect::<Vec<_>>(),
         vec!["VP8"]

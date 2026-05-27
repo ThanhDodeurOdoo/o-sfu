@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info};
 
 use crate::{
-    application::stream_catalog::value_for_stream_type,
+    application::stream_catalog::counter_for_stream_type,
     runtime::{
         RuntimeState, diagnostics,
         diagnostics::DiagnosticsUserLookup,
@@ -394,13 +394,13 @@ fn http_room_stats(snapshot: RuntimeRoomStatsSnapshot) -> RoomStatsResponse {
         users_stats: UsersStatsResponse {
             incoming_bit_rate: IncomingBitRateStatsResponse {
                 total: incoming_bitrate.total,
-                audio: value_for_stream_type(&incoming_bitrate.by_stream, StreamType::Audio),
-                camera: value_for_stream_type(&incoming_bitrate.by_stream, StreamType::Camera),
-                screen: value_for_stream_type(&incoming_bitrate.by_stream, StreamType::Screen),
+                audio: counter_for_stream_type(&incoming_bitrate.by_stream, StreamType::Audio),
+                camera: counter_for_stream_type(&incoming_bitrate.by_stream, StreamType::Camera),
+                screen: counter_for_stream_type(&incoming_bitrate.by_stream, StreamType::Screen),
             },
             count: snapshot.users_stats.count,
-            camera_count: value_for_stream_type(active_stream_counts, StreamType::Camera),
-            screen_count: value_for_stream_type(active_stream_counts, StreamType::Screen),
+            camera_count: counter_for_stream_type(active_stream_counts, StreamType::Camera),
+            screen_count: counter_for_stream_type(active_stream_counts, StreamType::Screen),
         },
         web_rtc_enabled: snapshot.web_rtc_enabled,
     }

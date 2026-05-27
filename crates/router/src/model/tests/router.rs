@@ -226,7 +226,7 @@ fn removing_a_producer_cleans_dependent_consumers_but_keeps_transports() {
 #[test]
 fn removing_a_producer_rejects_missing_owning_transport() {
     let observer = EventCaptureObserver::default();
-    let inspector = observer.clone();
+    let event_log = observer.clone();
     let mut router = Router::new_with_observer(ROUTER, observer);
 
     join_session(&mut router, PUBLISHER_SESSION);
@@ -254,7 +254,7 @@ fn removing_a_producer_rejects_missing_owning_transport() {
     );
     assert!(router_state_snapshot(&router).contains_producer(PRODUCER));
     assert_eq!(
-        inspector.recorded_events(),
+        event_log.recorded_events(),
         vec![
             RouterEvent::SessionJoined {
                 session_id: PUBLISHER_SESSION,
@@ -736,7 +736,7 @@ fn joined_sessions_store_only_router_lifecycle_state() {
 #[test]
 fn explicit_producer_removal_emits_one_removal_event() {
     let observer = EventCaptureObserver::default();
-    let inspector = observer.clone();
+    let event_log = observer.clone();
     let mut router = Router::new_with_observer(ROUTER, observer);
 
     join_session(&mut router, PUBLISHER_SESSION);
@@ -756,7 +756,7 @@ fn explicit_producer_removal_emits_one_removal_event() {
     assert_eq!(router.remove_producer(PRODUCER), Ok(()));
 
     assert_eq!(
-        inspector.recorded_events(),
+        event_log.recorded_events(),
         vec![
             RouterEvent::SessionJoined {
                 session_id: PUBLISHER_SESSION,
@@ -781,7 +781,7 @@ fn explicit_producer_removal_emits_one_removal_event() {
 #[test]
 fn missing_producer_removal_emits_no_removal_event() {
     let observer = EventCaptureObserver::default();
-    let inspector = observer.clone();
+    let event_log = observer.clone();
     let mut router = Router::new_with_observer(ROUTER, observer);
 
     assert_eq!(
@@ -789,7 +789,7 @@ fn missing_producer_removal_emits_no_removal_event() {
         Err(RouterError::MissingProducer(PRODUCER))
     );
 
-    assert!(inspector.recorded_events().is_empty());
+    assert!(event_log.recorded_events().is_empty());
 }
 
 #[derive(Clone, Default)]
@@ -812,7 +812,7 @@ impl RouterObserver for EventCaptureObserver {
 #[test]
 fn router_emits_session_and_producer_lifecycle_events() {
     let observer = EventCaptureObserver::default();
-    let inspector = observer.clone();
+    let event_log = observer.clone();
     let mut router = Router::new_with_observer(ROUTER, observer);
 
     join_session(&mut router, PUBLISHER_SESSION);
@@ -839,7 +839,7 @@ fn router_emits_session_and_producer_lifecycle_events() {
     assert_eq!(router.remove_session(SUBSCRIBER_SESSION), Ok(()));
 
     assert_eq!(
-        inspector.recorded_events(),
+        event_log.recorded_events(),
         vec![
             RouterEvent::SessionJoined {
                 session_id: PUBLISHER_SESSION,

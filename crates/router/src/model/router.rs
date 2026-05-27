@@ -263,7 +263,7 @@ impl<O: RouterObserver> Router<O> {
         };
         producer.set_route_state(route_state);
 
-        let consumer_ids = self.indexes.producer_consumers_for_update(producer_id);
+        let consumer_ids = self.indexes.producer_consumers_snapshot(producer_id);
         for consumer_id in consumer_ids {
             if let Some(consumer) = self.consumers.get_mut(&consumer_id) {
                 consumer.set_producer_route_state(route_state);

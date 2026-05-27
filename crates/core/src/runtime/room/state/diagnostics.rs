@@ -79,14 +79,11 @@ impl RoomState {
             .sources()
             .map(|source| {
                 let producer = self.media.producer_for_source(source.source_id());
-                let encodings = source
-                    .encodings()
-                    .map(diagnostics_source_encoding)
-                    .collect();
+                let encodings = source.encodings().map(source_encoding).collect();
                 let transport_media_id = producer.and_then(|producer| producer.transport_media_id);
                 DiagnosticsSource {
                     active: producer.is_some_and(|producer| producer.active),
-                    active_speaker: diagnostics_active_speaker(
+                    active_speaker: active_speaker(
                         source,
                         transport_media_id,
                         active_speaker_diagnostics_by_media,
@@ -96,7 +93,7 @@ impl RoomState {
                         .copied()
                         .unwrap_or_default(),
                     encodings,
-                    media_kind: diagnostics_media_kind(source.media_kind()),
+                    media_kind: media_kind(source.media_kind()),
                     mid: source.mid().map(|mid| mid.as_str().to_owned()),
                     owner_user_id: source.owner().user_id().clone(),
                     source_id: source.source_id().as_u64(),
@@ -158,7 +155,7 @@ impl RoomState {
                     .encodings()
                     .map(|encoding| encoding.encoding_id().as_u64())
                     .collect(),
-                media_kind: diagnostics_media_kind(producer.media_kind),
+                media_kind: media_kind(producer.media_kind),
                 source_id: producer.source_id.as_u64(),
                 stream_id: producer.stream_id.to_string(),
                 transport_media_id: producer.transport_media_id.map(TransportMediaId::as_u64),
@@ -192,7 +189,7 @@ impl RoomState {
                     layout_priority: layout_intent.map(|intent| intent.priority().into()),
                     layout_role: layout_intent.map(|intent| intent.role().into()),
                     producer_user_id: source.owner().user_id().clone(),
-                    selection: diagnostics_source_selection(source, selection),
+                    selection: source_selection(source, selection),
                     source_id: source.source_id().as_u64(),
                     source_transport_media_id: Some(route.state.source_media.as_u64()),
                     state: if route.producer.active && selection.delivery_active() {
@@ -219,7 +216,7 @@ impl RoomState {
                         layout_priority: layout_intent.map(|intent| intent.priority().into()),
                         layout_role: layout_intent.map(|intent| intent.role().into()),
                         producer_user_id: source.owner().user_id().clone(),
-                        selection: diagnostics_source_selection(source, selection),
+                        selection: source_selection(source, selection),
                         source_id: source.source_id().as_u64(),
                         source_transport_media_id: route
                             .producer
@@ -234,7 +231,7 @@ impl RoomState {
     }
 }
 
-fn diagnostics_source_encoding(encoding: &SourceEncodingDescriptor) -> DiagnosticsSourceEncoding {
+fn source_encoding(encoding: &SourceEncodingDescriptor) -> DiagnosticsSourceEncoding {
     let negotiated_format = encoding.negotiated_format();
     let max_temporal_layer_id = encoding
         .max_temporal_layer_id()
@@ -261,7 +258,7 @@ fn diagnostics_source_encoding(encoding: &SourceEncodingDescriptor) -> Diagnosti
     }
 }
 
-fn diagnostics_source_selection(
+fn source_selection(
     source: &PublishedSourceDescriptor,
     selection: ConsumerSourceSelection,
 ) -> DiagnosticsSourceSelection {
@@ -286,8 +283,8 @@ fn diagnostics_source_selection(
         policy_allows_delivery: selection.policy_allows_delivery(),
         policy_pause_reason: selection.policy_pause_reason().map(Into::into),
         pressure_observations: selection.pressure_observations(),
-        selection_reason: diagnostics_source_selection_reason(selection.selector()),
-        selector: diagnostics_source_selector(selection.selector()),
+        selection_reason: source_selection_reason(selection.selector()),
+        selector: source_selector(selection.selector()),
         selected_estimated_bitrate_bps: selected_encoding_id
             .and_then(|encoding_id| source.encoding(encoding_id))
             .and_then(SourceEncodingDescriptor::max_bitrate)
@@ -305,7 +302,7 @@ fn diagnostics_source_selection(
     }
 }
 
-fn diagnostics_active_speaker(
+fn active_speaker(
     source: &PublishedSourceDescriptor,
     transport_media_id: Option<TransportMediaId>,
     active_speaker_diagnostics_by_media: &BTreeMap<TransportMediaId, ActiveSpeakerSourceDiagnostic>,
@@ -320,14 +317,11 @@ fn diagnostics_active_speaker(
         active_speaker_diagnostics_by_media
             .get(&transport_media_id)
             .copied()
-            .map_or_else(
-                DiagnosticsActiveSpeaker::idle,
-                diagnostics_active_speaker_snapshot,
-            ),
+            .map_or_else(DiagnosticsActiveSpeaker::idle, active_speaker_snapshot),
     )
 }
 
-fn diagnostics_source_selector(value: SourceSelector) -> DiagnosticsSourceSelector {
+fn source_selector(value: SourceSelector) -> DiagnosticsSourceSelector {
     match value {
         SourceSelector::Open => DiagnosticsSourceSelector::Open,
         SourceSelector::Encoding(_) => DiagnosticsSourceSelector::Encoding,
@@ -356,7 +350,7 @@ fn diagnostics_source_selector(value: SourceSelector) -> DiagnosticsSourceSelect
     }
 }
 
-fn diagnostics_source_selection_reason(value: SourceSelector) -> DiagnosticsSourceSelectionReason {
+fn source_selection_reason(value: SourceSelector) -> DiagnosticsSourceSelectionReason {
     match value {
         SourceSelector::Open => DiagnosticsSourceSelectionReason::Open,
         SourceSelector::Encoding(_) | SourceSelector::OperatingPoint(_) => {
@@ -366,16 +360,14 @@ fn diagnostics_source_selection_reason(value: SourceSelector) -> DiagnosticsSour
     }
 }
 
-fn diagnostics_media_kind(value: o_sfu_router::MediaKind) -> DiagnosticsMediaKind {
+fn media_kind(value: o_sfu_router::MediaKind) -> DiagnosticsMediaKind {
     match value {
         o_sfu_router::MediaKind::Audio => DiagnosticsMediaKind::Audio,
         o_sfu_router::MediaKind::Video => DiagnosticsMediaKind::Video,
     }
 }
 
-fn diagnostics_active_speaker_snapshot(
-    diagnostic: ActiveSpeakerSourceDiagnostic,
-) -> DiagnosticsActiveSpeaker {
+fn active_speaker_snapshot(diagnostic: ActiveSpeakerSourceDiagnostic) -> DiagnosticsActiveSpeaker {
     DiagnosticsActiveSpeaker {
         state: diagnostic.state().into(),
         reason: diagnostic.reason().into(),
@@ -515,8 +507,8 @@ mod tests {
     fn source_encoding_diagnostics_distinguish_absent_temporal_metadata_from_base_layer() {
         let source_id = PublishedSourceId::from_raw(7);
         let absent_encoding =
-            diagnostics_source_encoding(&encoding(source_id, SourceEncodingId::from_raw(1), None));
-        let base_layer_encoding = diagnostics_source_encoding(&encoding(
+            source_encoding(&encoding(source_id, SourceEncodingId::from_raw(1), None));
+        let base_layer_encoding = source_encoding(&encoding(
             source_id,
             SourceEncodingId::from_raw(2),
             Some(SourceTemporalLayerId::base().as_u8()),
@@ -546,7 +538,7 @@ mod tests {
 
         let mut rid_selection = ConsumerSourceSelection::open(true);
         rid_selection.set_selector(SourceSelector::Encoding(encoding_id));
-        let rid_diagnostics = diagnostics_source_selection(&source, rid_selection);
+        let rid_diagnostics = source_selection(&source, rid_selection);
         assert_eq!(
             rid_diagnostics.temporal_layer_selection,
             DiagnosticsTemporalLayerSelection::NotSelected
@@ -557,7 +549,7 @@ mod tests {
         base_layer_selection.set_selector(SourceSelector::OperatingPoint(
             SourceOperatingPoint::new(encoding_id, SourceTemporalLayerId::base()),
         ));
-        let base_layer_diagnostics = diagnostics_source_selection(&source, base_layer_selection);
+        let base_layer_diagnostics = source_selection(&source, base_layer_selection);
         assert_eq!(
             base_layer_diagnostics.temporal_layer_selection,
             DiagnosticsTemporalLayerSelection::Selected

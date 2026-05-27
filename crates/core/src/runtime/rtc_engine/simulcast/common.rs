@@ -74,7 +74,7 @@ pub(super) fn layers_from_rid_bindings(
     rtp_parameters: &RouterRtpParameters,
 ) -> Option<Vec<SimulcastLayerSpec<'_>>> {
     let mut layers = Vec::new();
-    for encoding in rtp_parameters.encodings() {
+    for encoding in rtp_parameters.bindings() {
         let Some(rid) = encoding.rid() else {
             continue;
         };

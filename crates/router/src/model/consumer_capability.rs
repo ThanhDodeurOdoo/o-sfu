@@ -12,7 +12,7 @@ pub enum ConsumerCapability {
 
 impl ConsumerCapability {
     #[must_use]
-    pub const fn from_negotiation_result(can_consume: bool) -> Self {
+    pub const fn from_can_consume(can_consume: bool) -> Self {
         if can_consume {
             Self::Compatible
         } else {

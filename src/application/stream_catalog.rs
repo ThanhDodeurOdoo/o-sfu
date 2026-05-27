@@ -73,7 +73,7 @@ pub(crate) fn stream_type_for_stream_id(stream_id: &UserStreamId) -> Option<Stre
 /// HTTP stats still expose compatibility-shaped `audio`, `camera` and `screen`
 /// buckets. This helper keeps that projection at the application edge while
 /// diagnostics and room state stay keyed by [`UserStreamId`].
-pub(crate) fn value_for_stream_type(
+pub(crate) fn counter_for_stream_type(
     by_stream: &BTreeMap<UserStreamId, u64>,
     stream_type: StreamType,
 ) -> u64 {

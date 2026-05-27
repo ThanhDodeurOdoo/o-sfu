@@ -59,7 +59,7 @@ pub(super) fn source_packet_gate_for_selector(
 }
 
 #[cfg(test)]
-fn lowest_declared_encoding(source: &PublishedSourceDescriptor) -> Option<SourceEncodingId> {
+fn lowest_declared_encoding_id(source: &PublishedSourceDescriptor) -> Option<SourceEncodingId> {
     if source.selectable_encoding_count() < 2 {
         return None;
     }
@@ -149,7 +149,7 @@ mod tests {
     }
 
     #[test]
-    fn source_selector_bridge_projects_selected_encoding_to_rid_gate() {
+    fn projects_selected_encoding_to_rid_gate() {
         let source_id = PublishedSourceId::from_raw(7);
         let high_encoding_id = SourceEncodingId::from_raw(1);
         let low_encoding_id = SourceEncodingId::from_raw(2);
@@ -168,7 +168,7 @@ mod tests {
             ),
         ]);
 
-        let selector = lowest_declared_encoding(&source)
+        let selector = lowest_declared_encoding_id(&source)
             .map_or(SourceSelector::Open, SourceSelector::Encoding);
 
         assert_eq!(selector, SourceSelector::Encoding(low_encoding_id));
@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn source_selector_bridge_keeps_open_as_an_explicit_transport_gate() {
+    fn keeps_open_as_an_explicit_transport_gate() {
         let source_id = PublishedSourceId::from_raw(7);
         let source = source_with_encodings(vec![encoding(
             source_id,
@@ -195,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn source_selector_bridge_rejects_ridless_selected_encoding() {
+    fn rejects_ridless_selected_encoding() {
         let source_id = PublishedSourceId::from_raw(7);
         let encoding_id = SourceEncodingId::from_raw(1);
         let source = source_with_encodings(vec![encoding(source_id, encoding_id, None, None)]);
@@ -207,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn source_selector_bridge_projects_operating_point_to_transport_layer_gate() {
+    fn projects_operating_point_to_transport_layer_gate() {
         let source_id = PublishedSourceId::from_raw(7);
         let encoding_id = SourceEncodingId::from_raw(1);
         let source = source_with_encodings(vec![layered_encoding(
@@ -234,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn source_selector_bridge_rejects_operating_points_without_advertised_temporal_metadata() {
+    fn rejects_operating_points_without_advertised_temporal_metadata() {
         let source_id = PublishedSourceId::from_raw(7);
         let encoding_id = SourceEncodingId::from_raw(1);
         let source =
@@ -254,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn source_selector_bridge_projects_advertised_base_layer_operating_point() {
+    fn projects_advertised_base_layer_operating_point() {
         let source_id = PublishedSourceId::from_raw(7);
         let encoding_id = SourceEncodingId::from_raw(1);
         let source = source_with_encodings(vec![layered_encoding(
@@ -280,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn source_selector_bridge_rejects_operating_points_above_advertised_layer() {
+    fn rejects_operating_points_above_advertised_layer() {
         let source_id = PublishedSourceId::from_raw(7);
         let encoding_id = SourceEncodingId::from_raw(1);
         let source = source_with_encodings(vec![layered_encoding(source_id, encoding_id, None, 1)]);

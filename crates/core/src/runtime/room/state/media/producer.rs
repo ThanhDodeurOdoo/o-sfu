@@ -291,7 +291,7 @@ impl RoomState {
         let source_id = PublishedSourceId::allocate(&mut self.next_source_id);
         let encodings = pending
             .consumable_rtp_parameters
-            .encodings()
+            .bindings()
             .map(|binding| {
                 let encoding_id = SourceEncodingId::allocate(&mut self.next_source_encoding_id);
                 let upload_profile =

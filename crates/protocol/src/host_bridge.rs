@@ -159,7 +159,7 @@ pub enum HostCommand {
     },
 }
 
-fn host_commands_for_event(event: ProtocolEvent) -> Vec<HostCommand> {
+fn project_commands_for_event(event: ProtocolEvent) -> Vec<HostCommand> {
     match event {
         ProtocolEvent::TrackSnapshot { bindings } => {
             vec![HostCommand::ReplaceTrackBindings { bindings }]
@@ -183,18 +183,18 @@ fn host_commands_for_event(event: ProtocolEvent) -> Vec<HostCommand> {
 }
 
 #[must_use]
-pub fn host_commands(commands: CommandBatch) -> Vec<HostCommand> {
-    let mut host_commands = Vec::new();
+pub fn project_commands(commands: CommandBatch) -> Vec<HostCommand> {
+    let mut project_commands = Vec::new();
     for command in commands {
         match command {
             Command::SendWebSocket(frame) => {
-                host_commands.push(HostCommand::SendWebSocket { frame });
+                project_commands.push(HostCommand::SendWebSocket { frame });
             }
             Command::SetLocalUploadIntent {
                 stream_type,
                 active,
             } => {
-                host_commands.push(HostCommand::SetLocalUploadIntent {
+                project_commands.push(HostCommand::SetLocalUploadIntent {
                     stream_type,
                     active,
                 });
@@ -204,47 +204,51 @@ pub fn host_commands(commands: CommandBatch) -> Vec<HostCommand> {
                 kind,
                 sdp,
                 upload_slots,
-            } => host_commands.push(HostCommand::ApplyNegotiation {
+            } => project_commands.push(HostCommand::ApplyNegotiation {
                 request_id,
                 negotiation_kind: kind.into(),
                 sdp,
                 upload_slots,
             }),
             Command::AttachTrack { mid, stream_type } => {
-                host_commands.push(HostCommand::AttachTrack { mid, stream_type });
+                project_commands.push(HostCommand::AttachTrack { mid, stream_type });
             }
             Command::DetachTrack { stream_type } => {
-                host_commands.push(HostCommand::DetachTrack { stream_type });
+                project_commands.push(HostCommand::DetachTrack { stream_type });
             }
-            Command::CreatePeerConnection => host_commands.push(HostCommand::CreatePeerConnection),
-            Command::ClosePeerConnection => host_commands.push(HostCommand::ClosePeerConnection),
+            Command::CreatePeerConnection => {
+                project_commands.push(HostCommand::CreatePeerConnection);
+            }
+            Command::ClosePeerConnection => project_commands.push(HostCommand::ClosePeerConnection),
             Command::CloseWebSocket { code } => {
-                host_commands.push(HostCommand::CloseWebSocket { code });
+                project_commands.push(HostCommand::CloseWebSocket { code });
             }
             Command::EmitStateChange { state, cause } => {
-                host_commands.push(HostCommand::EmitStateChange {
+                project_commands.push(HostCommand::EmitStateChange {
                     state: connection_state_tag(state).to_owned(),
                     cause,
                 });
             }
-            Command::EmitEvent { event } => host_commands.extend(host_commands_for_event(event)),
+            Command::EmitEvent { event } => {
+                project_commands.extend(project_commands_for_event(event));
+            }
             Command::RegisterPendingRequest { request_id, kind } => {
-                host_commands.push(HostCommand::RegisterPendingRequest {
+                project_commands.push(HostCommand::RegisterPendingRequest {
                     request_id,
                     request_kind: kind.into(),
                 });
             }
             Command::ResolvePendingRequest { request_id, ok } => {
-                host_commands.push(HostCommand::ResolvePendingRequest { request_id, ok });
+                project_commands.push(HostCommand::ResolvePendingRequest { request_id, ok });
             }
             Command::ScheduleTimer { id, ms } => {
-                host_commands.push(HostCommand::ScheduleTimer { id, ms });
+                project_commands.push(HostCommand::ScheduleTimer { id, ms });
             }
-            Command::CancelTimer { id } => host_commands.push(HostCommand::CancelTimer { id }),
-            Command::Connect { url } => host_commands.push(HostCommand::Connect { url }),
+            Command::CancelTimer { id } => project_commands.push(HostCommand::CancelTimer { id }),
+            Command::Connect { url } => project_commands.push(HostCommand::Connect { url }),
         }
     }
-    host_commands
+    project_commands
 }
 
 #[must_use]
@@ -260,7 +264,7 @@ pub fn connection_state_tag(state: ConnectionState) -> &'static str {
 }
 
 #[must_use]
-pub fn cloned_track_binding(core: &ProtocolCore, mid: &str) -> Option<TrackBinding> {
+pub fn track_binding(core: &ProtocolCore, mid: &str) -> Option<TrackBinding> {
     core.track_binding(mid).cloned()
 }
 

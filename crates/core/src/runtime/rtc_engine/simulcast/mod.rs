@@ -193,7 +193,7 @@ pub(super) fn initial_consumer_packet_gate(
 }
 
 fn publish_uses_default_profile(rtp_parameters: &RouterRtpParameters) -> bool {
-    rtp_parameters.formats().next().is_none() && rtp_parameters.encodings().next().is_none()
+    rtp_parameters.formats().next().is_none() && rtp_parameters.bindings().next().is_none()
 }
 
 #[cfg(test)]

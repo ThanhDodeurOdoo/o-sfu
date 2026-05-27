@@ -28,8 +28,7 @@ fn protocol_start_recording_request_decodes_with_request_id() {
 }
 
 #[test]
-fn protocol_server_stop_recording_response_round_trips_through_server_envelope()
--> serde_json::Result<()> {
+fn stop_recording_response_round_trips() -> serde_json::Result<()> {
     let envelope = ServerEnvelope::Response {
         response_to: RequestId::new("recording-1"),
         response: ServerResponse::StopRecording(RecordingActionResult { ok: true }),

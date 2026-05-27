@@ -504,7 +504,7 @@ fn apply_plan(
     plan: LifecyclePlan,
     fresh_connect_context: Option<ConnectContext>,
 ) -> Commands {
-    let connect_url = connect_url(core, &plan, fresh_connect_context.as_ref());
+    let url = connect_url(core, &plan, fresh_connect_context.as_ref());
     core.state = model.state;
     core.recovery_delay_ms = model.recovery_delay_ms;
     if plan.reset_session_state {
@@ -536,7 +536,7 @@ fn apply_plan(
         core,
         plan.effects_after_cleanup,
     ));
-    if let Some(url) = connect_url {
+    if let Some(url) = url {
         commands.push(Command::Connect { url });
     }
     commands
@@ -567,17 +567,17 @@ fn connect_url(
 fn lifecycle_effects_to_commands(core: &ProtocolCore, effects: LifecycleEffects) -> Commands {
     match effects {
         LifecycleEffects::None => Vec::new(),
-        LifecycleEffects::One(first) => vec![lifecycle_effect_to_command(core, first)],
+        LifecycleEffects::One(first) => vec![effect_to_command(core, first)],
         LifecycleEffects::Three(first, second, third) => vec![
-            lifecycle_effect_to_command(core, first),
-            lifecycle_effect_to_command(core, second),
-            lifecycle_effect_to_command(core, third),
+            effect_to_command(core, first),
+            effect_to_command(core, second),
+            effect_to_command(core, third),
         ],
     }
 }
 
 /// projects one lifecycle effect into the protocol command boundary
-fn lifecycle_effect_to_command(_core: &ProtocolCore, effect: LifecycleEffect) -> Command {
+fn effect_to_command(_core: &ProtocolCore, effect: LifecycleEffect) -> Command {
     match effect {
         LifecycleEffect::EmitStateChange { state, cause } => Command::EmitStateChange {
             state,

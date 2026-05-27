@@ -208,12 +208,12 @@ impl RoomManager {
     /// result is best-effort, not like one atomic process-wide instant.
     pub async fn stats_snapshots(
         &self,
-        observability_port: &MediaTransport,
+        media_transport: &MediaTransport,
     ) -> Vec<RuntimeRoomStatsSnapshot> {
         let entries = self.directory_entries().await;
         let mut snapshots = Vec::with_capacity(entries.len());
         for entry in entries {
-            snapshots.push(self.entry_stats_snapshot(entry, observability_port).await);
+            snapshots.push(self.entry_stats_snapshot(entry, media_transport).await);
         }
         snapshots
     }
@@ -571,10 +571,10 @@ impl RoomManager {
     async fn entry_stats_snapshot(
         &self,
         entry: RoomDirectoryEntry,
-        observability_port: &MediaTransport,
+        media_transport: &MediaTransport,
     ) -> RuntimeRoomStatsSnapshot {
         let room = entry.room();
-        let users_stats = room.session_stats_snapshot(observability_port).await;
+        let users_stats = room.session_stats_snapshot(media_transport).await;
         RuntimeRoomStatsSnapshot {
             create_date: entry.create_date().to_owned(),
             uuid: room.uuid().to_owned(),

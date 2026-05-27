@@ -222,7 +222,7 @@ impl User {
         };
         let request_operation = action.operation_name();
         let committed_stream_ids = self
-            .apply_negotiation_action(action, &answer.sdp, &response_to, request_operation)
+            .apply_negotiation_answer(action, &answer.sdp, &response_to, request_operation)
             .await?;
         for stream_id in committed_stream_ids {
             if let Some(stream_type) = stream_type_for_stream_id(&stream_id) {
@@ -332,7 +332,7 @@ impl User {
         Ok(())
     }
 
-    async fn apply_negotiation_action(
+    async fn apply_negotiation_answer(
         &self,
         action: PendingUserAction,
         answer_sdp: &str,

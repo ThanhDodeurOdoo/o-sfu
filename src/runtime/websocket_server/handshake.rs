@@ -133,7 +133,7 @@ pub(super) async fn establish_user(
     pre_auth_permit: PreAuthWebSocketPermit,
 ) -> Option<ConnectedUser> {
     let authentication =
-        authenticate_handshake_session(state, writer, reader, remote_address.as_ref()).await?;
+        receive_and_authenticate(state, writer, reader, remote_address.as_ref()).await?;
     drop(pre_auth_permit);
     let mut joined_user =
         join_user(state, writer, authentication, Arc::clone(&remote_address)).await?;
@@ -216,14 +216,14 @@ async fn receive_auth_or_reject(
 /// the duration metric intentionally includes first-frame wait time plus JWT
 /// verification because both contribute to unauthenticated socket pressure
 #[o_sfu_telemetry::measure_duration(metrics = "state.metrics", record = "record_ws_auth_duration")]
-async fn authenticate_handshake_session(
+async fn receive_and_authenticate(
     state: &WebSocketServices,
     writer: &mut WsWriter,
     reader: &mut WsReader,
     remote_address: &str,
 ) -> Option<HandshakeAuthentication> {
     let auth_payload = receive_auth_or_reject(state, writer, reader, remote_address).await?;
-    authenticate_session(state, writer, &auth_payload, remote_address).await
+    verify_auth_or_reject(state, writer, &auth_payload, remote_address).await
 }
 
 /// extract the protocol auth payload from the first WebSocket message
@@ -311,7 +311,7 @@ fn extract_auth_envelope(batch: Vec<ClientEnvelope>) -> Result<AuthPayload, WebS
 /// untrusted token fields are used only for candidate room lookup when the
 /// payload has no channel
 /// the returned claims have passed room-key verification
-async fn authenticate(
+async fn verify_auth_payload(
     state: &WebSocketServices,
     auth_payload: &AuthPayload,
     remote_address: &str,
@@ -346,9 +346,9 @@ async fn resolve_handshake_room(
             debug!("authentication payload did not select a room");
             WebSocketCloseCode::AuthFailed
         })?;
-        return resolve_explicit_room(state, &unverified_claims.room_id).await;
+        return resolve_room_by_id(state, &unverified_claims.room_id).await;
     };
-    let room = resolve_explicit_room(state, explicit_room_id).await?;
+    let room = resolve_room_by_id(state, explicit_room_id).await?;
     Ok(room)
 }
 
@@ -357,7 +357,7 @@ async fn resolve_handshake_room(
 /// missing rooms are authentication failures because the client is trying to
 /// join an admission boundary that no longer exists or never existed in this
 /// process
-async fn resolve_explicit_room(
+async fn resolve_room_by_id(
     state: &WebSocketServices,
     room_id: &str,
 ) -> Result<Arc<Room>, WebSocketCloseCode> {
@@ -421,13 +421,13 @@ fn authenticate_room_scoped_claims(
 }
 
 /// authenticate a parsed payload and turn auth failures into terminal rejection
-async fn authenticate_session(
+async fn verify_auth_or_reject(
     state: &WebSocketServices,
     writer: &mut WsWriter,
     auth_payload: &AuthPayload,
     remote_address: &str,
 ) -> Option<HandshakeAuthentication> {
-    match authenticate(state, auth_payload, remote_address).await {
+    match verify_auth_payload(state, auth_payload, remote_address).await {
         Ok(result) => Some(result),
         Err(code) => {
             info!(

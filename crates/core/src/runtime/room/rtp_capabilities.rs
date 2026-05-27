@@ -114,7 +114,7 @@ fn audio_codec_capability(
     channels: Option<u16>,
 ) -> MediaCodecCapability {
     let codec = MediaCodecCapability::new(MediaKind::Audio, codec_name, clock_rate)
-        .with_preferred_payload_type(payload_type)
+        .with_payload_type(payload_type)
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None));
     match channels {
         Some(channel_count) => codec.with_channels(channel_count),
@@ -134,7 +134,7 @@ fn opus_codec_capability() -> MediaCodecCapability {
 
 fn video_codec_capability(codec_name: rtp::CodecName, payload_type: u8) -> MediaCodecCapability {
     MediaCodecCapability::new(MediaKind::Video, codec_name, 90_000)
-        .with_preferred_payload_type(payload_type)
+        .with_payload_type(payload_type)
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::Nack, None))
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
         .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::CcmFir, None))
@@ -186,7 +186,7 @@ fn video_rtx_codec_capability(
     associated_payload_type: u8,
 ) -> MediaCodecCapability {
     MediaCodecCapability::new(MediaKind::Video, rtp::CodecName::Rtx, 90_000)
-        .with_preferred_payload_type(payload_type)
+        .with_payload_type(payload_type)
         .with_setting(CodecSetting::RtxAssociation(associated_payload_type.into()))
 }
 

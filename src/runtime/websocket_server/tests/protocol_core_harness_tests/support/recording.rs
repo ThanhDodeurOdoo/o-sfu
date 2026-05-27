@@ -34,7 +34,8 @@ async fn drain_peer_until_pending_request_resolution(
 ) -> Option<RequestId> {
     timeout(Duration::from_secs(1), async {
         loop {
-            let Some(request_id) = pending_request_id(&peer.pending_request_commands, request_kind)
+            let Some(request_id) =
+                matching_request_id(&peer.pending_request_commands, request_kind)
             else {
                 peer.read_server_frame().await?;
                 continue;
@@ -65,7 +66,7 @@ pub(crate) async fn connect_protocol_recording_peer(
     Some(peer)
 }
 
-fn pending_request_id(
+fn matching_request_id(
     commands: &[HostCommand],
     request_kind: HostPendingRequestKind,
 ) -> Option<RequestId> {

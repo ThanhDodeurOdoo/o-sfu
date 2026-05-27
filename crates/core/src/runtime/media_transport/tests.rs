@@ -45,7 +45,7 @@ fn sample_capabilities() -> RouterRtpCapabilities {
         vec![
             MediaCodecCapability::new(RouterMediaKind::Audio, "opus", 48_000)
                 .with_channels(2)
-                .with_preferred_payload_type(111),
+                .with_payload_type(111),
         ],
         vec![],
     )

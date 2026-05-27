@@ -57,8 +57,7 @@ fn protocol_welcome_message_round_trips_to_wire_envelope() -> serde_json::Result
 }
 
 #[test]
-fn protocol_server_track_and_peer_messages_round_trip_to_wire_envelopes() -> serde_json::Result<()>
-{
+fn server_push_messages_round_trip() -> serde_json::Result<()> {
     let track_update = ServerMessage::Tracks(vec![TrackBinding {
         mid: String::from("0"),
         user_id: UserId::Integer(5),

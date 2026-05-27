@@ -794,7 +794,7 @@ function parseVideoCodecAnswer(sdp) {
     const lines = sdp.split(/\r?\n/);
     const h264Variants = new Set();
     const h264PayloadTypes = new Set();
-    const formatParametersByPayloadType = new Map();
+    const fmtpByPayloadType = new Map();
     const hasAnySendRid = lines.some((line) => /^a=rid:[^ ]+ send(?: |$)/.test(line));
     const hasAnySendSimulcast = lines.some((line) => /^a=simulcast:send /.test(line));
     const hasSendRidHi = lines.some((line) => /^a=rid:hi send(?: |$)/.test(line));
@@ -838,11 +838,11 @@ function parseVideoCodecAnswer(sdp) {
             continue;
         }
         const [, payloadType, formatParams] = fmtpMatch;
-        formatParametersByPayloadType.set(payloadType, parseFmtpParameters(formatParams));
+        fmtpByPayloadType.set(payloadType, parseFmtpParameters(formatParams));
     }
 
     for (const [payloadType, codecName] of videoPayloadTypes) {
-        const params = formatParametersByPayloadType.get(payloadType);
+        const params = fmtpByPayloadType.get(payloadType);
         if (!params) {
             continue;
         }
@@ -857,7 +857,7 @@ function parseVideoCodecAnswer(sdp) {
         }
     }
 
-    for (const [payloadType, params] of formatParametersByPayloadType) {
+    for (const [payloadType, params] of fmtpByPayloadType) {
         const codecName = videoPayloadTypes.get(payloadType);
         if (codecName === "rtx") {
             if (params.apt) {
