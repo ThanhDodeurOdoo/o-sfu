@@ -56,7 +56,7 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
             .remove_user_with_cleanup(
                 &UserId::Integer(1),
                 first_connection,
-                UserCleanup::state_only(None),
+                RoomEffectContext::state_only(None),
             )
             .await
     );
@@ -83,7 +83,7 @@ async fn leave_user_sends_departure_to_remaining_peers() {
     room.remove_user_with_cleanup(
         &UserId::Integer(2),
         bob_connection,
-        UserCleanup::state_only(None),
+        RoomEffectContext::state_only(None),
     )
     .await;
 
@@ -110,7 +110,7 @@ async fn negotiated_session_rejects_stale_connection() {
         room.remove_user_with_cleanup(
             &UserId::Integer(1),
             connection_id,
-            UserCleanup::state_only(Some(&media_transport)),
+            RoomEffectContext::state_only(Some(&media_transport)),
         )
         .await
     );
@@ -154,7 +154,7 @@ async fn removing_publisher_clears_media_state_and_transport_routes() {
         room.remove_user_with_cleanup(
             &UserId::Integer(1),
             connection_id,
-            UserCleanup::runtime(&media_transport),
+            RoomEffectContext::runtime(&media_transport),
         )
         .await
     );

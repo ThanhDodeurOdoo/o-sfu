@@ -1,7 +1,7 @@
 //! Post-lock effect plans for `Room` transitions.
 //!
 //! `RoomState` owns pure room mutation and validation under lock. This
-//! module contain the transport calls, diagnostics writes and fanout that must run
+//! module contains the transport calls, diagnostics writes and fanout that must run
 //! after that lock is released.
 //!
 //! 1. read or mutate room state under lock

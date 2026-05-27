@@ -2,7 +2,7 @@
 //!
 //! `RoomTopology` creates a receiver shadow session on a producer's source
 //! router when a receiver's home router is different. The pure router owns the
-//! real session, transport, producer and consumer maps. This module contain only
+//! real session, transport, producer and consumer maps. This module contains only
 //! the derived question that the pure router cannot answer by itself:
 //! Which receiver shadows are still justified by live routed consumer edges?
 //!

@@ -1,3 +1,9 @@
+//! user-scoped room operation handle plus domain-specific method groups
+
+mod media;
+mod membership;
+mod publish;
+
 use super::Room;
 use crate::runtime::{
     ConnectionId, UserId,

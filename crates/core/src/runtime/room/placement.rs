@@ -435,17 +435,17 @@ pub(super) enum RoomPlacementDecision {
 }
 
 #[derive(Debug)]
-pub(super) enum JoinPlacement {
+pub(super) enum JoinPlacementPlan {
     #[cfg(any(test, feature = "testing-transport"))]
     Resolved(ResolvedPlacement),
     Planned {
         decision: RoomPlacementDecision,
         worker_loads: WorkerLoadIndex,
-        media_worker_count: usize,
         policy: RoomWorkerPolicy,
     },
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::runtime::room) enum RoomPlacementDecisionReason {
     ExistingPlacementAvailable,
@@ -466,6 +466,7 @@ pub(in crate::runtime::room) struct LoadTriggeredPlacementState {
     activation_streak: usize,
     source_fanout_pressure: bool,
     cooldown_by_router: BTreeMap<RouterId, usize>,
+    #[cfg(test)]
     last_decision_reason: Option<RoomPlacementDecisionReason>,
 }
 
@@ -474,6 +475,7 @@ impl LoadTriggeredPlacementState {
         self.source_fanout_pressure = pressured;
     }
 
+    #[cfg(test)]
     fn record_decision(&mut self, reason: RoomPlacementDecisionReason) {
         self.last_decision_reason = Some(reason);
     }
@@ -522,17 +524,15 @@ impl LoadTriggeredPlacementState {
     }
 }
 
-impl JoinPlacement {
+impl JoinPlacementPlan {
     pub(super) fn planned(
         decision: RoomPlacementDecision,
         worker_loads: WorkerLoadIndex,
-        media_worker_count: usize,
         policy: RoomWorkerPolicy,
     ) -> Self {
         Self::Planned {
             decision,
             worker_loads,
-            media_worker_count,
             policy,
         }
     }
@@ -542,15 +542,14 @@ impl JoinPlacement {
         room: &RoomPlacementUsageSnapshot,
         allocate_spillover_router: impl FnOnce() -> RouterId,
     ) -> ResolvedPlacement {
-        let (decision, worker_loads, media_worker_count, policy) = match self {
+        let (decision, worker_loads, policy) = match self {
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Resolved(placement) => return placement,
             Self::Planned {
                 decision,
                 worker_loads,
-                media_worker_count,
                 policy,
-            } => (decision, worker_loads, media_worker_count, policy),
+            } => (decision, worker_loads, policy),
         };
         let assigned_placements = room.assigned_placements();
         let score_policy = score_policy(policy);
@@ -588,7 +587,10 @@ impl JoinPlacement {
                         media_worker: media_worker_id,
                     });
                 }
-                let placement_cap = policy.max_local_routers().min(media_worker_count).max(1);
+                let placement_cap = policy
+                    .max_local_routers()
+                    .min(worker_loads.worker_count())
+                    .max(1);
                 if assigned_placements.len() >= placement_cap {
                     return ResolvedPlacement(existing_placement);
                 }
@@ -654,6 +656,7 @@ impl WorkerPlacementLoad {
         }
     }
 
+    #[cfg(test)]
     fn pressure_reason(self, policy: LocalSpilloverPolicy) -> Option<RoomPlacementDecisionReason> {
         if self.session_count.saturating_add(1) >= policy.min_receiver_count() {
             return Some(RoomPlacementDecisionReason::ReceiverCountPressure);
@@ -691,7 +694,18 @@ impl WorkerPlacementLoad {
 
     /// whether adding another receiver would cross any spillover trigger
     fn is_overloaded(self, policy: LocalSpilloverPolicy) -> bool {
-        self.pressure_reason(policy).is_some()
+        self.session_count.saturating_add(1) >= policy.min_receiver_count()
+            || self.consumer_count >= policy.max_active_consumers_per_router()
+            || policy.egress_bitrate_threshold() > crate::Bitrate::zero()
+                && self.pressure.egress_bitrate >= policy.egress_bitrate_threshold()
+            || policy.packet_loop_lag_threshold_ms() > 0
+                && self.pressure.packet_loop_lag_ms >= policy.packet_loop_lag_threshold_ms()
+            || policy.command_backlog_threshold() > 0
+                && self.pressure.command_backlog_depth >= policy.command_backlog_threshold()
+            || policy.relay_mailbox_depth_threshold() > 0
+                && self.pressure.relay_mailbox_depth >= policy.relay_mailbox_depth_threshold()
+            || policy.worker_pressure_threshold() > 0
+                && self.pressure.worker_pressure_score >= policy.worker_pressure_threshold()
     }
 }
 
@@ -721,7 +735,6 @@ struct WorkerPlacementScore {
 /// this lets first-join placement prefer unused workers
 #[derive(Debug)]
 pub(super) struct WorkerLoadIndex {
-    media_worker_count: usize,
     loads: Vec<WorkerPlacementLoad>,
 }
 
@@ -752,10 +765,7 @@ impl WorkerLoadIndex {
                 *load = WorkerPlacementLoad::new(media_worker_id, snapshot.pressure);
             }
         }
-        Self {
-            media_worker_count,
-            loads,
-        }
+        Self { loads }
     }
 
     pub(super) fn record_session(&mut self, media_worker_id: usize) {
@@ -771,12 +781,12 @@ impl WorkerLoadIndex {
     }
 
     fn load_mut_for_worker(&mut self, media_worker_id: usize) -> Option<&mut WorkerPlacementLoad> {
-        self.loads
-            .get_mut(media_worker_id % self.media_worker_count)
+        let worker_count = self.worker_count();
+        self.loads.get_mut(media_worker_id % worker_count)
     }
 
     fn load_for_worker(&self, media_worker_id: usize) -> WorkerPlacementLoad {
-        let media_worker_id = media_worker_id % self.media_worker_count;
+        let media_worker_id = media_worker_id % self.worker_count();
         self.loads.get(media_worker_id).copied().unwrap_or_else(|| {
             WorkerPlacementLoad::new(
                 media_worker_id,
@@ -815,6 +825,10 @@ impl WorkerLoadIndex {
                 router: RouterId(0),
                 media_worker: 0,
             })
+    }
+
+    fn worker_count(&self) -> usize {
+        self.loads.len().max(1)
     }
 }
 
@@ -899,32 +913,43 @@ impl RoomPlacementPlanner {
             }
             RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) => {
                 let placement = load_index.least_loaded_placement(assigned_placements, policy);
-                let worker_pressure = load_index
-                    .load_for_worker(placement.media_worker)
-                    .pressure_reason(policy);
-                let pressure_reason = worker_pressure.or_else(|| {
+                let load = load_index.load_for_worker(placement.media_worker);
+                #[cfg(test)]
+                let pressure_reason = load.pressure_reason(policy).or_else(|| {
                     load_state
                         .source_fanout_pressure
                         .then_some(RoomPlacementDecisionReason::SourceFanoutPressure)
                 });
-                let Some(reason) = pressure_reason else {
+                #[cfg(test)]
+                if pressure_reason.is_none() {
                     load_state.reset_activation();
                     load_state
                         .record_decision(RoomPlacementDecisionReason::ExistingPlacementAvailable);
                     return RoomPlacementDecision::UseExisting(placement);
-                };
+                }
+                #[cfg(not(test))]
+                if !load.is_overloaded(policy) && !load_state.source_fanout_pressure {
+                    load_state.reset_activation();
+                    return RoomPlacementDecision::UseExisting(placement);
+                }
                 if !load_state.record_pressure(policy) {
+                    #[cfg(test)]
                     load_state.record_decision(RoomPlacementDecisionReason::ActivationWindowNotMet);
                     return RoomPlacementDecision::UseExisting(placement);
                 }
                 if assigned_placements.len() < placement_cap {
                     load_state.reset_activation();
+                    #[cfg(test)]
+                    let reason =
+                        pressure_reason.unwrap_or(RoomPlacementDecisionReason::WorkerPressure);
+                    #[cfg(test)]
                     load_state.record_decision(reason);
                     return RoomPlacementDecision::AllocateSpillover {
                         media_worker_id: load_index
                             .least_loaded_worker(assigned_placements, policy),
                     };
                 }
+                #[cfg(test)]
                 load_state.record_decision(RoomPlacementDecisionReason::LocalRouterCapReached);
                 RoomPlacementDecision::UseExisting(placement)
             }
@@ -1184,12 +1209,12 @@ mod tests {
         let second_decision = planner.choose(&stale_room, &hot_loads([0]));
         let mut allocation_count = 0;
 
-        let first_placement = JoinPlacement::planned(first_decision, hot_loads([0]), 2, policy)
+        let first_placement = JoinPlacementPlan::planned(first_decision, hot_loads([0]), policy)
             .resolve_for_commit(&stale_room, || {
                 allocation_count += 1;
                 RouterId(8)
             });
-        let second_placement = JoinPlacement::planned(second_decision, hot_loads([0]), 2, policy)
+        let second_placement = JoinPlacementPlan::planned(second_decision, hot_loads([0]), policy)
             .resolve_for_commit(
                 &room_with(vec![primary_placement(), placement(8, 1)]),
                 || {
@@ -1209,10 +1234,9 @@ mod tests {
         let stale_decision = RoomPlacementDecision::AssignPrimary { media_worker_id: 1 };
         let mut allocation_count = 0;
 
-        let placement = JoinPlacement::planned(
+        let placement = JoinPlacementPlan::planned(
             stale_decision,
             WorkerLoadIndex::new(2, Vec::new()),
-            2,
             RoomWorkerPolicy::strict_single_router(),
         )
         .resolve_for_commit(&primary_room(), || {
@@ -1229,10 +1253,9 @@ mod tests {
         let stale_decision = RoomPlacementDecision::UseExisting(placement(7, 1));
         let mut allocation_count = 0;
 
-        let placement = JoinPlacement::planned(
+        let placement = JoinPlacementPlan::planned(
             stale_decision,
             WorkerLoadIndex::new(2, Vec::new()),
-            2,
             RoomWorkerPolicy::strict_single_router(),
         )
         .resolve_for_commit(&primary_room(), || {

@@ -1,6 +1,6 @@
 //! Process-global room lookup and per-room lifecycle liveness.
 //!
-//! This module contain the boundary between "find or create the right room" and
+//! This module contains the boundary between "find or create the right room" and
 //! "run work only against a room that is still current". It keeps the directory
 //! keyed by issuer, UUID and instance id, and turns stale directory handles into
 //! no-ops before caller work runs.
@@ -17,11 +17,11 @@ pub(in crate::runtime::room) use self::test_support::JoinPlacementTestGate;
 use super::{
     Room, RoomConfig, RoomJoinError, RoomManagerJoinError, RoomRuntimePolicy,
     RoomUserStatsSnapshot, SourcePolicyEvent, UserOutboundSender,
-    cleanup::UserCleanup,
     directory::{RoomDirectory, RoomDirectoryEntry, RoomLifecycleLease},
+    effects::RoomEffectContext,
     factory::RoomFactory,
     membership::JoinSessionIntent,
-    placement::{JoinPlacement, RoomPlacementPlanner, WorkerLoadIndex},
+    placement::{JoinPlacementPlan, RoomPlacementPlanner, WorkerLoadIndex},
 };
 use crate::{
     RoomSpilloverMode,
@@ -367,7 +367,7 @@ impl RoomManager {
                             emit_joined_fanout: true,
                             placement,
                         },
-                        UserCleanup::runtime(media_transport),
+                        RoomEffectContext::runtime(media_transport),
                         || self.factory.allocate_spillover_router(),
                     )
                     .await
@@ -389,7 +389,7 @@ impl RoomManager {
         &self,
         room: &Arc<Room>,
         media_transport: &MediaTransport,
-    ) -> JoinPlacement {
+    ) -> JoinPlacementPlan {
         let room_snapshot = room.placement_usage_snapshot();
         let worker_loads = self.worker_load_index(media_transport).await;
         let policy = room.room_worker_policy();
@@ -408,7 +408,7 @@ impl RoomManager {
                 planner.choose(&room_snapshot, &worker_loads)
             }
         };
-        JoinPlacement::planned(decision, worker_loads, self.media_worker_count, policy)
+        JoinPlacementPlan::planned(decision, worker_loads, policy)
     }
 
     async fn worker_load_index(&self, media_transport: &MediaTransport) -> WorkerLoadIndex {

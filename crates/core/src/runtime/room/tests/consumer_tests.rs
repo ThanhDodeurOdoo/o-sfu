@@ -216,7 +216,7 @@ async fn user_leave_purges_producer_and_consumer_indexes() {
     room.remove_user_with_cleanup(
         &UserId::Integer(1),
         connection_id,
-        UserCleanup::state_only(None),
+        RoomEffectContext::state_only(None),
     )
     .await;
 

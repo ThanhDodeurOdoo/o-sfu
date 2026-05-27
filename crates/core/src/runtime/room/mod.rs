@@ -6,12 +6,13 @@
 //! `- Room
 //!    |- controller          -> room-facing facade and immutable accessors
 //!    |- lifecycle           -> close reasons and permission translation
-//!    |- membership          -> join, leave, readiness, presence and fanout
+//!    |- membership          -> join, leave and disconnect transition orchestration
+//!    |- operation           -> user-scoped membership, media and publish work
 //!    |- cleanup             -> transport cleanup execution and retry reconciliation
 //!    |- effects             -> explicit side-effect plans for transport, fanout, and diagnostics
 //!    |- state               -> locked mutable room model
 //!    |- user_negotiation    -> per-user transport readiness
-//!    |- media               -> publish and subscribe activity transitions
+//!    |- media               -> room-wide consumer bootstrap and publication lookup
 //!    |- recording           -> room-scoped recording policy
 //!    |- router_state        -> bridge into the router core
 //!    |- topology            -> routing placement boundary
@@ -80,5 +81,5 @@ pub use tests::api::{
 
 #[cfg(any(test, feature = "testing-transport"))]
 pub(in crate::runtime::room) use self::{
-    cleanup::UserCleanup, membership::JoinSessionIntent, placement::JoinPlacement,
+    effects::RoomEffectContext, membership::JoinSessionIntent, placement::JoinPlacementPlan,
 };

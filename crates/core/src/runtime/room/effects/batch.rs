@@ -52,22 +52,22 @@ pub(in crate::runtime::room) struct RoomEffectContext<'a> {
 }
 
 impl<'a> RoomEffectContext<'a> {
-    /// build a context when observation and cleanup permissions differ
-    pub(in crate::runtime::room) const fn new(
-        media_transport: Option<&'a MediaTransport>,
-        cleanup_media_transport: Option<&'a MediaTransport>,
-    ) -> Self {
-        Self {
-            media_transport,
-            cleanup_media_transport,
-        }
-    }
-
     /// build the production context for normal runtime room work
     pub(in crate::runtime::room) const fn runtime(media_transport: &'a MediaTransport) -> Self {
         Self {
             media_transport: Some(media_transport),
             cleanup_media_transport: Some(media_transport),
+        }
+    }
+
+    /// build a context that preserves room state effects without mutating transport cleanup state
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub(in crate::runtime::room) const fn state_only(
+        media_transport: Option<&'a MediaTransport>,
+    ) -> Self {
+        Self {
+            media_transport,
+            cleanup_media_transport: None,
         }
     }
 }
@@ -107,30 +107,37 @@ impl MediaCountDelta {
 /// called from packet forwarding paths
 #[derive(Debug, Default)]
 pub(in crate::runtime::room) struct RoomEffectBatch {
-    /// active-user gauge delta from a committed membership transition
-    user_count_delta: Option<UserCountDelta>,
-    /// media gauge deltas from committed publish, unpublish or subscribe work
-    media_count_deltas: Vec<MediaCountDelta>,
+    /// facts captured while room state was authoritative
+    mutation: CommittedRoomMutation,
     /// relay route mutations derived from room topology before unlock
     relay_effects: Vec<RelayRouteEffect>,
     /// detached media ids that cleanup.rs may retry if the adapter is unavailable
     transport_removals: Vec<TransportMediaRemoval>,
     /// detached transport users that no longer have an owning room session
     transport_user_closes: Vec<TransportUserCleanup>,
-    /// source policy event requested after committed room work
-    source_policy_event: Option<SourcePolicyEvent>,
     /// best-effort close requests and room fan-out captured by state
     lifecycle_effects: Vec<LifecycleEffects>,
-    /// diagnostics store mutations that must preserve caller order
-    diagnostics: Vec<DiagnosticsEffect>,
-    /// room event requests enqueued only after state and transport effects run
-    outbound_requests: Vec<OutboundRequestEffect>,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct UserCountDelta {
     before: usize,
     after: usize,
+}
+
+/// committed room-state facts consumed by the post-lock executor
+#[derive(Debug, Default)]
+struct CommittedRoomMutation {
+    /// active-user gauge delta from a committed membership transition
+    user_count_delta: Option<UserCountDelta>,
+    /// media gauge deltas from committed publish, unpublish or subscribe work
+    media_count_deltas: Vec<MediaCountDelta>,
+    /// source policy event requested after committed room work
+    source_policy_event: Option<SourcePolicyEvent>,
+    /// diagnostics store mutations that must preserve caller order
+    diagnostics: Vec<DiagnosticsEffect>,
+    /// room event requests enqueued only after state and transport effects run
+    outbound_requests: Vec<OutboundRequestEffect>,
 }
 
 /// detached transport user that should be closed after room state moves on
@@ -206,7 +213,7 @@ impl RoomEffectBatch {
         before: usize,
         after: usize,
     ) -> Self {
-        self.user_count_delta = Some(UserCountDelta { before, after });
+        self.mutation.user_count_delta = Some(UserCountDelta { before, after });
         self
     }
 
@@ -225,7 +232,7 @@ impl RoomEffectBatch {
         delta: Option<MediaCountDelta>,
     ) -> Self {
         if let Some(delta) = delta {
-            self.media_count_deltas.push(delta);
+            self.mutation.media_count_deltas.push(delta);
         }
         self
     }
@@ -235,7 +242,7 @@ impl RoomEffectBatch {
         mut self,
         delta: MediaCountDelta,
     ) -> Self {
-        self.media_count_deltas.push(delta);
+        self.mutation.media_count_deltas.push(delta);
         self
     }
 
@@ -271,7 +278,7 @@ impl RoomEffectBatch {
         mut self,
         event: SourcePolicyEvent,
     ) -> Self {
-        self.source_policy_event = Some(event);
+        self.mutation.source_policy_event = Some(event);
         self
     }
 
@@ -286,7 +293,8 @@ impl RoomEffectBatch {
 
     /// register a user in diagnostics after the join transition commits
     pub(in crate::runtime::room) fn register_diagnostics_user(mut self, user_id: UserId) -> Self {
-        self.diagnostics
+        self.mutation
+            .diagnostics
             .push(DiagnosticsEffect::RegisterUser(user_id));
         self
     }
@@ -296,14 +304,16 @@ impl RoomEffectBatch {
         mut self,
         diagnostics: DiagnosticsEventData,
     ) -> Self {
-        self.diagnostics
+        self.mutation
+            .diagnostics
             .push(DiagnosticsEffect::Record(diagnostics));
         self
     }
 
     /// forget a user in diagnostics after the room session is gone
     pub(in crate::runtime::room) fn forget_diagnostics_user(mut self, user_id: UserId) -> Self {
-        self.diagnostics
+        self.mutation
+            .diagnostics
             .push(DiagnosticsEffect::ForgetUser(user_id));
         self
     }
@@ -314,7 +324,8 @@ impl RoomEffectBatch {
         sender: OutboundSender,
         request: RoomEventRequest,
     ) -> Self {
-        self.outbound_requests
+        self.mutation
+            .outbound_requests
             .push(OutboundRequestEffect { sender, request });
         self
     }
@@ -343,16 +354,19 @@ impl RoomEffectBatch {
         context: RoomEffectContext<'_>,
     ) -> RoomEffectExecution {
         let Self {
-            user_count_delta,
-            media_count_deltas,
+            mutation,
             relay_effects,
             transport_removals,
             transport_user_closes,
-            source_policy_event,
             lifecycle_effects,
+        } = self;
+        let CommittedRoomMutation {
+            user_count_delta,
+            media_count_deltas,
+            source_policy_event,
             diagnostics,
             outbound_requests,
-        } = self;
+        } = mutation;
         Self::record_gauge_deltas(room, user_count_delta, &media_count_deltas);
         let relay_effects_applied =
             Self::execute_relay_effects(room, context, &relay_effects).await;
