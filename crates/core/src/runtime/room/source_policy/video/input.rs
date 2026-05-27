@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use o_sfu_router::MediaKind;
 
 use super::{
-    super::super::{media::ConsumerRouteTransportRef, shared::RoomState},
+    super::super::state::{ConsumerRouteTransportRef, RoomState},
     layout::{ReceiverVideoLayoutIntent, featured_source_user_ids_for_active_speakers},
 };
 use crate::{
@@ -44,7 +44,7 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
         let visible_scalable_route_counts =
             visible_scalable_route_counts_by_consumer(state, &featured_source_user_ids);
         let routes = state
-            .current_live_consumer_routes()
+            .source_policy_live_consumer_routes()
             .filter_map(|route| {
                 let source = route.source;
                 if source.media_kind() != MediaKind::Video
@@ -85,7 +85,9 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
             .collect();
         Self {
             routes,
-            max_video_downloads_per_receiver: state.media_limits.max_video_downloads_per_receiver(),
+            max_video_downloads_per_receiver: state
+                .source_policy_media_limits()
+                .max_video_downloads_per_receiver(),
         }
     }
 }
@@ -151,7 +153,7 @@ fn visible_scalable_route_counts_by_consumer(
     featured_source_user_ids: &BTreeSet<UserId>,
 ) -> BTreeMap<UserId, usize> {
     let mut counts = BTreeMap::new();
-    for route in state.current_live_consumer_routes() {
+    for route in state.source_policy_live_consumer_routes() {
         let source = route.source;
         if source.media_kind() != MediaKind::Video
             || source.policy().adaptation() != SourceAdaptationPolicy::ScalableVideo
@@ -204,15 +206,14 @@ pub(super) fn featured_source_owner_for_active_speaker_source(
     transport_media_id: TransportMediaId,
 ) -> Option<UserId> {
     let entry = state.source_transport_media_entry(transport_media_id)?;
-    let detector_source = state.media.source(entry.source_id())?;
+    let detector_source = state.source_policy_source(entry.source_id())?;
     let detector_policy = detector_source.policy().active_speaker()?;
     if detector_policy.role() != ActiveSpeakerSourceRole::Detector {
         return None;
     }
     let owner_user_id = entry.owner_user_id().clone();
     state
-        .media
-        .owner_has_promotable_source_in_group(&owner_user_id, detector_policy.group())
+        .source_policy_owner_has_promotable_source_in_group(&owner_user_id, detector_policy.group())
         .then_some(owner_user_id)
 }
 

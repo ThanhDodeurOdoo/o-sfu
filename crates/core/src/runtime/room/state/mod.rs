@@ -3,7 +3,6 @@
 //! `ids` owns the typed runtime-only producer/consumer identifiers.
 //! `fanout` owns outbound fan-out preparation from state snapshots.
 //! `recording` owns room recording-control state updates and fan-out.
-//! `source_policy` owns room-level source selection input, planning, projection, and commit.
 //! `shared` owns the room state shell and room-user presentation projection.
 //! `membership` owns user lifecycle, presence fan-out, and negotiation readiness.
 //! `media` owns producer/consumer workflows and the media graph indexes.
@@ -16,7 +15,6 @@ mod media;
 mod membership;
 mod recording;
 mod shared;
-mod source_policy;
 #[cfg(any(test, feature = "testing-transport"))]
 mod test_support;
 
@@ -30,7 +28,4 @@ pub(in crate::runtime::room) use self::{
     },
     membership::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, LifecycleEffects},
     shared::RoomState,
-    source_policy::{
-        ConsumerPacketSelectionUpdate, FeaturedUserUpdate, rank_active_speaker_sources,
-    },
 };

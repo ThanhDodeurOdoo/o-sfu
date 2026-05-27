@@ -1,5 +1,5 @@
 use super::support::*;
-use crate::runtime::room::effects::SourcePolicyEffectPlan;
+use crate::runtime::room::source_policy::SourcePolicyEffectPlan;
 
 #[tokio::test]
 async fn two_party_camera_publish_selects_the_highest_consumer_layer() {

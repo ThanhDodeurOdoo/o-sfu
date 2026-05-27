@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 
 use super::{
-    super::{super::shared::RoomState, action::FeaturedUserUpdate},
+    super::{super::state::RoomState, action::FeaturedUserUpdate},
     input::{
         first_featured_source_user_for_active_speakers,
         first_featured_source_users_for_active_speakers,
@@ -125,15 +125,11 @@ impl RoomState {
         source: &PublishedSourceDescriptor,
         active_speaker_source_user_ids: &BTreeSet<UserId>,
     ) -> ReceiverVideoLayoutIntent {
-        let preference = self
-            .users
-            .get(consumer_user_id)
-            .and_then(|user| {
-                user.desired_source_subscriptions
-                    .get(source.owner().user_id())
-            })
-            .and_then(|states| states.get(source.stream_id()))
-            .and_then(|intent| intent.layout());
+        let preference = self.source_policy_layout_preference(
+            consumer_user_id,
+            source.owner().user_id(),
+            source.stream_id(),
+        );
         ReceiverVideoLayoutIntent::resolve(
             source,
             preference,
@@ -149,10 +145,9 @@ impl RoomState {
     ) -> Option<ReceiverVideoLayoutIntent> {
         source.policy().layout()?;
         let active_speaker_source_user_ids = self
-            .users
-            .iter()
-            .filter(|(_user_id, user)| user.featured() == Some(true))
-            .map(|(user_id, _session)| user_id.clone())
+            .source_policy_user_featured_states()
+            .filter(|(_user_id, featured)| *featured == Some(true))
+            .map(|(user_id, _featured)| user_id.clone())
             .collect();
         Some(self.receiver_video_layout_intent(
             consumer_user_id,
@@ -175,18 +170,19 @@ impl RoomState {
         let desired_featured_user_id =
             first_featured_source_user_for_active_speakers(self, ranked_active_speaker_sources);
         let should_clear_featured_state = desired_featured_user_id.is_none()
-            && self.users.values().any(|user| user.featured().is_some());
+            && self
+                .source_policy_user_featured_states()
+                .any(|(_user_id, featured)| featured.is_some());
         if desired_featured_user_id.is_none() && !should_clear_featured_state {
             return Vec::new();
         }
-        self.users
-            .iter()
-            .filter_map(|(user_id, user)| {
+        self.source_policy_user_featured_states()
+            .filter_map(|(user_id, current_featured)| {
                 let desired_featured = desired_featured_user_id.as_ref().map_or_else(
-                    || user.featured().is_some().then_some(false),
+                    || current_featured.is_some().then_some(false),
                     |featured_user_id| Some(featured_user_id == user_id),
                 );
-                (desired_featured != user.featured())
+                (desired_featured != current_featured)
                     .then(|| FeaturedUserUpdate::new(user_id.clone(), desired_featured))
             })
             .collect()

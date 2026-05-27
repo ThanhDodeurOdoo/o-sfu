@@ -8,11 +8,9 @@
 
 use tracing::{debug, warn};
 
-use super::super::{
-    Room,
-    state::{
-        ConsumerPacketSelectionUpdate, FeaturedUserUpdate, RoomState, rank_active_speaker_sources,
-    },
+use super::{
+    super::{Room, state::RoomState},
+    ConsumerPacketSelectionUpdate, FeaturedUserUpdate, rank_active_speaker_sources,
 };
 use crate::runtime::{
     media_transport::{

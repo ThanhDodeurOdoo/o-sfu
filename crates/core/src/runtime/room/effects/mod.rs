@@ -17,10 +17,8 @@ use tracing::warn;
 use crate::{UnpublishOutcome, runtime::UserId};
 
 mod batch;
-mod source_policy;
 pub(super) use batch::{MediaCountDelta, RoomEffectBatch, RoomEffectContext, TransportUserCleanup};
 use o_sfu_telemetry::schema::event as telemetry_event;
-pub(super) use source_policy::SourcePolicyEffectPlan;
 
 use super::{
     Room, RoomMediaCounts, SourcePolicyEvent,
