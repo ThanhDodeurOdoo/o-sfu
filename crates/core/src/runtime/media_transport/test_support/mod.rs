@@ -1,6 +1,9 @@
-#[cfg(test)]
-use std::sync::Arc;
 use std::time::Instant;
+#[cfg(test)]
+use std::{
+    net::{IpAddr, Ipv4Addr},
+    sync::Arc,
+};
 
 #[cfg(test)]
 use o_sfu_router::MediaStream as RouterRtpParameters;
@@ -10,8 +13,19 @@ use str0m::media::Mid;
 use super::TransportAdapterError;
 use super::{MediaTransport, TransportMediaId, TransportSessionHealth, TransportSessionKey};
 #[cfg(test)]
+use super::{MediaTransportBuilder, MediaTransportConfig, MediaTransportDeps};
+#[cfg(test)]
 use crate::runtime::rtc_engine::RtcWorker;
 use crate::runtime::rtc_engine::test_support::DebugRouteEntry;
+#[cfg(test)]
+use crate::{
+    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
+    VideoBitrateLimits,
+    runtime::{
+        diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
+        packet_sink_registry::RoomPacketSinkRegistry,
+    },
+};
 
 impl MediaTransport {
     #[cfg(test)]
@@ -119,4 +133,26 @@ impl MediaTransport {
                 .await;
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_media_transport_builder(rtc_port_range: RtcPortRange) -> MediaTransportBuilder {
+    MediaTransport::builder()
+        .transport_config(MediaTransportConfig {
+            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            bitrate_limits: SessionBitrateLimits::new(
+                Bitrate::from_mbps(8),
+                Bitrate::from_mbps(10),
+            ),
+            video_bitrate_limits: VideoBitrateLimits::default(),
+            rtc_port_range,
+            codec_flags: MediaCodecFlags::default(),
+            codec_preferences: CodecPreferences::default(),
+            media_quality_interval: None,
+        })
+        .deps(MediaTransportDeps {
+            diagnostics: Arc::new(DiagnosticsStore::default()),
+            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
+            metrics: Arc::new(RuntimeMetrics::default()),
+        })
 }

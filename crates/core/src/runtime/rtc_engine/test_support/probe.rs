@@ -27,14 +27,11 @@
 use std::fmt;
 #[cfg(all(not(test), feature = "testing-transport"))]
 use std::time::Instant;
+#[cfg(test)]
+use std::{net::SocketAddr, time::Instant};
 
 use str0m::media::Mid;
 use tokio::sync::{mpsc, oneshot};
-#[cfg(test)]
-use {
-    crate::Bitrate,
-    std::{net::SocketAddr, time::Instant},
-};
 
 use crate::runtime::{
     media_transport::{TransportMediaId, TransportSessionKey},
@@ -132,6 +129,23 @@ pub(in crate::runtime::rtc_engine) trait DebugProbe:
     ) -> Self::Output;
 }
 
+#[cfg(test)]
+impl<F, Output> DebugProbe for F
+where
+    F: FnOnce(&PacketLoopState, &WorkerCommandContext<'_>) -> Output + Send + 'static,
+    Output: Send + 'static,
+{
+    type Output = Output;
+
+    fn inspect(
+        self,
+        state: &mut PacketLoopState,
+        context: &WorkerCommandContext<'_>,
+    ) -> Self::Output {
+        self(state, context)
+    }
+}
+
 /// object-safe wrapper for carrying different probe types through one mailbox
 ///
 /// type erasure is confined to the mailbox edge
@@ -189,67 +203,6 @@ pub(in crate::runtime::rtc_engine) fn handle_debug_probe(
     probe: DebugProbeRequest,
 ) {
     probe.inspect(state, context);
-}
-
-#[cfg(test)]
-pub(in crate::runtime::rtc_engine) struct ResolveMidProbe {
-    pub transport_media_id: TransportMediaId,
-}
-
-#[cfg(test)]
-impl DebugProbe for ResolveMidProbe {
-    type Output = Option<Mid>;
-
-    fn inspect(
-        self,
-        state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
-    ) -> Self::Output {
-        state.resolve_mid(self.transport_media_id)
-    }
-}
-
-#[cfg(test)]
-pub(in crate::runtime::rtc_engine) struct RemoteAddrOwnerProbe {
-    pub source_addr: SocketAddr,
-}
-
-#[cfg(test)]
-impl DebugProbe for RemoteAddrOwnerProbe {
-    type Output = Option<TransportSessionKey>;
-
-    fn inspect(
-        self,
-        _state: &mut PacketLoopState,
-        context: &WorkerCommandContext<'_>,
-    ) -> Self::Output {
-        context.snapshot_state.lock().ok().and_then(|snapshot| {
-            snapshot
-                .remote_addr_demux
-                .session_key_for_remote_addr(self.source_addr)
-                .cloned()
-        })
-    }
-}
-
-#[cfg(test)]
-pub(in crate::runtime::rtc_engine) struct HasAnyRemoteAddrSessionProbe;
-
-#[cfg(test)]
-impl DebugProbe for HasAnyRemoteAddrSessionProbe {
-    type Output = bool;
-
-    fn inspect(
-        self,
-        _state: &mut PacketLoopState,
-        context: &WorkerCommandContext<'_>,
-    ) -> Self::Output {
-        context
-            .snapshot_state
-            .lock()
-            .ok()
-            .is_some_and(|snapshot| !snapshot.remote_addr_demux.is_empty())
-    }
 }
 
 #[cfg(test)]
@@ -330,48 +283,6 @@ impl DebugProbe for SessionStreamTxSsrcProbe {
                     .stream_tx_by_mid(self.mid, None)
                     .map(|stream_tx| *stream_tx.ssrc())
             })
-    }
-}
-
-#[cfg(test)]
-pub(in crate::runtime::rtc_engine) struct SessionMaxBitrateInProbe {
-    pub session_key: TransportSessionKey,
-}
-
-#[cfg(test)]
-impl DebugProbe for SessionMaxBitrateInProbe {
-    type Output = Option<Bitrate>;
-
-    fn inspect(
-        self,
-        state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
-    ) -> Self::Output {
-        state
-            .users
-            .get(&self.session_key)
-            .and_then(|session_state| session_state.max_bitrate_in)
-    }
-}
-
-#[cfg(test)]
-pub(in crate::runtime::rtc_engine) struct SessionMaxBitrateOutProbe {
-    pub session_key: TransportSessionKey,
-}
-
-#[cfg(test)]
-impl DebugProbe for SessionMaxBitrateOutProbe {
-    type Output = Option<Bitrate>;
-
-    fn inspect(
-        self,
-        state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
-    ) -> Self::Output {
-        state
-            .users
-            .get(&self.session_key)
-            .and_then(|session_state| session_state.max_bitrate_out)
     }
 }
 
@@ -496,42 +407,6 @@ impl DebugProbe for ObserveAudioActivityProbe {
             self.audio_level_dbov,
             self.now,
         );
-    }
-}
-
-#[cfg(test)]
-pub(in crate::runtime::rtc_engine) struct RelayTargetCountProbe {
-    pub source_transport_media_id: TransportMediaId,
-}
-
-#[cfg(test)]
-impl DebugProbe for RelayTargetCountProbe {
-    type Output = usize;
-
-    fn inspect(
-        self,
-        state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
-    ) -> Self::Output {
-        state.relay_target_count_for_source(self.source_transport_media_id)
-    }
-}
-
-#[cfg(test)]
-pub(in crate::runtime::rtc_engine) struct ActiveRelayTargetCountProbe {
-    pub source_transport_media_id: TransportMediaId,
-}
-
-#[cfg(test)]
-impl DebugProbe for ActiveRelayTargetCountProbe {
-    type Output = usize;
-
-    fn inspect(
-        self,
-        state: &mut PacketLoopState,
-        _context: &WorkerCommandContext<'_>,
-    ) -> Self::Output {
-        state.active_relay_target_count_for_source(self.source_transport_media_id)
     }
 }
 

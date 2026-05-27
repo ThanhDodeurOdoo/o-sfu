@@ -4,17 +4,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-use str0m::{
-    crypto::from_feature_flags,
-    ice::{StunMessage, TransId},
-};
+use str0m::ice::{StunMessage, TransId};
 
 use super::super::{
     bootstrap,
     packet_loop::{PacketRouteDatagram, route_packet_to_matching_session_at},
     routing_miss::DemuxRecoveryState,
     state::{PacketLoopState, RtcSnapshotState},
-    test_support::test_transport_session_key,
+    test_support::{
+        sample_rtp_packet_with_len, serialize_stun_message, test_transport_session_key,
+    },
 };
 use crate::{
     Bitrate, MediaCodecFlags,
@@ -92,9 +91,9 @@ impl IngressRoutingBenchFixture {
                         Some(local_ice_credentials.pass.as_bytes()),
                     )
                 })
-                .unwrap_or_else(|| valid_rtp_packet(1, 11, RTP_HEADER_LEN))
+                .unwrap_or_else(|| sample_rtp_packet_with_len(1, 11, RTP_HEADER_LEN))
         } else {
-            valid_rtp_packet(1, 11, RTP_HEADER_LEN)
+            sample_rtp_packet_with_len(1, 11, RTP_HEADER_LEN)
         };
 
         Self {
@@ -113,12 +112,12 @@ impl IngressRoutingBenchFixture {
 
     #[must_use]
     pub fn repeated_unknown_source_miss() -> Self {
-        Self::unknown_source_miss(valid_rtp_packet(1, 11, RTP_HEADER_LEN))
+        Self::unknown_source_miss(sample_rtp_packet_with_len(1, 11, RTP_HEADER_LEN))
     }
 
     #[must_use]
     pub fn repeated_large_unknown_source_miss() -> Self {
-        Self::unknown_source_miss(valid_rtp_packet(1, 11, LARGE_RTP_PACKET_LEN))
+        Self::unknown_source_miss(sample_rtp_packet_with_len(1, 11, LARGE_RTP_PACKET_LEN))
     }
 
     #[must_use]
@@ -174,42 +173,4 @@ impl IngressRoutingBenchFixture {
 
 fn fixed_now() -> Instant {
     Instant::now() + Duration::from_secs(1)
-}
-
-fn valid_rtp_packet(sequence_number: u16, ssrc: u32, packet_len: usize) -> Vec<u8> {
-    let sequence_number = sequence_number.to_be_bytes();
-    let ssrc = ssrc.to_be_bytes();
-    let mut packet = Vec::with_capacity(packet_len);
-    packet.extend_from_slice(&[
-        0x80,
-        96,
-        sequence_number[0],
-        sequence_number[1],
-        0,
-        0,
-        0,
-        1,
-        ssrc[0],
-        ssrc[1],
-        ssrc[2],
-        ssrc[3],
-    ]);
-    for byte_index in packet.len()..packet_len {
-        let mixed = byte_index
-            .wrapping_mul(31)
-            .wrapping_add(byte_index.rotate_left(5))
-            .wrapping_add(17);
-        packet.push(u8::try_from(mixed & 0xff).unwrap_or(0));
-    }
-    packet
-}
-
-fn serialize_stun_message(message: &StunMessage<'_>, password: Option<&[u8]>) -> Option<Vec<u8>> {
-    let mut buffer = [0_u8; 1024];
-    let crypto_provider = from_feature_flags();
-    let sha1_hmac = |key: &[u8], payloads: &[&[u8]]| {
-        crypto_provider.sha1_hmac_provider.sha1_hmac(key, payloads)
-    };
-    let len = message.to_bytes(password, &mut buffer, sha1_hmac).ok()?;
-    buffer.get(..len).map(<[u8]>::to_vec)
 }

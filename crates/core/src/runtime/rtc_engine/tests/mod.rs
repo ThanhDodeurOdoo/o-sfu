@@ -12,6 +12,5 @@ mod lifecycle_tests;
 mod media_flow_tests;
 mod negotiation_tests;
 mod packet_loop_state_tests;
-mod parsing;
 mod relay_registry_tests;
 mod route_control_state_tests;

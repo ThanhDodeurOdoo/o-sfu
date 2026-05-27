@@ -14,15 +14,16 @@ use std::{
 use fixtures::{
     LocalVideoRoute, PendingSelectedRidRoute, RemoteVideoRoute, assert_consumer_packet_gate,
     assert_remote_keyframe_command, assert_remote_packet_gate_command, drain_ready_sessions,
-    install_video_route, prepare_pending_selected_rid_route, prepare_source_session,
-    prepare_source_session_with_rid, register_saturated_remote_source, request_consumer_keyframe,
+    expect_response, install_video_route, prepare_pending_selected_rid_route,
+    prepare_source_session, prepare_source_session_with_rid, register_saturated_remote_source,
+    request_consumer_keyframe, response_channel,
 };
 use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
 use str0m::{
     media::{KeyframeRequestKind, MediaKind, Mid, Pt, Rid},
     rtp::Ssrc,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 use super::{
     AddSendMediaRequest, apply_route_control_request, drain_due_rid_keyframe_refreshes,
@@ -259,7 +260,7 @@ fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate(
         first_consumer_transport_media_id,
         TransportSourceKey::new(source_session.clone(), source_transport_media_id),
     );
-    let (response_tx, response_rx) = oneshot::channel();
+    let (response_tx, response_rx) = response_channel();
     apply_route_control_request(
         &mut state,
         &RuntimeMetrics::default(),
@@ -271,7 +272,7 @@ fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate(
         Some(response_tx),
     );
 
-    assert_eq!(response_rx.blocking_recv(), Ok(Ok(())));
+    assert_eq!(expect_response(response_rx), Ok(()));
     assert!(matches!(
         state.media_route_index.get(&source_transport_media_id),
         Some(route_entry) if route_entry.destinations.iter().any(|destination| {
@@ -306,7 +307,7 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
     );
 
     let consumer_route = route.consumer_route();
-    let (live_response_tx, live_response_rx) = oneshot::channel();
+    let (live_response_tx, live_response_rx) = response_channel();
     apply_route_control_request(
         &mut route.state,
         &RuntimeMetrics::default(),
@@ -318,7 +319,7 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
         Some(live_response_tx),
     );
 
-    assert_eq!(live_response_rx.blocking_recv(), Ok(Ok(())));
+    assert_eq!(expect_response(live_response_rx), Ok(()));
     assert_consumer_packet_gate(
         &route.state,
         route.source_transport_media_id,
@@ -327,7 +328,7 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
         None,
     );
 
-    let (stale_response_tx, stale_response_rx) = oneshot::channel();
+    let (stale_response_tx, stale_response_rx) = response_channel();
     apply_route_control_request(
         &mut route.state,
         &RuntimeMetrics::default(),
@@ -339,7 +340,7 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
         Some(stale_response_tx),
     );
 
-    assert_eq!(stale_response_rx.blocking_recv(), Ok(Ok(())));
+    assert_eq!(expect_response(stale_response_rx), Ok(()));
     assert_consumer_packet_gate(
         &route.state,
         route.source_transport_media_id,
@@ -688,7 +689,7 @@ fn batched_consumer_packet_gates_keep_remote_relay_open_during_rid_bootstrap() {
         second_consumer_mid,
     );
 
-    let (response_tx, response_rx) = oneshot::channel();
+    let (response_tx, response_rx) = response_channel();
     respond_set_consumer_packet_gates(
         &mut state,
         &source,
@@ -708,7 +709,7 @@ fn batched_consumer_packet_gates_keep_remote_relay_open_during_rid_bootstrap() {
         response_tx,
     );
 
-    assert_eq!(response_rx.blocking_recv(), Ok(Ok(vec![Ok(()), Ok(())])));
+    assert_eq!(expect_response(response_rx), Ok(vec![Ok(()), Ok(())]));
     assert_remote_packet_gate_command(
         &mut command_rx,
         &source_session,

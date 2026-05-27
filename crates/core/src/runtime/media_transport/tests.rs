@@ -1,7 +1,9 @@
-use std::{
-    net::{IpAddr, Ipv4Addr},
-    sync::Arc,
-};
+#![allow(
+    clippy::panic,
+    reason = "media transport tests fail loudly when fixed test setup is invalid"
+)]
+
+use std::sync::Arc;
 
 use o_sfu_router::{
     MediaCapabilities as RouterRtpCapabilities, MediaCodecCapability, MediaKind,
@@ -9,20 +11,17 @@ use o_sfu_router::{
 };
 use str0m::media::Mid;
 
-use super::{MediaTransport, MediaTransportBuildError, MediaTransportBuilder};
+use super::{MediaTransport, MediaTransportBuildError};
 use crate::{
-    Bitrate, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
+    RtcPortRange,
     runtime::{
         ConnectionId, RoomInstanceId, UserId,
-        diagnostics::DiagnosticsStore,
         media_transport::{
-            ConsumerActivity, MediaTransportConfig, MediaTransportDeps, RelayRouteActivity,
-            TransportAdapterError, TransportConsumerRoute, TransportMediaId,
-            TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionKey,
-            TransportSourceKey,
+            ConsumerActivity, RelayRouteActivity, SessionOffer, TransportAdapterError,
+            TransportConsumerRoute, TransportMediaId, TransportRelayRouteAction,
+            TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey,
+            test_support::test_media_transport_builder,
         },
-        metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
         rtc_engine::RtcWorker,
     },
 };
@@ -41,27 +40,6 @@ fn test_session_key(
     )
 }
 
-fn test_media_transport_builder(rtc_port_range: RtcPortRange) -> MediaTransportBuilder {
-    MediaTransport::builder()
-        .transport_config(MediaTransportConfig {
-            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(
-                Bitrate::from_mbps(8),
-                Bitrate::from_mbps(10),
-            ),
-            video_bitrate_limits: crate::VideoBitrateLimits::default(),
-            rtc_port_range,
-            codec_flags: MediaCodecFlags::default(),
-            codec_preferences: crate::CodecPreferences::default(),
-            media_quality_interval: None,
-        })
-        .deps(MediaTransportDeps {
-            diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
-            metrics: Arc::new(RuntimeMetrics::default()),
-        })
-}
-
 fn sample_capabilities() -> RouterRtpCapabilities {
     RouterRtpCapabilities::new(
         vec![
@@ -78,18 +56,9 @@ fn sample_audio_rtp_parameters(mid: &str, ssrc: u32) -> MediaStream {
         .with_mid(String::from(mid))
 }
 
-async fn prepare_rtc_session(adapter: &MediaTransport, session_key: &TransportSessionKey) {
-    assert!(
-        adapter
-            .create_initial_session_offer(session_key)
-            .await
-            .is_ok()
-    );
-}
-
 async fn prepare_rtc_sessions(adapter: &MediaTransport, session_keys: &[&TransportSessionKey]) {
     for session_key in session_keys {
-        prepare_rtc_session(adapter, session_key).await;
+        let _offer = expect_initial_offer(adapter, session_key).await;
     }
 }
 
@@ -97,12 +66,11 @@ async fn publish_audio(
     adapter: &MediaTransport,
     session_key: &TransportSessionKey,
     rtp_parameters: &MediaStream,
-) -> Option<TransportMediaId> {
-    let result = adapter
+) -> TransportMediaId {
+    adapter
         .publish_media(session_key, MediaKind::Audio, rtp_parameters)
-        .await;
-    assert!(result.is_ok());
-    result.ok()
+        .await
+        .unwrap_or_else(|error| panic!("test audio publication should succeed: {error:?}"))
 }
 
 async fn consume_audio(
@@ -111,8 +79,8 @@ async fn consume_audio(
     source_session_key: &TransportSessionKey,
     source_media_id: TransportMediaId,
     rtp_parameters: &MediaStream,
-) -> Option<TransportMediaId> {
-    let result = adapter
+) -> TransportMediaId {
+    adapter
         .consume_media(
             consumer_session_key,
             MediaKind::Audio,
@@ -121,9 +89,8 @@ async fn consume_audio(
             rtp_parameters,
             ConsumerActivity::Active,
         )
-        .await;
-    assert!(result.is_ok());
-    result.ok()
+        .await
+        .unwrap_or_else(|error| panic!("test audio consumption should succeed: {error:?}"))
 }
 
 async fn apply_relay_route_effect(
@@ -163,39 +130,6 @@ async fn install_active_relay_route(
         TransportRelayRouteAction::SetActivity(RelayRouteActivity::Active),
     )
     .await;
-}
-
-async fn remove_consumer_media(
-    adapter: &MediaTransport,
-    session_key: &TransportSessionKey,
-    consumer_media_id: TransportMediaId,
-) {
-    assert!(
-        adapter
-            .remove_media(session_key, consumer_media_id)
-            .await
-            .is_ok()
-    );
-}
-
-async fn apply_release_effect_and_assert_counts(
-    adapter: &MediaTransport,
-    source_worker: &RtcWorker,
-    source_session_key: &TransportSessionKey,
-    source_media_id: TransportMediaId,
-    target_session_key: &TransportSessionKey,
-    total: usize,
-    active: usize,
-) {
-    apply_relay_route_effect(
-        adapter,
-        source_session_key,
-        source_media_id,
-        target_session_key,
-        TransportRelayRouteAction::Release,
-    )
-    .await;
-    assert_relay_target_counts(source_worker, source_media_id, total, active).await;
 }
 
 async fn set_remote_relay_and_consumer_active(
@@ -253,12 +187,11 @@ async fn assert_local_route_active(
     local_consumer_session: &TransportSessionKey,
     local_consumer_media_id: TransportMediaId,
 ) {
-    let local_route_entry = source_worker
+    let Some(local_route_entry) = source_worker
         .debug_route_entry(source_session, Mid::from("aud-up"))
-        .await;
-    assert!(local_route_entry.is_some());
-    let Some(local_route_entry) = local_route_entry else {
-        return;
+        .await
+    else {
+        panic!("local route entry should exist");
     };
     assert!(local_route_entry.destinations.iter().any(|destination| {
         destination.dest_session == *local_consumer_session
@@ -274,12 +207,11 @@ async fn assert_remote_route_activity(
     remote_consumer_media_id: TransportMediaId,
     active: bool,
 ) {
-    let remote_route_entry = consumer_worker
+    let Some(remote_route_entry) = consumer_worker
         .debug_route_entry_by_media_id(source_media_id)
-        .await;
-    assert!(remote_route_entry.is_some());
-    let Some(remote_route_entry) = remote_route_entry else {
-        return;
+        .await
+    else {
+        panic!("remote route entry should exist");
     };
     assert!(remote_route_entry.destinations.iter().any(|destination| {
         destination.dest_session == *remote_consumer_session
@@ -288,10 +220,6 @@ async fn assert_remote_route_activity(
     }));
 }
 
-#[allow(
-    clippy::panic,
-    reason = "media transport tests use fixed valid RTC ranges and should fail immediately if their fixture is invalid"
-)]
 fn test_media_transport(worker_count: usize, rtc_port_range: RtcPortRange) -> MediaTransport {
     match test_media_transport_builder(rtc_port_range)
         .worker_count(worker_count)
@@ -302,12 +230,33 @@ fn test_media_transport(worker_count: usize, rtc_port_range: RtcPortRange) -> Me
     }
 }
 
-fn first_candidate_port(offer_sdp: &str) -> Option<u16> {
+fn expect_first_candidate_port(offer_sdp: &str) -> u16 {
     offer_sdp
         .lines()
         .find_map(|line| line.trim().strip_prefix("a=candidate:"))
         .and_then(|candidate| candidate.split_whitespace().nth(5))
         .and_then(|port| port.parse::<u16>().ok())
+        .unwrap_or_else(|| panic!("RTC offer should include a parseable ICE candidate port"))
+}
+
+fn expect_worker_for_user(
+    adapter: &MediaTransport,
+    session_key: &TransportSessionKey,
+) -> Arc<RtcWorker> {
+    let Some(worker) = adapter.debug_worker_for_user(session_key) else {
+        panic!("test session should be assigned to a media worker");
+    };
+    worker
+}
+
+async fn expect_initial_offer(
+    adapter: &MediaTransport,
+    session_key: &TransportSessionKey,
+) -> SessionOffer {
+    adapter
+        .create_initial_session_offer(session_key)
+        .await
+        .unwrap_or_else(|error| panic!("test session should create an RTC offer: {error:?}"))
 }
 
 #[test]
@@ -344,46 +293,6 @@ fn media_transport_builder_rejects_invalid_port_split() {
     );
 }
 
-async fn assert_remote_route_inactive(
-    remote_consumer_worker: &RtcWorker,
-    source_media_id: TransportMediaId,
-    remote_consumer_session: &TransportSessionKey,
-    remote_consumer_media_id: TransportMediaId,
-) {
-    assert_remote_route_activity(
-        remote_consumer_worker,
-        source_media_id,
-        remote_consumer_session,
-        remote_consumer_media_id,
-        false,
-    )
-    .await;
-}
-
-async fn assert_local_active_and_remote_inactive(
-    source_worker: &RtcWorker,
-    remote_consumer_worker: &RtcWorker,
-    source_session: &TransportSessionKey,
-    source_media_id: TransportMediaId,
-    local_consumer: (&TransportSessionKey, TransportMediaId),
-    remote_consumer: (&TransportSessionKey, TransportMediaId),
-) {
-    assert_local_route_active(
-        source_worker,
-        source_session,
-        local_consumer.0,
-        local_consumer.1,
-    )
-    .await;
-    assert_remote_route_inactive(
-        remote_consumer_worker,
-        source_media_id,
-        remote_consumer.0,
-        remote_consumer.1,
-    )
-    .await;
-}
-
 #[test]
 fn rtc_engine_rejects_answers_without_projectable_client_capabilities() {
     let adapter = test_media_transport(1, RtcPortRange::new(46_100, 46_199));
@@ -401,37 +310,13 @@ async fn rtc_engine_workers_room_bootstrap_by_explicit_media_worker() {
     let second_room_session = test_session_key(11, 1, 1, UserId::Integer(2));
     let same_worker_session = test_session_key(12, 0, 1, UserId::Integer(3));
 
-    let first_offer = adapter
-        .create_initial_session_offer(&first_room_session)
-        .await;
-    let second_offer = adapter
-        .create_initial_session_offer(&second_room_session)
-        .await;
-    let same_worker_offer = adapter
-        .create_initial_session_offer(&same_worker_session)
-        .await;
-    assert!(first_offer.is_ok());
-    assert!(second_offer.is_ok());
-    assert!(same_worker_offer.is_ok());
-    let Some(first_offer) = first_offer.ok() else {
-        return;
-    };
-    let Some(second_offer) = second_offer.ok() else {
-        return;
-    };
-    let Some(same_worker_offer) = same_worker_offer.ok() else {
-        return;
-    };
+    let first_offer = expect_initial_offer(&adapter, &first_room_session).await;
+    let second_offer = expect_initial_offer(&adapter, &second_room_session).await;
+    let same_worker_offer = expect_initial_offer(&adapter, &same_worker_session).await;
 
-    let Some(first_port) = first_candidate_port(&first_offer.into_sdp()) else {
-        return;
-    };
-    let Some(second_port) = first_candidate_port(&second_offer.into_sdp()) else {
-        return;
-    };
-    let Some(same_worker_port) = first_candidate_port(&same_worker_offer.into_sdp()) else {
-        return;
-    };
+    let first_port = expect_first_candidate_port(&first_offer.into_sdp());
+    let second_port = expect_first_candidate_port(&second_offer.into_sdp());
+    let same_worker_port = expect_first_candidate_port(&same_worker_offer.into_sdp());
 
     assert!((46_000..=46_001).contains(&first_port));
     assert!((46_002..=46_003).contains(&second_port));
@@ -461,15 +346,8 @@ async fn rtc_engine_allocates_disjoint_media_ids_across_workers() {
 
     prepare_rtc_sessions(&adapter, &[&first_source, &second_source]).await;
 
-    let Some(first_media_id) = publish_audio(&adapter, &first_source, &first_rtp_parameters).await
-    else {
-        return;
-    };
-    let Some(second_media_id) =
-        publish_audio(&adapter, &second_source, &second_rtp_parameters).await
-    else {
-        return;
-    };
+    let first_media_id = publish_audio(&adapter, &first_source, &first_rtp_parameters).await;
+    let second_media_id = publish_audio(&adapter, &second_source, &second_rtp_parameters).await;
 
     assert_ne!(first_media_id, second_media_id);
     assert!(first_media_id.as_u64() < 1_000_000_000);
@@ -486,22 +364,15 @@ async fn rtc_engine_rejects_stale_session_removal_without_dropping_consumer_hand
 
     prepare_rtc_sessions(&adapter, &[&source_session, &consumer_session]).await;
 
-    let Some(source_media_id) =
-        publish_audio(&adapter, &source_session, &producer_rtp_parameters).await
-    else {
-        return;
-    };
-    let Some(consumer_media_id) = consume_audio(
+    let source_media_id = publish_audio(&adapter, &source_session, &producer_rtp_parameters).await;
+    let consumer_media_id = consume_audio(
         &adapter,
         &consumer_session,
         &source_session,
         source_media_id,
         &consumer_rtp_parameters,
     )
-    .await
-    else {
-        return;
-    };
+    .await;
 
     assert_eq!(
         adapter
@@ -509,10 +380,8 @@ async fn rtc_engine_rejects_stale_session_removal_without_dropping_consumer_hand
             .await,
         Err(TransportAdapterError::InvalidInput)
     );
-    let route_entry = adapter.debug_route_entry_by_media_id(source_media_id).await;
-    assert!(route_entry.is_some());
-    let Some(route_entry) = route_entry else {
-        return;
+    let Some(route_entry) = adapter.debug_route_entry_by_media_id(source_media_id).await else {
+        panic!("source route entry should survive stale removal");
     };
     assert!(route_entry.destinations.iter().any(|destination| {
         destination.dest_session == consumer_session
@@ -550,11 +419,7 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
     ];
     prepare_rtc_sessions(&adapter, &sessions).await;
 
-    let Some(source_media_id) =
-        publish_audio(&adapter, &source_session, &producer_rtp_parameters).await
-    else {
-        return;
-    };
+    let source_media_id = publish_audio(&adapter, &source_session, &producer_rtp_parameters).await;
     install_active_relay_route(
         &adapter,
         &source_session,
@@ -562,35 +427,25 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
         &remote_consumer_session,
     )
     .await;
-    let Some(local_consumer_media_id) = consume_audio(
+    let local_consumer_media_id = consume_audio(
         &adapter,
         &local_consumer_session,
         &source_session,
         source_media_id,
         &local_consumer_rtp_parameters,
     )
-    .await
-    else {
-        return;
-    };
-    let Some(remote_consumer_media_id) = consume_audio(
+    .await;
+    let remote_consumer_media_id = consume_audio(
         &adapter,
         &remote_consumer_session,
         &source_session,
         source_media_id,
         &remote_consumer_rtp_parameters,
     )
-    .await
-    else {
-        return;
-    };
+    .await;
 
-    let (Some(source_worker), Some(remote_consumer_worker)) = (
-        adapter.debug_worker_for_user(&source_session),
-        adapter.debug_worker_for_user(&remote_consumer_session),
-    ) else {
-        return;
-    };
+    let source_worker = expect_worker_for_user(&adapter, &source_session);
+    let remote_consumer_worker = expect_worker_for_user(&adapter, &remote_consumer_session);
 
     assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 1).await;
 
@@ -605,13 +460,19 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
     .await;
 
     assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 0).await;
-    assert_local_active_and_remote_inactive(
+    assert_local_route_active(
         source_worker.as_ref(),
-        remote_consumer_worker.as_ref(),
         &source_session,
+        &local_consumer_session,
+        local_consumer_media_id,
+    )
+    .await;
+    assert_remote_route_activity(
+        remote_consumer_worker.as_ref(),
         source_media_id,
-        (&local_consumer_session, local_consumer_media_id),
-        (&remote_consumer_session, remote_consumer_media_id),
+        &remote_consumer_session,
+        remote_consumer_media_id,
+        false,
     )
     .await;
 
@@ -626,16 +487,20 @@ async fn rtc_engine_gates_remote_relay_mailboxes_without_touching_local_routes()
     .await;
     assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 1).await;
 
-    remove_consumer_media(&adapter, &remote_consumer_session, remote_consumer_media_id).await;
+    assert!(
+        adapter
+            .remove_media(&remote_consumer_session, remote_consumer_media_id)
+            .await
+            .is_ok()
+    );
     assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 1).await;
-    apply_release_effect_and_assert_counts(
+    apply_relay_route_effect(
         &adapter,
-        source_worker.as_ref(),
         &source_session,
         source_media_id,
         &remote_consumer_session,
-        0,
-        0,
+        TransportRelayRouteAction::Release,
     )
     .await;
+    assert_relay_target_counts(source_worker.as_ref(), source_media_id, 0, 0).await;
 }

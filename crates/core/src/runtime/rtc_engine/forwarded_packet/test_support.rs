@@ -98,7 +98,7 @@ pub fn sample_forwarded_packet_with_audio_activity(
     )
 }
 
-#[cfg(any(test, feature = "internal-benchmarks"))]
+#[cfg(feature = "internal-benchmarks")]
 #[must_use]
 pub fn sample_forwarded_packet_with_rid_and_audio_activity(
     source_session_key: TransportSessionKey,
@@ -232,7 +232,7 @@ pub fn sample_forwarded_packet_without_mid(
     }
 }
 
-#[cfg(any(test, feature = "internal-benchmarks"))]
+#[cfg(feature = "internal-benchmarks")]
 pub fn reset_packet_resolution(packet: &mut ForwardedPacket) {
     packet.facts = None;
     packet.source_transport_media_id = None;
