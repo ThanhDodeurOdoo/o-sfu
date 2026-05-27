@@ -25,19 +25,19 @@ impl H264PayloadSpec {
         }
     }
 
-    pub(in crate::runtime) const fn payload_type(self) -> u8 {
+    pub const fn payload_type(self) -> u8 {
         self.payload_type
     }
 
-    pub(in crate::runtime) const fn packetization_mode(self) -> H264PacketizationMode {
+    pub const fn packetization_mode(self) -> H264PacketizationMode {
         self.packetization_mode
     }
 
-    pub(in crate::runtime) const fn profile_level_id(self) -> u32 {
+    pub const fn profile_level_id(self) -> u32 {
         self.profile_level_id
     }
 
-    pub(in crate::runtime) fn profile_level_id_parameter(self) -> String {
+    pub fn profile_level_id_parameter(self) -> String {
         let profile_level_id = self.profile_level_id;
         format!("{profile_level_id:06x}")
     }
@@ -50,14 +50,14 @@ pub(in crate::runtime) enum H264PacketizationMode {
 }
 
 impl H264PacketizationMode {
-    pub(in crate::runtime) const fn fmtp_value(self) -> u8 {
+    pub const fn fmtp_value(self) -> u8 {
         match self {
             Self::SingleNalUnit => 0,
             Self::NonInterleaved => 1,
         }
     }
 
-    pub(in crate::runtime) const fn str0m_flag(self) -> bool {
+    pub const fn str0m_flag(self) -> bool {
         matches!(self, Self::NonInterleaved)
     }
 }

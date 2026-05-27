@@ -88,10 +88,9 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopBuffers {
     /// Logical length of [`Self::pending_transmits`] for the current turn.
     pub(super) pending_transmit_count: usize,
     /// Media packets produced by local adapter sessions or inbound relays.
-    pub(in crate::runtime::rtc_engine) pending_packets: Vec<ForwardedPacket>,
+    pub pending_packets: Vec<ForwardedPacket>,
     /// Raw keyframe feedback emitted by consumer sessions before source lookup.
-    pub(in crate::runtime::rtc_engine) pending_keyframe_requests:
-        Vec<(TransportSessionKey, PendingKeyframeRequest)>,
+    pub pending_keyframe_requests: Vec<(TransportSessionKey, PendingKeyframeRequest)>,
     /// Sessions ready for polling after dirty and timeout scheduling is merged.
     pub(super) ready_sessions: Vec<SessionHandle>,
     /// Source-keyed feedback after duplicate requests are merged.
@@ -105,7 +104,7 @@ pub(in crate::runtime::rtc_engine) struct PacketLoopBuffers {
     /// Rooms whose source policy must be recomputed after packet observations.
     pub(super) dirty_source_policy_channel_ids: Vec<RoomInstanceId>,
     /// Concrete forwarding destinations planned for `pending_packets`.
-    pub(in crate::runtime::rtc_engine) forwards: Vec<PacketForward>,
+    pub forwards: Vec<PacketForward>,
 }
 
 impl PacketLoopBuffers {
@@ -114,7 +113,7 @@ impl PacketLoopBuffers {
     /// The capacities are only starting points. Dense rooms may grow them once,
     /// after which normal `.clear()` calls keep the larger allocation for later
     /// turns.
-    pub(in crate::runtime::rtc_engine) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             pending_transmits: Vec::with_capacity(64),
             pending_transmit_count: 0,
@@ -135,7 +134,7 @@ impl PacketLoopBuffers {
     /// This must run before a new packet-loop turn starts. It intentionally
     /// leaves `pending_transmits` slots allocated because each slot owns a byte
     /// buffer that is cheaper to overwrite than recreate.
-    pub(in crate::runtime::rtc_engine) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.pending_transmit_count = 0;
         self.pending_packets.clear();
         self.pending_keyframe_requests.clear();

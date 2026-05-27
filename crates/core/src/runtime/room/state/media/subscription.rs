@@ -45,10 +45,10 @@ use crate::runtime::{
 /// activity is handled through producer state and is combined with this value
 /// when callers ask for the effective route.
 pub(in crate::runtime::room) struct ConsumerRouteUpdate {
-    pub(in crate::runtime::room) route: ConsumerRouteTransportRef,
-    pub(in crate::runtime::room) stream_id: UserStreamId,
-    pub(in crate::runtime::room) media_kind: RouterMediaKind,
-    pub(in crate::runtime::room) active: bool,
+    pub route: ConsumerRouteTransportRef,
+    pub stream_id: UserStreamId,
+    pub media_kind: RouterMediaKind,
+    pub active: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,10 +70,10 @@ pub enum ConsumerRouteState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::room) struct ConsumerKeyframeRefreshTarget {
-    pub(in crate::runtime::room) consumer_media: TransportMediaId,
-    pub(in crate::runtime::room) producer_user_id: UserId,
-    pub(in crate::runtime::room) producer_connection_id: ConnectionId,
-    pub(in crate::runtime::room) source_media: TransportMediaId,
+    pub consumer_media: TransportMediaId,
+    pub producer_user_id: UserId,
+    pub producer_connection_id: ConnectionId,
+    pub source_media: TransportMediaId,
 }
 
 #[derive(Debug, Default)]
@@ -105,7 +105,7 @@ pub(in crate::runtime::room) struct ConsumerBootstrapProducerSnapshot {
 
 #[derive(Debug, Clone)]
 pub(in crate::runtime::room) struct PreparedConsumerBootstrap {
-    pub(in crate::runtime::room) consumer_rtp_parameters: RouterRtpParameters,
+    pub consumer_rtp_parameters: RouterRtpParameters,
 }
 
 #[derive(Debug, Clone)]
@@ -746,7 +746,7 @@ impl RoomState {
 }
 
 impl PlannedSubscriptionChange {
-    pub(in crate::runtime::room) fn touches_route_graph(&self) -> bool {
+    pub fn touches_route_graph(&self) -> bool {
         !self.route_updates.is_empty()
             || !self.bootstraps.is_empty()
             || !self.relay_effects.is_empty()
@@ -764,7 +764,7 @@ impl PlannedSubscriptionChange {
 }
 
 impl ConsumerRouteUpdate {
-    pub(in crate::runtime::room) const fn new(
+    pub const fn new(
         route: ConsumerRouteTransportRef,
         stream_id: UserStreamId,
         media_kind: RouterMediaKind,
@@ -826,7 +826,7 @@ impl PendingConsumerBootstrapTarget {
 }
 
 impl PendingConsumerBootstrap {
-    pub(in crate::runtime::room) fn consumer_active(&self) -> bool {
+    pub fn consumer_active(&self) -> bool {
         self.consumer_selection.delivery_active()
     }
 }

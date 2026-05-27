@@ -1,15 +1,16 @@
 use o_sfu_router::MediaStream as RouterRtpParameters;
+#[cfg(test)]
+use {
+    super::{PendingPublishTransactions, Room},
+    crate::runtime::{
+        ConnectionId, TestSourceKind, UserId, media_transport::TransportMediaId,
+        room::state::ValidatedPublishDescriptor, source_model::test_support::stream_id_for_source,
+        sync::lock_unpoisoned,
+    },
+};
 
 use super::{PendingPublishTransaction, RoomUserOperation};
-#[cfg(test)]
-use super::{PendingPublishTransactions, Room};
 use crate::runtime::source_model::UserStreamId;
-#[cfg(test)]
-use crate::runtime::{
-    ConnectionId, TestSourceKind, UserId, media_transport::TransportMediaId,
-    room::state::ValidatedPublishDescriptor, source_model::test_support::stream_id_for_source,
-    sync::lock_unpoisoned,
-};
 
 impl PendingPublishTransaction {
     pub(in crate::runtime::room) async fn commit_with_parameters(

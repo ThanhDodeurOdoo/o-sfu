@@ -331,15 +331,15 @@ impl CommittedPlacementReceipt {
 
 impl ResolvedPlacement {
     #[cfg(test)]
-    pub(in crate::runtime::room) const fn for_test(placement: LocalRouterRuntimeContext) -> Self {
+    pub const fn for_test(placement: LocalRouterRuntimeContext) -> Self {
         Self(placement)
     }
 
-    pub(in crate::runtime::room) const fn router(self) -> RouterId {
+    pub const fn router(self) -> RouterId {
         self.0.router
     }
 
-    pub(in crate::runtime::room) const fn into_context(self) -> LocalRouterRuntimeContext {
+    pub const fn into_context(self) -> LocalRouterRuntimeContext {
         self.0
     }
 }
@@ -471,7 +471,7 @@ pub(in crate::runtime::room) struct LoadTriggeredPlacementState {
 }
 
 impl LoadTriggeredPlacementState {
-    pub(in crate::runtime::room) fn set_source_fanout_pressure(&mut self, pressured: bool) {
+    pub fn set_source_fanout_pressure(&mut self, pressured: bool) {
         self.source_fanout_pressure = pressured;
     }
 
@@ -489,7 +489,7 @@ impl LoadTriggeredPlacementState {
         self.activation_streak >= policy.parts().activation_window
     }
 
-    pub(in crate::runtime::room) fn cooldown_detachments(
+    pub fn cooldown_detachments(
         &mut self,
         idle_router_ids: &[RouterId],
         cooldown_window: usize,
@@ -510,16 +510,14 @@ impl LoadTriggeredPlacementState {
         detached
     }
 
-    pub(in crate::runtime::room) fn clear_cooldowns(&mut self, router_ids: &[RouterId]) {
+    pub fn clear_cooldowns(&mut self, router_ids: &[RouterId]) {
         for router_id in router_ids {
             self.cooldown_by_router.remove(router_id);
         }
     }
 
     #[cfg(test)]
-    pub(in crate::runtime::room) const fn last_decision_reason(
-        &self,
-    ) -> Option<RoomPlacementDecisionReason> {
+    pub const fn last_decision_reason(&self) -> Option<RoomPlacementDecisionReason> {
         self.last_decision_reason
     }
 }
