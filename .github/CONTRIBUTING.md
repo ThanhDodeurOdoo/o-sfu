@@ -1,5 +1,13 @@
 # Contributing
 
+> [!WARNING]
+> AI policy
+>
+> Trivial changes are allowed (rewording docstring, basic autocompletion,...)
+>
+> Non-Trivial changes written by AI must have the `AI` tag on the PR, and may be rejected.
+> The author must always understand all the added code and can justify the changes
+
 ## Learning resources
 
 - [The Rust Book](https://doc.rust-lang.org/book/)
