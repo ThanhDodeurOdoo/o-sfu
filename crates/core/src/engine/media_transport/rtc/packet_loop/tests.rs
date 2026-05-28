@@ -41,7 +41,7 @@ use super::{
     },
 };
 use crate::{
-    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
+    Bitrate, CodecPreferences, MediaCodecFlags, VideoBitrateLimits,
     engine::{
         RoomInstanceId, UserId,
         diagnostics::DiagnosticsStore,
@@ -69,6 +69,7 @@ use crate::{
                     sample_rtp_packet, serialize_stun_message, test_transport_session_key,
                 },
             },
+            test_support::test_rtc_port_range,
         },
         metrics::{
             RtcMetricsRecorder, RtcRouteControlMetrics, RtpForwardDestinationKind,
@@ -422,6 +423,11 @@ impl PacketLoopHarness {
 }
 
 fn packet_loop_config_for_test() -> PacketLoopConfig {
+    #![allow(
+        clippy::panic,
+        reason = "packet-loop test configs cannot return Result and must fail loudly when no RTC ports are available"
+    )]
+
     let metrics = Arc::new(RuntimeMetrics::default());
     let outbound_recorder = metrics.register_rtp_worker();
     let datagram_recorder = metrics.register_rtc_worker();
@@ -430,7 +436,8 @@ fn packet_loop_config_for_test() -> PacketLoopConfig {
         max_bitrate_in: Bitrate::from_mbps(8),
         max_bitrate_out: Bitrate::from_mbps(10),
         video_bitrate_limits: VideoBitrateLimits::default(),
-        rtc_port_range: RtcPortRange::new(40_000, 49_999),
+        rtc_port_range: test_rtc_port_range(1)
+            .unwrap_or_else(|| panic!("test RTC port range should be available")),
         codec_flags: MediaCodecFlags::default(),
         codec_preferences: CodecPreferences::default(),
         media_quality_interval: None,

@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use o_sfu::{
-    config::{Config, RtcPortRange},
+    config::Config,
     http::{DISCONNECT_PATH, STATS_PATH, StatsResponse},
 };
 use o_sfu_protocol::wire::{
@@ -107,6 +107,7 @@ async fn websocket_welcome_and_initial_offer_work_from_integration_test() -> Tes
 #[tokio::test]
 async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details() -> TestResult {
     let config = protocol_test_config(1_000, 10);
+    let rtc_port_range = config.transport.rtc_port_range;
     let (server, room) = server_with_configured_room(config, "issuer-a").await?;
     let mut client = client_in_room(&server, &room, UserId::Integer(701)).await?;
     let request = initial_offer(&mut client).await?;
@@ -117,25 +118,22 @@ async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details()
     assert!(payload.sdp.contains("a=fingerprint:sha-256"));
     assert!(payload.sdp.contains("a=candidate:"));
     assert!(payload.sdp.contains("127.0.0.1"));
-    if let Some(candidate_line) = payload
-        .sdp
-        .lines()
-        .find(|line| line.starts_with("a=candidate:"))
-    {
-        assert!(candidate_line.contains(" 127.0.0.1 "));
-    } else {
-        panic!("expected SDP candidate line");
-    }
-    let port = require_some(
+    let candidate_line = require_some(
         payload
             .sdp
             .lines()
-            .find(|line| line.starts_with("a=candidate:"))
-            .and_then(|line| line.split_whitespace().nth(5))
+            .find(|line| line.starts_with("a=candidate:")),
+        "expected SDP candidate line",
+    )?;
+    assert!(candidate_line.contains(" 127.0.0.1 "));
+    let port = require_some(
+        candidate_line
+            .split_whitespace()
+            .nth(5)
             .and_then(|value| value.parse::<u16>().ok()),
         "candidate should expose an RTC port",
     )?;
-    assert!((40_000..=49_999).contains(&port));
+    assert!(rtc_port_range.ports().any(|candidate| candidate == port));
     Ok(())
 }
 
@@ -143,7 +141,6 @@ async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details()
 async fn websocket_offer_advertises_configured_public_ip_in_rtc_mode() -> TestResult {
     let mut config = protocol_test_config(1_000, 10);
     config.transport.public_ip = "203.0.113.44".parse().unwrap_or(config.transport.public_ip);
-    config.transport.rtc_port_range = RtcPortRange::new(45_000, 45_099);
     let (server, room) = server_with_configured_room(config, "issuer-public-ip").await?;
     let mut client = client_in_room(&server, &room, UserId::Integer(702)).await?;
     let request = initial_offer(&mut client).await?;

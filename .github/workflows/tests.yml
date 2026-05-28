@@ -48,7 +48,7 @@ jobs:
           - id: integration-proofs
             name: integration and proof tests
             nextest: false
-            command: cargo test --locked -p o-sfu-tests -p o-sfu-proofs
+            command: cargo test --locked -p o-sfu-tests -p o-sfu-core-room-tests -p o-sfu-proofs
           - id: doctests
             name: doctests
             nextest: false

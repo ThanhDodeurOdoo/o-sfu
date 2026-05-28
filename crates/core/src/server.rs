@@ -39,9 +39,13 @@ pub mod room {
         pub use crate::engine::{
             room::{
                 NegotiatedPublish, RoomManagerTestApi, RoomTestApi, RoomTestInspect,
-                RoomTestLifecycle, RoomTestMedia,
+                RoomTestLifecycle, RoomTestMedia, TestPlacementReason,
             },
-            source_model::test_support::TestSourceKind,
+            source_model::test_support::{
+                TestSourceKind, TestSubscriptionStates, source_kind_for_stream_id,
+                source_publish_intent_for_source, stream_id_for_source,
+                subscription_intents_from_test_states,
+            },
         };
     }
 

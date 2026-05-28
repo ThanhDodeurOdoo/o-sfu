@@ -1,10 +1,16 @@
-use o_sfu_router::RouterId;
+use o_sfu_router::{RouterId, test_support::rtp_samples::sample_client_rtp_capabilities};
 
 use super::super::super::{
     JoinPlacementPlan, JoinSessionIntent, Room, RoomEffectContext, RoomJoinError,
     UserOutboundSender,
 };
-use crate::engine::{ConnectionId, UserId, UserPermissions, media_transport::MediaTransport};
+use crate::{
+    SessionNegotiationOutcome,
+    engine::{
+        ConnectionId, UserId, UserPermissions,
+        media_transport::{MediaTransport, TransportAdapterError},
+    },
+};
 
 #[derive(Clone, Copy)]
 pub struct RoomTestLifecycle<'a> {
@@ -83,6 +89,43 @@ impl RoomTestLifecycle<'_> {
         self.room
             .force_cleanup_retry_cycle_for_test(media_transport)
             .await;
+    }
+
+    /// drives one joined session to negotiated readiness through the real media transport
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError`] when the user is absent or the
+    /// transport cannot create the initial offer used by the room readiness
+    /// transition
+    pub async fn make_session_ready(
+        self,
+        user_id: &UserId,
+        media_transport: &MediaTransport,
+    ) -> Result<(), TransportAdapterError> {
+        let connection_id = self
+            .room
+            .state
+            .read()
+            .await
+            .user_connection_id(user_id)
+            .ok_or(TransportAdapterError::InvalidInput)?;
+        media_transport
+            .create_initial_session_offer(&self.room.transport_user_key(user_id, connection_id))
+            .await?;
+        match self
+            .room
+            .apply_session_negotiated(
+                user_id,
+                connection_id,
+                sample_client_rtp_capabilities(),
+                media_transport,
+            )
+            .await
+        {
+            SessionNegotiationOutcome::Applied => Ok(()),
+            SessionNegotiationOutcome::StaleConnection => Err(TransportAdapterError::InvalidInput),
+        }
     }
 
     #[must_use]

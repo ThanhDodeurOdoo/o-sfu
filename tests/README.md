@@ -4,6 +4,8 @@
 
   - `tests/benchmarks/`: The Gungraun (Valgrind/Callgrind) perf benchmarks
   - `tests/tests/`: integration tests
+  - `tests/core-room/`: broad room lifecycle, spillover and subscription
+    coverage through the public `testing-transport` harness
   - `tests/src/support/`: cross-crate integration harnesses for real server
     entry points, fake peers, websocket clients, and polling predicates
   - `tests/miri/`: UB tests
@@ -115,8 +117,8 @@ cargo check --locked --package o-sfu-tests --all-targets --all-features
 cargo check --locked --package o-sfu-proofs --all-targets --all-features
 ```
 
-the matrix covers the root `otel-tracing` and `testing-transport` facade,
-core fuzzing, internal benchmark and worker benchmark features, telemetry
+the matrix covers the root `otel-tracing` facade, core fuzzing,
+`testing-transport`, internal benchmark and worker benchmark features, telemetry
 macros and OpenTelemetry features, protocol verification models, router
 test-support and proof-crate dependency features
 

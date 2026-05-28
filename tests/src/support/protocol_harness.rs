@@ -1,7 +1,4 @@
-use std::{
-    sync::atomic::{AtomicU16, Ordering},
-    time::Duration,
-};
+use std::time::Duration;
 
 use futures_util::SinkExt;
 use o_sfu::config::Config;
@@ -21,9 +18,6 @@ use super::{
     protocol_wire::{encode_client_batch, read_protocol_batch, send_server_request_response},
 };
 
-const RTC_NEGOTIATION_PORT_BASE: u16 = 56_000;
-static NEXT_RTC_NEGOTIATION_PORT: AtomicU16 = AtomicU16::new(RTC_NEGOTIATION_PORT_BASE);
-
 #[must_use]
 pub fn protocol_test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
     test_config(authentication_timeout_ms, room_size)
@@ -38,7 +32,7 @@ impl ProtocolWebSocketClient {
     pub async fn connect(server: &TestServer) -> Option<Self> {
         Some(Self {
             websocket: connect_websocket(server).await?,
-            rtc_peer: FakeRtcPeer::bind(next_negotiation_port()).await?,
+            rtc_peer: FakeRtcPeer::bind(0).await?,
         })
     }
 
@@ -88,7 +82,7 @@ impl ProtocolWebSocketClient {
             .ok()?;
         Some(Self {
             websocket,
-            rtc_peer: FakeRtcPeer::bind(next_negotiation_port()).await?,
+            rtc_peer: FakeRtcPeer::bind(0).await?,
         })
     }
 
@@ -197,10 +191,6 @@ fn encode_auth(auth_payload: AuthPayload) -> Option<String> {
     encode_client_batch(vec![ClientEnvelope::Message(ClientMessage::Auth(
         auth_payload,
     ))])
-}
-
-fn next_negotiation_port() -> u16 {
-    NEXT_RTC_NEGOTIATION_PORT.fetch_add(1, Ordering::Relaxed)
 }
 
 pub async fn read_until_server_message(
