@@ -1,5 +1,5 @@
 //! the graph is synchronous room state because callers hold the room state lock while
-//! they ask for muattions or read views, collect returned effect inputs then run
+//! they ask for mutations or read views, collect returned effect inputs then run
 //! transport work after the lock is released
 //!
 //! ownership sketch:
@@ -29,10 +29,16 @@ use crate::runtime::{
     media_transport::{RelayRouteActivity, TransportMediaId},
     room::topology::{RoutedConsumerId, RoutedProducerId},
     source_model::{
-        ActiveSpeakerGroup, ActiveSpeakerSourceRole, ConsumerSourceSelection,
-        PublishedSourceDescriptor, PublishedSourceId, SourceEncodingId, UserStreamId,
+        ActiveSpeakerGroup, ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
+        SourceEncodingId, UserStreamId,
     },
 };
+
+mod consumer_index;
+mod source_index;
+
+use consumer_index::ConsumerIndex;
+use source_index::SourceIndex;
 
 #[cfg(test)]
 mod test_support;
@@ -48,18 +54,8 @@ mod test_support;
 /// this graph directly
 #[derive(Debug, Default)]
 pub struct RoomMediaGraph {
-    sources: BTreeMap<PublishedSourceId, PublishedSourceDescriptor>,
-    source_ids_by_owner_stream: BTreeMap<SourceKey, PublishedSourceId>,
-    source_ids_by_owner: BTreeMap<UserId, BTreeSet<PublishedSourceId>>,
-    producer_id_by_source_id: BTreeMap<PublishedSourceId, ProducerRuntimeId>,
-    producer_ids_by_owner: BTreeMap<UserId, BTreeSet<ProducerRuntimeId>>,
-    producers: BTreeMap<ProducerRuntimeId, PublishedProducer>,
-    source_transport_media_index: BTreeMap<TransportMediaId, SourceTransportMediaIndexEntry>,
-    consumer_source_selections: BTreeMap<ConsumerKey, ConsumerSourceSelection>,
-    consumer_index: BTreeMap<ConsumerKey, ConsumerState>,
-    pending_consumer_bootstraps: BTreeSet<ConsumerKey>,
-    consumer_keys_by_user: BTreeMap<UserId, BTreeSet<ConsumerKey>>,
-    consumer_keys_by_source: BTreeMap<PublishedSourceId, BTreeSet<ConsumerKey>>,
+    sources: SourceIndex,
+    consumers: ConsumerIndex,
     relay_routes: RoomRelayRoutes,
 }
 
@@ -98,7 +94,7 @@ pub struct SourceKey {
 ///
 /// this is the graph-local join between the source model, room topology and
 /// transport media ownership, workflow modules read it to plan bootstraps or
-/// activity updates, but all index maintenance stays in [`RoomMediaGraph`]
+/// activity updates, but all index maintenance stays behind the graph facade
 #[derive(Debug, Clone)]
 pub struct PublishedProducer {
     pub source_id: PublishedSourceId,
@@ -149,7 +145,7 @@ pub struct SourceTransportMediaIndexEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// stale-callback guard for a live producer route
 ///
-/// callers resolve this imediately before a producer activity change or
+/// callers resolve this immediately before a producer activity change or
 /// unpublish, later mutation methods compare the handle against current graph
 /// ownership, so callbacks from replaced sockets become no-ops instead of
 /// mutating a newer producer that reused the same user and stream
@@ -381,7 +377,7 @@ impl RoomMediaGraph {
     /// this is the room publication count used for metrics snapshots and
     /// lifecycle deltas
     pub fn publication_count(&self) -> usize {
-        self.sources.len()
+        self.sources.publication_count()
     }
 
     /// current committed plus reserved subscription count
@@ -389,21 +385,19 @@ impl RoomMediaGraph {
     /// pending bootstraps count because room orchestration has already accepted
     /// the subscription intent and reserved cleanup ownership for the consumer
     pub fn subscription_count(&self) -> usize {
-        self.consumer_index
-            .len()
-            .saturating_add(self.pending_consumer_bootstraps.len())
+        self.consumers.subscription_count()
     }
 
     /// number of committed producers for transport-backed test assertions
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn producer_count(&self) -> usize {
-        self.producers.len()
+        self.sources.producer_count()
     }
 
     /// number of committed consumers for transport-backed test assertions
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn consumer_count(&self) -> usize {
-        self.consumer_index.len()
+        self.consumers.consumer_count()
     }
 
     /// borrowed source inventory for diagnostics and policy input assembly
@@ -411,7 +405,7 @@ impl RoomMediaGraph {
     /// callers must keep this as a read-only projection because source
     /// ownership and teardown stay behind graph mutation methods
     pub fn sources(&self) -> impl Iterator<Item = &PublishedSourceDescriptor> {
-        self.sources.values()
+        self.sources.sources()
     }
 
     /// borrowed producer inventory for bootstrap planning
@@ -420,9 +414,7 @@ impl RoomMediaGraph {
     /// can snapshot the exact producer they will later revalidate during
     /// consumer bootstrap commit
     pub fn producers(&self) -> impl Iterator<Item = (ProducerRuntimeId, &PublishedProducer)> {
-        self.producers
-            .iter()
-            .map(|(producer_id, producer)| (*producer_id, producer))
+        self.sources.producers()
     }
 
     /// active producer owners grouped by stream for `/v1/stats`
@@ -430,17 +422,14 @@ impl RoomMediaGraph {
     /// the query only exposes stream and owner identity because callers do not
     /// need source or transport ids to build compatibility user counts
     pub fn active_producer_stream_owners(&self) -> impl Iterator<Item = (&UserStreamId, &UserId)> {
-        self.producers
-            .values()
-            .filter(|producer| producer.active)
-            .map(|producer| (&producer.stream_id, &producer.owner_user_id))
+        self.sources.active_producer_stream_owners()
     }
 
     /// resolves a source id to the current descriptor
     ///
     /// a missing source means the route or diagnostic snapshot is stale
     pub fn source(&self, source_id: PublishedSourceId) -> Option<&PublishedSourceDescriptor> {
-        self.sources.get(&source_id)
+        self.sources.source(source_id)
     }
 
     /// resolves transport media observations back to source ownership
@@ -451,7 +440,8 @@ impl RoomMediaGraph {
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<&SourceTransportMediaIndexEntry> {
-        self.source_transport_media_index.get(&transport_media_id)
+        self.sources
+            .source_transport_media_entry(transport_media_id)
     }
 
     /// returns the stream id associated with an incoming producer media handle
@@ -469,9 +459,7 @@ impl RoomMediaGraph {
     /// first producer transport media id exposed for test transport probes
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn first_published_transport_media_id(&self) -> Option<TransportMediaId> {
-        self.producers
-            .values()
-            .find_map(|producer| producer.transport_media_id)
+        self.sources.first_published_transport_media_id()
     }
 
     /// producer transport media for one owner stream and connection
@@ -485,9 +473,8 @@ impl RoomMediaGraph {
         connection_id: ConnectionId,
         stream_id: &UserStreamId,
     ) -> Option<TransportMediaId> {
-        let producer_id = self.producer_id_for_source_key(&SourceKey::new(user_id, stream_id))?;
-        let producer = self.producers.get(&producer_id)?;
-        (producer.owner_connection_id == connection_id).then_some(producer.transport_media_id?)
+        self.sources
+            .producer_transport_media_id(user_id, connection_id, stream_id)
     }
 
     /// resolves a publisher-owned stream to the canonical source id
@@ -496,9 +483,8 @@ impl RoomMediaGraph {
         owner_user_id: &UserId,
         stream_id: &UserStreamId,
     ) -> Option<PublishedSourceId> {
-        self.source_ids_by_owner_stream
-            .get(&SourceKey::new(owner_user_id, stream_id))
-            .copied()
+        self.sources
+            .source_id_for_owner_stream(owner_user_id, stream_id)
     }
 
     /// checks whether a publisher-owned stream is currently published
@@ -522,20 +508,8 @@ impl RoomMediaGraph {
         owner_connection_id: ConnectionId,
         stream_id: &UserStreamId,
     ) -> Option<ProducerRouteTarget> {
-        let producer_id =
-            self.producer_id_for_source_key(&SourceKey::new(owner_user_id, stream_id))?;
-        let producer = self.producers.get(&producer_id)?;
-        if producer.owner_connection_id != owner_connection_id {
-            return None;
-        }
-        let transport_media_id = producer.transport_media_id?;
-        Some(ProducerRouteTarget {
-            source_id: producer.source_id,
-            producer_id,
-            owner_connection_id: producer.owner_connection_id,
-            routed_producer_id: producer.routed_producer_id,
-            transport_media_id,
-        })
+        self.sources
+            .producer_route_target(owner_user_id, owner_connection_id, stream_id)
     }
 
     /// revalidates a producer target against current graph ownership
@@ -547,13 +521,8 @@ impl RoomMediaGraph {
         target: &ProducerRouteTarget,
         current_connection_id: Option<ConnectionId>,
     ) -> Option<&PublishedProducer> {
-        let producer = self.producers.get(&target.producer_id)?;
-        if !target.matches_producer(producer)
-            || Some(producer.owner_connection_id) != current_connection_id
-        {
-            return None;
-        }
-        Some(producer)
+        self.sources
+            .producer_for_route_target(target, current_connection_id)
     }
 
     /// commits producer activity after router state accepted the same change
@@ -562,14 +531,7 @@ impl RoomMediaGraph {
     /// returns `false` so outward fanout cannot get ahead of lasting media
     /// state
     pub fn set_producer_active(&mut self, target: &ProducerRouteTarget, active: bool) -> bool {
-        let Some(producer) = self.producers.get_mut(&target.producer_id) else {
-            return false;
-        };
-        if !target.matches_producer(producer) {
-            return false;
-        }
-        producer.active = active;
-        true
+        self.sources.set_producer_active(target, active)
     }
 
     /// borrowed publications for one current user connection
@@ -581,13 +543,8 @@ impl RoomMediaGraph {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> impl Iterator<Item = (&PublishedSourceDescriptor, &PublishedProducer)> {
-        self.producers.values().filter_map(move |producer| {
-            if producer.owner_user_id != *user_id || producer.owner_connection_id != connection_id {
-                return None;
-            }
-            let source = self.sources.get(&producer.source_id)?;
-            Some((source, producer))
-        })
+        self.sources
+            .publications_for_user_connection(user_id, connection_id)
     }
 
     /// checks whether an active-speaker detector can promote the same owner
@@ -600,16 +557,8 @@ impl RoomMediaGraph {
         owner_user_id: &UserId,
         group: ActiveSpeakerGroup,
     ) -> bool {
-        self.source_ids_by_owner
-            .get(owner_user_id)
-            .into_iter()
-            .flat_map(BTreeSet::iter)
-            .filter_map(|source_id| self.sources.get(source_id))
-            .any(|source| {
-                source.policy().active_speaker().is_some_and(|policy| {
-                    policy.group() == group && policy.role() == ActiveSpeakerSourceRole::Promotable
-                })
-            })
+        self.sources
+            .owner_has_promotable_source_in_group(owner_user_id, group)
     }
 
     /// atomically installs a published source and all producer-side indexes
@@ -619,68 +568,7 @@ impl RoomMediaGraph {
     /// lookup, owner teardown and transport-media diagnostics all see the same
     /// graph state
     pub fn install_source(&mut self, install: PublishedSourceInstall) {
-        let PublishedSourceInstall {
-            source_key,
-            source_descriptor,
-            source_encoding_ids,
-            producer_id,
-            producer,
-            transport_media_id,
-        } = install;
-        let source_id = source_descriptor.source_id();
-        let owner_user_id = producer.owner_user_id.clone();
-        let owner_connection_id = producer.owner_connection_id;
-        let stream_id = producer.stream_id.clone();
-        self.producers.insert(producer_id, producer);
-        self.sources.insert(source_id, source_descriptor);
-        self.source_ids_by_owner_stream
-            .insert(source_key, source_id);
-        self.producer_id_by_source_id.insert(source_id, producer_id);
-        self.register_source_owner(&owner_user_id, source_id);
-        self.register_producer_owner(&owner_user_id, producer_id);
-        self.source_transport_media_index.insert(
-            transport_media_id,
-            SourceTransportMediaIndexEntry::new(
-                source_id,
-                source_encoding_ids,
-                owner_user_id,
-                owner_connection_id,
-                stream_id,
-            ),
-        );
-    }
-
-    fn register_source_owner(&mut self, user_id: &UserId, source_id: PublishedSourceId) {
-        self.source_ids_by_owner
-            .entry(user_id.clone())
-            .or_default()
-            .insert(source_id);
-    }
-
-    fn unregister_source_owner(&mut self, user_id: &UserId, source_id: PublishedSourceId) {
-        remove_from_index_set(&mut self.source_ids_by_owner, user_id, &source_id);
-    }
-
-    fn register_producer_owner(&mut self, user_id: &UserId, producer_id: ProducerRuntimeId) {
-        self.producer_ids_by_owner
-            .entry(user_id.clone())
-            .or_default()
-            .insert(producer_id);
-    }
-
-    fn unregister_producer_owner(&mut self, user_id: &UserId, producer_id: ProducerRuntimeId) {
-        remove_from_index_set(&mut self.producer_ids_by_owner, user_id, &producer_id);
-    }
-
-    fn register_consumer_key(&mut self, key: &ConsumerKey) {
-        self.consumer_keys_by_user
-            .entry(key.consumer_user_id.clone())
-            .or_default()
-            .insert(key.clone());
-        self.consumer_keys_by_source
-            .entry(key.source_id)
-            .or_default()
-            .insert(key.clone());
+        self.sources.install_source(install);
     }
 
     /// stores receiver intent for a source and keeps consumer reverse indexes live
@@ -689,11 +577,7 @@ impl RoomMediaGraph {
     /// retained so a later publish, late join or recovery bootstrap can inherit
     /// the user's desired active state
     pub fn set_consumer_source_selection(&mut self, key: &ConsumerKey, active: bool) {
-        self.consumer_source_selections
-            .entry(key.clone())
-            .and_modify(|selection| selection.set_active(active))
-            .or_insert_with(|| ConsumerSourceSelection::open(active));
-        self.register_consumer_key(key);
+        self.consumers.set_source_selection(key, active);
     }
 
     /// reads the stored receiver selection for one source
@@ -701,29 +585,21 @@ impl RoomMediaGraph {
     /// absence means no receiver-specific choice has been stored yet, callers
     /// may fall back to the effective subscription intent for that user
     pub fn consumer_source_selection(&self, key: &ConsumerKey) -> Option<ConsumerSourceSelection> {
-        self.consumer_source_selections.get(key).copied()
+        self.consumers.source_selection(key)
     }
 
-    /// ensures a receiver selection exists for the bootstrap state.
+    /// ensures a receiver selection exists for the bootstrap state
     ///
     /// selections without committed consumers can only come from stored
     /// subscription intent, so bootstrap planning may replace them with the
-    /// computed initial policy state. Committed routes keep their current
-    /// selector and budget state until source policy updates them.
+    /// computed initial policy state, committed routes keep their current
+    /// selector and budget state until source policy updates them
     pub fn ensure_consumer_source_selection(
         &mut self,
         key: &ConsumerKey,
         selection: ConsumerSourceSelection,
     ) {
-        if self.consumer_index.contains_key(key) {
-            self.consumer_source_selections
-                .entry(key.clone())
-                .or_insert(selection);
-        } else {
-            self.consumer_source_selections
-                .insert(key.clone(), selection);
-        }
-        self.register_consumer_key(key);
+        self.consumers.ensure_source_selection(key, selection);
     }
 
     /// mutates a consumer selection only when the transport route is still current
@@ -744,11 +620,7 @@ impl RoomMediaGraph {
         if !current_route.matches_transport_ref(route) {
             return false;
         }
-        let selection = self
-            .consumer_source_selections
-            .entry(key)
-            .or_insert_with(|| ConsumerSourceSelection::open(true));
-        update(selection);
+        update(self.consumers.selection_mut_or_open(key));
         true
     }
 
@@ -758,8 +630,7 @@ impl RoomMediaGraph {
     /// so replacement and source teardown can release the pending work if the
     /// async transport step fails or becomes stale
     pub fn reserve_consumer_bootstrap(&mut self, key: ConsumerKey) {
-        self.register_consumer_key(&key);
-        self.pending_consumer_bootstraps.insert(key);
+        self.consumers.reserve_bootstrap(key);
     }
 
     /// removes a pending bootstrap reservation after transport work finishes
@@ -767,8 +638,7 @@ impl RoomMediaGraph {
     /// the consumer key indexes are pruned only when no committed route or
     /// stored selection still references the key
     pub fn remove_pending_consumer_bootstrap(&mut self, key: &ConsumerKey) {
-        self.pending_consumer_bootstraps.remove(key);
-        self.prune_consumer_key_indexes_if_unused(key);
+        self.consumers.remove_pending_bootstrap(key);
     }
 
     /// commits a transport-backed consumer route
@@ -782,12 +652,7 @@ impl RoomMediaGraph {
         state: ConsumerState,
         selection: ConsumerSourceSelection,
     ) -> bool {
-        if self.consumer_index.contains_key(&key) {
-            return false;
-        }
-        self.ensure_consumer_source_selection(&key, selection);
-        self.consumer_index.insert(key, state);
-        true
+        self.consumers.commit(key, state, selection)
     }
 
     /// resolves a committed consumer route without exposing the backing map
@@ -796,7 +661,7 @@ impl RoomMediaGraph {
     /// route state is enough
     #[cfg(test)]
     pub fn consumer_state(&self, key: &ConsumerKey) -> Option<ConsumerState> {
-        self.consumer_index.get(key).copied()
+        self.consumers.consumer_state(key)
     }
 
     /// committed consumer sessions as transport cleanup candidates
@@ -806,9 +671,7 @@ impl RoomMediaGraph {
     pub fn committed_consumer_transport_entries(
         &self,
     ) -> impl Iterator<Item = (UserId, ConnectionId)> + '_ {
-        self.consumer_index
-            .iter()
-            .map(|(key, state)| (key.consumer_user_id.clone(), state.consumer_connection_id))
+        self.consumers.committed_consumer_transport_entries()
     }
 
     /// users with pending consumer bootstrap reservations
@@ -816,9 +679,7 @@ impl RoomMediaGraph {
     /// this lets room transport cleanup include users whose consumer route is
     /// not yet committed but whose bootstrap already reserved graph ownership
     pub fn pending_consumer_user_ids(&self) -> impl Iterator<Item = &UserId> {
-        self.pending_consumer_bootstraps
-            .iter()
-            .map(|key| &key.consumer_user_id)
+        self.consumers.pending_consumer_user_ids()
     }
 
     /// borrowed live route views for diagnostics and policy planning
@@ -826,9 +687,9 @@ impl RoomMediaGraph {
     /// the iterator joins source, producer, selection and consumer state inside
     /// the graph so callers cannot accidentally observe mismatched indexes
     pub fn live_consumer_routes(&self) -> impl Iterator<Item = ConsumerRouteView<'_>> {
-        self.consumer_index
-            .iter()
-            .filter_map(|(key, state)| self.consumer_route_for_key(key, *state))
+        self.consumers
+            .committed_entries()
+            .filter_map(|(key, state)| self.consumer_route_for_key(key, state))
     }
 
     /// joins one consumer key and route state into a borrowed route view
@@ -840,14 +701,14 @@ impl RoomMediaGraph {
         key: &ConsumerKey,
         state: ConsumerState,
     ) -> Option<ConsumerRouteView<'_>> {
-        let source = self.sources.get(&key.source_id)?;
+        let source = self.sources.source(key.source_id)?;
         let producer = self.producer_for_source(key.source_id)?;
         Some(ConsumerRouteView {
             consumer_user_id: key.consumer_user_id.clone(),
             state,
             source,
             producer,
-            selection: self.consumer_source_selections.get(key).copied(),
+            selection: self.consumers.source_selection(key),
         })
     }
 
@@ -859,7 +720,7 @@ impl RoomMediaGraph {
         &self,
         key: &ConsumerKey,
     ) -> Option<ConsumerRouteView<'_>> {
-        let state = *self.consumer_index.get(key)?;
+        let state = self.consumers.consumer_state(key)?;
         self.consumer_route_for_key(key, state)
     }
 
@@ -871,17 +732,14 @@ impl RoomMediaGraph {
         &self,
         user_id: &UserId,
     ) -> impl Iterator<Item = PendingConsumerRouteView<'_>> {
-        self.pending_consumer_bootstraps
-            .iter()
-            .filter(|key| {
-                key.consumer_user_id == *user_id && !self.consumer_index.contains_key(*key)
-            })
+        self.consumers
+            .pending_keys_for_user(user_id)
             .filter_map(|key| {
-                let source = self.sources.get(&key.source_id)?;
+                let source = self.sources.source(key.source_id)?;
                 Some(PendingConsumerRouteView {
                     source,
                     producer: self.producer_for_source(key.source_id),
-                    selection: self.consumer_source_selections.get(key).copied(),
+                    selection: self.consumers.source_selection(key),
                 })
             })
     }
@@ -891,29 +749,12 @@ impl RoomMediaGraph {
     /// source removal and stale async callbacks can make this lookup fail even
     /// while a caller still holds an older source id
     pub fn producer_for_source(&self, source_id: PublishedSourceId) -> Option<&PublishedProducer> {
-        self.producer_id_by_source_id
-            .get(&source_id)
-            .and_then(|producer_id| self.producers.get(producer_id))
+        self.sources.producer_for_source(source_id)
     }
 
     /// resolves a graph-local producer id into the current producer state
     pub fn producer(&self, producer_id: ProducerRuntimeId) -> Option<&PublishedProducer> {
-        self.producers.get(&producer_id)
-    }
-
-    /// drops reverse consumer-key indexes when no owner state still uses the key
-    ///
-    /// callers invoke this after removing one optional state slot such as a
-    /// pending bootstrap so later user or source teardown sees only live keys
-    pub fn prune_consumer_key_indexes_if_unused(&mut self, key: &ConsumerKey) {
-        if self.consumer_index.contains_key(key)
-            || self.pending_consumer_bootstraps.contains(key)
-            || self.consumer_source_selections.contains_key(key)
-        {
-            return;
-        }
-        remove_from_index_set(&mut self.consumer_keys_by_user, &key.consumer_user_id, key);
-        remove_from_index_set(&mut self.consumer_keys_by_source, &key.source_id, key);
+        self.sources.producer(producer_id)
     }
 
     /// removes all state attached to one consumer key
@@ -922,11 +763,7 @@ impl RoomMediaGraph {
     /// selection state and reverse indexes before releasing matching relay
     /// ownership
     pub fn remove_consumer_key_state(&mut self, key: &ConsumerKey) -> Vec<RelayRouteEffect> {
-        self.consumer_index.remove(key);
-        self.pending_consumer_bootstraps.remove(key);
-        self.consumer_source_selections.remove(key);
-        remove_from_index_set(&mut self.consumer_keys_by_user, &key.consumer_user_id, key);
-        remove_from_index_set(&mut self.consumer_keys_by_source, &key.source_id, key);
+        self.consumers.remove_key_state(key);
         self.relay_routes
             .release_consumer_key(&key.consumer_user_id, key.source_id)
     }
@@ -938,22 +775,12 @@ impl RoomMediaGraph {
     /// ownership are removed together
     pub fn remove_user_media(&mut self, user_id: &UserId) -> Vec<RelayRouteEffect> {
         let mut relay_effects = Vec::new();
-        let source_ids = self
-            .source_ids_by_owner
-            .get(user_id)
-            .cloned()
-            .unwrap_or_default();
-        for source_id in source_ids {
+        for source_id in self.sources.source_ids_for_owner_snapshot(user_id) {
             if let Some((_producer, effects)) = self.remove_source(source_id) {
                 relay_effects.extend(effects);
             }
         }
-        let consumer_keys = self
-            .consumer_keys_by_user
-            .get(user_id)
-            .cloned()
-            .unwrap_or_default();
-        for key in consumer_keys {
+        for key in self.consumers.keys_for_user(user_id) {
             relay_effects.extend(self.remove_consumer_key_state(&key));
         }
         relay_effects
@@ -965,10 +792,7 @@ impl RoomMediaGraph {
     /// keys while iterating without borrowing conflicts
     #[cfg(test)]
     pub fn consumer_keys_for_user(&self, user_id: &UserId) -> Vec<ConsumerKey> {
-        self.consumer_keys_by_user
-            .get(user_id)
-            .map(|keys| keys.iter().cloned().collect())
-            .unwrap_or_default()
+        self.consumers.keys_for_user(user_id)
     }
 
     /// consumer keys that point at one published source
@@ -976,18 +800,12 @@ impl RoomMediaGraph {
     /// the returned vector gives teardown code a stable snapshot before it
     /// starts mutating the graph
     pub fn consumer_keys_for_source(&self, source_id: PublishedSourceId) -> Vec<ConsumerKey> {
-        self.consumer_keys_by_source
-            .get(&source_id)
-            .map(|keys| keys.iter().cloned().collect())
-            .unwrap_or_default()
+        self.consumers.keys_for_source(source_id)
     }
 
     #[cfg(test)]
     pub fn producer_ids_for_user(&self, user_id: &UserId) -> Vec<ProducerRuntimeId> {
-        self.producer_ids_by_owner
-            .get(user_id)
-            .map(|producer_ids| producer_ids.iter().copied().collect())
-            .unwrap_or_default()
+        self.sources.producer_ids_for_user(user_id)
     }
 
     /// routed consumer ids that receive from one published source
@@ -998,7 +816,7 @@ impl RoomMediaGraph {
         &self,
         source_id: PublishedSourceId,
     ) -> Vec<RoutedConsumerId> {
-        self.routed_consumer_ids_for_keys(self.consumer_keys_for_source(source_id))
+        self.consumers.routed_consumer_ids_for_source(source_id)
     }
 
     /// routed consumers affected when one room user leaves or is replaced
@@ -1006,42 +824,17 @@ impl RoomMediaGraph {
     /// the result includes consumers owned by the departing receiver plus
     /// consumers attached to sources owned by the departing publisher
     pub fn routed_consumer_ids_affected_by_user(&self, user_id: &UserId) -> Vec<RoutedConsumerId> {
-        let mut consumer_ids =
-            self.routed_consumer_ids_for_keys(self.consumer_keys_affected_by_user(user_id));
+        let mut consumer_ids = self
+            .consumers
+            .routed_consumer_ids_for_keys(self.consumer_keys_affected_by_user(user_id));
         consumer_ids.sort_unstable();
         consumer_ids.dedup();
         consumer_ids
     }
 
-    fn routed_consumer_ids_for_keys(
-        &self,
-        keys: impl IntoIterator<Item = ConsumerKey>,
-    ) -> Vec<RoutedConsumerId> {
-        keys.into_iter()
-            .filter_map(|key| self.consumer_index.get(&key))
-            .map(|consumer_state| consumer_state.routed_consumer_id)
-            .collect()
-    }
-
     fn consumer_keys_affected_by_user(&self, user_id: &UserId) -> BTreeSet<ConsumerKey> {
-        let mut keys = self
-            .consumer_keys_by_user
-            .get(user_id)
-            .cloned()
-            .unwrap_or_default();
-        if let Some(source_ids) = self.source_ids_by_owner.get(user_id) {
-            for source_id in source_ids {
-                if let Some(source_keys) = self.consumer_keys_by_source.get(source_id) {
-                    keys.extend(source_keys.iter().cloned());
-                }
-            }
-        }
-        keys
-    }
-
-    fn producer_id_for_source_key(&self, source_key: &SourceKey) -> Option<ProducerRuntimeId> {
-        let source_id = self.source_ids_by_owner_stream.get(source_key)?;
-        self.producer_id_by_source_id.get(source_id).copied()
+        self.consumers
+            .affected_keys_for_user(user_id, self.sources.source_ids_for_owner(user_id))
     }
 
     /// removes one published source and every graph edge depending on it
@@ -1053,22 +846,13 @@ impl RoomMediaGraph {
         &mut self,
         source_id: PublishedSourceId,
     ) -> Option<(PublishedProducer, Vec<RelayRouteEffect>)> {
-        let source = self.sources.remove(&source_id)?;
+        self.sources.source(source_id)?;
         let consumer_keys = self.consumer_keys_for_source(source_id);
         let mut relay_effects = Vec::new();
         for key in consumer_keys {
             relay_effects.extend(self.remove_consumer_key_state(&key));
         }
-        let source_key = SourceKey::new(source.owner().user_id(), source.stream_id());
-        self.source_ids_by_owner_stream.remove(&source_key);
-        self.unregister_source_owner(source.owner().user_id(), source_id);
-        let producer_id = self.producer_id_by_source_id.remove(&source_id)?;
-        let producer = self.producers.remove(&producer_id)?;
-        self.unregister_producer_owner(&producer.owner_user_id, producer_id);
-        if let Some(transport_media_id) = producer.transport_media_id {
-            self.source_transport_media_index
-                .remove(&transport_media_id);
-        }
+        let producer = self.sources.remove_source(source_id)?;
         Some((producer, relay_effects))
     }
 
@@ -1080,30 +864,11 @@ impl RoomMediaGraph {
         &self,
         departing_user_ids: &BTreeSet<UserId>,
     ) -> Vec<TransportMediaRemoval> {
-        let mut removals = self.producer_transport_removals_for_users(departing_user_ids);
+        let mut removals = self
+            .sources
+            .producer_transport_removals_for_users(departing_user_ids);
         removals.extend(self.consumer_transport_removals_for_users(departing_user_ids));
         removals
-    }
-
-    /// producer transport media owned by departing users
-    fn producer_transport_removals_for_users(
-        &self,
-        departing_user_ids: &BTreeSet<UserId>,
-    ) -> Vec<TransportMediaRemoval> {
-        departing_user_ids
-            .iter()
-            .filter_map(|user_id| self.producer_ids_by_owner.get(user_id))
-            .flat_map(|producer_ids| producer_ids.iter())
-            .filter_map(|producer_id| {
-                let producer = self.producers.get(producer_id)?;
-                let transport_media = producer.transport_media_id?;
-                Some(TransportMediaRemoval {
-                    user: producer.owner_user_id.clone(),
-                    connection: producer.owner_connection_id,
-                    transport_media,
-                })
-            })
-            .collect()
     }
 
     /// transport media removals needed before explicit source unpublish
@@ -1117,15 +882,11 @@ impl RoomMediaGraph {
             producer_target.owner_connection_id,
             producer_target.transport_media_id,
         )];
-        removals.extend(self.consumer_transport_removals_for_source(producer_target.source_id));
+        removals.extend(
+            self.consumers
+                .transport_removals_for_source(producer_target.source_id),
+        );
         removals
-    }
-
-    fn consumer_transport_removals_for_source(
-        &self,
-        source_id: PublishedSourceId,
-    ) -> Vec<TransportMediaRemoval> {
-        self.consumer_transport_removals_for_keys(self.consumer_keys_for_source(source_id))
     }
 
     /// consumer transport media affected by departing receivers or publishers
@@ -1141,23 +902,7 @@ impl RoomMediaGraph {
             .flat_map(|user_id| self.consumer_keys_affected_by_user(user_id))
             .collect::<BTreeSet<_>>();
 
-        self.consumer_transport_removals_for_keys(keys)
-    }
-
-    fn consumer_transport_removals_for_keys(
-        &self,
-        keys: impl IntoIterator<Item = ConsumerKey>,
-    ) -> Vec<TransportMediaRemoval> {
-        keys.into_iter()
-            .filter_map(|key| {
-                let consumer_state = self.consumer_index.get(&key)?;
-                Some(TransportMediaRemoval {
-                    user: key.consumer_user_id,
-                    connection: consumer_state.consumer_connection_id,
-                    transport_media: consumer_state.consumer_media,
-                })
-            })
-            .collect()
+        self.consumers.transport_removals_for_keys(keys)
     }
 
     /// reserves a relay consumer target while bootstrap transport work is in flight
@@ -1213,13 +958,12 @@ impl RoomMediaGraph {
     /// subscription bootstrap uses this to avoid creating duplicate transport
     /// work for the same receiver and source
     pub fn consumer_bootstrap_exists(&self, consumer_key: &ConsumerKey) -> bool {
-        self.consumer_index.contains_key(consumer_key)
-            || self.pending_consumer_bootstraps.contains(consumer_key)
+        self.consumers.bootstrap_exists(consumer_key)
     }
 
     /// checks whether a consumer key has a committed route
     pub fn contains_consumer(&self, key: &ConsumerKey) -> bool {
-        self.consumer_index.contains_key(key)
+        self.consumers.contains_consumer(key)
     }
 }
 

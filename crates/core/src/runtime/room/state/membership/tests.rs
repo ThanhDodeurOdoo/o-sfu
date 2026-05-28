@@ -391,5 +391,5 @@ fn replacement_join_clears_transport_media_owner_index() {
         state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
         None
     );
-    assert!(state.media.source_indexes_are_empty());
+    assert!(state.media.publication_state_is_empty());
 }
