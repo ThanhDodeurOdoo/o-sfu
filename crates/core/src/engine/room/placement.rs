@@ -445,7 +445,7 @@ pub(super) enum JoinPlacementPlan {
     },
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::engine::room) enum RoomPlacementDecisionReason {
     ExistingPlacementAvailable,
@@ -461,12 +461,49 @@ pub(in crate::engine::room) enum RoomPlacementDecisionReason {
     LocalRouterCapReached,
 }
 
+#[cfg(any(test, feature = "testing-transport"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestPlacementReason {
+    ExistingPlacementAvailable,
+    ReceiverCountPressure,
+    ConsumerPressure,
+    SourceFanoutPressure,
+    EgressPressure,
+    PacketLoopLagPressure,
+    CommandBacklogPressure,
+    RelayMailboxPressure,
+    WorkerPressure,
+    ActivationWindowNotMet,
+    LocalRouterCapReached,
+}
+
+#[cfg(any(test, feature = "testing-transport"))]
+impl From<RoomPlacementDecisionReason> for TestPlacementReason {
+    fn from(reason: RoomPlacementDecisionReason) -> Self {
+        match reason {
+            RoomPlacementDecisionReason::ExistingPlacementAvailable => {
+                Self::ExistingPlacementAvailable
+            }
+            RoomPlacementDecisionReason::ReceiverCountPressure => Self::ReceiverCountPressure,
+            RoomPlacementDecisionReason::ConsumerPressure => Self::ConsumerPressure,
+            RoomPlacementDecisionReason::SourceFanoutPressure => Self::SourceFanoutPressure,
+            RoomPlacementDecisionReason::EgressPressure => Self::EgressPressure,
+            RoomPlacementDecisionReason::PacketLoopLagPressure => Self::PacketLoopLagPressure,
+            RoomPlacementDecisionReason::CommandBacklogPressure => Self::CommandBacklogPressure,
+            RoomPlacementDecisionReason::RelayMailboxPressure => Self::RelayMailboxPressure,
+            RoomPlacementDecisionReason::WorkerPressure => Self::WorkerPressure,
+            RoomPlacementDecisionReason::ActivationWindowNotMet => Self::ActivationWindowNotMet,
+            RoomPlacementDecisionReason::LocalRouterCapReached => Self::LocalRouterCapReached,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub(in crate::engine::room) struct LoadTriggeredPlacementState {
     activation_streak: usize,
     source_fanout_pressure: bool,
     cooldown_by_router: BTreeMap<RouterId, usize>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     last_decision_reason: Option<RoomPlacementDecisionReason>,
 }
 
@@ -475,7 +512,7 @@ impl LoadTriggeredPlacementState {
         self.source_fanout_pressure = pressured;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     fn record_decision(&mut self, reason: RoomPlacementDecisionReason) {
         self.last_decision_reason = Some(reason);
     }
@@ -516,7 +553,7 @@ impl LoadTriggeredPlacementState {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     pub const fn last_decision_reason(&self) -> Option<RoomPlacementDecisionReason> {
         self.last_decision_reason
     }
@@ -654,7 +691,7 @@ impl WorkerPlacementLoad {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     fn pressure_reason(self, policy: LocalSpilloverPolicy) -> Option<RoomPlacementDecisionReason> {
         let policy = policy.parts();
         if self.session_count.saturating_add(1) >= policy.min_receiver_count {
@@ -914,42 +951,42 @@ impl RoomPlacementPlanner {
             RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) => {
                 let placement = load_index.least_loaded_placement(assigned_placements, policy);
                 let load = load_index.load_for_worker(placement.media_worker);
-                #[cfg(test)]
+                #[cfg(any(test, feature = "testing-transport"))]
                 let pressure_reason = load.pressure_reason(policy).or_else(|| {
                     load_state
                         .source_fanout_pressure
                         .then_some(RoomPlacementDecisionReason::SourceFanoutPressure)
                 });
-                #[cfg(test)]
+                #[cfg(any(test, feature = "testing-transport"))]
                 if pressure_reason.is_none() {
                     load_state.reset_activation();
                     load_state
                         .record_decision(RoomPlacementDecisionReason::ExistingPlacementAvailable);
                     return RoomPlacementDecision::UseExisting(placement);
                 }
-                #[cfg(not(test))]
+                #[cfg(not(any(test, feature = "testing-transport")))]
                 if !load.is_overloaded(policy) && !load_state.source_fanout_pressure {
                     load_state.reset_activation();
                     return RoomPlacementDecision::UseExisting(placement);
                 }
                 if !load_state.record_pressure(policy) {
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "testing-transport"))]
                     load_state.record_decision(RoomPlacementDecisionReason::ActivationWindowNotMet);
                     return RoomPlacementDecision::UseExisting(placement);
                 }
                 if assigned_placements.len() < placement_cap {
                     load_state.reset_activation();
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "testing-transport"))]
                     let reason =
                         pressure_reason.unwrap_or(RoomPlacementDecisionReason::WorkerPressure);
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "testing-transport"))]
                     load_state.record_decision(reason);
                     return RoomPlacementDecision::AllocateSpillover {
                         media_worker_id: load_index
                             .least_loaded_worker(assigned_placements, policy),
                     };
                 }
-                #[cfg(test)]
+                #[cfg(any(test, feature = "testing-transport"))]
                 load_state.record_decision(RoomPlacementDecisionReason::LocalRouterCapReached);
                 RoomPlacementDecision::UseExisting(placement)
             }

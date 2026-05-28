@@ -4,12 +4,17 @@
 )]
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
+    env,
     fmt::Display,
+    fs,
     future::Future,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    io::ErrorKind,
+    net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
+    path::{Path, PathBuf},
     result::Result as StdResult,
-    time::Duration,
+    sync::{Mutex, OnceLock, PoisonError},
+    time::{Duration, SystemTime},
 };
 
 use anyhow::{Result, anyhow};
@@ -56,6 +61,10 @@ pub type TestWebSocket =
 
 pub const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 pub const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
+const RTC_PORT_RESERVATION_ATTEMPTS: usize = 256;
+const RTC_PORT_LOCK_DIR: &str = "o-sfu-rtc-test-ports";
+const RTC_PORT_LOCK_STALE_AFTER: Duration = Duration::from_hours(1);
+static RESERVED_RTC_TEST_PORTS: OnceLock<Mutex<BTreeSet<u16>>> = OnceLock::new();
 
 pub type TestResult<T = ()> = Result<T>;
 
@@ -443,7 +452,7 @@ pub fn test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
         },
         transport: TransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            rtc_port_range: RtcPortRange::new(40_000, 49_999),
+            rtc_port_range: unique_rtc_port_range(1),
             max_bitrate_in: Bitrate::from_mbps(8),
             max_bitrate_out: Bitrate::from_mbps(10),
             video_bitrate_limits: VideoBitrateLimits::default(),
@@ -458,6 +467,119 @@ pub fn test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
         features: RuntimeFeatureFlags::default(),
         telemetry: TelemetryConfig::default(),
         diagnostics: DiagnosticsConfig::default(),
+    }
+}
+
+pub fn set_rtc_media_worker_count(config: &mut Config, worker_count: usize) {
+    config.transport.rtc_media_worker_count = worker_count;
+    config.transport.rtc_port_range = unique_rtc_port_range(worker_count);
+}
+
+fn unique_rtc_port_range(worker_count: usize) -> RtcPortRange {
+    #![allow(
+        clippy::panic,
+        reason = "test configs cannot return Result and must fail loudly when no RTC ports are available"
+    )]
+
+    let worker_count = u16::try_from(worker_count)
+        .unwrap_or_else(|error| panic!("RTC worker count should fit in u16: {error}"));
+    assert!(
+        worker_count != 0,
+        "RTC worker count should be greater than zero"
+    );
+    let ports = RESERVED_RTC_TEST_PORTS.get_or_init(|| Mutex::new(BTreeSet::new()));
+    for _ in 0..RTC_PORT_RESERVATION_ATTEMPTS {
+        let used_ports = {
+            let ports = ports.lock().unwrap_or_else(PoisonError::into_inner);
+            ports.clone()
+        };
+        let Some((range, _sockets)) = reserve_contiguous_rtc_ports(worker_count, &used_ports)
+        else {
+            continue;
+        };
+        let Some(port_locks) = reserve_rtc_port_locks(range) else {
+            continue;
+        };
+        let inserted = {
+            let mut ports = ports.lock().unwrap_or_else(PoisonError::into_inner);
+            if range.ports().any(|port| ports.contains(&port)) {
+                false
+            } else {
+                ports.extend(range.ports());
+                true
+            }
+        };
+        if !inserted {
+            release_rtc_port_locks(&port_locks);
+            continue;
+        }
+        return range;
+    }
+    panic!("test RTC port allocator could not reserve a contiguous range");
+}
+
+fn reserve_contiguous_rtc_ports(
+    worker_count: u16,
+    used_ports: &BTreeSet<u16>,
+) -> Option<(RtcPortRange, Vec<UdpSocket>)> {
+    let first_socket = UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 0))).ok()?;
+    let first_port = first_socket.local_addr().ok()?.port();
+    let last_port = first_port.checked_add(worker_count.checked_sub(1)?)?;
+    let range = RtcPortRange::new(first_port, last_port);
+    if range.ports().any(|port| used_ports.contains(&port)) {
+        return None;
+    }
+    let mut sockets = Vec::with_capacity(usize::from(worker_count));
+    sockets.push(first_socket);
+    for port in (first_port.saturating_add(1))..=last_port {
+        sockets.push(UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], port))).ok()?);
+    }
+    Some((range, sockets))
+}
+
+fn reserve_rtc_port_locks(range: RtcPortRange) -> Option<Vec<PathBuf>> {
+    let lock_root = env::temp_dir().join(RTC_PORT_LOCK_DIR);
+    fs::create_dir_all(&lock_root).ok()?;
+    let mut locked_paths = Vec::with_capacity(usize::from(range.port_count()));
+    for port in range.ports() {
+        let lock_path = lock_root.join(port.to_string());
+        if !reserve_rtc_port_lock(&lock_path) {
+            release_rtc_port_locks(&locked_paths);
+            return None;
+        }
+        locked_paths.push(lock_path);
+    }
+    Some(locked_paths)
+}
+
+fn reserve_rtc_port_lock(path: &Path) -> bool {
+    match fs::create_dir(path) {
+        Ok(()) => true,
+        Err(error)
+            if error.kind() == ErrorKind::AlreadyExists && remove_stale_rtc_port_lock(path) =>
+        {
+            fs::create_dir(path).is_ok()
+        }
+        Err(_) => false,
+    }
+}
+
+fn remove_stale_rtc_port_lock(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    let Ok(modified_at) = metadata.modified() else {
+        return false;
+    };
+    let Ok(age) = SystemTime::now().duration_since(modified_at) else {
+        return false;
+    };
+    age > RTC_PORT_LOCK_STALE_AFTER && fs::remove_dir(path).is_ok()
+}
+
+fn release_rtc_port_locks(paths: &[PathBuf]) {
+    for path in paths {
+        let _ = fs::remove_dir(path);
     }
 }
 

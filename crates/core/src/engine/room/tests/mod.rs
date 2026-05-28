@@ -8,8 +8,6 @@
 
 pub(super) mod api;
 #[cfg(test)]
-mod consumer_tests;
-#[cfg(test)]
 mod fixtures;
 #[cfg(test)]
 mod manager_tests;

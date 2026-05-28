@@ -1317,6 +1317,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "o-sfu-core-room-tests"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "o-sfu-core",
+ "o-sfu-router",
+ "tokio",
+]
+
+[[package]]
 name = "o-sfu-model"
 version = "0.3.0"
 dependencies = [

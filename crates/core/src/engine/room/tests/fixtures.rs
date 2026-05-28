@@ -1,7 +1,3 @@
-use std::{
-    collections::BTreeMap,
-    sync::atomic::{AtomicU16, Ordering},
-};
 pub(super) use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -20,23 +16,23 @@ pub(super) use tokio::time::timeout;
 
 pub(super) use super::super::{
     JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomEffectContext, RoomEventMessage,
-    RoomEventRequest, RoomJoinError, RoomManager, RoomManagerJoinError, UserCloseReason,
-    UserOutbound, UserOutboundReceiver, UserOutboundSender, topology::RoomTopology,
+    RoomEventRequest, RoomJoinError, RoomManager, UserCloseReason, UserOutbound,
+    UserOutboundReceiver, UserOutboundSender, topology::RoomTopology,
 };
 use crate::engine::room::user_negotiation::{UserNegotiationUpdate, UserTransportReady};
 pub(super) use crate::{
     PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
-    RollbackStagedPublishOutcome, RoomMediaLimits, RtcPortRange, SessionNegotiationOutcome,
+    RollbackStagedPublishOutcome, RoomMediaLimits, SessionNegotiationOutcome,
     SubscriptionUpdateOutcome, UnpublishOutcome,
     engine::{
         ConnectionId, TestSourceKind, UserId, UserPermissions, VideoLayoutIntent,
         media_transport::{
             AppliedSessionAnswer, MediaTransport, TransportMediaId,
-            test_support::test_media_transport_builder,
+            test_support::{test_media_transport_builder, test_rtc_port_range},
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
         source_model::{
-            SourceSubscriptionIntent, UserStreamId,
+            UserStreamId,
             test_support::{
                 TestSubscriptionStates, source_publish_intent_for_source, stream_id_for_source,
                 subscription_intents_from_test_states,
@@ -46,7 +42,6 @@ pub(super) use crate::{
 };
 
 pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
-static NEXT_RTC_TEST_PORT: AtomicU16 = AtomicU16::new(47_000);
 
 /// Realistic client RTP capabilities (default codecs)
 pub(super) fn test_client_rtp_capabilities() -> MediaCapabilities {
@@ -78,9 +73,9 @@ pub(super) fn test_sender() -> (UserOutboundSender, UserOutboundReceiver) {
     reason = "the room test fixture uses a fixed-valid RTC config and should fail loudly if it stops being valid"
 )]
 pub(super) fn real_adapter() -> MediaTransport {
-    let port_start = NEXT_RTC_TEST_PORT.fetch_add(100, Ordering::Relaxed);
-    let port_end = port_start.saturating_add(99);
-    match test_media_transport_builder(RtcPortRange::new(port_start, port_end))
+    let rtc_port_range =
+        test_rtc_port_range(4).unwrap_or_else(|| panic!("RTC room test ports should be available"));
+    match test_media_transport_builder(rtc_port_range)
         .worker_count(4)
         .build()
     {
@@ -723,30 +718,6 @@ pub(super) async fn source_media_ids(
     let audio_media_id = source_media_id(room, user_id, TestSourceKind::AudioDetector).await;
     let camera_media_id = source_media_id(room, user_id, TestSourceKind::ScalableVideo).await;
     (audio_media_id, camera_media_id)
-}
-
-pub(super) fn pause_scalable_video_intents() -> BTreeMap<UserStreamId, SourceSubscriptionIntent> {
-    scalable_video_intents(false)
-}
-
-pub(super) fn resume_scalable_video_intents() -> BTreeMap<UserStreamId, SourceSubscriptionIntent> {
-    scalable_video_intents(true)
-}
-
-pub(super) fn pause_audio_and_scalable_video_intents()
--> BTreeMap<UserStreamId, SourceSubscriptionIntent> {
-    subscription_intents_from_test_states(&TestSubscriptionStates {
-        audio_detector: Some(false),
-        scalable_video: Some(false),
-        ..TestSubscriptionStates::default()
-    })
-}
-
-fn scalable_video_intents(active: bool) -> BTreeMap<UserStreamId, SourceSubscriptionIntent> {
-    subscription_intents_from_test_states(&TestSubscriptionStates {
-        scalable_video: Some(active),
-        ..TestSubscriptionStates::default()
-    })
 }
 
 pub(super) async fn source_media_id(

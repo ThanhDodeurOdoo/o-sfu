@@ -19,8 +19,9 @@ use crate::{
         media_transport::{
             ConsumerActivity, RelayRouteActivity, SessionOffer, TransportAdapterError,
             TransportConsumerRoute, TransportMediaId, TransportRelayRouteAction,
-            TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey, rtc::RtcWorker,
-            test_support::test_media_transport_builder,
+            TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey,
+            rtc::RtcWorker,
+            test_support::{test_media_transport_builder, test_rtc_port_range},
         },
     },
 };
@@ -229,6 +230,11 @@ fn test_media_transport(worker_count: usize, rtc_port_range: RtcPortRange) -> Me
     }
 }
 
+fn test_rtc_range(worker_count: usize) -> RtcPortRange {
+    test_rtc_port_range(worker_count)
+        .unwrap_or_else(|| panic!("test RTC port range should be available"))
+}
+
 fn expect_first_candidate_port(offer_sdp: &str) -> u16 {
     offer_sdp
         .lines()
@@ -260,7 +266,7 @@ async fn expect_initial_offer(
 
 #[test]
 fn media_transport_builder_uses_one_worker_by_default() {
-    let result = test_media_transport_builder(RtcPortRange::new(46_200, 46_200)).build();
+    let result = test_media_transport_builder(test_rtc_range(1)).build();
 
     assert!(result.is_ok());
 }
@@ -294,7 +300,7 @@ fn media_transport_builder_rejects_invalid_port_split() {
 
 #[test]
 fn rtc_rejects_answers_without_projectable_client_capabilities() {
-    let adapter = test_media_transport(1, RtcPortRange::new(46_100, 46_199));
+    let adapter = test_media_transport(1, test_rtc_range(1));
 
     let projected = adapter
         .negotiated_client_rtp_capabilities("v=0\r\ns=invalid-answer\r\n", &sample_capabilities());
@@ -304,7 +310,8 @@ fn rtc_rejects_answers_without_projectable_client_capabilities() {
 
 #[tokio::test]
 async fn rtc_workers_room_bootstrap_by_explicit_media_worker() {
-    let adapter = test_media_transport(2, RtcPortRange::new(46_000, 46_003));
+    let rtc_port_range = test_rtc_range(2);
+    let adapter = test_media_transport(2, rtc_port_range);
     let first_room_session = test_session_key(10, 0, 1, UserId::Integer(1));
     let second_room_session = test_session_key(11, 1, 1, UserId::Integer(2));
     let same_worker_session = test_session_key(12, 0, 1, UserId::Integer(3));
@@ -317,14 +324,24 @@ async fn rtc_workers_room_bootstrap_by_explicit_media_worker() {
     let second_port = expect_first_candidate_port(&second_offer.into_sdp());
     let same_worker_port = expect_first_candidate_port(&same_worker_offer.into_sdp());
 
-    assert!((46_000..=46_001).contains(&first_port));
-    assert!((46_002..=46_003).contains(&second_port));
+    let mut worker_ranges = rtc_port_range
+        .split_for_workers(2)
+        .unwrap_or_else(|| panic!("test RTC range should split across workers"))
+        .into_iter();
+    let first_worker_range = worker_ranges
+        .next()
+        .unwrap_or_else(|| panic!("first worker range should exist"));
+    let second_worker_range = worker_ranges
+        .next()
+        .unwrap_or_else(|| panic!("second worker range should exist"));
+    assert!(first_worker_range.ports().any(|port| port == first_port));
+    assert!(second_worker_range.ports().any(|port| port == second_port));
     assert_eq!(same_worker_port, first_port);
 }
 
 #[tokio::test]
 async fn rtc_rejects_noncanonical_media_worker_id() {
-    let adapter = test_media_transport(2, RtcPortRange::new(46_800, 46_803));
+    let adapter = test_media_transport(2, test_rtc_range(2));
     let session = test_session_key(13, 2, 1, UserId::Integer(4));
 
     let offer = adapter.create_initial_session_offer(&session).await;
@@ -337,7 +354,7 @@ async fn rtc_rejects_noncanonical_media_worker_id() {
 
 #[tokio::test]
 async fn rtc_allocates_disjoint_media_ids_across_workers() {
-    let adapter = test_media_transport(2, RtcPortRange::new(46_700, 46_799));
+    let adapter = test_media_transport(2, test_rtc_range(2));
     let first_source = test_session_key(50, 0, 1, UserId::Integer(1));
     let second_source = test_session_key(50, 1, 2, UserId::Integer(2));
     let first_rtp_parameters = sample_audio_rtp_parameters("first-aud-up", 71_000);
@@ -355,7 +372,7 @@ async fn rtc_allocates_disjoint_media_ids_across_workers() {
 
 #[tokio::test]
 async fn rtc_rejects_stale_session_removal_without_dropping_consumer_handle() {
-    let adapter = test_media_transport(1, RtcPortRange::new(46_600, 46_649));
+    let adapter = test_media_transport(1, test_rtc_range(1));
     let source_session = test_session_key(35, 0, 1, UserId::Integer(1));
     let consumer_session = test_session_key(35, 0, 2, UserId::Integer(2));
     let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 54_000);
@@ -408,7 +425,7 @@ async fn rtc_rejects_stale_session_removal_without_dropping_consumer_handle() {
 
 #[tokio::test]
 async fn rtc_gates_remote_relay_mailboxes_without_touching_local_routes() {
-    let adapter = test_media_transport(2, RtcPortRange::new(46_600, 46_699));
+    let adapter = test_media_transport(2, test_rtc_range(2));
     let source_session = test_session_key(40, 0, 1, UserId::Integer(1));
     let local_consumer_session = test_session_key(40, 0, 2, UserId::Integer(2));
     let remote_consumer_session = test_session_key(40, 1, 3, UserId::Integer(3));

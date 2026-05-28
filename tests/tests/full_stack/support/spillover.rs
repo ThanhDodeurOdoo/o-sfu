@@ -101,7 +101,7 @@ fn load_triggered_spillover_test_config() -> Config {
         Ok(policy) => policy,
         Err(error) => panic!("load-triggered spillover test policy should be valid: {error}"),
     };
-    config.transport.rtc_media_worker_count = 2;
+    set_rtc_media_worker_count(&mut config, 2);
     config.transport.room_worker_policy =
         RoomWorkerPolicy::load_triggered_local_spillover(2, policy);
     config
@@ -120,7 +120,7 @@ fn large_room_spillover_test_config() -> Config {
         Ok(policy) => policy,
         Err(error) => panic!("large-room spillover test policy should be valid: {error}"),
     };
-    config.transport.rtc_media_worker_count = LARGE_ROOM_LOCAL_ROUTER_CAP;
+    set_rtc_media_worker_count(&mut config, LARGE_ROOM_LOCAL_ROUTER_CAP);
     config.transport.room_worker_policy =
         RoomWorkerPolicy::load_triggered_local_spillover(LARGE_ROOM_LOCAL_ROUTER_CAP, policy);
     config.transport.room_media_limits =

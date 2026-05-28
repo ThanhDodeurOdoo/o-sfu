@@ -17,7 +17,10 @@ use {
         Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
         engine::{
             diagnostics::DiagnosticsStore,
-            media_transport::{MediaTransportConfig, MediaTransportDeps, SourcePolicySignal},
+            media_transport::{
+                MediaTransportConfig, MediaTransportDeps, SourcePolicySignal,
+                test_support::test_rtc_port_range,
+            },
             metrics::RuntimeMetrics,
             packet_sink_registry::RoomPacketSinkRegistry,
         },
@@ -38,6 +41,15 @@ use super::{
     },
     RtcWorker,
 };
+
+#[cfg(test)]
+#[allow(
+    clippy::panic,
+    reason = "test worker defaults cannot return Result and must fail loudly when no RTC ports are available"
+)]
+fn default_test_rtc_port_range() -> RtcPortRange {
+    test_rtc_port_range(1).unwrap_or_else(|| panic!("test RTC port range should be available"))
+}
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::engine::media_transport::TransportMediaId;
 use crate::engine::{media_transport::TransportSessionKey, metrics};
@@ -318,12 +330,6 @@ impl RtcWorkerTestBuilder {
     }
 
     #[must_use]
-    pub(crate) fn port_range(mut self, rtc_port_range: RtcPortRange) -> Self {
-        self.rtc_port_range = rtc_port_range;
-        self
-    }
-
-    #[must_use]
     pub(crate) fn codec_flags(mut self, codec_flags: MediaCodecFlags) -> Self {
         self.codec_flags = codec_flags;
         self
@@ -373,7 +379,7 @@ impl Default for RtcWorkerTestBuilder {
         Self {
             max_bitrate_in: Bitrate::from_mbps(8),
             max_bitrate_out: Bitrate::from_mbps(10),
-            rtc_port_range: RtcPortRange::new(40_000, 49_999),
+            rtc_port_range: default_test_rtc_port_range(),
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: CodecPreferences::default(),
         }
@@ -383,8 +389,6 @@ impl Default for RtcWorkerTestBuilder {
 #[cfg(test)]
 impl Default for RtcWorker {
     fn default() -> Self {
-        Self::test_builder()
-            .port_range(RtcPortRange::new(40_000, 49_999))
-            .build()
+        Self::test_builder().build()
     }
 }

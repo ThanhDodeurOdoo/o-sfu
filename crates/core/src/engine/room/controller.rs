@@ -390,7 +390,7 @@ impl Room {
         state.reconcile_spillover_routers(spillover, &mut placement);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     pub(in crate::engine::room) fn load_triggered_last_decision_reason(
         &self,
     ) -> Option<super::placement::RoomPlacementDecisionReason> {

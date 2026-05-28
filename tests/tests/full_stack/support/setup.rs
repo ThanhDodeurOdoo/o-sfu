@@ -116,7 +116,7 @@ pub(crate) async fn room_parts_with_config(
 
 pub(crate) fn cross_worker_test_config() -> Config {
     let mut config = test_config(1_000, 10);
-    config.transport.rtc_media_worker_count = 2;
+    set_rtc_media_worker_count(&mut config, 2);
     config.transport.room_worker_policy = RoomWorkerPolicy::bounded_local_spillover(2);
     config
 }
