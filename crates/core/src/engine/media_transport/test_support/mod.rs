@@ -1,14 +1,12 @@
 #[cfg(any(test, feature = "testing-transport"))]
 use {
     super::{MediaTransport, TransportMediaId, TransportSessionHealth, TransportSessionKey},
-    crate::engine::rtc::test_support::DebugRouteEntry,
     std::time::Instant,
     str0m::media::Mid,
 };
 #[cfg(test)]
 use {
-    super::{MediaTransportBuilder, TransportAdapterError},
-    crate::engine::rtc::RtcWorker,
+    super::{MediaTransportBuilder, TransportAdapterError, rtc::RtcWorker},
     o_sfu_router::MediaStream as RouterRtpParameters,
 };
 #[cfg(any(test, feature = "internal-benchmarks"))]
@@ -27,6 +25,9 @@ use {
         sync::Arc,
     },
 };
+
+#[cfg(any(test, feature = "testing-transport"))]
+pub use super::rtc::{ForwardedPacket, test_support::*};
 
 #[derive(Debug, Clone, Copy)]
 #[cfg(any(test, feature = "testing-transport"))]

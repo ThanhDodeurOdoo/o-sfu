@@ -11,7 +11,7 @@ on:
       - crates/core/src/engine/media_transport/**
       - crates/core/src/engine/packet_sink_registry.rs
       - crates/core/src/engine/recording/**
-      - crates/core/src/engine/rtc/**
+      - crates/core/src/engine/media_transport/rtc/**
       - tests/Cargo.toml
       - tests/benchmarks/**
   pull_request:
@@ -23,7 +23,7 @@ on:
       - crates/core/src/engine/media_transport/**
       - crates/core/src/engine/packet_sink_registry.rs
       - crates/core/src/engine/recording/**
-      - crates/core/src/engine/rtc/**
+      - crates/core/src/engine/media_transport/rtc/**
       - tests/Cargo.toml
       - tests/benchmarks/**
   workflow_dispatch:

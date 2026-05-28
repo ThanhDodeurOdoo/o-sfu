@@ -23,6 +23,7 @@
 mod builder;
 mod config;
 mod policy_invalidation;
+mod rtc;
 #[cfg(any(test, feature = "testing-transport", feature = "internal-benchmarks"))]
 pub mod test_support;
 mod types;
@@ -36,6 +37,19 @@ use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParamet
 pub use policy_invalidation::{
     SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
 };
+#[cfg(feature = "internal-benchmarks")]
+pub mod benchmark_support {
+    pub use super::rtc::benchmark_support::*;
+}
+#[cfg(any(test, feature = "fuzzing"))]
+pub mod fuzz_support {
+    pub use super::rtc::{
+        client_rtp_capabilities_from_answer, fuzz_support::route_packet_loop_ingress_demux,
+    };
+}
+#[cfg(any(test, feature = "testing-transport"))]
+pub use rtc::ForwardedPacket;
+use rtc::{RtcSendMediaSource, RtcWorker};
 use tracing::warn;
 pub use types::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
@@ -50,10 +64,7 @@ pub use types::{
 };
 
 use self::workers::signaling_to_str0m_media_kind;
-use crate::engine::{
-    RoomInstanceId,
-    rtc::{RtcSendMediaSource, RtcWorker},
-};
+use crate::engine::RoomInstanceId;
 
 /// Opaque runtime media transport handle.
 ///

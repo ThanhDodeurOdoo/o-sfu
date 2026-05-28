@@ -1,7 +1,7 @@
 pub use o_sfu_telemetry::metrics::*;
 
 use crate::engine::{
-    rtc::TransportSessionHealth,
+    media_transport::TransportSessionHealth,
     source_model::{SourceRoomPolicySelector, SourceSelector},
 };
 

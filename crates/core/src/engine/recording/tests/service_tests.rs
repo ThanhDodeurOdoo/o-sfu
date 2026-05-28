@@ -4,7 +4,10 @@ use o_sfu_router::{MediaKind, ProducerId, RouterEvent, SessionId as RouterSessio
 
 use crate::engine::{
     RoomInstanceId, UserId as SignalingSessionId,
-    media_transport::TransportMediaId,
+    media_transport::{
+        TransportMediaId,
+        test_support::{sample_forwarded_packet, test_transport_session_key},
+    },
     metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
     packet_sink_registry::RoomPacketSinkRegistry,
     recording::{
@@ -12,7 +15,6 @@ use crate::engine::{
         test_support::{RecordingLifecycleState, is_room_active, transition_error_state},
     },
     router_events::RoomRouterEventSink,
-    rtc::test_support::{sample_forwarded_packet, test_transport_session_key},
 };
 
 #[test]
