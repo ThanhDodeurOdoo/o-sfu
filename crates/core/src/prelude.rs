@@ -6,6 +6,15 @@
 
 pub use crate::{
     Bitrate, ConnectionId, RoomInstanceId,
+    engine::{
+        media_transport::TransportSessionHealth,
+        source_model::{
+            ActiveSpeakerGroup, ActiveSpeakerPolicy, ActiveSpeakerSourceRole,
+            SourceAdaptationPolicy, SourceLayoutPolicy, SourcePolicy, SourcePublishIntent,
+            SourceRoomPolicySelector, SourceRoutePriority, SourceSubscriptionIntent,
+            UploadLayerPolicyRole, UserStreamId,
+        },
+    },
     options::{
         AudioCodecPreference, CodecOptions, CodecPreferences, CoreOptions, LocalSpilloverPolicy,
         LocalSpilloverPolicyError, LocalSpilloverPolicyParts, MediaCodecFlags, MediaOptions,
@@ -17,15 +26,6 @@ pub use crate::{
         MediaSessionContext, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
         RollbackStagedPublishOutcome, SessionNegotiationOutcome, SubscriptionUpdateOutcome,
         TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
-    },
-    runtime::{
-        media_transport::TransportSessionHealth,
-        source_model::{
-            ActiveSpeakerGroup, ActiveSpeakerPolicy, ActiveSpeakerSourceRole,
-            SourceAdaptationPolicy, SourceLayoutPolicy, SourcePolicy, SourcePublishIntent,
-            SourceRoomPolicySelector, SourceSubscriptionIntent, UploadLayerPolicyRole,
-            UserStreamId,
-        },
     },
     sfu::{
         InitialOffer, MediaNegotiation, MediaPresence, MediaPublication, MediaSession,

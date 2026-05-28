@@ -8,10 +8,10 @@ on:
       - .github/workflows/performance.yml
       - Cargo.lock
       - crates/core/Cargo.toml
-      - crates/core/src/runtime/media_transport/**
-      - crates/core/src/runtime/packet_sink_registry.rs
-      - crates/core/src/runtime/recording/**
-      - crates/core/src/runtime/rtc_engine/**
+      - crates/core/src/engine/media_transport/**
+      - crates/core/src/engine/packet_sink_registry.rs
+      - crates/core/src/engine/recording/**
+      - crates/core/src/engine/rtc/**
       - tests/Cargo.toml
       - tests/benchmarks/**
   pull_request:
@@ -20,10 +20,10 @@ on:
       - .github/workflows/performance.yml
       - Cargo.lock
       - crates/core/Cargo.toml
-      - crates/core/src/runtime/media_transport/**
-      - crates/core/src/runtime/packet_sink_registry.rs
-      - crates/core/src/runtime/recording/**
-      - crates/core/src/runtime/rtc_engine/**
+      - crates/core/src/engine/media_transport/**
+      - crates/core/src/engine/packet_sink_registry.rs
+      - crates/core/src/engine/recording/**
+      - crates/core/src/engine/rtc/**
       - tests/Cargo.toml
       - tests/benchmarks/**
   workflow_dispatch:

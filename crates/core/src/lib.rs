@@ -5,14 +5,14 @@
 //! integration.
 //!
 //! The crate root keeps only fundamental value types: [`Bitrate`],
-//! [`ConnectionId`] and [`RoomInstanceId`]. The private runtime tree stays
+//! [`ConnectionId`] and [`RoomInstanceId`]. The private engine tree stays
 //! hidden so new exposed types must fit [`prelude`] or [`server`] first.
 use std::fmt::{self, Display, Formatter};
 
+mod engine;
 mod options;
 pub mod prelude;
 mod room;
-mod runtime;
 pub mod server;
 mod sfu;
 
