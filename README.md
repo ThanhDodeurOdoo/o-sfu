@@ -129,20 +129,3 @@ Partial coverage
 | VP9 hybrid/layered forwarding | WIP. `CODEC_VP9=true` is codec negotiation only.                                                                          |
 | AV1 hybrid/layered forwarding | WIP. `CODEC_AV1=true` is codec negotiation only.                                                                          |
 
-## Side repos
-
-## Monitoring
-
-The `telemetry/` crate (sub dir) contain the telemetry tooling and serialization formats,
-runtime log and trace setup, event and field schema, diagnostics DTOs and recent
-event storage, the runtime metrics catalog, Prometheus text rendering and
-Grafana node-graph JSON formatting.
-
-you can check
-https://github.com/ThanhDodeurOdoo/o-sfu-telemetry
-it is an example of how to read and exploit the telemetry api
-
-## Benchmarking
-
-if you want to play with benchmarking you can fork
-https://github.com/ThanhDodeurOdoo/o-sfu-benchmarks
