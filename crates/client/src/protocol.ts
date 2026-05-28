@@ -1,4 +1,4 @@
-export { WIRE_TAG, WS_CLOSE_CODE } from "./generated/protocol_contract.js";
+export { WS_CLOSE_CODE } from "./protocol_contract.js";
 
 export type {
     AuthPayload,
@@ -30,4 +30,4 @@ export type {
     SubscribePayload,
     TrackBinding,
     WelcomePayload
-} from "./generated/protocol_contract.js";
+} from "./protocol_contract.js";

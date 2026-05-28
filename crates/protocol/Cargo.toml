@@ -13,17 +13,11 @@ rust-version = "1.93"
 version.workspace = true
 
 [features]
-ts-bindings = [
-    "dep:ts-rs",
-    "o-sfu-model/ts-bindings",
-    "o-sfu-rfc/ts-bindings",
-]
 verification-models = []
 
 [[bin]]
-name = "o-sfu-protocol-ts"
-path = "src/bin/o_sfu_protocol_ts.rs"
-required-features = ["ts-bindings"]
+name = "o-sfu-protocol-manifest"
+path = "src/bin/o_sfu_protocol_manifest.rs"
 
 [dependencies]
 o-sfu-model.workspace = true
@@ -31,7 +25,6 @@ o-sfu-rfc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde-wasm-bindgen = "0.6"
-ts-rs = { workspace = true, optional = true }
 wasm-bindgen = "0.2"
 
 [lints]

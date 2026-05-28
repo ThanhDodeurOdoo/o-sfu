@@ -8,13 +8,9 @@ publish.workspace = true
 rust-version = "1.93"
 version.workspace = true
 
-[features]
-ts-bindings = ["dep:ts-rs"]
-
 [dependencies]
 base64.workspace = true
 serde.workspace = true
-ts-rs = { workspace = true, optional = true }
 
 [lints]
 workspace = true
