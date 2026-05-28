@@ -7,8 +7,9 @@
 - [Rust by Example](https://doc.rust-lang.org/rust-by-example/)
 - [Rust Cookbook](https://github.com/rust-lang-nursery/rust-cookbook/)
 - [Idiomatic Rust snippets](https://idiomatic-rust-snippets.org/)
-- [The Rust Programming Language by Aaron Turon (video)](https://youtu.be/O5vzLKg7y-k)
-- [Living with Rust Long-Term by Jon Gjengset (video)](https://youtu.be/r35cBkPRNMI)
+- ["The Rust Programming Language" by Aaron Turon (video)](https://youtu.be/O5vzLKg7y-k)
+- ["Living with Rust Long-Term" by Jon Gjengset (video)](https://youtu.be/r35cBkPRNMI)
+- ["Rust makes cents" by No Boilerplate (video)](https://www.youtube.com/watch?v=4dvf6kM70qM)
 
 ## Style guidelines
 
