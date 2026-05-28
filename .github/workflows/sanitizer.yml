@@ -19,9 +19,9 @@ on:
       - src/runtime/**
       - tests/Cargo.toml
       - tests/src/**
-      - tests/tests/control_plane.rs
-      - tests/tests/full_stack.rs
-      - tests/tests/full_stack/**
+      - tests/integration/control_plane.rs
+      - tests/integration/full_stack.rs
+      - tests/integration/full_stack/**
   pull_request:
     paths:
       - .github/workflows/sanitizer.yml
@@ -37,9 +37,9 @@ on:
       - src/runtime/**
       - tests/Cargo.toml
       - tests/src/**
-      - tests/tests/control_plane.rs
-      - tests/tests/full_stack.rs
-      - tests/tests/full_stack/**
+      - tests/integration/control_plane.rs
+      - tests/integration/full_stack.rs
+      - tests/integration/full_stack/**
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:
