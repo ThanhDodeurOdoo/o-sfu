@@ -60,6 +60,22 @@ harness = false
 required-features = ["worker-benchmarks"]
 
 [[test]]
+name = "control_plane"
+path = "integration/control_plane.rs"
+
+[[test]]
+name = "full_stack"
+path = "integration/full_stack.rs"
+
+[[test]]
+name = "public_error_api"
+path = "integration/public_error_api.rs"
+
+[[test]]
+name = "telemetry_ui"
+path = "integration/telemetry_ui.rs"
+
+[[test]]
 name = "miri_router_protocol"
 path = "miri/router_protocol.rs"
 

@@ -1,9 +1,9 @@
 # Tests
 
-## Layout
+## dir
 
   - `tests/benchmarks/`: The Gungraun (Valgrind/Callgrind) perf benchmarks
-  - `tests/tests/`: integration tests
+  - `tests/integration/`: integration tests
   - `tests/core-room/`: broad room lifecycle, spillover and subscription
     coverage through the public `testing-transport` harness
   - `tests/src/support/`: cross-crate integration harnesses for real server
