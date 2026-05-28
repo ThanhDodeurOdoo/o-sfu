@@ -6,10 +6,10 @@ pub enum TransportDirection {
     Receive,
 }
 
-/// Router-owned transport record.
+/// Router transport record.
 ///
-/// `id` is the stable transport identity, `session_id` ties the transport to
-/// its owner, and `direction` is to validate producer and consumer attachment.
+/// the id is the stable transport identity, the session id ties the transport
+/// to its session and the direction validates producer or consumer attachment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Transport {
     id: TransportId,
@@ -18,7 +18,7 @@ pub struct Transport {
 }
 
 impl Transport {
-    /// Create a transport owned by `session_id` with a fixed router direction.
+    /// create a transport for `session_id` with a fixed router direction
     #[must_use]
     pub fn new(id: TransportId, session_id: SessionId, direction: TransportDirection) -> Self {
         Self {

@@ -1,4 +1,4 @@
-//! Pure room-owned source policy.
+//! Pure room source policy.
 //!
 //! The source-selection path is split into a one-way pipeline:
 //! immutable input from `RoomState` and transport observations, layout

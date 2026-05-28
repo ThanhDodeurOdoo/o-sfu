@@ -1,7 +1,7 @@
 //! ordered websocket output for one user-session transition
 //!
-//! this module is the handoff from application orchestration to websocket IO
-//! `User` decides the order of client-visible work, while the socket writer
+//! this module is the handoff from the application session to websocket IO
+//! [`super::User`] decides the order of client-visible work, while the socket writer
 //! decides how adjacent messages are batched into protocol envelopes
 
 use o_sfu_protocol::wire::{RequestId, ServerMessage, ServerRequest, ServerResponse};

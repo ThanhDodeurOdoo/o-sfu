@@ -564,7 +564,7 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
             webrtc::sdp::simulcast::DIRECTION_RECV,
             &["lo", "hi"]
         )),
-        "empty protocol publish intents should emit the server-owned RID ladder"
+        "empty protocol publish intents should emit the server-defined RID ladder"
     );
     let negotiated_mid = adapter
         .debug_resolve_mid(transport_media_id)
@@ -1115,7 +1115,7 @@ fn assert_default_vp8_upload_slot(upload_slots: &[SessionUploadSlot]) {
             .codecs
             .iter()
             .any(|codec| codec.as_str() == "VP8"),
-        "empty protocol publish intent should use the server-owned VP8 upload profile"
+        "empty protocol publish intent should use the server-defined VP8 upload profile"
     );
     assert_eq!(video_upload_slot.simulcast_encodings.len(), 2);
     assert_eq!(

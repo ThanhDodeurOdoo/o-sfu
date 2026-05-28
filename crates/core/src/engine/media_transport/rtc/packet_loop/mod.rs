@@ -1,8 +1,8 @@
 //! Worker-local media packet loop.
 //!
 //! The packet loop is the RTC engine's transport hot path. Each
-//! `RtcWorker` starts one Tokio task that owns one mutable
-//! `PacketLoopState`, drives all `str0m::Rtc` instances for that worker and
+//! [`RtcWorker`](super::worker::RtcWorker) starts one Tokio task that holds one mutable
+//! [`PacketLoopState`](super::state::PacketLoopState), drives all [`str0m::Rtc`] instances for that worker and
 //! performs the UDP reads and writes for the shared worker socket.
 //!
 //! The loop is below room policy and above raw `str0m` I/O. Room
@@ -11,12 +11,12 @@
 //! `str0m` outputs, local fanout, relay fanout, packet sinks and transport
 //! observability.
 //!
-//! Authoritative media state lives in the worker-owned `PacketLoopState`.
-//! `RtcSnapshotState`, bitrate counters, diagnostics, metrics, packet sinks and
+//! Authoritative media state lives in [`PacketLoopState`](super::state::PacketLoopState).
+//! [`RtcSnapshotState`](super::state::RtcSnapshotState), bitrate counters, diagnostics, metrics, packet sinks and
 //! source-policy signals are side channels used to expose observations or
 //! enqueue work without letting external callers mutate the hot-path state
-//! directly. Relay routing state stays in the worker-owned
-//! `PacketLoopState`.
+//! directly. Relay routing state stays in
+//! [`PacketLoopState`](super::state::PacketLoopState).
 //!
 //! # Packet-loop turn
 //!

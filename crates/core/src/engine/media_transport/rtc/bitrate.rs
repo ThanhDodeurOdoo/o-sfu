@@ -44,7 +44,7 @@ impl MediaBitrateCounter {
     /// `MediaBitrateCounter` is shared so diagnostics can snapshot it from
     /// another thread, but `record` has one writer: the RTC packet loop that
     /// owns the registered media handle. That makes a release `fetch_add`
-    /// enough for per-packet writes. Exact saturating addition is intentionally
+    /// enough for per-packet writes. Exact saturating addition is
     /// not part of the observable contract because one RTP bitrate window is
     /// bounded by real transport packet sizes and cannot approach `u64::MAX`.
     pub(super) fn record(&self, now: Instant, payload_bytes: usize) -> bool {

@@ -283,7 +283,7 @@ impl MediaTransport {
     /// Returns room instances whose transport-observed active-speaker state has
     /// expired by `now`.
     ///
-    /// This bridges packet-loop observations back into room-owned policy. The
+    /// This bridges packet-loop observations back into room policy. The
     /// room remains authoritative for layout and subscription decisions.
     pub(super) async fn expired_active_speaker_room_instance_ids_from_workers(
         &self,

@@ -14,13 +14,13 @@ use super::{
 
 /// pure routing state for one router instance
 ///
-/// the router is intentionally synchronous and in-memory
+/// the router is synchronous and in-memory
 /// it does not perform media I/O or signaling negotiation
 /// it only accepts typed router-domain entities and keeps the topology internally
 /// consistent
 ///
-/// the primary maps own live entities
-/// `indexes` mirrors ownership edges that are needed for teardown and
+/// the primary maps store live entities
+/// reverse indexes mirror dependency edges needed for teardown and
 /// producer route-state propagation
 /// every mutation that changes a primary entity must keep the matching reverse
 /// relation in the same transition
@@ -28,7 +28,7 @@ use super::{
 pub struct Router<O: RouterObserver = NoopRouterObserver> {
     /// stable identity for this pure router instance
     pub(super) id: RouterId,
-    /// live sessions admitted through `join_session`
+    /// live sessions admitted through [`Router::join_session`]
     pub(super) sessions: BTreeMap<SessionId, Session>,
     /// live transports grouped by id in the primary topology map
     pub(super) transports: BTreeMap<TransportId, Transport>,
@@ -47,8 +47,8 @@ impl Router<NoopRouterObserver> {
     ///
     /// this constructor is the normal choice for tests or callers that only need
     /// pure topology state
-    /// use `new_with_observer` when session or producer lifecycle events must be
-    /// mirrored to another owner
+    /// use [`Router::new_with_observer`] when session or producer lifecycle
+    /// events must be mirrored outside the router
     #[must_use]
     pub fn new(id: RouterId) -> Self {
         Self::new_with_observer(id, NoopRouterObserver)
@@ -178,7 +178,7 @@ impl<O: RouterObserver> Router<O> {
 
     /// register a consumer on a send transport
     ///
-    /// the `capability` parameter is the result of external capability
+    /// the capability parameter is the result of external capability
     /// negotiation such as [`crate::can_consume`]
     /// the router treats it as an opaque compatibility gate
     /// a [`ConsumerCapability::Incompatible`] result rejects the consumer
@@ -414,7 +414,7 @@ impl<O: RouterObserver> Router<O> {
 
     /// remove a consumer primary record plus both reverse relations
     ///
-    /// the helper is intentionally tolerant of missing consumers because multiple
+    /// the helper tolerates missing consumers because multiple
     /// teardown paths can converge here after a relation has already been drained
     fn detach_consumer(&mut self, consumer_id: ConsumerId) {
         let Some(consumer) = self.consumers.remove(&consumer_id) else {

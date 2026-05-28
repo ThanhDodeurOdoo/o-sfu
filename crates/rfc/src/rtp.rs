@@ -321,7 +321,7 @@ pub mod vp8 {
     /// not a complete RTP packet.
     ///
     /// Truncated descriptors, missing payload headers and non-start partitions
-    /// return `false`. The helper intentionally performs only the cheap
+    /// return `false`. The helper performs only the cheap
     /// keyframe probe needed by packet gates and decoder-refresh detection.
     #[must_use]
     pub fn payload_starts_keyframe(payload: &[u8]) -> bool {

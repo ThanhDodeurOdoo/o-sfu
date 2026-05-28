@@ -19,7 +19,7 @@ pub struct RoutingOptions {
 /// describes how many process-local router placements a room may use and which
 /// spillover mode should interpret that limit.
 ///
-/// `RoomWorkerPolicy` belongs to room orchestration, not to the RTP packet
+/// [`RoomWorkerPolicy`] belongs to room placement, not to the RTP packet
 /// loop. The room manager reads it at join time to decide whether a user
 /// connection can be placed on a spillover router.
 ///
@@ -42,7 +42,7 @@ pub struct LocalSpilloverPolicy {
 /// Validated construction input for [`LocalSpilloverPolicy`].
 ///
 /// Count and window fields must be greater than zero. Transport-observed
-/// pressure thresholds may be zero when the caller intentionally disables that
+/// pressure thresholds may be zero when the caller disables that
 /// signal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalSpilloverPolicyParts {
@@ -168,7 +168,7 @@ impl RoomWorkerPolicy {
     ///
     /// Callers should branch on this value instead of treating
     /// `max_local_routers() == 1` as the only strict-mode signal. That keeps
-    /// the policy open to future modes that may also use one router at a time.
+    /// the policy open to other modes that may also use one router at a time.
     #[must_use]
     pub const fn spillover(self) -> RoomSpilloverMode {
         self.spillover

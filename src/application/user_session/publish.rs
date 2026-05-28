@@ -53,7 +53,7 @@ impl User {
     /// Accept a client intent to publish one compatibility stream.
     ///
     /// This method translates the Odoo stream type through
-    /// `stream_catalog`, stages media through core when needed and emits a
+    /// [`crate::application::stream_catalog`], stages media through core when needed and emits a
     /// renegotiation request only when a new offer is required. Duplicate
     /// publish requests are accepted as idempotent no-ops.
     ///

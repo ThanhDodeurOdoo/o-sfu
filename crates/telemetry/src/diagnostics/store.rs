@@ -1,10 +1,10 @@
-//! in-memory event storage for the diagnostics
+//! in-memory event storage for diagnostics
 //!
-//! This module contain the part of diagnostics that must preserve history across
-//! asynchronous runtime parts: recent global events, recent per-room
-//! events, recent per-user events, etc...
+//! This module contains the part of diagnostics that must preserve recent
+//! global, per-room and per-user event history across asynchronous runtime
+//! paths.
 //!
-//! Runtime code records events here as they happen, and the query layer later
+//! Runtime code records events here as they happen. The query layer later
 //! reads those bounded histories when building operator responses.
 
 use std::{
@@ -125,10 +125,10 @@ impl DiagnosticsStore {
             .insert(room_instance_id, room_id.to_owned());
     }
 
-    /// Adds a live user to the diagnostics-owned lookup index.
+    /// Adds a live user to the diagnostics lookup index.
     ///
     /// The room lifecycle calls this after the join transition commits. The
-    /// lookup key intentionally matches the raw diagnostics route segment:
+    /// lookup key matches the raw diagnostics route segment:
     /// integer ids use decimal strings and compatibility string ids keep their
     /// original value.
     pub fn register_user(&self, room_id: &str, user_id: &UserId) {

@@ -67,7 +67,7 @@ impl RoomDirectoryEntry {
 
 /// mutable state behind one directory entry's lifecycle lease gate
 ///
-/// this lock is intentionally synchronous and short lived
+/// this lock is synchronous and short lived
 /// callers may hold a
 /// [`RoomLifecycleLease`] while awaiting, but this mutex is only held while a
 /// lease is accepted or released

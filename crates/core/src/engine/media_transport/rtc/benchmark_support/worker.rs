@@ -1,6 +1,6 @@
 //! whole-worker fixtures for manual packet-loop profiling
 //!
-//! the fixtures in this file are intentionally heavier than the slice fixtures
+//! the fixtures in this file are heavier than the slice fixtures
 //! they own a real current-thread `RtcWorker` so the benchmark can include
 //! mailbox scheduling and worker command handling after setup
 //!

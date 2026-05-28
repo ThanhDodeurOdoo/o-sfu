@@ -2,7 +2,7 @@
 //!
 //! The packet loop is a long-lived task, so temporary per-turn storage belongs
 //! in one reusable allocation surface instead of being rebuilt while packets are
-//! flowing. This module contain that surface. Callers borrow the vectors during one
+//! flowing. This module contains that surface. Callers borrow the vectors during one
 //! turn, then call [`PacketLoopBuffers::clear`] before the next turn to reset
 //! logical length while keeping capacity.
 //!
@@ -131,7 +131,7 @@ impl PacketLoopBuffers {
 
     /// Reset all staged work while retaining allocation capacity.
     ///
-    /// This must run before a new packet-loop turn starts. It intentionally
+    /// This must run before a new packet-loop turn starts. It
     /// leaves `pending_transmits` slots allocated because each slot owns a byte
     /// buffer that is cheaper to overwrite than recreate.
     pub fn clear(&mut self) {

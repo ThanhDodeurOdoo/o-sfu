@@ -1,6 +1,6 @@
-//! This node turns an upgraded socket into an authenticated RTC user. It owns the
-//! transport-specific mechanics of the WebSocket connection and then delegates the
-//! business meaning of authenticated messages to `application::user_session::User`.
+//! This node turns an upgraded socket into an authenticated RTC user. It handles
+//! WebSocket mechanics then delegates authenticated messages to
+//! [`crate::application::user_session::User`].
 //!
 //! ```text
 //! websocket_server
@@ -11,8 +11,8 @@
 //! `- io               -> socket writer boundary and close helpers
 //! ```
 //!
-//! The rest of the runtime should treat this module as the sole owner of WebSocket
-//! mechanics such as close codes, ping/pong liveness, and reader/writer management.
+//! The rest of the runtime should keep WebSocket close codes, ping/pong liveness
+//! and reader/writer management behind this module.
 mod admission;
 mod controller;
 mod handshake;

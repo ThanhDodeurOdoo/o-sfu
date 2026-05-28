@@ -1,10 +1,10 @@
 //! websocket handshake admission boundary
 //!
-//! this module owns the cold path that turns an upgraded socket into a
-//! `ConnectedUser`
-//! the controller owns HTTP upgrade admission
-//! the steady-state session loop owns authenticated signaling
-//! this file only owns the narrow interval where the socket is open but not yet
+//! this module handles the cold path that turns an upgraded socket into a
+//! [`ConnectedUser`]
+//! the controller handles HTTP upgrade admission
+//! the steady-state session loop handles authenticated signaling
+//! this file covers the narrow interval where the socket is open but not yet
 //! a room user
 //!
 //! admission has four ordered steps:
@@ -12,7 +12,7 @@
 //! - receive exactly one first-frame `auth` envelope before the configured auth timeout
 //! - select the candidate room from the explicit auth payload channel or from a JWT room id
 //! - verify the same JWT with the selected room key before trusting claims
-//! - join the room and send the startup output returned by `User::start`
+//! - join the room and send the startup output returned by [`User::start`]
 //!
 //! the order is security-critical because decoded JWT contents can only select
 //! a candidate room
@@ -65,11 +65,11 @@ use crate::{
 
 /// legacy Odoo WebSocket claims scoped by the selected room key
 ///
-/// current Odoo sends the room id as `AuthPayload.channel`, not as a signed JWT claim
+/// current Odoo sends the room id as [`AuthPayload::channel`], not as a signed JWT claim
 /// the JWT still authenticates the user because it is signed with the
 /// room key selected during channel creation
 /// this shape keeps that compatibility path explicit so the modern
-/// `WebSocketConnectClaims` verifier can stay room-id-bound
+/// [`WebSocketConnectClaims`] verifier can stay room-id-bound
 #[derive(Deserialize)]
 struct RoomScopedConnectClaims {
     /// registered JWT lifetime claims validated by the shared verifier
@@ -94,7 +94,8 @@ struct HandshakeAuthentication {
 /// post-auth handoff from the handshake to the steady-state session loop
 ///
 /// the room manager has already accepted this user
-/// failures after this point must clean up this connection or hand ownership to the caller
+/// failures after this point must clean up this connection or hand it to the
+/// caller
 struct JoinedUser {
     room: Arc<Room>,
     user_id: UserId,
@@ -213,8 +214,8 @@ async fn receive_auth_or_reject(
 
 /// receive the auth frame and authenticate it against a room
 ///
-/// the duration metric intentionally includes first-frame wait time plus JWT
-/// verification because both contribute to unauthenticated socket pressure
+/// the duration metric includes first-frame wait time plus JWT verification
+/// because both contribute to unauthenticated socket pressure
 #[o_sfu_telemetry::measure_duration(metrics = "state.metrics", record = "record_ws_auth_duration")]
 async fn receive_and_authenticate(
     state: &WebSocketServices,

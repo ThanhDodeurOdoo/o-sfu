@@ -3,17 +3,17 @@ use o_sfu_router::MediaKind;
 use super::{SourcePolicy, UserStreamId};
 use crate::engine::VideoLayoutIntent;
 
-/// Orchestration-provided publish intent for one user stream.
+/// Publish intent for one user stream.
 ///
-/// This is the API business-layer code should pass into core when a user starts
-/// publishing. It carries the stream identity, technical media kind and room
-/// policy as one immutable decision. Core captures these values when the staged
-/// publish commits.
+/// Application code passes this into core when a user starts publishing. It
+/// carries the stream identity, technical media kind and room policy as one
+/// immutable decision. Core captures these values when the staged publish
+/// commits.
 ///
 /// Compatibility concepts such as "camera" or "screen" must be translated into
 /// this type before entering core. If a product stream needs different layout
-/// or bandwidth behavior, change the orchestration catalog that builds this
-/// intent instead of adding stream-specific branches to room state.
+/// or bandwidth behavior, change the application catalog that builds this intent
+/// instead of adding stream-specific branches to room state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourcePublishIntent {
     stream_id: UserStreamId,
@@ -47,12 +47,12 @@ impl SourcePublishIntent {
     }
 }
 
-/// Per-source subscription update supplied by orchestration.
+/// Per-source subscription update submitted by the caller.
 ///
-/// This is the generic core shape for receiver download intent. Business
-/// compatibility code decides which stream ids to include. Core merges partial
+/// This is the core shape for receiver download intent. Compatibility code
+/// decides which stream ids to include. Core merges partial
 /// updates by stream id and applies the resulting active or layout preference
-/// to existing and future consumer routes.
+/// to current and later consumer routes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SourceSubscriptionIntent {
     active: Option<bool>,

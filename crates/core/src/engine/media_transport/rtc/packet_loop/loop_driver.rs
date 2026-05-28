@@ -159,7 +159,7 @@ impl PacketLoopTurn {
 
     /// runs the synchronous work for one packet-loop turn
     ///
-    /// this method is intentionally non-async because it holds mutable worker
+    /// this method is non-async because it holds mutable worker
     /// state
     /// it returns only the cloned socket and next deadline needed after that borrow
     /// ends

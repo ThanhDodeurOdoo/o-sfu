@@ -1,4 +1,4 @@
-//! Room membership orchestration for joins, leaves, disconnects and
+//! Room membership workflows for joins, leaves, disconnects and
 //! negotiation readiness.
 //!
 //! This module is the async boundary around pure `RoomState` membership
@@ -15,7 +15,7 @@
 //!
 //! # Concurrency
 //!
-//! Public and crate-visible entrypoints here are cold-path orchestration calls.
+//! Public and crate-visible entrypoints here are cold-path membership calls.
 //! They must not hold the room state lock across `.await`. Cleanup calls run
 //! after the state guard has been released.
 
@@ -56,7 +56,7 @@ pub(in crate::engine::room) struct JoinSessionIntent {
     pub user_id: UserId,
     /// browser-visible label stored on the room user
     pub label: Option<String>,
-    /// permissions translated into room-owned capability flags
+    /// permissions translated into room capability flags
     pub permissions: UserPermissions,
     /// outbound queue for post-auth room events
     pub sender: UserOutboundSender,
@@ -91,13 +91,13 @@ enum UserTransition<'a> {
 enum UserTransitionResult {
     /// A join committed and allocated this runtime-local connection id.
     Joined(ConnectionId),
-    /// A close or disconnect command completed its orchestration path.
+    /// A close or disconnect command completed its lifecycle path.
     Applied,
     /// No state transition was available to finalize.
     Missing,
 }
 
-/// State-owned transition data captured before async effects run.
+/// Transition data captured before async effects run.
 ///
 /// Values stored here are the only data finalization may use after the
 /// `RoomState` guard is dropped. This prevents cleanup, diagnostics and fan-out
@@ -208,7 +208,7 @@ impl Room {
             .resolve_for_commit(&room_snapshot, || room_snapshot.next_local_router_id())
     }
 
-    /// Run the room-owned join transition with an explicit cleanup policy.
+    /// Run the room join transition with an explicit cleanup policy.
     ///
     /// This method exists so production and test callers share the same join
     /// sequencing while choosing whether transport state should be touched.
@@ -361,8 +361,8 @@ impl Room {
     /// Mutate `RoomState` and capture all data needed after the lock is gone.
     ///
     /// No transport, diagnostics or websocket work belongs in this phase. The
-    /// returned outcome is intentionally owned so finalization never has to
-    /// re-read mutable membership state to decide cleanup.
+    /// returned outcome carries all cleanup data so finalization never has to
+    /// re-read mutable membership state.
     async fn apply_state_transition(
         &self,
         transition: UserTransition<'_>,

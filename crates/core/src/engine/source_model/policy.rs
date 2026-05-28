@@ -1,11 +1,11 @@
 use crate::engine::VideoLayoutIntent;
 
-/// Room policy metadata supplied by orchestration for one source.
+/// Room policy applied to one published source.
 ///
-/// `SourcePolicy` is the generic contract between business orchestration and
-/// core room policy. It tells core what it may do with a source after publish,
-/// but it does not name the product feature that created the stream and it does
-/// not limit how many streams a user may publish.
+/// [`SourcePolicy`] is the source contract between application publish intent
+/// and core room policy. It tells core what it may do with a source after
+/// publish, but it does not name the product feature that created the stream
+/// and it does not limit how many streams a user may publish.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourcePolicy {
     layout: Option<SourceLayoutPolicy>,
@@ -50,12 +50,12 @@ impl SourcePolicy {
 
 /// Default receiver-layout role for one source.
 ///
-/// Orchestration sets this when a source is published. Core combines it with a
-/// receiver's explicit layout preference and the active-speaker snapshot to
-/// choose a [`SourceRoomPolicySelector`] for each receiver/source route.
+/// The publish intent sets this when a source is published. Core combines it
+/// with a receiver's explicit layout preference and the active-speaker snapshot
+/// to choose a [`SourceRoomPolicySelector`] for each receiver/source route.
 ///
 /// If a source has no layout policy, core treats it as hidden for video budget
-/// planning. That is useful for audio and for future sources that should route
+/// planning. That is useful for audio and for sources that should route
 /// without entering receiver video layout decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceLayoutPolicy {
@@ -96,10 +96,10 @@ impl SourceLayoutPolicy {
 
 /// Receiver bandwidth behavior for one published source.
 ///
-/// Orchestration chooses this once, when building
-/// [`SourcePublishIntent`](crate::prelude::SourcePublishIntent). Core then uses it to
-/// decide whether the source participates in receiver-video layer selection,
-/// route pausing and over-budget diagnostics.
+/// Callers set this once when building
+/// [`SourcePublishIntent`](crate::prelude::SourcePublishIntent). Core then uses
+/// it to decide whether the source participates in receiver-video layer
+/// selection, route pausing and over-budget diagnostics.
 ///
 /// # Example situations
 ///
@@ -138,9 +138,9 @@ pub enum SourceAdaptationPolicy {
     ReadableDetail,
 }
 
-/// Active-speaker relationship supplied by orchestration.
+/// Active-speaker relationship declared for one source.
 ///
-/// Core receives transport active-speaker observations, but orchestration
+/// Core receives transport active-speaker observations, but the publish intent
 /// decides which sources participate in that relationship. Audio-like sources
 /// normally detect speech. Video-like sources may be promotable by speech from
 /// another source in the same group.
@@ -167,10 +167,10 @@ impl ActiveSpeakerPolicy {
     }
 }
 
-/// Orchestration-owned active-speaker group id.
+/// Active-speaker group id used to separate speech relationships.
 ///
-/// Groups let future orchestrators keep unrelated speech domains separate
-/// without teaching core about product stream names. The current Odoo
+/// Groups keep unrelated speech domains separate without teaching core about
+/// application stream names. The current Odoo
 /// compatibility layer uses [`Self::MAIN`] for the call's normal audio and
 /// camera relationship.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -352,11 +352,11 @@ pub enum PolicyPauseReason {
     VideoDownloadLimit,
 }
 
-/// Server-owned role for one published source encoding.
+/// Server-defined role for one published source encoding.
 ///
 /// The role lets the budget planner understand what an encoding is meant for
-/// without reading product stream names. Room state assigns it when committing
-/// the source descriptor after transport negotiation.
+/// without reading application stream names. Room state assigns it when
+/// committing the source descriptor after transport negotiation.
 ///
 /// # Example situation
 ///
@@ -378,7 +378,7 @@ pub enum UploadLayerPolicyRole {
     Thumbnail,
     /// Lower-cost thumbnail rung below the normal thumbnail target.
     ///
-    /// This is reserved for a future upload ladder where the server advertises
+    /// This is reserved for an expanded upload ladder where the server advertises
     /// more than two useful video encodings.
     DegradedThumbnail,
 }

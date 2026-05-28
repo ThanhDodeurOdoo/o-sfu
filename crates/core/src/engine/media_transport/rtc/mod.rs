@@ -11,7 +11,7 @@
 //! diagnostics hooks, packet-sink fanout, bitrate snapshots plus the state machines
 //! needed to drive Str0m. The surrounding media transport worker manager decides
 //! which session belongs to which worker and hides cross-worker relay setup
-//! from room orchestration.
+//! from room code.
 //!
 //! Internal ownership is split by the kind of RTC work being performed:
 //!

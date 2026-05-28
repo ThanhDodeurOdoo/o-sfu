@@ -1,6 +1,6 @@
 //! Worker-local media lifecycle for one RTC worker.
 //!
-//! This module contain producer and consumer media declaration plus transport-handle
+//! This module contains producer and consumer media declaration plus transport-handle
 //! teardown inside `PacketLoopState`. Route ownership and relay tracking
 //! stay in `control/`, while offer/answer transitions remain in
 //! `worker/handlers/negotiation.rs`.

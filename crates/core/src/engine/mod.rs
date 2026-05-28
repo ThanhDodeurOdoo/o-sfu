@@ -7,7 +7,7 @@
 //! The media engine has to coordinate state that is too concrete for the pure
 //! router and too low level for the server shell: room membership, publish or
 //! subscribe transactions, transport cleanup, packet sinks, relay setup, packet-
-//! loop observations and room-owned media policy. Keeping those pieces together
+//! loop observations and room media policy. Keeping those pieces together
 //! lets them share media-engine state without making the server crate import
 //! RTC workers or room-state internals.
 

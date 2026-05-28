@@ -1,4 +1,4 @@
-//! worker-owned state for the RTC engine transport layer
+//! worker-local state for the RTC engine transport layer
 //!
 //! this module holds the mutable facts that must stay local to one packet-loop
 //! worker:
@@ -76,7 +76,7 @@ pub(super) struct SharedRtcSocket {
     pub(super) candidate_addr: SocketAddr,
 }
 
-/// worker-owned `str0m::Rtc` state for one transport session
+/// worker-local [`str0m::Rtc`] state for one transport session
 ///
 /// this state is single-threaded under [`PacketLoopState`]
 /// control commands mutate negotiation or routing facts before the packet loop
@@ -108,7 +108,7 @@ pub(super) struct RtcSessionState {
     pub(super) consumer_streams: ConsumerStreamStore,
 }
 
-/// offer and answer staging state for one worker-owned session
+/// offer and answer staging state for one worker-local session
 ///
 /// this preserves `str0m`'s one-outstanding-offer rule while media lifecycle
 /// code can stage additions or removals through serialized worker commands
@@ -160,7 +160,7 @@ pub(super) struct PendingRecvStream {
 pub(super) struct PacketLoopState {
     /// lazily bound worker socket cleared when the last session leaves
     pub(super) shared_socket: Option<SharedRtcSocket>,
-    /// live worker-owned RTC sessions
+    /// live worker-local RTC sessions
     pub(super) users: SessionStore,
     /// source media id to local consumer destinations for packet fanout
     pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
@@ -373,7 +373,7 @@ impl PacketLoopState {
 
     /// report whether a producer RID has recent packet liveness
     ///
-    /// readiness is intentionally time-bound
+    /// readiness is time-bound
     /// a RID that was live earlier may become stale after encoder adaptation
     pub(super) fn producer_rid_is_ready(
         &self,
@@ -601,7 +601,7 @@ impl RidReadinessScratch {
 
 /// packet-path readiness for one producer RID
 ///
-/// this is intentionally time based
+/// this is time based
 /// a RID that was live once may go quiet after browser encoder adaptation, so
 /// strict gates consult freshness instead of treating the first packet as
 /// permanent readiness
@@ -684,12 +684,12 @@ impl PartialOrd for PendingRidKeyframeRefresh {
 /// this state mirrors facts that diagnostics, placement and transport policy
 /// need without exposing mutable [`PacketLoopState`]
 /// it is protected by a cold-path mutex while packet-path state remains
-/// worker-owned and single-threaded
+/// worker-local and single-threaded
 #[derive(Debug, Default)]
 pub struct RtcSnapshotState {
     /// demux hints visible to diagnostics and recovery tooling
     pub(super) remote_addr_demux: RemoteAddrDemux,
-    /// sessions that currently have worker-owned RTC state
+    /// sessions that currently have worker-local RTC state
     pub(super) live_sessions: BTreeSet<TransportSessionKey>,
     /// latest observed transport health by session
     transport_health_by_session: BTreeMap<TransportSessionKey, TransportSessionHealth>,

@@ -5,13 +5,13 @@
 //! callers express transport intent directly on the selected worker while the
 //! worker keeps mutable RTC state inside its packet-loop task
 //!
-//! worker methods are cold-path orchestration
+//! worker methods are cold-path transport calls
 //! they clone typed identifiers, build mailbox commands and await worker
 //! responses
-//! the packet loop remains the only owner of WebRTC sessions, media handles,
+//! the packet loop remains the only place with mutable WebRTC sessions, media handles,
 //! route-control state and relay fanout
 //!
-//! the split is intentionally small:
+//! the split stays small:
 //!
 //! ```text
 //! media transport worker manager
@@ -176,7 +176,7 @@ impl RtcWorker {
     /// builds one worker from validated RTC transport config
     ///
     /// construction does not start sockets or spawn the packet loop
-    /// the first command that needs worker-owned state triggers lazy boot
+    /// the first command that needs worker-local state triggers lazy boot
     ///
     /// `media_id_base` must identify the media-id range reserved for this
     /// worker
@@ -215,7 +215,7 @@ impl RtcWorker {
 }
 
 impl RtcWorker {
-    /// creates the first transport offer for a worker-owned session
+    /// creates the first transport offer for a worker-local session
     ///
     /// this boots the packet loop if needed and asks the worker to create the
     /// bootstrap offer used for WebRTC setup and capability probing
@@ -387,7 +387,7 @@ impl RtcWorker {
         .await
     }
 
-    /// registers browser-uploaded media as a worker-owned producer
+    /// registers browser-uploaded media as a worker-local producer
     ///
     /// before the initial answer, recv state can be declared directly on the
     /// worker session
@@ -400,7 +400,7 @@ impl RtcWorker {
     /// is gone or worker command dispatch fails
     ///
     /// returns [`TransportAdapterError::InvalidInput`] when a new offer would
-    /// violate the worker-owned one-outstanding-offer rule
+    /// violate the worker-local one-outstanding-offer rule
     pub async fn add_recv_media(
         &self,
         session_key: &TransportSessionKey,
@@ -416,7 +416,7 @@ impl RtcWorker {
         .await
     }
 
-    /// registers browser-downloaded media as a worker-owned consumer
+    /// registers browser-downloaded media as a worker-local consumer
     ///
     /// the source may be local to the same packet loop or represented by a
     /// remote-source control handle from another worker
@@ -463,7 +463,7 @@ impl RtcWorker {
         .await
     }
 
-    /// updates whether one worker-owned producer may forward packets
+    /// updates whether one worker-local producer may forward packets
     ///
     /// # Errors
     ///
@@ -481,12 +481,12 @@ impl RtcWorker {
         .await
     }
 
-    /// updates whether one worker-owned consumer destination is active
+    /// updates whether one worker-local consumer destination is active
     ///
     /// # Errors
     ///
     /// returns [`TransportAdapterError`] when the worker cannot receive the
-    /// command or the consumer route no longer resolves to worker-owned media
+    /// command or the consumer route no longer resolves to worker-local media
     pub async fn set_consumer_active(
         &self,
         route: &TransportConsumerRoute,
@@ -499,7 +499,7 @@ impl RtcWorker {
         .await
     }
 
-    /// updates the packet gate for one worker-owned consumer destination
+    /// updates the packet gate for one worker-local consumer destination
     ///
     /// # Errors
     ///
@@ -559,7 +559,7 @@ impl RtcWorker {
     /// # Errors
     ///
     /// returns [`TransportAdapterError`] when the source worker cannot receive
-    /// the command or the relay target no longer matches worker-owned state
+    /// the command or the relay target no longer matches worker-local state
     pub async fn deactivate_relay_route(
         &self,
         source_transport_media_id: TransportMediaId,
@@ -577,7 +577,7 @@ impl RtcWorker {
     /// # Errors
     ///
     /// returns [`TransportAdapterError`] when the source worker cannot receive
-    /// the command or the relay target no longer matches worker-owned state
+    /// the command or the relay target no longer matches worker-local state
     pub async fn apply_relay_target_activity(
         &self,
         source: &TransportSourceKey,

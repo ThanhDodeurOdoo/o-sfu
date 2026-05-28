@@ -1,4 +1,4 @@
-//! `room` is the main business-flow layer of the SFU.
+//! main application-flow layer of the SFU.
 //!
 //! ```text
 //! RoomManager
@@ -6,7 +6,7 @@
 //! `- Room
 //!    |- controller          -> room-facing facade and immutable accessors
 //!    |- lifecycle           -> close reasons and permission translation
-//!    |- membership          -> join, leave and disconnect transition orchestration
+//!    |- membership          -> join, leave and disconnect transitions
 //!    |- operation           -> user-scoped membership, media and publish work
 //!    |- cleanup             -> transport cleanup execution and retry reconciliation
 //!    |- effects             -> explicit side-effect plans for transport, fanout, and diagnostics
@@ -16,7 +16,7 @@
 //!    |- media               -> room-wide consumer bootstrap and publication lookup
 //!    |- recording           -> room-scoped recording policy
 //!    |- router_state        -> bridge into the router core
-//!    |- source_policy       -> room-owned source selection and refresh bridge
+//!    |- source_policy       -> room source selection and refresh bridge
 //!    |- topology            -> routing placement boundary
 //!    |- outbound            -> shared server-to-client fanout helpers
 //! ```

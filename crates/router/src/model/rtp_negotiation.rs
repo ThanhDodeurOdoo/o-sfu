@@ -337,7 +337,7 @@ fn negotiated_payload_type(
         .unwrap_or(format.payload_type_id())
 }
 
-/// Media capability matching intentionally ignores payload type.
+/// Media capability matching ignores payload type.
 /// PT is negotiated output state, not an identity key for codec compatibility.
 ///
 /// Compatibliity is instead based on the codec's media kind, codec name,
@@ -429,8 +429,8 @@ fn codec_match_ignoring_payload_type(
 /// Only settings that actually affect wire compatibility are treated as hard
 /// negotiation keys here.
 ///
-/// Receiver preferences or advisory parameters are intentionally not all treated
-/// as compatibility blockers, because this module is trying to answer "can the
+/// Receiver preferences or advisory parameters are not all compatibility
+/// blockers because this module is trying to answer "can the
 /// formats interoperate?" rather than "are all local preferences identical?"
 fn critical_codec_settings_match(
     format: &MediaFormat,
@@ -664,7 +664,7 @@ fn normalized_channels(media_kind: MediaKind, channels: Option<u16>) -> Option<u
     }
 }
 
-/// This is intentionally a URI-level capability intersection only.
+/// This is a URI-level capability intersection only.
 ///
 /// It does NOT perform full SDP extmap negotiation:
 /// - no direction filtering
@@ -679,7 +679,7 @@ fn negotiate_header_extensions(
 ) -> Vec<HeaderExtension> {
     consumable_parameters
         .header_extensions()
-        // RFC 8285 extmaps are negotiated by common support. This helper intentionally keeps the
+        // RFC 8285 extmaps are negotiated by common support. This helper keeps the
         // router model at URI-intersection scope and leaves direction/id validation to the SDP edge.
         .filter(|extension| {
             consumer_capabilities

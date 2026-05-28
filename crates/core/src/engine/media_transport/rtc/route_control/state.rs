@@ -1,6 +1,6 @@
 //! worker-local route-control state for source packet forwarding
 //!
-//! route control sits between worker-owned media routes and packet planning
+//! route control sits between worker-local media routes and packet planning
 //! callers address it with transport media ids plus packet metadata
 //! room policy reaches this layer only after it has been projected into
 //! [`PacketLayerGate`] values

@@ -34,7 +34,7 @@ use self::fingerprint::packet_fingerprint;
 
 /// Maximum exact negative route decisions retained by one packet-loop worker.
 ///
-/// The limit is intentionally small and worker-local. A miss only helps with
+/// The limit is small and worker-local. A miss only helps with
 /// very recent repeated traffic, while durable routing truth lives in
 /// `PacketLoopState` and `RemoteAddrDemux`.
 const RECENT_MISS_CACHE_LIMIT: usize = 256;
@@ -55,7 +55,7 @@ const UNKNOWN_SOURCE_MISS_BURST_LIMIT: usize = 4;
 
 /// Cooldown applied after one source exhausts its unresolved probe burst.
 ///
-/// The value is intentionally short. This is abuse resistance for the demux
+/// The value is short. This is abuse resistance for the demux
 /// fallback path, not a session lifecycle timeout.
 const UNKNOWN_SOURCE_RATE_LIMIT_COOLDOWN: Duration = Duration::from_millis(200);
 
@@ -63,7 +63,7 @@ const UNKNOWN_SOURCE_RATE_LIMIT_COOLDOWN: Duration = Duration::from_millis(200);
 ///
 /// The key narrows cache lookup using stable packet facts that are cheap to
 /// carry through the packet loop. It is not sufficient by itself. Callers must
-/// still compare the saved bytes because the fingerprint is intentionally small
+/// still compare the saved bytes because the fingerprint is small
 /// and can collide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct PacketLoopRoutingMissKey {

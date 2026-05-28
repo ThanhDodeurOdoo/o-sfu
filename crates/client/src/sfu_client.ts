@@ -2,8 +2,8 @@
  * main entry point for the o-sfu client
  *
  * this module provides the high-level surface for interacting with the sfu.
- * it orchestrates the rtc runtime, the protocol core, and the public state
- * and events exposed to the application
+ * it connects the rtc runtime, the protocol core, and the public state exposed
+ * to the application
  */
 
 import {

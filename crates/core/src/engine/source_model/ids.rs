@@ -5,17 +5,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::UserId;
 
-/// Orchestration-owned stream identity inside one user's source inventory.
+/// User-scoped stream identity supplied with a publish intent.
 ///
 /// The room treats this value as an opaque slot name scoped by the publishing
-/// user. Compatibility layers and future orchestrators allocate the stable
-/// stream ids and attach media and policy metadata separately.
+/// user. Callers allocate the slot before entering core and pass media kind
+/// plus room-policy metadata through the publish intent.
 ///
 /// # Invariant
 ///
 /// `UserStreamId` is not globally unique. It is unique only together with the
-/// owning user id. Room indexes that need publication identity must pair it with
-/// the owner or use [`PublishedSourceId`] after a publish commits.
+/// publishing user id. Room indexes that need publication identity must pair it
+/// with the publishing user or use [`PublishedSourceId`] after a publish
+/// commits.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct UserStreamId(String);
@@ -88,7 +89,7 @@ impl Display for PublishedSourceId {
 /// Stable room-domain identity for one advertised source encoding
 ///
 /// The id names an operating point of a source such as a simulcast `lo` or
-/// `hi` layer. It intentionally does not encode a RID string or worker-local
+/// `hi` layer. It does not encode a RID string or worker-local
 /// route so selectors can keep pointing at the same encoding after transport
 /// details are refreshed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -122,7 +123,7 @@ impl Display for SourceEncodingId {
 
 /// Codec-native temporal layer id used by SVC operating points.
 ///
-/// The current representation intentionally follows the RFC 9626 frame-marking
+/// The current representation follows the RFC 9626 frame-marking
 /// temporal-id range. Spatial identity remains modeled by the source encoding,
 /// which keeps hybrid simulcast plus SVC as one selected encoding plus one
 /// temporal ceiling instead of a second parallel source graph.

@@ -2,7 +2,7 @@
 //!
 //! These wrappers prevent the control plane from mixing identifiers that are
 //! all strings or counters at the wire boundary but mean different things in
-//! the domain. They are intentionally small, serializable and cheap to clone
+//! the domain. They are small, serializable and cheap to clone
 //! because they live on the control path rather than the media hot path.
 
 use serde::{Deserialize, Serialize};

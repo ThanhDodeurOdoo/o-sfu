@@ -1,12 +1,11 @@
-//! Shared business model for the Odoo Discuss SFU contract.
+//! Shared application model for the Odoo Discuss SFU contract.
 //!
-//! This crate owns the pure business-layer types that multiple `o-sfu` crates
-//! must interpret identically. These are the Odoo Discuss call concepts that
-//! are more specific than RFC vocabulary but less specific than any one
-//! runtime subsystem.
+//! This crate defines the Odoo Discuss call concepts that multiple `o-sfu`
+//! crates must interpret identically. They are more specific than RFC
+//! vocabulary but less specific than any one runtime subsystem.
 //!
-//! The model crate intentionally depends only on serialization support. It does
-//! not own sockets, async work, media transports, router topology, metrics
+//! The model crate depends only on serialization support. It does
+//! not include sockets, async work, media transports, router topology, metrics
 //! registries, server configuration or JSON envelope parsing. Those concerns
 //! stay in the runtime, core, router, telemetry and protocol crates.
 //!
@@ -22,7 +21,7 @@ use serde_json::Value;
 
 /// Opaque compatibility payload carried through legacy broadcast paths.
 ///
-/// Prefer explicit business structs for new flows. This alias exists for
+/// Prefer explicit application structs for new flows. This alias exists for
 /// payloads where Odoo owns the shape and the SFU only relays the JSON value.
 pub type JsonPayload = Value;
 
@@ -91,7 +90,7 @@ impl UserId {
 
 /// Room capabilities advertised to a newly connected browser client.
 ///
-/// These are business capabilities, not permission checks. The room advertises
+/// These are call capabilities, not permission checks. The room advertises
 /// which features exist for the call, then per-user permissions decide who may
 /// actually start or change a restricted feature.
 #[allow(
@@ -168,7 +167,7 @@ pub enum StopCode {
 pub struct RecordingStateUpdate {
     /// New room-visible recording state.
     pub state: RecordingState,
-    /// Optional business reason for a transition to an inactive recording
+    /// Optional reason for a transition to an inactive recording
     /// state.
     #[serde(rename = "stopCode", skip_serializing_if = "Option::is_none")]
     pub stop_code: Option<StopCode>,
@@ -195,10 +194,9 @@ pub struct UserPermissions {
 
 /// Presence and call UI state associated with one room participant.
 ///
-/// This is business state visible to other clients. It does not own media
-/// routing, transport health or source identity. Application orchestration
-/// updates media-related fields before the room stores and rebroadcasts this
-/// payload.
+/// This is participant state visible to other clients. It does not include
+/// media routing, transport health or source identity. Application code updates
+/// media-related fields before the room stores and rebroadcasts this payload.
 ///
 /// Fields are optional so callers can send partial updates. Use
 /// [`Self::snapshot_complete`] when serializing a full room snapshot.
@@ -296,7 +294,7 @@ impl UserInfo {
 /// Full peer entry sent when a client needs the current room membership view.
 ///
 /// The serialized `sessionId` field is the Odoo-facing user identity. Runtime
-/// connection ids are intentionally absent because reconnection and replacement
+/// connection ids are absent because reconnection and replacement
 /// are server-local concerns.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerSnapshot {
@@ -311,7 +309,7 @@ pub struct PeerSnapshot {
 
 /// Receiver intent for which streams to download from one peer.
 ///
-/// This is business intent from a client, not a transport subscription object.
+/// This is client intent, not a transport subscription object.
 /// The room translates it into routing policy, source selection and transport
 /// effects. Missing fields mean the current receiver preference for that stream
 /// or layout should be left unchanged.
@@ -338,7 +336,7 @@ pub struct DownloadStates {
 impl DownloadStates {
     /// Iterate over explicit stream toggles in this update.
     ///
-    /// Layout preferences are intentionally not yielded because they do not map
+    /// Layout preferences are not yielded because they do not map
     /// one-to-one to enabling or disabling a media stream.
     pub fn iter(&self) -> impl Iterator<Item = (StreamType, bool)> + '_ {
         [
@@ -353,7 +351,7 @@ impl DownloadStates {
 
 /// Receiver-side layout role for a video stream.
 ///
-/// The room uses this business hint to prioritize selected video layers under
+/// The room uses this layout hint to prioritize selected video layers under
 /// bandwidth pressure. It does not name an RTP encoding, simulcast RID or
 /// concrete packet gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -369,14 +367,14 @@ pub enum VideoLayoutIntent {
     /// Stream hidden by the client layout.
     Hidden,
     /// Stream outside the currently visible layout range.
-    /// currently the same as hidden, but the meaning can allow more granular
-    /// control in the future.
+    /// Currently the same as hidden. The distinct value leaves room for more
+    /// granular client layout policy.
     Overflow,
 }
 
-/// Business stream category exposed to Odoo clients.
+/// Stream category exposed to Odoo clients.
 ///
-/// This is intentionally smaller than the internal source model. The source
+/// This is smaller than the internal source model. The source
 /// model may contain encodings, RTP metadata and transport-local media ids,
 /// while `StreamType` only says which user-facing stream a caller means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -432,7 +430,7 @@ pub enum WebSocketCloseCode {
     AuthFailed = 4106,
     /// The client did not authenticate before the server timeout.
     AuthTimeout = 4107,
-    /// The runtime intentionally removed this client from the room.
+    /// The runtime removed this client from the room.
     Kicked = 4108,
     /// Admission failed because the room cannot accept another user.
     RoomFull = 4109,
@@ -442,7 +440,7 @@ impl WebSocketCloseCode {
     /// Decode a raw websocket close code if it belongs to the shared vocabulary.
     ///
     /// Unknown codes return `None` so the caller can keep foreign websocket
-    /// close reasons out of business telemetry labels and protocol state
+    /// close reasons out of application telemetry labels and protocol state
     /// machines.
     #[must_use]
     pub const fn from_u16(value: u16) -> Option<Self> {

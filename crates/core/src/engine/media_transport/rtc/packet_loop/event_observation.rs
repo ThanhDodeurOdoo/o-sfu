@@ -1,7 +1,7 @@
 //! Transport event observation for packet-loop sessions.
 //!
 //! `str0m` emits many events while the packet loop drains a session. Only a
-//! small subset changes the SFU's observable transport state. This module contain
+//! small subset changes the SFU's observable transport state. This module contains
 //! that translation so session draining can stay focused on moving `str0m`
 //! outputs into packet-loop buffers.
 
@@ -69,7 +69,8 @@ pub(super) fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
 /// Project selected `str0m` events into metrics, snapshots and diagnostics.
 ///
 /// Snapshot writes are best-effort. If the snapshot lock is unavailable, the
-/// packet loop keeps running because the worker-owned `PacketLoopState`
+/// packet loop keeps running because the worker-local
+/// [`PacketLoopState`](crate::engine::media_transport::rtc::state::PacketLoopState)
 /// remains authoritative for media behavior.
 pub(super) fn observe_rtc_event(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,

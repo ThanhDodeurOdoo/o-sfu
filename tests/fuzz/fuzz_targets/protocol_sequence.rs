@@ -5,7 +5,7 @@
 //! directly interact with the core so the fuzzer can reach authenticated,
 //! connected, recovery, negotiation, and pending-request paths
 //!
-//! we intentionally does not fuzz arbitrary JSON framing. That boundary is
+//! this target does not fuzz arbitrary JSON framing. That boundary is
 //! already covered by `protocol_decode.rs`.
 //!
 //!  guarantees:

@@ -1,4 +1,4 @@
-//! Room-owned audio route admission.
+//! Room audio route admission.
 //!
 //! Transport reports active-speaker facts. Room policy turns those facts into a
 //! bounded admitted set so large rooms cannot forward every simultaneous talker.

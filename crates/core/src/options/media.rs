@@ -10,7 +10,7 @@ pub struct MediaOptions {
     pub video_bitrate_limits: VideoBitrateLimits,
 }
 
-/// Room-owned media activation limits.
+/// Room media activation limits.
 ///
 /// These limits control receiver delivery. They do not erase publication state
 /// or user subscription intent.

@@ -30,7 +30,7 @@ pub mod packet_sinks {
 }
 
 pub mod room {
-    //! Room orchestration facade used by HTTP, websocket, and application code.
+    //! Room facade used by HTTP, websocket and application code.
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub mod test_support {

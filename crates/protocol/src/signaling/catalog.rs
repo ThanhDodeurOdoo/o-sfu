@@ -67,7 +67,7 @@ pub struct StreamIntentPayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscribePayload {
-    /// Wire shape is intentionally flat: `{ sessionId, audio?, camera?, screen? }`.
+    /// Wire shape is flat: `{ sessionId, audio?, camera?, screen? }`.
     /// Adding fields to `DownloadStates` implicitly changes the subscribe payload shape.
     #[serde(rename = "sessionId")]
     pub user_id: UserId,

@@ -1,9 +1,9 @@
 //! Cluster
 //!
 //! This crate owns the shared language for distributed room ownership. It is
-//! intentionally smaller than a full cluster runtime. The media server, the
+//! smaller than a full cluster runtime. The media server, the
 //! control-plane binary and integration tests can depend on these types
-//! without importing HTTP, WebSocket, Tokio task orchestration or media routing
+//! without importing HTTP, WebSocket, Tokio tasks or media routing
 //! code.
 //!
 //! The crate models the cold path only:

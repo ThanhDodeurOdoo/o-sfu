@@ -1148,7 +1148,7 @@ test("renegotiation configures RID simulcast before answering supported video pu
     );
 });
 
-test("renegotiation configures RID simulcast from server-owned upload slots", async () => {
+test("renegotiation configures RID simulcast from server-defined upload slots", async () => {
     const { core, peerConnections, track, transceiver } = await renegotiateCamera(
         "renegotiate-with-pending-h264-simulcast-camera",
         "camera-track-single"

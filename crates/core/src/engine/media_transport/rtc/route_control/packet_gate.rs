@@ -8,7 +8,7 @@
 //! source-wide route control uses this language as set algebra
 //! downstream gates are unioned first so packets needed by any relay target or
 //! local destination stay alive at the source
-//! then the aggregate source gate is intersected with source-owned policy such
+//! then the aggregate source gate is intersected with source-level policy such
 //! as transport audio activity, so a stricter source policy can still block all
 //! fanout for the packet
 //!
@@ -196,7 +196,7 @@ pub(in crate::engine::media_transport::rtc) fn aggregate_packet_gates<'a>(
 /// composes two gates so only packets accepted by both gates can pass
 ///
 /// `None` means "no gate installed" and acts as the identity value
-/// this is used to apply source-owned restrictions such as transport audio
+/// this is used to apply source-level restrictions such as transport audio
 /// policy after downstream gates have already been widened into one source gate
 pub(super) fn intersect_packet_gates(
     first: Option<PacketLayerGate>,

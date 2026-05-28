@@ -343,7 +343,7 @@ impl ConsumerBootstrapOp {
 
     /// Finalize a prepared consumer bootstrap once the transport media exists.
     ///
-    /// This step intentionally does not request a keyframe. Fresh subscribers
+    /// This step does not request a keyframe. Fresh subscribers
     /// need that refresh only after the receiver has applied the
     /// relevant SDP answer, which is handled by the later user-negotiation
     /// callbacks.

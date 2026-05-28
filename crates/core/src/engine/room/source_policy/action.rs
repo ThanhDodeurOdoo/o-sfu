@@ -111,7 +111,7 @@ impl ConsumerPacketSelectionUpdate {
     }
 }
 
-/// Server-owned featured state derived from active-speaker observations.
+/// Featured state derived from active-speaker observations.
 ///
 /// This lives beside the video route actions because current featured
 /// projection and quality floor both derive from the same transport

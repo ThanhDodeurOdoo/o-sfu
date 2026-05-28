@@ -1,14 +1,13 @@
 //! cold-path rtc socket and session bootstrap
 //!
-//! this module is the only production path that creates worker-owned `str0m`
-//! state
+//! this module is the only production path that creates worker-local str0m state
 //! negotiation calls it before offer creation so the packet loop can
 //! later treat sockets, ICE credentials, codec configuration and per-session
 //! bookkeeping as already initialized worker-local state
 //!
 //! bootstrap stops at transport setup
 //! room policy, media registration, SDP
-//! staging and packet routing stay in the worker modules that own those
+//! staging and packet routing stay in the worker modules responsible for those
 //! contracts
 
 use std::{
@@ -45,7 +44,7 @@ const VIDEO_PAYLOAD_TYPE_VP8: u8 = 96;
 /// bind the shared worker UDP socket and return the advertised candidate tuple
 ///
 /// the bind address uses the unspecified address for the configured public IP
-/// family so one socket can receive traffic for every session owned by the
+/// family so one socket can receive traffic for every session assigned to the
 /// worker
 /// the advertised candidate keeps the configured public IP with the
 /// bound port because that is what browsers must see in SDP
@@ -102,12 +101,12 @@ fn bind_ip_for_public_ip(public_ip: IpAddr) -> IpAddr {
     }
 }
 
-/// ensure one worker-owned `RtcSessionState` exists for a session
+/// ensure one worker-local [`RtcSessionState`] exists for a session
 ///
 /// this is idempotent because negotiation may ask for readiness more than once
 /// while a session is still alive
-/// `Ok(true)` means a fresh `Rtc` was created and inserted
-/// `Ok(false)` means the existing session state is still the owner for that key
+/// `Ok(true)` means a fresh [`str0m::Rtc`] was created and inserted
+/// `Ok(false)` means the existing session state still matches that key
 ///
 /// new sessions start in ICE-lite mode, with RTP mode enabled, bandwidth
 /// estimation capped by `max_bitrate_out` and exactly one local host candidate
@@ -183,7 +182,7 @@ pub(super) fn ensure_session_rtc_state_with_stats_interval(
 /// codec flags are applied before any media is declared so initial offers and
 /// later staged media additions share one capability surface
 /// the builder runs
-/// in RTP mode because the SFU forwards RTP packets through worker-owned str0m
+/// in RTP mode because the SFU forwards RTP packets through worker-local str0m
 /// sessions instead of using data channels or peer-connection media sources
 fn rtc_builder(codec_flags: MediaCodecFlags, stats_interval: Option<Duration>) -> str0m::RtcConfig {
     let mut config = Rtc::builder()
@@ -216,7 +215,7 @@ fn rtc_builder(codec_flags: MediaCodecFlags, stats_interval: Option<Duration>) -
 
 /// register the h264 payload types that match the existing browser contract
 ///
-/// these entries intentionally omit RTX because local forwarding projects one
+/// these entries omit RTX because local forwarding projects one
 /// receiver-safe RTP stream per consumer and does not model retransmission as a
 /// separate negotiated payload in this bootstrap path
 fn add_h264_codecs_without_rtx(codec_config: &mut CodecConfig) {

@@ -1,6 +1,6 @@
 //! Transport-native route control for source packet forwarding.
 //!
-//! Route control sits between worker-owned media routes and the packet loop. It
+//! Route control sits between worker-local media routes and the packet loop. It
 //! coalesces keyframe requests, tracks packet-level active-speaker state, and
 //! applies already-projected packet gates. It does not know room layout,
 //! receiver budgets, or Odoo-facing source identity.

@@ -20,7 +20,7 @@ use super::super::{
     worker::{WorkerCommandContext, handle_worker_command},
 };
 
-/// Receive-side input bundle owned by one packet-loop worker.
+/// Receive-side input bundle for one packet-loop worker.
 ///
 /// `RtcWorker` builds this bundle when it lazily boots a worker. After
 /// that point the packet loop is the only receiver owner, while worker methods,
@@ -38,7 +38,7 @@ pub(in crate::engine::media_transport::rtc) struct PacketLoopInputReceivers {
     command_rx: mpsc::Receiver<RtcWorkerCommand>,
     /// Cross-worker relay packets drained during the pump phase.
     ///
-    /// Relay input is intentionally separate from control input because it is
+    /// Relay input stays separate from control input because it is
     /// bounded by the packet-loop turn budget and must not starve lifecycle
     /// commands or shutdown.
     relay_rx: mpsc::Receiver<ForwardedPacket>,
@@ -53,7 +53,7 @@ pub(in crate::engine::media_transport::rtc) struct PacketLoopInputReceivers {
     ///
     /// The receiver is optional so production construction has no probe
     /// mailbox. When present, probe input is treated as control input because it
-    /// can mutate the same worker-owned indexes as normal commands.
+    /// can mutate the same worker indexes as normal commands.
     #[cfg(any(test, feature = "testing-transport"))]
     probe_rx: Option<mpsc::Receiver<DebugProbeRequest>>,
 }

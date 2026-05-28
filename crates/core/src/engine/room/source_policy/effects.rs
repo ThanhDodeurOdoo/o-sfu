@@ -1,4 +1,4 @@
-//! Async effect executor for room-owned source policy.
+//! Async effect executor for room source policy.
 //!
 //! The pure source-policy planners return source-domain selector updates and
 //! featured-state changes while the room lock is held. This executor owns

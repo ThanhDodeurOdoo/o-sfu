@@ -42,7 +42,7 @@ pub enum TopologyCacheError {
 /// The store contains pure map state and does not lock internally. Runtime code
 /// should put it behind the service boundary that owns topology updates. This
 /// keeps the cache easy to test and avoids leaking lock handling into ingress
-/// or room orchestration.
+/// or room admission.
 #[derive(Debug, Default, Clone)]
 pub struct CachedTopologyStore {
     snapshots: BTreeMap<ClusterRoomId, TopologySnapshot>,

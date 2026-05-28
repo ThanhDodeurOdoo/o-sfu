@@ -1,6 +1,6 @@
 //! Verification helpers that still run shared production lifecycle logic.
 //!
-//! The protocol proof surface stays intentionally narrow here. This module only
+//! The protocol proof surface stays narrow here. This module only
 //! exposes the connection-lifecycle state machine because its transition model
 //! is shared with production code.
 
