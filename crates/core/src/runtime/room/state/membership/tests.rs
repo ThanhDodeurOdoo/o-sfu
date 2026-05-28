@@ -21,14 +21,11 @@ use crate::{
         recording::RecordingService,
         room::{
             LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext, UserOutboundSender,
-            rtp_capabilities::router_rtp_capabilities,
-            state::{
-                ids::ProducerRuntimeId,
-                media::{
-                    ConsumerKey, ConsumerState, PublishedProducer, PublishedSourceInstall,
-                    SourceKey,
-                },
+            media_graph::{
+                ConsumerKey, ConsumerState, ProducerRuntimeId, PublishedProducer,
+                PublishedSourceInstall, SourceKey,
             },
+            rtp_capabilities::router_rtp_capabilities,
             topology::{RoutedConsumerId, RoutedProducerId},
         },
         source_model::{
@@ -391,5 +388,5 @@ fn replacement_join_clears_transport_media_owner_index() {
         state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
         None
     );
-    assert!(state.media.source_indexes_are_empty());
+    assert!(state.media.publication_state_is_empty());
 }

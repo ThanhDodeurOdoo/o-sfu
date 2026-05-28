@@ -4,8 +4,8 @@ use {
     super::{PendingPublishTransactions, Room},
     crate::runtime::{
         ConnectionId, TestSourceKind, UserId, media_transport::TransportMediaId,
-        room::state::ValidatedPublishDescriptor, source_model::test_support::stream_id_for_source,
-        sync::lock_unpoisoned,
+        room::media_graph::ValidatedPublishDescriptor,
+        source_model::test_support::stream_id_for_source, sync::lock_unpoisoned,
     },
 };
 

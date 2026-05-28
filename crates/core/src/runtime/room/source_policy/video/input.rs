@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use o_sfu_router::MediaKind;
 
 use super::{
-    super::super::state::{ConsumerRouteTransportRef, RoomState},
+    super::super::{media_graph::ConsumerRouteTransportRef, state::RoomState},
     layout::{ReceiverVideoLayoutIntent, featured_source_user_ids_for_active_speakers},
 };
 use crate::{

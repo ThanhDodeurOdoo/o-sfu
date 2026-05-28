@@ -78,7 +78,7 @@ use std::{
 
 use tracing::warn;
 
-use super::{Room, state::RelayRouteKey};
+use super::{Room, media_graph::RelayRouteKey};
 use crate::{
     TransportEffectOutcome,
     runtime::{

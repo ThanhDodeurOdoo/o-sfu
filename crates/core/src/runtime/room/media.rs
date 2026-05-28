@@ -10,7 +10,7 @@
 //! [`SourceSubscriptionIntent`]. That keeps business policy at the application
 //! edge while this layer focuses on ownership, staleness and cleanup ordering.
 
-use super::{Room, effects::SubscriptionEffectPlan, state::ConsumerBootstrapOrigin};
+use super::{Room, effects::SubscriptionEffectPlan, media_graph::ConsumerBootstrapOrigin};
 use crate::runtime::{UserId, media_transport::MediaTransport, source_model::UserStreamId};
 
 impl Room {
@@ -18,7 +18,7 @@ impl Room {
         &self,
         media_port: &MediaTransport,
         origin: ConsumerBootstrapOrigin,
-        targets: Vec<super::state::PendingConsumerBootstrapTarget>,
+        targets: Vec<super::media_graph::PendingConsumerBootstrapTarget>,
     ) {
         let effect_plan = {
             let worker_lookup = self.placement_state.worker_lookup();

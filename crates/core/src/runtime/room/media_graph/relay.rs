@@ -14,7 +14,7 @@ pub(in crate::runtime::room) struct RelayRouteEffect {
 }
 
 #[derive(Debug, Default)]
-pub(in crate::runtime::room::state) struct RoomRelayRoutes {
+pub(super) struct RoomRelayRoutes {
     routes: BTreeMap<RelayRouteKey, RelayRouteOwners>,
 }
 

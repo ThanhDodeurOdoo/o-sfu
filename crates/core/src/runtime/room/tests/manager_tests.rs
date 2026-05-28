@@ -7,8 +7,8 @@ use super::{
     super::{
         effects::SubscriptionEffectPlan,
         manager::JoinPlacementTestGate,
+        media_graph::{ConsumerRouteTransportRef, ConsumerRouteUpdate},
         placement::RoomPlacementDecisionReason,
-        state::{ConsumerRouteTransportRef, ConsumerRouteUpdate},
         user_negotiation::UserTransportReady,
     },
     api::NegotiatedPublish,

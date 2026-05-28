@@ -31,8 +31,9 @@ use crate::{
         room::{
             Room, RoomEventRequest, RoomMediaCounts, SourcePolicyEvent, UserOutbound,
             cleanup::TransportCleanupOperation,
+            media_graph::{RelayRouteEffect, TransportMediaRemoval},
             outbound::OutboundSender,
-            state::{LifecycleEffects, RelayRouteEffect, TransportMediaRemoval},
+            state::LifecycleEffects,
         },
     },
 };

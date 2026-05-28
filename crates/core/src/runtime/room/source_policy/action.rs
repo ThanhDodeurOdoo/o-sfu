@@ -4,7 +4,7 @@
 //! holds the shared effect-bound update types consumed by the post-lock source
 //! policy executor.
 
-use super::super::state::ConsumerRouteTransportRef;
+use super::super::media_graph::ConsumerRouteTransportRef;
 use crate::runtime::{
     UserId,
     media_transport::SourcePacketGate,

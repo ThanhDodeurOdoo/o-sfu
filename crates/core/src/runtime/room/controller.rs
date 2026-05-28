@@ -38,13 +38,14 @@ use super::{
     cleanup::CleanupReconciler,
     definition::RoomDefinition,
     init::RoomInit,
+    media_graph::{ConsumerRouteState, ConsumerRouteTransportRef},
     media_transaction::PendingPublishTransactions,
     operation::RoomUserOperation,
     placement::{
         LoadTriggeredPlacementState, RoomPlacementState, RoomPlacementUsageSnapshot,
         RoomWorkerLoadContribution,
     },
-    state::{ConsumerRouteState, ConsumerRouteTransportRef, RoomState},
+    state::RoomState,
 };
 use crate::{
     RoomSpilloverMode, RoomWorkerPolicy, RuntimeFeatureFlags,

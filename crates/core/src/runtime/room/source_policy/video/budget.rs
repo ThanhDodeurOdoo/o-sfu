@@ -784,8 +784,8 @@ mod tests {
         ConnectionId, UserId,
         media_transport::{SourcePacketGate, TransportMediaId},
         room::{
+            media_graph::ConsumerRouteTransportRef,
             source_policy::video::layout::ReceiverVideoLayoutIntent,
-            state::ConsumerRouteTransportRef,
         },
         source_model::{
             PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,

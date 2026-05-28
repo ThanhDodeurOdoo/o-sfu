@@ -38,7 +38,9 @@ use super::{
     Room, RoomMediaCounts, RoomUserOperation, SourcePolicyEvent,
     cleanup::TransportCleanupOperation,
     effects::{RoomEffectBatch, RoomEffectContext},
-    state::{ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, ValidatedPublishDescriptor},
+    media_graph::{
+        ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, ValidatedPublishDescriptor,
+    },
 };
 use crate::{
     TransportEffectOutcome,
