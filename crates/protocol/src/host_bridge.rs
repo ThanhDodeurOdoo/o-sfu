@@ -63,7 +63,6 @@ impl From<PendingRequestKind> for HostPendingRequestKind {
     }
 }
 
-#[cfg(feature = "ts-bindings")]
 pub(crate) const HOST_COMMAND_KINDS: &[(&str, &str)] = &[
     ("CONNECT", "connect"),
     ("SEND_WEB_SOCKET", "sendWebSocket"),

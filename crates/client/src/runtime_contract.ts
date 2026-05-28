@@ -13,7 +13,6 @@ import {
     type SourceDescriptor,
     type StreamType
 } from "./public_api.js";
-import type { NegotiationUploadSlot, TrackBinding } from "./protocol.js";
 import {
     COMMAND_KIND,
     NEGOTIATION_KIND,
@@ -21,8 +20,10 @@ import {
     RECORDING_STOP_CODES,
     SOURCE_ENCODING_POLICY_ROLES,
     STREAM_TYPES,
-    UPLOAD_KINDS
-} from "./generated/protocol_contract.js";
+    UPLOAD_KINDS,
+    type NegotiationUploadSlot,
+    type TrackBinding
+} from "./protocol_contract.js";
 
 const MIN_TEMPORAL_LAYER_ID = 0;
 const MAX_TEMPORAL_LAYER_ID = 7;
