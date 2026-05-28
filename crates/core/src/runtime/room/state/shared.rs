@@ -5,17 +5,15 @@ use std::{
 
 use o_sfu_router::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities};
 
-use super::{
-    super::{
-        RoomAdmissionPolicy, RoomMediaCounts, RoomUserPermissions,
-        outbound::OutboundSender,
-        topology::{RoomRouterStateFactory, RoomTopology},
-        user_negotiation::UserNegotiation,
-    },
-    media::{
+use super::super::{
+    RoomAdmissionPolicy, RoomMediaCounts, RoomUserPermissions,
+    media_graph::{
         ConsumerRouteTransportRef, ConsumerRouteView, RelayRouteEffect, RoomMediaGraph,
         TransportMediaRemoval,
     },
+    outbound::OutboundSender,
+    topology::{RoomRouterStateFactory, RoomTopology},
+    user_negotiation::UserNegotiation,
 };
 use crate::{
     RoomMediaLimits, RoomSpilloverMode,
@@ -43,19 +41,19 @@ use crate::{
 #[derive(Debug)]
 pub(in crate::runtime::room) struct RoomState {
     pub(super) admission_policy: RoomAdmissionPolicy,
-    pub(super) media_limits: RoomMediaLimits,
-    pub(super) users: BTreeMap<UserId, ActiveUser>,
+    pub(in crate::runtime::room) media_limits: RoomMediaLimits,
+    pub(in crate::runtime::room) users: BTreeMap<UserId, ActiveUser>,
     /// Monotonically increasing: each join, including re-joins, gets a fresh id
     /// so stale async callbacks from a previous connection are rejected.
     pub(super) next_connection_id: u64,
-    pub(super) next_source_id: u64,
-    pub(super) next_source_encoding_id: u64,
-    pub(super) next_producer_id: u64,
-    pub(super) next_consumer_id: u64,
+    pub(in crate::runtime::room) next_source_id: u64,
+    pub(in crate::runtime::room) next_source_encoding_id: u64,
+    pub(in crate::runtime::room) next_producer_id: u64,
+    pub(in crate::runtime::room) next_consumer_id: u64,
     pub(super) recording_state: RecordingState,
-    pub(super) media: RoomMediaGraph,
+    pub(in crate::runtime::room) media: RoomMediaGraph,
     /// Shadow of user/producer/consumer state inside the pure router core.
-    pub(super) topology: RoomTopology,
+    pub(in crate::runtime::room) topology: RoomTopology,
 }
 
 #[derive(Debug)]
@@ -69,12 +67,12 @@ pub(in crate::runtime::room) struct ActiveUser {
     pub(super) permissions: RoomUserPermissions,
     pub(super) info: UserInfo,
     pub(super) server_featured: Option<bool>,
-    pub(super) negotiation: UserNegotiation,
-    pub(super) desired_source_subscriptions:
+    pub(in crate::runtime::room) negotiation: UserNegotiation,
+    pub(in crate::runtime::room) desired_source_subscriptions:
         BTreeMap<UserId, BTreeMap<UserStreamId, SourceSubscriptionIntent>>,
-    pub(super) parsed_client_rtp_capabilities: Option<RouterRtpCapabilities>,
-    pub(super) connection_id: ConnectionId,
-    pub(super) sender: OutboundSender,
+    pub(in crate::runtime::room) parsed_client_rtp_capabilities: Option<RouterRtpCapabilities>,
+    pub(in crate::runtime::room) connection_id: ConnectionId,
+    pub(in crate::runtime::room) sender: OutboundSender,
 }
 
 impl ActiveUser {
@@ -317,7 +315,7 @@ impl RoomState {
         )
     }
 
-    pub(super) fn current_live_consumer_routes(
+    pub(in crate::runtime::room) fn current_live_consumer_routes(
         &self,
     ) -> impl Iterator<Item = ConsumerRouteView<'_>> {
         self.media.live_consumer_routes().filter(|route| {

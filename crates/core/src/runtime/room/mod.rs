@@ -11,6 +11,7 @@
 //!    |- cleanup             -> transport cleanup execution and retry reconciliation
 //!    |- effects             -> explicit side-effect plans for transport, fanout, and diagnostics
 //!    |- state               -> locked mutable room model
+//!    |- media_graph         -> source, producer, consumer and relay indexes
 //!    |- user_negotiation    -> per-user transport readiness
 //!    |- media               -> room-wide consumer bootstrap and publication lookup
 //!    |- recording           -> room-scoped recording policy
@@ -31,6 +32,7 @@ mod init;
 mod lifecycle;
 mod manager;
 mod media;
+mod media_graph;
 mod media_transaction;
 mod membership;
 mod operation;
@@ -59,6 +61,7 @@ pub use manager::{
     JoinUserRequest, RoomManager, RoomManagerConfig, RoomManagerDeps, RuntimeRoomDirectorySnapshot,
     RuntimeRoomStatsSnapshot,
 };
+pub use media_graph::{ConsumerRouteState, RemoteTrackBootstrap};
 pub(crate) use operation::RoomUserOperation;
 pub use outbound::{
     DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
@@ -72,7 +75,6 @@ pub use placement::{
     RoomRuntimeContext,
 };
 pub(in crate::runtime::room) use source_policy::SourcePolicyEvent;
-pub use state::{ConsumerRouteState, RemoteTrackBootstrap};
 #[cfg(any(test, feature = "testing-transport"))]
 pub use tests::api::{
     NegotiatedPublish, RoomManagerTestApi, RoomTestApi, RoomTestInspect, RoomTestLifecycle,

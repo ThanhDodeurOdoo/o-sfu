@@ -23,10 +23,10 @@ use super::{
     super::{
         BroadcastPayload, BroadcastPayloadError, ResolvedPlacement, RoomEventMessage,
         RoomJoinError, RoomUserPermissions, UserCloseReason,
+        media_graph::{RelayRouteEffect, TransportMediaRemoval},
         outbound::{MessageFanout, OutboundSender},
         user_negotiation::{UserNegotiation, UserNegotiationUpdate},
     },
-    media::{RelayRouteEffect, TransportMediaRemoval},
     shared::{ActiveUser, RoomState},
 };
 use crate::runtime::{ConnectionId, UserId, UserInfo};

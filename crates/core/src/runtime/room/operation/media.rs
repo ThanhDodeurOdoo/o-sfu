@@ -7,7 +7,7 @@ use super::{
     super::{
         SourcePolicyEvent,
         effects::{SubscriptionEffectContext, SubscriptionEffectPlan, UnpublishEffectPlan},
-        state::ConsumerBootstrapOrigin,
+        media_graph::ConsumerBootstrapOrigin,
     },
     RoomUserOperation,
 };

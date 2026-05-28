@@ -23,7 +23,7 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 use super::{
     Room, RoomMediaCounts, SourcePolicyEvent,
     cleanup::TransportCleanupOperation,
-    state::{
+    media_graph::{
         ConsumerBootstrapOrigin, ConsumerRouteTransportRef, ConsumerRouteUpdate,
         PendingConsumerBootstrap, PendingConsumerBootstrapTarget, PlannedConsumerBootstrap,
         PlannedSubscriptionChange, PreparedConsumerBootstrap, RelayRouteEffect,

@@ -1,8 +1,8 @@
 use o_sfu_router::RouterId;
 #[cfg(test)]
-use {super::media::ConsumerKey, crate::runtime::source_model::PublishedSourceId};
+use {super::super::media_graph::ConsumerKey, crate::runtime::source_model::PublishedSourceId};
 
-use super::{media::SourceTransportMediaIndexEntry, shared::RoomState};
+use super::{super::media_graph::SourceTransportMediaIndexEntry, shared::RoomState};
 use crate::runtime::{
     ConnectionId, TestSourceKind, UserId,
     media_transport::TransportMediaId,
@@ -105,7 +105,8 @@ impl RoomState {
         source_id: PublishedSourceId,
     ) -> bool {
         self.media
-            .contains_consumer_source_selection(&ConsumerKey::new(consumer_user_id, source_id))
+            .consumer_source_selection(&ConsumerKey::new(consumer_user_id, source_id))
+            .is_some()
     }
 
     pub fn inspect_source_encoding_ids_for_transport_media_id(

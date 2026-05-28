@@ -14,7 +14,7 @@ use tokio::sync::{
 use super::{
     events::{MAX_BROADCAST_PAYLOAD_BYTES, RoomEventMessage},
     lifecycle::UserCloseReason,
-    state::RemoteTrackBootstrap,
+    media_graph::RemoteTrackBootstrap,
 };
 use crate::runtime::{UserId, metrics::RuntimeMetrics, source_model::UserStreamId};
 

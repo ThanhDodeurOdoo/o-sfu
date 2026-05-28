@@ -18,9 +18,8 @@ use o_sfu_router::{
 };
 
 use super::{
-    super::{ids::ProducerRuntimeId, shared::RoomState},
-    ConsumerKey, ConsumerRouteState, ConsumerState, PublishedProducer, PublishedSourceInstall,
-    SourceKey,
+    ConsumerKey, ConsumerRouteState, ConsumerState, ProducerRuntimeId, PublishedProducer,
+    PublishedSourceInstall, SourceKey,
 };
 use crate::{
     Bitrate, MediaCodecFlags, RoomMediaLimits,
@@ -33,6 +32,7 @@ use crate::{
         room::{
             LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext, UserOutboundSender,
             rtp_capabilities::router_rtp_capabilities,
+            state::RoomState,
             topology::{RoutedConsumerId, RoutedProducerId},
             user_negotiation::UserTransportReady,
         },
@@ -720,7 +720,7 @@ fn commit_published_track_populates_transport_media_owner_index() {
         .inspect_source_id_for_transport_media_id(transport_media_id)
         .expect("transport media should resolve to a source id");
     assert!(
-        state.media.contains_source(source_id),
+        state.media.source(source_id).is_some(),
         "transport media source id should point into the source registry"
     );
     assert_eq!(
@@ -861,7 +861,7 @@ fn unpublish_track_clears_transport_media_owner_index() {
         state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
         None
     );
-    assert!(state.media.source_indexes_are_empty());
+    assert!(state.media.publication_state_is_empty());
 }
 
 #[test]
@@ -907,7 +907,7 @@ fn unpublish_track_repairs_missing_topology_router_and_clears_state() {
         state.producer_stream_id_for_transport_media_id(transport_media_id),
         None
     );
-    assert!(state.media.source_indexes_are_empty());
+    assert!(state.media.publication_state_is_empty());
 }
 
 #[test]
@@ -973,13 +973,21 @@ fn purge_user_media_state_removes_only_indexed_user_and_source_entries() {
     state.purge_user_media_state(&publisher_id);
 
     let media = &state.media;
-    assert!(!media.contains_source(publisher_source_id));
-    assert!(media.contains_source(other_source_id));
+    assert!(media.source(publisher_source_id).is_none());
+    assert!(media.source(other_source_id).is_some());
     assert!(!media.contains_consumer(&removed_consumer_key));
     assert!(!media.contains_pending_consumer_bootstrap(&pending_removed_key));
-    assert!(!media.contains_consumer_source_selection(&removed_consumer_key));
+    assert!(
+        media
+            .consumer_source_selection(&removed_consumer_key)
+            .is_none()
+    );
     assert!(media.contains_consumer(&surviving_consumer_key));
-    assert!(media.contains_consumer_source_selection(&surviving_consumer_key));
+    assert!(
+        media
+            .consumer_source_selection(&surviving_consumer_key)
+            .is_some()
+    );
     assert_eq!(
         media.consumer_keys_for_user(&subscriber_id),
         vec![surviving_consumer_key.clone()]
@@ -992,8 +1000,7 @@ fn purge_user_media_state_removes_only_indexed_user_and_source_entries() {
         media.producer_ids_for_user(&other_publisher_id),
         vec![other_producer_id]
     );
-    assert!(media.owner_producer_index_is_empty(&publisher_id));
-    assert!(media.owner_source_index_is_empty(&publisher_id));
+    assert!(media.owner_publication_state_is_empty(&publisher_id));
 }
 
 #[test]

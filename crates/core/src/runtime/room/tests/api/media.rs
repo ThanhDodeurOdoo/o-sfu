@@ -74,12 +74,14 @@ impl RoomTestMedia<'_> {
         producer_rtp_parameters: RouterRtpParameters,
         media_transport: &MediaTransport,
     ) -> Option<UserStreamId> {
-        let publish_prerequisites = {
+        let (publisher_connection_id, capabilities) = {
             let state = self.room.state.read().await;
-            state.publish_prerequisites(user_id)?
+            let user = state.users.get(user_id)?;
+            if !user.negotiation.can_publish() {
+                return None;
+            }
+            (user.connection_id, state.router_rtp_capabilities())
         };
-        let publisher_connection_id = publish_prerequisites.connection_id();
-        let capabilities = publish_prerequisites.capabilities();
         let consumable_rtp_parameters =
             derive_consumable_rtp_parameters(&producer_rtp_parameters, &capabilities)
                 .map_err(|error| {
