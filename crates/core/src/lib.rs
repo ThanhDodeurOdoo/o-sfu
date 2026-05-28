@@ -22,7 +22,7 @@ pub(crate) use options::{
     SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
 };
 pub(crate) use room::{
-    MediaSessionContext, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
+    MediaSessionIdentity, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
     RollbackStagedPublishOutcome, SessionNegotiationOutcome, SubscriptionUpdateOutcome,
     TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
 };

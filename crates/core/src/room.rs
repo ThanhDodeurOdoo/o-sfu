@@ -25,13 +25,13 @@ use crate::{
 /// mutating a replacement session for the same user. The transport key is
 /// derived once by the room so the core facade does not need to know room
 /// instance or worker placement rules.
-pub struct MediaSessionContext<'a> {
+pub struct MediaSessionIdentity<'a> {
     user_id: &'a UserId,
     connection_id: ConnectionId,
     transport_user_key: TransportSessionKey,
 }
 
-impl<'a> MediaSessionContext<'a> {
+impl<'a> MediaSessionIdentity<'a> {
     /// Build a context from room identity data.
     #[must_use]
     pub const fn new(

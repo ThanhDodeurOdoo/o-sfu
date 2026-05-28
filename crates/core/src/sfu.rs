@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use o_sfu_router::MediaCapabilities;
 
 use crate::{
-    Bitrate, ConnectionId, MediaSessionContext, PublicationActivity, PublicationActivityOutcome,
+    Bitrate, ConnectionId, MediaSessionIdentity, PublicationActivity, PublicationActivityOutcome,
     PublishStageOutcome, RollbackStagedPublishOutcome, SessionNegotiationOutcome,
     SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
     engine::{
@@ -216,7 +216,7 @@ pub struct SfuCore {
 pub struct MediaSession<'a> {
     core: &'a SfuCore,
     room: &'a Room,
-    context: MediaSessionContext<'a>,
+    identity: MediaSessionIdentity<'a>,
 }
 
 /// Negotiation lifecycle handle for one media session.
@@ -261,7 +261,7 @@ impl SfuCore {
         MediaSession {
             core: self,
             room,
-            context: MediaSessionContext::new(
+            identity: MediaSessionIdentity::new(
                 user_id,
                 connection_id,
                 room.transport_user_key(user_id, connection_id),
@@ -279,7 +279,7 @@ impl<'a> MediaSession<'a> {
     pub fn endpoint_health(&self) -> Option<TransportSessionHealth> {
         self.core
             .media_transport
-            .session_transport_health(self.context.transport_user_key())
+            .session_transport_health(self.identity.transport_user_key())
     }
 
     /// Enter the transport negotiation lifecycle for this media session.
@@ -308,8 +308,8 @@ impl<'a> MediaSession<'a> {
 
     fn room_operation(&self) -> RoomUserOperation<'_> {
         self.room.user_operation(
-            self.context.user_id(),
-            self.context.connection_id(),
+            self.identity.user_id(),
+            self.identity.connection_id(),
             &self.core.media_transport,
         )
     }
@@ -320,7 +320,7 @@ impl<'a> MediaSession<'a> {
     ) -> Result<AppliedSessionAnswer, SfuCoreError> {
         self.core
             .media_transport
-            .apply_session_answer(self.context.transport_user_key(), answer_sdp)
+            .apply_session_answer(self.identity.transport_user_key(), answer_sdp)
             .await
             .map_err(SfuCoreError::Transport)
     }
@@ -352,7 +352,7 @@ impl MediaNegotiation<'_> {
             .0
             .core
             .media_transport
-            .create_initial_session_offer(self.0.context.transport_user_key())
+            .create_initial_session_offer(self.0.identity.transport_user_key())
             .await
             .map_err(SfuCoreError::Transport)?;
         Ok(InitialOffer {
@@ -378,7 +378,7 @@ impl MediaNegotiation<'_> {
             .0
             .core
             .media_transport
-            .create_session_renegotiation_offer(self.0.context.transport_user_key())
+            .create_session_renegotiation_offer(self.0.identity.transport_user_key())
             .await
         {
             Ok(offer) => Ok(Some(NegotiationOffer::from(offer))),

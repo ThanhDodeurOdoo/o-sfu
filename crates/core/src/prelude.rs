@@ -23,7 +23,7 @@ pub use crate::{
         VideoBitrateLimits, VideoCodecPreference,
     },
     room::{
-        MediaSessionContext, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
+        MediaSessionIdentity, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
         RollbackStagedPublishOutcome, SessionNegotiationOutcome, SubscriptionUpdateOutcome,
         TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
     },
