@@ -7,7 +7,7 @@ on:
       - .github/workflows/fuzzing.yml
       - Cargo.lock
       - Cargo.toml
-      - crates/core/src/engine/rtc/**
+      - crates/core/src/engine/media_transport/rtc/**
       - crates/protocol/**
       - crates/rfc/**
       - src/application/user_session/**

@@ -3,7 +3,7 @@
 //! `MediaTransport` owns the process-local RTC worker topology, maps each
 //! transport session to the worker selected by its media-worker id and
 //! coordinates cross-worker relay cleanup. Packet-loop hot paths live inside
-//! `engine::rtc`.
+//! `engine::media_transport::rtc`.
 
 use std::{
     cmp::Reverse,
@@ -15,6 +15,7 @@ use std::{
 use o_sfu_router::MediaCapabilities;
 use str0m::media::MediaKind as Str0mMediaKind;
 
+use super::rtc::{RtcWorker, client_rtp_capabilities_from_answer};
 use crate::engine::{
     RoomInstanceId,
     media_transport::{
@@ -26,7 +27,6 @@ use crate::engine::{
         TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey, TransportSourceKey,
         TransportWorkerPressureSnapshot,
     },
-    rtc::{RtcWorker, client_rtp_capabilities_from_answer},
 };
 
 /// Distance between two worker media-id allocation ranges.

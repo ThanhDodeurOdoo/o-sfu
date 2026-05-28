@@ -9,7 +9,7 @@ use std::{
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
-use super::rtc::ForwardedPacket;
+use super::media_transport::ForwardedPacket;
 use super::{
     RoomInstanceId,
     media_transport::{TransportMediaId, TransportSessionKey},

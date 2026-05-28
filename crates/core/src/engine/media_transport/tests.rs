@@ -19,10 +19,9 @@ use crate::{
         media_transport::{
             ConsumerActivity, RelayRouteActivity, SessionOffer, TransportAdapterError,
             TransportConsumerRoute, TransportMediaId, TransportRelayRouteAction,
-            TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey,
+            TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey, rtc::RtcWorker,
             test_support::test_media_transport_builder,
         },
-        rtc::RtcWorker,
     },
 };
 

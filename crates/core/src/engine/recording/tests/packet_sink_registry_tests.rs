@@ -8,11 +8,13 @@ use std::{
 
 use crate::engine::{
     RoomInstanceId, UserId,
-    media_transport::{TransportMediaId, TransportSessionKey},
+    media_transport::{
+        TransportMediaId, TransportSessionKey,
+        test_support::{sample_forwarded_packet, test_transport_session_key},
+    },
     metrics::RtpForwardDestinationKind,
     packet_sink_registry::{PacketSinkLookup, PacketSinkRouteCache, RoomPacketSinkRegistry},
     recording::MediaPacketSink,
-    rtc::test_support::{sample_forwarded_packet, test_transport_session_key},
     sync::lock_unpoisoned,
 };
 

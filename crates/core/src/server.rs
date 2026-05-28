@@ -94,10 +94,7 @@ pub mod transport {
         //! this module exists only for deterministic tests. production code
         //! must use the opaque `MediaTransport` facade
 
-        pub use crate::engine::{
-            media_transport::test_support::MediaTransportTestApi,
-            rtc::{ForwardedPacket, test_support::*},
-        };
+        pub use crate::engine::media_transport::test_support::*;
     }
 
     #[cfg(feature = "internal-benchmarks")]
@@ -109,13 +106,13 @@ pub mod transport {
         //! fixtures prepare fixed transport scenarios while the measured calls
         //! still execute production RTC-engine helpers
 
-        pub use crate::engine::rtc::benchmark_support::*;
+        pub use crate::engine::media_transport::benchmark_support::*;
     }
 
     #[cfg(any(test, feature = "fuzzing"))]
     pub mod fuzz_support {
-        pub use crate::engine::rtc::{
-            client_rtp_capabilities_from_answer, fuzz_support::route_packet_loop_ingress_demux,
+        pub use crate::engine::media_transport::fuzz_support::{
+            client_rtp_capabilities_from_answer, route_packet_loop_ingress_demux,
         };
     }
 
