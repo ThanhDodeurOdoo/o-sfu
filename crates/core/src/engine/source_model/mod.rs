@@ -1,4 +1,4 @@
-//! Runtime-native source, encoding, and selection vocabulary for published media.
+//! Runtime-native source, encoding and selection vocabulary for published media.
 //!
 //! This module defines the room-domain source identity that room state,
 //! transport projection, diagnostics and recording metadata are expected to
@@ -7,18 +7,19 @@
 //! the source identity.
 //!
 //! A published media stream is modeled as one [`PublishedSourceId`] plus one or
-//! more [`SourceEncodingId`] values. `Mid`, `Rid` and `Ssrc` stay as negotiated
+//! more [`SourceEncodingId`] values. [`o_sfu_router::Mid`],
+//! [`o_sfu_router::Rid`] and [`o_sfu_router::Ssrc`] stay as negotiated
 //! or transport-facing attachment points. Keeping those identities separate
 //! lets later same-room spillover and recording consume the same source
 //! inventory without redefining it around local worker placement.
 //!
-//! Business layers should express stream-specific behavior by constructing
-//! [`SourcePublishIntent`] values. Core policy reads the generic
+//! Application layers should express stream-specific behavior by constructing
+//! [`SourcePublishIntent`] values. Core policy reads the source
 //! [`SourcePolicy`] carried by each source, never compatibility stream labels.
 //!
 //! # Upload layer profiles
 //!
-//! The server-owned upload ladder currently lives at the RTC offer edge as
+//! The server-defined upload ladder lives at the RTC offer edge as
 //! upload-slot metadata, while this module stores the negotiated source
 //! encodings that result from the answer.
 

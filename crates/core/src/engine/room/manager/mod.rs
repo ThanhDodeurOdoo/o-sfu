@@ -117,15 +117,15 @@ impl RuntimeRoomDirectorySnapshot {
     }
 }
 
-/// process-global owner of live rooms keyed by issuer and UUID
+/// process-global live-room directory keyed by issuer and UUID
 ///
-/// `RoomManager` keeps room creation idepotent by issuer and owns the current
+/// [`RoomManager`] keeps room creation idempotent by issuer and stores the current
 /// room directory
 /// lifecycle leases prevent empty-room removal from racing
 /// accepted work, while room state locks and transition methods own the actual
 /// membership ordering
 /// runtime entrypoints should go through this type instead
-/// of coordonating directory lookup and teardown themselves
+/// of coordinating directory lookup and teardown themselves
 #[derive(Debug)]
 pub struct RoomManager {
     directory: RwLock<RoomDirectory>,
@@ -247,7 +247,7 @@ impl RoomManager {
     /// Returns live directory snapshots for known room ids.
     ///
     /// Diagnostics user lookup uses this after resolving candidate rooms from
-    /// the diagnostics-owned user index. Missing rooms are skipped because the
+    /// the diagnostics user index. Missing rooms are skipped because the
     /// index and directory can be observed at slightly different instants while
     /// room teardown is in progress.
     pub async fn directory_snapshots_for_room_ids(

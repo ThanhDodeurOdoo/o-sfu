@@ -2,7 +2,7 @@
 //!
 //! this module owns the synchronous half of user lifecycle changes
 //! it mutates `RoomState`, captures outbound effects and returns cleanup
-//! intents that async room orchestration can execute after the state lock is
+//! intents that async room finalization can execute after the state lock is
 //! released
 //!
 //! transport, websocket and diagnostics work must not happen here
@@ -85,7 +85,7 @@ type RuntimeUserRemoval = (
     Vec<RelayRouteEffect>,
 );
 
-/// committed join result passed to async room orchestration
+/// committed join result passed to async room finalization
 ///
 /// a join may replace an existing connection for the same user
 /// replacement cleanup is represented as transport removals, relay effects and
@@ -100,7 +100,7 @@ pub(in crate::engine::room) struct JoinUserOutcome {
     pub user_id: UserId,
     /// authoritative router and media-worker placement for the new connection
     pub transport_home_placement: ResolvedPlacement,
-    /// transport media owned by any connection replaced during the join
+    /// transport media detached from any connection replaced during the join
     pub transport_removals: Vec<TransportMediaRemoval>,
     /// relay routes that belonged to replaced media state
     pub relay_effects: Vec<RelayRouteEffect>,
@@ -139,7 +139,7 @@ impl UserInfoUpdateOutcome {
 /// user removed by a bulk disconnect request
 ///
 /// only users present in `RoomState` are returned
-/// missing ids intentionally create no cleanup or diagnostics work
+/// missing ids create no cleanup or diagnostics work
 #[derive(Debug)]
 pub(in crate::engine::room) struct DisconnectedUser {
     /// removed runtime user id

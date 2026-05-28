@@ -2,7 +2,7 @@ use std::{fmt, sync::Arc};
 
 use o_sfu_router::{RouterEvent, RouterObserver};
 
-/// room-owned sink for pure-router topology events
+/// room sink for pure-router topology events
 ///
 /// the router emits topology facts without knowing which room subsystem will
 /// consume them. recording is the only sink today, but the trait keeps router

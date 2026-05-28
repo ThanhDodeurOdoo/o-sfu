@@ -54,7 +54,7 @@ pub enum NodeHealth {
 ///
 /// The value is opaque to this crate. HTTP URLs, host and port pairs, internal
 /// service names and relay endpoints can all fit behind the same type.
-/// Address validation is intentionally left to the edge that knows the scheme.
+/// the edge that knows the scheme validates the address.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct NodeAddress(String);
 

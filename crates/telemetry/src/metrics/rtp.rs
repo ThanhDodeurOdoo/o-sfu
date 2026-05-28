@@ -11,7 +11,7 @@ use super::{
 const RTP_FLOW_DIRECTION_COUNT: usize = <RtpFlowDirection as MetricLabel>::COUNT;
 const RTP_FORWARD_DESTINATION_COUNT: usize = <RtpForwardDestinationKind as MetricLabel>::COUNT;
 
-/// Worker-owned RTP packet metric recorder.
+/// Worker-local RTP packet metric recorder.
 ///
 /// Packet loops keep one recorder for their full worker lifetime. Updates touch
 /// only this worker's padded atomics while `RuntimeMetrics` aggregates all

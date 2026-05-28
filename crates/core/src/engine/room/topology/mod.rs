@@ -254,11 +254,11 @@ pub(super) struct RoomTopology {
     shadow_sessions: ShadowSessionTracker,
 }
 
-/// Factory for router states that need room-owned event sinks.
+/// Factory for router states that need room event sinks.
 ///
 /// `RoomTopology` can attach spillover routers after placement. Each
 /// new router state must still report router lifecycle events through the
-/// room-owned sink, so the dependency is stored as a small cloneable factory
+/// room sink, so the dependency is stored as a small cloneable factory
 /// instead of being threaded through every topology call.
 #[derive(Clone)]
 pub(super) struct RoomRouterStateFactory {
@@ -398,7 +398,7 @@ impl RoomTopology {
 
     /// Add a producer on the publisher's home router.
     ///
-    /// Producer ownership is intentionally tied to the publisher's home router.
+    /// Producer routing stays tied to the publisher's home router.
     /// Dependent consumer state and producer route-state propagation should
     /// stay in that pure router instance for the producer lifetime.
     pub(super) fn add_producer(

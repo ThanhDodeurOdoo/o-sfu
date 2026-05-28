@@ -231,7 +231,7 @@ pub struct TransportBitrateSnapshot {
 /// Latest receiver-side bandwidth estimates keyed by transport user.
 ///
 /// These values are produced by the WebRTC egress BWE path and consumed by
-/// room-owned media policy. They are cold-path control-plane facts, not packet
+/// room media policy. They are cold-path control-plane facts, not packet
 /// loop routing state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReceiverBandwidthSnapshot {
@@ -446,11 +446,11 @@ impl ActiveSpeakerSourceDiagnostic {
     }
 }
 
-/// Transport-owned packet gate applied to one published source.
+/// Packet gate applied by transport to one published source.
 ///
 /// Room policy decides in source-domain terms. The transport boundary receives
 /// only the packet-facing projection that the worker can apply without knowing
-/// room layout, source identity, or future relay placement.
+/// room layout, source identity or relay placement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourcePacketGate {
     Open,
@@ -458,7 +458,7 @@ pub enum SourcePacketGate {
     OperatingPoint(SourcePacketOperatingPoint),
 }
 
-/// Room-owned relay route mutation applied by the media transport.
+/// Relay route mutation applied by the media transport.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportRelayRouteEffect {
     pub source: TransportSourceKey,

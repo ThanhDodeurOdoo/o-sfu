@@ -7,7 +7,7 @@
 //! bootstraps for the effect layer.
 //!
 //! The subscription state never decides what "camera" or "screen" means. It
-//! only knows whether a receiver wants a generic source active and which layout
+//! only knows whether a receiver wants a source active and which layout
 //! preference should be associated with that source.
 
 use std::collections::{BTreeMap, BTreeSet};

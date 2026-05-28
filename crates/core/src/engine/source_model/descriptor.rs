@@ -8,10 +8,10 @@ use crate::Bitrate;
 
 /// Authoritative room-domain description of one published source.
 ///
-/// The descriptor groups the stable source id, owner, orchestration stream id,
-/// media kind, source policy and negotiated source facts that recording,
-/// diagnostics and transport projection need to agree on. It does not own
-/// router producer state, socket state or packet-loop routing tables.
+/// The descriptor groups the stable source id, publishing authority, caller
+/// stream id, media kind, source policy and negotiated source facts required by
+/// recording, diagnostics and transport projection. It deliberately excludes
+/// router producer state, socket state and packet-loop routing tables.
 ///
 /// # Invariants
 ///
@@ -24,15 +24,15 @@ pub struct PublishedSourceDescriptor {
     source_id: PublishedSourceId,
     /// Live publishing authority used to reject stale commit or cleanup work.
     owner: PublishedSourceOwner,
-    /// Orchestration-owned stream identity scoped by the source owner.
+    /// User-scoped stream identity supplied with the publish intent.
     stream_id: UserStreamId,
     /// Router-facing media family used by negotiation and route planning.
     media_kind: MediaKind,
-    /// Room policy metadata supplied by orchestration for this source.
+    /// Room policy captured by the publish intent for this source.
     policy: SourcePolicy,
     /// Negotiated media-section identity when the RTC edge has one.
     mid: Option<Mid>,
-    /// Advertised encodings owned by this logical source.
+    /// Advertised encodings that belong to this logical source.
     encodings: Vec<SourceEncodingDescriptor>,
     /// Source-policy selectable encodings ordered by receiver budget priority.
     selectable_encoding_indices: Vec<usize>,
@@ -48,7 +48,8 @@ impl PublishedSourceDescriptor {
     /// # Errors
     ///
     /// Returns [`SourceModelError`] when the descriptor has no encodings, uses
-    /// a duplicate encoding id or contains an encoding owned by another source
+    /// a duplicate encoding id or contains an encoding whose source id points
+    /// elsewhere
     pub fn new(parts: PublishedSourceDescriptorParts) -> Result<Self, SourceModelError> {
         if parts.encodings.is_empty() {
             return Err(SourceModelError::SourceWithoutEncodings {
@@ -216,11 +217,11 @@ pub struct PublishedSourceDescriptorParts {
     pub source_id: PublishedSourceId,
     /// Publishing user authority for stale-work checks.
     pub owner: PublishedSourceOwner,
-    /// Orchestration-owned stream identity scoped by the source owner.
+    /// User-scoped stream identity supplied with the publish intent.
     pub stream_id: UserStreamId,
     /// Router-facing media family for this source.
     pub media_kind: MediaKind,
-    /// Room policy metadata supplied by orchestration for this source.
+    /// Room policy captured by the publish intent for this source.
     pub policy: SourcePolicy,
     /// Negotiated media-section id when known.
     pub mid: Option<Mid>,
@@ -252,7 +253,7 @@ pub struct SourceEncodingDescriptor {
     resolution_scale: Option<u16>,
     /// Sender-side frame-rate ceiling advertised for this encoding.
     max_framerate: Option<u16>,
-    /// Server-owned policy role associated with this encoding.
+    /// Server-defined policy role associated with this encoding.
     policy_role: Option<UploadLayerPolicyRole>,
     /// Highest temporal layer advertised for codec-native layered forwarding.
     max_temporal_layer_id: Option<SourceTemporalLayerId>,

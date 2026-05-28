@@ -5,7 +5,7 @@
 //! mailbox-driven packet-loop turns after setup and warmup have already
 //! completed
 //!
-//! the target is intentionally manual-only in CI
+//! the target is manual-only in CI
 //! it can produce DHAT, cache simulation, branch simulation and flamegraph
 //! artifacts without making pull requests depend on whole-worker noise
 //!

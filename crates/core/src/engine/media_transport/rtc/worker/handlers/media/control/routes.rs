@@ -354,7 +354,7 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn owned_lo
 ///
 /// source activity is enforced by the forwarding planner through
 /// `MediaRouteEntry::source_active`
-/// it is intentionally separate from packet-layer gates because producer
+/// it stays separate from packet-layer gates because producer
 /// activity is a route-lifecycle fact, not a layer-selection predicate
 ///
 /// # errors

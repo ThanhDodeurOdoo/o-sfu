@@ -40,7 +40,7 @@ pub(super) struct PacketForward {
 /// without taking mutable session state
 #[derive(Debug, Clone)]
 pub(super) enum ForwardingDestination {
-    /// local browser consumer reached through a worker-owned `Rtc`
+    /// local browser consumer reached through a worker-local [`str0m::Rtc`]
     LocalRtc(LocalRtcPacketDestination),
     /// room-scoped packet sink such as recording
     PacketSink(PacketSinkDestination),

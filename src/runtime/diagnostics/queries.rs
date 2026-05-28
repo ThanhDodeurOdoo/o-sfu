@@ -1,13 +1,13 @@
-//! Querys the diagnostics operator surface
+//! Queries for the diagnostics operator surface
 //!
 //! This module turns live room state plus bounded event history into the
-//! summary, room, and user views served by `/internal/diagnostics/...`.
-//! It consumes read-only transport snapshots from `MediaTransport` so
+//! summary, room and user views served by `/internal/diagnostics/...`.
+//! It consumes read-only transport snapshots from [`MediaTransport`] so
 //! diagnostics does not mutate transport state.
 //!
-//! The functions here are cold-path (no diagnostics for the hot routing loop) helpers used by the HTTP.
-//! They gather room snapshots, merge in transport health and bitrate
-//! data, and attach the relevant recent-event history from `DiagnosticsStore`.
+//! The functions here are cold-path HTTP helpers. They gather room snapshots,
+//! merge in transport health and bitrate data then attach the relevant
+//! recent-event history from [`DiagnosticsStore`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -111,14 +111,14 @@ impl DiagnosticsWorkerAccumulator {
     }
 }
 
-/// aggregate all live room snapshots into one process-wide view for
-/// operators.:
-/// - per-room counts derived from live room/user state
-/// - transport health totals derived from `MediaTransport`
-/// - bounded recent global events from `DiagnosticsStore`
+/// aggregate all live room snapshots into one process-wide operator view
 ///
-/// Callers should use this when they need an overview of current runtime activity.
-/// The function is cold-path only and recomputes the response from current snapshots.
+/// - per-room counts derived from live room/user state
+/// - transport health totals derived from [`MediaTransport`]
+/// - bounded recent global events from [`DiagnosticsStore`]
+///
+/// The function is cold-path only and recomputes the response from current
+/// snapshots.
 pub(crate) async fn summary_response(
     rooms: &RoomManager,
     transport: &MediaTransport,

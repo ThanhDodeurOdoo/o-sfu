@@ -20,7 +20,7 @@ pub trait RtcRouteControlMetrics {
     fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome);
 }
 
-/// Worker-owned RTC packet-loop metric recorder.
+/// Worker-local RTC packet-loop metric recorder.
 ///
 /// Packet loops keep one recorder for their full worker lifetime. Datagram and
 /// route-control updates touch only this worker's padded atomics while

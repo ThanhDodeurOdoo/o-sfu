@@ -413,7 +413,7 @@ fn packet_index_probe(
         return Err(IndexedSessionRecoveryOutcome::Malformed);
     };
     let packet_len = packet.len();
-    // This intentionally matches str0m's internal demux behavior, not the full
+    // This matches str0m's internal demux behavior, not the full
     // RFC 7983 range. str0m still uses the older RFC 5764 byte0 < 2 STUN rule,
     // so this recovery probe must remain a subset of that behavior.
     if byte0 < 2 && packet_len >= 20 {

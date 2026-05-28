@@ -4,10 +4,10 @@
 //! A caller creates one [`MediaSession`] for a room user connection, then
 //! enters a short-lived lifecycle handle for the intent it is executing. The
 //! session keeps room identity, user identity and runtime connection identity
-//! together so outer orchestration does not pass the same tuple through every
+//! together so callers do not pass the same tuple through every
 //! call.
 //!
-//! # Business-layer API
+//! # Application API
 //!
 //! Application code that changes publication policy should use
 //! [`SourcePublishIntent`] for upload intent and
@@ -37,8 +37,8 @@ use crate::{
 
 /// Transport-neutral SDP offer returned by the media-core public API.
 ///
-/// The media transport still owns the backend-specific `SessionOffer` shape.
-/// `NegotiationOffer` is the stable core-facing vocabulary consumed by server
+/// The media transport still returns the backend-specific [`SessionOffer`] shape.
+/// [`NegotiationOffer`] is the stable core-facing vocabulary consumed by server
 /// signaling code and mapped to the compatibility websocket payload at the
 /// protocol edge.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +89,7 @@ pub struct UploadSlot {
     /// This is upload-policy metadata. The room still validates the answered
     /// transport parameters before a staged publish becomes live.
     pub codecs: Vec<String>,
-    /// Optional sender encoding constraints for simulcast or future SVC paths.
+    /// Optional sender encoding constraints for simulcast or SVC paths.
     pub simulcast_encodings: Vec<UploadEncoding>,
 }
 
@@ -116,7 +116,7 @@ pub struct UploadEncoding {
 /// Transport and capability projection failures mean the media backend could
 /// not apply or interpret the SDP answer. Session negotiation rejections mean
 /// the transport step completed, but room state refused the callback because
-/// the connection no longer owned the user session. Callers should treat stale
+/// the connection was no longer current for the user session. Callers should treat stale
 /// connection outcomes as protocol races, not as transport outages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SfuCoreError {
@@ -150,7 +150,7 @@ impl SfuCoreError {
 
 /// Process-wide media facade.
 ///
-/// [`SfuCore`] is the main entry point for the media-core library. It owns the
+/// [`SfuCore`] is the main entry point for the media-core library. It holds the
 /// transport backend. It does not manage websocket state or room membership
 /// because those belong to the server runtime and room engine.
 ///
@@ -183,8 +183,8 @@ pub struct SfuCore {
 /// # Lifecycle
 ///
 /// Handles are intended to be short-lived and borrow-based. They should be
-/// created at the start of an orchestration step and dropped once the step
-/// is finished.
+/// created at the start of one application step and dropped once that step is
+/// finished.
 ///
 /// Holding a [`MediaSession`] does not guarantee the user is still connected
 /// or present in the room. All mutating operations perform an authoritative
@@ -192,8 +192,8 @@ pub struct SfuCore {
 ///
 /// # Concurrency
 ///
-/// Methods on this handle are cold-path orchestration calls. They may
-/// involve awaiting room state locks, transport backend commands, or cleanup
+/// Methods on this handle are cold-path application calls. They may
+/// involve awaiting room state locks, transport backend commands or cleanup
 /// side-effects. The room boundary is responsible for managing its own
 /// synchronization to ensure that transport work does not hold room-wide
 /// locks for extended periods.
@@ -450,7 +450,7 @@ impl MediaNegotiation<'_> {
 impl MediaPublication<'_> {
     /// Check whether this connection already has a staged publish for a stream.
     ///
-    /// This is an idempotency hint for websocket orchestration. It is not an
+    /// This is an idempotency hint for websocket handling. It is not an
     /// authority to commit media because another task could win or clean up
     /// the staged transaction before the answer arrives.
     #[must_use]
@@ -490,7 +490,7 @@ impl MediaPublication<'_> {
     /// domain decisions. Err means the transport could not reserve media
     /// and the publish cannot safely continue.
     ///
-    /// The intent represents the business-layer policy handoff. Core stores
+    /// The intent represents the application policy handoff. Core stores
     /// the stream ID as opaque identity and uses the attached source policy
     /// when applying receiver layout and bandwidth decisions.
     ///
@@ -524,7 +524,7 @@ impl MediaPublication<'_> {
             .await
     }
 
-    /// Roll back every staged publish owned by this connection.
+    /// Roll back every staged publish for this connection.
     ///
     /// User replacement, websocket close, and failed admission use this as
     /// best-effort cleanup for in-flight publish reservations. It does not
@@ -536,7 +536,7 @@ impl MediaPublication<'_> {
             .await;
     }
 
-    /// Remove a live publication owned by this exact session.
+    /// Remove a live publication for this exact session.
     ///
     /// Missing publications are normal no-ops. Cleanup or state commit failures
     /// are explicit outcomes so callers do not infer failure reasons from a
@@ -551,8 +551,8 @@ impl MediaSubscription<'_> {
     ///
     /// The returned outcome is room-authoritative. A stale connection outcome
     /// means the caller is acting on a session that has already been replaced
-    /// or removed. The caller owns translation from compatibility download
-    /// state into the generic per-stream map.
+    /// or removed. The caller translates compatibility download state into the
+    /// per-stream map.
     pub async fn update(
         &self,
         target_user_id: &UserId,

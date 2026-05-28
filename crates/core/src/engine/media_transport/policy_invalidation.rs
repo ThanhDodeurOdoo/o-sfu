@@ -35,7 +35,7 @@ use crate::{RoomInstanceId, engine::sync::lock_unpoisoned};
 ///
 /// the bit represents "at least one transport observation changed since the
 /// last drain"
-/// it is intentionally separate from the room-id registry so Loom and unit
+/// it stays separate from the room-id registry so Loom and unit
 /// tests can verify the wake edge without depending on `Notify`
 #[derive(Debug, Default)]
 pub struct SourcePolicyDirtyState {

@@ -6,12 +6,13 @@ use super::{
 ///
 /// A consumer records the routing edge from one producer to one downstream
 /// transport. It stores two route-control inputs because the receiver's local
-/// subscription choice and the producer's source pause have different owners.
+/// subscription choice and the producer's source pause come from separate
+/// decisions.
 ///
-/// `route_state` is the receiver-local choice. `producer_route_state` is the
-/// source shadow copied from the producer by the router. Keeping both values
-/// lets compatibility code report the same two pause axes without deriving one
-/// from the other.
+/// [`Consumer::route_state`] is the receiver-local choice.
+/// [`Consumer::producer_route_state`] is the source shadow copied from the
+/// producer by the router. Keeping both values lets compatibility code report
+/// the same two pause axes without deriving one from the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Consumer {
     id: ConsumerId,
@@ -84,7 +85,7 @@ impl Consumer {
         self.producer_route_state.is_paused()
     }
 
-    /// Returns the route state selected by this consumer's owner.
+    /// Returns the receiver-local route state.
     #[must_use]
     pub fn route_state(&self) -> ConsumerRouteState {
         self.route_state
@@ -101,7 +102,7 @@ impl Consumer {
     /// This builder is for fixtures and staged values. Mutating a live router
     /// consumer should go through
     /// [`Router::set_consumer_route_state`](super::Router::set_consumer_route_state) so the
-    /// router remains the only owner of indexed state changes.
+    /// router remains the only path for indexed state changes.
     #[must_use]
     pub fn with_route_state(mut self, route_state: ConsumerRouteState) -> Self {
         self.route_state = route_state;
@@ -110,7 +111,7 @@ impl Consumer {
 
     /// Returns a copy of this consumer with a different producer shadow.
     ///
-    /// This is mainly for fixtures that construct staged values. Production code should let
+    /// Fixture helper for staged values. Production code should let
     /// [`Router::add_consumer`](super::Router::add_consumer) and
     /// [`Router::set_producer_route_state`](super::Router::set_producer_route_state)
     /// manage producer shadowing.

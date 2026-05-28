@@ -1,24 +1,8 @@
-//! WebSocket Connection Lifecycle
+//! websocket controller for one upgraded socket
 //!
-//! This module manages the lifecycle of a client's WebSocket connection and its
-//! relationship to the underlying RTC user:
-//!
-//! 1. **Creation**: A connection begins when the Axum router accepts an HTTP upgrade
-//!    request in the `upgrade` handler. It is then split into a read and write stream
-//!    as a raw, unauthenticated socket.
-//!
-//! 2. **Upgrade to RTC User**: The raw socket is passed to `handshake::establish_user`,
-//!    where it waits for an `auth` envelope from the client. After JWT validation,
-//!    the connection is admitted into a room. At this point, the connection is upgraded
-//!    into a full RTC user owned by the core.
-//!
-//! 3. **Steady State**: The connection enters the steady-state `session_loop::run`, continuously
-//!    polling for incoming WebSocket frames to feed the core user and outbound
-//!    room events to send back to the client.
-//!
-//! 4. **Removal**: When the user loop terminates (due to client disconnect, timeout, or
-//!    protocol error), the connection is cleaned up through the core room manager,
-//!    which removes the user from the room and tears down associated media resources.
+//! this module accepts the HTTP upgrade, delegates first-frame auth to
+//! [`super::handshake::establish_user`], runs [`super::session_loop::run`] then
+//! performs the single room cleanup path for the admitted user
 
 use std::sync::Arc;
 
@@ -140,13 +124,13 @@ fn reject_pre_auth_admission(
     }
 }
 
-/// Owns one upgraded WebSocket from first split through final room cleanup.
+/// Drives one upgraded WebSocket from first split through final room cleanup.
 ///
-/// After the HTTP upgrade complete, this function records connection metrics, delegates
-/// authenticated admission to [`super::handshake::establish_user`], runs the steady-state
-/// user loop, and then closes the logical room user exactly once. Keeping that
-/// sequencing here prevent handshake code and steady-state protocol code from racing to
-/// clean up the same room user.
+/// After the HTTP upgrade completes, this function records connection metrics,
+/// delegates authenticated admission to [`super::handshake::establish_user`],
+/// runs the steady-state user loop then closes the logical room user exactly
+/// once. Keeping that sequencing here prevents handshake code and steady-state
+/// protocol code from racing to clean up the same room user.
 async fn handle_socket(
     socket: WebSocket,
     services: WebSocketServices,

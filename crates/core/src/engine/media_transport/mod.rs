@@ -1,10 +1,10 @@
-//! Runtime media transport boundary used by core orchestration.
+//! Runtime media transport boundary used by core.
 //!
-//! This module contains the service surface that room, server plus [`crate::prelude::SfuCore`]
-//! code use when they need media work to happen outside the pure router:
-//! callers ask the media transport to create SDP
-//! offers, apply answers, publish or consume media, close sessions, read
-//! diagnostics snapshots plus subscribe to source-policy wakeups.
+//! This module contains the service surface that room, server and
+//! [`crate::prelude::SfuCore`] code use when media work must happen outside the
+//! pure router. Callers ask the media transport to create SDP offers, apply
+//! answers, publish or consume media, close sessions, read diagnostics
+//! snapshots and subscribe to source-policy wakeups.
 //!
 //! The boundary has three responsibilities:
 //!
@@ -17,7 +17,7 @@
 //! Code above this module should depend on [`MediaTransport`]. Code below this
 //! module, especially the RTC engine, may deal with worker-local state machines
 //! and packet-loop details. Keeping that split explicit prevents room and
-//! signaling orchestration from growing knowledge of the concrete WebRTC
+//! signaling code from growing knowledge of the concrete WebRTC
 //! implementation.
 
 mod builder;
@@ -68,7 +68,8 @@ use crate::engine::RoomInstanceId;
 
 /// Opaque runtime media transport handle.
 ///
-/// `MediaTransport` is the type server orchestration and `SfuCore` should hold.
+/// [`MediaTransport`] is the handle server code and [`crate::prelude::SfuCore`]
+/// should hold.
 /// It hides the production RTC worker topology. Callers express intent through
 /// inherent methods and must not branch on concrete worker internals.
 ///
@@ -88,7 +89,7 @@ impl MediaTransport {
     /// Creates the first SDP offer for a transport session.
     ///
     /// The session must already be assigned to a transport worker by its
-    /// [`TransportSessionKey`]. The returned offer is transport-owned state that
+    /// [`TransportSessionKey`]. The returned offer is transport state that
     /// callers should send to the browser unchanged.
     ///
     /// # Errors
@@ -178,7 +179,7 @@ impl MediaTransport {
     ///
     /// This method does not mutate transport state. It validates the answer
     /// against the router capabilities offered to the browser and returns the
-    /// capability set room policy may use for future consumer creation.
+    /// capability set room policy may use for later consumer creation.
     ///
     /// # Errors
     ///
@@ -199,7 +200,7 @@ impl MediaTransport {
             },
         )
     }
-    /// Closes all backend state owned by a transport session.
+    /// Closes all backend state for a transport session.
     ///
     /// Backends should release producer, consumer and relay state tied to the
     /// session. The operation is idempotent only when the active backend
@@ -354,7 +355,7 @@ impl MediaTransport {
         })
     }
 
-    /// Applies a room-owned relay route mutation.
+    /// Applies a room relay route mutation.
     ///
     /// The transport may install, release or gate the packet-loop relay target.
     /// Room state remains the lifecycle owner.
@@ -442,7 +443,7 @@ impl MediaTransport {
 
     /// Applies source-policy packet gating to one consumer route.
     ///
-    /// Packet gates are transport execution policy derived from room-owned
+    /// Packet gates are transport execution policy derived from room
     /// source selection. Invalid routes or unknown transport media ids return
     /// [`TransportAdapterError`].
     ///
@@ -609,7 +610,7 @@ impl MediaTransport {
     /// Returns rooms whose transport-observed active-speaker state expired by
     /// `now`.
     ///
-    /// The returned ids identify room instances that should resync room-owned
+    /// The returned ids identify room instances that should resync room
     /// source policy after transport observations changed.
     pub async fn expired_active_speaker_room_instance_ids(
         &self,

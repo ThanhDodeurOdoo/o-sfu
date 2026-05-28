@@ -4,10 +4,9 @@ use super::{MediaKind, ProducerId, ProducerRouteState, TransportId};
 
 /// Media source attached to a receive transport inside the pure router.
 ///
-/// A producer owns only router topology and source-side route state. It does
-/// not own transport handles, RTP parameters or packet forwarding state. Those
-/// stay in the runtime and transport layers so the router can remain a pure
-/// state machine.
+/// A producer stores only router topology and source-side route state.
+/// Transport handles, RTP parameters and packet forwarding state stay in the
+/// runtime and transport layers so the router can remain a pure state machine.
 ///
 /// The producer route state is authoritative for the source shadow seen by all
 /// consumers of this producer. Consumer-local route state is stored on each

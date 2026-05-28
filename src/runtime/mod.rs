@@ -1,14 +1,14 @@
 //! process runtime shell that wires subsystems and owns server lifecycle
 //!
-//! `Runtime` is the process boundary for the media server. It is not the Tokio
+//! [`Runtime`] is the process boundary for the media server. It is not the Tokio
 //! executor and it is not the core media engine. It turns loaded configuration
 //! into long-lived services, builds the media core, starts HTTP and WebSocket
-//! serving, starts background policy work and makes shutdown cancel runtime-owned
-//! tasks in one place.
+//! serving, starts background policy work and cancels runtime tasks on
+//! shutdown.
 //!
 //! This type is useful because request handlers should not know how the process
 //! was booted. They receive cheap clones through [`RuntimeState`] while the full
-//! [`Runtime`] keeps ownership of services that must live for the whole process:
+//! [`Runtime`] keeps services that must live for the whole process:
 //! room management, diagnostics, metrics, media transport plus websocket
 //! admission state.
 //!
@@ -78,14 +78,14 @@ const CLEANUP_RETRY_DRAIN_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Process-global shell for the server process.
 ///
-/// `Runtime` owns boot-time configuration plus the long-lived services shared
-/// by every request. It exists to keep process lifecycle decisions together:
+/// [`Runtime`] keeps boot-time configuration plus the long-lived services
+/// shared by every request. It exists to keep process lifecycle decisions together:
 /// service construction, listener serving, background task supervision and
 /// graceful shutdown.
 ///
-/// Request handlers do not receive this full object. They receive
-/// [`RuntimeState`], which carries only the cheap service handles needed while a
-/// request or websocket connection is active.
+/// Request handlers do not receive this full object. They receive a runtime
+/// state handle with only the cheap service handles needed while a request or
+/// websocket connection is active.
 #[derive(Debug)]
 pub struct Runtime {
     config: RuntimeConfig,
@@ -184,9 +184,9 @@ impl Runtime {
 
     /// core execution lifecycle manager
     ///
-    /// orchestrates the relationship between the control plane (the http/websocket server)
-    /// and the background workers. it ensures that background tasks are explicitly
-    /// joined and cleaned up when the server stops,
+    /// coordinates the control plane with background workers
+    ///
+    /// background tasks are explicitly joined when the server stops
     async fn serve<F, HttpServer>(self, http_server: F) -> Result<()>
     where
         F: FnOnce(CancellationToken) -> HttpServer,
@@ -209,12 +209,12 @@ impl Runtime {
     }
 }
 
-/// Owns runtime background tasks for the lifetime of one server future.
+/// Runtime background tasks for the lifetime of one server future.
 ///
 /// Normal shutdown asks tasks to exit through the shared cancellation token and
 /// waits for them. Dropping the server future cancels the token and aborts any
-/// remaining task so embedders cannot detach process-owned workers by cancelling
-/// `Runtime::serve_listener`.
+/// remaining task so embedders cannot detach process workers by cancelling
+/// [`Runtime::serve_listener`].
 struct RuntimeTasks {
     shutdown_token: CancellationToken,
     source_packet_policy_sync: Option<JoinHandle<()>>,
@@ -377,7 +377,7 @@ fn spawn_source_packet_policy_update_task(
     })
 }
 
-/// starts the process-owned driver for room cleanup retry progress
+/// starts the process driver for room cleanup retry progress
 ///
 /// room cleanup retry state deliberately has no timer. this task supplies the
 /// wall-clock poll from the runtime shell, then exits through the shared

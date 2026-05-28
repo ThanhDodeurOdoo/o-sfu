@@ -26,7 +26,7 @@ pub(super) type OutboundSender = UserOutboundSender;
 
 /// delta sent from room state to one post-auth user's wire track state
 ///
-/// the room only names the publisher and orchestration stream. the websocket
+/// the room only names the publisher and user stream. the websocket
 /// user maps that pair onto its own current browser-side binding so room state
 /// stays independent from wire `mid` assignment and renegotiation details
 #[derive(Debug, Clone)]
@@ -41,7 +41,7 @@ pub struct TrackBindingUpdate {
 
 /// outbound work the room wants one websocket user to perform
 ///
-/// this is the main handoff from room-owned state transitions to user-owned
+/// this is the main handoff from room state transitions to user
 /// protocol handling. the room never writes websocket frames or serializes
 /// protocol envelopes. it emits these values and leaves user-local wire state
 /// to post-auth websocket code

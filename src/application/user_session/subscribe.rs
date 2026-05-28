@@ -13,7 +13,7 @@ use crate::{
 impl User {
     /// Persist this user's download intent for another room user.
     ///
-    /// The compatibility [`DownloadStates`] payload is projected into generic
+    /// The compatibility [`DownloadStates`] payload is projected into core
     /// source subscription intent before core sees it. The target user id must
     /// already be normalized by the websocket edge.
     ///

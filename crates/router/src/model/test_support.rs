@@ -151,8 +151,7 @@ impl RouterStateSnapshot {
 
     /// return the captured lifecycle state for one session
     ///
-    /// this is intentionally based on the primary session map, not the reverse
-    /// index
+    /// this is based on the primary session map, not the reverse index
     /// tests that need relation facts should use the relation accessors
     /// separately
     #[must_use]
@@ -374,7 +373,7 @@ pub fn router_state_snapshot<O: RouterObserver>(router: &Router<O>) -> RouterSta
 
 /// verify the full router consistency contract used by tests and proofs
 ///
-/// this predicate is intentionally broader than public API validation
+/// this predicate is broader than public API validation
 /// it checks facts that should be impossible to violate through normal transitions,
 /// including exact reverse indexes, transport direction rules, consumer media
 /// kind matches and producer route-state shadows
@@ -509,7 +508,7 @@ fn consumer_route_shadows_producer<O: RouterObserver>(router: &Router<O>) -> boo
 
 /// proof-only accessors for storage-shaped router facts
 ///
-/// these helpers are intentionally not exposed in normal test-support builds
+/// these helpers are not exposed in normal test-support builds
 /// the Kani harnesses need small predicates over individual map entries so they
 /// can state bounded exactness properties without copying an entire snapshot
 /// into each assertion

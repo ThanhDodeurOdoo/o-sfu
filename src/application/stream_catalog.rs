@@ -1,15 +1,15 @@
 //! Compatibility stream catalog for the current Odoo-facing protocol.
 //!
-//! This module is the production ownership point for translating discuss
-//! [`StreamType`] values into generic core source intent. Business decisions
-//! such as which streams are bandwidth-scalable, which streams may become
-//! active-speaker video and which streams should preserve readable detail
+//! This module translates discuss [`StreamType`] values into core source
+//! intent. Application decisions such as which streams are bandwidth-scalable,
+//! which streams may become active-speaker video and which streams should
+//! preserve readable detail
 //! belong here, not in core room state or the router.
 //!
 //! Core receives [`SourcePublishIntent`] and
 //! [`crate::core::prelude::SourceSubscriptionIntent`] values with opaque [`UserStreamId`]
 //! keys. It does not know whether a stream id came from Odoo's camera slot, a
-//! screen-share slot or a future custom stream.
+//! screen-share slot or a custom stream.
 
 use std::collections::BTreeMap;
 
@@ -27,8 +27,9 @@ pub(crate) const SCREEN_STREAM_LABEL: &str = "screen";
 
 /// Build the core publish intent for one discuss upload request.
 ///
-/// `UserSession` calls this before [`crate::core::prelude::MediaPublication::stage`].
-/// Changing this mapping changes how future publications behave in core policy,
+/// [`User`](crate::application::user_session::User) calls this before
+/// [`crate::core::prelude::MediaPublication::stage`].
+/// Changing this mapping changes how new publications behave in core policy,
 /// including media kind, layout role, receiver bandwidth adaptation and active
 /// speaker participation.
 pub(crate) fn source_publish_intent_for_stream_type(
@@ -54,7 +55,7 @@ pub(crate) fn stream_id_for_stream_type(stream_type: StreamType) -> UserStreamId
     }
 }
 
-/// Project a generic core stream id back to the current Odoo wire shape.
+/// Project a core stream id back to the current Odoo wire shape.
 ///
 /// Unknown stream ids are valid for core, but cannot be represented by the
 /// discuss protocol. Callers use `None` as the signal to omit that source from
@@ -68,7 +69,7 @@ pub(crate) fn stream_type_for_stream_id(stream_id: &UserStreamId) -> Option<Stre
     }
 }
 
-/// Read a generic per-stream counter through a discuss stream label.
+/// Read a per-stream counter through a discuss stream label.
 ///
 /// HTTP stats still expose compatibility-shaped `audio`, `camera` and `screen`
 /// buckets. This helper keeps that projection at the application edge while
@@ -83,10 +84,10 @@ pub(crate) fn counter_for_stream_type(
         .unwrap_or(0)
 }
 
-/// Read a diagnostics bitrate bucket by generic stream id.
+/// Read a diagnostics bitrate bucket by core stream id.
 ///
 /// Diagnostics may contain streams that do not map back to discuss
-/// [`StreamType`] values, so this helper intentionally accepts raw stream ids.
+/// [`StreamType`] values, so this helper accepts raw stream ids.
 pub(crate) fn diagnostics_bitrate_for_stream_id(
     by_stream: &BTreeMap<String, u64>,
     stream_id: &str,
@@ -101,7 +102,7 @@ const fn media_kind_for_stream_type(stream_type: StreamType) -> MediaKind {
     }
 }
 
-/// Business policy matrix for the current discuss stream catalog.
+/// Application policy matrix for the current discuss stream catalog.
 ///
 /// This is the place to change product behavior. The current mapping means:
 ///
@@ -110,7 +111,7 @@ const fn media_kind_for_stream_type(stream_type: StreamType) -> MediaKind {
 /// - camera is scalable video, visible as a thumbnail by default and can be
 ///   promoted by active-speaker policy
 /// - screen share is video that favors readable detail and is protected from
-///   normal thumbnail downgrades
+///   thumbnail downgrades
 const fn source_policy_for_stream_type(stream_type: StreamType) -> SourcePolicy {
     match stream_type {
         StreamType::Audio => SourcePolicy::new(

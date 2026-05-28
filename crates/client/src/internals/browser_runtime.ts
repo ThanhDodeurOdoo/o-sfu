@@ -1,6 +1,6 @@
 /**
  * the lifecycle of the browser-side media transport.
- * manages the peer connection, the signaling websocket, and the command
+ * manages the peer connection, the signaling websocket and the command
  * queue that executes protocol core instructions in order
  */
 
@@ -48,7 +48,7 @@ const BROWSER_RUNTIME_LOG_SOURCE = "browser_runtime";
 export { CLIENT_RECOVERABLE_CLOSE_CODE };
 
 /**
- * main orchestrator for browser-side rtc operations
+ * serialized runtime for browser-side rtc operations
  *
  * it executes commands from the protocol core (like creating offers or
  * attaching tracks) and emits events back to the core (like ice candidates

@@ -1,14 +1,15 @@
-//! Room media orchestration above pure state and transport effects.
+//! Room media workflows above pure state and transport effects.
 //!
 //! Public callers should normally enter through [`crate::prelude::MediaSession`]. This
-//! module is the room-internal bridge that takes generic source ids and
+//! module is the room-internal bridge that takes source ids and
 //! subscription intents, performs short authoritative state transitions and
 //! then delegates transport work to effect plans after locks are released.
 //!
 //! The room does not translate product stream labels here. A caller must already
 //! have a [`UserStreamId`] and, for subscriptions, a
-//! [`SourceSubscriptionIntent`]. That keeps business policy at the application
-//! edge while this layer focuses on ownership, staleness and cleanup ordering.
+//! [`crate::prelude::SourceSubscriptionIntent`]. That keeps stream policy at the
+//! application edge while this layer focuses on source authority, staleness and
+//! cleanup ordering.
 
 use super::{Room, effects::SubscriptionEffectPlan, media_graph::ConsumerBootstrapOrigin};
 use crate::engine::{UserId, media_transport::MediaTransport, source_model::UserStreamId};

@@ -11,7 +11,7 @@
 //! source policy events, lifecycle fan-out, diagnostics and outbound room
 //! requests
 //!
-//! callers should build a batch only from state-owned results that have already
+//! callers should build a batch only from committed state results that have already
 //! committed
 //! the executor must not rediscover ownership from live room state
 //! after async work starts, because a replacement session may have claimed the
@@ -98,8 +98,8 @@ impl MediaCountDelta {
 /// each builder method records a fact that was already decided by room state or
 /// by a transport boundary that just completed
 ///
-/// execution is cold-path orchestration
-/// the batch may allocate and move owned effect vectors, but it must not be
+/// execution is cold-path room work
+/// the batch may allocate and move effect vectors by value, but it must not be
 /// called from packet forwarding paths
 #[derive(Debug, Default)]
 pub(in crate::engine::room) struct RoomEffectBatch {

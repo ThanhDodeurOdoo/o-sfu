@@ -522,7 +522,7 @@ fn activate_bootstrap_fallback_destinations(
 
 /// appends a rid to a small scratch vector when it is not already present
 ///
-/// the vector is intentionally used instead of a set because the number of rids
+/// the vector is used instead of a set because the number of rids
 /// per source is tiny and this runs on the packet-loop path
 fn add_unique_rid(rids: &mut Vec<Rid>, rid: Rid) {
     if !rids.contains(&rid) {

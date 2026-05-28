@@ -36,8 +36,8 @@ impl User {
 
     /// Return the current transport-driven disconnect reason, if one is known.
     ///
-    /// `None` means the transport backend has not reported a terminal
-    /// disconnection. It does not prove that the room still owns this
+    /// no terminal transport health has been reported yet
+    /// disconnection. It does not prove that this is still the current room
     /// connection.
     #[must_use]
     pub fn disconnect_reason(&self) -> Option<UserDisconnectReason> {
@@ -75,7 +75,7 @@ impl User {
 
     /// do the cleanup for this connection.
     ///
-    /// This is idempotent and only rolls back staged publishes owned by this
+    /// This is idempotent and only rolls back staged publishes from this
     /// websocket session. Room membership teardown and transport-session close
     /// remain the responsibility of the runtime room manager.
     pub async fn close(&mut self) {
@@ -97,7 +97,7 @@ impl User {
     ///
     /// # Errors
     ///
-    /// Returns [`UserError::Kicked`] if the room no longer owns this connection.
+    /// Returns [`UserError::Kicked`] if this connection is no longer current.
     /// Returns [`UserError::ProtocolViolation`] when the payload exceeds the
     /// room broadcast byte limit.
     pub async fn update_info(&self, info: UserInfo) -> Result<UserOutput, UserError> {
@@ -116,7 +116,7 @@ impl User {
     ///
     /// # Errors
     ///
-    /// Returns [`UserError::Kicked`] if the room no longer owns this connection.
+    /// Returns [`UserError::Kicked`] if this connection is no longer current.
     /// Returns [`UserError::ProtocolViolation`] when the payload exceeds the
     /// room broadcast byte limit.
     pub async fn broadcast(&self, message: JsonPayload) -> Result<UserOutput, UserError> {
@@ -128,7 +128,7 @@ impl User {
         Ok(UserOutput::new())
     }
 
-    /// Reject work from a websoket that no longer owns the room connection
+    /// Reject work from a websocket that is no longer current in the room.
     ///
     /// Replacement sockets reuse the same user id with a new connection id, so
     /// every client intent must prove that this exact connection is still the
@@ -136,8 +136,8 @@ impl User {
     ///
     /// # Errors
     ///
-    /// Returns [`UserError::Kicked`] when the room no longer owns this
-    /// connection id for the user.
+    /// Returns [`UserError::Kicked`] when the room has replaced this connection
+    /// id for the user.
     pub(super) async fn reject_stale_connection(&self) -> Result<(), UserError> {
         if self.room.has_connection(&self.id, self.connection_id).await {
             return Ok(());

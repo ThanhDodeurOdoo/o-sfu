@@ -3,7 +3,7 @@
 //! This file owns the pure state work around publish, unpublish and producer
 //! activity changes after transport negotiation has happened elsewhere. The
 //! main rule is that room state commits a producer only after the caller has a
-//! current user connection, a generic source publish intent and a real transport
+//! current user connection, a source publish intent and a real transport
 //! media id to attach.
 //!
 //! Source policy is copied from [`SourcePublishIntent`] into the committed

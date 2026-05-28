@@ -1,9 +1,10 @@
 //! Room boundary vocabulary consumed by the media-core facade.
 //!
-//! `SfuCore` owns transport orchestration, while the concrete room
-//! implementation owns membership, publication state and subscription intent.
+//! [`crate::prelude::SfuCore`] holds transport services, while the concrete room implementation
+//! tracks membership, publication state and subscription intent.
 //! This file defines the session context and domain outcomes shared by those
-//! layers. It lets callers express media intent through a `MediaSession`
+//! layers. It lets callers express media intent through a
+//! [`MediaSession`](crate::prelude::MediaSession)
 //! without exposing room maps, router ids or transport reservation details.
 //!
 //! The outcome enums distinguish expected domain rejections from transport
@@ -31,7 +32,7 @@ pub struct MediaSessionContext<'a> {
 }
 
 impl<'a> MediaSessionContext<'a> {
-    /// Build a context from room-owned identity data.
+    /// Build a context from room identity data.
     #[must_use]
     pub const fn new(
         user_id: &'a UserId,
@@ -112,7 +113,7 @@ pub enum TransportEffectOutcome {
 pub enum SessionNegotiationOutcome {
     /// The room accepted the answer-derived readiness update.
     Applied,
-    /// The connection no longer owns the user session.
+    /// The connection is no longer current for the user session.
     StaleConnection,
 }
 
@@ -122,7 +123,7 @@ pub enum SessionNegotiationOutcome {
 /// Staging is a cold-path transaction. The publish is not live until a later
 /// answer commits the reserved media into room state. Duplicate outcomes are
 /// normal idempotency results and should usually be ignored by user-facing
-/// orchestration.
+/// coordination.
 pub enum PublishStageOutcome {
     /// A new transport media line is reserved and awaits answer commit.
     Staged,
@@ -144,7 +145,7 @@ impl PublishStageOutcome {
     /// Returns whether this outcome created a pending publish transaction.
     ///
     /// Callers that only need to decide whether to request renegotiation can
-    /// use this helper. More specific orchestration and telemetry should still
+    /// use this helper. More specific coordination and telemetry should still
     /// match on the enum so duplicate and rejected paths stay visible.
     #[must_use]
     pub const fn staged(self) -> bool {
@@ -204,7 +205,7 @@ pub enum PublicationActivityOutcome {
 pub enum SubscriptionUpdateOutcome {
     /// The room accepted the subscription intent.
     Applied,
-    /// The connection no longer owns the subscribing user.
+    /// The connection is no longer current for the subscribing user.
     StaleConnection,
 }
 

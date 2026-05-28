@@ -467,19 +467,19 @@ metric_catalog! {
     },
     TransportCleanupRetriesTotal {
         name: "osfu_transport_cleanup_retries_total",
-        help: "Total room-owned transport cleanup retry attempts scheduled after cleanup failures.",
+        help: "Total room-scoped transport cleanup retry attempts scheduled after cleanup failures.",
         kind: Counter,
         samples: |metrics| vec![unlabeled_counter(metrics.transport_cleanup_retries.load())]
     },
     TransportCleanupRetrySuccessesTotal {
         name: "osfu_transport_cleanup_retry_successes_total",
-        help: "Total room-owned transport cleanup retry attempts that eventually succeeded.",
+        help: "Total room-scoped transport cleanup retry attempts that eventually succeeded.",
         kind: Counter,
         samples: |metrics| vec![unlabeled_counter(metrics.transport_cleanup_retry_successes.load())]
     },
     TransportCleanupFailuresTotal {
         name: "osfu_transport_cleanup_failures_total",
-        help: "Total room-owned transport cleanup failures by final handling kind.",
+        help: "Total room-scoped transport cleanup failures by final handling kind.",
         kind: Counter,
         samples: |metrics| counter_family_samples(&metrics.transport_cleanup_failures, "kind")
     },
@@ -597,7 +597,7 @@ metric_catalog! {
     },
     SourceSelectionUpdatesTotal {
         name: "osfu_source_selection_updates_total",
-        help: "Total room-owned source selector updates accepted by source policy.",
+        help: "Total room-scoped source selector updates accepted by source policy.",
         kind: Counter,
         samples: |metrics| counter_family_samples(&metrics.source_selection_updates, "selector")
     },

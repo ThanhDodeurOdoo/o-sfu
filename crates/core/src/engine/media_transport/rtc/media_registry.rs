@@ -45,7 +45,7 @@ use crate::engine::{
     },
 };
 
-/// worker-owned browser media handle stored under one transport media id
+/// worker-local browser media handle stored under one transport media id
 ///
 /// producers represent browser uploads that can become packet sources
 /// consumers represent browser downloads that consume packets from one source
@@ -103,7 +103,7 @@ pub(super) struct RemoteSourceRegistration {
 
 /// codec class used for decoder-refresh detection on forwarded keyframes
 ///
-/// this is intentionally smaller than the negotiated codec list
+/// this is smaller than the negotiated codec list
 /// the packet path only needs to know whether it can recognize a refresh frame
 /// from packet payload bytes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -738,7 +738,7 @@ impl PacketLoopState {
     ///
     /// route-control only knows source media ids
     /// the registry maps each local or remote source back to the owning room
-    /// before the worker reports expiry to room orchestration
+    /// before the worker reports expiry to room policy
     pub(super) fn expired_active_speaker_room_instance_ids(
         &self,
         now: Instant,

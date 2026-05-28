@@ -1,16 +1,17 @@
-//! this module owns the cold-path compatibility flow for one authenticated
-//! websocket connection. it accepts Odoo protocol intent, translates stream
-//! labels through [`crate::application::stream_catalog`] and calls the media
-//! facade with generic source intents
+//! cold-path compatibility flow for one authenticated websocket connection
 //!
-//! business-layer changes to publication shape should enter core as
+//! this module accepts Odoo protocol intent, translates stream labels through
+//! [`crate::application::stream_catalog`] and calls the media facade with core
+//! source intents
+//!
+//! application changes to publication shape should enter core as
 //! [`crate::core::prelude::SourcePublishIntent`] and
-//! [`crate::core::prelude::SourceSubscriptionIntent`] values. `User` sequences those
+//! [`crate::core::prelude::SourceSubscriptionIntent`] values. [`User`] sequences those
 //! intents around negotiation, request tracking and user-info fanout, while the
 //! pure connection-local state lives beside the workflow that consumes it and
-//! ordered websocket output lives in `output`
+//! ordered websocket output lives in [`output`]
 //!
-//! `User` is the post-auth websocket session facade. it keeps the
+//! [`User`] is the post-auth websocket session facade. it keeps the
 //! connection-scoped signaling state needed to answer one browser, including
 //! pending request ids, staged renegotiation decisions and compatibility track
 //! snapshots
@@ -57,7 +58,7 @@ pub enum UserDisconnectReason {
 pub enum UserError {
     /// The browser sent a message that cannot be accepted for this session.
     ProtocolViolation,
-    /// The room no longer owns this exact user connection.
+    /// The user connection is no longer current in the room.
     Kicked,
     /// A server-side media or transport operation failed.
     InternalError,
@@ -65,21 +66,21 @@ pub enum UserError {
 
 /// Post-auth application session for one websocket connection.
 ///
-/// `User` owns connection-local negotiation state, local compatibility track
-/// bindings for the connected browser and cleanup completion. It does not own
-/// room membership, media publications or transport resources. Those stay
-/// behind [`Room`] and [`crate::core::prelude::MediaSession`], which keeps this boundary
-/// focused on translating Odoo websocket intent into core media intent.
+/// [`User`] keeps connection-local negotiation state, local compatibility track
+/// bindings for the connected browser and cleanup completion. Room membership,
+/// media publications and transport resources stay behind [`Room`] and
+/// [`crate::core::prelude::MediaSession`], keeping this boundary focused on
+/// translating Odoo websocket intent into core media intent.
 ///
 /// # Concurrency
 ///
-/// Methods are cold-path orchestration calls. They may await room snapshots,
+/// Methods are cold-path application calls. They may await room snapshots,
 /// media transactions and transport effects. The room and core layers remain
 /// responsible for not holding their state locks across transport work.
 ///
 /// # Lifecycle
 ///
-/// The websocket handshake constructs a `User` only after room admission. The
+/// The websocket handshake constructs a [`User`] only after room admission. The
 /// steady-state loop must call [`User::close`] before dropping it so staged
 /// publishes that never reached room commit are rolled back explicitly.
 #[derive(Debug)]
@@ -92,7 +93,7 @@ pub struct User {
     ///
     /// The address is not part of authentication or room identity.
     remote_address: Arc<str>,
-    /// Authoritative room facade for membership, snapshots and fanout.
+    /// Room facade for membership, snapshots and fanout.
     room: Arc<Room>,
     /// Process media facade used to build borrow-based session handles.
     sfu_core: SfuCore,

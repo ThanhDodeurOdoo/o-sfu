@@ -1,6 +1,6 @@
 //! Production H.264 simulcast profile for the first promoted browser matrix.
 //!
-//! The promoted matrix is intentionally narrow: Chromium-compatible constrained
+//! The promoted matrix is narrow: Chromium-compatible constrained
 //! baseline H.264 using packetization-mode 1. Broader profile, packetization,
 //! browser, and repair-mode support must pass through this boundary before the
 //! RTC edge exposes RID simulcast metadata for it.

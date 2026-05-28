@@ -394,8 +394,8 @@ impl RoomMediaGraph {
 
     /// current committed plus reserved subscription count
     ///
-    /// pending bootstraps count because room orchestration has already accepted
-    /// the subscription intent and reserved cleanup ownership for the consumer
+    /// pending bootstraps count because the room workflow has already accepted
+    /// the subscription intent and reserved cleanup tracking for the consumer
     pub fn subscription_count(&self) -> usize {
         self.consumers.subscription_count()
     }
@@ -827,7 +827,7 @@ impl RoomMediaGraph {
     /// routed consumer ids that receive from one published source
     ///
     /// source teardown passes this snapshot to topology before the media graph
-    /// removes the source-owned consumer edges
+    /// removes the consumer edges tied to that source
     pub fn routed_consumer_ids_for_source(
         &self,
         source_id: PublishedSourceId,

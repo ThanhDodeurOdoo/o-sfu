@@ -105,7 +105,7 @@ impl ShadowSessionTracker {
         self.shadow_refcounts.contains_key(shadow_key)
     }
 
-    /// Release all routed consumer edges supplied by room-owned media state.
+    /// Release all routed consumer edges supplied by room media state.
     ///
     /// Room media state owns the producer and consumer graph. The topology
     /// tracker only keeps the shadow reference counts needed after router

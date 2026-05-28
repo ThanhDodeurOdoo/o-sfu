@@ -750,7 +750,7 @@ impl SilentWebSocket {
     /// decodes the minimal server-to-client websocket frame shape used by tests
     ///
     /// keeping this parser local avoids expanding the production websocket
-    /// surface just to model one intentionally silent test peer
+    /// surface just to model one silent test peer
     async fn read_frame(&mut self) -> Option<RawWebSocketFrame> {
         let mut header = [0_u8; 2];
         self.stream.read_exact(&mut header).await.ok()?;

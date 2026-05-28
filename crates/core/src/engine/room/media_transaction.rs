@@ -1,11 +1,11 @@
-//! Room-owned transaction helpers for staged publish and transport cleanup.
+//! Room-side transaction helpers for staged publish and transport cleanup.
 //!
 //! # Role
 //!
 //! This module contains the room-side unit of work for media changes that need
 //! transport calls. `RoomState` stays authoritative for live producers and
 //! consumers. The media transport stays authoritative for allocated media
-//! lines. This file owns the short-lived transaction bridge between those two
+//! lines. This file keeps the short-lived transaction bridge between those two
 //! layers so websocket publish and unpublish
 //! flows do not have to remember rollback details
 //!
@@ -20,7 +20,7 @@
 //!
 //! # Concurrency
 //!
-//! This is cold-path orchestration. Transport calls happen after room state
+//! This is cold-path room work. Transport calls happen after room state
 //! locks are released. The pending-publish registry has its own mutex, but that
 //! lock is held only for lookup, insertion and draining. Commit and cleanup run
 //! after the registry lock is released.
@@ -65,7 +65,7 @@ mod test_support;
 ///
 /// At most one `(user, connection, stream_id)` entry may be staged at a
 /// time. The key includes the runtime-local connection id so stale replaced
-/// sockets cannot share ownership with the current websocket for the same user
+/// sockets cannot share the slot with the current websocket for the same user
 /// facing user id.
 ///
 /// This registry owns only in-flight reservations. Once a publish commits, the
@@ -81,7 +81,7 @@ pub(super) struct PendingPublishTransactions {
 /// Stable key for one staged publish slot
 ///
 /// This uses the protocol user identity for room ownership, the runtime
-/// connection id for stale-socket rejection and the orchestration stream id
+/// connection id for stale-socket rejection and the user stream id
 /// for the per-user media slot.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct PendingPublishKey {
@@ -90,13 +90,13 @@ struct PendingPublishKey {
     stream: UserStreamId,
 }
 
-/// Publish transaction that owns a reserved transport media line until the
+/// Publish transaction that keeps a reserved transport media line until the
 /// room either commits it or rolls it back.
 ///
 /// The descriptor proves only that the user was publish-ready when staging
 /// started. The reservation proves that the media transport allocated media
 /// that must be accounted for. Keeping both values together prevents call sites
-/// from committing room state while forgetting the transport owner, or from
+/// from committing room state while forgetting the transport reservation, or from
 /// cleaning transport media while leaving a descriptor that can still commit.
 #[derive(Debug)]
 pub(super) struct PendingPublishTransaction {
@@ -108,9 +108,9 @@ pub(super) struct PendingPublishTransaction {
     reservation: StagedMediaReservation,
 }
 
-/// Legal ownership states for one staged transport-media reservation.
+/// Legal states for one staged transport-media reservation.
 ///
-/// These states are intentionally local to the transaction boundary. The
+/// These states stay local to the transaction boundary. The
 /// websocket layer sees publish intent and answer handling. `RoomState` sees
 /// only committed producers. The media transport sees media add or remove
 /// calls. This enum records which layer is responsible for the reserved media
@@ -121,7 +121,7 @@ enum StagedMediaReservationState {
     /// room state.
     Reserved,
     /// The room committed the producer, so normal unpublish or leave cleanup
-    /// owns the transport media from this point onward.
+    /// handles the transport media from this point onward.
     Committed,
     /// The transaction made an explicit cleanup decision.
     ///
@@ -131,7 +131,7 @@ enum StagedMediaReservationState {
     Released,
 }
 
-/// Owner for transport media reserved by a staged publish.
+/// Guard for transport media reserved by a staged publish.
 ///
 /// # note
 ///
@@ -149,10 +149,10 @@ struct StagedMediaReservation {
     /// Runtime-local connection identity that prevents a replacement socket
     /// from inheriting stale transport media.
     owner_connection_id: ConnectionId,
-    /// Transport-owned media handle that must be removed unless the publish
+    /// Transport media handle that must be removed unless the publish
     /// becomes a live producer.
     transport_media_id: TransportMediaId,
-    /// Current ownership state for the reserved media.
+    /// Current state for the reserved media.
     state: StagedMediaReservationState,
 }
 

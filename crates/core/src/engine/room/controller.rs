@@ -1,4 +1,4 @@
-//! Room runtime layer: membership, bootstrap orchestration and room-local state.
+//! Room runtime layer: membership, bootstrap and room-local state.
 //!
 //! Internal modules:
 //! - `manager`: server-global room lookup, creation and cleanup coordination
@@ -111,10 +111,10 @@ pub enum RoomManagerJoinError {
     RouterState,
 }
 
-/// Best-effort inbound bitrate totals grouped by orchestration stream id.
+/// Best-effort inbound bitrate totals grouped by user stream id.
 ///
 /// These numbers are cold-path observability data assembled from transport
-/// snapshots plus room-owned producer metadata. They are not used for routing
+/// snapshots plus room producer metadata. They are not used for routing
 /// decisions in the hot path.
 ///
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -124,14 +124,14 @@ pub struct IncomingBitrateSnapshot {
     /// This can be larger than the sum of the typed buckets if transport state
     /// still contains media that room state no longer classifies.
     pub total: u64,
-    /// Bitrate grouped by the stream id supplied by orchestration.
+    /// Bitrate grouped by the stream id captured at publish time.
     pub by_stream: BTreeMap<UserStreamId, u64>,
 }
 
 /// Cold-path observability snapshot for one live room.
 ///
 /// This is the compact room-level view used by compatibility stats and manager
-/// listings. It intentionally avoids exposing per-user details.
+/// listings. It avoids exposing per-user details.
 ///
 /// See [`Room::diagnostics_user_views`] for the richer per-user
 /// inspection surface.
@@ -162,7 +162,7 @@ pub struct RoomMediaCounts {
     pub publications: usize,
     /// Number of live consumer routes in room state.
     ///
-    /// This counts room-owned consumer state, not pending bootstrap work.
+    /// This counts committed room consumer state, not pending bootstrap work.
     pub subscriptions: usize,
 }
 
@@ -175,7 +175,7 @@ pub struct RoomMediaCounts {
 ///
 /// The main invariant is that this facade keeps room state authoritative while
 /// transport work happens after the relevant locks are released. That is why it
-/// stores both a pure `RoomState` model and the async staging state needed
+/// stores both a pure room-state model and the async staging state needed
 /// around publish and recording workflows.
 ///
 /// # Concurrency
@@ -183,13 +183,12 @@ pub struct RoomMediaCounts {
 /// The room uses a `RwLock<RoomState>` for the pure mutable model and a
 /// separate `Mutex<PendingPublishTransactions>` for staged publish work that
 /// crosses async negotiation boundaries. Callers should treat all public async
-/// methods on `Room` as cold-path orchestration entrypoints, not as hot-path
-/// packet-loop helpers.
+/// methods on [`Room`] as cold-path room entrypoints, not as hot-path packet-loop
+/// helpers.
 pub struct Room {
     /// Room-scoped diagnostics sink for lifecycle and media events
     ///
-    /// This is written from room orchestration paths, not from the pure room
-    /// model itself.
+    /// This is written from room workflows, not from the pure room model itself.
     pub(super) diagnostics: Arc<DiagnosticsStore>,
     /// Immutable identity and feature metadata for the room lifetime.
     ///
@@ -206,20 +205,20 @@ pub struct Room {
     pub(super) load_triggered_placement: StdMutex<LoadTriggeredPlacementState>,
     #[allow(
         dead_code,
-        reason = "recording control-plane wiring is intentionally deferred until the replacement baseline is validated"
+        reason = "recording control-plane wiring is deferred until the replacement baseline is validated"
     )]
-    /// Room-owned recording service shared with topology observers.
+    /// Room recording service shared with topology observers.
     ///
     /// The service is injected into the topology side so recording can observe
     /// routed media without making router state recording-aware.
     pub(super) recording_service: Arc<RecordingService>,
-    /// Process-wide metrics catalog used by room-facing orchestration.
+    /// Process-wide metrics catalog used by room-facing work.
     ///
     /// Keeping this here avoids threading metrics handles through every room
     /// transition call that may want to report lifecycle changes.
     pub(super) metrics: Arc<RuntimeMetrics>,
-    /// Room-owned reconciliation queue for transport cleanup that failed after
-    /// state ownership was already removed.
+    /// Room reconciliation queue for transport cleanup that failed after state
+    /// already removed the user or media object.
     ///
     /// This lives on `Room` instead of `RoomState` because retry bookkeeping
     /// must survive the state transition that forgot the user or media object.
@@ -236,7 +235,7 @@ pub struct Room {
     pub(super) duplicate_staged_publish_after_reservation: StdMutex<Option<TransportMediaId>>,
     #[cfg(test)]
     pub(super) duplicate_staged_publish_cleanup_target: StdMutex<Option<TransportMediaId>>,
-    /// Pure room state plus room-owned indexes.
+    /// Pure room state plus room indexes.
     ///
     /// Callers must snapshot what they need and drop this lock before async
     /// transport or websocket work. This keeps room transitions deterministic
@@ -247,7 +246,7 @@ pub struct Room {
 impl Room {
     /// Build one live room from semantic initialization input.
     ///
-    /// Construction wires the immutable room definition, the room-owned state
+    /// Construction wires the immutable room definition, the room state
     /// model and the recording observer surface together once. After that,
     /// higher-level runtime code should interact with the room through intent
     /// methods such as join, leave, publish, subscribe and stats queries.
@@ -399,7 +398,7 @@ impl Room {
 
     /// Current route state for one consumer or producer pair
     ///
-    /// This is mainly used by orchestration and diagnostics code that needs to
+    /// This is mainly used by room workflow and diagnostics code that needs to
     /// know whether a logical room subscription currently resolves to a live,
     /// paused, or otherwise tracked consumer route.
     pub async fn consumer_route_state(
@@ -450,10 +449,10 @@ impl Room {
         self.definition.available_features()
     }
 
-    /// Current recording state as projected by room-owned state.
+    /// Current recording state stored in room state.
     ///
     /// Callers should treat this as the authoritative room view. It may lag
-    /// behind lower-level media events only until the room transtion that
+    /// behind lower-level media events only until the room transition that
     /// records those changes has completed
     ///
     /// This is a room-level state query, not a direct peek into recording I/O.
@@ -479,13 +478,13 @@ impl Room {
     /// This is mainly used by diagnostics or negotiation-adjacent code that
     /// needs to understand what the room can currently negotiate.
     ///
-    /// The result comes from room-owned state because it is part of the room's
+    /// The result comes from room state because it is part of the room's
     /// active negotiation baseline, not only static runtime config.
     pub async fn router_rtp_capabilities(&self) -> o_sfu_router::MediaCapabilities {
         self.state.read().await.router_rtp_capabilities()
     }
 
-    /// Best-efort stats snapshot used by compatibility stats surfaces.
+    /// Best-effort stats snapshot used by compatibility stats surfaces.
     ///
     /// Bitrate totals come from the transport boundary, while the per-stream
     /// split and user counts come from current room state

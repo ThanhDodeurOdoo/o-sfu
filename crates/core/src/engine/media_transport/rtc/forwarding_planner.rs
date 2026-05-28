@@ -122,7 +122,7 @@ fn push_origin_sink_forward(
 /// Reserves the fanout list for the largest destination count this packet can
 /// produce.
 ///
-/// The bound intentionally counts configured destinations before packet gates
+/// The bound counts configured destinations before packet gates
 /// are applied. That may reserve a few unused slots when routes are inactive or
 /// layer gates drop the packet, but it avoids allocator churn when a dense room
 /// crosses a previous high-water mark.
@@ -142,7 +142,7 @@ fn reserve_forward_capacity(
 ///
 /// This is the last check before destination planning. A source-level drop
 /// suppresses local and relay fanout together, which keeps active-speaker,
-/// selected-layer and server-owned source gates authoritative for every
+/// selected-layer and source-wide policy gates authoritative for every
 /// downstream destination.
 fn source_packet_gate_permits(
     state: &PacketLoopState,
@@ -299,7 +299,7 @@ fn relay_target_gate_permits(
 
 /// Reports whether route planning has any destination work after origin sinks.
 ///
-/// Origin sinks are intentionally excluded because recording or similar side
+/// Origin sinks are excluded because recording or similar side
 /// effects must still run for source packets even when the source has no live
 /// relay or local RTC consumers.
 fn has_routed_forward(

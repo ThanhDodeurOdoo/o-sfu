@@ -1,8 +1,8 @@
 //! Room resolution and topology snapshot DTOs.
 //!
 //! A room resolution is the answer ingress needs before admitting a client. A
-//! topology snapshot is the durable subset a media node caches so an already
-//! owned room can keep operating while fresh control-plane reads are degraded.
+//! topology snapshot is the durable subset a media node caches so an assigned
+//! room can keep operating while fresh control-plane reads are degraded.
 
 use serde::{Deserialize, Serialize};
 

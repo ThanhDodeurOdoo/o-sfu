@@ -1,4 +1,4 @@
-//! Async synchronization bridge for room-owned video source policy.
+//! Async synchronization bridge for room video source policy.
 //!
 //! This file connects `Room` to the pure source-selection policy in
 //! `room::source_policy`. Room state decides which source-domain selector

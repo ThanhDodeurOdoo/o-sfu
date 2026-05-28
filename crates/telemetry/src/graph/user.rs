@@ -1,6 +1,6 @@
 //! User-centered Grafana node graph formatting.
 //!
-//! The graph is intentionally centered on one selected user while still showing
+//! The graph is centered on one selected user while still showing
 //! the packet path through local media-worker ownership:
 //!
 //! ```text

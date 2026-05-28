@@ -5,12 +5,13 @@
 //!
 //! - `media_route_index` records which consumer transports depend on a source
 //! - remote-source registrations track cross-worker packet gates and keyframes
-//! - `route_control` keeps the effective local, relay and server-owned gates
+//! - route control keeps the effective local, relay and source policy gates
 //!
-//! `lifecycle.rs` owns media declaration and teardown against `RtcSessionState`.
-//! Once a producer or consumer handle exists, this module contain the routing-side
-//! bookkeeping that validates sources, registers or removes consumer routes and
-//! recomputes packet-gate state.
+//! [`lifecycle`](super::lifecycle) handles media declaration and teardown against
+//! [`RtcSessionState`](crate::engine::media_transport::rtc::state::RtcSessionState).
+//! Once a producer or consumer handle exists, this module
+//! contains the routing-side bookkeeping that validates sources, registers or
+//! removes consumer routes and recomputes packet-gate state.
 //!
 //! Small ownership graph:
 //!
@@ -23,7 +24,7 @@
 //! control/
 //!   |-- validate source ownership (local vs remote)
 //!   |-- mutate media_route_index
-//!   |-- refresh route_control packet gates
+//!   |-- refresh route-control packet gates
 //!   `-- keep remote-source packet gates executable
 //!
 //! keyframe.rs

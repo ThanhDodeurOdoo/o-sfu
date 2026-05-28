@@ -284,7 +284,7 @@ impl RtcWorker {
 
     /// sends a request command through an already acquired worker handle
     ///
-    /// observability and close paths use this when they have intentionally
+    /// observability and close paths use this when they have already
     /// decided whether a missing worker should be treated as empty state or
     /// should be booted first
     ///
@@ -494,7 +494,7 @@ impl RtcWorker {
 
 /// combines command and relay mailbox saturation into one pressure score
 ///
-/// the score is intentionally the max of both queues
+/// the score is the max of both queues
 /// one saturated input path should make placement avoid the worker even if the
 /// other path is idle
 fn worker_pressure_score(

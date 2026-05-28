@@ -2,9 +2,10 @@
 //!
 //! These types are cold-path configuration and dependency carriers. They are
 //! consumed when the runtime builds the transport service and must not be
-//! consulted by packet-loop code after startup. The split is intentional:
+//! consulted by packet-loop code after startup. The split keeps startup policy
+//! separate from long-lived service handles:
 //! transport config describes operator policy, while transport deps describe
-//! process-owned services shared with diagnostics, metrics and recording.
+//! process services shared with diagnostics, metrics and recording.
 
 use std::{net::IpAddr, sync::Arc, time::Duration};
 
@@ -20,8 +21,8 @@ use crate::{
 /// Operator-facing RTC transport policy used to build each RTC worker.
 ///
 /// This is still RTC-specific because it describes the concrete server-side
-/// WebRTC transport. The orchestration layer should normally pass
-/// [`CoreOptions`](crate::prelude::CoreOptions) into
+/// WebRTC transport. Application code should normally pass
+/// [`CoreOptions`] into
 /// [`MediaTransport`](super::MediaTransport) construction instead of
 /// assembling this type directly.
 ///
@@ -67,7 +68,7 @@ impl MediaTransportConfig {
         }
     }
 
-    /// Returns a copy scoped to one worker-owned UDP port range.
+    /// Returns a copy scoped to one worker UDP port range.
     ///
     /// This is used only during media transport construction. Callers should
     /// validate the original range once through the media transport builder
@@ -88,10 +89,10 @@ impl MediaTransportConfig {
 
 /// Long-lived services injected into media transport construction.
 ///
-/// # Ownership split
+/// # Resource split
 ///
 /// The transport owns no global telemetry registry or recording service by
-/// itself. It receives handles to the process-owned stores it must update while
+/// itself. It receives handles to the process stores it must update while
 /// executing media work. Keeping this dependency bag neutral prevents the
 /// server runtime from importing RTC-specific construction names.
 #[derive(Debug, Clone)]
@@ -100,7 +101,7 @@ pub struct MediaTransportDeps {
     /// events.
     pub diagnostics: Arc<DiagnosticsStore>,
     /// Room packet-sink registry used by the packet path to fan out recording
-    /// and future non-local destinations.
+    /// and non-local destinations.
     pub packet_sink_registry: Arc<RoomPacketSinkRegistry>,
     /// Process-local metrics catalog updated by transport lifecycle and media
     /// counters.

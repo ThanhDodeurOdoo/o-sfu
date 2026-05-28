@@ -1,11 +1,10 @@
-//! mailbox command contract for the worker-owned rtc engine
+//! mailbox command contract for the RTC worker engine
 //!
 //! worker API methods translate transport API calls into these values before the
 //! packet-loop task dispatches them while it owns mutable rtc state
 //! request commands carry a oneshot response
-//! fire-and-forget route controls are intentionally best-effort because they
-//! may target a worker that has already torn down the corresponding relay or
-//! session
+//! fire-and-forget route controls are best-effort because they may target a
+//! worker that has already torn down the corresponding relay or session
 
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
@@ -36,7 +35,7 @@ use crate::engine::{
 pub enum CloseSessionState {
     /// the requested session is no longer present while the worker can stay live
     SessionClosed,
-    /// the requested session was the last worker-owned session
+    /// the requested session was the last live session on the worker
     WorkerDrained,
 }
 
@@ -80,7 +79,7 @@ impl RemoteSourceControl {
     ///
     /// this never waits for the source worker
     /// if the command cannot be queued, the caller has no stronger recovery
-    /// action than future media or control traffic triggering another request
+    /// action than later media or control traffic triggering another request
     pub(super) fn request_keyframe(
         &self,
         source: &TransportSourceKey,
@@ -271,7 +270,7 @@ pub(super) enum RtcWorkerCommand {
     },
     /// read active-speaker sources from worker-local route-control state
     ///
-    /// the result is a cold-path observation for room orchestration
+    /// the result is a cold-path observation for room policy
     /// it does not mutate route state or packet-loop scheduling
     ActiveSpeakerSourceSnapshot {
         response: RtcWorkerResponse<Vec<ActiveSpeakerSource>>,
@@ -293,7 +292,7 @@ pub(super) enum RtcWorkerCommand {
     },
     /// collect room ids whose active-speaker observations expired by `now`
     ///
-    /// the command keeps expiry calculation beside the worker-owned observation
+    /// the command keeps expiry calculation beside the worker-local observation
     /// state and returns only the rooms that need an external wakeup
     ExpiredActiveSpeakerRoomInstanceIds {
         now: Instant,
@@ -349,7 +348,7 @@ pub(super) enum RtcWorkerCommand {
         transport_media_id: TransportMediaId,
         response: RtcWorkerResponse<Option<String>>,
     },
-    /// register one browser upload as worker-owned producer media
+    /// register one browser upload as worker-local producer media
     ///
     /// before the initial answer this can declare receive state directly in
     /// str0m

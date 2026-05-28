@@ -1,12 +1,12 @@
 //! Authoritative room-to-owner assignment state.
 //!
-//! The distributed room directory answers "which node owns this room right
-//! now". It is separate from the process-local `RoomDirectory` in
+//! The distributed room directory answers "which node is responsible for this
+//! room right now". It is separate from the process-local room directory in
 //! `o-sfu-core`, which only tracks rooms already live inside one media-server
 //! process.
 //!
-//! This module contain ownership assignment, stale-owner rejection and failover
-//! epoch advancement.
+//! This module contains owner selection, stale-owner rejection and failover epoch
+//! advancement.
 
 use std::collections::BTreeMap;
 
@@ -147,8 +147,8 @@ impl ClusterRoomDirectory {
     /// Validates that a caller still owns a room for the claimed epoch.
     ///
     /// This is the central fencing check for owner-authored messages such as
-    /// health reports and topology mutations. The check intentionally
-    /// uses the directory's assignment as the authority rather than trusting a
+    /// health reports and topology mutations. The check uses the directory's
+    /// assignment as the authority rather than trusting a
     /// topology snapshot supplied by the caller.
     ///
     /// # Errors

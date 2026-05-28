@@ -1,26 +1,27 @@
 //! Pure client-side signaling state machine for the `o-sfu` protocol.
 //!
-//! `ProtocolCore` never perform I/O directly. Every public transition returns
+//! [`ProtocolCore`] never performs I/O directly. Every public transition returns
 //! [`CommandBatch`], an ordered batch of side effects for the host to execute in
-//! sequence. The host owns the actual WebSocket, peer-connection, and timer
+//! sequence. The host keeps the actual WebSocket, peer connection and timer
 //! integration, then feeds the resulting events back into the core.
 //!
-//! we have to coordinate transport lifecycle, negotiation, timers,
-//! and host-visible state changes without hiding side effects inside the state machine itself.
+//! we have to coordinate transport lifecycle, negotiation, timers and
+//! host-visible state changes without hiding side effects inside the state
+//! machine itself.
 //! Returning commands allow three things that are hard to keep at the same time otherwise:
 //!
 //! 1. Deterministic tests: transitions can be asserted as pure input/output
-//!    steps without a live socket, browser API, or async runtime.
-//! 2. Runtime independence: the same core can drive wasm, native, and test
+//!    steps without a live socket, browser API or async runtime.
+//! 2. Runtime independence: the same core can drive wasm, native and test
 //!    hosts because it describes *what* must happen, not *how* that host does it.
-//! 3. Explicit ordering and cleanup: reconnects, request timeouts, and teardown
+//! 3. Explicit ordering and cleanup: reconnects, request timeouts and teardown
 //!    paths expose every required side effect, which avoids hidden partial work
 //!    and makes it obvious when the host still owes a timer cancel or close.
 //!
 //! The command system is more cumbersome than inlining I/O calls, but that
 //! cost is what keeps the protocol verifiable and portable. Browser hosts
-//! should consume the commands as [`CommandBatch`] values. Rust owns the
-//! canonical batch-ordering contract, and the TypeScript runtime contract
+//! should consume the commands as [`CommandBatch`] values. Rust keeps the
+//! canonical batch-ordering contract and the TypeScript runtime contract
 //! wrapper repeats the same checks before browser side effects run:
 //!
 //! - an initial offer must create the peer connection immediately before
@@ -206,7 +207,7 @@ pub struct ProtocolCore {
     ///
     /// This is the gate for all protocol transitions. Client messages are only
     /// sent once authentication has completed, transport readiness only advances
-    /// from `Authenticated` and stale timer callbacks become no-ops when the
+    /// from [`BundleConnectionState::Authenticated`] and stale timer callbacks become no-ops when the
     /// state no longer matches the timer role.
     state: ConnectionState,
     /// Feature snapshot from the last accepted welcome payload.
@@ -221,7 +222,7 @@ pub struct ProtocolCore {
     /// recording-change messages update it incrementally, while fresh connects
     /// and terminal cleanup reset it back to the neutral default.
     recording_state: RecordingState,
-    /// Current server-owned mapping from SDP mid to stream ownership metadata.
+    /// Current server-maintained mapping from SDP mid to stream binding metadata.
     ///
     /// The map is replaced by track snapshots and trimmed when peers leave. It
     /// is the core's authoritative source for host track and source projection,
@@ -318,7 +319,7 @@ impl ProtocolCore {
 
     /// Starts a fresh connection attempt and replaces any earlier user context.
     ///
-    /// This is intentionally stricter than a reconnect path: it clears sticky
+    /// This is stricter than a reconnect path: it clears sticky
     /// replay and runtime state so a caller switching rooms or credentials cannot
     /// accidentally leak the previous user intent into the new connection.
     pub fn connect(
@@ -337,7 +338,7 @@ impl ProtocolCore {
 
     /// Authenticates a newly opened socket with the stored connect context.
     ///
-    /// Recovery reuses the same JWT and optional room that `connect` captured,
+    /// Recovery reuses the same JWT and optional room that [`ProtocolCore::connect`] captured,
     /// which keeps every socket attempt tied to one explicit admission context.
     pub fn on_ws_open(&mut self) -> CommandBatch {
         if !matches!(
@@ -486,7 +487,7 @@ impl ProtocolCore {
 
     /// Sends a best-effort broadcast to the current room.
     ///
-    /// Broadcast payloads are intentionally not sticky: if the client is not yet
+    /// Broadcast payloads are not sticky: if the client is not yet
     /// authenticated, the message is dropped instead of being replayed later out
     /// of its original conversational contexte.
     pub fn broadcast(&mut self, message: JsonPayload) -> CommandBatch {
@@ -717,7 +718,7 @@ fn command_batch(commands: Commands) -> CommandBatch {
 
 /// Grows reconnect delay by 1.5x while keeping the backoff bounded.
 ///
-/// The sequence is intentionally modest so short-lived outages recover quickly,
+/// The sequence is modest so short-lived outages recover quickly,
 /// but repeated failures still spread out retries and avoid hot-loop reconnects.
 fn next_recovery_delay(current_delay_ms: u32) -> u32 {
     current_delay_ms

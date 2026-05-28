@@ -31,7 +31,7 @@ impl UserRequestIdSequencer {
 
 /// reason a server-authored negotiation request exists
 ///
-/// the pending action tells `User` which media-core answer path is legal when
+/// the pending action tells [`super::User`] which media-core answer path is legal when
 /// the browser resolves the request
 #[derive(Debug)]
 pub(in crate::application::user_session) enum PendingUserAction {
@@ -50,9 +50,9 @@ impl PendingUserAction {
     }
 }
 
-/// command returned to the orchestrator after a renegotiation request
+/// state-machine outcome for one renegotiation request
 ///
-/// this keeps the state decision pure so `User` performs media work only when
+/// this keeps the state decision pure so [`super::User`] performs media work only when
 /// the state machine says a request can be issued immediately
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::application::user_session) enum RenegotiationDisposition {
@@ -67,7 +67,7 @@ pub(in crate::application::user_session) enum RenegotiationDisposition {
 /// resolved answer metadata returned after a request id match
 ///
 /// the queued renegotiation flag is carried beside the pending request so
-/// `User` can apply the answer first, then decide whether follow-up media work
+/// [`super::User`] can apply the answer first, then decide whether follow-up media work
 /// needs another offer
 #[derive(Debug)]
 pub(in crate::application::user_session) struct ResolvedUserNegotiation {

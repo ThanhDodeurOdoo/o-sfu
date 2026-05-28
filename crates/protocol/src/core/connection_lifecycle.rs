@@ -7,7 +7,7 @@
 //! it is a control-plane module
 //! it never opens sockets or advances transport work directly
 //! each transition returns ordered [`Command`] values the host must execute
-//! through the `CommandBatch` contract
+//! through the [`super::CommandBatch`] contract
 //!
 //! the lifecycle split has three layers:
 //!
@@ -18,17 +18,18 @@
 //! the [`LifecycleModel`] is the small state slice shared by production and
 //! verification
 //! transition helpers mutate only that model and return a [`LifecyclePlan`]
-//! `apply_plan` is the bridge back to [`ProtocolCore`],
+//! [`apply_plan`] is the bridge back to [`ProtocolCore`],
 //! where runtime state, sticky replay state and host-visible commands are
 //! updated in the prescribed order
 //!
 //! the main contract is:
 //!
-//! - a fresh `connect` starts a new user attempt and wipes replayable intent
-//! - explicit `disconnect` is terminal for that user attempt and clears saved context
-//! - terminal close codes move to `Closed` without scheduling recovery
-//! - transient close events keep the saved connect context and enter `Recovering`
-//! - recovery timers only reconnect while the model is still `Recovering`
+//! - a fresh [`connect`] starts a new user attempt and wipes replayable intent
+//! - explicit [`disconnect`] is terminal for that user attempt and clears saved context
+//! - terminal close codes move to [`BundleConnectionState::Closed`] without scheduling recovery
+//! - transient close events keep the saved connect context and enter
+//!   [`BundleConnectionState::Recovering`]
+//! - recovery timers only reconnect while the model is still [`BundleConnectionState::Recovering`]
 //!
 //! example flows:
 //!
@@ -45,7 +46,7 @@
 //! Connected --> disconnect()--> Disconnected
 //! ```
 //!
-//! the last flow is intentionally different from `on_ws_close`: explicit
+//! the last flow is different from [`on_ws_close`]: explicit
 //! disconnect wipes replayable intent and suppresses later recovery, while a
 //! transient socket loss keeps enough state around to reconnect and rebuild
 //! from saved state
@@ -95,11 +96,11 @@ pub(super) enum ConnectContextUpdate {
     Preserve,
     /// drop the saved context so later recovery callbacks cannot reconnect
     Clear,
-    /// replace the saved context with the input passed to `connect`
+    /// replace the saved context with the input passed to [`connect`]
     ReplaceFromInput,
 }
 
-/// cleanup policy that `apply_plan` should use after the pure transition logic
+/// cleanup policy that [`apply_plan`] should use after the pure transition logic
 /// has chosen the next lifecycle state
 ///
 /// the pure model can say which cleanup class is required without touching
@@ -111,10 +112,10 @@ pub(super) enum ConnectContextUpdate {
 /// example:
 ///
 /// ```text
-/// connect() uses `Silent` because a fresh connect should drop old runtime
+/// [`connect`] uses [`RuntimeCleanupMode::Silent`] because a fresh connect should drop old runtime
 /// state without emitting teardown commands for an already-dead user
 ///
-/// disconnect() uses `WithCommands` because the caller is ending a live user
+/// [`disconnect`] uses [`RuntimeCleanupMode::WithCommands`] because the caller is ending a live user
 /// and the host must see the explicit cleanup commands that fall out of it
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,7 +133,7 @@ pub(super) enum RuntimeCleanupMode {
 pub(super) enum ConnectCommandSource {
     /// do not emit a websocket connect command
     None,
-    /// use the URL from the current `connect` input
+    /// use the URL from the current [`connect`] input
     FreshInput,
     /// use the URL from the saved connect context
     SavedContext,
@@ -140,7 +141,7 @@ pub(super) enum ConnectCommandSource {
 
 /// lifecycle side effect shared by production command translation and verification
 ///
-/// this is intentionally narrower than [`Command`]
+/// this is narrower than [`Command`]
 /// lifecycle transitions only need state projection, socket teardown, peer
 /// teardown and recovery timer control
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,7 +247,7 @@ pub enum LifecycleCloseCause {
 /// the saved connect context changes and which host
 /// effects must happen after cleanup
 ///
-/// ordering matters because `CommandBatch` validates lifecycle side effects at
+/// ordering matters because [`super::CommandBatch`] validates lifecycle side effects at
 /// the host boundary
 /// keep websocket close before peer close and schedule recovery only after peer
 /// close
@@ -264,7 +265,7 @@ pub(super) struct LifecyclePlan {
     pub(super) runtime_cleanup_mode: RuntimeCleanupMode,
     /// how the saved connect context changes after this transition
     pub(super) connect_context_update: ConnectContextUpdate,
-    /// whether server-owned session snapshots should be reset
+    /// whether server-provided session snapshots should be reset
     pub(super) reset_session_state: bool,
 }
 
@@ -386,9 +387,10 @@ impl LifecyclePlan {
 
 /// plans a fresh connection attempt in the pure lifecycle model
 ///
-/// accepted only from `Disconnected`, `Closed` or `Recovering`
+/// accepted only from [`BundleConnectionState::Disconnected`],
+/// [`BundleConnectionState::Closed`] or [`BundleConnectionState::Recovering`]
 /// accepted attempts reset recovery backoff, mark the saved connect context as
-/// present and move the lifecycle to `Connecting`
+/// present and move the lifecycle to [`BundleConnectionState::Connecting`]
 pub(super) fn connect_model(model: &mut LifecycleModel) -> LifecyclePlan {
     let effects_before_cleanup = match model.state {
         BundleConnectionState::Disconnected | BundleConnectionState::Closed => {
@@ -407,7 +409,7 @@ pub(super) fn connect_model(model: &mut LifecycleModel) -> LifecyclePlan {
 
 /// plans the protocol admission to media-ready transition
 ///
-/// only `Authenticated` can become `Connected`
+/// only [`BundleConnectionState::Authenticated`] can become [`BundleConnectionState::Connected`]
 /// all other states are stale or premature host events and produce no effects
 pub(super) fn on_transport_ready_model(model: &mut LifecycleModel) -> LifecyclePlan {
     if model.state != BundleConnectionState::Authenticated {
@@ -437,9 +439,9 @@ pub(super) fn disconnect_model(model: &mut LifecycleModel) -> LifecyclePlan {
 
 /// plans websocket close handling for terminal and recoverable socket loss
 ///
-/// terminal close codes move to `Closed` and suppress recovery
-/// recoverable closes with saved context enter `Recovering`
-/// recoverable closes without saved context fall back to `Disconnected`
+/// terminal close codes move to [`BundleConnectionState::Closed`] and suppress recovery
+/// recoverable closes with saved context enter [`BundleConnectionState::Recovering`]
+/// recoverable closes without saved context fall back to [`BundleConnectionState::Disconnected`]
 pub(super) fn on_ws_close_model(model: &mut LifecycleModel, close_code: u16) -> LifecyclePlan {
     if matches!(
         model.state,
@@ -473,7 +475,7 @@ pub(super) fn on_ws_close_model(model: &mut LifecycleModel, close_code: u16) -> 
 
 /// plans the retry attempt for the recovery timer
 ///
-/// only `Recovering` with a saved connect context may retry
+/// only [`BundleConnectionState::Recovering`] with a saved connect context may retry
 /// stale timers in any other state are ignored
 pub(super) fn handle_recovery_timer_model(model: &mut LifecycleModel) -> LifecyclePlan {
     if model.state != BundleConnectionState::Recovering || !model.has_connect_context {
@@ -616,14 +618,14 @@ fn lifecycle_close_cause_label(cause: LifecycleCloseCause) -> &'static str {
 
 /// starts a fresh connection attempt from an inactive or recovering state
 ///
-/// this is the only lifecycle entry point that intentionally wipes both
+/// this is the only lifecycle entry point that wipes both
 /// runtime state and sticky replay state before reconnecting
-/// a brand-new `connect` means "start over with this endpoint and auth context",
+/// a brand-new [`connect`] means "start over with this endpoint and auth context",
 /// not "resume whatever the previous user was trying to do"
 ///
 /// calls from live admission states are ignored so the host cannot accidentally
 /// stack overlapping connection attempts on top of an already-live user
-/// a call from `Recovering` also cancels the stale recovery timer before the
+/// a call from [`BundleConnectionState::Recovering`] also cancels the stale recovery timer before the
 /// new socket attempt starts
 ///
 /// ```text
@@ -659,7 +661,7 @@ pub(super) fn on_transport_ready(core: &mut ProtocolCore) -> Commands {
 
 /// ends the current user attempt on purpose
 ///
-/// unlike `on_ws_close`, this is not a recovery path
+/// unlike [`on_ws_close`], this is not a recovery path
 /// it clears the saved connect context, runtime state and sticky replay state,
 /// then closes the websocket and peer connection
 /// any later recovery-timer delivery becomes a no-op because the caller
@@ -675,12 +677,12 @@ pub(super) fn disconnect(core: &mut ProtocolCore) -> Commands {
 /// there are three different cases here and mixing them up is the main way to
 /// break reconnect behavior:
 ///
-/// - terminal close codes move to `Closed`, clear the saved connect context,
+/// - terminal close codes move to [`BundleConnectionState::Closed`], clear the saved connect context,
 ///   and suppress recovery
-/// - non-terminal closes with saved connect context move to `Recovering` and
+/// - non-terminal closes with saved connect context move to [`BundleConnectionState::Recovering`] and
 ///   schedule the recovery timer
 /// - non-terminal closes without saved connect context fall back to
-///   `Disconnected`, because there is nothing safe to reconnect to
+///   [`BundleConnectionState::Disconnected`], because there is nothing safe to reconnect to
 ///
 /// example:
 ///
@@ -696,8 +698,8 @@ pub(super) fn on_ws_close(core: &mut ProtocolCore, close_code: u16) -> Commands 
 
 /// retries the saved websocket connection after a recovery delay
 ///
-/// this is intentionally narrow
-/// only `Recovering` may consume the recovery timer
+/// this is narrow
+/// only [`BundleConnectionState::Recovering`] may consume the recovery timer
 /// a stale timer firing after a successful reconnect or explicit
 /// disconnect must do nothing, otherwise old scheduled work can restart an
 /// inactive attempt

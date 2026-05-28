@@ -2,7 +2,7 @@
 //!
 //! `str0m` is Sans-I/O. It produces transmits, RTP packets, feedback events,
 //! transport events and timeout deadlines only when the host polls it. This
-//! module contain that polling for sessions that are dirty or whose timeout has
+//! module contains that polling for sessions that are dirty or whose timeout has
 //! elapsed.
 //!
 //! The scheduler lives in `PacketLoopState`. This file only consumes the

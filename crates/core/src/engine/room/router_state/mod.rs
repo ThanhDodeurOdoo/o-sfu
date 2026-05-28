@@ -30,7 +30,7 @@ impl From<RouterError> for RoomRouterStateError {
 }
 
 #[derive(Debug, Clone)]
-/// Room-owned adapter around one pure router instance.
+/// Room adapter around one pure router instance.
 ///
 /// The adapter translates compatibility-facing room identities into compact
 /// router identifiers and keeps the upload and download transport pair for

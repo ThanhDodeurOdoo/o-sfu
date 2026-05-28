@@ -4,7 +4,7 @@
 //! boundary for facts that live inside [`PacketLoopState`] and cannot be read
 //! from snapshots without losing ordering against worker commands
 //!
-//! use a probe when a test needs worker-owned route, demux, session, bitrate,
+//! use a probe when a test needs worker-local route, demux, session, bitrate,
 //! relay or route-control state
 //! keep the readable helper method in `worker/test_support.rs`
 //! implement one small [`DebugProbe`] type here with its request fields and
@@ -121,7 +121,7 @@ pub(in crate::engine::media_transport::rtc) trait DebugProbe:
 {
     type Output: Send + 'static;
 
-    /// reads or prepares worker-owned state for one test probe
+    /// reads or prepares worker-local state for one test probe
     fn inspect(
         self,
         state: &mut PacketLoopState,
@@ -424,7 +424,7 @@ pub struct DebugRouteDestination {
 ///
 /// tests use this value to assert the source route, destination fanout and
 /// effective packet gate chosen by the packet loop
-/// it is intentionally a snapshot DTO so assertions cannot mutate worker-owned
+/// it is a snapshot DTO so assertions cannot mutate worker-local
 /// route state
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DebugRouteEntry {

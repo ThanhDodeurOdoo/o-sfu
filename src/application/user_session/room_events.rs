@@ -14,8 +14,8 @@ use crate::{
 
 /// envelope for ordered server messages produced by one room event
 ///
-/// `needs_renegotiation` is a session-local signal that means this browser's
-/// current track snapshot changed in a way that requires `User` to request a
+/// [`UserWireMessages::needs_renegotiation`] is a session-local signal that means this browser's
+/// current track snapshot changed in a way that requires [`User`] to request a
 /// new offer after the compatibility messages are emitted
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::application::user_session) struct UserWireMessages {
@@ -36,7 +36,7 @@ impl UserWireMessages {
 
 /// per-connection state used to build compatibility server messages
 ///
-/// this state owns the remote track snapshot for one browser because room
+/// this state keeps the remote track snapshot for one browser because room
 /// events may update presence, remove peers or change publication activity and
 /// those compatibility updates must be reflected locally before the websocket edge
 /// serializes the output

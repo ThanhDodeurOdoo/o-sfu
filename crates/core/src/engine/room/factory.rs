@@ -9,7 +9,7 @@
 //! runtime policy selected at boot plus shared observability, recording and
 //! metrics services. It does not register the room or emit creation events.
 //!
-//! Same-room worker placement is intentionally not decided here. The factory
+//! Same-room worker placement is not decided here. The factory
 //! gives a room its stable instance id and primary router id, while
 //! `RoomManager::join_user` assigns workers from live load snapshots when
 //! sessions arrive.
