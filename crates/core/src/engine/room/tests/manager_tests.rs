@@ -6,9 +6,9 @@ use tokio::{sync::Notify, task::yield_now, time::timeout};
 use super::{
     super::{
         TestPlacementReason,
-        effects::SubscriptionEffectPlan,
         manager::JoinPlacementTestGate,
         media_graph::{ConsumerRouteTransportRef, ConsumerRouteUpdate},
+        transition::SubscriptionEffectPlan,
         user_negotiation::UserTransportReady,
     },
     api::NegotiatedPublish,

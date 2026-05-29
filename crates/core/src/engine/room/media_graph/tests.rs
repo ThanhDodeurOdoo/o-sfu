@@ -413,10 +413,7 @@ fn policy_paused_routes_do_not_count_as_effective_delivery() {
     );
     assert_eq!(
         state
-            .active_video_consumer_keyframe_refresh_targets(
-                &consumer_user_id,
-                consumer_connection_id,
-            )
+            .active_video_keyframe_targets(&consumer_user_id, consumer_connection_id,)
             .expect("consumer should exist")
             .len(),
         1
@@ -431,10 +428,7 @@ fn policy_paused_routes_do_not_count_as_effective_delivery() {
     );
     assert!(
         state
-            .active_video_consumer_keyframe_refresh_targets(
-                &consumer_user_id,
-                consumer_connection_id,
-            )
+            .active_video_keyframe_targets(&consumer_user_id, consumer_connection_id,)
             .expect("consumer should exist")
             .is_empty()
     );
@@ -532,7 +526,7 @@ fn stale_replaced_connection_cannot_update_download_state() {
     assert!(planned_bootstraps.is_empty());
     assert!(relay_effects.is_empty());
     assert!(
-        state.desired_source_subscription_active(
+        state.desired_source_active(
             &consumer_user_id,
             &producer_user_id,
             &stream_id_for_source(TestSourceKind::ScalableVideo),
@@ -632,11 +626,7 @@ fn missing_consumer_bootstrap_applies_video_download_cap_before_effects() {
     }
 
     let planned_bootstraps = state
-        .plan_missing_consumer_bootstraps_for_connection(
-            &subscriber_user_id,
-            subscriber_connection_id,
-            |_| 0,
-        )
+        .plan_missing_consumers(&subscriber_user_id, subscriber_connection_id, |_| 0)
         .expect("subscriber session should still exist");
 
     assert_eq!(planned_bootstraps.len(), 2);
@@ -674,7 +664,7 @@ fn missing_consumer_bootstrap_applies_video_download_cap_before_effects() {
 }
 
 #[test]
-fn commit_published_track_populates_transport_media_owner_index() {
+fn commit_publish_reservation_populates_transport_media_owner_index() {
     let mut state = test_state();
     let user_id = UserId::Integer(1);
 
@@ -698,7 +688,7 @@ fn commit_published_track_populates_transport_media_owner_index() {
 
     assert!(
         state
-            .commit_published_track(prepared_track, transport_media_id)
+            .commit_publish_reservation(prepared_track, transport_media_id)
             .is_some()
     );
     assert_eq!(
@@ -733,7 +723,7 @@ fn commit_published_track_populates_transport_media_owner_index() {
 }
 
 #[test]
-fn commit_published_track_registers_all_source_encodings() {
+fn commit_publish_reservation_registers_all_source_encodings() {
     let mut state = test_state();
     let user_id = UserId::Integer(1);
 
@@ -760,7 +750,7 @@ fn commit_published_track_registers_all_source_encodings() {
 
     assert!(
         state
-            .commit_published_track(prepared_track, transport_media_id)
+            .commit_publish_reservation(prepared_track, transport_media_id)
             .is_some()
     );
 
@@ -837,7 +827,7 @@ fn unpublish_track_clears_transport_media_owner_index() {
 
     assert!(
         state
-            .commit_published_track(prepared_track, transport_media_id)
+            .commit_publish_reservation(prepared_track, transport_media_id)
             .is_some()
     );
     assert!(
@@ -889,7 +879,7 @@ fn unpublish_track_repairs_missing_topology_router_and_clears_state() {
 
     assert!(
         state
-            .commit_published_track(prepared_track, transport_media_id)
+            .commit_publish_reservation(prepared_track, transport_media_id)
             .is_some()
     );
     state.topology.remove_router_for_test(RouterId(1));

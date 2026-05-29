@@ -9,7 +9,7 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
         PublishStageOutcome::Staged
     );
     let transport_media_id = scenario
-        .staged_transport_media_id(TestSourceKind::ScalableVideo)
+        .staged_media_id(TestSourceKind::ScalableVideo)
         .await;
 
     assert_eq!(
@@ -67,7 +67,7 @@ async fn staged_publish_duplicate_after_transport_reservation_cleans_second_medi
         .expect("test reservation should allocate transport media");
     scenario
         .room
-        .stage_duplicate_after_next_publish_reservation_for_test(pre_reserved_media_id);
+        .stage_next_duplicate_for_test(pre_reserved_media_id);
 
     assert_eq!(
         scenario.stage_scalable_video().await,
@@ -77,13 +77,13 @@ async fn staged_publish_duplicate_after_transport_reservation_cleans_second_medi
     );
     let cleanup_target = scenario
         .room
-        .duplicate_staged_publish_cleanup_target_for_test()
+        .duplicate_cleanup_target_for_test()
         .expect("test hook should record duplicate cleanup target");
 
     assert_eq!(scenario.staged_count().await, 1);
     assert_eq!(
         scenario
-            .staged_transport_media_id(TestSourceKind::ScalableVideo)
+            .staged_media_id(TestSourceKind::ScalableVideo)
             .await,
         pre_reserved_media_id
     );
@@ -118,7 +118,7 @@ async fn staged_negotiated_publish_commit_moves_through_room_owned_transaction()
         PublishStageOutcome::Staged
     );
     let transport_media_id = scenario
-        .staged_transport_media_id(TestSourceKind::ScalableVideo)
+        .staged_media_id(TestSourceKind::ScalableVideo)
         .await;
 
     scenario.commit().await;

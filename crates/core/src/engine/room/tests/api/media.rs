@@ -3,7 +3,7 @@ use o_sfu_router::{
 };
 use tracing::warn;
 
-use super::super::super::{Room, media_transaction::PendingPublishTransaction};
+use super::super::super::{Room, transition::ReservedPublish};
 use crate::engine::{
     ConnectionId, TestSourceKind, UserId,
     media_transport::{MediaTransport, TransportMediaId},
@@ -38,7 +38,7 @@ impl RoomTestMedia<'_> {
             let state = self.room.state.read().await;
             state.validate_publish_descriptor(user_id, publish.connection_id, &intent)?
         };
-        PendingPublishTransaction::new(validated_descriptor, publish.transport_media_id)
+        ReservedPublish::new(validated_descriptor, publish.transport_media_id)
             .commit_with_parameters(
                 self.room
                     .user_operation(user_id, publish.connection_id, media_transport),
@@ -117,7 +117,7 @@ impl RoomTestMedia<'_> {
                 return None;
             }
         };
-        PendingPublishTransaction::new(validated_descriptor, transport_media_id)
+        ReservedPublish::new(validated_descriptor, transport_media_id)
             .commit_with_parameters(
                 self.room
                     .user_operation(user_id, publisher_connection_id, media_transport),

@@ -300,6 +300,42 @@ fn topology_keeps_receiver_shadow_until_last_source_router_consumer_is_removed()
 }
 
 #[test]
+fn topology_remove_consumer_prunes_cross_router_shadow() {
+    let mut topology = RoomTopology::new_with_bounded_spillover(RouterId(9), 2);
+    let producer_user_id = UserId::Integer(10);
+    let consumer_user_id = UserId::Integer(20);
+
+    assert!(join_on_router(&mut topology, &producer_user_id, 0, 9, 0).is_ok());
+    assert!(join_on_router(&mut topology, &consumer_user_id, 1, 10, 1).is_ok());
+    let producer = topology
+        .add_producer(&producer_user_id, RouterMediaKind::Audio)
+        .expect("producer should be accepted");
+    let consumer = topology
+        .add_consumer(
+            &consumer_user_id,
+            producer,
+            RouterMediaKind::Audio,
+            ConsumerCapability::Compatible,
+        )
+        .expect("consumer should be accepted");
+
+    assert_eq!(
+        topology.mapped_session_count_for_router(RouterId(9)),
+        Some(2)
+    );
+    assert!(topology.remove_consumer(consumer).is_ok());
+
+    assert_eq!(
+        topology.mapped_session_count_for_router(RouterId(9)),
+        Some(1)
+    );
+    assert_eq!(
+        topology.home_router_id_for_user(&consumer_user_id),
+        Some(RouterId(10))
+    );
+}
+
+#[test]
 fn topology_rejects_shadow_consumer_without_receiver_home_placement() {
     let mut topology = RoomTopology::new(RouterId(9));
     let missing_consumer_user_id = UserId::Integer(20);

@@ -44,7 +44,7 @@ mod test_support;
 mod tests;
 
 pub use self::subscription::{ConsumerRouteState, RemoteTrackBootstrap};
-pub(in crate::engine::room) use self::{
+pub(super) use self::{
     ids::{ConsumerRuntimeId, ProducerRuntimeId},
     producer::ValidatedPublishDescriptor,
     relay::{RelayRouteEffect, RelayRouteKey},
@@ -65,7 +65,7 @@ pub(in crate::engine::room) use self::{
 /// all methods are cold-path room-state work because packet forwarding never calls
 /// this graph directly
 #[derive(Debug, Default)]
-pub(in crate::engine::room) struct RoomMediaGraph {
+pub(super) struct RoomMediaGraph {
     sources: SourceIndex,
     consumers: ConsumerIndex,
     relay_routes: RoomRelayRoutes,
@@ -77,7 +77,7 @@ pub(in crate::engine::room) struct RoomMediaGraph {
 /// can point at stored receiver intent, a pending bootstrap reservation or a
 /// committed consumer route
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(in crate::engine::room) struct ConsumerKey {
+pub(super) struct ConsumerKey {
     pub consumer_user_id: UserId,
     pub source_id: PublishedSourceId,
 }
@@ -97,7 +97,7 @@ impl ConsumerKey {
 /// this prevents producer workflows from depending on product stream labels
 /// the graph stores the normalized source id once a publish commit succeeds
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(in crate::engine::room) struct SourceKey {
+pub(super) struct SourceKey {
     owner_user_id: UserId,
     stream_id: UserStreamId,
 }
@@ -108,7 +108,7 @@ pub(in crate::engine::room) struct SourceKey {
 /// transport media ownership, workflow modules read it to plan bootstraps or
 /// activity updates, but all index maintenance stays behind the graph facade
 #[derive(Debug, Clone)]
-pub(in crate::engine::room) struct PublishedProducer {
+pub(super) struct PublishedProducer {
     pub source_id: PublishedSourceId,
     pub owner_user_id: UserId,
     pub owner_connection_id: ConnectionId,
@@ -127,7 +127,7 @@ pub(in crate::engine::room) struct PublishedProducer {
 /// the source descriptor, producer, owner indexes and transport-media index are
 /// installed as one graph update
 #[derive(Debug)]
-pub(in crate::engine::room) struct PublishedSourceInstall {
+pub(super) struct PublishedSourceInstall {
     pub source_key: SourceKey,
     pub source_descriptor: PublishedSourceDescriptor,
     pub source_encoding_ids: Vec<SourceEncodingId>,
@@ -142,7 +142,7 @@ pub(in crate::engine::room) struct PublishedSourceInstall {
 /// from transport observations, this entry lets those cold-path readers resolve
 /// back to source identity without walking every producer
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::engine::room) struct SourceTransportMediaIndexEntry {
+pub(super) struct SourceTransportMediaIndexEntry {
     source_id: PublishedSourceId,
     encoding_ids: Vec<SourceEncodingId>,
     owner_user_id: UserId,
@@ -161,7 +161,7 @@ pub(in crate::engine::room) struct SourceTransportMediaIndexEntry {
 /// unpublish, later mutation methods compare the handle against current graph
 /// ownership, so callbacks from replaced sockets become no-ops instead of
 /// mutating a newer producer that reused the same user and stream
-pub(in crate::engine::room) struct ProducerRouteTarget {
+pub(super) struct ProducerRouteTarget {
     source_id: PublishedSourceId,
     producer_id: ProducerRuntimeId,
     owner_connection_id: ConnectionId,
@@ -175,7 +175,7 @@ pub(in crate::engine::room) struct ProducerRouteTarget {
 /// ownership, async cleanup can then target the exact user connection and
 /// transport media id after the state lock has been released
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::engine::room) struct TransportMediaRemoval {
+pub(super) struct TransportMediaRemoval {
     user: UserId,
     connection: ConnectionId,
     transport_media: TransportMediaId,
@@ -187,7 +187,7 @@ pub(in crate::engine::room) struct TransportMediaRemoval {
 /// packet-gate, keyframe and diagnostics updates must validate both topology
 /// and transport ownership before changing source selection state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::engine::room) struct ConsumerState {
+pub(super) struct ConsumerState {
     pub routed_consumer_id: RoutedConsumerId,
     pub consumer_connection_id: ConnectionId,
     pub source_connection_id: ConnectionId,
@@ -200,7 +200,7 @@ pub(in crate::engine::room) struct ConsumerState {
 /// read-side code uses this instead of joining source, producer, selection and
 /// consumer maps itself, the view is only valid for the borrow of the graph
 #[derive(Debug, Clone)]
-pub(in crate::engine::room) struct ConsumerRouteView<'a> {
+pub(super) struct ConsumerRouteView<'a> {
     pub consumer_user_id: UserId,
     pub state: ConsumerState,
     pub source: &'a PublishedSourceDescriptor,
@@ -244,7 +244,7 @@ impl ConsumerRouteView<'_> {
 /// returned a consumer media id, this view exposes the source and any still-live
 /// producer without pretending the consumer route is committed
 #[derive(Debug, Clone, Copy)]
-pub(in crate::engine::room) struct PendingConsumerRouteView<'a> {
+pub(super) struct PendingConsumerRouteView<'a> {
     pub source: &'a PublishedSourceDescriptor,
     pub producer: Option<&'a PublishedProducer>,
     pub selection: Option<ConsumerSourceSelection>,
@@ -257,7 +257,7 @@ pub(in crate::engine::room) struct PendingConsumerRouteView<'a> {
 /// it deliberately carries transport identity rather than diagnostics or fanout
 /// payloads
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::engine::room) struct ConsumerRouteTransportRef {
+pub(super) struct ConsumerRouteTransportRef {
     consumer_user_id: UserId,
     consumer_connection_id: ConnectionId,
     consumer_media: TransportMediaId,
