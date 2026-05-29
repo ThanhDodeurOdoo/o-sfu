@@ -103,7 +103,7 @@ impl RoomState {
     ///
     /// This is the pure state gate in front of the staged publish flow. The
     /// caller may use the returned descriptor to drive transport work, but it
-    /// must still commit through `commit_published_track` because replacement,
+    /// must still commit through `commit_publish_reservation` because replacement,
     /// disconnect or negotiation rollback can make the descriptor stale.
     pub fn validate_publish_descriptor(
         &self,
@@ -155,7 +155,7 @@ impl RoomState {
     /// during replacement or disconnect. On success this install every
     /// producer-facing index in one place, including the `TransportMediaId`
     /// ownership index used by room policy and diagnostics.
-    pub fn commit_published_track(
+    pub fn commit_publish_reservation(
         &mut self,
         pending: PreparedPublishedTrack,
         transport_media_id: TransportMediaId,

@@ -500,6 +500,19 @@ impl RoomTopology {
         Ok(())
     }
 
+    /// Remove one routed consumer and reconcile a shadow receiver if the
+    /// consumer was the last edge that needed it.
+    pub(super) fn remove_consumer(
+        &mut self,
+        consumer_id: RoutedConsumerId,
+    ) -> Result<(), RoomTopologyError> {
+        self.router_mut(consumer_id.router_id())?
+            .remove_consumer(consumer_id.consumer_id())?;
+        let shadow_sessions = self.shadow_sessions.unregister_consumers([consumer_id]);
+        self.prune_shadow_sessions(shadow_sessions)?;
+        Ok(())
+    }
+
     /// Remove a routed producer and reconcile the shadows of dependent
     /// cross-router consumers.
     ///

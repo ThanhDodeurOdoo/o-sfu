@@ -39,25 +39,25 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy)]
-pub(in crate::engine::room) struct RoomEffectContext<'a> {
+pub struct RoomEffectContext<'a> {
     /// transport handle available for post-lock observations and policy work
     ///
     /// state-only tests may provide this while still disabling cleanup mutation
     /// so source policy can observe transport state without removing media
-    media_transport: Option<&'a MediaTransport>,
+    media: Option<&'a MediaTransport>,
     /// transport handle available for adapter mutation after room ownership ends
     ///
     /// relay updates, media removals and transport user closes use this handle
     /// only when the caller authorizes cleanup side effects
-    cleanup_media_transport: Option<&'a MediaTransport>,
+    cleanup: Option<&'a MediaTransport>,
 }
 
 impl<'a> RoomEffectContext<'a> {
     /// build the production context for normal runtime room work
     pub const fn runtime(media_transport: &'a MediaTransport) -> Self {
         Self {
-            media_transport: Some(media_transport),
-            cleanup_media_transport: Some(media_transport),
+            media: Some(media_transport),
+            cleanup: Some(media_transport),
         }
     }
 
@@ -65,8 +65,8 @@ impl<'a> RoomEffectContext<'a> {
     #[cfg(any(test, feature = "testing-transport"))]
     pub const fn state_only(media_transport: Option<&'a MediaTransport>) -> Self {
         Self {
-            media_transport,
-            cleanup_media_transport: None,
+            media: media_transport,
+            cleanup: None,
         }
     }
 }
@@ -76,7 +76,7 @@ impl<'a> RoomEffectContext<'a> {
 /// callers pass snapshots instead of recomputing counts after unlock, so metric
 /// updates describe the committed transition that produced the batch
 #[derive(Debug, Clone, Copy)]
-pub(in crate::engine::room) struct MediaCountDelta {
+pub struct MediaCountDelta {
     before: RoomMediaCounts,
     after: RoomMediaCounts,
 }
@@ -87,7 +87,15 @@ impl MediaCountDelta {
     }
 
     fn record(self, room: &Room) {
-        room.record_media_count_delta(self.before, self.after);
+        let before_publications = i64::try_from(self.before.publications).unwrap_or(i64::MAX);
+        let after_publications = i64::try_from(self.after.publications).unwrap_or(i64::MAX);
+        room.metrics
+            .add_active_publications(after_publications.saturating_sub(before_publications));
+
+        let before_subscriptions = i64::try_from(self.before.subscriptions).unwrap_or(i64::MAX);
+        let after_subscriptions = i64::try_from(self.after.subscriptions).unwrap_or(i64::MAX);
+        room.metrics
+            .add_active_subscriptions(after_subscriptions.saturating_sub(before_subscriptions));
     }
 }
 
@@ -102,17 +110,17 @@ impl MediaCountDelta {
 /// the batch may allocate and move effect vectors by value, but it must not be
 /// called from packet forwarding paths
 #[derive(Debug, Default)]
-pub(in crate::engine::room) struct RoomEffectBatch {
+pub struct RoomEffectBatch {
     /// facts captured while room state was authoritative
     mutation: CommittedRoomMutation,
     /// relay route mutations derived from room topology before unlock
-    relay_effects: Vec<RelayRouteEffect>,
+    relays: Vec<RelayRouteEffect>,
     /// detached media ids that cleanup.rs may retry if the adapter is unavailable
-    transport_removals: Vec<TransportMediaRemoval>,
+    removals: Vec<TransportMediaRemoval>,
     /// detached transport users that no longer have an owning room session
-    transport_user_closes: Vec<TransportUserCleanup>,
+    closes: Vec<TransportUserCleanup>,
     /// best-effort close requests and room fan-out captured by state
-    lifecycle_effects: Vec<LifecycleEffects>,
+    lifecycle: Vec<LifecycleEffects>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -127,13 +135,13 @@ struct CommittedRoomMutation {
     /// active-user gauge delta from a committed membership transition
     user_count_delta: Option<UserCountDelta>,
     /// media gauge deltas from committed publish, unpublish or subscribe work
-    media_count_deltas: Vec<MediaCountDelta>,
+    media_deltas: Vec<MediaCountDelta>,
     /// source policy event requested after committed room work
-    source_policy_event: Option<SourcePolicyEvent>,
+    source_policy: Option<SourcePolicyEvent>,
     /// diagnostics store mutations that must preserve caller order
     diagnostics: Vec<DiagnosticsEffect>,
     /// room event requests enqueued only after state and transport effects run
-    outbound_requests: Vec<OutboundRequestEffect>,
+    outbound: Vec<OutboundRequestEffect>,
 }
 
 /// detached transport user that should be closed after room state moves on
@@ -141,7 +149,7 @@ struct CommittedRoomMutation {
 /// the identity is captured before async cleanup starts, so replacement joins
 /// cannot make cleanup target the new transport user by accident
 #[derive(Debug, Clone)]
-pub(in crate::engine::room) struct TransportUserCleanup {
+pub struct TransportUserCleanup {
     user_id: UserId,
     connection_id: ConnectionId,
 }
@@ -182,9 +190,9 @@ struct OutboundRequestEffect {
 /// relay success stays separate because consumer bootstrap must release pending
 /// state when relay setup fails before the consumer can be created
 #[derive(Debug, Clone, Copy)]
-pub(in crate::engine::room) struct RoomEffectExecution {
+pub struct RoomEffectExecution {
     cleanup: TransportEffectOutcome,
-    relay_effects_applied: bool,
+    relays_applied: bool,
 }
 
 impl RoomEffectExecution {
@@ -193,7 +201,7 @@ impl RoomEffectExecution {
     }
 
     pub const fn relay_effects_applied(self) -> bool {
-        self.relay_effects_applied
+        self.relays_applied
     }
 }
 
@@ -217,14 +225,14 @@ impl RoomEffectBatch {
     /// record a media-count delta only when the caller planned one
     pub fn with_optional_media_count_delta(mut self, delta: Option<MediaCountDelta>) -> Self {
         if let Some(delta) = delta {
-            self.mutation.media_count_deltas.push(delta);
+            self.mutation.media_deltas.push(delta);
         }
         self
     }
 
     /// record a prebuilt media-count delta
     pub fn with_media_count_delta_value(mut self, delta: MediaCountDelta) -> Self {
-        self.mutation.media_count_deltas.push(delta);
+        self.mutation.media_deltas.push(delta);
         self
     }
 
@@ -233,7 +241,7 @@ impl RoomEffectBatch {
         mut self,
         effects: impl IntoIterator<Item = RelayRouteEffect>,
     ) -> Self {
-        self.relay_effects.extend(effects);
+        self.relays.extend(effects);
         self
     }
 
@@ -242,25 +250,25 @@ impl RoomEffectBatch {
         mut self,
         removals: impl IntoIterator<Item = TransportMediaRemoval>,
     ) -> Self {
-        self.transport_removals.extend(removals);
+        self.removals.extend(removals);
         self
     }
 
     /// queue a transport user close after room state released ownership
     pub fn with_transport_user_close(mut self, cleanup: TransportUserCleanup) -> Self {
-        self.transport_user_closes.push(cleanup);
+        self.closes.push(cleanup);
         self
     }
 
     /// record the source-policy consequence of the committed transition
     pub fn with_source_policy_event(mut self, event: SourcePolicyEvent) -> Self {
-        self.mutation.source_policy_event = Some(event);
+        self.mutation.source_policy = Some(event);
         self
     }
 
     /// queue lifecycle notifications captured by room state
     pub fn with_lifecycle_effects(mut self, effects: LifecycleEffects) -> Self {
-        self.lifecycle_effects.push(effects);
+        self.lifecycle.push(effects);
         self
     }
 
@@ -295,7 +303,7 @@ impl RoomEffectBatch {
         request: RoomEventRequest,
     ) -> Self {
         self.mutation
-            .outbound_requests
+            .outbound
             .push(OutboundRequestEffect { sender, request });
         self
     }
@@ -321,49 +329,42 @@ impl RoomEffectBatch {
     pub async fn execute(self, room: &Room, context: RoomEffectContext<'_>) -> RoomEffectExecution {
         let Self {
             mutation,
-            relay_effects,
-            transport_removals,
-            transport_user_closes,
-            lifecycle_effects,
+            relays,
+            removals,
+            closes,
+            lifecycle,
         } = self;
         let CommittedRoomMutation {
             user_count_delta,
-            media_count_deltas,
-            source_policy_event,
+            media_deltas,
+            source_policy,
             diagnostics,
-            outbound_requests,
+            outbound,
         } = mutation;
-        Self::record_gauge_deltas(room, user_count_delta, &media_count_deltas);
-        let relay_effects_applied =
-            Self::execute_relay_effects(room, context, &relay_effects).await;
-        let cleanup = Self::execute_transport_cleanup(
-            room,
-            context,
-            &transport_removals,
-            &transport_user_closes,
-        )
-        .await;
-        Self::execute_source_policy_event(room, context, source_policy_event).await;
-        Self::emit_lifecycle_effects(lifecycle_effects);
+        Self::record_gauge_deltas(room, user_count_delta, &media_deltas);
+        let relays_applied = Self::execute_relay_effects(room, context, &relays).await;
+        let cleanup = Self::execute_transport_cleanup(room, context, &removals, &closes).await;
+        Self::execute_source_policy_event(room, context, source_policy).await;
+        Self::emit_lifecycle_effects(lifecycle);
         Self::record_diagnostics_effects(room, diagnostics);
-        Self::send_outbound_requests(outbound_requests);
+        Self::send_outbound_requests(outbound);
         RoomEffectExecution {
             cleanup,
-            relay_effects_applied,
+            relays_applied,
         }
     }
 
     fn record_gauge_deltas(
         room: &Room,
         user_count_delta: Option<UserCountDelta>,
-        media_count_deltas: &[MediaCountDelta],
+        media_deltas: &[MediaCountDelta],
     ) {
         if let Some(delta) = user_count_delta {
             let before = i64::try_from(delta.before).unwrap_or(i64::MAX);
             let after = i64::try_from(delta.after).unwrap_or(i64::MAX);
             room.metrics.add_active_users(after.saturating_sub(before));
         }
-        for delta in media_count_deltas {
+        for delta in media_deltas {
             (*delta).record(room);
         }
     }
@@ -371,24 +372,24 @@ impl RoomEffectBatch {
     async fn execute_relay_effects(
         room: &Room,
         context: RoomEffectContext<'_>,
-        relay_effects: &[RelayRouteEffect],
+        relays: &[RelayRouteEffect],
     ) -> bool {
-        let Some(media_transport) = context.cleanup_media_transport else {
+        let Some(media_transport) = context.cleanup else {
             return true;
         };
-        execute_relay_route_effects(room, media_transport, relay_effects).await
+        execute_relay_route_effects(room, media_transport, relays).await
     }
 
     async fn execute_transport_cleanup(
         room: &Room,
         context: RoomEffectContext<'_>,
-        transport_removals: &[TransportMediaRemoval],
-        transport_user_closes: &[TransportUserCleanup],
+        removals: &[TransportMediaRemoval],
+        closes: &[TransportUserCleanup],
     ) -> TransportEffectOutcome {
-        let Some(media_transport) = context.cleanup_media_transport else {
+        let Some(media_transport) = context.cleanup else {
             return TransportEffectOutcome::Applied;
         };
-        let removals = transport_removals
+        let removals = removals
             .iter()
             .map(|removal| {
                 let connection_id = removal.connection();
@@ -402,8 +403,8 @@ impl RoomEffectBatch {
         let cleanup = room
             .execute_transport_cleanup_operations(media_transport, &removals)
             .await;
-        if !transport_user_closes.is_empty() {
-            let closes = transport_user_closes
+        if !closes.is_empty() {
+            let closes = closes
                 .iter()
                 .map(|cleanup| TransportCleanupOperation::CloseUser {
                     session_key: room.transport_user_key(&cleanup.user_id, cleanup.connection_id),
@@ -420,16 +421,15 @@ impl RoomEffectBatch {
     async fn execute_source_policy_event(
         room: &Room,
         context: RoomEffectContext<'_>,
-        source_policy_event: Option<SourcePolicyEvent>,
+        source_policy: Option<SourcePolicyEvent>,
     ) {
-        if let Some(event) = source_policy_event {
-            room.handle_source_policy_event(event, context.media_transport)
-                .await;
+        if let Some(event) = source_policy {
+            room.handle_source_policy_event(event, context.media).await;
         }
     }
 
-    fn emit_lifecycle_effects(lifecycle_effects: Vec<LifecycleEffects>) {
-        for effects in lifecycle_effects {
+    fn emit_lifecycle_effects(lifecycle: Vec<LifecycleEffects>) {
+        for effects in lifecycle {
             for close_request in effects.close_requests {
                 let _ = close_request
                     .sender
@@ -457,16 +457,16 @@ impl RoomEffectBatch {
         }
     }
 
-    fn send_outbound_requests(outbound_requests: Vec<OutboundRequestEffect>) {
-        for outbound_request in outbound_requests {
-            let _ = outbound_request
+    fn send_outbound_requests(outbound: Vec<OutboundRequestEffect>) {
+        for request in outbound {
+            let _ = request
                 .sender
-                .send(UserOutbound::Request(Box::new(outbound_request.request)));
+                .send(UserOutbound::Request(Box::new(request.request)));
         }
     }
 }
 
-pub(super) async fn execute_relay_route_effects(
+async fn execute_relay_route_effects(
     room: &Room,
     media_port: &MediaTransport,
     effects: &[RelayRouteEffect],

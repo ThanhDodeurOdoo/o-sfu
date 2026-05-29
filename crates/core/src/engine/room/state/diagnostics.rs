@@ -178,7 +178,7 @@ impl RoomState {
                     return None;
                 }
                 let source = route.source;
-                let selection = route.selection_or_open(self.desired_source_subscription_active(
+                let selection = route.selection_or_open(self.desired_source_active(
                     user_id,
                     source.owner().user_id(),
                     source.stream_id(),

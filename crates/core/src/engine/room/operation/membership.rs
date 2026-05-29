@@ -69,10 +69,10 @@ impl RoomUserOperation<'_> {
     /// consumers and bootstraps any consumers that became possible after the
     /// renegotiation.
     pub(crate) async fn apply_session_refreshed(self) -> SessionNegotiationOutcome {
-        if !self.request_active_video_consumer_keyframes().await {
+        if !self.request_video_keyframes().await {
             return SessionNegotiationOutcome::StaleConnection;
         }
-        if !self.bootstrap_missing_consumers().await {
+        if !self.bootstrap_consumers().await {
             return SessionNegotiationOutcome::StaleConnection;
         }
         SessionNegotiationOutcome::Applied
@@ -91,10 +91,10 @@ impl RoomUserOperation<'_> {
             return SessionNegotiationOutcome::StaleConnection;
         }
         if update.became_consumer_ready {
-            if !self.bootstrap_missing_consumers().await {
+            if !self.bootstrap_consumers().await {
                 return SessionNegotiationOutcome::StaleConnection;
             }
-            self.request_active_video_consumer_keyframes().await;
+            self.request_video_keyframes().await;
         }
         SessionNegotiationOutcome::Applied
     }
@@ -104,14 +104,11 @@ impl RoomUserOperation<'_> {
     /// The target list is an authoritative room-state snapshot for the current
     /// connection. Individual transport request failures are logged but kept
     /// best-effort because a later media packet or refresh can recover video.
-    async fn request_active_video_consumer_keyframes(self) -> bool {
+    async fn request_video_keyframes(self) -> bool {
         let room = self.room();
         let Some(keyframe_refresh_targets) = ({
             let state = room.state.read().await;
-            state.active_video_consumer_keyframe_refresh_targets(
-                self.user_id(),
-                self.connection_id(),
-            )
+            state.active_video_keyframe_targets(self.user_id(), self.connection_id())
         }) else {
             return false;
         };

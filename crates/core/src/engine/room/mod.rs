@@ -33,7 +33,6 @@ mod lifecycle;
 mod manager;
 mod media;
 mod media_graph;
-mod media_transaction;
 mod membership;
 mod operation;
 mod outbound;
@@ -46,6 +45,7 @@ mod state;
 #[cfg(any(test, feature = "testing-transport"))]
 mod tests;
 mod topology;
+mod transition;
 mod user_negotiation;
 
 pub use controller::{

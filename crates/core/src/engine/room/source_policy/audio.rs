@@ -32,7 +32,7 @@ impl RoomState {
                 if route.source.media_kind() != MediaKind::Audio || !route.producer.active {
                     return None;
                 }
-                let desired_active = self.desired_source_subscription_active(
+                let desired_active = self.desired_source_active(
                     &route.consumer_user_id,
                     route.source.owner().user_id(),
                     route.source.stream_id(),

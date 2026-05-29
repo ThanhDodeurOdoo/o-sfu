@@ -39,13 +39,13 @@ use super::{
     definition::RoomDefinition,
     init::RoomInit,
     media_graph::{ConsumerRouteState, ConsumerRouteTransportRef},
-    media_transaction::PendingPublishTransactions,
     operation::RoomUserOperation,
     placement::{
         LoadTriggeredPlacementState, RoomPlacementState, RoomPlacementUsageSnapshot,
         RoomWorkerLoadContribution,
     },
     state::RoomState,
+    transition::PendingPublishTransactions,
 };
 use crate::{
     RoomSpilloverMode, RoomWorkerPolicy, RuntimeFeatureFlags,
