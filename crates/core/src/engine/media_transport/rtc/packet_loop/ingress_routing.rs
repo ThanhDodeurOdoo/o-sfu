@@ -38,6 +38,7 @@ use super::super::{
     state::{PacketLoopState, RtcSnapshotState},
 };
 use crate::engine::{
+    hot_path::unlikely,
     media_transport::TransportSessionKey,
     metrics::{RtcDatagramDropReason, RtcDatagramRoutePath, RtcMetricsRecorder},
 };
@@ -277,7 +278,7 @@ fn route_packet_with_cached_session(
         return CachedRouteOutcome::NotMatched;
     }
     let handle_result = session_state.rtc.handle_input(input);
-    if handle_result.is_err() {
+    if unlikely(handle_result.is_err()) {
         // NOTE: We still consider the packet "routed" even if `handle_input` fails.
         // Routing answers "which user owns this packet", not "was the packet valid".
         //
