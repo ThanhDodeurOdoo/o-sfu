@@ -278,7 +278,7 @@ fn source_is_video(
 /// Relay messages are already decoded as `ForwardedPacket` values by their
 /// source worker. The cap keeps command handling and UDP receive responsive
 /// under cross-worker fanout spikes.
-pub(super) fn drain_relay_packets(
+pub(crate) fn drain_relay_packets(
     relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
     pending_packets: &mut Vec<ForwardedPacket>,
     max_packets: usize,

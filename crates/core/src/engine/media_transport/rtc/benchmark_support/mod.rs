@@ -7,6 +7,7 @@
 
 mod active_speaker;
 mod consumer_gates;
+mod drain;
 mod fanout;
 mod ingress;
 mod local_rewrite;
@@ -20,6 +21,7 @@ mod worker;
 
 pub use active_speaker::ActiveSpeakerBenchFixture;
 pub use consumer_gates::ConsumerGateBatchBenchFixture;
+pub use drain::{RelayDrainBenchFixture, SessionDrainBenchFixture};
 pub use fanout::{FanoutBenchTopology, ROUTE_PLANNING_TURNS};
 pub use ingress::{INGRESS_DEMUX_ATTEMPTS, IngressRoutingBenchFixture};
 pub use local_rewrite::LocalRewriteBenchFixture;

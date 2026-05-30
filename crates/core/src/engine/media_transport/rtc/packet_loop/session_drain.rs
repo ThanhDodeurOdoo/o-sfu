@@ -37,12 +37,12 @@ use crate::engine::{
     metrics::RuntimeMetrics,
 };
 
-pub(super) struct SessionDrainContext<'a> {
-    pub(super) snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
-    pub(super) diagnostics: &'a Arc<DiagnosticsStore>,
-    pub(super) metrics: &'a RuntimeMetrics,
-    pub(super) source_policy_signal: &'a SourcePolicySignal,
-    pub(super) socket: &'a UdpSocket,
+pub(crate) struct SessionDrainContext<'a> {
+    pub snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
+    pub diagnostics: &'a Arc<DiagnosticsStore>,
+    pub metrics: &'a RuntimeMetrics,
+    pub source_policy_signal: &'a SourcePolicySignal,
+    pub socket: &'a UdpSocket,
 }
 
 /// Poll every session that the scheduler reports as ready.
@@ -50,7 +50,7 @@ pub(super) struct SessionDrainContext<'a> {
 /// Readiness comes from dirty-session marks and exact timeout deadlines stored
 /// in `PacketLoopState`. Sessions that disappeared before the drain are
 /// ignored, which keeps teardown races harmless for already queued wakeups.
-pub(super) fn drain_ready_sessions(
+pub(crate) fn drain_ready_sessions(
     state: &mut PacketLoopState,
     context: &SessionDrainContext<'_>,
     buffers: &mut PacketLoopBuffers,
