@@ -31,9 +31,9 @@ use gungraun::{
 use o_sfu_core::server::transport::benchmark_support::{
     ActiveSpeakerBenchFixture, ConsumerGateBatchBenchFixture, FanoutBenchTopology,
     IncomingObservationBenchFixture, IngressRoutingBenchFixture, KeyframeCoalescingBenchFixture,
-    LocalRewriteBenchFixture, PacketSinkFanoutBenchFixture, RelayPressureBenchFixture,
-    RidReadinessBenchFixture, SchedulerBenchFixture, WorkerPacketCommandMixBenchFixture,
-    routing_miss_packet_fingerprint,
+    LocalRewriteBenchFixture, PacketSinkFanoutBenchFixture, RelayDrainBenchFixture,
+    RelayPressureBenchFixture, RidReadinessBenchFixture, SchedulerBenchFixture,
+    SessionDrainBenchFixture, WorkerPacketCommandMixBenchFixture, routing_miss_packet_fingerprint,
 };
 
 const ROUTING_MISS_FINGERPRINT_ATTEMPTS: usize = 4096;
@@ -247,6 +247,20 @@ fn interleaved_fanout(mut fixture: WorkerPacketCommandMixBenchFixture) -> usize 
     black_box(fixture.run_packet_command_mix())
 }
 
+// measures ready session output draining
+#[library_benchmark(config = callgrind_config(1.0))]
+#[bench::drain(SessionDrainBenchFixture::new())]
+fn session_drain_128(mut fixture: SessionDrainBenchFixture) -> usize {
+    black_box(fixture.drain_sessions())
+}
+
+// measures relay channel packet draining
+#[library_benchmark(config = callgrind_config(1.0))]
+#[bench::drain(RelayDrainBenchFixture::new())]
+fn relay_drain_256(mut fixture: RelayDrainBenchFixture) -> usize {
+    black_box(fixture.drain_relay())
+}
+
 library_benchmark_group!(
     name = packet_loop_callgrind;
     benchmarks =
@@ -262,7 +276,9 @@ library_benchmark_group!(
         local_rewrite_4096,
         active_speaker_policy,
         keyframe_coalesce_512,
-        interleaved_fanout
+        interleaved_fanout,
+        session_drain_128,
+        relay_drain_256
 );
 
 main!(library_benchmark_groups = packet_loop_callgrind);
