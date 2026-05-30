@@ -50,6 +50,7 @@ use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
     engine::{
         diagnostics::DiagnosticsStore,
+        hot_path::unlikely,
         media_transport::SourcePolicySignal,
         metrics::{RtcMetricsRecorder, RtpMetricsRecorder, RuntimeMetrics},
         packet_sink_registry::{PacketSinkRouteCache, RoomPacketSinkRegistry},
@@ -580,9 +581,10 @@ fn route_received_datagram(
     candidate_addr: SocketAddr,
     received_size: usize,
 ) {
-    let Some(packet) = context.receive_buffer.get(..received_size) else {
+    if unlikely(received_size > context.receive_buffer.len()) {
         return;
-    };
+    }
+    let packet = &context.receive_buffer[..received_size];
     // ingress routing owns demux recovery and calls `Rtc::accepts()` before a
     // packet can mutate a session
     route_packet_to_matching_session(
