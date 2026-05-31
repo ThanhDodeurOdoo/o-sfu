@@ -1,14 +1,12 @@
 //! the packet loop needs one packet shape that can cross four local concerns:
 //! observation, fanout planning, local browser egress and relay egress
 //! `ForwardedPacket` is that shape
-//! it keeps the source session, RTP header view and shared payload together
+//! it keeps the source session, RTP header view and `Arc` payload together
 //! while letting each concern borrow only the state it owns
 //!
-//! relay and multi-destination local sends share the source bytes through
-//! `SharedPayload`, while the last local destination can consume the owned
-//! payload instead of cloning it
+//! relay and multi-destination local sends share the source bytes through `Arc`
 //! callers that need cached source observations must read them before entering
-//! the local-send path that may move the payload
+//! the local-send path
 //!
 //! source-derived observations live in `PacketFacts`
 //! facts are valid for the current packet-loop turn only because they are
@@ -17,18 +15,18 @@
 //! same source media id, layer metadata and codec facts without repeating header
 //! or payload parsing
 
-use std::{mem::take, time::Instant};
+use std::{mem::take, sync::Arc, time::Instant};
 
 use o_sfu_rfc::rtp::{frame_marking, h264, vp8};
 use str0m::{
     media::{ExtensionValues, Mid, Rid},
-    rtp::{RtpHeader, RtpPacket, Ssrc},
+    rtp::{RtpHeader, RtpPacket, Ssrc, Vp8Descriptor, Vp8Patch, Vp8PatchError},
 };
 
 use super::{
     local_forwarding::LocalForwardedRtp, local_send_rewrite::Vp8PayloadIdentity,
-    media_registry::DecoderRefreshCodec, route_control::PacketLayerMetadata,
-    shared_payload::SharedPayload, slots::SessionHandle, state::PacketLoopState,
+    media_registry::DecoderRefreshCodec, route_control::PacketLayerMetadata, slots::SessionHandle,
+    state::PacketLoopState,
 };
 use crate::engine::{
     RoomInstanceId,
@@ -70,8 +68,8 @@ pub struct ForwardedPacket {
     visits_origin_sinks: bool,
     /// packet timestamp used for bitrate, activity and egress metrics
     received_at: Instant,
-    /// source payload bytes with clone-or-move ownership for fanout
-    payload: SharedPayload,
+    /// source payload bytes shared by relay and local fanout
+    payload: Arc<[u8]>,
     /// origin-specific RTP header storage
     data: ForwardedPacketData,
 }
@@ -102,7 +100,7 @@ impl ForwardedPacketSource {
 ///
 /// local packets keep the full `str0m` packet so browser egress can reuse the
 /// exact source header view
-/// relayed packets only need the header plus the shared payload that already
+/// relayed packets only need the header plus the `Arc` payload that already
 /// lives on `ForwardedPacket`
 #[derive(Debug)]
 enum ForwardedPacketData {
@@ -116,7 +114,7 @@ struct ForwardedRtpData {
     rtp_packet: RtpPacket,
 }
 
-/// relay packet metadata after payload ownership has been moved to `SharedPayload`
+/// relay packet metadata after payload ownership has moved to `ForwardedPacket`
 #[derive(Debug)]
 pub(super) struct ForwardedRelayRtpData {
     pub(super) header: RtpHeader,
@@ -148,24 +146,32 @@ pub(super) struct PacketFacts {
     pub(super) vp8_payload: Option<PacketVp8Payload>,
 }
 
-/// vp8 descriptor data that local egress can reuse before payload mutation
+/// vp8 descriptor data that local egress can reuse for payload patches
 ///
-/// local forwarding rewrites the descriptor in the destination payload
+/// local forwarding asks str0m to patch the descriptor during serialization
 /// caching the source descriptor here keeps descriptor parsing source-scoped
 /// instead of destination-scoped
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub(super) struct PacketVp8Payload {
     /// descriptor parsed from the source payload
-    pub(super) descriptor: vp8::PayloadDescriptor,
+    descriptor: Vp8Descriptor,
     /// source picture identity used by destination RTP identity projection
     pub(super) identity: Vp8PayloadIdentity,
 }
 
+impl PartialEq for PacketVp8Payload {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity == other.identity
+    }
+}
+
+impl Eq for PacketVp8Payload {}
+
 impl ForwardedPacket {
     /// stages one packet emitted by a local `str0m` session
     ///
-    /// the payload is moved into `SharedPayload` immediately so relay fanout and
-    /// local fanout can share the same ownership model
+    /// the payload is moved out of the str0m packet immediately so relay fanout
+    /// and local fanout can share the same ownership model
     /// the remaining `str0m` packet is kept only for header metadata and the
     /// original receive time
     pub(super) fn from_rtp_packet(
@@ -179,7 +185,7 @@ impl ForwardedPacket {
             facts: None,
             visits_origin_sinks: true,
             received_at: rtp_packet.timestamp,
-            payload: SharedPayload::from_vec(take(&mut rtp_packet.payload)),
+            payload: take(&mut rtp_packet.payload),
             data: ForwardedPacketData::Str0mRtp(ForwardedRtpData { rtp_packet }),
         }
     }
@@ -212,7 +218,7 @@ impl ForwardedPacket {
 
     #[must_use]
     pub fn payload(&self) -> &[u8] {
-        self.payload.as_slice()
+        self.payload.as_ref()
     }
 
     #[cfg(test)]
@@ -259,16 +265,13 @@ impl ForwardedPacket {
         Some(facts)
     }
 
-    /// returns the VP8 descriptor facts local egress should use for rewriting
+    /// returns the cached VP8 descriptor facts local egress should use for rewriting
     ///
-    /// incoming observation normally fills `PacketFacts` before local forwarding
-    /// runs
-    /// the lazy parse keeps the API correct for tests or exceptional paths
-    /// that send a packet without first calling `resolve_facts`
+    /// incoming observation fills `PacketFacts` before route planning and local
+    /// forwarding run, so descriptor parsing remains packet-scoped instead of
+    /// destination-scoped
     pub(super) fn local_vp8_payload(&self) -> Option<PacketVp8Payload> {
-        self.facts
-            .and_then(|facts| facts.vp8_payload)
-            .or_else(|| self.resolve_vp8_payload())
+        self.facts.and_then(|facts| facts.vp8_payload)
     }
 
     fn compute_route_control_layer_metadata(
@@ -317,7 +320,7 @@ impl ForwardedPacket {
             facts: self.facts,
             visits_origin_sinks: false,
             received_at: self.received_at,
-            payload: self.payload.share(),
+            payload: Arc::clone(&self.payload),
             data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
                 header: self.rtp_header().clone(),
             }),
@@ -368,11 +371,10 @@ impl ForwardedPacket {
     ///
     /// callers should resolve any packet facts they still need before calling
     /// this method
-    /// local send may consume the shared payload when the packet is written to
-    /// its last destination
-    pub(super) fn local_send_packet(&mut self) -> LocalForwardedRtp<'_> {
-        let payload = &mut self.payload;
-        match &mut self.data {
+    /// local send keeps the `Arc` payload alive while str0m queues the packet
+    pub(super) fn local_send_packet(&self) -> LocalForwardedRtp<'_> {
+        let payload = &self.payload;
+        match &self.data {
             ForwardedPacketData::Str0mRtp(rtp_data) => {
                 LocalForwardedRtp::new(&rtp_data.rtp_packet, payload)
             }
@@ -406,10 +408,10 @@ impl ForwardedPacket {
     ) -> bool {
         match state.source_decoder_refresh_codec(source_transport_media_id) {
             Some(DecoderRefreshCodec::H264(packetization_mode)) => {
-                h264::payload_starts_idr(self.payload.as_slice(), packetization_mode)
+                h264::payload_starts_idr(self.payload.as_ref(), packetization_mode)
             }
             Some(DecoderRefreshCodec::Vp8) | None => {
-                vp8::payload_starts_keyframe(self.payload.as_slice())
+                vp8::payload_starts_keyframe(self.payload.as_ref())
             }
             Some(DecoderRefreshCodec::Unsupported) => false,
         }
@@ -418,12 +420,16 @@ impl ForwardedPacket {
     fn resolve_vp8_payload(&self) -> Option<PacketVp8Payload> {
         let extensions = self.route_control_extension_values();
         extensions.rid.or(extensions.rid_repair)?;
-        vp8::payload_descriptor(self.payload.as_slice()).map(PacketVp8Payload::new)
+        PacketVp8Payload::parse(self.payload.as_ref())
     }
 }
 
 impl PacketVp8Payload {
-    pub(super) fn new(descriptor: vp8::PayloadDescriptor) -> Self {
+    fn parse(payload: &[u8]) -> Option<Self> {
+        Vp8Descriptor::parse(payload).ok().map(Self::new)
+    }
+
+    fn new(descriptor: Vp8Descriptor) -> Self {
         Self {
             descriptor,
             identity: Vp8PayloadIdentity {
@@ -431,6 +437,32 @@ impl PacketVp8Payload {
                 tl0_pic_idx: descriptor.tl0_pic_idx(),
             },
         }
+    }
+
+    pub(super) fn patch(self, identity: Vp8PayloadIdentity) -> Option<Vp8Patch> {
+        match self.build_patch(identity) {
+            Ok(patch) => Some(patch),
+            Err(Vp8PatchError::PictureIdTooLarge) => self
+                .build_patch(Vp8PayloadIdentity {
+                    picture_id: identity
+                        .picture_id
+                        .map(|picture_id| picture_id & vp8::SHORT_PICTURE_ID_MASK),
+                    tl0_pic_idx: identity.tl0_pic_idx,
+                })
+                .ok(),
+            Err(_) => None,
+        }
+    }
+
+    fn build_patch(self, identity: Vp8PayloadIdentity) -> Result<Vp8Patch, Vp8PatchError> {
+        let mut patch = self.descriptor.patch();
+        if let Some(picture_id) = identity.picture_id {
+            patch = patch.picture_id(picture_id);
+        }
+        if let Some(tl0_pic_idx) = identity.tl0_pic_idx {
+            patch = patch.tl0_pic_idx(tl0_pic_idx);
+        }
+        patch.build()
     }
 }
 

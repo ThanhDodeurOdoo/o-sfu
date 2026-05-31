@@ -139,7 +139,7 @@ impl PacketSinkFanoutBenchFixture {
             &self.metrics,
             &self.egress_metrics,
             &self.route_metrics,
-            &mut self.buffers,
+            &self.buffers,
         );
     }
 }

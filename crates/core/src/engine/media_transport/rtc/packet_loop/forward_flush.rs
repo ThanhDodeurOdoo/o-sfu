@@ -20,7 +20,7 @@ use std::{mem::take, time::Instant};
 
 use str0m::media::{KeyframeRequestKind, MediaKind};
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use super::{
     super::{
@@ -324,33 +324,30 @@ pub(in crate::engine::media_transport::rtc) fn flush_forward_routes(
     metrics: &RuntimeMetrics,
     rtp_metrics: &RtpMetricsRecorder,
     rtc_recorder: &RtcMetricsRecorder,
-    buffers: &mut PacketLoopBuffers,
+    buffers: &PacketLoopBuffers,
 ) {
-    let (forwards, pending_packets) = (&buffers.forwards, &mut buffers.pending_packets);
-    for (forward_idx, forward) in forwards.iter().enumerate() {
-        let is_last_destination = forwards
-            .get(forward_idx + 1)
-            .is_none_or(|next_forward| next_forward.packet_idx() != forward.packet_idx());
+    let (forwards, pending_packets) = (&buffers.forwards, &buffers.pending_packets);
+    for forward in forwards {
         let packet_idx = forward.packet_idx();
-        let Some(packet) = pending_packets.get_mut(packet_idx) else {
+        let Some(packet) = pending_packets.get(packet_idx) else {
             continue;
         };
         let destination = forward.destination();
         let destination_kind = destination.metrics_kind();
         let payload_len = packet.payload_len();
-        match destination.send(state, packet, is_last_destination) {
-            Ok(ForwardSendOutcome::LocalRtc {
+        match destination.send(state, packet) {
+            ForwardSendOutcome::LocalRtc {
                 payload_bytes: Some(payload_len),
-            }) => {
+            } => {
                 rtp_metrics.record_egress(payload_len);
                 rtp_metrics.record_forwarded(destination_kind, payload_len);
             }
-            Ok(ForwardSendOutcome::SideEffect)
+            ForwardSendOutcome::SideEffect
                 if matches!(destination, ForwardingDestination::PacketSink(_)) =>
             {
                 rtp_metrics.record_forwarded(destination_kind, payload_len);
             }
-            Ok(ForwardSendOutcome::RelayEnqueue(report)) => {
+            ForwardSendOutcome::RelayEnqueue(report) => {
                 rtc_recorder.record_rtc_relay_enqueue(relay_enqueue_result(report));
                 rtc_recorder.record_rtc_relay_mailbox_depth(report.mailbox_depth);
                 match report.outcome {
@@ -365,19 +362,10 @@ pub(in crate::engine::media_transport::rtc) fn flush_forward_routes(
                     RelayEnqueueOutcome::Closed => {}
                 }
             }
-            Ok(
-                ForwardSendOutcome::SideEffect
-                | ForwardSendOutcome::LocalRtc {
-                    payload_bytes: None,
-                },
-            ) => {}
-            Err(error) => {
-                warn!(
-                    ?destination,
-                    ?error,
-                    "failed to write media to destination user"
-                );
-            }
+            ForwardSendOutcome::SideEffect
+            | ForwardSendOutcome::LocalRtc {
+                payload_bytes: None,
+            } => {}
         }
     }
 }

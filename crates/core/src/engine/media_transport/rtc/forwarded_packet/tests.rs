@@ -281,7 +281,7 @@ fn forwarded_packet_facts_expose_vp8_payload_identity() {
         session_key,
         "cam-up",
         Some("hi"),
-        &[0x90, 0xc0, 0x80, 0x02, 0x09, 0x00],
+        &[0x90, 0xe0, 0x80, 0x02, 0x09, 0x00, 0x00],
     );
     let facts = packet.resolve_facts(&state);
     assert!(facts.is_some());

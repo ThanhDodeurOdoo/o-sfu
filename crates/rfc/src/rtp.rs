@@ -222,7 +222,8 @@ pub mod vp8 {
     /// VP8 payload-header P bit set for interframes.
     pub const INTERFRAME_BIT: u8 = 0b0000_0001;
 
-    const SHORT_PICTURE_ID_MASK: u16 = 0x7f;
+    /// value mask for the 7-bit VP8 short `PictureID` field
+    pub const SHORT_PICTURE_ID_MASK: u16 = 0x7f;
 
     /// Value mask for the 15-bit VP8 long `PictureID` field.
     pub const LONG_PICTURE_ID_MASK: u16 = 0x7fff;

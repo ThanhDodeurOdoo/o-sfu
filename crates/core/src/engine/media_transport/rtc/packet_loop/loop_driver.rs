@@ -236,7 +236,7 @@ impl PacketLoopTurn {
             &config.metrics,
             &config.rtp_metrics,
             &config.rtc_metrics,
-            &mut self.buffers,
+            &self.buffers,
         );
         Some(WaitPhaseSnapshot {
             socket,

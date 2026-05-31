@@ -3,12 +3,10 @@
 //! the forwarding planner records destination intent in this file's types before
 //! `flush_forward_routes` executes the side effects in a stable order
 //! keeping destinations as data lets planning stay read-only over route state
-//! while the flush step owns mutable rtc state, payload sharing and destination
+//! while the flush step owns mutable rtc state, payload fanout and destination
 //! metrics
 
 use std::fmt;
-
-use str0m::RtcError;
 
 use super::{
     forwarded_packet::ForwardedPacket,
@@ -51,7 +49,7 @@ pub(super) enum ForwardingDestination {
 /// flush result used for destination metrics and overload accounting
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ForwardSendOutcome {
-    /// local rtc send path, with payload bytes only when str0m accepted a write
+    /// local rtc send path, with payload bytes only when str0m queued a write
     LocalRtc { payload_bytes: Option<usize> },
     /// non-local side effect completed or had no stronger delivery signal
     SideEffect,
@@ -181,23 +179,19 @@ impl ForwardingDestination {
 
     /// performs this destination's side effect during route flushing
     ///
-    /// local rtc sends can return a `RtcError` from str0m
+    /// local rtc sends enqueue into str0m when the route remains live
     /// packet sinks and relay destinations collapse their result into
     /// `ForwardSendOutcome` so the packet loop can continue flushing other
     /// destinations
-    ///
-    /// `is_last_destination` lets the local send path move the payload instead
-    /// of cloning it when no later destination for the same packet exists
     pub(super) fn send(
         &self,
         state: &mut PacketLoopState,
-        packet: &mut ForwardedPacket,
-        is_last_destination: bool,
-    ) -> Result<ForwardSendOutcome, RtcError> {
+        packet: &ForwardedPacket,
+    ) -> ForwardSendOutcome {
         match self {
-            Self::LocalRtc(destination) => destination.send(state, packet, is_last_destination),
-            Self::PacketSink(destination) => Ok(destination.send(state, packet)),
-            Self::Relay(destination) => Ok(destination.send(state, packet)),
+            Self::LocalRtc(destination) => destination.send(state, packet),
+            Self::PacketSink(destination) => destination.send(state, packet),
+            Self::Relay(destination) => destination.send(state, packet),
         }
     }
 }
@@ -232,29 +226,24 @@ impl LocalRtcPacketDestination {
     /// because cleanup already made the route non-authoritative
     ///
     /// successful writes clone the destination session key only after `str0m`
-    /// accepted the packet, so failed or stale local sends do not touch dirty
+    /// queues the packet, so stale local sends do not touch dirty
     /// session scheduling
-    fn send(
-        &self,
-        state: &mut PacketLoopState,
-        packet: &mut ForwardedPacket,
-        is_last_destination: bool,
-    ) -> Result<ForwardSendOutcome, RtcError> {
+    fn send(&self, state: &mut PacketLoopState, packet: &ForwardedPacket) -> ForwardSendOutcome {
         let (payload_bytes, dirty_session_key) = {
             let Some(route_destination) = state
                 .media_route_index
                 .get(&self.source_transport_media_id)
                 .and_then(|route_entry| route_entry.destinations.get(self.destination_index))
             else {
-                return Ok(ForwardSendOutcome::LocalRtc {
+                return ForwardSendOutcome::LocalRtc {
                     payload_bytes: None,
-                });
+                };
             };
             let session_key = &route_destination.dest_session;
             let Some(session_state) = state.users.get_mut(session_key) else {
-                return Ok(ForwardSendOutcome::LocalRtc {
+                return ForwardSendOutcome::LocalRtc {
                     payload_bytes: None,
-                });
+                };
             };
             let sender = LocalPacketDestination::new(
                 route_destination.dest_transport_media_id,
@@ -264,12 +253,7 @@ impl LocalRtcPacketDestination {
                 route_destination.nackable,
             );
             let vp8_payload = packet.local_vp8_payload();
-            let payload_bytes = sender.send(
-                session_state,
-                packet.local_send_packet(),
-                vp8_payload,
-                is_last_destination,
-            )?;
+            let payload_bytes = sender.send(session_state, packet.local_send_packet(), vp8_payload);
             let dirty_session_key = payload_bytes.is_some().then(|| session_key.clone());
             (payload_bytes, dirty_session_key)
         };
@@ -277,7 +261,7 @@ impl LocalRtcPacketDestination {
             let _ = state.record_egress_bitrate(&session_key, packet.received_at(), payload_bytes);
             state.mark_session_dirty(&session_key);
         }
-        Ok(ForwardSendOutcome::LocalRtc { payload_bytes })
+        ForwardSendOutcome::LocalRtc { payload_bytes }
     }
 }
 
@@ -423,7 +407,7 @@ mod tests {
     #[test]
     fn packet_forward_wraps_intra_node_relay_sinks_in_the_named_contract() {
         let (mailbox, mut relay_rx) = RelayPacketMailbox::channel_for_test();
-        let mut packet = sample_already_relayed_packet(
+        let packet = sample_already_relayed_packet(
             test_transport_session_key(11, 0, 12, UserId::Integer(13)),
             TransportMediaId::new(8),
             "aud-up",
@@ -438,7 +422,7 @@ mod tests {
             ForwardingDestination::Relay(destination)
                 if destination.transport_media_id == TransportMediaId::new(9)
         ));
-        let _ = forward.destination().send(&mut state, &mut packet, true);
+        let _ = forward.destination().send(&mut state, &packet);
         assert!(relay_rx.try_recv().is_ok());
     }
 }

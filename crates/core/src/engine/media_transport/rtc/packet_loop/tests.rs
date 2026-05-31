@@ -989,7 +989,7 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
         &harness.metrics,
         &harness.rtp_metrics,
         &harness.rtc_metrics,
-        &mut harness.buffers,
+        &harness.buffers,
     );
 
     assert_eq!(harness.buffers.forwards.len(), 1);
@@ -1021,7 +1021,7 @@ fn flush_forward_routes_writes_hot_rtp_metrics_only_to_the_worker_recorder() {
         &harness.metrics,
         &harness.rtp_metrics,
         &harness.rtc_metrics,
-        &mut harness.buffers,
+        &harness.buffers,
     );
 
     assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
@@ -1095,7 +1095,7 @@ fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
         &harness.metrics,
         &harness.rtp_metrics,
         &harness.rtc_metrics,
-        &mut harness.buffers,
+        &harness.buffers,
     );
 
     assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
@@ -1143,7 +1143,7 @@ fn flush_forward_routes_records_packet_sink_source_key_for_local_packet() -> Res
         &harness.metrics,
         &harness.rtp_metrics,
         &harness.rtc_metrics,
-        &mut harness.buffers,
+        &harness.buffers,
     );
 
     assert_eq!(sink.last_session(), Some(source_session));
@@ -1176,7 +1176,7 @@ fn flush_forward_routes_records_closed_relays_and_keeps_later_destinations() {
         &harness.metrics,
         &harness.rtp_metrics,
         &harness.rtc_metrics,
-        &mut harness.buffers,
+        &harness.buffers,
     );
 
     let snapshot = harness.metrics.snapshot();
@@ -1232,7 +1232,7 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() -> Result<(), &'st
         &harness.metrics,
         &harness.rtp_metrics,
         &harness.rtc_metrics,
-        &mut harness.buffers,
+        &harness.buffers,
     );
 
     assert_eq!(
@@ -1284,7 +1284,7 @@ fn flush_forward_routes_drops_stale_local_consumer_stream_handle() {
         &harness.metrics,
         &harness.rtp_metrics,
         &harness.rtc_metrics,
-        &mut harness.buffers,
+        &harness.buffers,
     );
 
     assert!(drain_ready_sessions(&mut harness.state).is_empty());
@@ -1800,7 +1800,7 @@ fn flush_forward_routes_records_relay_overload_drops() {
         &harness.metrics,
         &harness.rtp_metrics,
         &harness.rtc_metrics,
-        &mut harness.buffers,
+        &harness.buffers,
     );
 
     let snapshot = harness.metrics.snapshot();
