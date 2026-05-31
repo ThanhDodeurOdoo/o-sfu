@@ -27,8 +27,8 @@ pub(super) use crate::{
     engine::{
         UserId,
         media_transport::{
-            ActiveSpeakerSource, SessionOffer, TransportAdapterError, TransportConsumerRoute,
-            TransportMediaId, TransportSessionKey, TransportSourceKey,
+            ActiveSpeakerSource, ReceiverBweTargetUpdate, SessionOffer, TransportAdapterError,
+            TransportConsumerRoute, TransportMediaId, TransportSessionKey, TransportSourceKey,
         },
         metrics::test_support::RuntimeMetricsSnapshotTestExt,
     },

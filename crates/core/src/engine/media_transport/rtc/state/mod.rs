@@ -94,6 +94,11 @@ pub(super) struct RtcSessionState {
     #[cfg(test)]
     /// outbound bitrate cap used to build the session in deterministic tests
     pub(super) max_bitrate_out: Option<Bitrate>,
+    /// last desired receiver-side send bitrate applied to str0m BWE
+    pub(super) receiver_bwe_target: Option<Bitrate>,
+    #[cfg(test)]
+    /// number of non-deduped desired-bitrate writes issued to str0m BWE
+    pub(super) receiver_bwe_str0m_update_count: u64,
     /// whether a remote answer has committed DTLS and media packet routing can start
     pub(super) dtls_started: bool,
     /// scheduler bit that prevents duplicate dirty-session wakeups

@@ -76,9 +76,9 @@ use crate::{
         diagnostics::DiagnosticsStore,
         media_transport::{
             AppliedSessionAnswer, ConsumerPacketGateUpdate, MediaTransportConfig,
-            MediaTransportDeps, SessionOffer, SourcePacketGate, SourcePolicySignal,
-            TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportResult,
-            TransportSessionKey, TransportSourceKey,
+            MediaTransportDeps, ReceiverBweTargetUpdate, SessionOffer, SourcePacketGate,
+            SourcePolicySignal, TransportAdapterError, TransportConsumerRoute, TransportMediaId,
+            TransportResult, TransportSessionKey, TransportSourceKey,
         },
         metrics::{RtcMetricsRecorder, RtpMetricsRecorder, RuntimeMetrics},
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -624,6 +624,24 @@ impl RtcWorker {
                 updates,
                 response,
             })
+        })
+        .await
+    }
+
+    /// updates receiver-side desired bitrate targets for BWE probing
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError`] when the worker cannot receive or
+    /// answer the batch command
+    pub async fn set_receiver_bwe_targets<'a>(
+        &self,
+        updates: impl IntoIterator<Item = &'a ReceiverBweTargetUpdate>,
+    ) -> Result<Vec<TransportResult<()>>, TransportAdapterError> {
+        let updates = updates.into_iter().cloned().collect();
+        self.request_worker(|response| RtcWorkerCommand::SetReceiverBweTargetBatch {
+            updates,
+            response,
         })
         .await
     }

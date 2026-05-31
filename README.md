@@ -83,7 +83,7 @@ you can read the one at [odoo/sfu](https://github.com/odoo/sfu), it's roughly th
 | `CODEC_AUDIO_PREFERENCE`                     | `opus,PCMU,PCMA`           | Optional comma-separated audio codec preference order. Missing codecs keep their default relative order.                                                          |
 | `CODEC_VIDEO_PREFERENCE`                     | `VP8,H264,H265,VP9,AV1`    | Optional comma-separated video codec preference order. Missing codecs keep their default relative order.                                                          |
 | `MAX_BITRATE_IN`                             | `8000000`                  | Maximum incoming bitrate in bps per user (upload).                                                                                                                |
-| `MAX_BITRATE_OUT`                            | `10000000`                 | WebRTC desired-send-bitrate and BWE ceiling in bps per user (download). It is not a strict packet-forwarding cap.                                                 |
+| `MAX_BITRATE_OUT`                            | `10000000`                 | Receiver-side BWE ceiling in bps per user (download). Desired send bitrate is derived from selected receiver video demand and capped by this value. It is not a strict packet-forwarding cap. |
 | `MAX_VIDEO_BITRATE`                          | `4000000`                  | Maximum bitrate in bps for the highest default simulcast video layer metadata.                                                                                    |
 
 

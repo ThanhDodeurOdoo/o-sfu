@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use super::{
     super::{
         VideoAdmissionRank,
-        action::{BudgetSolverOutcomes, ConsumerPacketSelectionUpdate},
+        action::{BudgetSolverOutcomes, ConsumerPacketSelectionUpdate, ReceiverVideoPolicyPlan},
     },
     input::{ReceiverVideoPolicyInput, ReceiverVideoRouteInput, SelectableRouteEncodings},
     projection::source_packet_gate_for_selector,
@@ -187,49 +187,58 @@ impl super::super::super::state::RoomState {
     /// change room authority on their own. This method combines them with
     /// committed source descriptors, subscription state and active-speaker
     /// layout state to build staged updates for the effect executor.
-    pub fn consumer_packet_selection_updates(
+    pub fn receiver_video_policy_plan(
         &self,
         ranked_active_speaker_sources: &[ActiveSpeakerSource],
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
-    ) -> Vec<ConsumerPacketSelectionUpdate> {
+    ) -> ReceiverVideoPolicyPlan {
         let input = ReceiverVideoPolicyInput::from_state(
             self,
             ranked_active_speaker_sources,
             receiver_bandwidth_snapshot,
         );
-        receiver_video_selection_updates(&input)
+        receiver_video_selection_plan(input)
     }
 }
 
-fn receiver_video_selection_updates(
-    input: &ReceiverVideoPolicyInput<'_>,
-) -> Vec<ConsumerPacketSelectionUpdate> {
-    let routes = input.routes.as_slice();
+fn receiver_video_selection_plan(input: ReceiverVideoPolicyInput<'_>) -> ReceiverVideoPolicyPlan {
+    let ReceiverVideoPolicyInput {
+        routes,
+        mut receiver_bwe_targets,
+        max_video_downloads_per_receiver,
+    } = input;
     let mut selection_updates = Vec::with_capacity(routes.len());
-    let mut remaining_routes = routes;
+    let mut remaining_routes = routes.as_slice();
     while let Some((first_route, rest)) = remaining_routes.split_first() {
         let consumer_user_id = first_route.consumer_user_id();
         let group_len = 1 + rest
             .iter()
             .take_while(|route| route.consumer_user_id() == consumer_user_id)
             .count();
-        let Some((receiver_routes, next_routes)) = remaining_routes.split_at_checked(group_len)
-        else {
-            break;
-        };
-        selection_updates.extend(plan_receiver_routes(
-            receiver_routes,
-            input.max_video_downloads_per_receiver,
-        ));
+        let (receiver_routes, next_routes) = remaining_routes.split_at(group_len);
+        let receiver_plan = plan_receiver_routes(receiver_routes, max_video_downloads_per_receiver);
+        if let Some(target) = receiver_bwe_targets.get_mut(consumer_user_id) {
+            target.set_target(receiver_plan.receiver_bwe_target);
+        }
+        selection_updates.extend(receiver_plan.selection_updates);
         remaining_routes = next_routes;
     }
-    selection_updates
+    ReceiverVideoPolicyPlan {
+        consumer_packet_updates: selection_updates,
+        receiver_bwe_targets: receiver_bwe_targets.into_values().collect(),
+    }
+}
+
+#[derive(Debug)]
+struct PlannedReceiverRoutes {
+    selection_updates: Vec<ConsumerPacketSelectionUpdate>,
+    receiver_bwe_target: Bitrate,
 }
 
 fn plan_receiver_routes<'a>(
     routes: &'a [ReceiverVideoRouteInput<'a>],
     max_video_downloads_per_receiver: usize,
-) -> Vec<ConsumerPacketSelectionUpdate> {
+) -> PlannedReceiverRoutes {
     let receiver_bandwidth = routes.iter().find_map(|route| route.receiver_bandwidth);
     let mut planned_routes = routes
         .iter()
@@ -240,10 +249,15 @@ fn plan_receiver_routes<'a>(
         apply_receiver_overload_policy(&mut planned_routes, receiver_bandwidth);
     }
     let budget = receiver_budget_diagnostics(&planned_routes, receiver_bandwidth);
-    planned_routes
+    let receiver_bwe_target = budget.selected_video_bitrate();
+    let selection_updates = planned_routes
         .into_iter()
         .filter_map(|route| planned_route_update(route, budget))
-        .collect()
+        .collect();
+    PlannedReceiverRoutes {
+        selection_updates,
+        receiver_bwe_target,
+    }
 }
 
 fn planned_receiver_route<'a>(
@@ -785,7 +799,7 @@ mod tests {
         media_transport::{SourcePacketGate, TransportMediaId},
         room::{
             media_graph::ConsumerRouteTransportRef,
-            source_policy::video::layout::ReceiverVideoLayoutIntent,
+            source_policy::{ReceiverBweTargetPlan, video::layout::ReceiverVideoLayoutIntent},
         },
         source_model::{
             PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
@@ -808,6 +822,28 @@ mod tests {
             primary_ssrc: None,
             repair_ssrc: None,
             max_bitrate: None,
+            resolution_scale: None,
+            max_framerate: None,
+            policy_role: Some(role),
+            max_temporal_layer_id: None,
+            negotiated_format: None,
+        })
+    }
+
+    fn bitrate_encoding(
+        source_id: PublishedSourceId,
+        encoding_id: SourceEncodingId,
+        rid: &str,
+        max_bitrate: Bitrate,
+        role: UploadLayerPolicyRole,
+    ) -> SourceEncodingDescriptor {
+        SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
+            encoding_id,
+            source_id,
+            rid: Some(Rid::new(rid)),
+            primary_ssrc: None,
+            repair_ssrc: None,
+            max_bitrate: Some(max_bitrate),
             resolution_scale: None,
             max_framerate: None,
             policy_role: Some(role),
@@ -930,7 +966,8 @@ mod tests {
         selection.set_adaptation_observations(1, 0);
         let route = route(&source, selection);
 
-        let updates = plan_receiver_routes(&[route], usize::MAX);
+        let plan = plan_receiver_routes(&[route], usize::MAX);
+        let updates = plan.selection_updates;
 
         assert_eq!(updates.len(), 1);
         let update = updates
@@ -980,7 +1017,8 @@ mod tests {
             ),
         ];
 
-        let updates = plan_receiver_routes(&routes, 1);
+        let plan = plan_receiver_routes(&routes, 1);
+        let updates = plan.selection_updates;
         let hidden_update = updates
             .iter()
             .find(|update| update.source_id == hidden_source_id)
@@ -993,6 +1031,127 @@ mod tests {
         assert!(hidden_update.route_activity_update);
         assert!(hidden_update.outcomes.is_paused());
         assert_eq!(hidden_update.budget.active_video_route_count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn two_party_receiver_bwe_target_uses_high_layer() -> Result<(), SourceModelError> {
+        let source_id = PublishedSourceId::from_raw(7);
+        let low_encoding_id = SourceEncodingId::from_raw(1);
+        let high_encoding_id = SourceEncodingId::from_raw(2);
+        let source = scalable_source(vec![
+            bitrate_encoding(
+                source_id,
+                low_encoding_id,
+                "lo",
+                Bitrate::from_kbps(150),
+                UploadLayerPolicyRole::Thumbnail,
+            ),
+            bitrate_encoding(
+                source_id,
+                high_encoding_id,
+                "hi",
+                Bitrate::from_kbps(900),
+                UploadLayerPolicyRole::Featured,
+            ),
+        ])?;
+        let mut route = route(&source, ConsumerSourceSelection::open(true));
+        route.user_count = 2;
+        route.receiver_bandwidth = None;
+
+        let plan = plan_receiver_routes(&[route], usize::MAX);
+
+        assert_eq!(plan.receiver_bwe_target, Bitrate::from_kbps(900));
+        Ok(())
+    }
+
+    #[test]
+    fn multiparty_receiver_bwe_target_uses_thumbnail_layer() -> Result<(), SourceModelError> {
+        let source_id = PublishedSourceId::from_raw(7);
+        let low_encoding_id = SourceEncodingId::from_raw(1);
+        let high_encoding_id = SourceEncodingId::from_raw(2);
+        let source = scalable_source(vec![
+            bitrate_encoding(
+                source_id,
+                low_encoding_id,
+                "lo",
+                Bitrate::from_kbps(150),
+                UploadLayerPolicyRole::Thumbnail,
+            ),
+            bitrate_encoding(
+                source_id,
+                high_encoding_id,
+                "hi",
+                Bitrate::from_kbps(900),
+                UploadLayerPolicyRole::Featured,
+            ),
+        ])?;
+        let mut route = route(&source, ConsumerSourceSelection::open(true));
+        route.receiver_bandwidth = None;
+
+        let plan = plan_receiver_routes(&[route], usize::MAX);
+
+        assert_eq!(plan.receiver_bwe_target, Bitrate::from_kbps(150));
+        Ok(())
+    }
+
+    #[test]
+    fn receiver_without_video_routes_gets_zero_bwe_target() {
+        let input = ReceiverVideoPolicyInput {
+            routes: Vec::new(),
+            receiver_bwe_targets: [(
+                UserId::Integer(42),
+                ReceiverBweTargetPlan::new(
+                    UserId::Integer(42),
+                    ConnectionId::from_raw(10),
+                    Bitrate::zero(),
+                ),
+            )]
+            .into(),
+            max_video_downloads_per_receiver: usize::MAX,
+        };
+
+        let plan = receiver_video_selection_plan(input);
+
+        assert_eq!(plan.receiver_bwe_targets.len(), 1);
+        let target = plan
+            .receiver_bwe_targets
+            .first()
+            .expect("plan should keep the seeded receiver BWE target");
+        assert_eq!(target.target(), Bitrate::zero());
+    }
+
+    #[test]
+    fn protected_over_budget_route_keeps_selected_bwe_target() -> Result<(), SourceModelError> {
+        let source_id = PublishedSourceId::from_raw(7);
+        let low_encoding_id = SourceEncodingId::from_raw(1);
+        let high_encoding_id = SourceEncodingId::from_raw(2);
+        let source = scalable_source(vec![
+            bitrate_encoding(
+                source_id,
+                low_encoding_id,
+                "lo",
+                Bitrate::from_kbps(150),
+                UploadLayerPolicyRole::Thumbnail,
+            ),
+            bitrate_encoding(
+                source_id,
+                high_encoding_id,
+                "hi",
+                Bitrate::from_kbps(900),
+                UploadLayerPolicyRole::Featured,
+            ),
+        ])?;
+        let mut route = route_with_layout(
+            &source,
+            ConsumerSourceSelection::open(true),
+            SourceRoomPolicySelector::Pinned,
+        );
+        route.receiver_bandwidth = Some(Bitrate::from_kbps(100));
+
+        let plan = plan_receiver_routes(&[route], usize::MAX);
+
+        assert_eq!(plan.receiver_bwe_target, Bitrate::from_kbps(900));
         Ok(())
     }
 }

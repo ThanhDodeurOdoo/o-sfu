@@ -21,7 +21,7 @@ use super::{
         commands::{CloseSessionState, RtcMediaControlCommand, RtcWorkerCommand},
         state::{PacketLoopState, RtcSnapshotState},
     },
-    media,
+    bwe, media,
     negotiation::{self, OfferBootstrapConfig},
     session,
 };
@@ -95,18 +95,14 @@ pub fn handle_worker_command(
                 &session_key,
             ),
         ),
-        RtcWorkerCommand::ActiveSpeakerSourceSnapshot { response } => {
-            respond(
-                response,
-                Ok(state.active_speaker_source_snapshot(context.now)),
-            );
-        }
-        RtcWorkerCommand::ActiveSpeakerDiagnosticSnapshot { response } => {
-            respond(
-                response,
-                Ok(state.active_speaker_diagnostic_snapshot(context.now)),
-            );
-        }
+        RtcWorkerCommand::ActiveSpeakerSourceSnapshot { response } => respond(
+            response,
+            Ok(state.active_speaker_source_snapshot(context.now)),
+        ),
+        RtcWorkerCommand::ActiveSpeakerDiagnosticSnapshot { response } => respond(
+            response,
+            Ok(state.active_speaker_diagnostic_snapshot(context.now)),
+        ),
         RtcWorkerCommand::NextActiveSpeakerDeadline { response } => {
             respond(
                 response,
@@ -115,12 +111,18 @@ pub fn handle_worker_command(
                     .next_active_speaker_deadline(context.now)),
             );
         }
-        RtcWorkerCommand::ExpiredActiveSpeakerRoomInstanceIds { now, response } => {
-            respond(
-                response,
-                Ok(state.expired_active_speaker_room_instance_ids(now)),
-            );
-        }
+        RtcWorkerCommand::ExpiredActiveSpeakerRoomInstanceIds { now, response } => respond(
+            response,
+            Ok(state.expired_active_speaker_room_instance_ids(now)),
+        ),
+        RtcWorkerCommand::SetReceiverBweTargetBatch { updates, response } => respond(
+            response,
+            Ok(bwe::worker_set_receiver_bwe_targets(
+                state,
+                context.max_bitrate_out,
+                &updates,
+            )),
+        ),
         RtcWorkerCommand::CreateSessionRenegotiationOffer {
             session_key,
             response,

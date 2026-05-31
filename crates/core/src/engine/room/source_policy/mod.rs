@@ -17,7 +17,7 @@ mod sync;
 mod video;
 
 pub(in crate::engine::room) use self::{
-    action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
+    action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate, ReceiverBweTargetPlan},
     active_speaker::rank_active_speaker_sources,
     effects::SourcePolicyEffectPlan,
     sync::SourcePolicyEvent,

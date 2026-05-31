@@ -150,8 +150,6 @@ pub(super) fn ensure_session_rtc_state_with_stats_interval(
         .enable_bwe(Some(Str0mBitrate::bps(max_bitrate_out.as_bps())))
         .set_ice_lite(true)
         .build(started_at);
-    rtc.bwe()
-        .set_desired_bitrate(Str0mBitrate::bps(max_bitrate_out.as_bps()));
     let candidate = Candidate::host(candidate_addr, webrtc::IceTransport::Udp.as_str())
         .map_err(|_error| TransportAdapterError::TransportUnavailable)?;
     if rtc.add_local_candidate(candidate).is_none() {
@@ -168,6 +166,9 @@ pub(super) fn ensure_session_rtc_state_with_stats_interval(
             max_bitrate_in: None,
             #[cfg(test)]
             max_bitrate_out: Some(max_bitrate_out),
+            receiver_bwe_target: None,
+            #[cfg(test)]
+            receiver_bwe_str0m_update_count: 0,
             dtls_started: false,
             packet_loop_dirty: false,
             sdp_negotiation: SessionSdpNegotiationState::default(),

@@ -21,6 +21,13 @@ async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
         "hi",
     )
     .await;
+    assert_receiver_bwe_target(
+        &room,
+        &adapter,
+        &UserId::Integer(2),
+        Bitrate::from_kbps(900),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -40,6 +47,32 @@ async fn multiparty_camera_publish_marks_thumbnail_routes_in_diagnostics() {
         )
         .await;
     }
+}
+
+#[tokio::test]
+async fn source_policy_resets_receiver_bwe_target_after_last_video_route_removal() {
+    let (room, adapter, _publisher_rx, _subscriber_rx) = setup_two_ready_users().await;
+    publish_simulcast_camera(&room, &UserId::Integer(1), &adapter).await;
+    assert_receiver_bwe_target(
+        &room,
+        &adapter,
+        &UserId::Integer(2),
+        Bitrate::from_kbps(900),
+    )
+    .await;
+
+    let publisher_connection_id = user_connection_id(&room, &UserId::Integer(1)).await;
+    assert_eq!(
+        room.user_operation(&UserId::Integer(1), publisher_connection_id, &adapter)
+            .unpublish(&stream_id_for_source(TestSourceKind::ScalableVideo))
+            .await,
+        UnpublishOutcome::Unpublished {
+            cleanup: crate::TransportEffectOutcome::Applied
+        }
+    );
+    room.sync_source_packet_selection_policy(&adapter).await;
+
+    assert_receiver_bwe_target(&room, &adapter, &UserId::Integer(2), Bitrate::zero()).await;
 }
 
 #[tokio::test]

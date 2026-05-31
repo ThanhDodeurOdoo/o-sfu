@@ -142,6 +142,16 @@ impl MediaTransportTestApi<'_> {
         None
     }
 
+    pub async fn session_receiver_bwe_target(
+        self,
+        session_key: &TransportSessionKey,
+    ) -> Option<crate::Bitrate> {
+        self.transport
+            .worker_for_user(session_key)?
+            .debug_session_receiver_bwe_target(session_key)
+            .await
+    }
+
     pub async fn observe_audio_activity(self, transport_media_id: TransportMediaId, now: Instant) {
         self.observe_audio_activity_with_level(transport_media_id, -20, now)
             .await;
