@@ -14,7 +14,8 @@ use {
         WorkerCommandContext,
     },
     crate::{
-        Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, SessionBitrateLimits,
+        Bitrate, CodecPreferences, MediaCodecFlags, MediaWorkerId, RtcPortRange,
+        SessionBitrateLimits,
         engine::{
             diagnostics::DiagnosticsStore,
             media_transport::{
@@ -368,7 +369,7 @@ impl RtcWorkerTestBuilder {
             },
             Arc::new(SourcePolicySignal::default()),
             0,
-            0,
+            MediaWorkerId::from_raw(0),
         )
     }
 }

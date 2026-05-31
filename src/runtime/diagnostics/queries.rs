@@ -11,9 +11,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use o_sfu_core::server::{
-    session::UserId,
-    transport::{MediaTransport, TransportPlacementPressureSnapshot},
+use o_sfu_core::{
+    MediaWorkerId,
+    server::{
+        session::UserId,
+        transport::{MediaTransport, TransportPlacementPressureSnapshot},
+    },
 };
 
 use super::{
@@ -205,9 +208,10 @@ pub(crate) async fn workers_response(
         })
         .collect::<BTreeMap<_, _>>();
     for pressure in transport.worker_pressure_snapshots() {
+        let media_worker_id = pressure.media_worker_id.as_usize();
         workers
-            .entry(pressure.media_worker_id)
-            .or_insert_with(|| DiagnosticsWorkerAccumulator::new(pressure.media_worker_id))
+            .entry(media_worker_id)
+            .or_insert_with(|| DiagnosticsWorkerAccumulator::new(media_worker_id))
             .set_pressure(diagnostics_worker_pressure(pressure.pressure));
     }
     for entry in rooms.directory_snapshots().await {
@@ -215,9 +219,12 @@ pub(crate) async fn workers_response(
         let room_id = room.uuid();
         let users = room.diagnostics_user_views(transport).await;
         if users.is_empty() {
+            let media_worker_id = room
+                .assigned_primary_media_worker_id()
+                .map_or(0, MediaWorkerId::as_usize);
             workers
-                .entry(room.media_worker_id())
-                .or_insert_with(|| DiagnosticsWorkerAccumulator::new(room.media_worker_id()))
+                .entry(media_worker_id)
+                .or_insert_with(|| DiagnosticsWorkerAccumulator::new(media_worker_id))
                 .record_empty_room(room_id);
             continue;
         }
@@ -315,7 +322,10 @@ async fn room_snapshot(
             sources,
             summary: DiagnosticsRoomSummary {
                 create_date: entry.create_date().to_owned(),
-                media_worker_id: entry.room().media_worker_id(),
+                media_worker_id: entry
+                    .room()
+                    .assigned_primary_media_worker_id()
+                    .map_or(0, MediaWorkerId::as_usize),
                 publication_count,
                 recording_state: entry.room().recording_state().await,
                 remote_address: entry.remote_address().to_owned(),

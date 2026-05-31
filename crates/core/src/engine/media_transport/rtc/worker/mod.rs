@@ -71,7 +71,7 @@ use super::{
     state::RtcSnapshotState,
 };
 use crate::{
-    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
+    Bitrate, CodecPreferences, MediaCodecFlags, MediaWorkerId, RtcPortRange, VideoBitrateLimits,
     engine::{
         diagnostics::DiagnosticsStore,
         media_transport::{
@@ -187,7 +187,7 @@ impl RtcWorker {
         deps: &MediaTransportDeps,
         source_policy_signal: Arc<SourcePolicySignal>,
         media_id_base: u64,
-        media_worker_id: usize,
+        media_worker_id: MediaWorkerId,
     ) -> Self {
         let metrics = deps.metrics();
         Self {
@@ -207,7 +207,7 @@ impl RtcWorker {
             packet_sink_registry: deps.packet_sink_registry(),
             source_policy_signal,
             metrics: Arc::clone(&metrics),
-            rtp_metrics: metrics.register_rtp_worker_for_media_worker(media_worker_id),
+            rtp_metrics: metrics.register_rtp_worker_for_media_worker(media_worker_id.as_usize()),
             rtc_metrics: metrics.register_rtc_worker(),
             worker_handle: Mutex::new(WorkerHandleSlot::default()),
         }

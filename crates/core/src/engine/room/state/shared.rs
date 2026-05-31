@@ -18,7 +18,8 @@ use super::super::{
 use crate::{
     RoomMediaLimits, RoomSpilloverMode,
     engine::{
-        ConnectionId, PeerSnapshot, RecordingState, UserId, UserInfo, VideoLayoutIntent,
+        ConnectionId, MediaWorkerId, PeerSnapshot, RecordingState, UserId, UserInfo,
+        VideoLayoutIntent,
         room::placement::LoadTriggeredPlacementState,
         router_events::RoomRouterEventSink,
         source_model::{
@@ -126,7 +127,7 @@ impl RoomState {
             },
             media: RoomMediaGraph::default(),
             topology: RoomTopology::new_with_router_state_factory(
-                runtime_context.local_routers(),
+                runtime_context.primary_router(),
                 router_rtp_capabilities,
                 &RoomRouterStateFactory::new(router_event_sink),
             ),
@@ -203,7 +204,7 @@ impl RoomState {
     pub fn source_fanout_pressure(
         &self,
         max_fanout_per_source: usize,
-        media_worker_for_connection: impl Fn(ConnectionId) -> usize,
+        media_worker_for_connection: impl Fn(ConnectionId) -> MediaWorkerId,
     ) -> bool {
         if max_fanout_per_source == 0 {
             return false;

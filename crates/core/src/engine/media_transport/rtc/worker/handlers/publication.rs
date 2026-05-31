@@ -203,7 +203,7 @@ pub(super) fn worker_resolve_negotiated_producer_parameters(
     if let Err(TransportAdapterError::UnsupportedFeature) = &result {
         warn!(
             user_id = ?session_key.user_id(),
-            media_worker_id = session_key.media_worker_id(),
+            media_worker_id = session_key.media_worker_id().as_usize(),
             ?transport_media_id,
             ?mid,
             initial_offer_applied = session_state.sdp_negotiation.initial_offer_applied,

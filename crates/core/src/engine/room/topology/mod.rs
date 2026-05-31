@@ -55,7 +55,7 @@ use o_sfu_router::{
 };
 
 use super::{
-    LocalRoomRouterPlacements, ResolvedPlacement,
+    ResolvedPlacement,
     router_state::{RoomRouterState, RoomRouterStateError},
 };
 use crate::engine::{UserId, router_events::RoomRouterEventSink};
@@ -293,18 +293,17 @@ impl RoomRouterStateFactory {
 }
 
 impl RoomTopology {
-    /// Build the room topology from the room's initial local placement.
+    /// Build the room topology from the room's primary router.
     ///
-    /// The first placement becomes the primary router and is attached
-    /// immediately. Production rooms start without spillover placements.
-    /// The returned topology owns router state only. It does not register users
-    /// and it does not allocate transport sessions.
+    /// The primary router is attached immediately. Production rooms start without
+    /// worker placement or spillover placements. The returned topology owns router
+    /// state only. It does not register users and it does not allocate transport
+    /// sessions.
     pub(super) fn new_with_router_state_factory(
-        local_routers: &LocalRoomRouterPlacements,
+        primary_router_id: RouterId,
         router_rtp_capabilities: MediaCapabilities,
         router_state_factory: &RoomRouterStateFactory,
     ) -> Self {
-        let primary_router_id = local_routers.primary().router;
         let mut routers = BTreeMap::new();
         routers.insert(
             primary_router_id,

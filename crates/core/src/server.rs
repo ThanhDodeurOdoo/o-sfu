@@ -49,18 +49,22 @@ pub mod room {
         };
     }
 
-    pub use crate::engine::room::{
-        BroadcastPayload, BroadcastPayloadError, ConsumerRouteState,
-        DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
-        IncomingBitrateSnapshot, JoinUserRequest, LocalRoomRouterPlacements,
-        LocalRoomRouterPlacementsError, LocalRouterRuntimeContext, MAX_BROADCAST_PAYLOAD_BYTES,
-        RemoteTrackBootstrap, Room, RoomAdmissionPolicy, RoomConfig, RoomEventMessage,
-        RoomEventRequest, RoomJoinError, RoomManager, RoomManagerConfig, RoomManagerDeps,
-        RoomManagerJoinError, RoomMediaCounts, RoomRuntimeContext, RoomRuntimePolicy,
-        RoomUserPermissions, RoomUserStatsSnapshot, RuntimeRoomDirectorySnapshot,
-        RuntimeRoomStatsSnapshot, TrackBindingUpdate, UserCloseReason, UserOutbound,
-        UserOutboundEvent, UserOutboundOverflow, UserOutboundOverflowKind, UserOutboundQueueLimits,
-        UserOutboundReceiver, UserOutboundSendError, UserOutboundSender, rtp_capabilities,
+    pub use crate::{
+        MediaWorkerId,
+        engine::room::{
+            BroadcastPayload, BroadcastPayloadError, ConsumerRouteState,
+            DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
+            IncomingBitrateSnapshot, JoinUserRequest, LocalRoomRouterPlacements,
+            LocalRoomRouterPlacementsError, LocalRouterRuntimeContext, MAX_BROADCAST_PAYLOAD_BYTES,
+            RemoteTrackBootstrap, Room, RoomAdmissionPolicy, RoomConfig, RoomEventMessage,
+            RoomEventRequest, RoomJoinError, RoomManager, RoomManagerConfig, RoomManagerDeps,
+            RoomManagerJoinError, RoomMediaCounts, RoomRuntimeContext, RoomRuntimePolicy,
+            RoomUserPermissions, RoomUserStatsSnapshot, RuntimeRoomDirectorySnapshot,
+            RuntimeRoomStatsSnapshot, TrackBindingUpdate, UserCloseReason, UserOutbound,
+            UserOutboundEvent, UserOutboundOverflow, UserOutboundOverflowKind,
+            UserOutboundQueueLimits, UserOutboundReceiver, UserOutboundSendError,
+            UserOutboundSender, rtp_capabilities,
+        },
     };
 }
 
@@ -121,6 +125,7 @@ pub mod transport {
     }
 
     pub use crate::{
+        MediaWorkerId,
         engine::media_transport::{
             ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
             ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,

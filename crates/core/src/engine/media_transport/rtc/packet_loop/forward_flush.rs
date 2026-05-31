@@ -100,7 +100,7 @@ pub(super) fn record_incoming_stats(
                 };
                 debug!(
                     user_id = ?source_session_key.user_id(),
-                    media_worker_id = source_session_key.media_worker_id(),
+                    media_worker_id = source_session_key.media_worker_id().as_usize(),
                     ?transport_media_id,
                     payload_bytes = facts.payload_len,
                     "observed first RTP ingress for published media"

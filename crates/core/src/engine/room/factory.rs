@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use o_sfu_router::RouterId;
 
 use super::{
-    LocalRouterRuntimeContext, Room, RoomConfig, RoomRuntimeContext, RoomRuntimePolicy,
+    Room, RoomConfig, RoomRuntimeContext, RoomRuntimePolicy,
     init::{RoomInit, RoomServices},
 };
 use crate::engine::{
@@ -105,26 +105,22 @@ impl RoomFactory {
 
     /// Reserves runtime-local placement for one new room.
     ///
-    /// The primary router id is allocated here, but its media worker is a
-    /// placeholder until the first session join assigns the room to a live
-    /// worker from load data.
+    /// The primary router id is allocated here, but worker placement remains
+    /// unset until the first session join assigns the room from live load data.
     ///
     /// The mutex is poisoned-tolerant because placement allocation has no
     /// partial side effect beyond the counters themselves. Recovering the inner
     /// value keeps later room creation possible after an unrelated panic.
     fn allocate_runtime_context(&self) -> RoomRuntimeContext {
-        let (room_instance_id, primary) = {
+        let (room_instance_id, primary_router) = {
             let mut allocator = lock_unpoisoned(&self.allocator);
             let room_instance_id = RoomInstanceId::allocate(&mut allocator.next_room_instance_id);
-            let primary = LocalRouterRuntimeContext {
-                router: RouterId(allocator.next_router_id),
-                media_worker: 0,
-            };
+            let primary_router = RouterId(allocator.next_router_id);
             allocator.next_router_id = allocator.next_router_id.saturating_add(1);
             drop(allocator);
-            (room_instance_id, primary)
+            (room_instance_id, primary_router)
         };
-        RoomRuntimeContext::new(room_instance_id, primary, Vec::new())
+        RoomRuntimeContext::new_unassigned(room_instance_id, primary_router)
     }
 
     /// reserve a new process-unique identifier for a spillover router

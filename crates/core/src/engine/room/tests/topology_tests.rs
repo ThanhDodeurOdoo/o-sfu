@@ -1,17 +1,20 @@
 use o_sfu_router::{ProducerId as RouterProducerId, RouterError};
 
 use super::fixtures::*;
-use crate::engine::room::{
-    LocalRoomRouterPlacements, LocalRoomRouterPlacementsError, LocalRouterRuntimeContext,
-    ResolvedPlacement,
-    router_state::RoomRouterStateError,
-    topology::{RoomTopologyError, RoutedProducerId},
+use crate::engine::{
+    MediaWorkerId,
+    room::{
+        LocalRoomRouterPlacements, LocalRoomRouterPlacementsError, LocalRouterRuntimeContext,
+        ResolvedPlacement,
+        router_state::RoomRouterStateError,
+        topology::{RoomTopologyError, RoutedProducerId},
+    },
 };
 
 fn placement(router: u64, media_worker: usize) -> LocalRouterRuntimeContext {
     LocalRouterRuntimeContext {
         router: RouterId(router),
-        media_worker,
+        media_worker: MediaWorkerId::from_raw(media_worker),
     }
 }
 
@@ -106,7 +109,7 @@ fn topology_returns_router_scoped_entity_handles() {
 
 #[test]
 fn topology_attaches_spillover_router_for_bounded_policy() {
-    let mut topology = RoomTopology::new_with_bounded_spillover(RouterId(9), 2);
+    let mut topology = RoomTopology::new(RouterId(9));
     let first_user_id = UserId::Integer(10);
     let second_user_id = UserId::Integer(20);
 
@@ -127,7 +130,7 @@ fn topology_attaches_spillover_router_for_bounded_policy() {
 
 #[test]
 fn topology_replacement_rehomes_from_the_new_connection_seed() {
-    let mut topology = RoomTopology::new_with_bounded_spillover(RouterId(9), 2);
+    let mut topology = RoomTopology::new(RouterId(9));
     let user_id = UserId::Integer(10);
 
     assert!(join_on_router(&mut topology, &user_id, 0, 9, 0).is_ok());
@@ -147,7 +150,7 @@ fn topology_replacement_rehomes_from_the_new_connection_seed() {
 
 #[test]
 fn topology_routes_cross_router_consumers_through_source_router() {
-    let mut topology = RoomTopology::new_with_bounded_spillover(RouterId(9), 2);
+    let mut topology = RoomTopology::new(RouterId(9));
     let producer_user_id = UserId::Integer(10);
     let consumer_user_id = UserId::Integer(20);
 
@@ -184,7 +187,7 @@ fn topology_routes_cross_router_consumers_through_source_router() {
 
 #[test]
 fn topology_prunes_receiver_shadow_when_cross_router_source_leaves_first() {
-    let mut topology = RoomTopology::new_with_bounded_spillover(RouterId(9), 2);
+    let mut topology = RoomTopology::new(RouterId(9));
     let producer_user_id = UserId::Integer(10);
     let consumer_user_id = UserId::Integer(20);
 
@@ -237,7 +240,7 @@ fn topology_prunes_receiver_shadow_when_cross_router_source_leaves_first() {
 
 #[test]
 fn topology_keeps_receiver_shadow_until_last_source_router_consumer_is_removed() {
-    let mut topology = RoomTopology::new_with_bounded_spillover(RouterId(9), 2);
+    let mut topology = RoomTopology::new(RouterId(9));
     let producer_user_id = UserId::Integer(10);
     let consumer_user_id = UserId::Integer(20);
 
@@ -301,7 +304,7 @@ fn topology_keeps_receiver_shadow_until_last_source_router_consumer_is_removed()
 
 #[test]
 fn topology_remove_consumer_prunes_cross_router_shadow() {
-    let mut topology = RoomTopology::new_with_bounded_spillover(RouterId(9), 2);
+    let mut topology = RoomTopology::new(RouterId(9));
     let producer_user_id = UserId::Integer(10);
     let consumer_user_id = UserId::Integer(20);
 
@@ -374,7 +377,7 @@ fn topology_rejects_consumer_on_missing_attached_router() {
 
 #[test]
 fn topology_reports_idle_spillover_router_after_last_home_session_leaves() {
-    let mut topology = RoomTopology::new_with_bounded_spillover(RouterId(9), 2);
+    let mut topology = RoomTopology::new(RouterId(9));
     let first_user_id = UserId::Integer(10);
     let second_user_id = UserId::Integer(20);
 
@@ -393,7 +396,7 @@ fn topology_reports_idle_spillover_router_after_last_home_session_leaves() {
 
 #[test]
 fn topology_never_reports_primary_router_as_idle_spillover() {
-    let mut topology = RoomTopology::new_with_bounded_spillover(RouterId(9), 2);
+    let mut topology = RoomTopology::new(RouterId(9));
     let user_id = UserId::Integer(10);
 
     assert!(join_on_router(&mut topology, &user_id, 0, 9, 0).is_ok());

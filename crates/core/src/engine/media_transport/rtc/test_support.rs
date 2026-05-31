@@ -49,7 +49,9 @@ pub(in crate::engine::media_transport::rtc) use {
 #[cfg(any(test, feature = "internal-benchmarks"))]
 pub use super::forwarded_packet::test_support::sample_forwarded_packet;
 #[cfg(any(test, feature = "internal-benchmarks"))]
-use crate::engine::{ConnectionId, RoomInstanceId, UserId, media_transport::TransportSessionKey};
+use crate::engine::{
+    ConnectionId, MediaWorkerId, RoomInstanceId, UserId, media_transport::TransportSessionKey,
+};
 
 #[cfg(test)]
 pub(in crate::engine::media_transport::rtc) fn collect_ready_session_keys(
@@ -74,7 +76,7 @@ pub fn test_transport_session_key(
 ) -> TransportSessionKey {
     TransportSessionKey::new(
         RoomInstanceId::from_raw(room_instance_id),
-        media_worker_id,
+        MediaWorkerId::from_raw(media_worker_id),
         ConnectionId::from_raw(connection_id),
         user_id,
     )

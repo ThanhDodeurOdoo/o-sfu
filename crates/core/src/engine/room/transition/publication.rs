@@ -394,7 +394,11 @@ impl AnsweredPublish {
                     telemetry_event::PUBLISH_COMMITTED,
                 )
                 .with_connection_id(connection.as_u64())
-                .with_media_worker_id(room.transport_user_key(&user, connection).media_worker_id())
+                .with_media_worker_id(
+                    room.transport_user_key(&user, connection)
+                        .media_worker_id()
+                        .as_usize(),
+                )
                 .with_transport_media_id(media.as_u64()),
             })
         };
@@ -736,7 +740,7 @@ impl RoomUserOperation<'_> {
                 telemetry_event::PUBLICATION_ACTIVITY_CHANGED,
             )
             .with_connection_id(self.connection_id().as_u64())
-            .with_media_worker_id(media_worker_id)
+            .with_media_worker_id(media_worker_id.as_usize())
             .with_transport_media_id(outcome.transport_media_id.as_u64())
             .insert_field("active", outcome.active)
             .insert_field("stream_id", stream_id.to_string()),

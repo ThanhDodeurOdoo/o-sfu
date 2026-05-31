@@ -191,7 +191,8 @@ impl RoomTestInspect<'_> {
         Some(
             self.room
                 .placement_state
-                .media_worker_id_for_connection(connection_id),
+                .media_worker_id_for_connection(connection_id)
+                .as_usize(),
         )
     }
 
@@ -206,7 +207,10 @@ impl RoomTestInspect<'_> {
     }
 
     #[must_use]
-    pub fn media_worker_id(self) -> usize {
-        self.room.placement_state.media_worker_id()
+    pub fn assigned_primary_media_worker_id(self) -> Option<usize> {
+        self.room
+            .placement_state
+            .assigned_primary_media_worker_id()
+            .map(crate::MediaWorkerId::as_usize)
     }
 }

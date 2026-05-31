@@ -281,7 +281,7 @@ impl SubscriptionEffectPlan {
                     telemetry_event::SUBSCRIPTION_ACTIVITY_CHANGED,
                 )
                 .with_connection_id(connection_id.as_u64())
-                .with_media_worker_id(media_worker_id)
+                .with_media_worker_id(media_worker_id.as_usize())
                 .with_transport_media_id(route.consumer_media().as_u64())
                 .insert_field("active", active)
                 .insert_field(
@@ -557,7 +557,8 @@ impl PendingConsumerLease {
                         target.consumer_user_id(),
                         target.consumer_connection_id(),
                     )
-                    .media_worker_id(),
+                    .media_worker_id()
+                    .as_usize(),
                 )
                 .with_transport_media_id(consumer_media.as_u64())
                 .insert_field(

@@ -5,8 +5,9 @@
 //! integration.
 //!
 //! The crate root keeps only fundamental value types: [`Bitrate`],
-//! [`ConnectionId`] and [`RoomInstanceId`]. The private engine tree stays
-//! hidden so new exposed types must fit [`prelude`] or [`server`] first.
+//! [`ConnectionId`], [`MediaWorkerId`] and [`RoomInstanceId`]. The private
+//! engine tree stays hidden so new exposed types must fit [`prelude`] or
+//! [`server`] first.
 use std::fmt::{self, Display, Formatter};
 
 mod engine;
@@ -113,6 +114,27 @@ impl ConnectionId {
 impl Display for ConnectionId {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
+    }
+}
+
+/// runtime-local identifier for one rtc media worker
+///
+/// this is worker identity, not a worker count or vector capacity
+/// convert to raw `usize` only when indexing worker storage or projecting
+/// telemetry and diagnostics fields
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MediaWorkerId(usize);
+
+impl MediaWorkerId {
+    #[must_use]
+    pub const fn from_raw(raw: usize) -> Self {
+        Self(raw)
+    }
+
+    #[must_use]
+    pub const fn as_usize(self) -> usize {
+        self.0
     }
 }
 

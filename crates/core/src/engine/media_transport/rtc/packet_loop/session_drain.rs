@@ -114,7 +114,7 @@ fn drain_single_session(
                     .push((session_key.clone(), PendingKeyframeRequest::new(request)));
                 trace!(
                     user_id = ?session_key.user_id(),
-                    media_worker_id = session_key.media_worker_id(),
+                    media_worker_id = session_key.media_worker_id().as_usize(),
                     mid = %request.mid,
                     rid = ?request.rid,
                     kind = ?request.kind,
@@ -138,7 +138,7 @@ fn drain_single_session(
                     if session_state.rtc.handle_input(Input::Timeout(now)).is_err() {
                         warn!(
                             user_id = ?session_key.user_id(),
-                            media_worker_id = session_key.media_worker_id(),
+                            media_worker_id = session_key.media_worker_id().as_usize(),
                             "failed to apply immediate rtc packet-loop timeout input"
                         );
                         return None;
@@ -150,7 +150,7 @@ fn drain_single_session(
             Err(error) => {
                 warn!(
                     user_id = ?session_key.user_id(),
-                    media_worker_id = session_key.media_worker_id(),
+                    media_worker_id = session_key.media_worker_id().as_usize(),
                     ?error,
                     "rtc packet loop failed while polling output"
                 );

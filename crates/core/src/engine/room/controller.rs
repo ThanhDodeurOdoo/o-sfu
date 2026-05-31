@@ -50,7 +50,8 @@ use super::{
 use crate::{
     RoomSpilloverMode, RoomWorkerPolicy, RuntimeFeatureFlags,
     engine::{
-        AvailableFeatures, ConnectionId, PeerSnapshot, RecordingState, RoomInstanceId, UserId,
+        AvailableFeatures, ConnectionId, MediaWorkerId, PeerSnapshot, RecordingState,
+        RoomInstanceId, UserId,
         diagnostics::{
             self, DiagnosticsIncomingBitrate, DiagnosticsQualitySummary, DiagnosticsSource,
             DiagnosticsStore, DiagnosticsUserTransport, DiagnosticsUserView,
@@ -274,7 +275,8 @@ impl Room {
             definition,
             placement_state: RoomPlacementState::new(
                 instance_id,
-                runtime_context.local_routers().clone(),
+                runtime_context.primary_router(),
+                runtime_context.initial_local_router_placements().cloned(),
             ),
             load_triggered_placement: StdMutex::new(LoadTriggeredPlacementState::default()),
             recording_service: Arc::clone(&recording_service),
@@ -362,14 +364,14 @@ impl Room {
             )
         };
         RoomWorkerLoadContribution {
-            session_workers: session_entries
+            session_worker_ids: session_entries
                 .into_iter()
                 .map(|(user_id, connection_id)| {
                     self.transport_user_key(&user_id, connection_id)
                         .media_worker_id()
                 })
                 .collect(),
-            consumer_workers: consumer_entries
+            consumer_worker_ids: consumer_entries
                 .into_iter()
                 .map(|(_, connection_id)| {
                     self.placement_state
@@ -550,8 +552,8 @@ impl Room {
     ///
     /// Runtime diagnostics and transport command paths use this to route work
     /// to the correct RTC worker.
-    pub fn media_worker_id(&self) -> usize {
-        self.placement_state.media_worker_id()
+    pub fn assigned_primary_media_worker_id(&self) -> Option<MediaWorkerId> {
+        self.placement_state.assigned_primary_media_worker_id()
     }
 
     pub(in crate::engine::room) fn room_worker_policy(&self) -> RoomWorkerPolicy {
@@ -608,7 +610,7 @@ impl Room {
                     health: transport
                         .session_transport_health(&session_key)
                         .map(diagnostics::diagnostics_transport_health),
-                    media_worker_id: session_key.media_worker_id(),
+                    media_worker_id: session_key.media_worker_id().as_usize(),
                     quality_summary: diagnostics_quality_summary(
                         incoming_bitrate_by_session
                             .get(&user_id)
@@ -621,7 +623,9 @@ impl Room {
             })
             .collect();
         state.diagnostics_user_views(
-            self.placement_state.media_worker_id(),
+            self.placement_state
+                .assigned_primary_media_worker_id()
+                .map_or(0, MediaWorkerId::as_usize),
             &transport_by_session,
         )
     }
@@ -707,10 +711,14 @@ fn diagnostics_quality_summary(
 
 impl fmt::Debug for Room {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let media_worker_id = self
+            .placement_state
+            .assigned_primary_media_worker_id()
+            .map(MediaWorkerId::as_usize);
         formatter
             .debug_struct("Room")
             .field("instance_id", &self.definition.instance_id())
-            .field("media_worker_id", &self.placement_state.media_worker_id())
+            .field("media_worker_id", &media_worker_id)
             .field("uuid", &self.definition.uuid())
             .field("issuer", &self.definition.issuer())
             .field("web_rtc_enabled", &self.definition.web_rtc_enabled())
