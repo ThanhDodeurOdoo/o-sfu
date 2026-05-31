@@ -70,6 +70,34 @@ pub(super) enum RegisteredMediaHandle {
     },
 }
 
+/// producer-side keyframe target derived from consumer RTCP feedback
+///
+/// packet-loop feedback arrives in consumer-local terms, so callers must
+/// resolve it through the current route before forwarding a refresh request
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ConsumerKeyframeTarget {
+    /// source that owns the producer stream to refresh
+    pub(super) source_transport_media_id: TransportMediaId,
+    /// producer RID selected by the route or carried by ungated feedback
+    pub(super) rid: Option<Rid>,
+}
+
+/// consumer MID lookup entry with its route destination slot
+///
+/// `destination_index` is a cached slot inside the source route
+/// route teardown must clear or repair it whenever
+/// [`super::demux::MediaRouteEntry::remove_destination`] moves another
+/// destination into the removed slot
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ConsumerMidBinding {
+    /// consumer media section that owns this MID
+    consumer_transport_media_id: TransportMediaId,
+    /// source route that should contain this consumer destination
+    source_transport_media_id: TransportMediaId,
+    /// cached slot inside the source route, absent when the route is gone
+    destination_index: Option<usize>,
+}
+
 impl RegisteredMediaHandle {
     /// returns the session that owns the browser media section
     pub(super) fn session_key(&self) -> &TransportSessionKey {
@@ -222,7 +250,7 @@ pub(super) struct SessionMediaLookup {
     producer_mids: TinyLookup<Mid, TransportMediaId>,
     producer_ssrcs: TinyLookup<Ssrc, TransportMediaId>,
     producer_ssrc_rids: TinyLookup<Ssrc, Rid>,
-    consumer_mids: TinyLookup<Mid, TransportMediaId>,
+    consumer_mids: TinyLookup<Mid, ConsumerMidBinding>,
 }
 
 impl SessionMediaLookup {
@@ -367,6 +395,12 @@ impl<K: Eq, V: Copy> TinyLookup<K, V> {
             .find_map(|(entry_key, value)| (entry_key == key).then_some(*value))
     }
 
+    fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        self.entries
+            .iter_mut()
+            .find_map(|(entry_key, value)| (entry_key == key).then_some(value))
+    }
+
     fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -377,8 +411,8 @@ impl PacketLoopState {
     ///
     /// producers gain a `(session, MID)` lookup and an empty SSRC set
     /// ssrc bindings are filled later by negotiation or dynamic RTP header discovery
-    /// consumers gain a `(session, MID)` lookup to their source media id so RTCP
-    /// feedback can be mapped back to the producer route
+    /// consumers gain a `(session, MID)` lookup to their own media id so RTCP
+    /// feedback can be mapped through the active route destination
     pub(super) fn register_media_handle(
         &mut self,
         handle: RegisteredMediaHandle,
@@ -402,9 +436,14 @@ impl PacketLoopState {
         {
             let session_lookup = self.session_media.entry(session_key.clone()).or_default();
             session_lookup.insert_owned_media(transport_media_id);
-            session_lookup
-                .consumer_mids
-                .insert(*mid, *source_transport_media_id);
+            session_lookup.consumer_mids.insert(
+                *mid,
+                ConsumerMidBinding {
+                    consumer_transport_media_id: transport_media_id,
+                    source_transport_media_id: *source_transport_media_id,
+                    destination_index: None,
+                },
+            );
         }
         self.mid_registry.insert(transport_media_id, handle);
         transport_media_id
@@ -868,10 +907,7 @@ impl PacketLoopState {
         );
     }
 
-    /// resolve the source media id that feeds a consumer MID
-    ///
-    /// rtcp feedback arrives from the consumer session, so the packet loop uses
-    /// this lookup to route keyframe requests back to the correct source
+    #[cfg(any(test, feature = "testing-transport"))]
     pub(super) fn consumer_source_transport_media_id_for_mid(
         &self,
         consumer_session_key: &TransportSessionKey,
@@ -880,6 +916,86 @@ impl PacketLoopState {
         self.session_media
             .get(consumer_session_key)
             .and_then(|consumer_lookup| consumer_lookup.consumer_mids.get(&consumer_mid))
+            .map(|binding| binding.source_transport_media_id)
+    }
+
+    /// resolve consumer RTCP feedback to the currently active producer target
+    ///
+    /// this is the packet-loop feedback path
+    /// missing indexes, removed routes and inactive routes are treated as stale
+    /// feedback because those can race with teardown after `str0m` emits a
+    /// request
+    ///
+    /// selected destination gates override the feedback RID so RID-less browser
+    /// PLI stays scoped to the routed simulcast layer
+    #[inline]
+    pub(super) fn active_consumer_keyframe_target_for_mid(
+        &self,
+        consumer_session_key: &TransportSessionKey,
+        consumer_mid: Mid,
+        feedback_rid: Option<Rid>,
+    ) -> Option<ConsumerKeyframeTarget> {
+        let binding = self
+            .session_media
+            .get(consumer_session_key)?
+            .consumer_mids
+            .get(&consumer_mid)?;
+        let route_entry = self
+            .media_route_index
+            .get(&binding.source_transport_media_id)?;
+        // a miss means feedback raced with route teardown or index repair
+        let destination = route_entry.destinations.get(binding.destination_index?)?;
+        debug_assert_eq!(&destination.dest_session, consumer_session_key);
+        debug_assert_eq!(
+            destination.dest_transport_media_id,
+            binding.consumer_transport_media_id
+        );
+        if !route_entry.source_active || !destination.active {
+            return None;
+        }
+        let rid = match destination.packet_gate {
+            PacketLayerGate::Rid(rid) => Some(rid),
+            PacketLayerGate::OperatingPoint(operating_point) => operating_point.rid(),
+            // while blocked, the pending gate names the layer that needs a refresh
+            PacketLayerGate::Block => Some(
+                destination
+                    .pending_packet_gate
+                    .as_ref()
+                    .and_then(PacketLayerGate::selected_rid)?,
+            ),
+            // open routes have no layer policy, so preserve the feedback RID
+            PacketLayerGate::Open => feedback_rid,
+        };
+        Some(ConsumerKeyframeTarget {
+            source_transport_media_id: binding.source_transport_media_id,
+            rid,
+        })
+    }
+
+    /// updates the cached destination slot for one consumer MID binding
+    ///
+    /// callers pass both sides of the route identity so a late repair from an
+    /// old route cannot relink a MID to a different source
+    pub(super) fn set_consumer_destination_index(
+        &mut self,
+        consumer_session_key: &TransportSessionKey,
+        consumer_mid: Mid,
+        consumer_transport_media_id: TransportMediaId,
+        source_transport_media_id: TransportMediaId,
+        destination_index: Option<usize>,
+    ) {
+        let Some(binding) = self
+            .session_media
+            .get_mut(consumer_session_key)
+            .and_then(|consumer_lookup| consumer_lookup.consumer_mids.get_mut(&consumer_mid))
+        else {
+            return;
+        };
+        if binding.consumer_transport_media_id == consumer_transport_media_id
+            && binding.source_transport_media_id == source_transport_media_id
+        {
+            binding.destination_index = destination_index;
+        }
     }
 
     /// resolve the room that owns a local or remote source media id

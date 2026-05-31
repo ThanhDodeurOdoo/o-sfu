@@ -227,9 +227,9 @@ fn active_speaker_policy(mut fixture: ActiveSpeakerBenchFixture) -> usize {
 //
 // coalescing keeps route-control feedback storms from turning into one remote
 // source command per consumer
-// this benchmark checks the sorted flush path that collapses many requests into
-// the single producer-side signal the packet loop should emit
-#[library_benchmark(config = callgrind_config(0.5))]
+// this benchmark checks the route-scoped flush path that resolves current route
+// state before collapsing many requests into one producer-side signal
+#[library_benchmark(config = callgrind_config(5.0))]
 #[bench::remote_source(KeyframeCoalescingBenchFixture::remote_source_requests())]
 fn keyframe_coalesce_512(mut fixture: KeyframeCoalescingBenchFixture) -> usize {
     black_box(fixture.flush_requests())

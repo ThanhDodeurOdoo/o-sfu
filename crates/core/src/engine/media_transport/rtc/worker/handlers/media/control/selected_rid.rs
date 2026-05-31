@@ -28,7 +28,7 @@ use tracing::{debug, warn};
 
 use super::{
     super::keyframe::request_keyframe_for_source,
-    routes::{owned_local_producer_mid, packet_gate_rid, refresh_source_packet_gate},
+    routes::{owned_local_producer_mid, refresh_source_packet_gate},
 };
 use crate::engine::{
     media_transport::{
@@ -329,7 +329,7 @@ pub(super) fn guarded_packet_gate(
     packet_gate: PacketLayerGate,
     now: Instant,
 ) -> (PacketLayerGate, Option<PacketLayerGate>) {
-    let Some(rid) = packet_gate_rid(&packet_gate) else {
+    let Some(rid) = packet_gate.selected_rid() else {
         return (packet_gate, None);
     };
     if state.producer_rid_is_ready(
@@ -410,7 +410,7 @@ fn update_selected_rid_destinations(
         let Some(selected_rid) = destination
             .pending_packet_gate
             .as_ref()
-            .and_then(packet_gate_rid)
+            .and_then(PacketLayerGate::selected_rid)
         else {
             continue;
         };
@@ -460,7 +460,7 @@ fn suspend_stale_destination_gate(
     if destination.pending_packet_gate.is_some() {
         return;
     }
-    let Some(selected_rid) = packet_gate_rid(&destination.packet_gate) else {
+    let Some(selected_rid) = destination.packet_gate.selected_rid() else {
         return;
     };
     if selected_rid == incoming_rid || ready_rids.contains(&selected_rid) {
@@ -498,7 +498,7 @@ fn activate_bootstrap_fallback_destinations(
         let Some(selected_rid) = destination
             .pending_packet_gate
             .as_ref()
-            .and_then(packet_gate_rid)
+            .and_then(PacketLayerGate::selected_rid)
         else {
             continue;
         };

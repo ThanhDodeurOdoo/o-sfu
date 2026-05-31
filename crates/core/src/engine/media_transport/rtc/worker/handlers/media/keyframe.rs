@@ -11,10 +11,12 @@ use tracing::debug;
 
 use super::{
     super::super::super::{
-        demux::MediaRouteDestination, media_registry::RegisteredMediaHandle,
-        route_control::KeyframeRequestDecision, state::PacketLoopState,
+        demux::MediaRouteDestination,
+        media_registry::RegisteredMediaHandle,
+        route_control::{KeyframeRequestDecision, PacketLayerGate},
+        state::PacketLoopState,
     },
-    control::{ensure_existing_route_source, owned_local_producer_mid, packet_gate_rid},
+    control::{ensure_existing_route_source, owned_local_producer_mid},
     types::RouteSourceKind,
 };
 use crate::engine::{
@@ -162,7 +164,7 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn worker_r
             );
         }
         RouteSourceKind::Remote => {
-            let Some((source_session_key, source_control)) = state
+            let Some((source, source_control)) = state
                 .remote_source_registration(source_transport_media_id)
                 .map(|registration| {
                     (
@@ -180,7 +182,7 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn worker_r
             ) {
                 KeyframeRequestDecision::Forward => {
                     source_control.request_keyframe(
-                        &source_session_key,
+                        &source,
                         destination_rid,
                         KeyframeRequestKind::Pli,
                     );
@@ -195,12 +197,16 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn worker_r
     Ok(())
 }
 
+/// returns the RID that a route-level keyframe command should refresh
+///
+/// route commands can bootstrap a pending selected RID, so they look at
+/// `pending_packet_gate` before the effective fallback gate
 fn keyframe_request_rid(destination: &MediaRouteDestination) -> Option<Rid> {
     destination
         .pending_packet_gate
         .as_ref()
-        .and_then(packet_gate_rid)
-        .or_else(|| packet_gate_rid(&destination.packet_gate))
+        .and_then(PacketLayerGate::selected_rid)
+        .or_else(|| destination.packet_gate.selected_rid())
 }
 
 fn local_keyframe_request_mid(

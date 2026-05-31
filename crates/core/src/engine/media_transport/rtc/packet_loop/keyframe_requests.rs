@@ -8,10 +8,10 @@
 //!
 //! Keyframe requests are route-control feedback, not room policy. The room
 //! decides which sources and layers a user should receive. This module only
-//! makes sure the currently routed producer gets a bounded, source-keyed request
-//! stream.
+//! makes sure the currently routed producer gets a bounded, source/RID keyed
+//! request stream.
 
-use std::time::Instant;
+use std::{cmp::Ordering, time::Instant};
 
 use str0m::media::{KeyframeRequest, KeyframeRequestKind, Mid, Rid};
 use tracing::debug;
@@ -77,11 +77,11 @@ pub(super) enum ResolvedKeyframeRoute {
     },
 }
 
-/// Source-keyed keyframe request after route resolution.
+/// Source and RID keyed keyframe request after route resolution.
 ///
 /// Multiple consumers can ask for the same source during one packet-loop turn.
-/// Coalescing keeps the request stream proportional to source media instead of
-/// fanout count and upgrades request kind when a stronger request is observed.
+/// Coalescing keeps duplicate feedback bounded without merging distinct
+/// simulcast layers into one source-wide request.
 #[derive(Clone, Copy)]
 pub(super) struct CoalescedKeyframeRequest {
     source_transport_media_id: TransportMediaId,
@@ -89,30 +89,11 @@ pub(super) struct CoalescedKeyframeRequest {
     kind: KeyframeRequestKind,
 }
 
-impl CoalescedKeyframeRequest {
-    fn new(
-        source_transport_media_id: TransportMediaId,
-        rid: Option<Rid>,
-        kind: KeyframeRequestKind,
-    ) -> Self {
-        Self {
-            source_transport_media_id,
-            rid,
-            kind,
-        }
-    }
-
-    fn coalesce(&mut self, rid: Option<Rid>, kind: KeyframeRequestKind) {
-        self.rid = self.rid.or(rid);
-        self.kind = coalesce_keyframe_kind(self.kind, kind);
-    }
-}
-
 /// Resolve and flush every keyframe request staged during the current turn.
 ///
 /// Requests are drained from packet-loop buffers, resolved from consumer-local
-/// MID to source transport media id, sorted by source and coalesced before any
-/// request is dispatched. Missing source state means the route changed before
+/// MID to source transport media id and selected producer RID before any
+/// request is dispatched. Missing route state means the route changed before
 /// the feedback was flushed and is treated as a benign stale request.
 pub(super) fn flush_pending_keyframe_requests(
     state: &mut PacketLoopState,
@@ -122,6 +103,10 @@ pub(super) fn flush_pending_keyframe_requests(
     flush_pending_keyframe_requests_at(state, metrics, buffers, Instant::now());
 }
 
+/// resolves and flushes staged keyframe requests at a supplied time
+///
+/// tests and benchmarks pass `now` explicitly so route-control throttling stays
+/// deterministic
 pub(in crate::engine::media_transport::rtc) fn flush_pending_keyframe_requests_at(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
@@ -131,28 +116,73 @@ pub(in crate::engine::media_transport::rtc) fn flush_pending_keyframe_requests_a
     let pending_keyframe_requests = &mut buffers.pending_keyframe_requests;
     let coalesced_requests = &mut buffers.coalesced_keyframe_requests;
     coalesced_requests.clear();
+    let mut has_rid = false;
+    let mut same_request: Option<CoalescedKeyframeRequest> = None;
     for (consumer_session_key, request) in pending_keyframe_requests.drain(..) {
-        let Some(source_transport_media_id) = state.consumer_source_transport_media_id_for_mid(
+        let Some(target) = state.active_consumer_keyframe_target_for_mid(
             &consumer_session_key,
             request.consumer_mid,
+            request.consumer_rid,
         ) else {
             continue;
         };
-        coalesced_requests.push(CoalescedKeyframeRequest::new(
-            source_transport_media_id,
-            request.consumer_rid,
-            request.kind,
-        ));
+        let resolved_request = CoalescedKeyframeRequest {
+            source_transport_media_id: target.source_transport_media_id,
+            rid: target.rid,
+            kind: request.kind,
+        };
+        has_rid |= resolved_request.rid.is_some();
+        // most turns carry repeated feedback for one target
+        // keep that path out of sorting
+        if coalesced_requests.is_empty() {
+            match &mut same_request {
+                Some(current)
+                    if current.source_transport_media_id
+                        == resolved_request.source_transport_media_id
+                        && current.rid == resolved_request.rid =>
+                {
+                    current.kind = coalesce_keyframe_kind(current.kind, resolved_request.kind);
+                }
+                Some(_) => {
+                    if let Some(current) = same_request.take() {
+                        coalesced_requests.push(current);
+                    }
+                    coalesced_requests.push(resolved_request);
+                }
+                None => {
+                    same_request = Some(resolved_request);
+                }
+            }
+        } else {
+            coalesced_requests.push(resolved_request);
+        }
     }
-    coalesced_requests.sort_by_key(|request| request.source_transport_media_id);
+    if coalesced_requests.is_empty() {
+        if let Some(request) = same_request {
+            flush_coalesced_keyframe_request(state, metrics, request, now);
+        }
+        return;
+    }
+    if has_rid {
+        // rid-scoped batches need the full source/RID key to avoid widening
+        // simulcast feedback
+        coalesced_requests.sort_unstable_by(|left, right| {
+            left.source_transport_media_id
+                .cmp(&right.source_transport_media_id)
+                .then_with(|| compare_keyframe_rids(left.rid, right.rid))
+        });
+    } else {
+        coalesced_requests.sort_unstable_by_key(|request| request.source_transport_media_id);
+    }
     let mut current_request: Option<CoalescedKeyframeRequest> = None;
     for coalesced_request in coalesced_requests.drain(..) {
         match &mut current_request {
             Some(current)
                 if current.source_transport_media_id
-                    == coalesced_request.source_transport_media_id =>
+                    == coalesced_request.source_transport_media_id
+                    && current.rid == coalesced_request.rid =>
             {
-                current.coalesce(coalesced_request.rid, coalesced_request.kind);
+                current.kind = coalesce_keyframe_kind(current.kind, coalesced_request.kind);
             }
             Some(_) => {
                 if let Some(request) = current_request.take() {
@@ -170,7 +200,11 @@ pub(in crate::engine::media_transport::rtc) fn flush_pending_keyframe_requests_a
     }
 }
 
-/// Dispatch one source-keyed keyframe request.
+fn compare_keyframe_rids(left: Option<Rid>, right: Option<Rid>) -> Ordering {
+    left.as_deref().cmp(&right.as_deref())
+}
+
+/// Dispatch one source/RID keyed keyframe request.
 ///
 /// Local producers are marked through the worker's normal keyframe request path.
 /// Remote producers pass through route-control de-duplication before the request

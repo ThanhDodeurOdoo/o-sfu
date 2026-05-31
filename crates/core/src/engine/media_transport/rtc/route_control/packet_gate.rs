@@ -71,6 +71,7 @@ impl PacketOperatingPointGate {
     }
 
     /// returns the selected rid restriction when this operating point is rid-bound
+    #[inline]
     pub const fn rid(self) -> Option<Rid> {
         self.rid
     }
@@ -108,6 +109,21 @@ impl PacketOperatingPointGate {
 }
 
 impl PacketLayerGate {
+    /// returns the concrete RID selected by this gate when one exists
+    ///
+    /// open routes, blocked routes and RID-less operating points do not name a
+    /// simulcast layer and therefore return `None`
+    /// feedback routing uses this to map destination policy back to the
+    /// producer layer that can satisfy a keyframe request
+    #[inline]
+    pub const fn selected_rid(&self) -> Option<Rid> {
+        match *self {
+            Self::Rid(rid) => Some(rid),
+            Self::OperatingPoint(operating_point) => operating_point.rid(),
+            Self::Open | Self::Block => None,
+        }
+    }
+
     /// checks whether packet metadata passes this gate without allocating
     ///
     /// the packet loop calls this on the forwarding hot path

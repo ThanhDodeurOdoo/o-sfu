@@ -102,11 +102,15 @@ impl<'a> MediaWorkerScenario<'a> {
                     mid,
                     source_transport_media_id,
                 });
-        self.state
-            .media_route_index
-            .entry(source_transport_media_id)
-            .or_insert_with(|| MediaRouteEntry::new(true))
-            .push_destination(MediaRouteDestination {
+        let bind_session_key = session_key.clone();
+        let destination_index = {
+            let route_entry = self
+                .state
+                .media_route_index
+                .entry(source_transport_media_id)
+                .or_insert_with(|| MediaRouteEntry::new(true));
+            let destination_index = route_entry.destinations.len();
+            route_entry.push_destination(MediaRouteDestination {
                 dest_session: session_key,
                 dest_transport_media_id: transport_media_id,
                 dest_stream: ConsumerStreamHandle::default(),
@@ -117,6 +121,15 @@ impl<'a> MediaWorkerScenario<'a> {
                 packet_gate,
                 pending_packet_gate,
             });
+            destination_index
+        };
+        self.state.set_consumer_destination_index(
+            &bind_session_key,
+            mid,
+            transport_media_id,
+            source_transport_media_id,
+            Some(destination_index),
+        );
         transport_media_id
     }
 }

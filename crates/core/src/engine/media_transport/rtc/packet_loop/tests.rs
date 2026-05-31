@@ -222,21 +222,47 @@ fn insert_open_route(
     consumer_stream: ConsumerStreamHandle,
     consumer_mid: Mid,
 ) {
-    let mut route_entry = MediaRouteEntry::new(true);
-    route_entry.push_destination(MediaRouteDestination {
-        dest_session: consumer_session.clone(),
-        dest_transport_media_id: consumer_transport_media_id,
-        dest_stream: consumer_stream,
-        dest_mid: consumer_mid,
-        dest_payload_type: None,
-        nackable: true,
-        active: true,
-        packet_gate: PacketLayerGate::Open,
-        pending_packet_gate: None,
-    });
-    state
-        .media_route_index
-        .insert(source_transport_media_id, route_entry);
+    insert_consumer_route_fixture(
+        state,
+        source_transport_media_id,
+        MediaRouteDestination {
+            dest_session: consumer_session.clone(),
+            dest_transport_media_id: consumer_transport_media_id,
+            dest_stream: consumer_stream,
+            dest_mid: consumer_mid,
+            dest_payload_type: None,
+            nackable: true,
+            active: true,
+            packet_gate: PacketLayerGate::Open,
+            pending_packet_gate: None,
+        },
+    );
+}
+
+fn insert_consumer_route_fixture(
+    state: &mut PacketLoopState,
+    source_transport_media_id: TransportMediaId,
+    destination: MediaRouteDestination,
+) {
+    let dest_session = destination.dest_session.clone();
+    let dest_mid = destination.dest_mid;
+    let dest_transport_media_id = destination.dest_transport_media_id;
+    let destination_index = {
+        let route_entry = state
+            .media_route_index
+            .entry(source_transport_media_id)
+            .or_insert_with(|| MediaRouteEntry::new(true));
+        let destination_index = route_entry.destinations.len();
+        route_entry.push_destination(destination);
+        destination_index
+    };
+    state.set_consumer_destination_index(
+        &dest_session,
+        dest_mid,
+        dest_transport_media_id,
+        source_transport_media_id,
+        Some(destination_index),
+    );
 }
 
 fn register_producer_media(
@@ -276,14 +302,64 @@ fn local_keyframe_source(
 fn register_consumer_media(
     state: &mut PacketLoopState,
     consumer_session: &TransportSessionKey,
-    consumer_mid: &str,
+    consumer_mid: Mid,
     source_transport_media_id: TransportMediaId,
 ) -> TransportMediaId {
     state.register_media_handle(RegisteredMediaHandle::Consumer {
         session_key: consumer_session.clone(),
-        mid: Mid::from(consumer_mid),
+        mid: consumer_mid,
         source_transport_media_id,
     })
+}
+
+fn register_consumer_route_fixture(
+    state: &mut PacketLoopState,
+    consumer_session: &TransportSessionKey,
+    consumer_mid: &str,
+    source_transport_media_id: TransportMediaId,
+    active: bool,
+    packet_gate: PacketLayerGate,
+    pending_packet_gate: Option<PacketLayerGate>,
+) {
+    let consumer_mid = Mid::from(consumer_mid);
+    let consumer_transport_media_id = register_consumer_media(
+        state,
+        consumer_session,
+        consumer_mid,
+        source_transport_media_id,
+    );
+    insert_consumer_route_fixture(
+        state,
+        source_transport_media_id,
+        MediaRouteDestination {
+            dest_session: consumer_session.clone(),
+            dest_transport_media_id: consumer_transport_media_id,
+            dest_stream: ConsumerStreamHandle::default(),
+            dest_mid: consumer_mid,
+            dest_payload_type: None,
+            nackable: true,
+            active,
+            packet_gate,
+            pending_packet_gate,
+        },
+    );
+}
+
+fn register_open_consumer_route_fixture(
+    state: &mut PacketLoopState,
+    consumer_session: &TransportSessionKey,
+    consumer_mid: &str,
+    source_transport_media_id: TransportMediaId,
+) {
+    register_consumer_route_fixture(
+        state,
+        consumer_session,
+        consumer_mid,
+        source_transport_media_id,
+        true,
+        PacketLayerGate::Open,
+        None,
+    );
 }
 
 fn push_keyframe_request(
@@ -292,11 +368,21 @@ fn push_keyframe_request(
     consumer_mid: &str,
     kind: KeyframeRequestKind,
 ) {
+    push_keyframe_request_with_rid(buffers, consumer_session, consumer_mid, None, kind);
+}
+
+fn push_keyframe_request_with_rid(
+    buffers: &mut PacketLoopBuffers,
+    consumer_session: TransportSessionKey,
+    consumer_mid: &str,
+    feedback_rid: Option<Rid>,
+    kind: KeyframeRequestKind,
+) {
     buffers.pending_keyframe_requests.push((
         consumer_session,
         PendingKeyframeRequest {
             consumer_mid: Mid::from(consumer_mid),
-            consumer_rid: None,
+            consumer_rid: feedback_rid,
             kind,
         },
     ));
@@ -319,6 +405,177 @@ fn remote_keyframe_source(
         .register_remote_source(&source, RemoteSourceControl::new(control_tx, target_id))
         .expect("remote source should register");
     control_rx
+}
+
+#[allow(
+    clippy::expect_used,
+    reason = "test setup helpers should fail loudly when a saturated remote keyframe fixture cannot be built"
+)]
+#[allow(
+    clippy::panic,
+    reason = "test assertion helpers should fail loudly when the command shape is wrong"
+)]
+fn recv_remote_keyframe_request(
+    control_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
+) -> (
+    TransportSourceKey,
+    RelayTargetId,
+    Option<Rid>,
+    KeyframeRequestKind,
+) {
+    match control_rx.try_recv() {
+        Ok(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+            request:
+                RouteControlRequest::RequestRemoteKeyframe {
+                    source,
+                    target_id,
+                    rid,
+                    kind,
+                },
+            response: None,
+        })) => (source, target_id, rid, kind),
+        Ok(_) => panic!("expected a remote keyframe request"),
+        Err(mpsc::error::TryRecvError::Empty) => {
+            panic!("expected a remote keyframe request but channel was empty")
+        }
+        Err(mpsc::error::TryRecvError::Disconnected) => {
+            panic!("expected a remote keyframe request but channel was disconnected")
+        }
+    }
+}
+
+fn assert_remote_keyframe_request(
+    control_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
+    source_session: &TransportSessionKey,
+    source_transport_media_id: TransportMediaId,
+    target_id: RelayTargetId,
+    rid: Option<Rid>,
+    kind: KeyframeRequestKind,
+) {
+    let (source, actual_target_id, actual_rid, actual_kind) =
+        recv_remote_keyframe_request(control_rx);
+    assert_eq!(source.session_key(), source_session);
+    assert_eq!(source.transport_media_id(), source_transport_media_id);
+    assert_eq!(actual_target_id, target_id);
+    assert_eq!(actual_rid, rid);
+    assert_eq!(actual_kind, kind);
+}
+
+#[allow(
+    clippy::panic,
+    reason = "test assertion helpers should fail loudly when an unexpected command is queued"
+)]
+fn assert_no_remote_keyframe_request(control_rx: &mut mpsc::Receiver<RtcWorkerCommand>) {
+    match control_rx.try_recv() {
+        Err(mpsc::error::TryRecvError::Empty) => {}
+        Err(mpsc::error::TryRecvError::Disconnected) => {
+            panic!("remote keyframe command channel disconnected")
+        }
+        Ok(_) => panic!("unexpected remote keyframe request"),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum RouteFeedbackGate {
+    Open,
+    Rid(&'static str),
+    RidWithPending {
+        effective: &'static str,
+        pending: &'static str,
+    },
+    Block,
+    BlockWithPending(&'static str),
+}
+
+impl RouteFeedbackGate {
+    fn gates(self) -> (PacketLayerGate, Option<PacketLayerGate>) {
+        match self {
+            Self::Open => (PacketLayerGate::Open, None),
+            Self::Rid(rid) => (PacketLayerGate::Rid(Rid::from(rid)), None),
+            Self::RidWithPending { effective, pending } => (
+                PacketLayerGate::Rid(Rid::from(effective)),
+                Some(PacketLayerGate::Rid(Rid::from(pending))),
+            ),
+            Self::Block => (PacketLayerGate::Block, None),
+            Self::BlockWithPending(rid) => (
+                PacketLayerGate::Block,
+                Some(PacketLayerGate::Rid(Rid::from(rid))),
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum RouteFeedbackExpectation {
+    Drop,
+    SourceWide,
+    Rid(&'static str),
+}
+
+#[derive(Clone, Copy)]
+struct RouteFeedbackCase {
+    id: u64,
+    active: bool,
+    gate: RouteFeedbackGate,
+    feedback_rid: Option<&'static str>,
+    expected: RouteFeedbackExpectation,
+    kind: KeyframeRequestKind,
+}
+
+fn route_feedback_cases() -> [RouteFeedbackCase; 6] {
+    [
+        RouteFeedbackCase {
+            id: 92,
+            active: true,
+            gate: RouteFeedbackGate::Open,
+            feedback_rid: None,
+            expected: RouteFeedbackExpectation::SourceWide,
+            kind: KeyframeRequestKind::Fir,
+        },
+        RouteFeedbackCase {
+            id: 93,
+            active: true,
+            gate: RouteFeedbackGate::Rid("hi"),
+            feedback_rid: None,
+            expected: RouteFeedbackExpectation::Rid("hi"),
+            kind: KeyframeRequestKind::Pli,
+        },
+        RouteFeedbackCase {
+            id: 94,
+            active: true,
+            gate: RouteFeedbackGate::RidWithPending {
+                effective: "lo",
+                pending: "hi",
+            },
+            feedback_rid: None,
+            expected: RouteFeedbackExpectation::Rid("lo"),
+            kind: KeyframeRequestKind::Pli,
+        },
+        RouteFeedbackCase {
+            id: 95,
+            active: true,
+            gate: RouteFeedbackGate::BlockWithPending("hi"),
+            feedback_rid: None,
+            expected: RouteFeedbackExpectation::Rid("hi"),
+            kind: KeyframeRequestKind::Pli,
+        },
+        RouteFeedbackCase {
+            id: 96,
+            active: true,
+            gate: RouteFeedbackGate::Block,
+            feedback_rid: Some("hi"),
+            expected: RouteFeedbackExpectation::Drop,
+            kind: KeyframeRequestKind::Pli,
+        },
+        RouteFeedbackCase {
+            id: 97,
+            active: false,
+            gate: RouteFeedbackGate::Rid("hi"),
+            feedback_rid: None,
+            expected: RouteFeedbackExpectation::Drop,
+            kind: KeyframeRequestKind::Pli,
+        },
+    ]
 }
 
 fn populate_forward_routes(
@@ -1259,18 +1516,19 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
     let packet_sink_registry = RoomPacketSinkRegistry::default();
     let source_transport_media_id =
         register_producer_media(&mut harness.state, &producer_session, "aud-up");
+    let consumer_mid = Mid::from("aud-down");
     let consumer_transport_media_id = register_consumer_media(
         &mut harness.state,
         &consumer_session,
-        "aud-down",
+        consumer_mid,
         source_transport_media_id,
     );
     let mut route_entry = MediaRouteEntry::new(true);
     route_entry.push_destination(MediaRouteDestination {
-        dest_session: consumer_session,
+        dest_session: consumer_session.clone(),
         dest_transport_media_id: consumer_transport_media_id,
         dest_stream: ConsumerStreamHandle::default(),
-        dest_mid: Mid::from("aud-down"),
+        dest_mid: consumer_mid,
         dest_payload_type: None,
         nackable: false,
         active: true,
@@ -1281,6 +1539,13 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
         .state
         .media_route_index
         .insert(source_transport_media_id, route_entry);
+    harness.state.set_consumer_destination_index(
+        &consumer_session,
+        consumer_mid,
+        consumer_transport_media_id,
+        source_transport_media_id,
+        Some(0),
+    );
     harness
         .buffers
         .pending_packets
@@ -1547,95 +1812,77 @@ fn flush_forward_routes_records_relay_overload_drops() {
 }
 
 #[test]
-fn flush_pending_keyframe_requests_marks_local_source_sessions_dirty() {
-    let source_session = test_transport_session_key(61, 0, 62, UserId::Integer(63));
-    let consumer_session = test_transport_session_key(61, 0, 64, UserId::Integer(65));
-    let mut harness = PacketLoopHarness::new();
+fn flush_pending_keyframe_requests_follow_route_scoped_feedback() {
+    for case in route_feedback_cases() {
+        let source_session =
+            test_transport_session_key(case.id, 0, case.id + 100, UserId::Integer(1000));
+        let consumer_session =
+            test_transport_session_key(case.id, 1, case.id + 200, UserId::Integer(2000));
+        let source_transport_media_id = TransportMediaId::new(case.id);
+        let target_id = RelayTargetId::new(case.id);
+        let mut harness = PacketLoopHarness::new();
+        let mut control_rx = remote_keyframe_source(
+            &mut harness.state,
+            source_transport_media_id,
+            &source_session,
+            target_id,
+            1,
+        );
+        let (packet_gate, pending_packet_gate) = case.gate.gates();
+        register_consumer_route_fixture(
+            &mut harness.state,
+            &consumer_session,
+            "cam-down",
+            source_transport_media_id,
+            case.active,
+            packet_gate,
+            pending_packet_gate,
+        );
+        push_keyframe_request_with_rid(
+            &mut harness.buffers,
+            consumer_session,
+            "cam-down",
+            case.feedback_rid.map(Rid::from),
+            case.kind,
+        );
 
-    let source_transport_media_id = local_keyframe_source(
-        &mut harness.state,
-        &source_session,
-        45_050,
-        "cam-up",
-        44_444,
-    );
-    register_consumer_media(
-        &mut harness.state,
-        &consumer_session,
-        "cam-down",
-        source_transport_media_id,
-    );
-    push_keyframe_request(
-        &mut harness.buffers,
-        consumer_session,
-        "cam-down",
-        KeyframeRequestKind::Pli,
-    );
+        flush_pending_keyframe_requests(
+            &mut harness.state,
+            harness.rtc_metrics.as_ref(),
+            &mut harness.buffers,
+        );
 
-    flush_pending_keyframe_requests(
-        &mut harness.state,
-        harness.rtc_metrics.as_ref(),
-        &mut harness.buffers,
-    );
-
-    assert_eq!(
-        drain_ready_sessions(&mut harness.state),
-        vec![source_session.clone()]
-    );
-    let snapshot = harness.metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
-    assert_eq!(snapshot.rtc_route_control_absorbed(), 0);
-}
-
-#[test]
-fn flush_pending_keyframe_requests_forwards_remote_sources_by_transport_media_id() {
-    let source_session = test_transport_session_key(71, 0, 72, UserId::Integer(73));
-    let consumer_session = test_transport_session_key(71, 1, 74, UserId::Integer(75));
-    let source_transport_media_id = TransportMediaId::new(91);
-    let mut harness = PacketLoopHarness::new();
-    let mut control_rx = remote_keyframe_source(
-        &mut harness.state,
-        source_transport_media_id,
-        &source_session,
-        RelayTargetId::new(1),
-        1,
-    );
-
-    register_consumer_media(
-        &mut harness.state,
-        &consumer_session,
-        "cam-down",
-        source_transport_media_id,
-    );
-    push_keyframe_request(
-        &mut harness.buffers,
-        consumer_session,
-        "cam-down",
-        KeyframeRequestKind::Fir,
-    );
-
-    flush_pending_keyframe_requests(
-        &mut harness.state,
-        harness.rtc_metrics.as_ref(),
-        &mut harness.buffers,
-    );
-
-    let command = control_rx.try_recv().ok();
-    assert!(matches!(
-        command,
-        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
-            request: RouteControlRequest::RequestRemoteKeyframe {
-                source,
-                target_id,
-                rid: None,
-                kind: KeyframeRequestKind::Fir,
-            },
-            response: None,
-        })) if source.session_key() == &source_session
-            && target_id == RelayTargetId::new(1)
-            && source.transport_media_id() == source_transport_media_id
-    ));
-    assert_eq!(harness.metrics.snapshot().rtc_route_control_forwarded(), 1);
+        match case.expected {
+            RouteFeedbackExpectation::Drop => {
+                assert_no_remote_keyframe_request(&mut control_rx);
+                assert_eq!(harness.metrics.snapshot().rtc_route_control_forwarded(), 0);
+            }
+            RouteFeedbackExpectation::SourceWide => {
+                assert_remote_keyframe_request(
+                    &mut control_rx,
+                    &source_session,
+                    source_transport_media_id,
+                    target_id,
+                    None,
+                    case.kind,
+                );
+                assert_eq!(harness.metrics.snapshot().rtc_route_control_forwarded(), 1);
+            }
+            RouteFeedbackExpectation::Rid(rid) => {
+                assert_remote_keyframe_request(
+                    &mut control_rx,
+                    &source_session,
+                    source_transport_media_id,
+                    target_id,
+                    Some(Rid::from(rid)),
+                    case.kind,
+                );
+                assert_eq!(harness.metrics.snapshot().rtc_route_control_forwarded(), 1);
+            }
+        }
+        assert_eq!(harness.metrics.snapshot().rtc_route_control_absorbed(), 0);
+        assert_no_remote_keyframe_request(&mut control_rx);
+    }
 }
 
 #[test]
@@ -1653,13 +1900,13 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
         2,
     );
 
-    register_consumer_media(
+    register_open_consumer_route_fixture(
         &mut harness.state,
         &first_consumer_session,
         "cam-down",
         source_transport_media_id,
     );
-    register_consumer_media(
+    register_open_consumer_route_fixture(
         &mut harness.state,
         &second_consumer_session,
         "cam-down-2",
@@ -1684,25 +1931,85 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
         &mut harness.buffers,
     );
 
-    let command = control_rx.try_recv().ok();
-    assert!(matches!(
-        command,
-        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
-            request: RouteControlRequest::RequestRemoteKeyframe {
-                source,
-                target_id,
-                rid: None,
-                kind: KeyframeRequestKind::Fir,
-            },
-            response: None,
-        })) if source.session_key() == &source_session
-            && target_id == RelayTargetId::new(4)
-            && source.transport_media_id() == source_transport_media_id
-    ));
-    assert!(control_rx.try_recv().is_err());
+    assert_remote_keyframe_request(
+        &mut control_rx,
+        &source_session,
+        source_transport_media_id,
+        RelayTargetId::new(4),
+        None,
+        KeyframeRequestKind::Fir,
+    );
+    assert_no_remote_keyframe_request(&mut control_rx);
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
     assert_eq!(snapshot.rtc_route_control_absorbed(), 0);
+}
+
+#[test]
+fn flush_pending_keyframe_requests_keeps_distinct_rids_separate() {
+    let source_session = test_transport_session_key(84, 0, 85, UserId::Integer(86));
+    let first_consumer_session = test_transport_session_key(84, 1, 87, UserId::Integer(88));
+    let second_consumer_session = test_transport_session_key(84, 1, 89, UserId::Integer(90));
+    let source_transport_media_id = TransportMediaId::new(104);
+    let first_rid = Rid::from("lo");
+    let second_rid = Rid::from("hi");
+    let mut harness = PacketLoopHarness::new();
+    let mut control_rx = remote_keyframe_source(
+        &mut harness.state,
+        source_transport_media_id,
+        &source_session,
+        RelayTargetId::new(6),
+        2,
+    );
+    register_consumer_route_fixture(
+        &mut harness.state,
+        &first_consumer_session,
+        "cam-down-1",
+        source_transport_media_id,
+        true,
+        PacketLayerGate::Rid(first_rid),
+        None,
+    );
+    register_consumer_route_fixture(
+        &mut harness.state,
+        &second_consumer_session,
+        "cam-down-2",
+        source_transport_media_id,
+        true,
+        PacketLayerGate::Rid(second_rid),
+        None,
+    );
+    push_keyframe_request(
+        &mut harness.buffers,
+        first_consumer_session,
+        "cam-down-1",
+        KeyframeRequestKind::Pli,
+    );
+    push_keyframe_request(
+        &mut harness.buffers,
+        second_consumer_session,
+        "cam-down-2",
+        KeyframeRequestKind::Fir,
+    );
+
+    flush_pending_keyframe_requests(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+    );
+
+    let mut requests = Vec::new();
+    for _ in 0..2 {
+        let (source, target_id, rid, kind) = recv_remote_keyframe_request(&mut control_rx);
+        assert_eq!(source.session_key(), &source_session);
+        assert_eq!(source.transport_media_id(), source_transport_media_id);
+        assert_eq!(target_id, RelayTargetId::new(6));
+        requests.push((rid, kind));
+    }
+    assert!(requests.contains(&(Some(first_rid), KeyframeRequestKind::Pli)));
+    assert!(requests.contains(&(Some(second_rid), KeyframeRequestKind::Fir)));
+    assert_eq!(requests.len(), 2);
+    assert_no_remote_keyframe_request(&mut control_rx);
 }
 
 #[test]
@@ -1719,13 +2026,13 @@ fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_f
         "cam-up",
         55_555,
     );
-    register_consumer_media(
+    register_open_consumer_route_fixture(
         &mut harness.state,
         &first_consumer_session,
         "cam-down-1",
         source_transport_media_id,
     );
-    register_consumer_media(
+    register_open_consumer_route_fixture(
         &mut harness.state,
         &second_consumer_session,
         "cam-down-2",

@@ -8,7 +8,6 @@ use tokio::sync::mpsc;
 
 use super::super::{
     commands::{RemoteSourceControl, RtcWorkerCommand},
-    media_registry::RegisteredMediaHandle,
     packet_loop::{PacketLoopBuffers, PendingKeyframeRequest, flush_pending_keyframe_requests_at},
     relay_registry::RelayTargetId,
     route_control::PacketLayerGate,
@@ -143,6 +142,8 @@ impl KeyframeCoalescingBenchFixture {
             ),
         );
 
+        let mut scenario = MediaWorkerScenario::new(&mut state);
+        scenario.existing_source(source_transport_media_id);
         for request_idx in 0..KEYFRAME_COALESCING_REQUESTS_I64 {
             let connection_offset = u64::try_from(request_idx).unwrap_or(0);
             let consumer_session = test_transport_session_key(
@@ -152,11 +153,7 @@ impl KeyframeCoalescingBenchFixture {
                 UserId::Integer(20_000 + request_idx),
             );
             let mid = Mid::from(format!("cam-down-{request_idx}").as_str());
-            state.register_media_handle(RegisteredMediaHandle::Consumer {
-                session_key: consumer_session.clone(),
-                mid,
-                source_transport_media_id,
-            });
+            scenario.destination(source_transport_media_id, consumer_session.clone(), mid);
             let kind = if request_idx == KEYFRAME_COALESCING_REQUESTS_I64 - 1 {
                 KeyframeRequestKind::Fir
             } else {

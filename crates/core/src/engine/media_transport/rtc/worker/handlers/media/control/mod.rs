@@ -47,8 +47,8 @@ pub(in crate::engine::media_transport::rtc::worker) use responses::{
 pub(in crate::engine::media_transport::rtc) use routes::worker_set_consumer_packet_gates_for_benchmark;
 pub(super) use routes::{
     ConsumerRouteRegistration, consumer_payload_type, ensure_existing_route_source,
-    ensure_route_source_registered, owned_local_producer_mid, packet_gate_rid,
-    register_consumer_route, remove_consumer_route,
+    ensure_route_source_registered, owned_local_producer_mid, register_consumer_route,
+    remove_consumer_route,
 };
 pub(in crate::engine::media_transport::rtc::worker) use routes::{
     refresh_source_packet_gate, remove_source_route,
