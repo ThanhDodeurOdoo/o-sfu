@@ -14,8 +14,7 @@ use {
         WorkerCommandContext,
     },
     crate::{
-        Bitrate, CodecPreferences, MediaCodecFlags, MediaWorkerId, RtcPortRange,
-        SessionBitrateLimits,
+        CodecPreferences, MediaCodecFlags, MediaWorkerId, RtcPortRange, SessionBitrateLimits,
         engine::{
             diagnostics::DiagnosticsStore,
             media_transport::{
@@ -36,12 +35,13 @@ use super::{
     super::{
         state::TransportSessionHealth,
         test_support::{
-            DebugProbe, DebugRouteEntry, ObserveAudioActivityProbe, RouteEntryByConsumerMidProbe,
-            RouteEntryByMediaIdProbe, RouteEntryProbe,
+            DebugProbe, DebugRouteEntry, ObserveAudioActivityProbe, ReceiverBweTargetProbe,
+            RouteEntryByConsumerMidProbe, RouteEntryByMediaIdProbe, RouteEntryProbe,
         },
     },
     RtcWorker,
 };
+use crate::Bitrate;
 
 #[cfg(test)]
 #[allow(
@@ -203,6 +203,34 @@ impl RtcWorker {
                 .users
                 .get(&session_key)
                 .and_then(|session_state| session_state.max_bitrate_out)
+        })
+        .await
+        .flatten()
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub async fn debug_session_receiver_bwe_target(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Option<Bitrate> {
+        self.probe_debug_worker(ReceiverBweTargetProbe {
+            session_key: session_key.clone(),
+        })
+        .await
+        .flatten()
+    }
+
+    #[cfg(test)]
+    pub async fn debug_session_receiver_bwe_str0m_update_count(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Option<u64> {
+        let session_key = session_key.clone();
+        self.read_debug_worker(move |state, _context| {
+            state
+                .users
+                .get(&session_key)
+                .map(|session_state| session_state.receiver_bwe_str0m_update_count)
         })
         .await
         .flatten()

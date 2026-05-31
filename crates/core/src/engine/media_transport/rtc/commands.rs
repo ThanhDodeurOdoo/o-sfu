@@ -19,9 +19,9 @@ use super::{
 use crate::engine::{
     RoomInstanceId,
     media_transport::{
-        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer, SessionOffer,
-        TransportConsumerRoute, TransportMediaId, TransportResult, TransportSessionKey,
-        TransportSourceKey,
+        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
+        ReceiverBweTargetUpdate, SessionOffer, TransportConsumerRoute, TransportMediaId,
+        TransportResult, TransportSessionKey, TransportSourceKey,
     },
     metrics::{RtcMetricsRecorder, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence},
 };
@@ -297,6 +297,14 @@ pub(super) enum RtcWorkerCommand {
     ExpiredActiveSpeakerRoomInstanceIds {
         now: Instant,
         response: RtcWorkerResponse<BTreeSet<RoomInstanceId>>,
+    },
+    /// update receiver-side desired send bitrate for BWE probing
+    ///
+    /// the worker caps every target at its outgoing bitrate ceiling and dedupes
+    /// unchanged values before touching str0m
+    SetReceiverBweTargetBatch {
+        updates: Vec<ReceiverBweTargetUpdate>,
+        response: RtcWorkerResponse<Vec<TransportResult<()>>>,
     },
     /// accept the answer for the current pending local offer
     ///

@@ -54,8 +54,8 @@ use tracing::warn;
 pub use types::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
     ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,
-    ConsumerPacketGateUpdate, ProducerActivity, ReceiverBandwidthSnapshot, RelayRouteActivity,
-    SessionOffer, SessionUploadEncoding, SessionUploadSlot, SourcePacketGate,
+    ConsumerPacketGateUpdate, ProducerActivity, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate,
+    RelayRouteActivity, SessionOffer, SessionUploadEncoding, SessionUploadSlot, SourcePacketGate,
     SourcePacketOperatingPoint, TransportAdapterError, TransportBitrateSnapshot,
     TransportConsumerRoute, TransportMediaId, TransportPlacementPressureSnapshot,
     TransportQualitySample, TransportQualitySnapshot, TransportRelayRouteAction,
@@ -487,6 +487,26 @@ impl MediaTransport {
                     route = ?update.route(),
                     packet_gate = ?update.packet_gate(),
                     "media transport failed to update a batched consumer packet gate"
+                );
+            }
+        }
+        results
+    }
+
+    /// Applies receiver-side desired BWE targets and preserves input order in
+    /// the returned results.
+    pub async fn set_receiver_bwe_targets(
+        &self,
+        updates: &[ReceiverBweTargetUpdate],
+    ) -> Vec<Result<(), TransportAdapterError>> {
+        let results = self.execute_receiver_bwe_target_batch(updates).await;
+        for (update, result) in updates.iter().zip(results.iter()) {
+            if let Err(error) = result {
+                warn!(
+                    ?error,
+                    session_key = ?update.session_key(),
+                    target = update.target().as_bps(),
+                    "media transport failed to update a receiver BWE target"
                 );
             }
         }

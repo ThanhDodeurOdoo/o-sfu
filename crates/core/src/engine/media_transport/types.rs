@@ -614,6 +614,32 @@ impl ConsumerPacketGateUpdate {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiverBweTargetUpdate {
+    session_key: TransportSessionKey,
+    target: Bitrate,
+}
+
+impl ReceiverBweTargetUpdate {
+    #[must_use]
+    pub fn new(session_key: TransportSessionKey, target: Bitrate) -> Self {
+        Self {
+            session_key,
+            target,
+        }
+    }
+
+    #[must_use]
+    pub fn session_key(&self) -> &TransportSessionKey {
+        &self.session_key
+    }
+
+    #[must_use]
+    pub const fn target(&self) -> Bitrate {
+        self.target
+    }
+}
+
 /// Packet-facing layered operating point selected for one source route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourcePacketOperatingPoint {

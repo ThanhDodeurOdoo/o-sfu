@@ -13,6 +13,7 @@
 //! - expose the small helpers that packet-loop code reuses directly, such as
 //!   keyframe requests for already-resolved sources
 
+mod bwe;
 mod dispatcher;
 mod media;
 mod negotiation;

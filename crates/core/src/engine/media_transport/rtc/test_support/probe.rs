@@ -33,11 +33,14 @@ use std::{net::SocketAddr, time::Instant};
 use str0m::media::Mid;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::engine::media_transport::{
-    TransportMediaId, TransportSessionKey,
-    rtc::{
-        packet_loop::PacketLoopInputReceivers, route_control::PacketLayerGate,
-        state::PacketLoopState, worker::WorkerCommandContext,
+use crate::{
+    Bitrate,
+    engine::media_transport::{
+        TransportMediaId, TransportSessionKey,
+        rtc::{
+            packet_loop::PacketLoopInputReceivers, route_control::PacketLayerGate,
+            state::PacketLoopState, worker::WorkerCommandContext,
+        },
     },
 };
 
@@ -345,6 +348,27 @@ impl DebugProbe for RouteEntryByMediaIdProbe {
         _context: &WorkerCommandContext<'_>,
     ) -> Self::Output {
         debug_route_entry(state, self.source_transport_media_id)
+    }
+}
+
+#[cfg(any(test, feature = "testing-transport"))]
+pub(in crate::engine::media_transport::rtc) struct ReceiverBweTargetProbe {
+    pub session_key: TransportSessionKey,
+}
+
+#[cfg(any(test, feature = "testing-transport"))]
+impl DebugProbe for ReceiverBweTargetProbe {
+    type Output = Option<Bitrate>;
+
+    fn inspect(
+        self,
+        state: &mut PacketLoopState,
+        _context: &WorkerCommandContext<'_>,
+    ) -> Self::Output {
+        state
+            .users
+            .get(&self.session_key)
+            .and_then(|session_state| session_state.receiver_bwe_target)
     }
 }
 

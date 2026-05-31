@@ -8,7 +8,7 @@ pub(super) use str0m::{Candidate, Rtc, change::SdpOffer};
 
 pub(super) use super::super::{api::NegotiatedPublish, fixtures::*};
 pub(super) use crate::{
-    RoomMediaLimits, RtcPortRange,
+    Bitrate, RoomMediaLimits, RtcPortRange,
     engine::{
         diagnostics::{
             DiagnosticsPolicyPauseReason, DiagnosticsRouteState, DiagnosticsSourceSelector,
@@ -193,6 +193,23 @@ pub(super) async fn active_destination_count_for_receiver(
             .count();
     }
     count
+}
+
+pub(super) async fn assert_receiver_bwe_target(
+    room: &Arc<Room>,
+    adapter: &MediaTransport,
+    receiver_user_id: &UserId,
+    expected_target: Bitrate,
+) {
+    let connection_id = user_connection_id(room, receiver_user_id).await;
+    let session_key = room.transport_user_key(receiver_user_id, connection_id);
+    assert_eq!(
+        adapter
+            .test_api()
+            .session_receiver_bwe_target(&session_key)
+            .await,
+        Some(expected_target)
+    );
 }
 
 pub(super) struct RealRtcRefreshScenario {

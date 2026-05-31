@@ -86,6 +86,122 @@ async fn rtc_session_bootstrap_applies_configured_outgoing_bitrate_cap() {
 }
 
 #[tokio::test]
+async fn rtc_receiver_bwe_target_update_writes_session_state() {
+    let adapter = RtcWorker::default();
+    let session_key = transport_key(1, 183, UserId::Integer(183));
+    expect_initial_offer(&adapter, &session_key).await;
+    let update = ReceiverBweTargetUpdate::new(session_key.clone(), Bitrate::from_kbps(850));
+
+    let results = adapter
+        .set_receiver_bwe_targets(slice::from_ref(&update))
+        .await
+        .expect("receiver BWE target command should reach the worker");
+
+    assert_eq!(results, vec![Ok(())]);
+    assert_eq!(
+        adapter
+            .debug_session_receiver_bwe_target(&session_key)
+            .await,
+        Some(Bitrate::from_kbps(850))
+    );
+}
+
+#[tokio::test]
+async fn rtc_receiver_bwe_target_update_dedupes_identical_targets() {
+    let adapter = RtcWorker::default();
+    let session_key = transport_key(1, 184, UserId::Integer(184));
+    expect_initial_offer(&adapter, &session_key).await;
+    let update = ReceiverBweTargetUpdate::new(session_key.clone(), Bitrate::from_kbps(640));
+
+    let first_results = adapter
+        .set_receiver_bwe_targets(slice::from_ref(&update))
+        .await
+        .expect("first receiver BWE target command should reach the worker");
+    let second_results = adapter
+        .set_receiver_bwe_targets(slice::from_ref(&update))
+        .await
+        .expect("second receiver BWE target command should reach the worker");
+
+    assert_eq!(first_results, vec![Ok(())]);
+    assert_eq!(second_results, vec![Ok(())]);
+    assert_eq!(
+        adapter
+            .debug_session_receiver_bwe_str0m_update_count(&session_key)
+            .await,
+        Some(1)
+    );
+}
+
+#[tokio::test]
+async fn rtc_receiver_bwe_target_update_caps_at_max_bitrate_out() {
+    let adapter = rtc_with_bitrate_limits(Bitrate::from_mbps(8), Bitrate::from_kbps(500));
+    let session_key = transport_key(1, 185, UserId::Integer(185));
+    expect_initial_offer(&adapter, &session_key).await;
+    let update = ReceiverBweTargetUpdate::new(session_key.clone(), Bitrate::from_kbps(900));
+
+    let results = adapter
+        .set_receiver_bwe_targets(slice::from_ref(&update))
+        .await
+        .expect("receiver BWE target command should reach the worker");
+
+    assert_eq!(results, vec![Ok(())]);
+    assert_eq!(
+        adapter
+            .debug_session_receiver_bwe_target(&session_key)
+            .await,
+        Some(Bitrate::from_kbps(500))
+    );
+}
+
+#[tokio::test]
+async fn rtc_receiver_bwe_target_update_missing_session_returns_error() {
+    let adapter = RtcWorker::default();
+    let session_key = transport_key(1, 186, UserId::Integer(186));
+    let update = ReceiverBweTargetUpdate::new(session_key, Bitrate::from_kbps(400));
+
+    let results = adapter
+        .set_receiver_bwe_targets(slice::from_ref(&update))
+        .await
+        .expect("missing session result should still return through the worker");
+
+    assert!(matches!(
+        results.as_slice(),
+        [Err(TransportAdapterError::InvalidInput)]
+    ));
+}
+
+#[tokio::test]
+async fn rtc_receiver_bwe_zero_target_clears_previous_target() {
+    let adapter = RtcWorker::default();
+    let session_key = transport_key(1, 187, UserId::Integer(187));
+    expect_initial_offer(&adapter, &session_key).await;
+    let non_zero = ReceiverBweTargetUpdate::new(session_key.clone(), Bitrate::from_kbps(700));
+    let zero = ReceiverBweTargetUpdate::new(session_key.clone(), Bitrate::zero());
+
+    assert!(
+        adapter
+            .set_receiver_bwe_targets(slice::from_ref(&non_zero))
+            .await
+            .expect("non-zero target command should reach the worker")[0]
+            .is_ok()
+    );
+    assert!(
+        adapter
+            .set_receiver_bwe_targets(slice::from_ref(&zero))
+            .await
+            .expect("zero target command should reach the worker")[0]
+            .is_ok()
+    );
+
+    assert_eq!(
+        adapter
+            .debug_session_receiver_bwe_target(&session_key)
+            .await,
+        Some(Bitrate::zero())
+    );
+}
+
+#[tokio::test]
 async fn rtc_recv_media_applies_configured_incoming_bitrate_cap() {
     let adapter =
         rtc_with_bitrate_limits(Bitrate::from_bps(1_234_567), Bitrate::from_bps(7_654_321));

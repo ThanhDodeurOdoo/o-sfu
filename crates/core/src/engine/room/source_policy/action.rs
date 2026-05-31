@@ -5,14 +5,56 @@
 //! policy executor.
 
 use super::super::media_graph::ConsumerRouteTransportRef;
-use crate::engine::{
-    UserId,
-    media_transport::SourcePacketGate,
-    source_model::{
-        ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId,
-        ReceiverVideoBudgetDiagnostics, SourceSelector,
+use crate::{
+    Bitrate,
+    engine::{
+        ConnectionId, UserId,
+        media_transport::SourcePacketGate,
+        source_model::{
+            ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId,
+            ReceiverVideoBudgetDiagnostics, SourceSelector,
+        },
     },
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::engine::room) struct ReceiverBweTargetPlan {
+    user_id: UserId,
+    connection_id: ConnectionId,
+    target: Bitrate,
+}
+
+impl ReceiverBweTargetPlan {
+    pub fn new(user_id: UserId, connection_id: ConnectionId, target: Bitrate) -> Self {
+        Self {
+            user_id,
+            connection_id,
+            target,
+        }
+    }
+
+    pub fn user_id(&self) -> &UserId {
+        &self.user_id
+    }
+
+    pub const fn connection_id(&self) -> ConnectionId {
+        self.connection_id
+    }
+
+    pub const fn target(&self) -> Bitrate {
+        self.target
+    }
+
+    pub const fn set_target(&mut self, target: Bitrate) {
+        self.target = target;
+    }
+}
+
+#[derive(Debug)]
+pub(in crate::engine::room) struct ReceiverVideoPolicyPlan {
+    pub consumer_packet_updates: Vec<ConsumerPacketSelectionUpdate>,
+    pub receiver_bwe_targets: Vec<ReceiverBweTargetPlan>,
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(in crate::engine::room) struct BudgetSolverOutcomes {

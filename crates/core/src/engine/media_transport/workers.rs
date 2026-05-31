@@ -21,8 +21,8 @@ use crate::engine::{
     media_transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ConsumerPacketGateUpdate,
         MediaTransport, MediaTransportConfig, MediaTransportDeps, ReceiverBandwidthSnapshot,
-        SourcePolicySignal, SourcePolicyUpdateSubscription, TransportAdapterError,
-        TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,
+        ReceiverBweTargetUpdate, SourcePolicySignal, SourcePolicyUpdateSubscription,
+        TransportAdapterError, TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,
         TransportPlacementPressureSnapshot, TransportQualitySnapshot, TransportRelayRouteAction,
         TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey, TransportSourceKey,
         TransportWorkerPressureSnapshot,
@@ -216,6 +216,37 @@ impl MediaTransport {
                     &key.source,
                     batch.iter().filter_map(|index| updates.get(*index)),
                 )
+                .await
+                .unwrap_or_else(|error| vec![Err(error); update_count]);
+            for (index, result) in batch.into_iter().zip(batch_results) {
+                if let Some(stored_result) = results.get_mut(index) {
+                    *stored_result = result;
+                }
+            }
+        }
+        results
+    }
+
+    /// Applies receiver BWE targets in worker-local batches.
+    pub(super) async fn execute_receiver_bwe_target_batch(
+        &self,
+        updates: &[ReceiverBweTargetUpdate],
+    ) -> Vec<Result<(), TransportAdapterError>> {
+        let mut results = vec![Err(TransportAdapterError::TransportUnavailable); updates.len()];
+        let mut batches = BTreeMap::<usize, Vec<usize>>::new();
+        for (index, update) in updates.iter().enumerate() {
+            let Some(worker_index) = self.worker_index_for_user(update.session_key()) else {
+                continue;
+            };
+            batches.entry(worker_index).or_default().push(index);
+        }
+        for (worker_index, batch) in batches {
+            let Some(worker) = self.worker_for_index(worker_index) else {
+                continue;
+            };
+            let update_count = batch.len();
+            let batch_results = worker
+                .set_receiver_bwe_targets(batch.iter().filter_map(|index| updates.get(*index)))
                 .await
                 .unwrap_or_else(|error| vec![Err(error); update_count]);
             for (index, result) in batch.into_iter().zip(batch_results) {

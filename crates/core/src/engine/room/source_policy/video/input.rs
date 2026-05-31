@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use o_sfu_router::MediaKind;
 
 use super::{
-    super::super::{media_graph::ConsumerRouteTransportRef, state::RoomState},
+    super::{super::media_graph::ConsumerRouteTransportRef, action::ReceiverBweTargetPlan},
     layout::{ReceiverVideoLayoutIntent, featured_source_user_ids_for_active_speakers},
 };
 use crate::{
@@ -16,6 +16,7 @@ use crate::{
     engine::{
         UserId,
         media_transport::{ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportMediaId},
+        room::state::RoomState,
         source_model::{
             ActiveSpeakerSourceRole, ConsumerSourceSelection, PublishedSourceDescriptor,
             PublishedSourceId, SourceAdaptationPolicy, SourceEncodingDescriptor,
@@ -26,6 +27,7 @@ use crate::{
 #[derive(Debug)]
 pub(in crate::engine::room) struct ReceiverVideoPolicyInput<'a> {
     pub routes: Vec<ReceiverVideoRouteInput<'a>>,
+    pub receiver_bwe_targets: BTreeMap<UserId, ReceiverBweTargetPlan>,
     pub max_video_downloads_per_receiver: usize,
 }
 
@@ -43,6 +45,16 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
         let receiver_bandwidth_by_user = receiver_bandwidth_by_user(receiver_bandwidth_snapshot);
         let visible_scalable_route_counts =
             visible_scalable_route_counts_by_consumer(state, &featured_source_user_ids);
+        let receiver_bwe_targets = state
+            .transport_user_entries()
+            .into_iter()
+            .map(|(user_id, connection_id)| {
+                (
+                    user_id.clone(),
+                    ReceiverBweTargetPlan::new(user_id, connection_id, Bitrate::zero()),
+                )
+            })
+            .collect();
         let routes = state
             .source_policy_live_consumer_routes()
             .filter_map(|route| {
@@ -85,6 +97,7 @@ impl<'a> ReceiverVideoPolicyInput<'a> {
             .collect();
         Self {
             routes,
+            receiver_bwe_targets,
             max_video_downloads_per_receiver: state
                 .source_policy_media_limits()
                 .max_video_downloads_per_receiver(),

@@ -10,12 +10,13 @@ use tracing::{debug, warn};
 
 use super::{
     super::{Room, state::RoomState},
-    ConsumerPacketSelectionUpdate, FeaturedUserUpdate, rank_active_speaker_sources,
+    ConsumerPacketSelectionUpdate, FeaturedUserUpdate, ReceiverBweTargetPlan,
+    rank_active_speaker_sources,
 };
 use crate::engine::{
     media_transport::{
         ActiveSpeakerSource, ConsumerActivity, ConsumerPacketGateUpdate, MediaTransport,
-        ReceiverBandwidthSnapshot,
+        ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate,
     },
     metrics::{self, BudgetSolverOutcome},
 };
@@ -33,6 +34,7 @@ mod test_support;
 #[derive(Debug, Default)]
 pub(in crate::engine::room) struct SourcePolicyEffectPlan {
     consumer_packet_updates: Vec<ConsumerPacketSelectionUpdate>,
+    receiver_bwe_targets: Vec<ReceiverBweTargetPlan>,
     featured_users: Vec<FeaturedUserUpdate>,
 }
 
@@ -49,19 +51,23 @@ impl SourcePolicyEffectPlan {
         let ranked_active_speaker_sources = rank_active_speaker_sources(active_speaker_sources);
         let mut consumer_packet_updates =
             state.audio_route_activity_updates(&ranked_active_speaker_sources);
-        consumer_packet_updates.extend(state.consumer_packet_selection_updates(
+        let video_plan = state.receiver_video_policy_plan(
             &ranked_active_speaker_sources,
             receiver_bandwidth_snapshot,
-        ));
+        );
+        consumer_packet_updates.extend(video_plan.consumer_packet_updates);
         let featured_users = state.featured_user_updates(&ranked_active_speaker_sources);
         Self {
             consumer_packet_updates,
+            receiver_bwe_targets: video_plan.receiver_bwe_targets,
             featured_users,
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.consumer_packet_updates.is_empty() && self.featured_users.is_empty()
+        self.consumer_packet_updates.is_empty()
+            && self.receiver_bwe_targets.is_empty()
+            && self.featured_users.is_empty()
     }
 
     /// Applies transport-visible gates before committing selector state.
@@ -71,6 +77,7 @@ impl SourcePolicyEffectPlan {
     /// `RoomState`; rejected or stale updates are left for the next policy
     /// refresh.
     pub async fn execute(self, room: &Room, media_port: &MediaTransport) {
+        Self::apply_receiver_bwe_targets(room, media_port, &self.receiver_bwe_targets).await;
         let applied_consumer_packet_updates =
             Self::apply_consumer_packet_updates(room, media_port, self.consumer_packet_updates)
                 .await;
@@ -86,6 +93,23 @@ impl SourcePolicyEffectPlan {
         if let Some(info_fanout) = info_fanout {
             info_fanout.emit();
         }
+    }
+
+    async fn apply_receiver_bwe_targets(
+        room: &Room,
+        media_port: &MediaTransport,
+        targets: &[ReceiverBweTargetPlan],
+    ) {
+        let updates = targets
+            .iter()
+            .map(|target| {
+                ReceiverBweTargetUpdate::new(
+                    room.transport_user_key(target.user_id(), target.connection_id()),
+                    target.target(),
+                )
+            })
+            .collect::<Vec<_>>();
+        media_port.set_receiver_bwe_targets(&updates).await;
     }
 
     fn record_source_selection_metrics(room: &Room, updates: &[ConsumerPacketSelectionUpdate]) {
