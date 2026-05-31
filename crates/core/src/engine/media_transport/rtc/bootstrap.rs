@@ -237,7 +237,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn h264_bootstrap_uses_the_shared_payload_contract_without_rtx() {
+    fn h264_bootstrap_omits_rtx_for_receiver_safe_consumer_streams() {
         let mut config = rtc_builder(
             MediaCodecFlags::default().with_vp8(false).with_h264(true),
             None,

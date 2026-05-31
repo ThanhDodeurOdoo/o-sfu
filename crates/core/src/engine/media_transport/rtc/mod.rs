@@ -20,7 +20,7 @@
 //! - `bootstrap`, `commands` and `state`: offer/answer bootstrap, mailbox
 //!   contracts and pure RTC session state.
 //! - `packet_loop`, `demux`, `forwarded_packet`, `forwarding_destination`,
-//!   `forwarding_planner`, `local_forwarding` and `shared_payload`: UDP/RTP
+//!   `forwarding_planner` and `local_forwarding`: UDP/RTP
 //!   ingress, routing, fanout planning, local sends, recording packet sinks,
 //!   and zero-copy payload ownership.
 //! - `media_registry`, `relay_registry`, `route_control`, `routing_miss`,
@@ -49,7 +49,6 @@ mod packet_loop;
 mod relay_registry;
 mod route_control;
 mod routing_miss;
-mod shared_payload;
 mod simulcast;
 mod slots;
 mod state;

@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use str0m::{
     media::{ExtensionValues, Mid, Pt, Rid},
@@ -6,7 +6,7 @@ use str0m::{
 };
 
 use super::{ForwardedPacket, ForwardedPacketData, ForwardedPacketSource, ForwardedRelayRtpData};
-use crate::engine::media_transport::{TransportSessionKey, rtc::shared_payload::SharedPayload};
+use crate::engine::media_transport::TransportSessionKey;
 #[cfg(test)]
 use crate::engine::{
     media_transport::TransportMediaId, media_transport::rtc::slots::SessionHandle,
@@ -171,7 +171,7 @@ fn sample_forwarded_packet_with_source(
         facts: None,
         visits_origin_sinks: true,
         received_at,
-        payload: SharedPayload::from_vec(payload.to_vec()),
+        payload: Arc::from(payload),
         data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
             header: RtpHeader {
                 version: 2,
@@ -210,7 +210,7 @@ pub fn sample_forwarded_packet_without_mid(
         facts: None,
         visits_origin_sinks: true,
         received_at,
-        payload: SharedPayload::from_vec(payload.to_vec()),
+        payload: Arc::from(payload),
         data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
             header: RtpHeader {
                 version: 2,

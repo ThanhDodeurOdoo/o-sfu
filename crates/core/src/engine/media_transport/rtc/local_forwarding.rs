@@ -5,20 +5,17 @@
 //! packet for the receiver: rewrite publisher metadata into the consumer MID,
 //! strip publisher RID extensions and apply projected RTP identity.
 
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
-use o_sfu_rfc::rtp::vp8;
 use str0m::{
-    RtcError,
     media::{ExtensionValues, Mid, Pt},
-    rtp::{RtpHeader, RtpPacket, StreamTx},
+    rtp::{RtpHeader, RtpPacket, RtpWrite, StreamTx},
 };
 use tracing::debug;
 
 use super::{
     forwarded_packet::PacketVp8Payload,
     local_send_rewrite::{ProjectedIdentity, next_projected_rtp_identity},
-    shared_payload::SharedPayload,
     slots::ConsumerStreamHandle,
     state::RtcSessionState,
 };
@@ -45,7 +42,7 @@ pub(super) struct LocalPacketDestination {
 
 pub(super) struct LocalForwardedRtp<'a> {
     data: LocalForwardedRtpData<'a>,
-    payload: &'a mut SharedPayload,
+    payload: &'a Arc<[u8]>,
 }
 
 enum LocalForwardedRtpData<'a> {
@@ -57,7 +54,7 @@ enum LocalForwardedRtpData<'a> {
 }
 
 impl<'a> LocalForwardedRtp<'a> {
-    pub(super) fn new(rtp_packet: &'a RtpPacket, payload: &'a mut SharedPayload) -> Self {
+    pub(super) fn new(rtp_packet: &'a RtpPacket, payload: &'a Arc<[u8]>) -> Self {
         Self {
             data: LocalForwardedRtpData::Str0m(rtp_packet),
             payload,
@@ -67,7 +64,7 @@ impl<'a> LocalForwardedRtp<'a> {
     pub(super) fn from_relay(
         header: &'a RtpHeader,
         timestamp: Instant,
-        payload: &'a mut SharedPayload,
+        payload: &'a Arc<[u8]>,
     ) -> Self {
         Self {
             data: LocalForwardedRtpData::Relay { header, timestamp },
@@ -120,11 +117,9 @@ impl LocalPacketDestination {
         session_state: &mut RtcSessionState,
         packet: LocalForwardedRtp<'_>,
         vp8_payload: Option<PacketVp8Payload>,
-        is_last_destination: bool,
-    ) -> Result<Option<usize>, RtcError> {
-        let mut rtp = packet;
+    ) -> Option<usize> {
+        let rtp = packet;
         let payload_len = rtp.payload.len();
-        let vp8_payload = vp8_payload.or_else(|| vp8_payload_from_rtp(&rtp));
         let vp8_identity = vp8_payload
             .map(|vp8_payload| vp8_payload.identity)
             .unwrap_or_default();
@@ -132,18 +127,14 @@ impl LocalPacketDestination {
         let rtc = &mut session_state.rtc;
         {
             let mut direct_api = rtc.direct_api();
-            let Some(stream_tx) = direct_api.stream_tx_by_mid(self.mid, None) else {
-                return Ok(None);
-            };
-            let Some(identity) = next_projected_rtp_identity(
+            let stream_tx = direct_api.stream_tx_by_mid(self.mid, None)?;
+            let identity = next_projected_rtp_identity(
                 local_send_streams,
                 self.stream_handle,
                 rtp.header().ssrc,
                 rtp.header().timestamp,
                 vp8_identity,
-            ) else {
-                return Ok(None);
-            };
+            )?;
             if identity.source_switched {
                 debug!(
                     ?self.transport_media_id,
@@ -160,14 +151,13 @@ impl LocalPacketDestination {
             let write_context = RtpWriteContext {
                 identity,
                 nackable: self.nackable,
-                is_last_destination,
                 mid: self.mid,
                 payload_type: self.payload_type,
                 vp8_payload,
             };
-            write_rtp(stream_tx, &mut rtp, write_context)?;
+            write_rtp(stream_tx, &rtp, write_context);
         }
-        Ok(Some(payload_len))
+        Some(payload_len)
     }
 }
 
@@ -175,7 +165,6 @@ impl LocalPacketDestination {
 struct RtpWriteContext {
     identity: ProjectedIdentity,
     nackable: bool,
-    is_last_destination: bool,
     mid: Mid,
     payload_type: Option<Pt>,
     vp8_payload: Option<PacketVp8Payload>,
@@ -186,46 +175,31 @@ struct RtpWriteContext {
 /// Str0m owns the actual send queue, but the adapter decides the per-consumer
 /// sequence, timestamp and VP8 payload descriptor space immediately before the
 /// packet crosses that boundary.
-fn write_rtp(
-    stream_tx: &mut StreamTx,
-    rtp: &mut LocalForwardedRtp<'_>,
-    context: RtpWriteContext,
-) -> Result<(), RtcError> {
-    let payload_type = outbound_payload_type(rtp.header(), context.payload_type);
-    let ext_vals = outbound_extension_values(rtp.header(), context.mid);
-    let mut payload = rtp.payload.take_write_payload(context.is_last_destination);
-    if let Some(packet_vp8_payload) = context.vp8_payload {
-        vp8::rewrite_payload_descriptor(
-            &mut payload,
-            packet_vp8_payload.descriptor,
-            vp8::PayloadDescriptorRewrite {
-                picture_id: context.identity.vp8_payload.picture_id,
-                tl0_pic_idx: context.identity.vp8_payload.tl0_pic_idx,
-            },
-        );
+fn write_rtp(stream_tx: &mut StreamTx, rtp: &LocalForwardedRtp<'_>, context: RtpWriteContext) {
+    let header = rtp.header();
+    let payload_type = outbound_payload_type(header, context.payload_type);
+    let ext_vals = outbound_extension_values(header, context.mid);
+    let payload = Arc::clone(rtp.payload);
+    let mut write = RtpWrite::new(
+        payload_type,
+        context.identity.seq_no,
+        context.identity.rtp_timestamp,
+        rtp.timestamp(),
+        payload,
+    )
+    .marker(header.marker)
+    .ext_vals(ext_vals)
+    .nackable(context.nackable);
+    if let Some(csrc) = header.csrc.get(..header.csrc_count) {
+        write = write.csrc(csrc);
     }
-    stream_tx
-        .write_rtp_with_csrc(
-            payload_type,
-            context.identity.seq_no,
-            context.identity.rtp_timestamp,
-            rtp.timestamp(),
-            rtp.header().marker,
-            ext_vals,
-            context.nackable,
-            payload,
-            rtp.header().csrc_count,
-            rtp.header().csrc,
-        )
-        .map_err(|error| RtcError::Packet(context.mid, payload_type, error))
-}
-
-fn vp8_payload_from_rtp(rtp: &LocalForwardedRtp<'_>) -> Option<PacketVp8Payload> {
-    rtp.header()
-        .ext_vals
-        .rid
-        .or(rtp.header().ext_vals.rid_repair)?;
-    vp8::payload_descriptor(rtp.payload.as_slice()).map(PacketVp8Payload::new)
+    if let Some(patch) = context
+        .vp8_payload
+        .and_then(|packet| packet.patch(context.identity.vp8_payload))
+    {
+        write = write.vp8_patch(patch);
+    }
+    stream_tx.write_rtp(write);
 }
 
 fn outbound_payload_type(header: &RtpHeader, payload_type: Option<Pt>) -> Pt {
@@ -253,17 +227,17 @@ mod tests {
     #[test]
     fn local_send_contract_keeps_payload_inside_the_adapter_boundary() {
         let session_key = test_transport_session_key(45, 0, 12, UserId::Integer(9));
-        let mut packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
+        let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
         let rtp = packet.local_send_packet();
 
         assert_eq!(rtp.header().ext_vals.mid, Some(Mid::from("aud-up")));
-        assert_eq!(rtp.payload.as_slice(), b"payload");
+        assert_eq!(rtp.payload.as_ref(), b"payload");
     }
 
     #[test]
     fn outbound_extension_values_rewrite_source_identity_to_consumer_stream() {
         let session_key = test_transport_session_key(45, 0, 12, UserId::Integer(9));
-        let mut packet = sample_forwarded_packet(session_key, "cam-up", b"payload");
+        let packet = sample_forwarded_packet(session_key, "cam-up", b"payload");
         let rtp = packet.local_send_packet();
         let mut source_header = rtp.header().clone();
         source_header.ext_vals.rid = Some(Rid::from("hi"));
@@ -281,7 +255,7 @@ mod tests {
     #[test]
     fn outbound_payload_type_prefers_consumer_negotiated_payload_type() {
         let session_key = test_transport_session_key(45, 0, 12, UserId::Integer(9));
-        let mut packet = sample_forwarded_packet(session_key, "cam-up", b"payload");
+        let packet = sample_forwarded_packet(session_key, "cam-up", b"payload");
         let rtp = packet.local_send_packet();
 
         assert_eq!(

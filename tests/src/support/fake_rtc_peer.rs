@@ -18,7 +18,7 @@ use str0m::{
     format::{Codec, PayloadParams},
     media::{Mid, Pt, Rid},
     net::{Protocol, Receive},
-    rtp::{RtpPacket, Ssrc},
+    rtp::{RtpPacket, RtpWrite, Ssrc},
 };
 use tokio::{net::UdpSocket, time::timeout};
 use tokio_util::bytes::Bytes;
@@ -175,16 +175,16 @@ impl FakeRtcPeer {
             .direct_api()
             .stream_tx_by_mid(send_path.mid, stream_rid)?
             .write_rtp(
-                payload_type,
-                u64::from(frame.sequence_number).into(),
-                frame.rtp_timestamp,
-                self.start_wallclock + frame.emitted_at,
-                frame.marker,
-                extension_values,
-                false,
-                frame.payload,
-            )
-            .ok()?;
+                RtpWrite::new(
+                    payload_type,
+                    u64::from(frame.sequence_number).into(),
+                    frame.rtp_timestamp,
+                    self.start_wallclock + frame.emitted_at,
+                    frame.payload,
+                )
+                .marker(frame.marker)
+                .ext_vals(extension_values),
+            );
         Some(())
     }
 
@@ -213,7 +213,7 @@ impl ProtocolSendPath {
     }
 }
 
-fn into_received_rtp_packet(rtc: &mut Rtc, packet: RtpPacket) -> Option<ReceivedRtpPacket> {
+fn into_received_rtp_packet(rtc: &mut Rtc, packet: &RtpPacket) -> Option<ReceivedRtpPacket> {
     let mid = rtc
         .direct_api()
         .stream_rx(&packet.header.ssrc)?
@@ -221,7 +221,7 @@ fn into_received_rtp_packet(rtc: &mut Rtc, packet: RtpPacket) -> Option<Received
         .to_string();
     Some(ReceivedRtpPacket {
         mid,
-        payload: packet.payload.into(),
+        payload: Bytes::copy_from_slice(packet.payload.as_ref()),
     })
 }
 
@@ -319,7 +319,7 @@ async fn pump_until_rtp(
                     .ok()?;
             }
             Output::Event(Event::RtpPacket(packet)) => {
-                return into_received_rtp_packet(rtc, packet);
+                return into_received_rtp_packet(rtc, &packet);
             }
             Output::Event(Event::Connected) => {
                 *connected = true;
