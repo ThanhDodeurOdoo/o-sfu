@@ -149,6 +149,9 @@ tokio-util.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.7"
+
 [lints]
 workspace = true
 
