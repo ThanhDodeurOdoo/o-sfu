@@ -123,7 +123,7 @@ pub(in crate::engine::media_transport::rtc::worker::handlers) fn worker_remove_m
     if can_unregister_unnegotiated_producer(state, &handle) {
         debug!(
             user_id = ?session_key.user_id(),
-            media_worker_id = session_key.media_worker_id(),
+            media_worker_id = session_key.media_worker_id().as_usize(),
             ?transport_media_id,
             mid = ?handle.mid(),
             "released unnegotiated producer media without staging sdp removal"
@@ -140,7 +140,7 @@ pub(in crate::engine::media_transport::rtc::worker::handlers) fn worker_remove_m
         }
         debug!(
             user_id = ?session_key.user_id(),
-            media_worker_id = session_key.media_worker_id(),
+            media_worker_id = session_key.media_worker_id().as_usize(),
             ?transport_media_id,
             mid = ?handle.mid(),
             "released unnegotiated producer media after removal staging failed"
@@ -341,7 +341,7 @@ pub(in crate::engine::media_transport::rtc::worker::handlers) fn worker_add_recv
     }
     debug!(
         user_id = ?session_key.user_id(),
-        media_worker_id = session_key.media_worker_id(),
+        media_worker_id = session_key.media_worker_id().as_usize(),
         ?transport_media_id,
         ?media_kind,
         "declared recv-only media on rtc user for incoming producer RTP"
@@ -450,9 +450,9 @@ pub(in crate::engine::media_transport::rtc::worker::handlers) fn worker_add_send
         Err(error) => {
             warn!(
                 consumer_user_id = ?consumer_session_key.user_id(),
-                consumer_media_worker_id = consumer_session_key.media_worker_id(),
+                consumer_media_worker_id = consumer_session_key.media_worker_id().as_usize(),
                 source_user_id = ?source_session_key.user_id(),
-                source_media_worker_id = source_session_key.media_worker_id(),
+                source_media_worker_id = source_session_key.media_worker_id().as_usize(),
                 ?source_transport_media_id,
                 error = ?error,
                 "failed to register route source for consumer media"
@@ -503,9 +503,9 @@ pub(in crate::engine::media_transport::rtc::worker::handlers) fn worker_add_send
     );
     debug!(
         consumer_user_id = ?consumer_session_key.user_id(),
-        consumer_media_worker_id = consumer_session_key.media_worker_id(),
+        consumer_media_worker_id = consumer_session_key.media_worker_id().as_usize(),
         source_user_id = ?source_session_key.user_id(),
-        source_media_worker_id = source_session_key.media_worker_id(),
+        source_media_worker_id = source_session_key.media_worker_id().as_usize(),
         ?source_transport_media_id,
         source_route_kind = route_source.label(),
         ?transport_media_id,

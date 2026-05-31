@@ -28,7 +28,7 @@ use super::{
     relay::RelayRouteEffect,
 };
 use crate::engine::{
-    ConnectionId, UserId,
+    ConnectionId, MediaWorkerId, UserId,
     media_transport::{RelayRouteActivity, TransportMediaId},
     room::source_policy::VideoAdmissionRank,
     source_model::{
@@ -151,7 +151,7 @@ impl RoomState {
         connection_id: ConnectionId,
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
-        worker_for: impl Fn(ConnectionId) -> usize,
+        worker_for: impl Fn(ConnectionId) -> MediaWorkerId,
     ) -> PlannedSubscriptionChange {
         if self.user_for_connection(user_id, connection_id).is_none() {
             return PlannedSubscriptionChange::default();
@@ -199,7 +199,7 @@ impl RoomState {
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        worker_for: impl Fn(ConnectionId) -> usize,
+        worker_for: impl Fn(ConnectionId) -> MediaWorkerId,
     ) -> Option<Vec<PlannedConsumerBootstrap>> {
         let user = self.users.get(user_id)?;
         if user.connection_id != connection_id {
@@ -214,7 +214,7 @@ impl RoomState {
     pub fn plan_consumers(
         &mut self,
         targets: Vec<PendingConsumerBootstrapTarget>,
-        worker_for: impl Fn(ConnectionId) -> usize,
+        worker_for: impl Fn(ConnectionId) -> MediaWorkerId,
     ) -> Vec<PlannedConsumerBootstrap> {
         let mut targets = targets;
         let active_speakers = BTreeSet::new();
@@ -395,7 +395,7 @@ impl RoomState {
     fn plan_consumer(
         &mut self,
         target: &PendingConsumerBootstrapTarget,
-        worker_for: &impl Fn(ConnectionId) -> usize,
+        worker_for: &impl Fn(ConnectionId) -> MediaWorkerId,
     ) -> Option<PlannedConsumerBootstrap> {
         let (sender, client_caps) = {
             let user = self.users.get(&target.user)?;
@@ -465,7 +465,7 @@ impl RoomState {
         &mut self,
         target: &PendingConsumerBootstrapTarget,
         consumer_active: bool,
-        worker_for: &impl Fn(ConnectionId) -> usize,
+        worker_for: &impl Fn(ConnectionId) -> MediaWorkerId,
     ) -> Vec<RelayRouteEffect> {
         let Some((source_connection, source_media, target_worker)) =
             Self::relay_route_for_target(target, worker_for)
@@ -483,8 +483,8 @@ impl RoomState {
 
     fn relay_route_for_target(
         target: &PendingConsumerBootstrapTarget,
-        worker_for: &impl Fn(ConnectionId) -> usize,
-    ) -> Option<(ConnectionId, TransportMediaId, usize)> {
+        worker_for: &impl Fn(ConnectionId) -> MediaWorkerId,
+    ) -> Option<(ConnectionId, TransportMediaId, MediaWorkerId)> {
         let source_worker = worker_for(target.producer_connection_id());
         let target_worker = worker_for(target.consumer_connection_id());
         if source_worker == target_worker {

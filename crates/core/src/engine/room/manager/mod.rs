@@ -418,10 +418,10 @@ impl RoomManager {
         );
         for entry in self.directory_entries().await {
             let contribution = entry.room().worker_load_contribution().await;
-            for media_worker_id in contribution.session_workers {
+            for media_worker_id in contribution.session_worker_ids {
                 load_index.record_session(media_worker_id);
             }
-            for media_worker_id in contribution.consumer_workers {
+            for media_worker_id in contribution.consumer_worker_ids {
                 load_index.record_consumer(media_worker_id);
             }
         }

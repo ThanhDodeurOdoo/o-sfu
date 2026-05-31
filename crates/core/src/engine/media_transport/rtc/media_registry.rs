@@ -284,7 +284,7 @@ fn bind_producer_ssrc(
     {
         warn!(
             user_id = ?session_key.user_id(),
-            media_worker_id = session_key.media_worker_id(),
+            media_worker_id = session_key.media_worker_id().as_usize(),
             ?transport_media_id,
             ?existing_transport_media_id,
             ?mid,
@@ -309,7 +309,7 @@ fn bind_producer_ssrc(
         if inserted || previous_rid != rid {
             debug!(
                 user_id = ?session_key.user_id(),
-                media_worker_id = session_key.media_worker_id(),
+                media_worker_id = session_key.media_worker_id().as_usize(),
                 ?transport_media_id,
                 ?mid,
                 ?ssrc,

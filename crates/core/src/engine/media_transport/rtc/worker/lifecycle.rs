@@ -57,7 +57,7 @@ use super::{
     RtcWorker, RtcWorkerHandle,
 };
 use crate::{
-    Bitrate,
+    Bitrate, MediaWorkerId,
     engine::{
         RoomInstanceId,
         media_transport::{
@@ -391,7 +391,7 @@ impl RtcWorker {
     /// worker has not started
     pub fn worker_pressure_snapshot(
         &self,
-        media_worker_id: usize,
+        media_worker_id: MediaWorkerId,
     ) -> TransportWorkerPressureSnapshot {
         let Some(worker_handle) = self.worker_handle().ok().flatten() else {
             return TransportWorkerPressureSnapshot::new(

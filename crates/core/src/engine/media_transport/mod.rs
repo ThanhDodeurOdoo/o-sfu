@@ -373,7 +373,7 @@ impl MediaTransport {
             .inspect_err(|error| {
                 warn!(
                 source = ?effect.source,
-                target_media_worker_id = effect.target_media_worker_id,
+                target_media_worker_id = effect.target_media_worker_id.as_usize(),
                 action = ?effect.action,
                 ?error,
                 "media transport failed to apply relay route effect"

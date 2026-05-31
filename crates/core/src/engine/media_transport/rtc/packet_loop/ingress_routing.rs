@@ -265,7 +265,7 @@ fn route_packet_with_cached_session(
             source_addr = %source_addr,
             candidate_addr = %candidate_addr,
             user_id = ?session_key.user_id(),
-            media_worker_id = session_key.media_worker_id(),
+            media_worker_id = session_key.media_worker_id().as_usize(),
             "indexed rtc source address no longer matched the cached user; clearing source-address pin"
         );
         state.remote_addr_demux.forget_remote_addr(source_addr);
@@ -285,7 +285,7 @@ fn route_packet_with_cached_session(
         // This ensures we still update source-address pinning and avoid re-scanning.
         warn!(
             user_id = ?session_key.user_id(),
-            media_worker_id = session_key.media_worker_id(),
+            media_worker_id = session_key.media_worker_id().as_usize(),
             "failed to feed indexed UDP datagram into rtc user state"
         );
         let _ = session_state;
@@ -373,7 +373,7 @@ fn matching_indexed_session_key_for_packet(
             candidate_addr = %candidate_addr,
             probe = %packet_index_probe,
             user_id = ?matched_session_key.user_id(),
-            media_worker_id = matched_session_key.media_worker_id(),
+            media_worker_id = matched_session_key.media_worker_id().as_usize(),
             examined_sessions,
             "recovered rtc user routing from packet probe"
         );
@@ -504,7 +504,7 @@ fn route_packet_to_session(
     if handle_result.is_err() {
         warn!(
             user_id = ?session_key.user_id(),
-            media_worker_id = session_key.media_worker_id(),
+            media_worker_id = session_key.media_worker_id().as_usize(),
             "failed to feed incoming UDP datagram into rtc user state"
         );
     } else {
@@ -534,9 +534,9 @@ fn route_packet_to_session(
                     candidate_addr = %route.candidate_addr,
                     route_resolution,
                     previous_session_id = ?previous_session_key.user_id(),
-                    previous_media_worker_id = previous_session_key.media_worker_id(),
+                    previous_media_worker_id = previous_session_key.media_worker_id().as_usize(),
                     user_id = ?session_key.user_id(),
-                    media_worker_id = session_key.media_worker_id(),
+                    media_worker_id = session_key.media_worker_id().as_usize(),
                     "remapped rtc source address to a different user"
                 );
             }
@@ -546,7 +546,7 @@ fn route_packet_to_session(
                     candidate_addr = %route.candidate_addr,
                     route_resolution,
                     user_id = ?session_key.user_id(),
-                    media_worker_id = session_key.media_worker_id(),
+                    media_worker_id = session_key.media_worker_id().as_usize(),
                     "pinned rtc source address to user"
                 );
             }

@@ -13,7 +13,7 @@ use str0m::media::Mid;
 
 use super::{MediaTransport, MediaTransportBuildError};
 use crate::{
-    RtcPortRange,
+    MediaWorkerId, RtcPortRange,
     engine::{
         ConnectionId, RoomInstanceId, UserId,
         media_transport::{
@@ -34,7 +34,7 @@ fn test_session_key(
 ) -> TransportSessionKey {
     TransportSessionKey::new(
         RoomInstanceId::from_raw(room_instance_id),
-        media_worker_id,
+        MediaWorkerId::from_raw(media_worker_id),
         ConnectionId::from_raw(connection_id),
         user_id,
     )
@@ -306,6 +306,14 @@ fn rtc_rejects_answers_without_projectable_client_capabilities() {
         .negotiated_client_rtp_capabilities("v=0\r\ns=invalid-answer\r\n", &sample_capabilities());
 
     assert_eq!(projected, Err(TransportAdapterError::InvalidInput));
+}
+
+#[test]
+fn transport_session_key_exposes_typed_media_worker_id() {
+    let session_key = test_session_key(10, 0, 1, UserId::Integer(1));
+    let media_worker_id: MediaWorkerId = session_key.media_worker_id();
+
+    assert_eq!(media_worker_id, MediaWorkerId::from_raw(0));
 }
 
 #[tokio::test]

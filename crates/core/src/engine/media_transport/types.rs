@@ -10,7 +10,7 @@ use o_sfu_rfc::webrtc::MediaKind;
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use thiserror::Error;
 
-use crate::{Bitrate, ConnectionId, RoomInstanceId, engine::UserId};
+use crate::{Bitrate, ConnectionId, MediaWorkerId, RoomInstanceId, engine::UserId};
 
 /// Room-scoped media-transport user identity.
 ///
@@ -21,7 +21,7 @@ use crate::{Bitrate, ConnectionId, RoomInstanceId, engine::UserId};
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TransportSessionKey {
     room_instance: RoomInstanceId,
-    media_worker: usize,
+    media_worker: MediaWorkerId,
     connection: ConnectionId,
     user: Arc<UserId>,
 }
@@ -30,7 +30,7 @@ impl TransportSessionKey {
     #[must_use]
     pub fn new(
         room_instance_id: RoomInstanceId,
-        media_worker_id: usize,
+        media_worker_id: MediaWorkerId,
         connection_id: ConnectionId,
         user_id: UserId,
     ) -> Self {
@@ -48,7 +48,7 @@ impl TransportSessionKey {
     }
 
     #[must_use]
-    pub fn media_worker_id(&self) -> usize {
+    pub const fn media_worker_id(&self) -> MediaWorkerId {
         self.media_worker
     }
 
@@ -282,15 +282,18 @@ impl TransportPlacementPressureSnapshot {
 }
 
 /// Transport-observed pressure for one local media worker.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransportWorkerPressureSnapshot {
-    pub media_worker_id: usize,
+    pub media_worker_id: MediaWorkerId,
     pub pressure: TransportPlacementPressureSnapshot,
 }
 
 impl TransportWorkerPressureSnapshot {
     #[must_use]
-    pub const fn new(media_worker_id: usize, pressure: TransportPlacementPressureSnapshot) -> Self {
+    pub const fn new(
+        media_worker_id: MediaWorkerId,
+        pressure: TransportPlacementPressureSnapshot,
+    ) -> Self {
         Self {
             media_worker_id,
             pressure,
@@ -462,7 +465,7 @@ pub enum SourcePacketGate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportRelayRouteEffect {
     pub source: TransportSourceKey,
-    pub target_media_worker_id: usize,
+    pub target_media_worker_id: MediaWorkerId,
     pub action: TransportRelayRouteAction,
 }
 

@@ -44,8 +44,11 @@ impl Room {
         }
 
         let current_state = request_context.recording_state();
-        let is_recording = current_state.recording == Some(true);
-        if is_recording {
+        let media_worker_id = self
+            .placement_state
+            .media_worker_id_for_connection(connection_id)
+            .as_usize();
+        if current_state.recording == Some(true) {
             if options.audio.is_some() || options.video.is_some() {
                 self.metrics.record_recording_start_rejected();
                 return false;
@@ -75,7 +78,7 @@ impl Room {
                     telemetry_event::RECORDING_STARTED,
                 )
                 .with_connection_id(connection_id.as_u64())
-                .with_media_worker_id(self.media_worker_id())
+                .with_media_worker_id(media_worker_id)
                 .insert_field("transcription", transcription),
             );
             return true;
@@ -122,7 +125,7 @@ impl Room {
                 telemetry_event::RECORDING_STARTED,
             )
             .with_connection_id(connection_id.as_u64())
-            .with_media_worker_id(self.media_worker_id())
+            .with_media_worker_id(media_worker_id)
             .insert_field("audio", wants_audio)
             .insert_field("transcription", wants_transcription)
             .insert_field("video", wants_video),
@@ -177,6 +180,10 @@ impl Room {
         }
         self.metrics.record_recording_stop_accepted();
         self.metrics.add_active_recording_rooms(-1);
+        let media_worker_id = self
+            .placement_state
+            .media_worker_id_for_connection(connection_id)
+            .as_usize();
         self.diagnostics.record(
             DiagnosticsEventData::for_user(
                 self.uuid(),
@@ -184,7 +191,7 @@ impl Room {
                 telemetry_event::RECORDING_STOPPED,
             )
             .with_connection_id(connection_id.as_u64())
-            .with_media_worker_id(self.media_worker_id())
+            .with_media_worker_id(media_worker_id)
             .insert_field("stop_code", "user_request"),
         );
         true

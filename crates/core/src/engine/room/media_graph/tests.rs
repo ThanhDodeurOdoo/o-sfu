@@ -24,7 +24,7 @@ use super::{
 use crate::{
     Bitrate, MediaCodecFlags, RoomMediaLimits,
     engine::{
-        ConnectionId, RoomInstanceId, TestSourceKind, UserId, UserPermissions,
+        ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserId, UserPermissions,
         media_transport::{SessionUploadEncoding, TransportMediaId},
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -60,7 +60,7 @@ fn test_state_with_media_limits(media_limits: RoomMediaLimits) -> RoomState {
         RoomInstanceId::from_raw(0),
         LocalRouterRuntimeContext {
             router: RouterId(1),
-            media_worker: 0,
+            media_worker: MediaWorkerId::from_raw(0),
         },
         Vec::new(),
     );
@@ -406,7 +406,7 @@ fn policy_paused_routes_do_not_count_as_effective_delivery() {
         two_user_consumer_route();
     let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
 
-    assert!(state.source_fanout_pressure(1, |_| 0));
+    assert!(state.source_fanout_pressure(1, |_| MediaWorkerId::from_raw(0)));
     assert_eq!(
         state.consumer_route_state(&consumer_user_id, &producer_user_id, &stream_id),
         Some(ConsumerRouteState::Active)
@@ -421,7 +421,7 @@ fn policy_paused_routes_do_not_count_as_effective_delivery() {
 
     set_test_consumer_policy_pause(&mut state, &key);
 
-    assert!(!state.source_fanout_pressure(1, |_| 0));
+    assert!(!state.source_fanout_pressure(1, |_| MediaWorkerId::from_raw(0)));
     assert_eq!(
         state.consumer_route_state(&consumer_user_id, &producer_user_id, &stream_id),
         Some(ConsumerRouteState::Inactive)
@@ -518,7 +518,7 @@ fn stale_replaced_connection_cannot_update_download_state() {
             stale_connection_id,
             &producer_user_id,
             &intents,
-            |_| 0,
+            |_| MediaWorkerId::from_raw(0),
         )
         .into_parts();
 
@@ -571,7 +571,7 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
             subscriber_connection_id,
             &publisher_user_id,
             &intents,
-            |_| 0,
+            |_| MediaWorkerId::from_raw(0),
         )
         .into_parts();
 
@@ -626,7 +626,9 @@ fn missing_consumer_bootstrap_applies_video_download_cap_before_effects() {
     }
 
     let planned_bootstraps = state
-        .plan_missing_consumers(&subscriber_user_id, subscriber_connection_id, |_| 0)
+        .plan_missing_consumers(&subscriber_user_id, subscriber_connection_id, |_| {
+            MediaWorkerId::from_raw(0)
+        })
         .expect("subscriber session should still exist");
 
     assert_eq!(planned_bootstraps.len(), 2);

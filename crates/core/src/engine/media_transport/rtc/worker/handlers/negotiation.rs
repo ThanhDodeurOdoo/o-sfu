@@ -402,7 +402,7 @@ fn ensure_session_ready_for_offer(
         if created_session || local_ice_ufrag_changed {
             debug!(
                 user_id = ?session_key.user_id(),
-                media_worker_id = session_key.media_worker_id(),
+                media_worker_id = session_key.media_worker_id().as_usize(),
                 %candidate_addr,
                 local_ice_ufrag = %session_state.local_ice_ufrag,
                 created_session,

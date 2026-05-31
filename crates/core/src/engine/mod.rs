@@ -31,4 +31,4 @@ pub use o_sfu_model::{
 #[cfg(any(test, feature = "testing-transport"))]
 pub use source_model::test_support::TestSourceKind;
 
-pub use crate::{ConnectionId, RoomInstanceId};
+pub use crate::{ConnectionId, MediaWorkerId, RoomInstanceId};

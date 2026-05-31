@@ -13,7 +13,7 @@ use super::{
 use crate::{
     Bitrate, MediaCodecFlags,
     engine::{
-        ConnectionId, RoomInstanceId, UserId,
+        ConnectionId, MediaWorkerId, RoomInstanceId, UserId,
         media_transport::TransportSessionKey,
         metrics::{RtcMetricsRecorder, RuntimeMetrics},
     },
@@ -65,7 +65,7 @@ impl IngressDemuxFuzzFixture {
     fn new(source_addr: SocketAddr, candidate_addr: SocketAddr) -> Self {
         let session_key = TransportSessionKey::new(
             RoomInstanceId::from_raw(61),
-            0,
+            MediaWorkerId::from_raw(0),
             ConnectionId::from_raw(62),
             UserId::Integer(63),
         );

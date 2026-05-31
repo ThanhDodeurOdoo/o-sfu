@@ -17,7 +17,7 @@ use str0m::media::MediaKind as Str0mMediaKind;
 
 use super::rtc::{RtcWorker, client_rtp_capabilities_from_answer};
 use crate::engine::{
-    RoomInstanceId,
+    MediaWorkerId, RoomInstanceId,
     media_transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ConsumerPacketGateUpdate,
         MediaTransport, MediaTransportConfig, MediaTransportDeps, ReceiverBandwidthSnapshot,
@@ -50,12 +50,13 @@ impl MediaTransport {
         let workers = worker_ranges
             .into_iter()
             .enumerate()
-            .map(|(media_worker_id, range)| {
+            .map(|(worker_index, range)| {
+                let media_worker_id = MediaWorkerId::from_raw(worker_index);
                 Arc::new(RtcWorker::new(
                     &transport.with_rtc_port_range(range),
                     deps,
                     Arc::clone(&source_policy_signal),
-                    media_id_base_for_worker_index(media_worker_id),
+                    media_id_base_for_worker_index(worker_index),
                     media_worker_id,
                 ))
             })
@@ -76,7 +77,7 @@ impl MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<Arc<RtcWorker>> {
-        self.worker_for_index(session_key.media_worker_id())
+        self.worker_for_media_worker_id(session_key.media_worker_id())
     }
 
     /// Returns the source and consumer workers needed for cross-worker relay.
@@ -169,7 +170,9 @@ impl MediaTransport {
         self.workers
             .iter()
             .enumerate()
-            .map(|(media_worker_id, worker)| worker.worker_pressure_snapshot(media_worker_id))
+            .map(|(worker_index, worker)| {
+                worker.worker_pressure_snapshot(MediaWorkerId::from_raw(worker_index))
+            })
             .collect()
     }
 
@@ -398,9 +401,9 @@ impl MediaTransport {
 
     fn require_worker_for_media_worker_id(
         &self,
-        media_worker_id: usize,
+        media_worker_id: MediaWorkerId,
     ) -> Result<Arc<RtcWorker>, TransportAdapterError> {
-        self.worker_for_index(media_worker_id)
+        self.worker_for_media_worker_id(media_worker_id)
             .ok_or(TransportAdapterError::TransportUnavailable)
     }
 
@@ -447,8 +450,13 @@ impl MediaTransport {
         self.require_worker_for_user(route.consumer_session_key())
     }
 
-    fn worker_index_for_media_worker_id(&self, media_worker_id: usize) -> Option<usize> {
-        self.workers.get(media_worker_id).map(|_| media_worker_id)
+    fn worker_index_for_media_worker_id(&self, media_worker_id: MediaWorkerId) -> Option<usize> {
+        let worker_index = media_worker_id.as_usize();
+        self.workers.get(worker_index).map(|_| worker_index)
+    }
+
+    fn worker_for_media_worker_id(&self, media_worker_id: MediaWorkerId) -> Option<Arc<RtcWorker>> {
+        self.worker_for_index(media_worker_id.as_usize())
     }
 
     fn worker_for_index(&self, worker_index: usize) -> Option<Arc<RtcWorker>> {

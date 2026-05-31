@@ -43,7 +43,7 @@ pub(super) fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
         Event::IceConnectionStateChange(state) => {
             debug!(
                 user_id = ?session_key.user_id(),
-                media_worker_id = session_key.media_worker_id(),
+                media_worker_id = session_key.media_worker_id().as_usize(),
                 ?state,
                 "rtc ICE connection state transition"
             );
@@ -51,14 +51,14 @@ pub(super) fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
         Event::Connected => {
             debug!(
                 user_id = ?session_key.user_id(),
-                media_worker_id = session_key.media_worker_id(),
+                media_worker_id = session_key.media_worker_id().as_usize(),
                 "rtc DTLS transport reached connected state"
             );
         }
         _ => {
             trace!(
                 user_id = ?session_key.user_id(),
-                media_worker_id = session_key.media_worker_id(),
+                media_worker_id = session_key.media_worker_id().as_usize(),
                 ?event,
                 "rtc packet loop event"
             );
@@ -122,7 +122,7 @@ pub(super) fn observe_rtc_event(
         diagnostics_room_instance_id(session_key.room_instance_id()),
         session_key.user_id(),
         schema::event::TRANSPORT_HEALTH_CHANGED,
-        session_key.media_worker_id(),
+        session_key.media_worker_id().as_usize(),
         fields,
     );
 }

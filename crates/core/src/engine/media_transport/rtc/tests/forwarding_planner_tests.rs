@@ -13,7 +13,7 @@ use super::{
     fixtures::RuntimeMetricsSnapshotTestExt,
 };
 use crate::engine::{
-    ConnectionId, RoomInstanceId, UserId,
+    ConnectionId, MediaWorkerId, RoomInstanceId, UserId,
     media_transport::{
         TransportMediaId, TransportSessionKey,
         rtc::{
@@ -142,13 +142,13 @@ fn assert_forward_plan(
 fn populate_forward_routes_wraps_local_rtc_destinations_in_the_named_contract() {
     let producer_session = TransportSessionKey::new(
         RoomInstanceId::from_raw(12),
-        0,
+        MediaWorkerId::from_raw(0),
         ConnectionId::from_raw(13),
         UserId::Integer(14),
     );
     let consumer_session = TransportSessionKey::new(
         RoomInstanceId::from_raw(12),
-        0,
+        MediaWorkerId::from_raw(0),
         ConnectionId::from_raw(13),
         UserId::Integer(15),
     );

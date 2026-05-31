@@ -29,6 +29,8 @@ use super::{
     },
     shared::{ActiveUser, RoomState},
 };
+#[cfg(test)]
+use crate::engine::MediaWorkerId;
 use crate::engine::{ConnectionId, UserId, UserInfo};
 
 #[cfg(test)]
@@ -204,7 +206,7 @@ impl RoomState {
     fn fallback_join_placement(&self) -> ResolvedPlacement {
         ResolvedPlacement::for_test(LocalRouterRuntimeContext {
             router: self.topology.primary_router_id(),
-            media_worker: 0,
+            media_worker: MediaWorkerId::from_raw(0),
         })
     }
 

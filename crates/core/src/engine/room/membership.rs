@@ -186,10 +186,10 @@ impl Room {
         let policy = self.room_worker_policy();
         let mut load_index = WorkerLoadIndex::new(policy.max_local_routers(), pressure_snapshots);
         let contribution = self.worker_load_contribution().await;
-        for media_worker_id in contribution.session_workers {
+        for media_worker_id in contribution.session_worker_ids {
             load_index.record_session(media_worker_id);
         }
-        for media_worker_id in contribution.consumer_workers {
+        for media_worker_id in contribution.consumer_worker_ids {
             load_index.record_consumer(media_worker_id);
         }
         let planner = RoomPlacementPlanner::new(policy.max_local_routers(), policy);
@@ -519,7 +519,7 @@ impl Room {
             .record_diagnostics(
                 DiagnosticsEventData::for_user(self.uuid(), &user_id, telemetry_event::USER_JOINED)
                     .with_connection_id(connection_id.as_u64())
-                    .with_media_worker_id(transport_session_key.media_worker_id()),
+                    .with_media_worker_id(transport_session_key.media_worker_id().as_usize()),
             )
             .execute(self, context)
             .await;
@@ -560,7 +560,7 @@ impl Room {
                         telemetry_event::USER_CLOSED,
                     )
                     .with_connection_id(connection_id.as_u64())
-                    .with_media_worker_id(media_worker_id),
+                    .with_media_worker_id(media_worker_id.as_usize()),
                 )
                 .forget_diagnostics_user(user_id.clone())
                 .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged);
@@ -608,7 +608,8 @@ impl Room {
                     )
                     .with_media_worker_id(
                         self.placement_state
-                            .media_worker_id_for_connection(disconnected_session.connection_id),
+                            .media_worker_id_for_connection(disconnected_session.connection_id)
+                            .as_usize(),
                     ),
                 )
                 .forget_diagnostics_user(disconnected_session.user_id.clone());

@@ -19,7 +19,7 @@ use super::{
     FanoutBenchTopology,
 };
 use crate::{
-    RtcPortRange,
+    MediaWorkerId, RtcPortRange,
     engine::{
         UserId,
         media_transport::{
@@ -80,7 +80,7 @@ impl WorkerLoopBenchFixture {
                 &test_media_transport_deps(),
                 Arc::new(SourcePolicySignal::default()),
                 0,
-                0,
+                MediaWorkerId::from_raw(0),
             ),
             session_key,
         };
@@ -173,7 +173,7 @@ impl WorkerPacketCommandMixBenchFixture {
                 &test_media_transport_deps(),
                 Arc::new(SourcePolicySignal::default()),
                 0,
-                0,
+                MediaWorkerId::from_raw(0),
             ),
             base_session_key: benchmark_session_key(10_000),
             fanout: FanoutBenchTopology::with_local_destinations(WORKER_PACKET_COMMAND_MIX_FANOUT),

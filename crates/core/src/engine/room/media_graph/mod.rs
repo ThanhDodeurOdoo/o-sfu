@@ -21,7 +21,7 @@ use o_sfu_router::MediaKind;
 
 use self::{consumer_index::ConsumerIndex, relay::RoomRelayRoutes, source_index::SourceIndex};
 use crate::engine::{
-    ConnectionId, UserId,
+    ConnectionId, MediaWorkerId, UserId,
     media_transport::{RelayRouteActivity, TransportMediaId},
     room::topology::{RoutedConsumerId, RoutedProducerId},
     source_model::{
@@ -930,7 +930,7 @@ impl RoomMediaGraph {
         target: &PendingConsumerBootstrapTarget,
         source_connection_id: ConnectionId,
         source_transport_media_id: TransportMediaId,
-        target_media_worker_id: usize,
+        target_media_worker_id: MediaWorkerId,
         active: bool,
     ) -> Vec<RelayRouteEffect> {
         self.relay_routes.reserve_consumer(

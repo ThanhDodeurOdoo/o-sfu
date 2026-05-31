@@ -166,7 +166,7 @@ pub fn observe_source_rid_readiness(
     if first_observed {
         debug!(
             user_id = ?source_session_key.user_id(),
-            media_worker_id = source_session_key.media_worker_id(),
+            media_worker_id = source_session_key.media_worker_id().as_usize(),
             ?source_transport_media_id,
             ?rid,
             is_keyframe,
@@ -297,7 +297,7 @@ pub fn drain_due_rid_keyframe_refreshes(
         };
         debug!(
             user_id = ?source_session_key.user_id(),
-            media_worker_id = source_session_key.media_worker_id(),
+            media_worker_id = source_session_key.media_worker_id().as_usize(),
             ?source_transport_media_id,
             ?rid,
             "draining scheduled selected RID keyframe refresh"
@@ -545,7 +545,7 @@ fn request_live_rid_keyframe(
 ) {
     debug!(
         user_id = ?source_session_key.user_id(),
-        media_worker_id = source_session_key.media_worker_id(),
+        media_worker_id = source_session_key.media_worker_id().as_usize(),
         ?source_transport_media_id,
         ?rid,
         "requesting selected RID producer keyframe"
@@ -573,7 +573,7 @@ fn request_live_rid_keyframe(
     else {
         warn!(
             user_id = ?source_session_key.user_id(),
-            media_worker_id = source_session_key.media_worker_id(),
+            media_worker_id = source_session_key.media_worker_id().as_usize(),
             ?source_transport_media_id,
             ?rid,
             "could not request selected RID keyframe because source ownership is unavailable"
@@ -583,9 +583,9 @@ fn request_live_rid_keyframe(
     if registered_source.session_key() != source_session_key {
         warn!(
             observed_source_user_id = ?source_session_key.user_id(),
-            observed_media_worker_id = source_session_key.media_worker_id(),
+            observed_media_worker_id = source_session_key.media_worker_id().as_usize(),
             registered_source_user_id = ?registered_source.session_key().user_id(),
-            registered_media_worker_id = registered_source.session_key().media_worker_id(),
+            registered_media_worker_id = registered_source.session_key().media_worker_id().as_usize(),
             ?source_transport_media_id,
             ?rid,
             "could not request selected RID keyframe because source ownership changed"
@@ -648,7 +648,7 @@ fn drain_live_rid_keyframe_retries(
     for _ in 0..due_count {
         debug!(
             user_id = ?source_session_key.user_id(),
-            media_worker_id = source_session_key.media_worker_id(),
+            media_worker_id = source_session_key.media_worker_id().as_usize(),
             ?source_transport_media_id,
             ?rid,
             "draining follow-up selected RID keyframe refresh"

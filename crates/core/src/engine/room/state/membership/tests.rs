@@ -14,7 +14,7 @@ use super::*;
 use crate::{
     MediaCodecFlags, RoomMediaLimits,
     engine::{
-        ConnectionId, RoomInstanceId, TestSourceKind, UserPermissions,
+        ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserPermissions,
         media_transport::TransportMediaId,
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -43,7 +43,7 @@ fn test_state() -> RoomState {
         RoomInstanceId::from_raw(0),
         LocalRouterRuntimeContext {
             router: RouterId(1),
-            media_worker: 0,
+            media_worker: MediaWorkerId::from_raw(0),
         },
         Vec::new(),
     );

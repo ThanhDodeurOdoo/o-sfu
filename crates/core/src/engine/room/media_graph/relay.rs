@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use super::subscription::PendingConsumerBootstrapTarget;
 use crate::engine::{
-    ConnectionId, UserId,
+    ConnectionId, MediaWorkerId, UserId,
     media_transport::{RelayRouteActivity, TransportMediaId, TransportRelayRouteAction},
     source_model::PublishedSourceId,
 };
@@ -25,7 +25,7 @@ pub(in crate::engine::room) struct RelayRouteKey {
     pub source_user: UserId,
     pub source_connection: ConnectionId,
     pub source_media: TransportMediaId,
-    pub target_worker: usize,
+    pub target_worker: MediaWorkerId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -37,7 +37,7 @@ impl RoomRelayRoutes {
         target: &PendingConsumerBootstrapTarget,
         source_connection_id: ConnectionId,
         source_transport_media_id: TransportMediaId,
-        target_media_worker_id: usize,
+        target_media_worker_id: MediaWorkerId,
         active: bool,
     ) -> Vec<RelayRouteEffect> {
         let route_key = RelayRouteKey {
