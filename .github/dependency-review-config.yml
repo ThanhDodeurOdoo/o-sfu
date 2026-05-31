@@ -20,7 +20,6 @@ allow-dependencies-licenses:
   - pkg:cargo/bincode-next
   - pkg:cargo/gungraun
   - pkg:cargo/o-sfu
-  - pkg:cargo/o-sfu-cluster
   - pkg:cargo/o-sfu-core
   - pkg:cargo/o-sfu-model
   - pkg:cargo/o-sfu-proofs

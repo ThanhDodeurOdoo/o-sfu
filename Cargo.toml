@@ -1,7 +1,6 @@
 [workspace]
 exclude = ["tests/fuzz"]
 members = [
-    "crates/cluster",
     "crates/core",
     "crates/model",
     "crates/protocol",
@@ -32,7 +31,6 @@ anyhow = "1.0"
 base64 = "0.22"
 futures-util = "0.3"
 o-sfu-protocol = { path = "crates/protocol" }
-o-sfu-cluster = { path = "crates/cluster" }
 o-sfu-core = { path = "crates/core" }
 o-sfu-model = { path = "crates/model" }
 o-sfu-rfc = { path = "crates/rfc" }
@@ -137,7 +135,6 @@ axum = { version = "0.8", features = ["ws"] }
 base64.workspace = true
 futures-util.workspace = true
 hmac = "0.13"
-o-sfu-cluster.workspace = true
 o-sfu-protocol.workspace = true
 o-sfu-core.workspace = true
 o-sfu-rfc.workspace = true

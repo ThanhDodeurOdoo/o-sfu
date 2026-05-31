@@ -33,7 +33,6 @@ jobs:
             nextest: true
             command: >-
               cargo nextest run --locked --profile ci
-              -p o-sfu-cluster
               -p o-sfu-core
               -p o-sfu-model
               -p o-sfu-protocol

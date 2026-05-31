@@ -86,18 +86,6 @@ you can read the one at [odoo/sfu](https://github.com/odoo/sfu), it's roughly th
 | `MAX_BITRATE_OUT`                            | `10000000`                 | WebRTC desired-send-bitrate and BWE ceiling in bps per user (download). It is not a strict packet-forwarding cap.                                                 |
 | `MAX_VIDEO_BITRATE`                          | `4000000`                  | Maximum bitrate in bps for the highest default simulcast video layer metadata.                                                                                    |
 
-### WORK IN PROGRESS: Control-plane env variables
-
-The control plane is experimental. The normal media-server Docker image does not
-copy or expose it. Build it explicitly with `Dockerfile.control-plane` or run
-`cargo run --bin o-sfu-control-plane` when testing scalable-topology work.
-The control-plane HTTP API does not authenticate requests yet, security specifications are 
-still to decide.
-
-| Variable                     | Default          | Description |
-| :--------------------------- | :--------------- | :---------- |
-| `CONTROL_PLANE_BIND_ADDRESS` | `127.0.0.1:8071` | Socket address for the experimental control-plane listener. The control-plane image overrides it to `0.0.0.0:8071` for container-network tests. |
-
 
 ## Running the server and contributing
 
@@ -116,7 +104,7 @@ will adapt accordingly.
 
 ### scalability (sharding)
 
-rooms can have multiple workers and the load will be sharded across them (logic still wip). In the long term an optional controller server will allow the SFUs to share shards between them.
+rooms can use multiple local workers when load-triggered local spillover is enabled. cross-server sharding is deferred until single-node behavior is production-ready and measured load proves that a distributed topology is required.
 
 ### Simulcast/SVC
 
@@ -128,4 +116,3 @@ Partial coverage
 | H.264 RID simulcast           | Production-ready for Chromium constrained baseline (`packetization-mode=1`, `profile-level-id=42e01f`) with RTX disabled. |
 | VP9 hybrid/layered forwarding | WIP. `CODEC_VP9=true` is codec negotiation only.                                                                          |
 | AV1 hybrid/layered forwarding | WIP. `CODEC_AV1=true` is codec negotiation only.                                                                          |
-

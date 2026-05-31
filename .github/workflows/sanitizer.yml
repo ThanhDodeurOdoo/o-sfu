@@ -19,7 +19,7 @@ on:
       - src/runtime/**
       - tests/Cargo.toml
       - tests/src/**
-      - tests/integration/control_plane.rs
+      - tests/integration/server_smoke.rs
       - tests/integration/full_stack.rs
       - tests/integration/full_stack/**
   pull_request:
@@ -37,7 +37,7 @@ on:
       - src/runtime/**
       - tests/Cargo.toml
       - tests/src/**
-      - tests/integration/control_plane.rs
+      - tests/integration/server_smoke.rs
       - tests/integration/full_stack.rs
       - tests/integration/full_stack/**
   schedule:
@@ -91,10 +91,10 @@ jobs:
           cargo +nightly-2026-04-01 test --locked --target x86_64-unknown-linux-gnu \
             -p o-sfu-core --lib --tests -- --test-threads=1 --nocapture
 
-      - name: Run control-plane smoke test under ASan
+      - name: Run server smoke test under ASan
         run: |
           cargo +nightly-2026-04-01 test --locked --target x86_64-unknown-linux-gnu \
-            -p o-sfu-tests --test control_plane \
+            -p o-sfu-tests --test server_smoke \
             websocket_welcome_and_initial_offer_work_from_integration_test \
             -- --exact --test-threads=1 --nocapture
 
