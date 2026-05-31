@@ -1,28 +1,30 @@
 use anyhow::{Result, anyhow, ensure};
 use o_sfu_core::prelude::{AudioCodecPreference, CodecPreferences, VideoCodecPreference};
 
+use super::env::env_block;
+
+env_block! {
+    struct CodecPreferenceEnv {
+        audio: Option<String> = optional("CODEC_AUDIO_PREFERENCE");
+        video: Option<String> = optional("CODEC_VIDEO_PREFERENCE");
+    }
+}
+
 pub(super) fn load_codec_preferences(
-    mut get_var: impl FnMut(&str) -> Option<String>,
+    get_var: impl FnMut(&str) -> Option<String>,
 ) -> Result<CodecPreferences> {
-    let audio = match get_var("CODEC_AUDIO_PREFERENCE") {
-        Some(value) => parse_audio_preferences(&value)?,
+    let env = CodecPreferenceEnv::load(get_var)?;
+    let audio = match env.audio {
+        Some(value) => parse_codec_list(&value, "CODEC_AUDIO_PREFERENCE", audio_codec_preference)?,
         None => Vec::new(),
     };
-    let video = match get_var("CODEC_VIDEO_PREFERENCE") {
-        Some(value) => parse_video_preferences(&value)?,
+    let video = match env.video {
+        Some(value) => parse_codec_list(&value, "CODEC_VIDEO_PREFERENCE", video_codec_preference)?,
         None => Vec::new(),
     };
     Ok(CodecPreferences::default()
         .with_audio_order(&audio)
         .with_video_order(&video))
-}
-
-fn parse_audio_preferences(value: &str) -> Result<Vec<AudioCodecPreference>> {
-    parse_codec_list(value, "CODEC_AUDIO_PREFERENCE", audio_codec_preference)
-}
-
-fn parse_video_preferences(value: &str) -> Result<Vec<VideoCodecPreference>> {
-    parse_codec_list(value, "CODEC_VIDEO_PREFERENCE", video_codec_preference)
 }
 
 fn parse_codec_list<T>(
@@ -53,22 +55,30 @@ where
 }
 
 fn audio_codec_preference(codec_name: &str) -> Option<AudioCodecPreference> {
-    match codec_name.to_ascii_lowercase().as_str() {
-        "opus" => Some(AudioCodecPreference::Opus),
-        "pcmu" => Some(AudioCodecPreference::Pcmu),
-        "pcma" => Some(AudioCodecPreference::Pcma),
-        _ => None,
+    if codec_name.eq_ignore_ascii_case("opus") {
+        Some(AudioCodecPreference::Opus)
+    } else if codec_name.eq_ignore_ascii_case("pcmu") {
+        Some(AudioCodecPreference::Pcmu)
+    } else if codec_name.eq_ignore_ascii_case("pcma") {
+        Some(AudioCodecPreference::Pcma)
+    } else {
+        None
     }
 }
 
 fn video_codec_preference(codec_name: &str) -> Option<VideoCodecPreference> {
-    match codec_name.to_ascii_lowercase().as_str() {
-        "vp8" => Some(VideoCodecPreference::Vp8),
-        "h264" => Some(VideoCodecPreference::H264),
-        "h265" => Some(VideoCodecPreference::H265),
-        "vp9" => Some(VideoCodecPreference::Vp9),
-        "av1" => Some(VideoCodecPreference::Av1),
-        _ => None,
+    if codec_name.eq_ignore_ascii_case("vp8") {
+        Some(VideoCodecPreference::Vp8)
+    } else if codec_name.eq_ignore_ascii_case("h264") {
+        Some(VideoCodecPreference::H264)
+    } else if codec_name.eq_ignore_ascii_case("h265") {
+        Some(VideoCodecPreference::H265)
+    } else if codec_name.eq_ignore_ascii_case("vp9") {
+        Some(VideoCodecPreference::Vp9)
+    } else if codec_name.eq_ignore_ascii_case("av1") {
+        Some(VideoCodecPreference::Av1)
+    } else {
+        None
     }
 }
 
@@ -105,19 +115,31 @@ mod tests {
 
     #[test]
     fn load_codec_preferences_rejects_unknown_codecs() {
-        let preferences = load_codec_preferences(|key| match key {
+        let error = load_codec_preferences(|key| match key {
             "CODEC_VIDEO_PREFERENCE" => Some("VP8,THEORA".to_owned()),
             _ => None,
-        });
-        assert!(preferences.is_err());
+        })
+        .err()
+        .map(|error| error.to_string());
+
+        assert_eq!(
+            error.as_deref(),
+            Some("CODEC_VIDEO_PREFERENCE contains unsupported codec `THEORA`")
+        );
     }
 
     #[test]
     fn load_codec_preferences_rejects_duplicates() {
-        let preferences = load_codec_preferences(|key| match key {
+        let error = load_codec_preferences(|key| match key {
             "CODEC_AUDIO_PREFERENCE" => Some("opus,OPUS".to_owned()),
             _ => None,
-        });
-        assert!(preferences.is_err());
+        })
+        .err()
+        .map(|error| error.to_string());
+
+        assert_eq!(
+            error.as_deref(),
+            Some("CODEC_AUDIO_PREFERENCE cannot contain duplicate codec `OPUS`")
+        );
     }
 }

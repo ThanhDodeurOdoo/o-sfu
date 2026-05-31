@@ -1,68 +1,34 @@
 use anyhow::Result;
 use o_sfu_core::prelude::MediaCodecFlags;
 
-use super::parsing::parse_optional_env;
+use super::env::env_block;
 
-#[derive(Debug, Clone, Copy)]
-struct CodecEnvSpec {
-    key: &'static str,
-    error_message: &'static str,
-    apply: fn(MediaCodecFlags, bool) -> MediaCodecFlags,
+env_block! {
+    struct CodecFlagsEnv {
+        opus: bool = default("CODEC_OPUS", MediaCodecFlags::default().opus_enabled());
+        pcmu: bool = default("CODEC_PCMU", MediaCodecFlags::default().pcmu_enabled());
+        pcma: bool = default("CODEC_PCMA", MediaCodecFlags::default().pcma_enabled());
+        vp8: bool = default("CODEC_VP8", MediaCodecFlags::default().vp8_enabled());
+        h264: bool = default("CODEC_H264", MediaCodecFlags::default().h264_enabled());
+        h265: bool = default("CODEC_H265", MediaCodecFlags::default().h265_enabled());
+        vp9: bool = default("CODEC_VP9", MediaCodecFlags::default().vp9_enabled());
+        av1: bool = default("CODEC_AV1", MediaCodecFlags::default().av1_enabled());
+    }
 }
 
-const CODEC_ENV_SPECS: [CodecEnvSpec; 8] = [
-    CodecEnvSpec {
-        key: "CODEC_OPUS",
-        error_message: "CODEC_OPUS must be either `true` or `false`",
-        apply: MediaCodecFlags::with_opus,
-    },
-    CodecEnvSpec {
-        key: "CODEC_PCMU",
-        error_message: "CODEC_PCMU must be either `true` or `false`",
-        apply: MediaCodecFlags::with_pcmu,
-    },
-    CodecEnvSpec {
-        key: "CODEC_PCMA",
-        error_message: "CODEC_PCMA must be either `true` or `false`",
-        apply: MediaCodecFlags::with_pcma,
-    },
-    CodecEnvSpec {
-        key: "CODEC_VP8",
-        error_message: "CODEC_VP8 must be either `true` or `false`",
-        apply: MediaCodecFlags::with_vp8,
-    },
-    CodecEnvSpec {
-        key: "CODEC_H264",
-        error_message: "CODEC_H264 must be either `true` or `false`",
-        apply: MediaCodecFlags::with_h264,
-    },
-    CodecEnvSpec {
-        key: "CODEC_H265",
-        error_message: "CODEC_H265 must be either `true` or `false`",
-        apply: MediaCodecFlags::with_h265,
-    },
-    CodecEnvSpec {
-        key: "CODEC_VP9",
-        error_message: "CODEC_VP9 must be either `true` or `false`",
-        apply: MediaCodecFlags::with_vp9,
-    },
-    CodecEnvSpec {
-        key: "CODEC_AV1",
-        error_message: "CODEC_AV1 must be either `true` or `false`",
-        apply: MediaCodecFlags::with_av1,
-    },
-];
-
 pub(super) fn load_media_codec_flags(
-    mut get_var: impl FnMut(&str) -> Option<String>,
+    get_var: impl FnMut(&str) -> Option<String>,
 ) -> Result<MediaCodecFlags> {
-    let mut flags = MediaCodecFlags::default();
-    for spec in CODEC_ENV_SPECS {
-        if let Some(enabled) = parse_optional_env(&mut get_var, spec.key, spec.error_message)? {
-            flags = (spec.apply)(flags, enabled);
-        }
-    }
-    Ok(flags)
+    let env = CodecFlagsEnv::load(get_var)?;
+    Ok(MediaCodecFlags::default()
+        .with_opus(env.opus)
+        .with_pcmu(env.pcmu)
+        .with_pcma(env.pcma)
+        .with_vp8(env.vp8)
+        .with_h264(env.h264)
+        .with_h265(env.h265)
+        .with_vp9(env.vp9)
+        .with_av1(env.av1))
 }
 
 #[cfg(test)]
@@ -97,10 +63,16 @@ mod tests {
 
     #[test]
     fn load_media_codec_flags_rejects_invalid_bool() {
-        let flags = load_media_codec_flags(|key| match key {
+        let error = load_media_codec_flags(|key| match key {
             "CODEC_VP8" => Some("enabled".to_owned()),
             _ => None,
-        });
-        assert!(flags.is_err());
+        })
+        .err()
+        .map(|error| error.to_string());
+
+        assert_eq!(
+            error.as_deref(),
+            Some("CODEC_VP8 must be either `true` or `false`")
+        );
     }
 }

@@ -1,17 +1,24 @@
 use anyhow::Result;
 
-use super::parsing::parse_optional_non_empty_env;
+use super::env::{env_block, non_empty};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DiagnosticsConfig {
     pub auth_token: Option<String>,
 }
 
+env_block! {
+    struct DiagnosticsEnv {
+        auth_token: Option<String> = optional("DIAGNOSTICS_AUTH_TOKEN").check(non_empty);
+    }
+}
+
 pub(super) fn load_diagnostics_config(
-    mut get_var: impl FnMut(&str) -> Option<String>,
+    get_var: impl FnMut(&str) -> Option<String>,
 ) -> Result<DiagnosticsConfig> {
+    let env = DiagnosticsEnv::load(get_var)?;
     Ok(DiagnosticsConfig {
-        auth_token: parse_optional_non_empty_env(&mut get_var, "DIAGNOSTICS_AUTH_TOKEN")?,
+        auth_token: env.auth_token,
     })
 }
 
@@ -20,24 +27,27 @@ mod tests {
     use super::load_diagnostics_config;
 
     #[test]
-    fn load_diagnostics_config_accepts_trimmed_bearer_token() {
+    fn load_diagnostics_config_accepts_trimmed_bearer_token() -> anyhow::Result<()> {
         let config = load_diagnostics_config(|key| match key {
             "DIAGNOSTICS_AUTH_TOKEN" => Some("  bearer-token  ".to_owned()),
             _ => None,
-        });
-        assert!(config.is_ok());
-        let Some(config) = config.ok() else {
-            return;
-        };
+        })?;
         assert_eq!(config.auth_token.as_deref(), Some("bearer-token"));
+        Ok(())
     }
 
     #[test]
     fn load_diagnostics_config_rejects_empty_token() {
-        let config = load_diagnostics_config(|key| match key {
+        let error = load_diagnostics_config(|key| match key {
             "DIAGNOSTICS_AUTH_TOKEN" => Some("   ".to_owned()),
             _ => None,
-        });
-        assert!(config.is_err());
+        })
+        .err()
+        .map(|error| error.to_string());
+
+        assert_eq!(
+            error.as_deref(),
+            Some("DIAGNOSTICS_AUTH_TOKEN must not be empty")
+        );
     }
 }

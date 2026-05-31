@@ -1,20 +1,21 @@
+mod auth;
 mod codec_flags;
 mod codec_preferences;
 mod diagnostics;
+mod env;
 mod feature_flags;
+mod http;
 mod loader;
-mod log_view;
-mod parsing;
 mod settings;
 mod telemetry;
 mod transport;
+mod user;
 
 pub use o_sfu_core::prelude::{
     Bitrate, CodecPreferences, MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange,
     VideoBitrateLimits,
 };
 
-pub(crate) use self::log_view::ConfigLogView;
 pub use self::{
     diagnostics::DiagnosticsConfig,
     feature_flags::RuntimeFeatureFlags,
