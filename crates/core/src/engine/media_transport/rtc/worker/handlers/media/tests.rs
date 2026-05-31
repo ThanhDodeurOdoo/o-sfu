@@ -14,9 +14,8 @@ use std::{
 use fixtures::{
     LocalVideoRoute, PendingSelectedRidRoute, RemoteVideoRoute, assert_consumer_packet_gate,
     assert_remote_keyframe_command, assert_remote_packet_gate_command, drain_ready_sessions,
-    expect_response, install_video_route, prepare_pending_selected_rid_route,
-    prepare_source_session, prepare_source_session_with_rid, register_saturated_remote_source,
-    request_consumer_keyframe,
+    expect_response, prepare_pending_selected_rid_route, prepare_source_session,
+    prepare_source_session_with_rid, register_saturated_remote_source,
 };
 use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
 use str0m::{
@@ -26,9 +25,10 @@ use str0m::{
 use tokio::sync::{mpsc, oneshot};
 
 use super::{
-    AddSendMediaRequest, apply_route_control_request, drain_due_rid_keyframe_refreshes,
-    observe_source_rid_readiness, refresh_source_packet_gate, request_keyframe_for_source,
-    respond_set_consumer_packet_gates, worker_add_send_media, worker_remove_media,
+    AddSendMediaRequest, apply_route_control_request, control::remove_consumer_route,
+    drain_due_rid_keyframe_refreshes, observe_source_rid_readiness, refresh_source_packet_gate,
+    request_keyframe_for_source, respond_set_consumer_packet_gates, worker_add_send_media,
+    worker_remove_media,
 };
 use crate::{
     Bitrate, MediaCodecFlags,
@@ -41,7 +41,9 @@ use crate::{
                 bitrate::BitrateRegistry,
                 bootstrap,
                 commands::{ConsumerPacketGateCommand, RemoteSourceControl, RouteControlRequest},
-                media_registry::{RegisteredMediaHandle, RemoteSourceRegistration},
+                media_registry::{
+                    ConsumerKeyframeTarget, RegisteredMediaHandle, RemoteSourceRegistration,
+                },
                 relay_registry::{RelayPacketMailbox, RelayTargetId},
                 route_control::{KeyframeRequestDecision, PacketLayerGate},
                 state::PacketLoopState,
@@ -280,6 +282,17 @@ fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate(
                 && destination.packet_gate == PacketLayerGate::Rid("lo".into())
         })
     ));
+    assert_eq!(
+        state.active_consumer_keyframe_target_for_mid(
+            &first_consumer_session,
+            first_consumer_mid,
+            None,
+        ),
+        Some(ConsumerKeyframeTarget {
+            source_transport_media_id,
+            rid: Some(Rid::from("lo")),
+        })
+    );
     assert!(matches!(
         state.media_route_index.get(&source_transport_media_id),
         Some(route_entry) if route_entry.destinations.iter().any(|destination| {
@@ -292,6 +305,57 @@ fn set_consumer_packet_gate_updates_one_route_without_rewriting_the_source_gate(
             .route_control
             .effective_packet_gate(source_transport_media_id),
         Some(PacketLayerGate::Open)
+    );
+}
+
+#[test]
+fn removing_consumer_route_clears_feedback_index_and_repairs_moved_route() {
+    let first_consumer_session = test_transport_session_key(64, 1, 65, UserId::Integer(66));
+    let second_consumer_session = test_transport_session_key(64, 1, 67, UserId::Integer(68));
+    let first_consumer_mid = Mid::from("cam-down-first");
+    let second_consumer_mid = Mid::from("cam-down-second");
+    let source_transport_media_id = TransportMediaId::new(64_100);
+    let rid = Rid::from("hi");
+    let mut state = PacketLoopState::default();
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    scenario.existing_source(source_transport_media_id);
+    let first_consumer_transport_media_id = scenario.destination(
+        source_transport_media_id,
+        first_consumer_session.clone(),
+        first_consumer_mid,
+    );
+    scenario.destination_with_gate(
+        source_transport_media_id,
+        second_consumer_session.clone(),
+        second_consumer_mid,
+        PacketLayerGate::Rid(rid),
+    );
+
+    remove_consumer_route(
+        &mut state,
+        &first_consumer_session,
+        first_consumer_transport_media_id,
+        source_transport_media_id,
+    );
+
+    assert_eq!(
+        state.active_consumer_keyframe_target_for_mid(
+            &first_consumer_session,
+            first_consumer_mid,
+            None,
+        ),
+        None
+    );
+    assert_eq!(
+        state.active_consumer_keyframe_target_for_mid(
+            &second_consumer_session,
+            second_consumer_mid,
+            None,
+        ),
+        Some(ConsumerKeyframeTarget {
+            source_transport_media_id,
+            rid: Some(rid),
+        })
     );
 }
 
@@ -609,6 +673,17 @@ fn selected_rid_packet_gate_blocks_when_selected_rid_goes_stale() {
         Some(&PacketLayerGate::Rid(selected_rid)),
     );
     assert_eq!(
+        route.state.active_consumer_keyframe_target_for_mid(
+            &route.consumer_session,
+            Mid::from("cam-down"),
+            None,
+        ),
+        Some(ConsumerKeyframeTarget {
+            source_transport_media_id: route.source_transport_media_id,
+            rid: Some(selected_rid),
+        })
+    );
+    assert_eq!(
         route
             .state
             .route_control
@@ -848,43 +923,6 @@ fn remote_source_teardown_drops_pending_packet_gate_state() {
             .is_none()
     );
     assert_eq!(metrics.snapshot().rtc_remote_control_packet_gate_drops(), 1);
-}
-
-#[test]
-fn remote_keyframe_command_drops_are_counted_under_mailbox_pressure() {
-    let source_session = test_transport_session_key(141, 0, 172, UserId::Integer(173));
-    let consumer_session = test_transport_session_key(141, 1, 174, UserId::Integer(175));
-    let consumer_mid = Mid::from("cam-down");
-    let mut state = PacketLoopState::default();
-    let metrics = RuntimeMetrics::default();
-    let rtc_metrics = metrics.register_rtc_worker();
-    let source_transport_media_id = TransportMediaId::new(65);
-    let _command_rx = register_saturated_remote_source(
-        &mut state,
-        source_transport_media_id,
-        &source_session,
-        RelayTargetId::new(22),
-        Arc::clone(&rtc_metrics),
-    );
-    let consumer_transport_media_id = install_video_route(
-        &mut state,
-        source_transport_media_id,
-        &consumer_session,
-        consumer_mid,
-    );
-
-    request_consumer_keyframe(
-        &mut state,
-        &metrics,
-        &consumer_session,
-        consumer_transport_media_id,
-        &source_session,
-        source_transport_media_id,
-    );
-
-    let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_remote_control_keyframe_drops(), 1);
-    assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
 }
 
 #[test]

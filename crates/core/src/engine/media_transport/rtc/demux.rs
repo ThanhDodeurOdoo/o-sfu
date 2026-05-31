@@ -117,10 +117,12 @@ impl MediaRouteEntry {
     /// removes one destination while preserving the active-count invariant
     ///
     /// callers pass the index they found under the same mutable route borrow
-    /// this keeps teardown precise without scanning a second time inside the
-    /// helper
+    /// destination order is not semantically observable, so removal keeps the
+    /// vector dense by moving the final destination into the cleared slot
+    /// callers that cache destination indexes must repair the moved destination
+    /// before feedback can use the cache again
     pub(super) fn remove_destination(&mut self, index: usize) -> MediaRouteDestination {
-        let destination = self.destinations.remove(index);
+        let destination = self.destinations.swap_remove(index);
         self.active_destination_count -= usize::from(destination.active);
         destination
     }

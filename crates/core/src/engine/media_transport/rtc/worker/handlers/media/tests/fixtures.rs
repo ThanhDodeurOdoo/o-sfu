@@ -131,21 +131,6 @@ pub(super) fn assert_consumer_packet_gate(
     );
 }
 
-pub(super) fn install_video_route(
-    state: &mut PacketLoopState,
-    source_transport_media_id: TransportMediaId,
-    consumer_session: &TransportSessionKey,
-    consumer_mid: Mid,
-) -> TransportMediaId {
-    install_video_route_with_gate(
-        state,
-        source_transport_media_id,
-        consumer_session,
-        consumer_mid,
-        PacketLayerGate::Open,
-    )
-}
-
 pub(super) fn install_video_route_with_gate(
     state: &mut PacketLoopState,
     source_transport_media_id: TransportMediaId,

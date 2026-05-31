@@ -29,7 +29,7 @@
 use std::time::Instant;
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
-use str0m::media::{MediaKind, Mid, Pt, Rid};
+use str0m::media::{MediaKind, Mid, Pt};
 
 use super::{super::types::RouteSourceKind, remote_source, selected_rid};
 use crate::engine::media_transport::{
@@ -214,11 +214,13 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn register
         now,
     );
     let dest_payload_type = consumer_payload_type(consumer_rtp_parameters);
-    state
-        .media_route_index
-        .entry(source_transport_media_id)
-        .or_insert_with(|| MediaRouteEntry::new(true))
-        .push_destination(MediaRouteDestination {
+    let destination_index = {
+        let route_entry = state
+            .media_route_index
+            .entry(source_transport_media_id)
+            .or_insert_with(|| MediaRouteEntry::new(true));
+        let destination_index = route_entry.destinations.len();
+        route_entry.push_destination(MediaRouteDestination {
             dest_session: consumer_session_key.clone(),
             dest_transport_media_id: consumer_transport_media_id,
             dest_stream: consumer_stream,
@@ -229,6 +231,15 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn register
             packet_gate,
             pending_packet_gate,
         });
+        destination_index
+    };
+    state.set_consumer_destination_index(
+        consumer_session_key,
+        consumer_mid,
+        consumer_transport_media_id,
+        source_transport_media_id,
+        Some(destination_index),
+    );
     refresh_source_packet_gate(state, source_transport_media_id);
 }
 
@@ -268,7 +279,7 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn remove_c
         state.prune_remote_source_if_unrouted(source_transport_media_id);
         return;
     };
-    let (removed_destination, remove_route_entry) = {
+    let (removed_destination, moved_destination, remove_route_entry) = {
         let Some(position) = route_entry.destinations.iter().position(|destination| {
             destination.dest_session == *consumer_session_key
                 && destination.dest_transport_media_id == consumer_transport_media_id
@@ -276,8 +287,38 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn remove_c
             return;
         };
         let removed_destination = route_entry.remove_destination(position);
-        (removed_destination, route_entry.destinations.is_empty())
+        let moved_destination = route_entry.destinations.get(position).map(|destination| {
+            (
+                destination.dest_session.clone(),
+                destination.dest_mid,
+                destination.dest_transport_media_id,
+                position,
+            )
+        });
+        (
+            removed_destination,
+            moved_destination,
+            route_entry.destinations.is_empty(),
+        )
     };
+    state.set_consumer_destination_index(
+        &removed_destination.dest_session,
+        removed_destination.dest_mid,
+        removed_destination.dest_transport_media_id,
+        source_transport_media_id,
+        None,
+    );
+    if let Some((session_key, mid, transport_media_id, destination_index)) = moved_destination {
+        // `swap_remove` can move another consumer into `position`
+        // repair that consumer's feedback index before the route is reused
+        state.set_consumer_destination_index(
+            &session_key,
+            mid,
+            transport_media_id,
+            source_transport_media_id,
+            Some(destination_index),
+        );
+    }
     release_destination_stream(state, &removed_destination);
     if remove_route_entry {
         state.media_route_index.remove(&source_transport_media_id);
@@ -299,6 +340,13 @@ pub(in crate::engine::media_transport::rtc::worker) fn remove_source_route(
         return;
     };
     for destination in route_entry.destinations {
+        state.set_consumer_destination_index(
+            &destination.dest_session,
+            destination.dest_mid,
+            destination.dest_transport_media_id,
+            source_transport_media_id,
+            None,
+        );
         release_destination_stream(state, &destination);
     }
     refresh_source_packet_gate(state, source_transport_media_id);
@@ -576,20 +624,6 @@ fn update_consumer_route(
         _ => false,
     })
 }
-/// extracts the rid restriction carried by a packet-layer gate
-///
-/// keyframe routing and selected-rid readiness use this to map destination
-/// policy back to producer-side refresh targets
-pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn packet_gate_rid(
-    packet_gate: &PacketLayerGate,
-) -> Option<Rid> {
-    match packet_gate {
-        PacketLayerGate::Rid(rid) => Some(*rid),
-        PacketLayerGate::OperatingPoint(operating_point) => operating_point.rid(),
-        PacketLayerGate::Open | PacketLayerGate::Block => None,
-    }
-}
-
 /// validates the source side of a route and optionally registers remote state
 ///
 /// local sources are resolved through worker media handles because they must be
