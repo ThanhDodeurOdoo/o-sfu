@@ -144,7 +144,6 @@ impl Runtime {
         let services = RuntimeServices::default();
         let media_transport = build_media_transport(&options.core, &services)?;
         let room_runtime_policy = build_room_runtime_policy(&runtime_config, &options);
-        info!("{}", config.log_view(process::id()));
         info!(
             event = telemetry_event::RUNTIME_BOOT,
             "runtime configuration loaded"

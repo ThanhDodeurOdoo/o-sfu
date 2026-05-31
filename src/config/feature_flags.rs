@@ -1,40 +1,25 @@
 use anyhow::Result;
 pub use o_sfu_core::prelude::RuntimeFeatureFlags;
 
-use super::{log_view::ConfigLogField, parsing::parse_optional_env};
+use super::env::env_block;
 
-pub(super) fn load_runtime_feature_flags(
-    mut get_var: impl FnMut(&str) -> Option<String>,
-) -> Result<RuntimeFeatureFlags> {
-    Ok(RuntimeFeatureFlags {
-        transcription: parse_optional_env(
-            &mut get_var,
-            "FEATURE_TRANSCRIPTION",
-            "FEATURE_TRANSCRIPTION must be either `true` or `false`",
-        )?
-        .unwrap_or(false),
-        audio_recording: parse_optional_env(
-            &mut get_var,
-            "FEATURE_AUDIO_RECORDING",
-            "FEATURE_AUDIO_RECORDING must be either `true` or `false`",
-        )?
-        .unwrap_or(false),
-        video_recording: parse_optional_env(
-            &mut get_var,
-            "FEATURE_VIDEO_RECORDING",
-            "FEATURE_VIDEO_RECORDING must be either `true` or `false`",
-        )?
-        .unwrap_or(false),
-    })
+env_block! {
+    struct FeatureEnv {
+        transcription: bool = default("FEATURE_TRANSCRIPTION", false);
+        audio_recording: bool = default("FEATURE_AUDIO_RECORDING", false);
+        video_recording: bool = default("FEATURE_VIDEO_RECORDING", false);
+    }
 }
 
-#[must_use]
-pub(super) fn runtime_feature_flag_log_fields(flags: RuntimeFeatureFlags) -> [ConfigLogField; 3] {
-    [
-        ConfigLogField::new("transcription", flags.transcription),
-        ConfigLogField::new("audio_recording", flags.audio_recording),
-        ConfigLogField::new("video_recording", flags.video_recording),
-    ]
+pub(super) fn load_runtime_feature_flags(
+    get_var: impl FnMut(&str) -> Option<String>,
+) -> Result<RuntimeFeatureFlags> {
+    let env = FeatureEnv::load(get_var)?;
+    Ok(RuntimeFeatureFlags {
+        transcription: env.transcription,
+        audio_recording: env.audio_recording,
+        video_recording: env.video_recording,
+    })
 }
 
 #[cfg(test)]
@@ -67,10 +52,16 @@ mod tests {
 
     #[test]
     fn load_runtime_feature_flags_rejects_invalid_bool() {
-        let config = load_runtime_feature_flags(|key| match key {
+        let error = load_runtime_feature_flags(|key| match key {
             "FEATURE_TRANSCRIPTION" => Some("enabled".to_owned()),
             _ => None,
-        });
-        assert!(config.is_err());
+        })
+        .err()
+        .map(|error| error.to_string());
+
+        assert_eq!(
+            error.as_deref(),
+            Some("FEATURE_TRANSCRIPTION must be either `true` or `false`")
+        );
     }
 }
