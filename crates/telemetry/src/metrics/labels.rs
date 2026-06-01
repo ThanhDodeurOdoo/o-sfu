@@ -152,6 +152,12 @@ pub enum RtpForwardDestinationKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RtpDecoderRefreshScope {
+    Rid,
+    Source,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RtpRelayDropKind {
     IntraNodeRelay,
 }
@@ -451,6 +457,11 @@ impl_exported_metric_label!(RtpForwardDestinationKind {
     LocalRtc => (0, "local_rtc"),
     Recording => (1, "recording"),
     IntraNodeRelay => (2, "intra_node_relay"),
+});
+
+impl_exported_metric_label!(RtpDecoderRefreshScope {
+    Rid => (0, "rid"),
+    Source => (1, "source"),
 });
 
 impl_exported_metric_label!(RtpRelayDropKind {

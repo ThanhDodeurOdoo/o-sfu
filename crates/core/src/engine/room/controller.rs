@@ -649,7 +649,30 @@ impl Room {
         let transport_snapshot = transport.transport_bitrate_snapshot(&session_keys);
         let incoming_bitrate_by_source =
             state.diagnostics_incoming_bitrate_by_source(&transport_snapshot.per_media);
-        state.diagnostics_sources(&incoming_bitrate_by_source, &active_speaker_diagnostics)
+        let sources = state
+            .diagnostics_source_media()
+            .into_iter()
+            .map(|media| {
+                TransportSourceKey::new(
+                    self.transport_user_key(&media.owner, media.connection),
+                    media.media,
+                )
+            })
+            .collect::<Vec<_>>();
+        drop(state);
+        let source_activity_by_media = transport
+            .source_activity_snapshot(&sources)
+            .await
+            .per_media
+            .into_iter()
+            .map(|activity| (activity.transport_media_id(), activity))
+            .collect::<BTreeMap<_, _>>();
+        let state = self.state.read().await;
+        state.diagnostics_sources(
+            &incoming_bitrate_by_source,
+            &active_speaker_diagnostics,
+            &source_activity_by_media,
+        )
     }
 
     /// Resolve a diagnostics request path agaisnt either nummeric or string user ids.

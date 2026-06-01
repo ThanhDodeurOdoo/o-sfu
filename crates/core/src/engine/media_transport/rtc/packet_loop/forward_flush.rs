@@ -36,10 +36,13 @@ use super::{
 use crate::engine::{
     hot_path::unlikely,
     media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
-    metrics::{RtcMetricsRecorder, RtcRouteControlMetrics, RtpMetricsRecorder, RuntimeMetrics},
+    metrics::{
+        RtcMetricsRecorder, RtcRouteControlMetrics, RtpDecoderRefreshScope, RtpMetricsRecorder,
+        RuntimeMetrics,
+    },
 };
 
-/// Observe packet-path metadata before packets are forwarded.
+/// observe packet-path metadata before packets are forwarded
 ///
 /// This is where producer SSRC bindings, audio activity, RID readiness and
 /// incoming bitrate become worker state or metrics. The function also coalesces
@@ -77,8 +80,24 @@ pub(super) fn record_incoming_stats(
                     .dirty_source_policy_channel_ids
                     .push(facts.room_instance_id);
             }
-            if let Some(rid) = facts.layer_metadata.rid() {
-                state.observe_producer_rid_packet(transport_media_id, rid, packet.received_at());
+            let packet_rid = facts.layer_metadata.rid();
+            if packet_rid.is_some() || facts.decoder_refresh {
+                state.observe_producer_packet(
+                    transport_media_id,
+                    packet_rid,
+                    facts.decoder_refresh,
+                    packet.received_at(),
+                );
+            }
+            if facts.decoder_refresh {
+                let scope = if packet_rid.is_some() {
+                    RtpDecoderRefreshScope::Rid
+                } else {
+                    RtpDecoderRefreshScope::Source
+                };
+                rtp_metrics.record_decoder_refresh(scope);
+            }
+            if let Some(rid) = packet_rid {
                 buffers.push_rid_readiness(
                     packet.source(),
                     transport_media_id,

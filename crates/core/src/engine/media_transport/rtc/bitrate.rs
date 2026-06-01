@@ -25,6 +25,7 @@ const BITRATE_WINDOW_NANOS: u64 = 1_000_000_000;
 pub(super) struct MediaBitrateCounter {
     origin: Instant,
     window_start_nanos: AtomicU64,
+    last_observed_nanos: AtomicU64,
     bytes_in_window: AtomicU64,
     observed: AtomicBool,
 }
@@ -34,6 +35,7 @@ impl MediaBitrateCounter {
         Self {
             origin: now,
             window_start_nanos: AtomicU64::new(0),
+            last_observed_nanos: AtomicU64::new(0),
             bytes_in_window: AtomicU64::new(0),
             observed: AtomicBool::new(false),
         }
@@ -49,6 +51,7 @@ impl MediaBitrateCounter {
     /// bounded by real transport packet sizes and cannot approach `u64::MAX`.
     pub(super) fn record(&self, now: Instant, payload_bytes: usize) -> bool {
         let now_nanos = self.nanos_since_origin(now);
+        self.last_observed_nanos.store(now_nanos, Ordering::Release);
         let window_start = self.window_start_nanos.load(Ordering::Acquire);
         if now_nanos.saturating_sub(window_start) >= BITRATE_WINDOW_NANOS {
             self.bytes_in_window.store(0, Ordering::Release);
@@ -58,6 +61,16 @@ impl MediaBitrateCounter {
         self.bytes_in_window
             .fetch_add(payload_bytes, Ordering::Release);
         !self.observed.swap(true, Ordering::AcqRel)
+    }
+
+    pub(super) fn last_observed_age(&self, now: Instant) -> Option<Duration> {
+        if !self.observed.load(Ordering::Acquire) {
+            return None;
+        }
+        Some(Duration::from_nanos(
+            self.nanos_since_origin(now)
+                .saturating_sub(self.last_observed_nanos.load(Ordering::Acquire)),
+        ))
     }
 
     fn snapshot(&self, now: Instant) -> Bitrate {

@@ -258,6 +258,100 @@ pub struct TransportQualitySample {
     pub sample_count: u64,
 }
 
+/// Latest packet-path activity for producer media.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TransportSourceActivitySnapshot {
+    pub per_media: Vec<TransportSourceActivity>,
+}
+
+/// Recent packet and decoder-refresh age for one producer media id.
+///
+/// The source-level fields answer whether any packets are still arriving for a
+/// publication. RID entries answer whether a selected simulcast layer is still
+/// producing packets and decoder refreshes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransportSourceActivity {
+    transport_media_id: TransportMediaId,
+    last_packet_age: Duration,
+    last_keyframe_age: Option<Duration>,
+    rids: Vec<TransportRidActivity>,
+}
+
+impl TransportSourceActivity {
+    #[must_use]
+    pub fn new(
+        transport_media_id: TransportMediaId,
+        last_packet_age: Duration,
+        last_keyframe_age: Option<Duration>,
+        rids: Vec<TransportRidActivity>,
+    ) -> Self {
+        Self {
+            transport_media_id,
+            last_packet_age,
+            last_keyframe_age,
+            rids,
+        }
+    }
+
+    #[must_use]
+    pub const fn transport_media_id(&self) -> TransportMediaId {
+        self.transport_media_id
+    }
+
+    #[must_use]
+    pub const fn last_packet_age(&self) -> Duration {
+        self.last_packet_age
+    }
+
+    #[must_use]
+    pub const fn last_keyframe_age(&self) -> Option<Duration> {
+        self.last_keyframe_age
+    }
+
+    #[must_use]
+    pub fn rids(&self) -> &[TransportRidActivity] {
+        &self.rids
+    }
+}
+
+/// Recent packet and decoder-refresh age for one producer RID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransportRidActivity {
+    rid: String,
+    last_packet_age: Duration,
+    last_keyframe_age: Option<Duration>,
+}
+
+impl TransportRidActivity {
+    #[must_use]
+    pub fn new(
+        rid: String,
+        last_packet_age: Duration,
+        last_keyframe_age: Option<Duration>,
+    ) -> Self {
+        Self {
+            rid,
+            last_packet_age,
+            last_keyframe_age,
+        }
+    }
+
+    #[must_use]
+    pub fn rid(&self) -> &str {
+        &self.rid
+    }
+
+    #[must_use]
+    pub const fn last_packet_age(&self) -> Duration {
+        self.last_packet_age
+    }
+
+    #[must_use]
+    pub const fn last_keyframe_age(&self) -> Option<Duration> {
+        self.last_keyframe_age
+    }
+}
+
 /// Transport-observed pressure used by room-local placement policy.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TransportPlacementPressureSnapshot {

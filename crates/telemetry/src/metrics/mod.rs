@@ -19,7 +19,7 @@ pub use self::{
         BudgetSolverOutcome, HttpRoute, MediaQualityLossDirection, MediaQualitySample,
         RtcDatagramDropReason, RtcDatagramRoutePath, RtcRelayEnqueueResult,
         RtcRemoteControlDropKind, RtcRemotePacketGateConvergence, RtcRouteControlOutcome,
-        RtpForwardDestinationKind, RtpRelayDropKind, SourceSelectionKind,
+        RtpDecoderRefreshScope, RtpForwardDestinationKind, RtpRelayDropKind, SourceSelectionKind,
         TransportCleanupFailureKind, TransportHealthState, TransportIceState,
         WsSessionLoopExitReason,
     },

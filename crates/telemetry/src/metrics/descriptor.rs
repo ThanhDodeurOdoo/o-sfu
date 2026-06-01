@@ -397,6 +397,16 @@ metric_catalog! {
         kind: Counter,
         samples: |metrics| counter_family_samples(&metrics.rtp_relay_overload_drops, "destination")
     },
+    RtpDecoderRefreshesTotal {
+        name: "osfu_rtp_decoder_refreshes_total",
+        help: "Total decoder-refresh RTP packets observed by source scope.",
+        kind: Counter,
+        samples: |metrics| snapshot_counter_samples(
+            &metrics.rtp_metrics.snapshot(),
+            "scope",
+            RtpMetricsSnapshot::decoder_refreshes
+        )
+    },
     TransportIceStateChangesTotal {
         name: "osfu_transport_ice_state_changes_total",
         help: "Total RTC ICE state-change events observed from the transport adapter.",

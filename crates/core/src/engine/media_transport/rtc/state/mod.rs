@@ -60,7 +60,8 @@ use crate::{
     Bitrate,
     engine::media_transport::{
         ReceiverBandwidthSnapshot, SessionUploadSlot, TransportMediaId, TransportQualitySample,
-        TransportQualitySnapshot, TransportSessionKey,
+        TransportQualitySnapshot, TransportRidActivity, TransportSessionKey,
+        TransportSourceActivity, TransportSourceActivitySnapshot,
     },
 };
 
@@ -183,6 +184,11 @@ pub(super) struct PacketLoopState {
     /// readiness decides when a strict selected-RID gate can become effective
     /// and when a stale selected gate must go pending again
     pub(super) live_producer_rids: BTreeMap<TransportMediaId, Vec<ProducerRidLiveness>>,
+    /// RID-less producer decoder refreshes keyed by source media id
+    ///
+    /// packet freshness comes from the incoming-bitrate counter that is already
+    /// touched by every packet, so this table only stores decoder-refresh age
+    pub(super) producer_media_refreshes: BTreeMap<TransportMediaId, ProducerMediaActivity>,
     /// delayed selected-RID keyframe refreshes owned by the packet-loop clock
     ///
     /// chrome can need more than one PLI after a RID first becomes live
@@ -358,22 +364,88 @@ impl PacketLoopState {
     /// before
     /// callers use that edge to apply selected-RID readiness work once per new
     /// layer while later packets still refresh freshness
+    #[cfg(any(test, feature = "internal-benchmarks"))]
     pub(super) fn observe_producer_rid_packet(
         &mut self,
         transport_media_id: TransportMediaId,
         rid: Rid,
         now: Instant,
     ) -> bool {
+        self.observe_producer_packet(transport_media_id, Some(rid), false, now)
+    }
+
+    /// record packet-path liveness for one producer packet
+    ///
+    /// normal RID-bearing traffic updates only the RID liveness table. Source
+    /// level diagnostics derive their packet age from that table off the hot
+    /// path. RID-less packets are recorded source-wide only when they carry a
+    /// decoder refresh signal because tracking every RID-less packet would add
+    /// work to the steady forwarding loop for little diagnostic value.
+    pub(super) fn observe_producer_packet(
+        &mut self,
+        transport_media_id: TransportMediaId,
+        rid: Option<Rid>,
+        is_keyframe: bool,
+        now: Instant,
+    ) -> bool {
+        let Some(rid) = rid else {
+            if is_keyframe {
+                self.observe_producer_refresh(transport_media_id, now);
+            }
+            return false;
+        };
         let live_rids = self
             .live_producer_rids
             .entry(transport_media_id)
             .or_default();
         if let Some(liveness) = live_rids.iter_mut().find(|liveness| liveness.rid() == rid) {
-            liveness.observe(now);
+            liveness.observe(is_keyframe, now);
             return false;
         }
-        live_rids.push(ProducerRidLiveness::new(rid, now));
+        live_rids.push(ProducerRidLiveness::new_with_keyframe(
+            rid,
+            is_keyframe,
+            now,
+        ));
         true
+    }
+
+    fn observe_producer_refresh(&mut self, transport_media_id: TransportMediaId, now: Instant) {
+        self.producer_media_refreshes
+            .entry(transport_media_id)
+            .or_default()
+            .observe_keyframe(now);
+    }
+
+    /// build packet activity diagnostics for producer media ids
+    pub(super) fn source_activity_snapshot(
+        &self,
+        transport_media_ids: &[TransportMediaId],
+        now: Instant,
+    ) -> TransportSourceActivitySnapshot {
+        TransportSourceActivitySnapshot {
+            per_media: transport_media_ids
+                .iter()
+                .filter_map(|transport_media_id| {
+                    let source = self.producer_media_refreshes.get(transport_media_id);
+                    let source_last_packet_age = self
+                        .incoming_bitrate_counters
+                        .get(transport_media_id)
+                        .and_then(|counter| counter.last_observed_age(now));
+                    let rids = self
+                        .live_producer_rids
+                        .get(transport_media_id)
+                        .map_or(&[][..], Vec::as_slice);
+                    ProducerMediaActivity::source_diagnostic(
+                        *transport_media_id,
+                        source_last_packet_age,
+                        source,
+                        rids,
+                        now,
+                    )
+                })
+                .collect(),
+        }
     }
 
     /// report whether a producer RID has recent packet liveness
@@ -422,6 +494,7 @@ impl PacketLoopState {
     /// the heap may keep stale entries until the next deadline query drains them
     pub(super) fn forget_live_producer_rids(&mut self, transport_media_id: TransportMediaId) {
         self.live_producer_rids.remove(&transport_media_id);
+        self.producer_media_refreshes.remove(&transport_media_id);
         self.pending_rid_keyframe_refreshes
             .remove(&transport_media_id);
     }
@@ -616,14 +689,17 @@ pub(super) struct ProducerRidLiveness {
     rid: Rid,
     /// last packet time for freshness checks
     last_seen: Instant,
+    /// last decoder-refresh packet time for diagnostics
+    last_keyframe: Option<Instant>,
 }
 
 impl ProducerRidLiveness {
-    /// create liveness state from the first observed packet for a RID
-    fn new(rid: Rid, observed_at: Instant) -> Self {
+    /// create liveness state with optional decoder-refresh metadata
+    fn new_with_keyframe(rid: Rid, is_keyframe: bool, observed_at: Instant) -> Self {
         Self {
             rid,
             last_seen: observed_at,
+            last_keyframe: is_keyframe.then_some(observed_at),
         }
     }
 
@@ -632,14 +708,65 @@ impl ProducerRidLiveness {
         self.rid
     }
 
-    /// refresh liveness after another packet for the same RID
-    fn observe(&mut self, observed_at: Instant) {
+    /// refresh liveness and optional decoder-refresh metadata
+    fn observe(&mut self, is_keyframe: bool, observed_at: Instant) {
         self.last_seen = observed_at;
+        if is_keyframe {
+            self.last_keyframe = Some(observed_at);
+        }
     }
 
     /// report whether the RID is fresh enough for selected-RID routing
     fn is_ready(&self, now: Instant, max_age: Duration) -> bool {
         now.duration_since(self.last_seen) <= max_age
+    }
+
+    fn diagnostic(&self, now: Instant) -> TransportRidActivity {
+        TransportRidActivity::new(
+            self.rid.to_string(),
+            now.saturating_duration_since(self.last_seen),
+            self.last_keyframe
+                .map(|last_keyframe| now.saturating_duration_since(last_keyframe)),
+        )
+    }
+}
+
+/// RID-less decoder-refresh activity for one producer media id
+#[derive(Debug, Clone, Default)]
+pub(super) struct ProducerMediaActivity {
+    /// last decoder-refresh packet time for the source
+    last_keyframe: Option<Instant>,
+}
+
+impl ProducerMediaActivity {
+    fn observe_keyframe(&mut self, observed_at: Instant) {
+        self.last_keyframe = Some(observed_at);
+    }
+
+    fn source_diagnostic(
+        transport_media_id: TransportMediaId,
+        source_last_packet_age: Option<Duration>,
+        source: Option<&Self>,
+        rids: &[ProducerRidLiveness],
+        now: Instant,
+    ) -> Option<TransportSourceActivity> {
+        let rid_last_seen = rids.iter().map(|rid| rid.last_seen).max();
+        let last_keyframe = source
+            .and_then(|activity| activity.last_keyframe)
+            .into_iter()
+            .chain(rids.iter().filter_map(|rid| rid.last_keyframe))
+            .max();
+        let last_packet_age = source_last_packet_age
+            .or_else(|| rid_last_seen.map(|last_seen| now.saturating_duration_since(last_seen)))
+            .or_else(|| {
+                last_keyframe.map(|last_keyframe| now.saturating_duration_since(last_keyframe))
+            })?;
+        Some(TransportSourceActivity::new(
+            transport_media_id,
+            last_packet_age,
+            last_keyframe.map(|last_keyframe| now.saturating_duration_since(last_keyframe)),
+            rids.iter().map(|rid| rid.diagnostic(now)).collect(),
+        ))
     }
 }
 

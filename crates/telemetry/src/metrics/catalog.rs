@@ -19,10 +19,11 @@ use super::{
         HttpRoomResponseStatus, HttpRoute, MediaQualityLossDirection, MediaQualityRttBucket,
         MediaQualitySample, RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath,
         RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
-        RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, SourceSelectionKind,
-        TransportCleanupFailureKind, TransportHealthState, TransportHealthTransition,
-        TransportIceState, TransportUserLifetimeBucket, WsBusClientFrameKind, WsBusDirection,
-        WsBusFailureKind, WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
+        RtcRouteControlOutcome, RtpDecoderRefreshScope, RtpForwardDestinationKind,
+        RtpRelayDropKind, SourceSelectionKind, TransportCleanupFailureKind, TransportHealthState,
+        TransportHealthTransition, TransportIceState, TransportUserLifetimeBucket,
+        WsBusClientFrameKind, WsBusDirection, WsBusFailureKind, WsConnectionStage,
+        WsSessionLoopExitReason, WsStartupFailureKind,
     },
     rtc::{RtcMetrics, RtcMetricsRecorder, RtcRouteControlMetrics},
     rtp::{RtpMetrics, RtpMetricsRecorder},
@@ -395,6 +396,10 @@ impl RuntimeMetrics {
     ) {
         self.rtp_metrics
             .record_forwarded(destination, payload_bytes);
+    }
+
+    pub fn record_rtp_decoder_refresh(&self, scope: RtpDecoderRefreshScope) {
+        self.rtp_metrics.record_decoder_refresh(scope);
     }
 
     pub fn record_rtp_relay_overload_drop(&self, destination: RtpRelayDropKind) {

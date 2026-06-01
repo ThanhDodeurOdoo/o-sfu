@@ -163,8 +163,8 @@ mod tests {
     use crate::metrics::{
         BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
         RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
-        RtcRouteControlOutcome, RtpForwardDestinationKind, RuntimeMetrics, SourceSelectionKind,
-        TransportCleanupFailureKind, TransportHealthState, TransportIceState,
+        RtcRouteControlOutcome, RtpDecoderRefreshScope, RtpForwardDestinationKind, RuntimeMetrics,
+        SourceSelectionKind, TransportCleanupFailureKind, TransportHealthState, TransportIceState,
         WsSessionLoopExitReason,
     };
 
@@ -225,6 +225,8 @@ mod tests {
         ));
         assert!(rendered.contains("osfu_rtp_packets_total{direction=\"ingress\"} 1"));
         assert!(rendered.contains("osfu_rtp_payload_bytes_total{direction=\"egress\"} 900"));
+        assert!(rendered.contains("osfu_rtp_decoder_refreshes_total{scope=\"rid\"} 1"));
+        assert!(rendered.contains("osfu_rtp_decoder_refreshes_total{scope=\"source\"} 1"));
         assert!(rendered.contains("osfu_rtp_forwarded_packets_total{destination=\"local_rtc\"} 1"));
         assert!(
             rendered
@@ -280,6 +282,8 @@ mod tests {
         metrics.record_recording_captured_stream();
         metrics.record_rtp_ingress(1200);
         metrics.record_rtp_egress(900);
+        metrics.record_rtp_decoder_refresh(RtpDecoderRefreshScope::Rid);
+        metrics.record_rtp_decoder_refresh(RtpDecoderRefreshScope::Source);
         metrics.record_rtp_forwarded(RtpForwardDestinationKind::LocalRtc, 900);
         metrics.record_rtp_forwarded(RtpForwardDestinationKind::Recording, 700);
         metrics.record_rtp_forwarded(RtpForwardDestinationKind::IntraNodeRelay, 500);

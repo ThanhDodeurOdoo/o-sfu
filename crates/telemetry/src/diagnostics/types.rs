@@ -228,6 +228,10 @@ pub struct DiagnosticsSourceEncoding {
     pub repair_ssrc: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_packet_age_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_keyframe_age_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -238,6 +242,10 @@ pub struct DiagnosticsSource {
     pub active_speaker: Option<DiagnosticsActiveSpeaker>,
     pub current_incoming_bitrate_bps: u64,
     pub encodings: Vec<DiagnosticsSourceEncoding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_packet_age_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_keyframe_age_ms: Option<u64>,
     pub media_kind: DiagnosticsMediaKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mid: Option<String>,

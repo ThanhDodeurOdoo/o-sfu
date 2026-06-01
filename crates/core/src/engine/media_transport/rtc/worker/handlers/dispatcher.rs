@@ -28,7 +28,9 @@ use super::{
 use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
     engine::{
-        media_transport::{TransportResult, TransportSessionKey},
+        media_transport::{
+            TransportMediaId, TransportResult, TransportSessionKey, TransportSourceActivitySnapshot,
+        },
         metrics::RuntimeMetrics,
     },
 };
@@ -103,14 +105,16 @@ pub fn handle_worker_command(
             response,
             Ok(state.active_speaker_diagnostic_snapshot(context.now)),
         ),
-        RtcWorkerCommand::NextActiveSpeakerDeadline { response } => {
-            respond(
-                response,
-                Ok(state
-                    .route_control
-                    .next_active_speaker_deadline(context.now)),
-            );
-        }
+        RtcWorkerCommand::SourceActivitySnapshot {
+            transport_media_ids,
+            response,
+        } => respond_source_activity_snapshot(state, &transport_media_ids, context.now, response),
+        RtcWorkerCommand::NextActiveSpeakerDeadline { response } => respond(
+            response,
+            Ok(state
+                .route_control
+                .next_active_speaker_deadline(context.now)),
+        ),
         RtcWorkerCommand::ExpiredActiveSpeakerRoomInstanceIds { now, response } => respond(
             response,
             Ok(state.expired_active_speaker_room_instance_ids(now)),
@@ -180,6 +184,18 @@ pub fn handle_worker_command(
 
 fn respond<T>(response: oneshot::Sender<TransportResult<T>>, result: TransportResult<T>) {
     let _ = response.send(result);
+}
+
+fn respond_source_activity_snapshot(
+    state: &PacketLoopState,
+    transport_media_ids: &[TransportMediaId],
+    now: Instant,
+    response: oneshot::Sender<TransportResult<TransportSourceActivitySnapshot>>,
+) {
+    respond(
+        response,
+        Ok(state.source_activity_snapshot(transport_media_ids, now)),
+    );
 }
 
 fn close_session(
