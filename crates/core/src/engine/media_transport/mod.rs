@@ -50,7 +50,7 @@ pub mod fuzz_support {
 #[cfg(any(test, feature = "testing-transport"))]
 pub use rtc::ForwardedPacket;
 use rtc::{RtcSendMediaSource, RtcWorker};
-use tracing::warn;
+use tracing::{debug, warn};
 pub use types::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
     ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,
@@ -501,13 +501,23 @@ impl MediaTransport {
     ) -> Vec<Result<(), TransportAdapterError>> {
         let results = self.execute_receiver_bwe_target_batch(updates).await;
         for (update, result) in updates.iter().zip(results.iter()) {
-            if let Err(error) = result {
-                warn!(
-                    ?error,
-                    session_key = ?update.session_key(),
-                    target = update.target().as_bps(),
-                    "media transport failed to update a receiver BWE target"
-                );
+            match result {
+                Ok(()) => {}
+                Err(TransportAdapterError::InvalidInput) => {
+                    debug!(
+                        session_key = ?update.session_key(),
+                        target = update.target().as_bps(),
+                        "media transport skipped a stale receiver BWE target"
+                    );
+                }
+                Err(error) => {
+                    warn!(
+                        ?error,
+                        session_key = ?update.session_key(),
+                        target = update.target().as_bps(),
+                        "media transport failed to update a receiver BWE target"
+                    );
+                }
             }
         }
         results
