@@ -21,7 +21,7 @@ use crate::engine::{
     media_transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
         ReceiverBweTargetUpdate, SessionOffer, TransportConsumerRoute, TransportMediaId,
-        TransportResult, TransportSessionKey, TransportSourceKey,
+        TransportResult, TransportSessionKey, TransportSourceActivitySnapshot, TransportSourceKey,
     },
     metrics::{RtcMetricsRecorder, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence},
 };
@@ -282,6 +282,14 @@ pub(super) enum RtcWorkerCommand {
     /// use for source activity decisions
     ActiveSpeakerDiagnosticSnapshot {
         response: RtcWorkerResponse<Vec<ActiveSpeakerSourceDiagnostic>>,
+    },
+    /// read source packet activity from worker-local packet-loop state
+    ///
+    /// this is a cold-path diagnostics view. querying through the worker
+    /// mailbox avoids mirroring every packet into a shared snapshot table.
+    SourceActivitySnapshot {
+        transport_media_ids: Vec<TransportMediaId>,
+        response: RtcWorkerResponse<TransportSourceActivitySnapshot>,
     },
     /// read the next active-speaker expiry deadline owned by this worker
     ///

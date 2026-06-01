@@ -1,6 +1,8 @@
+use str0m::media::Rid;
+
 use super::fixtures::*;
 use crate::engine::media_transport::rtc::{
-    bootstrap::ensure_session_rtc_state, state::PacketLoopState,
+    bitrate::BitrateRegistry, bootstrap::ensure_session_rtc_state, state::PacketLoopState,
     test_support::collect_ready_session_keys,
 };
 
@@ -183,4 +185,70 @@ fn packet_loop_state_ignores_stale_timeout_handle_after_session_replacement() {
 
     assert!(ready_sessions.is_empty());
     assert_eq!(state.next_timeout_deadline(), None);
+}
+
+#[test]
+fn packet_loop_state_snapshots_source_and_rid_packet_activity() {
+    let mut state = PacketLoopState::default();
+    let transport_media_id = TransportMediaId::new(77);
+    let rid = Rid::from("hi");
+    let now = Instant::now();
+
+    state.observe_producer_packet(transport_media_id, Some(rid), false, now);
+    state.observe_producer_packet(
+        transport_media_id,
+        Some(rid),
+        true,
+        now + Duration::from_millis(40),
+    );
+    let activity =
+        state.source_activity_snapshot(&[transport_media_id], now + Duration::from_millis(100));
+
+    let source = activity
+        .per_media
+        .first()
+        .expect("source activity should be present");
+    assert_eq!(source.last_packet_age(), Duration::from_millis(60));
+    assert_eq!(source.last_keyframe_age(), Some(Duration::from_millis(60)));
+    let rid_activity = source
+        .rids()
+        .first()
+        .expect("rid activity should be present");
+    assert_eq!(rid_activity.rid(), "hi");
+    assert_eq!(rid_activity.last_packet_age(), Duration::from_millis(60));
+    assert_eq!(
+        rid_activity.last_keyframe_age(),
+        Some(Duration::from_millis(60))
+    );
+}
+
+#[test]
+fn packet_loop_state_snapshots_ridless_packet_activity_from_ingress_counter() {
+    let mut bitrate_registry = BitrateRegistry::default();
+    let mut state = PacketLoopState::default();
+    let session_key = transport_key(1, 2, UserId::Integer(3));
+    let transport_media_id = TransportMediaId::new(77);
+    let now = Instant::now();
+    let counter = bitrate_registry.register_incoming_media(&session_key, transport_media_id, now);
+    state.register_incoming_bitrate_counter(transport_media_id, counter);
+
+    state.observe_producer_packet(transport_media_id, None, true, now);
+    assert_eq!(
+        state.record_incoming_bitrate(transport_media_id, now, 32),
+        Some(true)
+    );
+    assert_eq!(
+        state.record_incoming_bitrate(transport_media_id, now + Duration::from_millis(40), 32,),
+        Some(false)
+    );
+    let activity =
+        state.source_activity_snapshot(&[transport_media_id], now + Duration::from_millis(100));
+
+    let source = activity
+        .per_media
+        .first()
+        .expect("source activity should be present");
+    assert_eq!(source.last_packet_age(), Duration::from_millis(60));
+    assert_eq!(source.last_keyframe_age(), Some(Duration::from_millis(100)));
+    assert!(source.rids().is_empty());
 }

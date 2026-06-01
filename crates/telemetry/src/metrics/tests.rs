@@ -5,9 +5,9 @@ use o_sfu_model::WebSocketCloseCode;
 use super::{
     BudgetSolverOutcome, HttpRoute, MediaQualityLossDirection, MediaQualitySample, MetricName,
     RtcDatagramDropReason, RtcDatagramRoutePath, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
-    RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpForwardDestinationKind,
-    RtpRelayDropKind, RuntimeMetrics, RuntimeMetricsSnapshot, SourceSelectionKind,
-    TransportHealthState, TransportIceState, WsSessionLoopExitReason,
+    RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpDecoderRefreshScope,
+    RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetrics, RuntimeMetricsSnapshot,
+    SourceSelectionKind, TransportHealthState, TransportIceState, WsSessionLoopExitReason,
     test_support::{RuntimeMetricsSnapshotLookup, RuntimeMetricsSnapshotTestExt},
 };
 
@@ -78,6 +78,8 @@ fn assert_rtp_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.rtp_packets_egress(), 1);
     assert_eq!(snapshot.rtp_payload_bytes_ingress(), 1200);
     assert_eq!(snapshot.rtp_payload_bytes_egress(), 900);
+    assert_eq!(snapshot.rtp_decoder_refreshes_rid(), 1);
+    assert_eq!(snapshot.rtp_decoder_refreshes_source(), 1);
 }
 
 fn assert_forwarding_volume_metrics(snapshot: &RuntimeMetricsSnapshot) {
@@ -276,6 +278,8 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     metrics.record_recording_captured_stream();
     metrics.record_rtp_ingress(1200);
     metrics.record_rtp_egress(900);
+    metrics.record_rtp_decoder_refresh(RtpDecoderRefreshScope::Rid);
+    metrics.record_rtp_decoder_refresh(RtpDecoderRefreshScope::Source);
     metrics.record_rtp_forwarded(RtpForwardDestinationKind::LocalRtc, 900);
     metrics.record_rtp_forwarded(RtpForwardDestinationKind::Recording, 700);
     metrics.record_rtp_forwarded(RtpForwardDestinationKind::IntraNodeRelay, 500);

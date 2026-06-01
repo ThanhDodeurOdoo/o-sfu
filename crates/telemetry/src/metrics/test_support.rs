@@ -1,9 +1,9 @@
 use super::{
     BudgetSolverOutcome, HttpRoute, MetricName, RtcDatagramDropReason, RtcDatagramRoutePath,
     RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
-    RtcRouteControlOutcome, RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetricsSnapshot,
-    SourceSelectionKind, TransportCleanupFailureKind, TransportHealthState, TransportIceState,
-    counter::ExportedMetricLabel, labels::ExportedMetricLabelPair,
+    RtcRouteControlOutcome, RtpDecoderRefreshScope, RtpForwardDestinationKind, RtpRelayDropKind,
+    RuntimeMetricsSnapshot, SourceSelectionKind, TransportCleanupFailureKind, TransportHealthState,
+    TransportIceState, counter::ExportedMetricLabel, labels::ExportedMetricLabelPair,
 };
 
 macro_rules! snapshot_counter_accessors {
@@ -340,6 +340,21 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
 
     fn rtp_relay_overload_drops_intra_node_relay(&self) -> u64 {
         self.rtp_relay_overload_drops(RtpRelayDropKind::IntraNodeRelay)
+    }
+
+    fn rtp_decoder_refreshes(&self, scope: RtpDecoderRefreshScope) -> u64 {
+        self.counter_value(
+            MetricName::RtpDecoderRefreshesTotal,
+            &[("scope", metric_label(scope))],
+        )
+    }
+
+    fn rtp_decoder_refreshes_rid(&self) -> u64 {
+        self.rtp_decoder_refreshes(RtpDecoderRefreshScope::Rid)
+    }
+
+    fn rtp_decoder_refreshes_source(&self) -> u64 {
+        self.rtp_decoder_refreshes(RtpDecoderRefreshScope::Source)
     }
 
     fn rtc_datagram_routes(&self, path: RtcDatagramRoutePath) -> u64 {

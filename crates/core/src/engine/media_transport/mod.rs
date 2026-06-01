@@ -59,7 +59,8 @@ pub use types::{
     SourcePacketOperatingPoint, TransportAdapterError, TransportBitrateSnapshot,
     TransportConsumerRoute, TransportMediaId, TransportPlacementPressureSnapshot,
     TransportQualitySample, TransportQualitySnapshot, TransportRelayRouteAction,
-    TransportRelayRouteEffect, TransportResult, TransportSessionHealth, TransportSessionKey,
+    TransportRelayRouteEffect, TransportResult, TransportRidActivity, TransportSessionHealth,
+    TransportSessionKey, TransportSourceActivity, TransportSourceActivitySnapshot,
     TransportSourceKey, TransportWorkerPressureSnapshot,
 };
 
@@ -585,6 +586,17 @@ impl MediaTransport {
         session_keys: &[TransportSessionKey],
     ) -> TransportQualitySnapshot {
         self.transport_quality_snapshot_from_workers(session_keys)
+    }
+
+    /// Returns packet activity for producer sources.
+    ///
+    /// This is a diagnostics-only view. Missing sources may be inactive,
+    /// removed or not yet observed on the packet path.
+    pub(crate) async fn source_activity_snapshot(
+        &self,
+        sources: &[TransportSourceKey],
+    ) -> TransportSourceActivitySnapshot {
+        self.source_activity_snapshot_from_workers(sources).await
     }
 
     /// Returns transport-worker pressure for the workers that own the sessions.

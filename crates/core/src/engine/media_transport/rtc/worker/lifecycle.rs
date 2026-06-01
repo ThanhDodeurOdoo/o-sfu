@@ -62,8 +62,9 @@ use crate::{
         RoomInstanceId,
         media_transport::{
             ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ReceiverBandwidthSnapshot,
-            TransportAdapterError, TransportBitrateSnapshot, TransportPlacementPressureSnapshot,
-            TransportQualitySnapshot, TransportSessionKey, TransportWorkerPressureSnapshot,
+            TransportAdapterError, TransportBitrateSnapshot, TransportMediaId,
+            TransportPlacementPressureSnapshot, TransportQualitySnapshot, TransportSessionKey,
+            TransportSourceActivitySnapshot, TransportWorkerPressureSnapshot,
         },
     },
 };
@@ -452,6 +453,27 @@ impl RtcWorker {
         };
         self.send_worker_command(&worker_handle, |response| {
             RtcWorkerCommand::ActiveSpeakerDiagnosticSnapshot { response }
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    /// asks the packet loop for packet activity on producer media ids
+    ///
+    /// diagnostics query this through the mailbox so steady RTP forwarding does
+    /// not mirror per-packet source ages into shared state
+    pub async fn source_activity_snapshot(
+        &self,
+        transport_media_ids: &[TransportMediaId],
+    ) -> TransportSourceActivitySnapshot {
+        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
+            return TransportSourceActivitySnapshot::default();
+        };
+        self.send_worker_command(&worker_handle, |response| {
+            RtcWorkerCommand::SourceActivitySnapshot {
+                transport_media_ids: transport_media_ids.to_vec(),
+                response,
+            }
         })
         .await
         .unwrap_or_default()

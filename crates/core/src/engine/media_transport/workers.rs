@@ -24,8 +24,8 @@ use crate::engine::{
         ReceiverBweTargetUpdate, SourcePolicySignal, SourcePolicyUpdateSubscription,
         TransportAdapterError, TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,
         TransportPlacementPressureSnapshot, TransportQualitySnapshot, TransportRelayRouteAction,
-        TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey, TransportSourceKey,
-        TransportWorkerPressureSnapshot,
+        TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey,
+        TransportSourceActivitySnapshot, TransportSourceKey, TransportWorkerPressureSnapshot,
     },
 };
 
@@ -143,6 +143,36 @@ impl MediaTransport {
             let worker_snapshot = worker.transport_quality_snapshot(worker_session_keys);
             snapshot.per_session.extend(worker_snapshot.per_session);
         });
+        snapshot
+    }
+
+    /// Builds packet activity snapshots from each producer's owning worker.
+    pub(super) async fn source_activity_snapshot_from_workers(
+        &self,
+        sources: &[TransportSourceKey],
+    ) -> TransportSourceActivitySnapshot {
+        let mut snapshot = TransportSourceActivitySnapshot::default();
+        let mut source_media_by_worker = BTreeMap::<usize, Vec<TransportMediaId>>::new();
+        for source in sources {
+            let Some(worker_index) = self.worker_index_for_user(source.session_key()) else {
+                continue;
+            };
+            source_media_by_worker
+                .entry(worker_index)
+                .or_default()
+                .push(source.transport_media_id());
+        }
+        for (worker_index, transport_media_ids) in source_media_by_worker {
+            let Some(worker) = self.worker_for_index(worker_index) else {
+                continue;
+            };
+            snapshot.per_media.extend(
+                worker
+                    .source_activity_snapshot(&transport_media_ids)
+                    .await
+                    .per_media,
+            );
+        }
         snapshot
     }
 

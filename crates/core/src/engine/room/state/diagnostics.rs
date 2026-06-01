@@ -18,7 +18,7 @@ use crate::{
         },
         media_transport::{
             ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSourceDiagnostic,
-            TransportMediaId,
+            TransportMediaId, TransportRidActivity, TransportSourceActivity,
         },
         source_model::{
             ConsumerSourceSelection, OverBudgetExceptionReason, PolicyPauseReason,
@@ -28,6 +28,12 @@ use crate::{
         },
     },
 };
+
+pub(in crate::engine::room) struct DiagnosticsSourceMedia {
+    pub owner: UserId,
+    pub connection: ConnectionId,
+    pub media: TransportMediaId,
+}
 
 impl RoomState {
     pub fn diagnostics_incoming_bitrate_by_session(
@@ -74,13 +80,19 @@ impl RoomState {
             TransportMediaId,
             ActiveSpeakerSourceDiagnostic,
         >,
+        source_activity_by_media: &BTreeMap<TransportMediaId, TransportSourceActivity>,
     ) -> Vec<DiagnosticsSource> {
         self.media
             .sources()
             .map(|source| {
                 let producer = self.media.producer_for_source(source.source_id());
-                let encodings = source.encodings().map(source_encoding).collect();
                 let transport_media_id = producer.and_then(|producer| producer.transport_media_id);
+                let source_activity =
+                    transport_media_id.and_then(|media_id| source_activity_by_media.get(&media_id));
+                let encodings = source
+                    .encodings()
+                    .map(|encoding| source_encoding(encoding, source_activity))
+                    .collect();
                 DiagnosticsSource {
                     active: producer.is_some_and(|producer| producer.active),
                     active_speaker: active_speaker(
@@ -93,6 +105,11 @@ impl RoomState {
                         .copied()
                         .unwrap_or_default(),
                     encodings,
+                    last_packet_age_ms: source_activity
+                        .map(|activity| duration_millis(activity.last_packet_age())),
+                    last_keyframe_age_ms: source_activity
+                        .and_then(TransportSourceActivity::last_keyframe_age)
+                        .map(duration_millis),
                     media_kind: media_kind(source.media_kind()),
                     mid: source.mid().map(|mid| mid.as_str().to_owned()),
                     owner_user_id: source.owner().user_id().clone(),
@@ -100,6 +117,20 @@ impl RoomState {
                     stream_id: source.stream_id().to_string(),
                     transport_media_id: transport_media_id.map(TransportMediaId::as_u64),
                 }
+            })
+            .collect()
+    }
+
+    pub fn diagnostics_source_media(&self) -> Vec<DiagnosticsSourceMedia> {
+        self.media
+            .sources()
+            .filter_map(|source| {
+                let producer = self.media.producer_for_source(source.source_id())?;
+                Some(DiagnosticsSourceMedia {
+                    owner: producer.owner_user_id.clone(),
+                    connection: producer.owner_connection_id,
+                    media: producer.transport_media_id?,
+                })
             })
             .collect()
     }
@@ -231,11 +262,17 @@ impl RoomState {
     }
 }
 
-fn source_encoding(encoding: &SourceEncodingDescriptor) -> DiagnosticsSourceEncoding {
+fn source_encoding(
+    encoding: &SourceEncodingDescriptor,
+    source_activity: Option<&TransportSourceActivity>,
+) -> DiagnosticsSourceEncoding {
     let negotiated_format = encoding.negotiated_format();
     let max_temporal_layer_id = encoding
         .max_temporal_layer_id()
         .map(SourceTemporalLayerId::as_u8);
+    let rid_activity = encoding
+        .rid()
+        .and_then(|rid| rid_activity(source_activity, rid.as_str()));
     DiagnosticsSourceEncoding {
         codec: negotiated_format.map(|format| format.codec_name().to_owned()),
         encoding_id: encoding.encoding_id().as_u64(),
@@ -250,12 +287,27 @@ fn source_encoding(encoding: &SourceEncodingDescriptor) -> DiagnosticsSourceEnco
         primary_ssrc: encoding.primary_ssrc().map(o_sfu_router::Ssrc::value),
         repair_ssrc: encoding.repair_ssrc().map(o_sfu_router::Ssrc::value),
         rid: encoding.rid().map(|rid| rid.as_str().to_owned()),
+        last_packet_age_ms: rid_activity
+            .map(|activity| duration_millis(activity.last_packet_age())),
+        last_keyframe_age_ms: rid_activity
+            .and_then(TransportRidActivity::last_keyframe_age)
+            .map(duration_millis),
         temporal_layer_metadata: if max_temporal_layer_id.is_some() {
             DiagnosticsTemporalLayerMetadata::Advertised
         } else {
             DiagnosticsTemporalLayerMetadata::Absent
         },
     }
+}
+
+fn rid_activity<'a>(
+    source_activity: Option<&'a TransportSourceActivity>,
+    rid: &str,
+) -> Option<&'a TransportRidActivity> {
+    source_activity?
+        .rids()
+        .iter()
+        .find(|activity| activity.rid() == rid)
 }
 
 fn source_selection(
@@ -506,13 +558,18 @@ mod tests {
     #[test]
     fn source_encoding_diagnostics_distinguish_absent_temporal_metadata_from_base_layer() {
         let source_id = PublishedSourceId::from_raw(7);
-        let absent_encoding =
-            source_encoding(&encoding(source_id, SourceEncodingId::from_raw(1), None));
-        let base_layer_encoding = source_encoding(&encoding(
-            source_id,
-            SourceEncodingId::from_raw(2),
-            Some(SourceTemporalLayerId::base().as_u8()),
-        ));
+        let absent_encoding = source_encoding(
+            &encoding(source_id, SourceEncodingId::from_raw(1), None),
+            None,
+        );
+        let base_layer_encoding = source_encoding(
+            &encoding(
+                source_id,
+                SourceEncodingId::from_raw(2),
+                Some(SourceTemporalLayerId::base().as_u8()),
+            ),
+            None,
+        );
 
         assert_eq!(
             absent_encoding.temporal_layer_metadata,
@@ -524,6 +581,29 @@ mod tests {
             DiagnosticsTemporalLayerMetadata::Advertised
         );
         assert_eq!(base_layer_encoding.max_temporal_layer_id, Some(0));
+    }
+
+    #[test]
+    fn source_encoding_diagnostics_project_rid_packet_activity() {
+        let source_id = PublishedSourceId::from_raw(8);
+        let activity = TransportSourceActivity::new(
+            TransportMediaId::new(42),
+            Duration::from_millis(80),
+            Some(Duration::from_millis(70)),
+            vec![TransportRidActivity::new(
+                "hi".to_owned(),
+                Duration::from_millis(50),
+                Some(Duration::from_millis(30)),
+            )],
+        );
+
+        let encoding = source_encoding(
+            &encoding(source_id, SourceEncodingId::from_raw(1), None),
+            Some(&activity),
+        );
+
+        assert_eq!(encoding.last_packet_age_ms, Some(50));
+        assert_eq!(encoding.last_keyframe_age_ms, Some(30));
     }
 
     #[test]

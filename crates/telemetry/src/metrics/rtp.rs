@@ -5,11 +5,12 @@ use std::{
 
 use super::{
     counter::{MetricLabel, PaddedCounterFamily},
-    labels::{RtpFlowDirection, RtpForwardDestinationKind},
+    labels::{RtpDecoderRefreshScope, RtpFlowDirection, RtpForwardDestinationKind},
 };
 
 const RTP_FLOW_DIRECTION_COUNT: usize = <RtpFlowDirection as MetricLabel>::COUNT;
 const RTP_FORWARD_DESTINATION_COUNT: usize = <RtpForwardDestinationKind as MetricLabel>::COUNT;
+const RTP_DECODER_REFRESH_SCOPE_COUNT: usize = <RtpDecoderRefreshScope as MetricLabel>::COUNT;
 
 /// Worker-local RTP packet metric recorder.
 ///
@@ -22,6 +23,7 @@ pub struct RtpMetricsRecorder {
     payload_bytes: PaddedCounterFamily<RtpFlowDirection>,
     forwarded_packets: PaddedCounterFamily<RtpForwardDestinationKind>,
     forwarded_payload_bytes: PaddedCounterFamily<RtpForwardDestinationKind>,
+    decoder_refreshes: PaddedCounterFamily<RtpDecoderRefreshScope>,
 }
 
 impl RtpMetricsRecorder {
@@ -40,6 +42,10 @@ impl RtpMetricsRecorder {
     pub fn record_forwarded(&self, destination: RtpForwardDestinationKind, payload_bytes: usize) {
         self.forwarded_packets.increment(destination);
         self.forwarded_payload_bytes.add(destination, payload_bytes);
+    }
+
+    pub fn record_decoder_refresh(&self, scope: RtpDecoderRefreshScope) {
+        self.decoder_refreshes.increment(scope);
     }
 }
 
@@ -85,6 +91,10 @@ impl RtpMetrics {
             .record_forwarded(destination, payload_bytes);
     }
 
+    pub(super) fn record_decoder_refresh(&self, scope: RtpDecoderRefreshScope) {
+        self.process_recorder.record_decoder_refresh(scope);
+    }
+
     pub(super) fn snapshot(&self) -> RtpMetricsSnapshot {
         let mut snapshot = RtpMetricsSnapshot::default();
         snapshot.add_recorder(&self.process_recorder);
@@ -122,6 +132,7 @@ pub(super) struct RtpMetricsSnapshot {
     payload_bytes: [u64; RTP_FLOW_DIRECTION_COUNT],
     forwarded_packets: [u64; RTP_FORWARD_DESTINATION_COUNT],
     forwarded_payload_bytes: [u64; RTP_FORWARD_DESTINATION_COUNT],
+    decoder_refreshes: [u64; RTP_DECODER_REFRESH_SCOPE_COUNT],
     worker_snapshots: Vec<RtpWorkerMetricsSnapshot>,
 }
 
@@ -151,6 +162,13 @@ impl RtpMetricsSnapshot {
             .unwrap_or(0)
     }
 
+    pub(super) fn decoder_refreshes(&self, scope: RtpDecoderRefreshScope) -> u64 {
+        self.decoder_refreshes
+            .get(scope.as_index())
+            .copied()
+            .unwrap_or(0)
+    }
+
     pub(super) fn worker_snapshots(&self) -> &[RtpWorkerMetricsSnapshot] {
         &self.worker_snapshots
     }
@@ -169,6 +187,9 @@ impl RtpMetricsSnapshot {
                 recorder.forwarded_packets.load(*destination),
                 recorder.forwarded_payload_bytes.load(*destination),
             );
+        }
+        for scope in <RtpDecoderRefreshScope as MetricLabel>::VARIANTS {
+            self.add_decoder_refresh(*scope, recorder.decoder_refreshes.load(*scope));
         }
     }
 
@@ -192,6 +213,12 @@ impl RtpMetricsSnapshot {
         }
         if let Some(counter) = self.forwarded_payload_bytes.get_mut(destination.as_index()) {
             *counter = counter.saturating_add(payload_bytes);
+        }
+    }
+
+    fn add_decoder_refresh(&mut self, scope: RtpDecoderRefreshScope, refreshes: u64) {
+        if let Some(counter) = self.decoder_refreshes.get_mut(scope.as_index()) {
+            *counter = counter.saturating_add(refreshes);
         }
     }
 }

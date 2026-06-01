@@ -700,6 +700,10 @@ impl PacketLoopState {
             .retain(|source_transport_media_id, _rids| {
                 source_is_registered(source_transport_media_id)
             });
+        self.producer_media_refreshes
+            .retain(|source_transport_media_id, _activity| {
+                source_is_registered(source_transport_media_id)
+            });
         self.source_decoder_refresh_codecs
             .retain(|source_transport_media_id, _codec| {
                 source_is_registered(source_transport_media_id)
