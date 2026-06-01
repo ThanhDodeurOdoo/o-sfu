@@ -42,7 +42,7 @@ use super::{
     forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
     ingress_routing::route_packet_to_matching_session,
     input::{PacketLoopControlInput, PacketLoopInputReceivers, PacketLoopMailboxInput},
-    keyframe_requests::flush_pending_keyframe_requests,
+    keyframe_requests::{drain_due_keyframe_retries, flush_pending_keyframe_requests},
     lag::{PacketLoopLagPublisher, PacketLoopLagSnapshot},
     session_drain::{SessionDrainContext, drain_ready_sessions},
 };
@@ -213,6 +213,7 @@ impl PacketLoopTurn {
             &config.rtp_metrics,
             &mut self.buffers,
         );
+        drain_due_keyframe_retries(state, &*config.rtc_metrics, &mut self.buffers, now);
         // sink routes are refreshed once per turn so recording lookups do not take
         // the shared registry lock per packet
         self.packet_sink_cache
@@ -633,7 +634,7 @@ fn handle_control_input(
 /// dirty sessions are always due immediately because a previous input or local
 /// send has queued more `str0m` output
 /// otherwise the deadline is the earlier of the next `str0m` timeout and the
-/// next delayed selected-RID keyframe refresh
+/// next delayed selected-RID keyframe refresh or pending keyframe retry
 #[cfg(test)]
 pub(super) fn next_timeout_deadline(state: &mut PacketLoopState) -> Option<Instant> {
     next_timeout_deadline_at(state, Instant::now())
@@ -643,16 +644,14 @@ fn next_timeout_deadline_at(state: &mut PacketLoopState, now: Instant) -> Option
     if state.has_dirty_sessions() {
         return Some(now);
     }
-    match (
+    [
         state.next_timeout_deadline(),
         state.next_rid_keyframe_refresh_deadline(),
-    ) {
-        (Some(session_deadline), Some(refresh_deadline)) => {
-            Some(session_deadline.min(refresh_deadline))
-        }
-        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
-        (None, None) => None,
-    }
+        state.keyframe_requests.next_deadline(),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
 }
 
 fn mailbox_to_input(input: PacketLoopMailboxInput) -> PacketLoopTurnInput {

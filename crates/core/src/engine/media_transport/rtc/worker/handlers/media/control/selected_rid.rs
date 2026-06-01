@@ -27,7 +27,7 @@ use str0m::media::{KeyframeRequestKind, Rid};
 use tracing::{debug, warn};
 
 use super::{
-    super::keyframe::request_keyframe_for_source,
+    super::keyframe::{KeyframeRequestMode, KeyframeRequestTarget, request_keyframe_for_target},
     routes::{owned_local_producer_mid, refresh_source_packet_gate},
 };
 use crate::engine::{
@@ -36,11 +36,11 @@ use crate::engine::{
         rtc::{
             demux::{MediaRouteDestination, MediaRouteEntry},
             media_registry::RegisteredMediaHandle,
-            route_control::{KeyframeRequestDecision, PacketLayerGate},
+            route_control::PacketLayerGate,
             state::{PacketLoopState, RidReadinessScratch},
         },
     },
-    metrics::{RtcRouteControlMetrics, RtcRouteControlOutcome},
+    metrics::RtcRouteControlMetrics,
 };
 
 /// summary of route mutations caused by one source/rid readiness observation
@@ -222,7 +222,7 @@ pub(in crate::engine::media_transport::rtc) fn apply_source_rid_readiness(
             source_session_key,
             source_transport_media_id,
             stale_rid,
-            now,
+            KeyframeRequestMode::Track(now),
         );
     }
     if route_update.activated_pending_gate() {
@@ -233,7 +233,7 @@ pub(in crate::engine::media_transport::rtc) fn apply_source_rid_readiness(
             source_session_key,
             source_transport_media_id,
             rid,
-            now,
+            KeyframeRequestMode::Track(now),
         );
         schedule_live_rid_keyframe_retries(state, source_transport_media_id, rid, now);
     } else if route_update.activated_bootstrap_fallback_gate() {
@@ -245,7 +245,7 @@ pub(in crate::engine::media_transport::rtc) fn apply_source_rid_readiness(
                 source_session_key,
                 source_transport_media_id,
                 pending_rid,
-                now,
+                KeyframeRequestMode::Track(now),
             );
         }
     } else if route_update.has_pending_selected_gate() {
@@ -255,7 +255,7 @@ pub(in crate::engine::media_transport::rtc) fn apply_source_rid_readiness(
             source_session_key,
             source_transport_media_id,
             rid,
-            now,
+            KeyframeRequestMode::Track(now),
         );
     } else if route_update.suspended_stale_gate {
         refresh_source_packet_gate(state, source_transport_media_id);
@@ -308,7 +308,7 @@ pub fn drain_due_rid_keyframe_refreshes(
             &source_session_key,
             source_transport_media_id,
             rid,
-            now,
+            KeyframeRequestMode::Retry,
         );
     }
 }
@@ -541,7 +541,7 @@ fn request_live_rid_keyframe(
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
     rid: Rid,
-    now: Instant,
+    mode: KeyframeRequestMode,
 ) {
     debug!(
         user_id = ?source_session_key.user_id(),
@@ -551,14 +551,13 @@ fn request_live_rid_keyframe(
         "requesting selected RID producer keyframe"
     );
     if owned_local_producer_mid(state, source_session_key, source_transport_media_id).is_some() {
-        request_keyframe_for_source(
+        request_keyframe_for_target(
             state,
             metrics,
-            source_session_key,
-            source_transport_media_id,
+            KeyframeRequestTarget::Local(source_session_key, source_transport_media_id),
             Some(rid),
             KeyframeRequestKind::Pli,
-            now,
+            mode,
         );
         return;
     }
@@ -592,23 +591,14 @@ fn request_live_rid_keyframe(
         );
         return;
     }
-    match state.route_control.decide_keyframe_request_for_rid(
-        source_transport_media_id,
+    request_keyframe_for_target(
+        state,
+        metrics,
+        KeyframeRequestTarget::Remote(&registered_source, &source_control),
         Some(rid),
-        now,
-    ) {
-        KeyframeRequestDecision::Forward => {
-            source_control.request_keyframe(
-                &registered_source,
-                Some(rid),
-                KeyframeRequestKind::Pli,
-            );
-            metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
-        }
-        KeyframeRequestDecision::Absorb => {
-            metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
-        }
-    }
+        KeyframeRequestKind::Pli,
+        mode,
+    );
 }
 
 /// schedules bounded follow-up keyframe refreshes after selected-rid activation
@@ -659,7 +649,7 @@ fn drain_live_rid_keyframe_retries(
             source_session_key,
             source_transport_media_id,
             rid,
-            now,
+            KeyframeRequestMode::Retry,
         );
     }
 }

@@ -539,6 +539,16 @@ metric_catalog! {
             RtcMetricsSnapshot::route_control
         )
     },
+    RtcKeyframeRequestsTotal {
+        name: "osfu_rtc_keyframe_requests_total",
+        help: "Total RTC keyframe request tracker outcomes.",
+        kind: Counter,
+        samples: |metrics| snapshot_counter_samples(
+            &metrics.rtc_metrics.snapshot(),
+            "outcome",
+            RtcMetricsSnapshot::keyframe_requests
+        )
+    },
     RtcRelayEnqueuesTotal {
         name: "osfu_rtc_relay_enqueues_total",
         help: "Total relay enqueue attempts by target kind and outcome.",

@@ -3,14 +3,16 @@ use std::sync::{Arc, Mutex};
 use super::{
     counter::{MetricLabel, PaddedCounter, PaddedCounterFamily},
     labels::{
-        RtcDatagramDropReason, RtcDatagramRoutePath, RtcRelayEnqueueResult,
-        RtcRemoteControlDropKind, RtcRemotePacketGateConvergence, RtcRouteControlOutcome,
+        RtcDatagramDropReason, RtcDatagramRoutePath, RtcKeyframeRequestOutcome,
+        RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
+        RtcRouteControlOutcome,
     },
 };
 
 const RTC_DATAGRAM_ROUTE_PATH_COUNT: usize = <RtcDatagramRoutePath as MetricLabel>::COUNT;
 const RTC_DATAGRAM_DROP_REASON_COUNT: usize = <RtcDatagramDropReason as MetricLabel>::COUNT;
 const RTC_ROUTE_CONTROL_OUTCOME_COUNT: usize = <RtcRouteControlOutcome as MetricLabel>::COUNT;
+const RTC_KEYFRAME_REQUEST_OUTCOME_COUNT: usize = <RtcKeyframeRequestOutcome as MetricLabel>::COUNT;
 const RTC_RELAY_ENQUEUE_RESULT_COUNT: usize = <RtcRelayEnqueueResult as MetricLabel>::COUNT;
 const RTC_REMOTE_CONTROL_DROP_KIND_COUNT: usize = <RtcRemoteControlDropKind as MetricLabel>::COUNT;
 const RTC_REMOTE_PACKET_GATE_CONVERGENCE_COUNT: usize =
@@ -18,6 +20,7 @@ const RTC_REMOTE_PACKET_GATE_CONVERGENCE_COUNT: usize =
 
 pub trait RtcRouteControlMetrics {
     fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome);
+    fn record_rtc_keyframe_request(&self, outcome: RtcKeyframeRequestOutcome);
 }
 
 /// Worker-local RTC packet-loop metric recorder.
@@ -32,6 +35,7 @@ pub struct RtcMetricsRecorder {
     datagram_fallback_scans: PaddedCounter,
     datagram_scan_users: PaddedCounter,
     route_control: PaddedCounterFamily<RtcRouteControlOutcome>,
+    keyframe_requests: PaddedCounterFamily<RtcKeyframeRequestOutcome>,
     relay_enqueues: PaddedCounterFamily<RtcRelayEnqueueResult>,
     relay_mailbox_depth_samples: PaddedCounter,
     relay_mailbox_depth_total: PaddedCounter,
@@ -58,6 +62,10 @@ impl RtcMetricsRecorder {
 
     pub fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome) {
         self.route_control.increment(outcome);
+    }
+
+    pub fn record_rtc_keyframe_request(&self, outcome: RtcKeyframeRequestOutcome) {
+        self.keyframe_requests.increment(outcome);
     }
 
     pub fn record_rtc_relay_enqueue(&self, result: RtcRelayEnqueueResult) {
@@ -96,6 +104,10 @@ impl RtcRouteControlMetrics for RtcMetricsRecorder {
     fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome) {
         self.record_rtc_route_control(outcome);
     }
+
+    fn record_rtc_keyframe_request(&self, outcome: RtcKeyframeRequestOutcome) {
+        self.record_rtc_keyframe_request(outcome);
+    }
 }
 
 #[derive(Debug, Default)]
@@ -132,6 +144,10 @@ impl RtcMetrics {
 
     pub(super) fn record_route_control(&self, outcome: RtcRouteControlOutcome) {
         self.process_recorder.record_rtc_route_control(outcome);
+    }
+
+    pub(super) fn record_keyframe_request(&self, outcome: RtcKeyframeRequestOutcome) {
+        self.process_recorder.record_rtc_keyframe_request(outcome);
     }
 
     pub(super) fn record_relay_enqueue(&self, result: RtcRelayEnqueueResult) {
@@ -182,6 +198,7 @@ pub(super) struct RtcMetricsSnapshot {
     datagram_fallback_scans: u64,
     datagram_scan_users: u64,
     route_control: [u64; RTC_ROUTE_CONTROL_OUTCOME_COUNT],
+    keyframe_requests: [u64; RTC_KEYFRAME_REQUEST_OUTCOME_COUNT],
     relay_enqueues: [u64; RTC_RELAY_ENQUEUE_RESULT_COUNT],
     relay_mailbox_depth_samples: u64,
     relay_mailbox_depth_total: u64,
@@ -217,6 +234,13 @@ impl RtcMetricsSnapshot {
 
     pub(super) fn route_control(&self, outcome: RtcRouteControlOutcome) -> u64 {
         self.route_control
+            .get(outcome.as_index())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(super) fn keyframe_requests(&self, outcome: RtcKeyframeRequestOutcome) -> u64 {
+        self.keyframe_requests
             .get(outcome.as_index())
             .copied()
             .unwrap_or(0)
@@ -282,6 +306,9 @@ impl RtcMetricsSnapshot {
         for outcome in <RtcRouteControlOutcome as MetricLabel>::VARIANTS {
             self.add_route_control(*outcome, recorder.route_control.load(*outcome));
         }
+        for outcome in <RtcKeyframeRequestOutcome as MetricLabel>::VARIANTS {
+            self.add_keyframe_request(*outcome, recorder.keyframe_requests.load(*outcome));
+        }
         for result in <RtcRelayEnqueueResult as MetricLabel>::VARIANTS {
             self.add_relay_enqueue(*result, recorder.relay_enqueues.load(*result));
         }
@@ -325,6 +352,12 @@ impl RtcMetricsSnapshot {
 
     fn add_route_control(&mut self, outcome: RtcRouteControlOutcome, count: u64) {
         if let Some(counter) = self.route_control.get_mut(outcome.as_index()) {
+            *counter = counter.saturating_add(count);
+        }
+    }
+
+    fn add_keyframe_request(&mut self, outcome: RtcKeyframeRequestOutcome, count: u64) {
+        if let Some(counter) = self.keyframe_requests.get_mut(outcome.as_index()) {
             *counter = counter.saturating_add(count);
         }
     }

@@ -162,9 +162,10 @@ mod tests {
     use super::{PROMETHEUS_CONTENT_TYPE, render_prometheus};
     use crate::metrics::{
         BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
-        RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
-        RtcRouteControlOutcome, RtpDecoderRefreshScope, RtpForwardDestinationKind, RuntimeMetrics,
-        SourceSelectionKind, TransportCleanupFailureKind, TransportHealthState, TransportIceState,
+        RtcKeyframeRequestOutcome, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
+        RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpDecoderRefreshScope,
+        RtpForwardDestinationKind, RuntimeMetrics, SourceSelectionKind,
+        TransportCleanupFailureKind, TransportHealthState, TransportIceState,
         WsSessionLoopExitReason,
     };
 
@@ -234,6 +235,7 @@ mod tests {
         );
         assert!(rendered.contains("osfu_rtc_route_control_total{outcome=\"absorbed\"} 1"));
         assert!(rendered.contains("osfu_rtc_route_control_total{outcome=\"forwarded\"} 1"));
+        assert_rtc_keyframe_request_metrics(rendered);
         assert!(rendered.contains("osfu_source_selection_updates_total{selector=\"encoding\"} 1"));
         assert!(rendered.contains("osfu_budget_solver_outcomes_total{outcome=\"degraded\"} 1"));
         assert!(
@@ -253,6 +255,13 @@ mod tests {
         assert!(
             rendered.contains("osfu_transport_cleanup_failures_total{kind=\"retry_exhausted\"} 1")
         );
+    }
+
+    fn assert_rtc_keyframe_request_metrics(rendered: &str) {
+        assert!(rendered.contains("osfu_rtc_keyframe_requests_total{outcome=\"forwarded\"} 1"));
+        assert!(rendered.contains("osfu_rtc_keyframe_requests_total{outcome=\"absorbed\"} 1"));
+        assert!(rendered.contains("osfu_rtc_keyframe_requests_total{outcome=\"retry\"} 1"));
+        assert!(rendered.contains("osfu_rtc_keyframe_requests_total{outcome=\"cleared\"} 1"));
     }
 
     fn sample_metrics() -> RuntimeMetrics {
@@ -303,6 +312,10 @@ mod tests {
         metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
         metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
         metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
+        metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Forwarded);
+        metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Absorbed);
+        metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Retry);
+        metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
         metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeEnqueued);
         metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeOverloaded);
         metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeClosed);

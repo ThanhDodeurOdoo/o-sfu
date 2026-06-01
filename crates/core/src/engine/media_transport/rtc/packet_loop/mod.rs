@@ -42,7 +42,7 @@
 //!   |
 //!   +--> drain bounded relay mailbox
 //!   |
-//!   +--> coalesce keyframe requests
+//!   +--> resolve keyframe requests and pending retries
 //!   |
 //!   +--> record ingress stats and source policy dirtiness
 //!   |
@@ -84,7 +84,7 @@
 //! - [`forward_flush`] records packet-path stats, executes planned destinations
 //!   and accounts for local, relay and sink egress.
 //! - [`keyframe_requests`] resolves consumer RTCP feedback back to the producer
-//!   source, then coalesces duplicate requests before they leave the worker.
+//!   source, then dispatches bounded requests and pending retries.
 //! - [`event_observation`] translates selected `str0m` events into snapshots,
 //!   diagnostics, source-policy wakeups and metrics.
 //! - [`buffers`] owns the reusable allocation surface used by the whole turn.

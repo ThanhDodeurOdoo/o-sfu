@@ -25,10 +25,10 @@ use str0m::{
 use tokio::sync::{mpsc, oneshot};
 
 use super::{
-    AddSendMediaRequest, apply_route_control_request, control::remove_consumer_route,
-    drain_due_rid_keyframe_refreshes, observe_source_rid_readiness, refresh_source_packet_gate,
-    request_keyframe_for_source, respond_set_consumer_packet_gates, worker_add_send_media,
-    worker_remove_media,
+    AddSendMediaRequest, KeyframeRequestMode, KeyframeRequestTarget, apply_route_control_request,
+    control::remove_consumer_route, drain_due_rid_keyframe_refreshes, observe_source_rid_readiness,
+    refresh_source_packet_gate, request_keyframe_for_target, respond_set_consumer_packet_gates,
+    worker_add_send_media, worker_remove_media,
 };
 use crate::{
     Bitrate, MediaCodecFlags,
@@ -41,11 +41,12 @@ use crate::{
                 bitrate::BitrateRegistry,
                 bootstrap,
                 commands::{ConsumerPacketGateCommand, RemoteSourceControl, RouteControlRequest},
+                keyframe_tracker::KeyframeRequestDecision,
                 media_registry::{
                     ConsumerKeyframeTarget, RegisteredMediaHandle, RemoteSourceRegistration,
                 },
                 relay_registry::{RelayPacketMailbox, RelayTargetId},
-                route_control::{KeyframeRequestDecision, PacketLayerGate},
+                route_control::PacketLayerGate,
                 state::PacketLoopState,
                 test_support::{MediaWorkerScenario, test_transport_session_key},
             },
@@ -441,9 +442,12 @@ fn selected_rid_packet_gate_uses_bootstrap_fallback_before_becoming_strict() {
 
     let now = Instant::now();
     assert_eq!(
-        state
-            .route_control
-            .decide_keyframe_request(source_transport_media_id, now),
+        state.keyframe_requests.track(
+            source_transport_media_id,
+            None,
+            KeyframeRequestKind::Pli,
+            now
+        ),
         KeyframeRequestDecision::Forward
     );
 
@@ -1214,14 +1218,13 @@ fn request_keyframe_ignores_wrong_source_owner() {
     let source_transport_media_id =
         prepare_source_session(&mut state, &source_session, source_mid, 99_999);
 
-    request_keyframe_for_source(
+    request_keyframe_for_target(
         &mut state,
         &metrics,
-        &wrong_session,
-        source_transport_media_id,
+        KeyframeRequestTarget::Local(&wrong_session, source_transport_media_id),
         None,
         KeyframeRequestKind::Pli,
-        Instant::now(),
+        KeyframeRequestMode::Track(Instant::now()),
     );
 
     assert!(drain_ready_sessions(&mut state).is_empty());

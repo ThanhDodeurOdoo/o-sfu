@@ -49,6 +49,7 @@ use tokio::net::UdpSocket;
 use super::{
     bitrate::MediaBitrateCounter,
     demux::{MediaRouteEntry, MediaRouteKey, RemoteAddrDemux},
+    keyframe_tracker::KeyframeRequestTracker,
     local_send_rewrite::ConsumerStreamStore,
     media_registry::{DecoderRefreshCodec, RemoteSourceRegistration, SessionMediaRegistry},
     relay_registry::RelaySourceRegistration,
@@ -172,6 +173,8 @@ pub(super) struct PacketLoopState {
     pub(super) media_route_index: BTreeMap<MediaRouteKey, MediaRouteEntry>,
     /// packet-layer source policy already projected from room decisions
     pub(super) route_control: RouteControlState,
+    /// pending keyframe requests and retry deadlines keyed by source media id
+    pub(super) keyframe_requests: KeyframeRequestTracker,
     /// session-scoped media lookup vectors for packet source resolution
     pub(super) session_media: SessionMediaRegistry,
     /// producer SSRC bindings owned by each media id for teardown

@@ -29,7 +29,10 @@ use super::{
         media_registry::RegisteredMediaHandle,
         relay_registry::RelayEnqueueOutcome,
         state::PacketLoopState,
-        worker::{apply_source_rid_readiness, request_keyframe_for_source},
+        worker::{
+            KeyframeRequestMode, KeyframeRequestTarget, apply_source_rid_readiness,
+            request_keyframe_for_target,
+        },
     },
     buffers::PacketLoopBuffers,
 };
@@ -37,8 +40,8 @@ use crate::engine::{
     hot_path::unlikely,
     media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
     metrics::{
-        RtcMetricsRecorder, RtcRouteControlMetrics, RtpDecoderRefreshScope, RtpMetricsRecorder,
-        RuntimeMetrics,
+        RtcKeyframeRequestOutcome, RtcMetricsRecorder, RtcRouteControlMetrics,
+        RtpDecoderRefreshScope, RtpMetricsRecorder, RuntimeMetrics,
     },
 };
 
@@ -75,6 +78,14 @@ pub(super) fn record_incoming_stats(
                 facts.audio_level,
                 packet.received_at(),
             );
+            if facts.decoder_refresh {
+                let cleared = state
+                    .keyframe_requests
+                    .observe_refresh(transport_media_id, facts.layer_metadata.rid());
+                for _ in 0..cleared {
+                    metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
+                }
+            }
             if unlikely(audio_policy_changed) {
                 buffers
                     .dirty_source_policy_channel_ids
@@ -260,14 +271,13 @@ fn request_first_video_keyframe_for_session(
     now: Instant,
 ) {
     if source_is_video(state, source_session_key, transport_media_id) {
-        request_keyframe_for_source(
+        request_keyframe_for_target(
             state,
             metrics,
-            source_session_key,
-            transport_media_id,
+            KeyframeRequestTarget::Local(source_session_key, transport_media_id),
             None,
             KeyframeRequestKind::Pli,
-            now,
+            KeyframeRequestMode::Track(now),
         );
     }
 }

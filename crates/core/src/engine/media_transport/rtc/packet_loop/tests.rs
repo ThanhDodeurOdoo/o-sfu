@@ -33,7 +33,10 @@ use super::{
     forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
     ingress_routing::route_packet_to_matching_session,
     input::{PacketLoopInputReceivers, PacketLoopMailboxInput},
-    keyframe_requests::{PendingKeyframeRequest, flush_pending_keyframe_requests},
+    keyframe_requests::{
+        PendingKeyframeRequest, drain_due_keyframe_retries, flush_pending_keyframe_requests,
+        flush_pending_keyframe_requests_at,
+    },
     lag::PacketLoopLagSnapshot,
     loop_driver::{
         PacketLoopApplyContext, PacketLoopConfig, PacketLoopTurn, PacketLoopTurnInput,
@@ -56,9 +59,10 @@ use crate::{
                 },
                 demux::{MediaRouteDestination, MediaRouteEntry},
                 forwarding_destination::PacketForward,
+                keyframe_tracker::KeyframeRequestDecision,
                 media_registry::RegisteredMediaHandle,
                 relay_registry::{RelayPacketMailbox, RelayTargetId},
-                route_control::{KeyframeRequestDecision, PacketLayerGate},
+                route_control::PacketLayerGate,
                 slots::ConsumerStreamHandle,
                 state::{PacketLoopState, RtcSnapshotState, SharedRtcSocket},
                 test_support::{
@@ -405,6 +409,55 @@ fn remote_keyframe_source(
         .register_remote_source(&source, RemoteSourceControl::new(control_tx, target_id))
         .expect("remote source should register");
     control_rx
+}
+
+#[allow(
+    clippy::expect_used,
+    reason = "test setup helpers should fail loudly when a saturated remote source cannot be built"
+)]
+fn saturated_remote_keyframe_source(
+    state: &mut PacketLoopState,
+    metrics: Arc<RtcMetricsRecorder>,
+    source_transport_media_id: TransportMediaId,
+    source_session: &TransportSessionKey,
+    target_id: RelayTargetId,
+) -> mpsc::Receiver<RtcWorkerCommand> {
+    let (control_tx, control_rx) = mpsc::channel(1);
+    let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
+    control_tx
+        .try_send(RtcWorkerCommand::MediaControl(
+            RtcMediaControlCommand::Apply {
+                request: RouteControlRequest::RequestRemoteKeyframe {
+                    source: source.clone(),
+                    target_id,
+                    rid: None,
+                    kind: KeyframeRequestKind::Pli,
+                },
+                response: None,
+            },
+        ))
+        .expect("remote source control channel should be saturated");
+    state
+        .register_remote_source(
+            &source,
+            RemoteSourceControl::with_metrics(control_tx, target_id, metrics),
+        )
+        .expect("remote source should register");
+    control_rx
+}
+
+fn set_source_route_active(
+    state: &mut PacketLoopState,
+    source_transport_media_id: TransportMediaId,
+    active: bool,
+) -> bool {
+    state
+        .media_route_index
+        .get_mut(&source_transport_media_id)
+        .is_some_and(|route_entry| {
+            route_entry.source_active = active;
+            true
+        })
 }
 
 #[allow(
@@ -2013,6 +2066,331 @@ fn flush_pending_keyframe_requests_keeps_distinct_rids_separate() {
 }
 
 #[test]
+fn keyframe_tracker_retries_unsatisfied_duplicate_remote_request() {
+    let source_session = test_transport_session_key(184, 0, 185, UserId::Integer(186));
+    let consumer_session = test_transport_session_key(184, 1, 187, UserId::Integer(188));
+    let source_transport_media_id = TransportMediaId::new(1840);
+    let target_id = RelayTargetId::new(184);
+    let now = Instant::now();
+    let mut harness = PacketLoopHarness::new();
+    let mut control_rx = remote_keyframe_source(
+        &mut harness.state,
+        source_transport_media_id,
+        &source_session,
+        target_id,
+        2,
+    );
+    register_open_consumer_route_fixture(
+        &mut harness.state,
+        &consumer_session,
+        "cam-down",
+        source_transport_media_id,
+    );
+
+    push_keyframe_request(
+        &mut harness.buffers,
+        consumer_session.clone(),
+        "cam-down",
+        KeyframeRequestKind::Pli,
+    );
+    flush_pending_keyframe_requests_at(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+        now,
+    );
+    assert_remote_keyframe_request(
+        &mut control_rx,
+        &source_session,
+        source_transport_media_id,
+        target_id,
+        None,
+        KeyframeRequestKind::Pli,
+    );
+
+    push_keyframe_request(
+        &mut harness.buffers,
+        consumer_session,
+        "cam-down",
+        KeyframeRequestKind::Fir,
+    );
+    flush_pending_keyframe_requests_at(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+        now + Duration::from_millis(100),
+    );
+    assert_no_remote_keyframe_request(&mut control_rx);
+
+    drain_due_keyframe_retries(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+        now + Duration::from_secs(1),
+    );
+
+    assert_remote_keyframe_request(
+        &mut control_rx,
+        &source_session,
+        source_transport_media_id,
+        target_id,
+        None,
+        KeyframeRequestKind::Fir,
+    );
+    let snapshot = harness.metrics.snapshot();
+    assert_eq!(snapshot.rtc_keyframe_requests_forwarded(), 1);
+    assert_eq!(snapshot.rtc_keyframe_requests_absorbed(), 1);
+    assert_eq!(snapshot.rtc_keyframe_requests_retried(), 1);
+}
+
+#[test]
+fn keyframe_tracker_cancels_remote_pending_state_after_send_drop() {
+    let source_session = test_transport_session_key(186, 0, 187, UserId::Integer(188));
+    let consumer_session = test_transport_session_key(186, 1, 189, UserId::Integer(190));
+    let source_transport_media_id = TransportMediaId::new(1860);
+    let target_id = RelayTargetId::new(186);
+    let now = Instant::now();
+    let mut harness = PacketLoopHarness::new();
+    let mut control_rx = saturated_remote_keyframe_source(
+        &mut harness.state,
+        Arc::clone(&harness.rtc_metrics),
+        source_transport_media_id,
+        &source_session,
+        target_id,
+    );
+    register_open_consumer_route_fixture(
+        &mut harness.state,
+        &consumer_session,
+        "cam-down",
+        source_transport_media_id,
+    );
+
+    push_keyframe_request(
+        &mut harness.buffers,
+        consumer_session.clone(),
+        "cam-down",
+        KeyframeRequestKind::Pli,
+    );
+    flush_pending_keyframe_requests_at(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+        now,
+    );
+    let _ = recv_remote_keyframe_request(&mut control_rx);
+
+    push_keyframe_request(
+        &mut harness.buffers,
+        consumer_session,
+        "cam-down",
+        KeyframeRequestKind::Pli,
+    );
+    flush_pending_keyframe_requests_at(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+        now + Duration::from_millis(10),
+    );
+
+    assert_remote_keyframe_request(
+        &mut control_rx,
+        &source_session,
+        source_transport_media_id,
+        target_id,
+        None,
+        KeyframeRequestKind::Pli,
+    );
+    let snapshot = harness.metrics.snapshot();
+    assert_eq!(snapshot.rtc_remote_control_keyframe_drops(), 1);
+    assert_eq!(snapshot.rtc_keyframe_requests_forwarded(), 1);
+    assert_eq!(snapshot.rtc_keyframe_requests_absorbed(), 0);
+}
+
+#[test]
+fn keyframe_tracker_cancels_due_retry_when_route_goes_inactive() {
+    let source_session = test_transport_session_key(187, 0, 188, UserId::Integer(189));
+    let consumer_session = test_transport_session_key(187, 1, 190, UserId::Integer(191));
+    let source_transport_media_id = TransportMediaId::new(1870);
+    let target_id = RelayTargetId::new(187);
+    let now = Instant::now();
+    let mut harness = PacketLoopHarness::new();
+    let mut control_rx = remote_keyframe_source(
+        &mut harness.state,
+        source_transport_media_id,
+        &source_session,
+        target_id,
+        2,
+    );
+    register_open_consumer_route_fixture(
+        &mut harness.state,
+        &consumer_session,
+        "cam-down",
+        source_transport_media_id,
+    );
+
+    push_keyframe_request(
+        &mut harness.buffers,
+        consumer_session.clone(),
+        "cam-down",
+        KeyframeRequestKind::Pli,
+    );
+    flush_pending_keyframe_requests_at(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+        now,
+    );
+    assert_remote_keyframe_request(
+        &mut control_rx,
+        &source_session,
+        source_transport_media_id,
+        target_id,
+        None,
+        KeyframeRequestKind::Pli,
+    );
+    push_keyframe_request(
+        &mut harness.buffers,
+        consumer_session.clone(),
+        "cam-down",
+        KeyframeRequestKind::Pli,
+    );
+    flush_pending_keyframe_requests_at(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+        now + Duration::from_millis(100),
+    );
+    assert!(set_source_route_active(
+        &mut harness.state,
+        source_transport_media_id,
+        false
+    ));
+
+    drain_due_keyframe_retries(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+        now + Duration::from_secs(1),
+    );
+
+    assert_no_remote_keyframe_request(&mut control_rx);
+    assert!(set_source_route_active(
+        &mut harness.state,
+        source_transport_media_id,
+        true
+    ));
+    push_keyframe_request(
+        &mut harness.buffers,
+        consumer_session,
+        "cam-down",
+        KeyframeRequestKind::Pli,
+    );
+    flush_pending_keyframe_requests_at(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+        now + Duration::from_secs(1) + Duration::from_millis(10),
+    );
+
+    assert_remote_keyframe_request(
+        &mut control_rx,
+        &source_session,
+        source_transport_media_id,
+        target_id,
+        None,
+        KeyframeRequestKind::Pli,
+    );
+    let snapshot = harness.metrics.snapshot();
+    assert_eq!(snapshot.rtc_keyframe_requests_absorbed(), 1);
+    assert_eq!(snapshot.rtc_keyframe_requests_retried(), 0);
+}
+
+#[test]
+fn keyframe_tracker_decoder_refresh_suppresses_remote_retry() {
+    let source_session = test_transport_session_key(185, 0, 186, UserId::Integer(187));
+    let consumer_session = test_transport_session_key(185, 1, 188, UserId::Integer(189));
+    let source_transport_media_id = TransportMediaId::new(1850);
+    let target_id = RelayTargetId::new(185);
+    let now = Instant::now();
+    let mut harness = PacketLoopHarness::new();
+    let mut control_rx = remote_keyframe_source(
+        &mut harness.state,
+        source_transport_media_id,
+        &source_session,
+        target_id,
+        2,
+    );
+    register_open_consumer_route_fixture(
+        &mut harness.state,
+        &consumer_session,
+        "cam-down",
+        source_transport_media_id,
+    );
+
+    push_keyframe_request(
+        &mut harness.buffers,
+        consumer_session.clone(),
+        "cam-down",
+        KeyframeRequestKind::Pli,
+    );
+    flush_pending_keyframe_requests_at(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+        now,
+    );
+    assert_remote_keyframe_request(
+        &mut control_rx,
+        &source_session,
+        source_transport_media_id,
+        target_id,
+        None,
+        KeyframeRequestKind::Pli,
+    );
+
+    push_keyframe_request(
+        &mut harness.buffers,
+        consumer_session,
+        "cam-down",
+        KeyframeRequestKind::Pli,
+    );
+    flush_pending_keyframe_requests_at(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+        now + Duration::from_millis(100),
+    );
+    harness
+        .buffers
+        .pending_packets
+        .push(sample_already_relayed_packet(
+            source_session,
+            source_transport_media_id,
+            "cam-up",
+            &[0x10, 0x00],
+        ));
+    record_incoming_stats(
+        &mut harness.state,
+        &SourcePolicySignal::default(),
+        harness.rtc_metrics.as_ref(),
+        &harness.rtp_metrics,
+        &mut harness.buffers,
+    );
+    drain_due_keyframe_retries(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+        now + Duration::from_secs(1),
+    );
+
+    assert_no_remote_keyframe_request(&mut control_rx);
+    let snapshot = harness.metrics.snapshot();
+    assert_eq!(snapshot.rtc_keyframe_requests_absorbed(), 1);
+    assert_eq!(snapshot.rtc_keyframe_requests_cleared(), 1);
+    assert_eq!(snapshot.rtc_keyframe_requests_retried(), 0);
+}
+
+#[test]
 fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_flush() {
     let source_session = test_transport_session_key(91, 0, 92, UserId::Integer(93));
     let first_consumer_session = test_transport_session_key(91, 0, 94, UserId::Integer(95));
@@ -2065,10 +2443,12 @@ fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_f
         vec![source_session.clone()]
     );
     assert_eq!(
-        harness
-            .state
-            .route_control
-            .decide_keyframe_request(source_transport_media_id, Instant::now()),
+        harness.state.keyframe_requests.track(
+            source_transport_media_id,
+            None,
+            KeyframeRequestKind::Pli,
+            Instant::now()
+        ),
         KeyframeRequestDecision::Absorb
     );
 }

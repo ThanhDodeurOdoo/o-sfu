@@ -18,12 +18,12 @@ use super::{
         BudgetSolverOutcome, ControlPlaneDurationBucket, HttpDisconnectResponseStatus,
         HttpRoomResponseStatus, HttpRoute, MediaQualityLossDirection, MediaQualityRttBucket,
         MediaQualitySample, RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath,
-        RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
-        RtcRouteControlOutcome, RtpDecoderRefreshScope, RtpForwardDestinationKind,
-        RtpRelayDropKind, SourceSelectionKind, TransportCleanupFailureKind, TransportHealthState,
-        TransportHealthTransition, TransportIceState, TransportUserLifetimeBucket,
-        WsBusClientFrameKind, WsBusDirection, WsBusFailureKind, WsConnectionStage,
-        WsSessionLoopExitReason, WsStartupFailureKind,
+        RtcKeyframeRequestOutcome, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
+        RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpDecoderRefreshScope,
+        RtpForwardDestinationKind, RtpRelayDropKind, SourceSelectionKind,
+        TransportCleanupFailureKind, TransportHealthState, TransportHealthTransition,
+        TransportIceState, TransportUserLifetimeBucket, WsBusClientFrameKind, WsBusDirection,
+        WsBusFailureKind, WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
     },
     rtc::{RtcMetrics, RtcMetricsRecorder, RtcRouteControlMetrics},
     rtp::{RtpMetrics, RtpMetricsRecorder},
@@ -494,6 +494,10 @@ impl RuntimeMetrics {
         self.rtc_metrics.record_route_control(outcome);
     }
 
+    pub fn record_rtc_keyframe_request(&self, outcome: RtcKeyframeRequestOutcome) {
+        self.rtc_metrics.record_keyframe_request(outcome);
+    }
+
     pub fn record_rtc_relay_enqueue(&self, result: RtcRelayEnqueueResult) {
         self.rtc_metrics.record_relay_enqueue(result);
     }
@@ -531,5 +535,9 @@ impl RuntimeMetrics {
 impl RtcRouteControlMetrics for RuntimeMetrics {
     fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome) {
         self.rtc_metrics.record_route_control(outcome);
+    }
+
+    fn record_rtc_keyframe_request(&self, outcome: RtcKeyframeRequestOutcome) {
+        self.rtc_metrics.record_keyframe_request(outcome);
     }
 }

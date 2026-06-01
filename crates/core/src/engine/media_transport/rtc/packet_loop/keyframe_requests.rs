@@ -1,41 +1,29 @@
-//! Route-level keyframe feedback handling.
+//! route-level keyframe feedback handling
 //!
-//! Consumer `str0m::Rtc` instances emit keyframe requests in consumer-local
-//! terms, usually by MID and optional RID. The packet loop must translate that
-//! feedback back to the producer source that can satisfy it. This module contains
-//! that translation, duplicate coalescing and final dispatch to either a local
-//! producer session or a remote source-control handle.
-//!
-//! Keyframe requests are route-control feedback, not room policy. The room
-//! decides which sources and layers a user should receive. This module only
-//! makes sure the currently routed producer gets a bounded, source/RID keyed
-//! request stream.
+//! consumer feedback arrives as MID/RID terms local to the receiving session
+//! this module resolves it to the current producer source/RID target before
+//! dispatching through the shared keyframe tracker
 
 use std::{cmp::Ordering, time::Instant};
 
-use str0m::media::{KeyframeRequest, KeyframeRequestKind, Mid, Rid};
-use tracing::debug;
+use str0m::media::{KeyframeRequest as RtcKeyframeRequest, KeyframeRequestKind, Mid, Rid};
 
 use super::{
     super::{
         commands::RemoteSourceControl,
+        keyframe_tracker::{SourceKeyframeRequest, coalesce_keyframe_kind},
         media_registry::RegisteredMediaHandle,
-        route_control::{KeyframeRequestDecision, coalesce_keyframe_kind},
         state::PacketLoopState,
-        worker::request_keyframe_for_source,
+        worker::{KeyframeRequestMode, KeyframeRequestTarget, request_keyframe_for_target},
     },
     buffers::PacketLoopBuffers,
 };
 use crate::engine::{
     media_transport::{TransportMediaId, TransportSessionKey, TransportSourceKey},
-    metrics::{RtcRouteControlMetrics, RtcRouteControlOutcome},
+    metrics::RtcRouteControlMetrics,
 };
 
-/// Keyframe feedback emitted by one consumer session before producer lookup.
-///
-/// The MID is the consumer-local media identity. It must be resolved through
-/// worker route state before the packet loop knows which producer source owns
-/// the requested media.
+/// keyframe feedback emitted by one consumer session before producer lookup
 #[derive(Debug, Clone, Copy)]
 pub(in crate::engine::media_transport::rtc) struct PendingKeyframeRequest {
     pub(super) consumer_mid: Mid,
@@ -44,7 +32,7 @@ pub(in crate::engine::media_transport::rtc) struct PendingKeyframeRequest {
 }
 
 impl PendingKeyframeRequest {
-    pub(super) fn new(request: KeyframeRequest) -> Self {
+    pub(super) fn new(request: RtcKeyframeRequest) -> Self {
         Self {
             consumer_mid: request.mid,
             consumer_rid: request.rid,
@@ -62,11 +50,6 @@ impl PendingKeyframeRequest {
     }
 }
 
-/// Producer-side destination for a resolved keyframe request.
-///
-/// Local sources are driven by the same worker state. Remote sources are owned
-/// by another worker or node and must be reached through source-control
-/// messaging.
 pub(super) enum ResolvedKeyframeRoute {
     Local {
         source_session_key: TransportSessionKey,
@@ -77,24 +60,21 @@ pub(super) enum ResolvedKeyframeRoute {
     },
 }
 
-/// Source and RID keyed keyframe request after route resolution.
-///
-/// Multiple consumers can ask for the same source during one packet-loop turn.
-/// Coalescing keeps duplicate feedback bounded without merging distinct
-/// simulcast layers into one source-wide request.
-#[derive(Clone, Copy)]
-pub(super) struct CoalescedKeyframeRequest {
-    source_transport_media_id: TransportMediaId,
-    rid: Option<Rid>,
-    kind: KeyframeRequestKind,
+impl ResolvedKeyframeRoute {
+    fn target(&self, source_transport_media_id: TransportMediaId) -> KeyframeRequestTarget<'_> {
+        match self {
+            Self::Local { source_session_key } => {
+                KeyframeRequestTarget::Local(source_session_key, source_transport_media_id)
+            }
+            Self::Remote {
+                source,
+                source_control,
+            } => KeyframeRequestTarget::Remote(source, source_control),
+        }
+    }
 }
 
-/// Resolve and flush every keyframe request staged during the current turn.
-///
-/// Requests are drained from packet-loop buffers, resolved from consumer-local
-/// MID to source transport media id and selected producer RID before any
-/// request is dispatched. Missing route state means the route changed before
-/// the feedback was flushed and is treated as a benign stale request.
+/// resolve and flush every keyframe request staged during the current turn
 pub(super) fn flush_pending_keyframe_requests(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
@@ -103,10 +83,7 @@ pub(super) fn flush_pending_keyframe_requests(
     flush_pending_keyframe_requests_at(state, metrics, buffers, Instant::now());
 }
 
-/// resolves and flushes staged keyframe requests at a supplied time
-///
-/// tests and benchmarks pass `now` explicitly so route-control throttling stays
-/// deterministic
+/// resolves staged keyframe requests at a supplied time for tests and benchmarks
 pub(in crate::engine::media_transport::rtc) fn flush_pending_keyframe_requests_at(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
@@ -117,7 +94,7 @@ pub(in crate::engine::media_transport::rtc) fn flush_pending_keyframe_requests_a
     let coalesced_requests = &mut buffers.coalesced_keyframe_requests;
     coalesced_requests.clear();
     let mut has_rid = false;
-    let mut same_request: Option<CoalescedKeyframeRequest> = None;
+    let mut same_request: Option<SourceKeyframeRequest> = None;
     for (consumer_session_key, request) in pending_keyframe_requests.drain(..) {
         let Some(target) = state.active_consumer_keyframe_target_for_mid(
             &consumer_session_key,
@@ -126,7 +103,7 @@ pub(in crate::engine::media_transport::rtc) fn flush_pending_keyframe_requests_a
         ) else {
             continue;
         };
-        let resolved_request = CoalescedKeyframeRequest {
+        let resolved_request = SourceKeyframeRequest {
             source_transport_media_id: target.source_transport_media_id,
             rid: target.rid,
             kind: request.kind,
@@ -174,7 +151,7 @@ pub(in crate::engine::media_transport::rtc) fn flush_pending_keyframe_requests_a
     } else {
         coalesced_requests.sort_unstable_by_key(|request| request.source_transport_media_id);
     }
-    let mut current_request: Option<CoalescedKeyframeRequest> = None;
+    let mut current_request: Option<SourceKeyframeRequest> = None;
     for coalesced_request in coalesced_requests.drain(..) {
         match &mut current_request {
             Some(current)
@@ -200,88 +177,76 @@ pub(in crate::engine::media_transport::rtc) fn flush_pending_keyframe_requests_a
     }
 }
 
+/// drain retry deadlines after new feedback has had a chance to arm them
+pub(in crate::engine::media_transport::rtc) fn drain_due_keyframe_retries(
+    state: &mut PacketLoopState,
+    metrics: &impl RtcRouteControlMetrics,
+    buffers: &mut PacketLoopBuffers,
+    now: Instant,
+) {
+    state
+        .keyframe_requests
+        .drain_due(now, &mut buffers.keyframe_retries);
+    for retry in buffers.keyframe_retries.drain(..) {
+        flush_keyframe_retry(state, metrics, retry);
+    }
+}
+
 fn compare_keyframe_rids(left: Option<Rid>, right: Option<Rid>) -> Ordering {
     left.as_deref().cmp(&right.as_deref())
 }
 
-/// Dispatch one source/RID keyed keyframe request.
-///
-/// Local producers are marked through the worker's normal keyframe request path.
-/// Remote producers pass through route-control de-duplication before the request
-/// leaves the worker so repeated feedback does not flood another relay target.
 fn flush_coalesced_keyframe_request(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
-    coalesced_request: CoalescedKeyframeRequest,
+    coalesced_request: SourceKeyframeRequest,
     now: Instant,
 ) {
     let Some(route) = resolve_keyframe_route(state, coalesced_request.source_transport_media_id)
     else {
         return;
     };
-    match route {
-        ResolvedKeyframeRoute::Local { source_session_key } => {
-            debug!(
-                ?source_session_key,
-                source_transport_media_id = ?coalesced_request.source_transport_media_id,
-                rid = ?coalesced_request.rid,
-                kind = ?coalesced_request.kind,
-                "forwarding local keyframe request to source"
-            );
-            request_keyframe_for_source(
-                state,
-                metrics,
-                &source_session_key,
-                coalesced_request.source_transport_media_id,
-                coalesced_request.rid,
-                coalesced_request.kind,
-                now,
-            );
-        }
-        ResolvedKeyframeRoute::Remote {
-            source,
-            source_control,
-        } => {
-            match state.route_control.decide_keyframe_request_for_rid(
-                coalesced_request.source_transport_media_id,
-                coalesced_request.rid,
-                now,
-            ) {
-                KeyframeRequestDecision::Forward => {
-                    debug!(
-                        source_session_key = ?source.session_key(),
-                        source_transport_media_id = ?coalesced_request.source_transport_media_id,
-                        rid = ?coalesced_request.rid,
-                        kind = ?coalesced_request.kind,
-                        "forwarding remote keyframe request to source control"
-                    );
-                    source_control.request_keyframe(
-                        &source,
-                        coalesced_request.rid,
-                        coalesced_request.kind,
-                    );
-                    metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
-                }
-                KeyframeRequestDecision::Absorb => {
-                    debug!(
-                        source_session_key = ?source.session_key(),
-                        source_transport_media_id = ?coalesced_request.source_transport_media_id,
-                        rid = ?coalesced_request.rid,
-                        kind = ?coalesced_request.kind,
-                        "absorbed duplicate keyframe request"
-                    );
-                    metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
-                }
-            }
-        }
-    }
+    request_keyframe_for_target(
+        state,
+        metrics,
+        route.target(coalesced_request.source_transport_media_id),
+        coalesced_request.rid,
+        coalesced_request.kind,
+        KeyframeRequestMode::Track(now),
+    );
 }
 
-/// Resolve a producer transport media id to the control path that owns it.
-///
-/// The source can be local to this worker through `mid_registry`, or remote
-/// through the remote source registry populated by relay setup. Missing entries
-/// mean the route changed before the feedback was flushed.
+fn flush_keyframe_retry(
+    state: &mut PacketLoopState,
+    metrics: &impl RtcRouteControlMetrics,
+    retry: SourceKeyframeRequest,
+) {
+    let source_transport_media_id = retry.source_transport_media_id;
+    let rid = retry.rid;
+    let kind = retry.kind;
+    if !state.has_keyframe_demand(source_transport_media_id, rid) {
+        state
+            .keyframe_requests
+            .forget(source_transport_media_id, rid);
+        return;
+    }
+    let Some(route) = resolve_keyframe_route(state, source_transport_media_id) else {
+        state
+            .keyframe_requests
+            .forget(source_transport_media_id, rid);
+        return;
+    };
+    request_keyframe_for_target(
+        state,
+        metrics,
+        route.target(source_transport_media_id),
+        rid,
+        kind,
+        KeyframeRequestMode::Retry,
+    );
+}
+
+/// resolve a producer media id to its local or relayed control path
 fn resolve_keyframe_route(
     state: &PacketLoopState,
     source_transport_media_id: TransportMediaId,
@@ -295,7 +260,6 @@ fn resolve_keyframe_route(
     }
     state
         .remote_source_registration(source_transport_media_id)
-        .cloned()
         .map(|remote_source| ResolvedKeyframeRoute::Remote {
             source: remote_source.source().clone(),
             source_control: remote_source.source_control().clone(),

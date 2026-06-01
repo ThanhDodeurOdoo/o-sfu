@@ -1,9 +1,10 @@
 use super::{
     BudgetSolverOutcome, HttpRoute, MetricName, RtcDatagramDropReason, RtcDatagramRoutePath,
-    RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
-    RtcRouteControlOutcome, RtpDecoderRefreshScope, RtpForwardDestinationKind, RtpRelayDropKind,
-    RuntimeMetricsSnapshot, SourceSelectionKind, TransportCleanupFailureKind, TransportHealthState,
-    TransportIceState, counter::ExportedMetricLabel, labels::ExportedMetricLabelPair,
+    RtcKeyframeRequestOutcome, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
+    RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpDecoderRefreshScope,
+    RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetricsSnapshot, SourceSelectionKind,
+    TransportCleanupFailureKind, TransportHealthState, TransportIceState,
+    counter::ExportedMetricLabel, labels::ExportedMetricLabelPair,
 };
 
 macro_rules! snapshot_counter_accessors {
@@ -420,6 +421,29 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
 
     fn rtc_route_control_layer_dropped(&self) -> u64 {
         self.rtc_route_control(RtcRouteControlOutcome::LayerDropped)
+    }
+
+    fn rtc_keyframe_requests(&self, outcome: RtcKeyframeRequestOutcome) -> u64 {
+        self.counter_value(
+            MetricName::RtcKeyframeRequestsTotal,
+            &[("outcome", metric_label(outcome))],
+        )
+    }
+
+    fn rtc_keyframe_requests_forwarded(&self) -> u64 {
+        self.rtc_keyframe_requests(RtcKeyframeRequestOutcome::Forwarded)
+    }
+
+    fn rtc_keyframe_requests_absorbed(&self) -> u64 {
+        self.rtc_keyframe_requests(RtcKeyframeRequestOutcome::Absorbed)
+    }
+
+    fn rtc_keyframe_requests_retried(&self) -> u64 {
+        self.rtc_keyframe_requests(RtcKeyframeRequestOutcome::Retry)
+    }
+
+    fn rtc_keyframe_requests_cleared(&self) -> u64 {
+        self.rtc_keyframe_requests(RtcKeyframeRequestOutcome::Cleared)
     }
 
     fn rtc_relay_enqueue(&self, result: RtcRelayEnqueueResult) -> u64 {

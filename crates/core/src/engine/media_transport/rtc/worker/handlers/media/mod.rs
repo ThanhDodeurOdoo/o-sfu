@@ -18,7 +18,9 @@ pub(super) use control::{
 pub(in crate::engine::media_transport::rtc) use control::{
     apply_source_rid_readiness, drain_due_rid_keyframe_refreshes,
 };
-pub(in crate::engine::media_transport::rtc) use keyframe::request_keyframe_for_source;
+pub(in crate::engine::media_transport::rtc) use keyframe::{
+    KeyframeRequestMode, KeyframeRequestTarget, request_keyframe_for_target,
+};
 pub(super) use lifecycle::{
     RecvMediaPolicy, worker_add_recv_media, worker_add_send_media, worker_remove_media,
 };

@@ -109,7 +109,7 @@ impl RidReadinessBenchFixture {
     }
 }
 
-/// fixed keyframe-feedback fixture for route-control coalescing benchmarks
+/// fixed keyframe-feedback fixture for coalescing benchmarks
 ///
 /// setup stages many consumer-local feedback requests for one remote source
 /// the measured method resolves, sorts and coalesces them before sending one
