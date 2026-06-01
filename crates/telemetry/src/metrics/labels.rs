@@ -186,6 +186,14 @@ pub enum RtcRouteControlOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RtcKeyframeRequestOutcome {
+    Forwarded,
+    Absorbed,
+    Retry,
+    Cleared,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RtcRelayEnqueueResult {
     IntraNodeEnqueued,
     IntraNodeOverloaded,
@@ -486,6 +494,13 @@ impl_exported_metric_label!(RtcRouteControlOutcome {
     RouteGatedRelayDrop => (2, "route_gated_relay_drop"),
     LayerAllowed => (3, "layer_allowed"),
     LayerDropped => (4, "layer_dropped"),
+});
+
+impl_exported_metric_label!(RtcKeyframeRequestOutcome {
+    Forwarded => (0, "forwarded"),
+    Absorbed => (1, "absorbed"),
+    Retry => (2, "retry"),
+    Cleared => (3, "cleared"),
 });
 
 impl_metric_label!(RtcRelayEnqueueResult {

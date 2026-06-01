@@ -7,9 +7,9 @@
 //!
 //! each source entry is sparse and exists only while some transport-side
 //! control state is installed
-//! keyframe request windows, packet-level audio policy, local route gates and
-//! relay-target gates are kept together because the packet loop needs one
-//! source-wide answer before it fans out to destinations
+//! packet-level audio policy, local route gates and relay-target gates are kept
+//! together because the packet loop needs one source-wide answer before it fans
+//! out to destinations
 //!
 //! packet gating is composed in two stages
 //! local and relay gates are unioned first so a source packet survives when any
@@ -23,12 +23,10 @@ use std::{
     time::Instant,
 };
 
-use str0m::media::Rid;
 use tracing::debug;
 
 use super::{
     active_speaker::SourceAudioPolicyState,
-    keyframe::{KeyframeRequestDecision, KeyframeRequestWindow},
     packet_gate::{
         PacketLayerGate, PacketLayerMetadata, PacketRouteDecision, aggregate_packet_gates,
         intersect_packet_gates,
@@ -49,39 +47,11 @@ use crate::engine::media_transport::{
 pub(in crate::engine::media_transport::rtc) struct RouteControlState {
     /// sparse per-source control entries
     ///
-    /// entries may be created by packet gates, audio observations or keyframe
-    /// request coalescing
-    /// source teardown must call [`Self::forget_source`] because keyframe
-    /// windows are retained until the source disappears
+    /// entries may be created by packet gates or audio observations
     sources: BTreeMap<TransportMediaId, SourceRouteControl>,
 }
 
 impl RouteControlState {
-    /// test helper for source-wide keyframe request coalescing
-    #[cfg(test)]
-    pub fn decide_keyframe_request(
-        &mut self,
-        source_transport_media_id: TransportMediaId,
-        now: Instant,
-    ) -> KeyframeRequestDecision {
-        self.decide_keyframe_request_for_rid(source_transport_media_id, None, now)
-    }
-
-    /// decides whether a keyframe request for a source/rid should be forwarded
-    ///
-    /// the first request in a coalescing window forwards and records the window
-    /// later requests for the same rid are absorbed until the window reopens
-    /// `None` is used for source-wide refreshes that are not bound to a rid
-    pub fn decide_keyframe_request_for_rid(
-        &mut self,
-        source_transport_media_id: TransportMediaId,
-        rid: Option<Rid>,
-        now: Instant,
-    ) -> KeyframeRequestDecision {
-        let source_control = self.sources.entry(source_transport_media_id).or_default();
-        source_control.decide_keyframe_request(rid, now)
-    }
-
     /// decides whether the packet may enter destination planning for a source
     ///
     /// missing source state means no route-control restriction is installed
@@ -227,7 +197,7 @@ impl RouteControlState {
     /// removes the packet gate owned by one relay target
     ///
     /// relay cleanup uses this when a target is released while the source itself
-    /// may still have local routes, audio policy or keyframe windows
+    /// may still have local routes or audio policy
     pub fn forget_relay_packet_gate(
         &mut self,
         source_transport_media_id: TransportMediaId,
@@ -245,8 +215,7 @@ impl RouteControlState {
     /// drops all route-control state for a source
     ///
     /// source teardown must use this instead of clearing individual gates so
-    /// keyframe windows and audio policy do not outlive the media handle they
-    /// describe
+    /// audio policy does not outlive the media handle it describes
     pub fn forget_source(&mut self, source_transport_media_id: TransportMediaId) {
         self.sources.remove(&source_transport_media_id);
     }
@@ -391,16 +360,10 @@ fn same_active_speaker_order(left: &[ActiveSpeakerSource], right: &[ActiveSpeake
 /// the source entry composes independent concerns that have to agree before a
 /// packet reaches fanout:
 ///
-/// * keyframe requests are coalesced per rid
 /// * local and relay gates preserve downstream selected-layer needs
 /// * audio policy can block the source when packet metadata says it is inactive
 #[derive(Debug, Default)]
 struct SourceRouteControl {
-    /// keyframe coalescing windows keyed by optional rid
-    ///
-    /// these windows stay with the source until source cleanup so repeated
-    /// refresh requests remain bounded across route changes
-    keyframe_requests: Vec<KeyframeRequestState>,
     /// packet-derived audio policy for active-speaker state and audio gating
     source_audio_policy: Option<SourceAudioPolicyState>,
     /// source gate aggregated from local consumer destinations
@@ -411,42 +374,7 @@ struct SourceRouteControl {
     effective_packet_gate: Option<PacketLayerGate>,
 }
 
-/// coalescing window for keyframe requests that share one source/rid scope
-#[derive(Debug, Clone, Copy)]
-struct KeyframeRequestState {
-    /// selected rid for rid-specific refreshes
-    ///
-    /// `None` represents a source-wide refresh
-    rid: Option<Rid>,
-    /// time window during which repeated requests are absorbed
-    window: KeyframeRequestWindow,
-}
-
 impl SourceRouteControl {
-    /// decides whether a keyframe request escapes the coalescing window
-    fn decide_keyframe_request(
-        &mut self,
-        rid: Option<Rid>,
-        now: Instant,
-    ) -> KeyframeRequestDecision {
-        let Some(request_state) = self
-            .keyframe_requests
-            .iter_mut()
-            .find(|request_state| request_state.rid == rid)
-        else {
-            self.keyframe_requests.push(KeyframeRequestState {
-                rid,
-                window: KeyframeRequestWindow::new(now),
-            });
-            return KeyframeRequestDecision::Forward;
-        };
-        if request_state.window.is_open(now) {
-            return KeyframeRequestDecision::Absorb;
-        }
-        request_state.window = KeyframeRequestWindow::new(now);
-        KeyframeRequestDecision::Forward
-    }
-
     /// projects audio policy into the active-speaker source list
     fn active_speaker_source(
         &self,
@@ -547,12 +475,8 @@ impl SourceRouteControl {
     }
 
     /// reports whether the source entry can be pruned from route-control state
-    ///
-    /// keyframe request windows make the entry non-empty until explicit source
-    /// cleanup because they preserve coalescing state across route changes
     fn is_empty(&self) -> bool {
-        self.keyframe_requests.is_empty()
-            && self.source_audio_policy.is_none()
+        self.source_audio_policy.is_none()
             && self.local_packet_gate.is_none()
             && self.relay_packet_gates.is_empty()
     }

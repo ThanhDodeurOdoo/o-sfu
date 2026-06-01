@@ -32,6 +32,7 @@ use tracing::{debug, warn};
 
 use super::{
     commands::RemoteSourceControl,
+    demux::MediaRouteDestination,
     forwarded_packet::ForwardedPacketSource,
     route_control::PacketLayerGate,
     slots::{MediaStore, SessionHandle},
@@ -112,6 +113,31 @@ impl RegisteredMediaHandle {
             Self::Producer { mid, .. } | Self::Consumer { mid, .. } => *mid,
         }
     }
+}
+
+enum DestinationKeyframeTarget {
+    Current(Option<Rid>),
+    Stale,
+}
+
+fn destination_keyframe_target_rid(
+    destination: &MediaRouteDestination,
+    open_rid: Option<Rid>,
+) -> DestinationKeyframeTarget {
+    let target_rid = match destination.packet_gate {
+        PacketLayerGate::Rid(rid) => Some(rid),
+        PacketLayerGate::OperatingPoint(operating_point) => operating_point.rid(),
+        PacketLayerGate::Block => match destination
+            .pending_packet_gate
+            .as_ref()
+            .and_then(PacketLayerGate::selected_rid)
+        {
+            Some(rid) => Some(rid),
+            None => return DestinationKeyframeTarget::Stale,
+        },
+        PacketLayerGate::Open => open_rid,
+    };
+    DestinationKeyframeTarget::Current(target_rid)
 }
 
 /// remote producer placeholder used by consumer routes on this worker
@@ -684,6 +710,8 @@ impl PacketLoopState {
     fn forget_source_side_tables(&mut self, source_transport_media_id: TransportMediaId) {
         self.forget_live_producer_rids(source_transport_media_id);
         self.route_control.forget_source(source_transport_media_id);
+        self.keyframe_requests
+            .forget_source(source_transport_media_id);
         self.set_source_decoder_refresh_codec(source_transport_media_id, None);
     }
 
@@ -696,6 +724,7 @@ impl PacketLoopState {
                 || remote_source_registry.contains_key(source_transport_media_id)
         };
         self.route_control.retain_sources(&source_is_registered);
+        self.keyframe_requests.retain_sources(&source_is_registered);
         self.live_producer_rids
             .retain(|source_transport_media_id, _rids| {
                 source_is_registered(source_transport_media_id)
@@ -957,23 +986,42 @@ impl PacketLoopState {
         if !route_entry.source_active || !destination.active {
             return None;
         }
-        let rid = match destination.packet_gate {
-            PacketLayerGate::Rid(rid) => Some(rid),
-            PacketLayerGate::OperatingPoint(operating_point) => operating_point.rid(),
-            // while blocked, the pending gate names the layer that needs a refresh
-            PacketLayerGate::Block => Some(
-                destination
-                    .pending_packet_gate
-                    .as_ref()
-                    .and_then(PacketLayerGate::selected_rid)?,
-            ),
-            // open routes have no layer policy, so preserve the feedback RID
-            PacketLayerGate::Open => feedback_rid,
+        let DestinationKeyframeTarget::Current(rid) =
+            destination_keyframe_target_rid(destination, feedback_rid)
+        else {
+            return None;
         };
         Some(ConsumerKeyframeTarget {
             source_transport_media_id: binding.source_transport_media_id,
             rid,
         })
+    }
+
+    /// reports whether a current route still needs a source/RID keyframe retry
+    #[inline]
+    pub(super) fn has_keyframe_demand(
+        &self,
+        source_transport_media_id: TransportMediaId,
+        rid: Option<Rid>,
+    ) -> bool {
+        let local_demand = self
+            .media_route_index
+            .get(&source_transport_media_id)
+            .is_some_and(|route_entry| {
+                route_entry.source_active
+                    && route_entry.destinations.iter().any(|destination| {
+                        destination.active
+                            && matches!(
+                                destination_keyframe_target_rid(destination, None),
+                                DestinationKeyframeTarget::Current(target_rid)
+                                    if target_rid == rid
+                            )
+                    })
+            });
+        local_demand
+            || self
+                .relay_targets_for_source(source_transport_media_id)
+                .is_some()
     }
 
     /// updates the cached destination slot for one consumer MID binding

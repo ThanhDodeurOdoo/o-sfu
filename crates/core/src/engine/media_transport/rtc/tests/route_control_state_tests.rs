@@ -1,13 +1,11 @@
 use std::time::{Duration, Instant};
 
-use str0m::media::Rid;
+use str0m::media::{KeyframeRequestKind, Rid};
 
 use super::super::{
+    keyframe_tracker::{KeyframeRequestDecision, KeyframeRequestTracker},
     relay_registry::RelayTargetId,
-    route_control::{
-        KeyframeRequestDecision, PacketLayerGate, PacketLayerMetadata, PacketRouteDecision,
-        RouteControlState,
-    },
+    route_control::{PacketLayerGate, PacketLayerMetadata, PacketRouteDecision, RouteControlState},
 };
 use crate::engine::media_transport::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource, TransportMediaId,
@@ -52,72 +50,204 @@ fn assert_single_active_speaker_diagnostic(
     assert_eq!(diagnostic.reason(), reason);
 }
 
+fn track_source_wide(
+    state: &mut KeyframeRequestTracker,
+    source_transport_media_id: TransportMediaId,
+    now: Instant,
+) -> KeyframeRequestDecision {
+    state.track(
+        source_transport_media_id,
+        None,
+        KeyframeRequestKind::Pli,
+        now,
+    )
+}
+
 #[test]
-fn route_control_absorbs_repeated_keyframe_requests_within_the_window() {
-    let mut state = RouteControlState::default();
+fn keyframe_tracker_absorbs_repeated_requests_while_pending() {
+    let mut state = KeyframeRequestTracker::default();
     let source_transport_media_id = TransportMediaId::new(17);
     let now = Instant::now();
 
     assert_eq!(
-        state.decide_keyframe_request(source_transport_media_id, now),
+        track_source_wide(&mut state, source_transport_media_id, now),
         KeyframeRequestDecision::Forward
     );
+    assert_eq!(state.next_deadline(), Some(now + Duration::from_secs(1)));
     assert_eq!(
-        state.decide_keyframe_request(source_transport_media_id, now),
+        track_source_wide(&mut state, source_transport_media_id, now),
         KeyframeRequestDecision::Absorb
     );
 }
 
 #[test]
-fn route_control_reopens_after_the_coalesce_window() {
-    let mut state = RouteControlState::default();
+fn keyframe_tracker_expires_pending_request_without_duplicate_feedback() {
+    let mut state = KeyframeRequestTracker::default();
     let source_transport_media_id = TransportMediaId::new(18);
     let now = Instant::now();
+    let mut retries = Vec::new();
 
     assert_eq!(
-        state.decide_keyframe_request(source_transport_media_id, now),
+        track_source_wide(&mut state, source_transport_media_id, now),
         KeyframeRequestDecision::Forward
     );
+    state.drain_due(now + Duration::from_secs(1), &mut retries);
+
+    assert!(retries.is_empty());
+    assert_eq!(state.next_deadline(), None);
     assert_eq!(
-        state.decide_keyframe_request(source_transport_media_id, now + Duration::from_secs(1)),
+        track_source_wide(
+            &mut state,
+            source_transport_media_id,
+            now + Duration::from_secs(1)
+        ),
         KeyframeRequestDecision::Forward
     );
 }
 
 #[test]
-fn route_control_coalesces_explicit_rids_independently() {
-    let mut state = RouteControlState::default();
+fn keyframe_tracker_retries_after_duplicate_feedback() {
+    let mut state = KeyframeRequestTracker::default();
+    let source_transport_media_id = TransportMediaId::new(181);
+    let now = Instant::now();
+    let mut retries = Vec::new();
+
+    assert_eq!(
+        track_source_wide(&mut state, source_transport_media_id, now),
+        KeyframeRequestDecision::Forward
+    );
+    assert_eq!(
+        state.track(
+            source_transport_media_id,
+            None,
+            KeyframeRequestKind::Fir,
+            now + Duration::from_millis(100)
+        ),
+        KeyframeRequestDecision::Absorb
+    );
+
+    state.drain_due(now + Duration::from_secs(1), &mut retries);
+
+    assert_eq!(retries.len(), 1);
+    let retry = retries[0];
+    assert_eq!(retry.source_transport_media_id, source_transport_media_id);
+    assert_eq!(retry.rid, None);
+    assert_eq!(retry.kind, KeyframeRequestKind::Fir);
+}
+
+#[test]
+fn keyframe_tracker_tracks_explicit_rids_independently() {
+    let mut state = KeyframeRequestTracker::default();
     let source_transport_media_id = TransportMediaId::new(118);
     let now = Instant::now();
 
     assert_eq!(
-        state.decide_keyframe_request(source_transport_media_id, now),
+        track_source_wide(&mut state, source_transport_media_id, now),
         KeyframeRequestDecision::Forward
     );
     assert_eq!(
-        state.decide_keyframe_request_for_rid(
+        state.track(
             source_transport_media_id,
             Some(Rid::from("hi")),
+            KeyframeRequestKind::Pli,
             now
         ),
         KeyframeRequestDecision::Forward
     );
     assert_eq!(
-        state.decide_keyframe_request_for_rid(
+        state.track(
             source_transport_media_id,
             Some(Rid::from("hi")),
+            KeyframeRequestKind::Pli,
             now
         ),
         KeyframeRequestDecision::Absorb
     );
     assert_eq!(
-        state.decide_keyframe_request_for_rid(
+        state.track(
             source_transport_media_id,
             Some(Rid::from("lo")),
+            KeyframeRequestKind::Pli,
             now
         ),
         KeyframeRequestDecision::Forward
     );
+}
+
+#[test]
+fn keyframe_tracker_decoder_refresh_clears_matching_pending_request() {
+    let mut state = KeyframeRequestTracker::default();
+    let source_transport_media_id = TransportMediaId::new(182);
+    let now = Instant::now();
+    let hi = Rid::from("hi");
+    let lo = Rid::from("lo");
+    let mut retries = Vec::new();
+
+    assert_eq!(
+        state.track(
+            source_transport_media_id,
+            Some(hi),
+            KeyframeRequestKind::Pli,
+            now
+        ),
+        KeyframeRequestDecision::Forward
+    );
+    assert_eq!(
+        state.track(
+            source_transport_media_id,
+            Some(lo),
+            KeyframeRequestKind::Pli,
+            now
+        ),
+        KeyframeRequestDecision::Forward
+    );
+    assert_eq!(
+        state.track(
+            source_transport_media_id,
+            Some(hi),
+            KeyframeRequestKind::Pli,
+            now + Duration::from_millis(100)
+        ),
+        KeyframeRequestDecision::Absorb
+    );
+
+    assert_eq!(
+        state.observe_refresh(source_transport_media_id, Some(lo)),
+        1
+    );
+    state.drain_due(now + Duration::from_secs(1), &mut retries);
+
+    assert_eq!(retries.len(), 1);
+    assert_eq!(retries[0].rid, Some(hi));
+}
+
+#[test]
+fn keyframe_tracker_decoder_refresh_clears_source_wide_pending_request() {
+    let mut state = KeyframeRequestTracker::default();
+    let source_transport_media_id = TransportMediaId::new(183);
+    let now = Instant::now();
+    let mut retries = Vec::new();
+
+    assert_eq!(
+        track_source_wide(&mut state, source_transport_media_id, now),
+        KeyframeRequestDecision::Forward
+    );
+    assert_eq!(
+        track_source_wide(
+            &mut state,
+            source_transport_media_id,
+            now + Duration::from_millis(100)
+        ),
+        KeyframeRequestDecision::Absorb
+    );
+    assert_eq!(
+        state.observe_refresh(source_transport_media_id, Some(Rid::from("hi"))),
+        1
+    );
+
+    state.drain_due(now + Duration::from_secs(1), &mut retries);
+
+    assert!(retries.is_empty());
 }
 
 #[test]

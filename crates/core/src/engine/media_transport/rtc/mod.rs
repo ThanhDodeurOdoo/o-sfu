@@ -41,6 +41,7 @@ mod forwarding_destination;
 mod forwarding_planner;
 #[cfg(any(test, feature = "fuzzing"))]
 pub(crate) mod fuzz_support;
+mod keyframe_tracker;
 mod local_forwarding;
 mod local_send_rewrite;
 mod media_registry;

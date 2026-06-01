@@ -20,9 +20,10 @@ use super::{
     super::{
         forwarded_packet::{ForwardedPacket, ForwardedPacketSource},
         forwarding_destination::PacketForward,
+        keyframe_tracker::SourceKeyframeRequest,
         slots::SessionHandle,
     },
-    keyframe_requests::{CoalescedKeyframeRequest, PendingKeyframeRequest},
+    keyframe_requests::PendingKeyframeRequest,
 };
 use crate::engine::{
     RoomInstanceId,
@@ -73,46 +74,50 @@ pub(super) struct PendingFirstVideoKeyframe {
     pub(super) observed_at: Instant,
 }
 
-/// Per-worker scratch buffers reused across packet-loop turns.
+/// per-worker scratch buffers reused across packet-loop turns
 ///
-/// # Hot-path contract
+/// # hot-path contract
 ///
-/// The packet loop owns one instance for the lifetime of the worker task.
-/// Calling code may push staged work during a turn, but no field is
-/// authoritative after the turn is flushed. New reusable collections should be
+/// the packet loop owns one instance for the lifetime of the worker task
+/// calling code may push staged work during a turn, but no field is
+/// authoritative after the turn is flushed
+/// new reusable collections should be
 /// added here only when they replace repeated hot-path allocation or preserve a
-/// bounded batch between two packet-loop phases.
+/// bounded batch between two packet-loop phases
 pub(in crate::engine::media_transport::rtc) struct PacketLoopBuffers {
-    /// Reusable UDP transmit slots produced by `str0m::Output::Transmit`.
+    /// reusable UDP transmit slots produced by `str0m::Output::Transmit`
     pub(super) pending_transmits: Vec<PendingTransmit>,
-    /// Logical length of [`Self::pending_transmits`] for the current turn.
+    /// logical length of [`Self::pending_transmits`] for the current turn
     pub(super) pending_transmit_count: usize,
-    /// Media packets produced by local adapter sessions or inbound relays.
+    /// media packets produced by local adapter sessions or inbound relays
     pub pending_packets: Vec<ForwardedPacket>,
-    /// Raw keyframe feedback emitted by consumer sessions before source lookup.
+    /// raw keyframe feedback emitted by consumer sessions before source lookup
     pub pending_keyframe_requests: Vec<(TransportSessionKey, PendingKeyframeRequest)>,
-    /// Sessions ready for polling after dirty and timeout scheduling is merged.
+    /// sessions ready for polling after dirty and timeout scheduling is merged
     pub(super) ready_sessions: Vec<SessionHandle>,
-    /// Source-keyed feedback after duplicate requests are merged.
-    pub(super) coalesced_keyframe_requests: Vec<CoalescedKeyframeRequest>,
-    /// Source/RID-keyed readiness work after packet-level liveness is updated.
+    /// source-keyed feedback after duplicate requests are merged
+    pub(super) coalesced_keyframe_requests: Vec<SourceKeyframeRequest>,
+    /// due keyframe retries drained from the tracker
+    pub(super) keyframe_retries: Vec<SourceKeyframeRequest>,
+    /// source/RID-keyed readiness work after packet-level liveness is updated
     pub(super) pending_rid_readiness: Vec<PendingRidReadiness>,
-    /// First-ingress keyframe probes delayed until RID readiness work is known.
+    /// first-ingress keyframe probes delayed until RID readiness work is known
     pub(super) pending_first_video_keyframes: Vec<PendingFirstVideoKeyframe>,
-    /// Sources whose selected-RID route state changed during this turn.
+    /// sources whose selected-RID route state changed during this turn
     pub(super) rid_readiness_changed_sources: Vec<TransportMediaId>,
-    /// Rooms whose source policy must be recomputed after packet observations.
+    /// rooms whose source policy must be recomputed after packet observations
     pub(super) dirty_source_policy_channel_ids: Vec<RoomInstanceId>,
-    /// Concrete forwarding destinations planned for `pending_packets`.
+    /// concrete forwarding destinations planned for `pending_packets`
     pub forwards: Vec<PacketForward>,
 }
 
 impl PacketLoopBuffers {
-    /// Build the reusable buffer set with small initial capacities.
+    /// build the reusable buffer set with small initial capacities
     ///
-    /// The capacities are only starting points. Dense rooms may grow them once,
+    /// the capacities are only starting points
+    /// dense rooms may grow them once,
     /// after which normal `.clear()` calls keep the larger allocation for later
-    /// turns.
+    /// turns
     pub fn new() -> Self {
         Self {
             pending_transmits: Vec::with_capacity(64),
@@ -121,6 +126,7 @@ impl PacketLoopBuffers {
             pending_keyframe_requests: Vec::with_capacity(8),
             ready_sessions: Vec::with_capacity(32),
             coalesced_keyframe_requests: Vec::with_capacity(8),
+            keyframe_retries: Vec::with_capacity(8),
             pending_rid_readiness: Vec::with_capacity(8),
             pending_first_video_keyframes: Vec::with_capacity(8),
             rid_readiness_changed_sources: Vec::with_capacity(8),
@@ -140,6 +146,7 @@ impl PacketLoopBuffers {
         self.pending_keyframe_requests.clear();
         self.ready_sessions.clear();
         self.coalesced_keyframe_requests.clear();
+        self.keyframe_retries.clear();
         self.pending_rid_readiness.clear();
         self.pending_first_video_keyframes.clear();
         self.rid_readiness_changed_sources.clear();
