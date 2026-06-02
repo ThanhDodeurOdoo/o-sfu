@@ -31,6 +31,11 @@ pub enum ServerEnvelope {
 
 impl ClientEnvelope {
     /// encode one typed client-side envelope into the websocket wire shape
+    ///
+    /// # Errors
+    ///
+    /// returns an error when the typed payload cannot be serialized into the
+    /// JSON envelope payload
     pub fn into_envelope(self) -> Result<Envelope, serde_json::Error> {
         match self {
             Self::Message(message) => message.into_envelope(),
@@ -75,6 +80,11 @@ impl ClientEnvelope {
 
 impl ServerEnvelope {
     /// encode one typed server-side envelope into the websocket wire shape
+    ///
+    /// # Errors
+    ///
+    /// returns an error when the typed payload cannot be serialized into the
+    /// JSON envelope payload
     pub fn into_envelope(self) -> Result<Envelope, serde_json::Error> {
         match self {
             Self::Message(message) => message.into_envelope(),
