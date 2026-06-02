@@ -175,4 +175,5 @@ async fn removing_publisher_clears_media_state_and_transport_routes() {
             .await
             .is_none()
     );
+    assert_eq!(room.test_api().lifecycle().pending_cleanup_retry_count(), 0);
 }

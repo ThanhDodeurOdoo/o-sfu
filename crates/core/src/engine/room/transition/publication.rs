@@ -1,27 +1,4 @@
-//! Publication transitions for room media state.
-//!
-//! # Role
-//!
-//! This module owns the time-ordered publication workflows that cross room
-//! state and transport state. `RoomState` stays authoritative for committed
-//! producers. The media transport stays authoritative for allocated media
-//! lines. Publication transitions keep the short-lived ownership bridge between
-//! those layers so callers do not have to remember rollback details.
-//!
-//! # Staged publish lifecycle
-//!
-//! A publish is staged only after room state validates the current user and
-//! the media transport reserves a media line. While the browser answers
-//! renegotiation, that reservation lives in `PendingPublishTransactions`.
-//! Answer handling later drains the transaction and either commits it into
-//! room state or consumes it through transport cleanup.
-//!
-//! # Concurrency
-//!
-//! This is cold-path room work. Transport calls happen after room state
-//! locks are released. The pending-publish registry has its own mutex, but that
-//! lock is held only for lookup, insertion and draining. Commit and cleanup run
-//! after the registry lock is released.
+//! publication transitions for staged and committed room media
 
 use std::{
     collections::{BTreeMap, btree_map::Entry},
@@ -35,7 +12,7 @@ use tracing::warn;
 use super::super::{
     Room, RoomMediaCounts, RoomUserOperation, SourcePolicyEvent,
     cleanup::TransportCleanupOperation,
-    effects::{RoomEffectBatch, RoomEffectContext},
+    effects::{RoomCommit, RoomEffectContext},
     media_graph::{
         ConsumerBootstrapOrigin, PendingConsumerBootstrapTarget, ValidatedPublishDescriptor,
     },
@@ -47,8 +24,8 @@ use crate::{
         ConnectionId, UserId,
         diagnostics::DiagnosticsEventData,
         media_transport::{
-            AppliedSessionAnswer, ProducerActivity, SessionUploadEncoding, TransportAdapterError,
-            TransportMediaId, TransportSourceKey,
+            AppliedSessionAnswer, SessionUploadEncoding, TransportAdapterError, TransportMediaId,
+            TransportSourceKey,
         },
         source_model::{SourcePublishIntent, UserStreamId},
         sync::lock_unpoisoned,
@@ -69,20 +46,12 @@ mod test_support;
 /// facing user id.
 ///
 /// This registry owns only in-flight reservations. Once a publish commits, the
-/// producer and its transport media belong to room state. Once a publish is
-/// rolled back, the transaction must be consumed through reservation cleanup.
+/// producer and its transport media belong to room state.
 #[derive(Debug, Default)]
 pub struct PendingPublishTransactions {
-    /// In-flight publish ownership keyed by the exact websocket connection that
-    /// reserved the transport media.
     staged: BTreeMap<PendingPublishKey, ReservedPublish>,
 }
 
-/// Stable key for one staged publish slot
-///
-/// This uses the protocol user identity for room ownership, the runtime
-/// connection id for stale-socket rejection and the user stream id
-/// for the per-user media slot.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct PendingPublishKey {
     user: UserId,
@@ -100,40 +69,18 @@ struct PendingPublishKey {
 /// cleaning transport media while leaving a descriptor that can still commit.
 #[derive(Debug)]
 pub struct ReservedPublish {
-    /// Stage-time room validation. Commit must re-check it because
-    /// replacement or disconnect can make the descriptor stale while transport
-    /// work is in flight.
     descriptor: ValidatedPublishDescriptor,
-    /// Transport media ownership while the publish is not yet a live producer.
     reservation: StagedMediaReservation,
 }
 
-/// Legal states for one staged transport-media reservation.
-///
-/// These states stay local to the transaction boundary. The
-/// websocket layer sees publish intent and answer handling. `RoomState` sees
-/// only committed producers. The media transport sees media add or remove
-/// calls. This enum records which layer is responsible for the reserved media
-/// right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StagedMediaReservationState {
-    /// The media line exists in the media transport but is not committed in
-    /// room state.
     Reserved,
-    /// The room committed the producer, so normal unpublish or leave cleanup
-    /// handles the transport media from this point onward.
     Committed,
-    /// The transaction made an explicit cleanup decision.
-    ///
-    /// This does not prove the media transport removed the handle
-    /// successfully. Cleanup is best-effort at this boundary and failures are
-    /// reported through logs.
     Released,
 }
 
 /// Guard for transport media reserved by a staged publish.
-///
-/// # note
 ///
 /// Transport cleanup is async, so this guard must not try to clean up in
 /// `Drop`. Instead the guard is consumed by either `cleanup` or `commit`
@@ -143,16 +90,9 @@ enum StagedMediaReservationState {
 #[derive(Debug)]
 #[must_use = "staged media reservations must be committed or cleaned up explicitly"]
 struct StagedMediaReservation {
-    /// Protocol-facing user identity used to rebuild the transport user
-    /// key for cleanup.
     user: UserId,
-    /// Runtime-local connection identity that prevents a replacement socket
-    /// from inheriting stale transport media.
     connection: ConnectionId,
-    /// Transport media handle that must be removed unless the publish
-    /// becomes a live producer.
     media: TransportMediaId,
-    /// Current state for the reserved media.
     state: StagedMediaReservationState,
 }
 
@@ -165,10 +105,6 @@ struct AnsweredPublish {
     encodings: Vec<SessionUploadEncoding>,
 }
 
-/// Post-commit work for a publish that already became live in room state.
-///
-/// This exists so the lock-protected state mutation stays small while the
-/// follow-up effects still run in the right order after unlock
 #[derive(Debug)]
 struct CommittedPublish {
     before: RoomMediaCounts,
@@ -520,20 +456,19 @@ impl CommittedPublish {
     /// - diagnostics happen last
     async fn finish(self, operation: RoomUserOperation<'_>) {
         let room = operation.room();
-        RoomEffectBatch::new()
-            .with_media_count_delta(self.before, self.after)
-            .execute(
-                room,
-                RoomEffectContext::runtime(operation.media_transport()),
-            )
-            .await;
-        room.bootstrap_consumers(
-            operation.media_transport(),
-            ConsumerBootstrapOrigin::Publish,
-            self.consumers,
-        )
-        .await;
-        RoomEffectBatch::new()
+        let commit = {
+            let worker_lookup = room.placement_state.worker_lookup();
+            let mut state = room.state.write().await;
+            let before = state.media_counts();
+            let bootstraps = state.plan_consumers(self.consumers, worker_lookup);
+            let after = state.media_counts();
+            drop(state);
+            RoomCommit::new()
+                .with_media_count_delta(self.before, self.after)
+                .with_media_count_delta(before, after)
+                .with_bootstraps(bootstraps, ConsumerBootstrapOrigin::Publish)
+        };
+        commit
             .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged)
             .record_diagnostics(self.diagnostics)
             .execute(
@@ -583,7 +518,7 @@ impl RoomUserOperation<'_> {
             return Ok(PublishStageOutcome::Duplicate);
         }
         let session_key = self.transport_user_key();
-        let rtp_parameters = answer_derived_publish_parameters();
+        let rtp_parameters = RouterRtpParameters::default();
         let media = match self
             .media_transport()
             .publish_media(&session_key, intent.media_kind(), &rtp_parameters)
@@ -690,10 +625,6 @@ impl RoomUserOperation<'_> {
         committed_stream_ids
     }
 
-    #[allow(
-        clippy::cognitive_complexity,
-        reason = "the production-change transition intentionally keeps router updates, user-info sync, broadcast and transport activity in one explicit sequence"
-    )]
     pub(crate) async fn set_publication_activity(
         self,
         stream_id: &UserStreamId,
@@ -716,42 +647,28 @@ impl RoomUserOperation<'_> {
         }) else {
             return PublicationActivityOutcome::StalePublication;
         };
-        let source = TransportSourceKey::new(transport_user_key, outcome.transport_media_id);
-        let transport_update = if self
-            .media_transport()
-            .set_producer_active(&source, ProducerActivity::from_active(outcome.active))
-            .await
-            .is_err()
-        {
-            warn!(
-                user_id = ?self.user_id(),
-                stream_id = %stream_id,
-                active = outcome.active,
-                "media transport failed to update producer route activity"
-            );
-            TransportEffectOutcome::Failed
-        } else {
-            TransportEffectOutcome::Applied
-        };
-        room.diagnostics.record(
-            DiagnosticsEventData::for_user(
-                room.uuid(),
-                self.user_id(),
-                telemetry_event::PUBLICATION_ACTIVITY_CHANGED,
-            )
-            .with_connection_id(self.connection_id().as_u64())
-            .with_media_worker_id(media_worker_id.as_usize())
-            .with_transport_media_id(outcome.transport_media_id.as_u64())
-            .insert_field("active", outcome.active)
-            .insert_field("stream_id", stream_id.to_string()),
-        );
-        outcome.emit();
-        room.handle_source_policy_event(
-            SourcePolicyEvent::FanoutPressureChanged,
-            Some(self.media_transport()),
+        let transport_media_id = producer_target.transport_media_id();
+        let source = TransportSourceKey::new(transport_user_key, transport_media_id);
+        let diagnostics = DiagnosticsEventData::for_user(
+            room.uuid(),
+            self.user_id(),
+            telemetry_event::PUBLICATION_ACTIVITY_CHANGED,
         )
-        .await;
-        PublicationActivityOutcome::Applied { transport_update }
+        .with_connection_id(self.connection_id().as_u64())
+        .with_media_worker_id(media_worker_id.as_usize())
+        .with_transport_media_id(transport_media_id.as_u64())
+        .insert_field("active", active)
+        .insert_field("stream_id", stream_id.to_string());
+        let (recipients, track_update) = outcome.into_track_binding_update();
+        let execution = RoomCommit::new()
+            .with_producer_activity(source, active, stream_id.clone(), diagnostics)
+            .with_track_binding_update(recipients, track_update)
+            .with_source_policy_event(SourcePolicyEvent::FanoutPressureChanged)
+            .execute(room, RoomEffectContext::runtime(self.media_transport()))
+            .await;
+        PublicationActivityOutcome::Applied {
+            transport_update: execution.producer_activity(),
+        }
     }
 
     pub(crate) async fn unpublish(self, stream_id: &UserStreamId) -> UnpublishOutcome {
@@ -770,26 +687,20 @@ impl RoomUserOperation<'_> {
         let Some(outcome) = outcome else {
             return UnpublishOutcome::MissingPublication;
         };
-        let execution = RoomEffectBatch::new()
+        let (recipients, track_update, relays, removals) = outcome.into_parts();
+        let execution = RoomCommit::new()
             .with_media_count_delta(before, after)
-            .with_relay_effects(outcome.relay_effects().iter().cloned())
-            .with_transport_removals(outcome.transport_removals().iter().cloned())
+            .with_relay_effects(relays)
+            .with_transport_removals(room, removals)
+            .with_track_binding_update(recipients, track_update)
+            .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged)
             .execute(room, RoomEffectContext::runtime(media_port))
-            .await;
-        outcome.emit(user_id, stream_id);
-        room.handle_source_policy_event(SourcePolicyEvent::RouteGraphChanged, Some(media_port))
             .await;
         room.reconcile_spillover_routers().await;
         UnpublishOutcome::Unpublished {
             cleanup: execution.cleanup(),
         }
     }
-}
-
-/// Marker parameters for a protocol publish whose concrete SSRC and RID
-/// bindings are projected from the accepted SDP answer.
-fn answer_derived_publish_parameters() -> RouterRtpParameters {
-    RouterRtpParameters::default()
 }
 
 impl Room {

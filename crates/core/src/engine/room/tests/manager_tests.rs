@@ -6,9 +6,9 @@ use tokio::{sync::Notify, task::yield_now, time::timeout};
 use super::{
     super::{
         TestPlacementReason,
+        effects::{RoomCommit, RoomEffectContext},
         manager::JoinPlacementTestGate,
         media_graph::{ConsumerRouteTransportRef, ConsumerRouteUpdate},
-        transition::SubscriptionEffectPlan,
         user_negotiation::UserTransportReady,
     },
     api::NegotiatedPublish,
@@ -463,16 +463,21 @@ async fn spillover_media_diagnostics_use_connection_worker() {
         user_connection_id(&room, &UserId::Integer(1)).await,
         TransportMediaId::new(11),
     );
-    let subscription_update =
-        ConsumerRouteUpdate::new(route, stream_id.clone(), MediaKind::Audio, false);
-    SubscriptionEffectPlan::from_route_updates(
-        &room,
-        &publisher_id,
-        publisher_connection_id,
-        vec![subscription_update],
-    )
-    .execute(&room, &media_transport)
-    .await;
+    let subscription_update = ConsumerRouteUpdate {
+        route,
+        stream: stream_id.clone(),
+        kind: MediaKind::Audio,
+        active: false,
+    };
+    RoomCommit::new()
+        .with_route_updates(
+            &room,
+            &publisher_id,
+            publisher_connection_id,
+            vec![subscription_update],
+        )
+        .execute(&room, RoomEffectContext::runtime(&media_transport))
+        .await;
     assert_event_worker(
         &room,
         &publisher_id,

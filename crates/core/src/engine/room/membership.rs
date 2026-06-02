@@ -33,7 +33,7 @@ use {
 use super::{
     BroadcastPayloadError, Room, RoomJoinError, RoomMediaCounts, SourcePolicyEvent,
     UserOutboundSender,
-    effects::{RoomEffectBatch, RoomEffectContext, TransportUserCleanup},
+    effects::{RoomCommit, RoomEffectContext},
     placement::{CommittedPlacementReceipt, JoinPlacementPlan},
     state::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, RoomState},
 };
@@ -508,11 +508,11 @@ impl Room {
             transport_session_key.media_worker_id(),
             placement_receipt.media_worker_id()
         );
-        RoomEffectBatch::new()
+        RoomCommit::new()
             .with_user_count_delta(count_delta.users_before, count_delta.users_after)
             .with_media_count_delta(count_delta.media_before, count_delta.media_after)
             .with_relay_effects(relay_effects)
-            .with_transport_removals(transport_removals)
+            .with_transport_removals(self, transport_removals)
             .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged)
             .with_lifecycle_effects(effects)
             .register_diagnostics_user(user_id.clone())
@@ -544,14 +544,14 @@ impl Room {
         let media_worker_id = self
             .placement_state
             .media_worker_id_for_connection(connection_id);
-        let mut batch = RoomEffectBatch::new()
+        let mut commit = RoomCommit::new()
             .with_user_count_delta(count_delta.users_before, count_delta.users_after)
             .with_media_count_delta(count_delta.media_before, count_delta.media_after)
-            .with_transport_user_close(TransportUserCleanup::new(user_id.clone(), connection_id));
+            .with_transport_user_close(self, &user_id, connection_id);
         if let Some(outcome) = outcome {
-            batch = batch
+            commit = commit
                 .with_relay_effects(outcome.relay_effects)
-                .with_transport_removals(outcome.transport_removals)
+                .with_transport_removals(self, outcome.transport_removals)
                 .with_lifecycle_effects(outcome.effects)
                 .record_diagnostics(
                     DiagnosticsEventData::for_user(
@@ -565,7 +565,7 @@ impl Room {
                 .forget_diagnostics_user(user_id.clone())
                 .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged);
         }
-        batch.execute(self, context).await;
+        commit.execute(self, context).await;
         self.placement_state
             .unregister_committed_placement(connection_id);
         if had_state {
@@ -586,20 +586,21 @@ impl Room {
         count_delta: MembershipCountDelta,
         context: RoomEffectContext<'_>,
     ) -> UserTransitionResult {
-        let mut batch = RoomEffectBatch::new()
+        let mut commit = RoomCommit::new()
             .with_user_count_delta(count_delta.users_before, count_delta.users_after)
             .with_media_count_delta(count_delta.media_before, count_delta.media_after)
             .with_relay_effects(outcome.relay_effects)
-            .with_transport_removals(outcome.transport_removals)
+            .with_transport_removals(self, outcome.transport_removals)
             .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged)
             .with_lifecycle_effects(outcome.effects);
         let mut disconnected_sessions = Vec::with_capacity(outcome.disconnected_users.len());
         for disconnected_session in outcome.disconnected_users {
-            batch = batch
-                .with_transport_user_close(TransportUserCleanup::new(
-                    disconnected_session.user_id.clone(),
+            commit = commit
+                .with_transport_user_close(
+                    self,
+                    &disconnected_session.user_id,
                     disconnected_session.connection_id,
-                ))
+                )
                 .record_diagnostics(
                     DiagnosticsEventData::for_user(
                         self.uuid(),
@@ -615,7 +616,7 @@ impl Room {
                 .forget_diagnostics_user(disconnected_session.user_id.clone());
             disconnected_sessions.push(disconnected_session);
         }
-        batch.execute(self, context).await;
+        commit.execute(self, context).await;
         for disconnected_session in disconnected_sessions {
             self.placement_state
                 .unregister_committed_placement(disconnected_session.connection_id);

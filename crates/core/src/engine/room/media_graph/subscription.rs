@@ -38,11 +38,11 @@ use crate::engine::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConsumerRouteUpdate {
-    pub route: ConsumerRouteTransportRef,
-    pub stream: UserStreamId,
-    pub kind: RouterMediaKind,
-    pub active: bool,
+pub(in crate::engine::room) struct ConsumerRouteUpdate {
+    pub(in crate::engine::room) route: ConsumerRouteTransportRef,
+    pub(in crate::engine::room) stream: UserStreamId,
+    pub(in crate::engine::room) kind: RouterMediaKind,
+    pub(in crate::engine::room) active: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +127,16 @@ pub enum ConsumerBootstrapOrigin {
     LateJoin,
     Publish,
     Subscribe,
+}
+
+impl ConsumerBootstrapOrigin {
+    pub(in crate::engine::room) const fn as_diagnostic_str(self) -> &'static str {
+        match self {
+            Self::LateJoin => "latejoin",
+            Self::Publish => "publish",
+            Self::Subscribe => "subscribe",
+        }
+    }
 }
 
 impl RoomState {
@@ -285,12 +295,12 @@ impl RoomState {
                 );
                 continue;
             }
-            updates.push(ConsumerRouteUpdate::new(
-                route_ref,
-                stream_id.clone(),
+            updates.push(ConsumerRouteUpdate {
+                route: route_ref,
+                stream: stream_id.clone(),
                 kind,
                 active,
-            ));
+            });
             relays.extend(self.media.set_relay_consumer_active(
                 user_id,
                 connection_id,
@@ -713,22 +723,6 @@ impl PlannedSubscriptionChange {
         Vec<RelayRouteEffect>,
     ) {
         (self.updates, self.bootstraps, self.relays)
-    }
-}
-
-impl ConsumerRouteUpdate {
-    pub const fn new(
-        route: ConsumerRouteTransportRef,
-        stream: UserStreamId,
-        kind: RouterMediaKind,
-        active: bool,
-    ) -> Self {
-        Self {
-            route,
-            stream,
-            kind,
-            active,
-        }
     }
 }
 
