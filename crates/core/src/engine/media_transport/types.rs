@@ -1,4 +1,4 @@
-//! Media transport boundary values shared by room state, server code and RTC workers.
+//! media transport boundary values shared by room state, server code and RTC workers
 
 use std::{
     collections::BTreeMap,
@@ -12,12 +12,12 @@ use thiserror::Error;
 
 use crate::{Bitrate, ConnectionId, MediaWorkerId, RoomInstanceId, engine::UserId};
 
-/// Room-scoped media-transport user identity.
+/// room-scoped media-transport user identity
 ///
-/// A `UserId` alone is not unique across the server: the same id can appear
-/// in different rooms simultaneously. This composite key allows one user
-/// to be uniquely identified by the owning room instance, media worker,
-/// signaling connection, and user id.
+/// a `UserId` alone is not unique across the server
+/// the same id can appear in different rooms simultaneously
+/// this composite key includes room instance, media worker, signaling
+/// connection and user id
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TransportSessionKey {
     room_instance: RoomInstanceId,
@@ -76,55 +76,51 @@ pub enum TransportSessionHealth {
     Disconnected,
 }
 
-/// Producer-side transport activity state.
+/// producer-side transport activity state
 ///
-/// This is transport execution policy, not room membership. The room remains
+/// this is transport execution policy, not room membership
+/// the room remains
 /// responsible for deciding whether a source should be considered published or
-/// visible to participants.
+/// visible to participants
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProducerActivity {
-    /// RTP from this producer should be forwarded when routes allow it.
+    /// RTP from this producer should be forwarded when routes allow it
     Active,
-    /// RTP from this producer should not be forwarded until reactivated.
+    /// RTP from this producer should not be forwarded until reactivated
     Inactive,
 }
 
 impl ProducerActivity {
-    /// Converts a boolean activity flag into the explicit transport state.
     #[must_use]
     pub const fn from_active(active: bool) -> Self {
         if active { Self::Active } else { Self::Inactive }
     }
 
-    /// Returns whether this state allows producer forwarding.
     #[must_use]
     pub const fn is_active(self) -> bool {
         matches!(self, Self::Active)
     }
 }
 
-/// Consumer-side transport activity state.
+/// consumer-side transport activity state
 ///
-/// A consumer can be inactive even while the room still owns the subscription.
-/// That distinction lets source policy pause delivery without deleting the
-/// negotiated transport route.
+/// a consumer can be inactive while the room still owns the subscription
+/// that distinction lets source policy pause delivery without deleting the
+/// negotiated transport route
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsumerActivity {
-    /// RTP may be delivered to this consumer when its packet gate also allows
-    /// the packet.
+    /// RTP may be delivered when this consumer's packet gate also allows it
     Active,
-    /// RTP delivery to this consumer is paused.
+    /// RTP delivery to this consumer is paused
     Inactive,
 }
 
 impl ConsumerActivity {
-    /// Converts a boolean activity flag into the explicit transport state.
     #[must_use]
     pub const fn from_active(active: bool) -> Self {
         if active { Self::Active } else { Self::Inactive }
     }
 
-    /// Returns whether this state allows consumer delivery.
     #[must_use]
     pub const fn is_active(self) -> bool {
         matches!(self, Self::Active)
@@ -574,13 +570,11 @@ pub enum RelayRouteActivity {
 }
 
 impl RelayRouteActivity {
-    /// converts a boolean route activity flag into the explicit relay state
     #[must_use]
     pub const fn from_active(active: bool) -> Self {
         if active { Self::Active } else { Self::Inactive }
     }
 
-    /// returns whether this state allows relay forwarding
     #[must_use]
     pub const fn is_active(self) -> bool {
         matches!(self, Self::Active)

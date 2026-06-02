@@ -3,27 +3,28 @@ use std::{error::Error, fmt, ops::Deref, slice, vec::IntoIter};
 use super::{Command, NegotiationKind, RECOVERY_TIMER_ID};
 use crate::signaling::RequestId;
 
-/// Ordered side effects emitted by one protocol-core transition.
+/// ordered side effects emitted by one protocol-core transition
 ///
 /// `CommandBatch` is the canonical Rust contract for host-visible side
-/// effects. Construction validates the ordering rules that would otherwise be
-/// easy for native, WASM, fuzz, or test hosts to apply differently.
+/// effects
+/// construction validates the ordering rules that would otherwise be easy for
+/// native, WASM, fuzz or test hosts to apply differently
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandBatch {
     commands: Vec<Command>,
 }
 
 impl CommandBatch {
-    /// Builds a batch from manually assembled commands.
+    /// builds a batch from manually assembled commands
     ///
-    /// This is intended for tests and host bridges that need to validate an
-    /// externally assembled batch before projecting it to host-specific work.
+    /// this is intended for tests and host bridges that need to validate an
+    /// externally assembled batch before projecting it to host-specific work
     ///
     /// # Errors
     ///
-    /// Returns [`CommandBatchError`] when the command order can make the host
+    /// returns [`CommandBatchError`] when the command order can make the host
     /// execute negotiation, close, recovery, or request-resolution effects in an
-    /// invalid sequence.
+    /// invalid sequence
     pub fn try_from_vec(commands: Vec<Command>) -> Result<Self, CommandBatchError> {
         Self::validate_commands(&commands)?;
         Ok(Self { commands })
@@ -37,12 +38,12 @@ impl CommandBatch {
         Self { commands }
     }
 
-    /// Validates this batch using the canonical Rust command-order contract.
+    /// validates this batch using the canonical Rust command-order contract
     ///
     /// # Errors
     ///
-    /// Returns [`CommandBatchError`] when the batch violates a host side-effect
-    /// ordering rule.
+    /// returns [`CommandBatchError`] when the batch violates a host side-effect
+    /// ordering rule
     pub fn validate(&self) -> Result<(), CommandBatchError> {
         Self::validate_commands(&self.commands)
     }

@@ -43,15 +43,8 @@ use crate::{
 /// protocol edge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NegotiationOffer {
-    /// SDP offer body sent by the signaling edge.
-    ///
-    /// Routing decisions should use typed room state and upload-slot metadata
-    /// rather than parsing this string outside the transport boundary.
+    /// do not parse this outside the transport boundary for routing decisions
     pub sdp: String,
-    /// Upload opportunities authored by the server for this offer.
-    ///
-    /// The browser bundle uses these slots to attach pending local tracks to
-    /// the intended media sections without guessing from raw SDP.
     pub upload_slots: Vec<UploadSlot>,
 }
 
@@ -80,16 +73,10 @@ impl InitialOffer {
 /// answers and the room commits the staged publish for this session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadSlot {
-    /// SDP media id that correlates the slot with one offer media section.
     pub mid: String,
-    /// Technical media kind expected by the router and transport.
     pub kind: o_sfu_router::MediaKind,
-    /// Codec names the sender may use for this slot.
-    ///
-    /// This is upload-policy metadata. The room still validates the answered
-    /// transport parameters before a staged publish becomes live.
+    /// upload-policy metadata validated again after the answer
     pub codecs: Vec<String>,
-    /// Optional sender encoding constraints for simulcast or SVC paths.
     pub simulcast_encodings: Vec<UploadEncoding>,
 }
 
@@ -99,13 +86,9 @@ pub struct UploadSlot {
 /// transport parameters extracted from the answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadEncoding {
-    /// RID the browser should use for this encoding layer.
     pub rid: String,
-    /// Sender-side bitrate ceiling for this layer when the offer declares one.
     pub max_bitrate: Option<Bitrate>,
-    /// Sender-side resolution downscale for this layer.
     pub resolution_scale: Option<u16>,
-    /// Optional sender-side frame-rate ceiling for this layer.
     pub max_framerate: Option<u16>,
 }
 
@@ -387,18 +370,20 @@ impl MediaNegotiation<'_> {
         }
     }
 
-    /// Apply the browser answer for the first offer.
+    /// apply the browser answer for the first offer
     ///
-    /// The operation applies the transport answer first, then projects the
-    /// resulting SDP into router-native client capabilities. Room state is
-    /// marked as negotiated only after these steps succeed, and any staged
-    /// publishes made valid by the answer are committed last.
+    /// the operation applies the transport answer first, then projects the
+    /// resulting SDP into router-native client capabilities
+    /// room state is
+    /// marked as negotiated only after these steps succeed
+    /// any staged publishes made valid by the answer are committed last
     ///
     /// # Errors
     ///
-    /// Transport and capability projection errors mean answer application did
-    /// not complete. [`SfuCoreError::SessionNegotiationRejected`] means room
-    /// state rejected the callback because the connection became stale.
+    /// transport and capability projection errors mean answer application did
+    /// not complete
+    /// [`SfuCoreError::SessionNegotiationRejected`] means room state rejected
+    /// the callback because the connection became stale
     pub async fn apply_initial_answer(
         &self,
         answer_sdp: &str,
@@ -524,11 +509,11 @@ impl MediaPublication<'_> {
             .await
     }
 
-    /// Roll back every staged publish for this connection.
+    /// roll back every staged publish for this connection
     ///
-    /// User replacement, websocket close, and failed admission use this as
-    /// best-effort cleanup for in-flight publish reservations. It does not
-    /// close the transport session itself.
+    /// user replacement, websocket close and failed admission use this as
+    /// best-effort cleanup for in-flight publish reservations
+    /// it does not close the transport session itself
     pub async fn rollback_connection_publishes(&self) {
         self.0
             .room_operation()

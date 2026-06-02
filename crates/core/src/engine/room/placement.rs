@@ -124,7 +124,6 @@ impl LocalRoomRouterPlacements {
         Ok(Self::new(primary, placements.collect()))
     }
 
-    /// returns the placement used when a room has no connection-specific mapping
     #[must_use]
     pub const fn primary(&self) -> LocalRouterRuntimeContext {
         self.primary
@@ -152,7 +151,6 @@ impl LocalRoomRouterPlacements {
         self.spillover.push(placement);
     }
 
-    /// yields primary first, then spillover placements in allocation order
     pub fn iter(&self) -> impl Iterator<Item = LocalRouterRuntimeContext> + '_ {
         iter::once(self.primary).chain(self.spillover.iter().copied())
     }
@@ -214,13 +212,11 @@ impl RoomRuntimeContext {
         })
     }
 
-    /// returns the live room instance id used by runtime subsystems
     #[must_use]
     pub const fn instance(&self) -> RoomInstanceId {
         self.instance
     }
 
-    /// returns the router reserved for the primary room topology
     #[must_use]
     pub const fn primary_router(&self) -> RouterId {
         self.primary_router
@@ -399,7 +395,6 @@ impl RoomPlacementState {
         placement
     }
 
-    /// returns the worker that should handle transport work for a connection
     pub(super) fn media_worker_id_for_connection(
         &self,
         connection_id: ConnectionId,
@@ -474,17 +469,14 @@ impl RoomPlacementState {
 }
 
 impl CommittedPlacementReceipt {
-    /// returns the connection accepted by the committed join
     pub(super) const fn connection_id(&self) -> ConnectionId {
         self.connection_id
     }
 
-    /// returns the worker selected for the accepted connection
     pub(super) const fn media_worker_id(&self) -> MediaWorkerId {
         self.placement.media_worker
     }
 
-    /// returns the transport key derived from the committed placement
     pub(super) const fn transport_session_key(&self) -> &TransportSessionKey {
         &self.transport_session_key
     }
@@ -500,12 +492,10 @@ impl ResolvedPlacement {
         Self(placement)
     }
 
-    /// returns the router selected for the pending join
     pub const fn router(self) -> RouterId {
         self.0.router
     }
 
-    /// releases the resolved placement so membership can commit it
     pub const fn into_context(self) -> LocalRouterRuntimeContext {
         self.0
     }
@@ -519,11 +509,8 @@ impl ResolvedPlacement {
 /// across leave and rejoin cycles
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RoomPlacementUsageSnapshot {
-    /// router used when the first session commits the room primary placement
     primary_router: RouterId,
-    /// whether topology has ever committed a local placement for this room
     has_assigned_placements: bool,
-    /// placements that the next join may reuse or compare against the cap
     placements: Vec<LocalRouterRuntimeContext>,
 }
 
@@ -534,9 +521,7 @@ pub(super) struct RoomPlacementUsageSnapshot {
 /// delivery
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct RoomWorkerLoadContribution {
-    /// worker ids for live room sessions
     pub(super) session_worker_ids: Vec<MediaWorkerId>,
-    /// worker ids for active or pending receiver-side consumers
     pub(super) consumer_worker_ids: Vec<MediaWorkerId>,
 }
 
@@ -559,7 +544,6 @@ impl RoomPlacementUsageSnapshot {
         }
     }
 
-    /// returns the router used when first placement assigns the primary worker
     #[must_use]
     pub(super) const fn primary_router(&self) -> RouterId {
         self.primary_router
@@ -691,11 +675,8 @@ impl From<RoomPlacementDecisionReason> for TestPlacementReason {
 /// configured window
 #[derive(Debug, Default)]
 pub(in crate::engine::room) struct LoadTriggeredPlacementState {
-    /// consecutive pressured decisions observed for the current room
     activation_streak: usize,
-    /// pressure reported by room media graph fanout rather than transport metrics
     source_fanout_pressure: bool,
-    /// idle streak per spillover router before detach is allowed
     cooldown_by_router: BTreeMap<RouterId, usize>,
     /// reason surfaced only to tests and explicit testing-transport callers
     #[cfg(any(test, feature = "testing-transport"))]
@@ -703,7 +684,6 @@ pub(in crate::engine::room) struct LoadTriggeredPlacementState {
 }
 
 impl LoadTriggeredPlacementState {
-    /// updates whether source fanout pressure should count toward activation
     pub fn set_source_fanout_pressure(&mut self, pressured: bool) {
         self.source_fanout_pressure = pressured;
     }
@@ -713,12 +693,10 @@ impl LoadTriggeredPlacementState {
         self.last_decision_reason = Some(reason);
     }
 
-    /// clears activation after a non-pressured or successful allocation decision
     fn reset_activation(&mut self) {
         self.activation_streak = 0;
     }
 
-    /// records one pressured placement decision and returns whether it activates
     fn record_pressure(&mut self, policy: LocalSpilloverPolicy) -> bool {
         self.activation_streak = self.activation_streak.saturating_add(1);
         self.activation_streak >= policy.parts().activation_window
@@ -750,14 +728,12 @@ impl LoadTriggeredPlacementState {
         detached
     }
 
-    /// clears cooldowns for routers that are no longer eligible for detach
     pub fn clear_cooldowns(&mut self, router_ids: &[RouterId]) {
         for router_id in router_ids {
             self.cooldown_by_router.remove(router_id);
         }
     }
 
-    /// returns the last decision reason exposed by the testing boundary
     #[cfg(any(test, feature = "testing-transport"))]
     pub const fn last_decision_reason(&self) -> Option<RoomPlacementDecisionReason> {
         self.last_decision_reason
@@ -765,7 +741,6 @@ impl LoadTriggeredPlacementState {
 }
 
 impl JoinPlacementPlan {
-    /// stores a deferred placement decision with the load snapshot that shaped it
     pub(super) fn planned(
         decision: RoomPlacementDecision,
         worker_loads: WorkerLoadIndex,
@@ -882,7 +857,6 @@ struct WorkerPlacementLoad {
 }
 
 impl WorkerPlacementLoad {
-    /// starts a worker load bucket with transport pressure already applied
     #[must_use]
     const fn new(
         media_worker_id: MediaWorkerId,
@@ -896,12 +870,10 @@ impl WorkerPlacementLoad {
         }
     }
 
-    /// records one live session on this worker
     fn record_session(&mut self) {
         self.session_count = self.session_count.saturating_add(1);
     }
 
-    /// records one receiver-side consumer on this worker
     fn record_consumer(&mut self) {
         self.consumer_count = self.consumer_count.saturating_add(1);
     }
@@ -1036,21 +1008,18 @@ impl WorkerLoadIndex {
         Self { loads }
     }
 
-    /// adds one room session to the normalized worker bucket
     pub(super) fn record_session(&mut self, media_worker_id: MediaWorkerId) {
         if let Some(load) = self.load_mut_for_worker(media_worker_id) {
             load.record_session();
         }
     }
 
-    /// adds one receiver-side consumer to the normalized worker bucket
     pub(super) fn record_consumer(&mut self, media_worker_id: MediaWorkerId) {
         if let Some(load) = self.load_mut_for_worker(media_worker_id) {
             load.record_consumer();
         }
     }
 
-    /// returns the mutable load bucket for possibly noncanonical worker input
     fn load_mut_for_worker(
         &mut self,
         media_worker_id: MediaWorkerId,
@@ -1125,7 +1094,6 @@ impl WorkerLoadIndex {
             .unwrap_or(fallback)
     }
 
-    /// returns the normalized worker count used for modulo operations
     fn worker_count(&self) -> usize {
         self.loads.len().max(1)
     }

@@ -3,31 +3,31 @@ use crate::Bitrate;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RoutingOptions {
     pub media_worker_count: usize,
-    /// Room-local routing policy used by the room runtime.
+    /// room-local routing policy used by the room runtime
     ///
-    /// This is a cold-path control-plane setting. It decides how many local
-    /// router placements a room may use. It does not participate in packet
-    /// forwarding and it does not change the transport worker count after
-    /// startup.
+    /// this is a cold-path control-plane setting
+    /// it decides how many local router placements a room may use without
+    /// changing packet forwarding or transport worker count
     pub room_worker_policy: RoomWorkerPolicy,
 }
 
-/// Same-room placement policy for local router spillover.
+/// same-room placement policy for local router spillover
 ///
-/// The policy is part of the public core configuration surface because server
-/// startup has to choose the room topology model before any room exists. It
-/// describes how many process-local router placements a room may use and which
-/// spillover mode should interpret that limit.
+/// server startup chooses this topology model before any room exists
+/// it describes how many process-local router placements a room may use and
+/// which spillover mode interprets that limit
 ///
 /// [`RoomWorkerPolicy`] belongs to room placement, not to the RTP packet
-/// loop. The room manager reads it at join time to decide whether a user
-/// connection can be placed on a spillover router.
+/// loop
+/// the room manager reads it at join time to decide whether a user connection
+/// can be placed on a spillover router
 ///
 /// # Invariants
 ///
-/// `max_local_routers()` never returns zero. The runtime config layer still
+/// `max_local_routers()` never returns zero
+/// the runtime config layer still
 /// validates operator-facing worker limits because those depend on process
-/// topology.
+/// topology
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RoomWorkerPolicy {
     max_local_routers: usize,
@@ -39,11 +39,11 @@ pub struct LocalSpilloverPolicy {
     parts: LocalSpilloverPolicyParts,
 }
 
-/// Validated construction input for [`LocalSpilloverPolicy`].
+/// validated construction input for [`LocalSpilloverPolicy`]
 ///
-/// Count and window fields must be greater than zero. Transport-observed
-/// pressure thresholds may be zero when the caller disables that
-/// signal.
+/// count and window fields must be greater than zero
+/// transport-observed pressure thresholds may be zero when the caller disables
+/// that signal
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalSpilloverPolicyParts {
     pub min_receiver_count: usize,
@@ -58,7 +58,7 @@ pub struct LocalSpilloverPolicyParts {
     pub cooldown_window: usize,
 }
 
-/// Invalid load-triggered local spillover policy input.
+/// invalid load-triggered local spillover policy input
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum LocalSpilloverPolicyError {
     #[error("minimum receiver count must be greater than zero")]
@@ -75,21 +75,21 @@ pub enum LocalSpilloverPolicyError {
     CooldownWindowZero,
 }
 
-/// How a room interprets its local router placement cap.
+/// how a room interprets its local router placement cap
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomSpilloverMode {
-    /// Keep all users, producers and consumers on the room's primary router.
+    /// keep all users, producers and consumers on the room's primary router
     ///
-    /// This is the default deployment mode. It preserves the historical
-    /// topology shape even when the process has multiple RTC media workers.
+    /// this preserves the historical topology shape even when the process has
+    /// multiple RTC media workers
     StrictSingleRouter,
-    /// Allow the room runtime to add local placements up to the cap.
+    /// allow the room runtime to add local placements up to the cap
     ///
-    /// Placement is bounded by `max_local_routers`. It is not an adaptive
-    /// load-triggered policy.
+    /// placement is bounded by `max_local_routers`
+    /// it is not an adaptive load-triggered policy
     BoundedLocalSpillover,
-    /// Keep capable room workers in use and add local capacity only after
-    /// measured pressure crosses the configured policy thresholds.
+    /// keep capable room workers in use and add local capacity only after
+    /// measured pressure crosses the configured policy thresholds
     LoadTriggeredLocalSpillover(LocalSpilloverPolicy),
 }
 
@@ -104,11 +104,10 @@ impl RoutingOptions {
 }
 
 impl RoomWorkerPolicy {
-    /// Build the default policy that keeps every room on one local router.
-    ///
-    /// Use this unless the runtime has explicitly opted into same-room
-    /// spillover. It keeps the room topology identical to the historical
-    /// single-router model and is safe with any positive media-worker count.
+    /// use this unless the runtime has explicitly opted into same-room
+    /// spillover
+    /// it keeps the room topology identical to the historical single-router
+    /// model with any positive media-worker count
     #[must_use]
     pub const fn strict_single_router() -> Self {
         Self {
@@ -117,15 +116,14 @@ impl RoomWorkerPolicy {
         }
     }
 
-    /// Build a policy that may place one room across several local routers.
-    ///
-    /// `max_local_routers` is an upper bound for one room. The runtime config
+    /// `max_local_routers` is an upper bound for one room
+    /// the runtime config
     /// layer must keep it less than or equal to the RTC media worker count so
-    /// every placed router has a worker placement. If a caller passes zero,
-    /// [`Self::max_local_routers`] normalizes it to one.
+    /// every placed router has a worker placement
+    /// [`Self::max_local_routers`] normalizes zero to one
     ///
-    /// This constructor does not allocate routers. It only records the policy
-    /// consumed by room creation and topology state.
+    /// this constructor only records the policy consumed by room creation and
+    /// topology state
     #[must_use]
     pub const fn bounded_local_spillover(max_local_routers: usize) -> Self {
         Self {
@@ -134,11 +132,10 @@ impl RoomWorkerPolicy {
         }
     }
 
-    /// Build the production same-room spillover policy.
-    ///
-    /// `max_local_routers` is still only an upper bound. Rooms start on their
+    /// `max_local_routers` is still only an upper bound
+    /// rooms start on their
     /// primary placement and attach additional local placements when the
-    /// provided load policy reports sustained pressure.
+    /// provided load policy reports sustained pressure
     #[must_use]
     pub const fn load_triggered_local_spillover(
         max_local_routers: usize,
@@ -150,11 +147,11 @@ impl RoomWorkerPolicy {
         }
     }
 
-    /// Return the non-zero local router cap for one room.
+    /// return the non-zero local router cap for one room
     ///
-    /// The cap is the number of room-local router placements the runtime may
-    /// reserve, not a count of currently attached routers. Spillover routers
-    /// can stay detached until a user is placed on them.
+    /// the cap is the number of room-local router placements the runtime may
+    /// reserve, not a count of currently attached routers
+    /// spillover routers can stay detached until a user is placed on them
     #[must_use]
     pub const fn max_local_routers(self) -> usize {
         if self.max_local_routers == 0 {
@@ -164,20 +161,19 @@ impl RoomWorkerPolicy {
         }
     }
 
-    /// Return the spillover mode that interprets this policy.
+    /// return the spillover mode that interprets this policy
     ///
-    /// Callers should branch on this value instead of treating
-    /// `max_local_routers() == 1` as the only strict-mode signal. That keeps
-    /// the policy open to other modes that may also use one router at a time.
+    /// callers should branch on this value instead of treating
+    /// `max_local_routers() == 1` as the only strict-mode signal
     #[must_use]
     pub const fn spillover(self) -> RoomSpilloverMode {
         self.spillover
     }
 
-    /// Return how many known local placements may receive home sessions.
+    /// return how many known local placements may receive home sessions
     ///
-    /// Strict mode always uses the primary placement. Bounded spillover uses the
-    /// configured cap, limited by how many placements currently exist.
+    /// strict mode always uses the primary placement
+    /// bounded spillover uses the configured cap limited by known placements
     #[must_use]
     pub fn allowed_local_router_count(self, reserved_local_routers: usize) -> usize {
         match self.spillover {
@@ -208,17 +204,17 @@ impl LocalSpilloverPolicy {
     pub const DEFAULT_ACTIVATION_WINDOW: usize = 2;
     pub const DEFAULT_COOLDOWN_WINDOW: usize = 4;
 
-    /// Build a load-triggered spillover policy after validating its invariants.
+    /// build a load-triggered spillover policy after validating its invariants
     ///
-    /// Use this for operator or caller-provided values. The only zero values
-    /// accepted here are optional transport-pressure thresholds where zero means
-    /// the corresponding signal is disabled.
+    /// use this for operator or caller-provided values
+    /// zero is accepted only for optional transport-pressure thresholds where it
+    /// disables that signal
     ///
     /// # Errors
     ///
-    /// Returns [`LocalSpilloverPolicyError`] when a required count or window is
+    /// returns [`LocalSpilloverPolicyError`] when a required count or window is
     /// zero or when the worker pressure threshold is above the 0 to 100 score
-    /// range.
+    /// range
     pub fn try_new(parts: LocalSpilloverPolicyParts) -> Result<Self, LocalSpilloverPolicyError> {
         if parts.min_receiver_count == 0 {
             return Err(LocalSpilloverPolicyError::MinReceiverCountZero);
@@ -241,7 +237,6 @@ impl LocalSpilloverPolicy {
         Ok(Self { parts })
     }
 
-    /// Build the default conservative threshold set.
     #[must_use]
     pub const fn conservative() -> Self {
         Self {
@@ -256,7 +251,6 @@ impl LocalSpilloverPolicy {
 }
 
 impl LocalSpilloverPolicyParts {
-    /// Build the default conservative threshold input set.
     #[must_use]
     pub const fn conservative() -> Self {
         Self {

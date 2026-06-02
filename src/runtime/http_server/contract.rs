@@ -1,8 +1,7 @@
-//! HTTP API Contracts
+//! HTTP control-plane contracts
 //!
-//! This module defines the paths and JSON payloads for the SFU's HTTP
-//! These endpoints are primarily used by the Odoo server to manage rooms, disconnect
-//! users and get metrics.
+//! Odoo uses these paths and payloads to create rooms, disconnect users and read
+//! runtime stats
 
 use serde::{Deserialize, Serialize};
 pub const METRICS_PATH: &str = "/metrics";
@@ -14,11 +13,9 @@ pub const DIAGNOSTICS_SUMMARY_PATH: &str = "/internal/diagnostics/summary";
 pub const DIAGNOSTICS_ROOMS_PATH: &str = "/internal/diagnostics/rooms";
 pub const DIAGNOSTICS_WORKERS_PATH: &str = "/internal/diagnostics/workers";
 
-/// Response payload for the `/v1/noop` health-check endpoint.
-/// used by the operators (infra team) to check if the SFU is up
+/// `/v1/noop` response payload
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoopResponse {
-    /// Always returns "ok"
     pub result: String,
 }
 
@@ -31,16 +28,12 @@ impl NoopResponse {
     }
 }
 
-/// Query parameters for the `/v1/channel` creation endpoint.
+/// `/v1/channel` query parameters
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateRoomQuery {
-    /// Whether the room supports WebRTC features. Defaults to `true`.
     #[serde(rename = "webRTC", skip_serializing_if = "Option::is_none")]
     pub web_rtc: Option<bool>,
-    /// Optional compatibility recording address from Odoo.
-    ///
-    /// The current runtime preserves this field for the room contract but does
-    /// not send recording output until persistent recording finalization lands.
+    /// compatibility field preserved until persistent recording output lands
     #[serde(rename = "recordingAddress", skip_serializing_if = "Option::is_none")]
     pub recording_address: Option<String>,
 }
@@ -52,61 +45,46 @@ impl CreateRoomQuery {
     }
 }
 
-/// Response payload for a successfully created room.
+/// created-room response payload
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomResponse {
-    /// The unique identifier allocated for the newly created room.
     pub uuid: String,
-    /// The base URL (e.g., `https://sfu.example.com`) where clients should connect via WebSocket.
     pub url: String,
 }
 
-/// Incoming bitrate statistics broken down by media type.
+/// incoming bitrate stats by compatibility stream type
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IncomingBitRateStatsResponse {
-    /// Total incoming bitrate across all streams (in bps).
     pub total: u64,
-    /// Incoming bitrate from screen sharing streams (in bps).
     pub screen: u64,
-    /// Incoming bitrate from audio streams (in bps).
     pub audio: u64,
-    /// Incoming bitrate from camera video streams (in bps).
     pub camera: u64,
 }
 
-/// Aggregated statistics for all active users within a room.
+/// active-user stats for one room
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsersStatsResponse {
-    /// Breakdown of incoming bitrates for the room.
     pub incoming_bit_rate: IncomingBitRateStatsResponse,
-    /// Total number of connected users in this room.
     pub count: u64,
-    /// Number of users currently publishing a camera stream.
     pub camera_count: u64,
-    /// Number of users currently publishing a screen share stream.
     pub screen_count: u64,
 }
 
-/// Statistics payload for an individual active room.
+/// `/v1/stats` entry for one active room
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoomStatsResponse {
-    /// ISO 8601 formatted timestamp of when the room was created.
     pub create_date: String,
-    /// The room's unique identifier.
     pub uuid: String,
-    /// The remote IP address that requested the room creation.
     pub remote_address: String,
-    /// Aggregated user statistics for the room.
     #[serde(rename = "sessionsStats")]
     pub users_stats: UsersStatsResponse,
-    /// Whether WebRTC is enabled for this room.
     pub web_rtc_enabled: bool,
 }
 
-/// Response payload for the `/v1/stats` endpoint, containing statistics for all active rooms.
+/// `/v1/stats` response payload
 pub type StatsResponse = Vec<RoomStatsResponse>;
 
 #[cfg(test)]

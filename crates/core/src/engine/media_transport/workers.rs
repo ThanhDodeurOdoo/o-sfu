@@ -40,7 +40,6 @@ const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
 type RelayRegistrationWorkers = Option<(Arc<RtcWorker>, Arc<RtcWorker>)>;
 
 impl MediaTransport {
-    /// Builds RTC workers and installs one shared source-policy signal.
     pub(in crate::engine::media_transport) fn new(
         transport: &MediaTransportConfig,
         deps: &MediaTransportDeps,
@@ -133,7 +132,6 @@ impl MediaTransport {
         snapshot
     }
 
-    /// Builds best-effort sampled quality snapshots across RTC workers.
     pub(super) fn transport_quality_snapshot_from_workers(
         &self,
         session_keys: &[TransportSessionKey],
@@ -146,7 +144,6 @@ impl MediaTransport {
         snapshot
     }
 
-    /// Builds packet activity snapshots from each producer's owning worker.
     pub(super) async fn source_activity_snapshot_from_workers(
         &self,
         sources: &[TransportSourceKey],
@@ -193,7 +190,6 @@ impl MediaTransport {
         snapshot
     }
 
-    /// Builds best-effort pressure snapshots for every local RTC worker.
     pub(super) fn worker_pressure_snapshots_from_workers(
         &self,
     ) -> Vec<TransportWorkerPressureSnapshot> {
@@ -257,7 +253,6 @@ impl MediaTransport {
         results
     }
 
-    /// Applies receiver BWE targets in worker-local batches.
     pub(super) async fn execute_receiver_bwe_target_batch(
         &self,
         updates: &[ReceiverBweTargetUpdate],
@@ -310,8 +305,6 @@ impl MediaTransport {
         snapshot
     }
 
-    /// Returns diagnostic active-speaker state across all workers.
-    ///
     /// The ordering is stable for operator output. Like other diagnostics this
     /// is best-effort and can race with packet processing.
     pub(super) async fn active_speaker_diagnostic_snapshot_from_workers(
@@ -540,7 +533,7 @@ fn ensure_same_room_instance(
     Err(TransportAdapterError::InvalidInput)
 }
 
-/// Returns the first media id reserved for one worker index.
+/// first media id reserved for one worker index
 ///
 /// The fallback clamps extreme indexes to the highest representable stride
 /// base. Normal startup validates worker counts long before this point, so the

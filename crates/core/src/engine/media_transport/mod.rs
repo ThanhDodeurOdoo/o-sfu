@@ -6,13 +6,10 @@
 //! answers, publish or consume media, close sessions, read diagnostics
 //! snapshots and subscribe to source-policy wakeups.
 //!
-//! The boundary has three responsibilities:
-//!
-//! - expose the opaque [`MediaTransport`] handle plus the narrow construction
-//!   inputs needed by the server runtime
-//! - expose transport operations directly on [`MediaTransport`] so higher
-//!   layers express intent without knowing about RTC workers, Str0m state, UDP
-//!   sockets or worker-local relay routing
+//! The boundary exposes the opaque [`MediaTransport`] handle, narrow
+//! construction inputs for the server runtime and transport operations that let
+//! higher layers express intent without knowing about RTC workers, Str0m state,
+//! UDP sockets or worker-local relay routing
 //!
 //! Code above this module should depend on [`MediaTransport`]. Code below this
 //! module, especially the RTC engine, may deal with worker-local state machines
@@ -79,7 +76,6 @@ use crate::engine::RoomInstanceId;
 /// context such as session keys, media ids and SDP lengths.
 #[derive(Debug, Clone)]
 pub struct MediaTransport {
-    /// RTC workers indexed by canonical runtime media-worker ids.
     workers: Arc<[Arc<RtcWorker>]>,
     /// Shared wakeup signal used by every worker to notify room-level source
     /// policy tasks about transport-observed changes without polling every room.
@@ -227,9 +223,6 @@ impl MediaTransport {
         })
     }
     /// Removes one producer or consumer handle from a transport session.
-    ///
-    /// Returns [`TransportAdapterError`] when the session or media id is unknown
-    /// or when the underlying transport cannot release the resource.
     ///
     /// # Errors
     ///
@@ -445,8 +438,7 @@ impl MediaTransport {
     /// Applies source-policy packet gating to one consumer route.
     ///
     /// Packet gates are transport execution policy derived from room
-    /// source selection. Invalid routes or unknown transport media ids return
-    /// [`TransportAdapterError`].
+    /// source selection.
     ///
     /// # Errors
     ///

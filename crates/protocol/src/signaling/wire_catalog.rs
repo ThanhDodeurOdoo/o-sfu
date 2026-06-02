@@ -156,11 +156,6 @@ impl ClientMessage {
         }),
     ];
 
-    /// Serialize this typed websocket message into the wire envelope shape.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the payload cannot be serialized to JSON.
     pub(crate) fn into_envelope(self) -> Result<Envelope, serde_json::Error> {
         match self {
             Self::Auth(payload) => encode_message(WireTag::Auth, payload),
@@ -196,11 +191,6 @@ impl ClientRequest {
         }),
     ];
 
-    /// Serialize this typed websocket request into the wire envelope shape.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the payload cannot be serialized to JSON.
     pub(crate) fn into_envelope(
         self,
         request_id: RequestId,
@@ -241,11 +231,7 @@ impl ServerRequest {
         }),
     ];
 
-    /// Serialize this typed websocket request into the wire envelope shape.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the payload cannot be serialized to JSON.
+    /// encode one server-authored request into the Odoo wire envelope
     pub fn into_envelope(self, request_id: RequestId) -> Result<Envelope, serde_json::Error> {
         match self {
             Self::Offer(payload) => encode_request(WireTag::Offer, request_id, payload),
@@ -277,11 +263,6 @@ impl ClientResponse {
         }),
     ];
 
-    /// Serialize this typed websocket response into the wire envelope shape.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the payload cannot be serialized to JSON.
     pub(crate) fn into_envelope(
         self,
         response_to: RequestId,
@@ -338,11 +319,7 @@ impl ServerMessage {
         }),
     ];
 
-    /// Serialize this typed websocket message into the wire envelope shape.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the payload cannot be serialized to JSON.
+    /// encode one server message into the Odoo wire envelope
     pub fn into_envelope(self) -> Result<Envelope, serde_json::Error> {
         match self {
             Self::Welcome(payload) => encode_message(WireTag::Welcome, payload),
@@ -379,11 +356,7 @@ impl ServerResponse {
         }),
     ];
 
-    /// Serialize this typed websocket response into the wire envelope shape.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the payload cannot be serialized to JSON.
+    /// encode one server response into the Odoo wire envelope
     pub fn into_envelope(self, response_to: RequestId) -> Result<Envelope, serde_json::Error> {
         match self {
             Self::StartRecording(payload) => {

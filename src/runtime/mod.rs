@@ -1,23 +1,10 @@
 //! process runtime shell that wires subsystems and owns server lifecycle
 //!
-//! [`Runtime`] is the process boundary for the media server. It is not the Tokio
-//! executor and it is not the core media engine. It turns loaded configuration
-//! into long-lived services, builds the media core, starts HTTP and WebSocket
-//! serving, starts background policy work and cancels runtime tasks on
-//! shutdown.
-//!
-//! This type is useful because request handlers should not know how the process
-//! was booted. They receive cheap clones through [`RuntimeState`] while the full
-//! [`Runtime`] keeps services that must live for the whole process:
-//! room management, diagnostics, metrics, media transport plus websocket
-//! admission state.
-//!
-//! ```text
-//! Runtime
-//! |- http_server          -> HTTP control-plane routes and server boot
-//! |- websocket_server     -> WebSocket upgrade, auth handshake, and steady-state socket loop
-//! `- telemetry            -> tracing setup, schemas, diagnostics, metrics, and exporters
-//! ```
+//! [`Runtime`] turns loaded configuration into process-owned services, starts
+//! HTTP and websocket serving, runs background policy work and cancels runtime
+//! tasks on shutdown
+//! request handlers receive [`RuntimeState`] so they cannot depend on process
+//! boot details or full lifecycle ownership
 
 use std::{
     future::Future,
@@ -71,21 +58,19 @@ pub(crate) use self::{
 };
 
 /// retry sweep cadence for retained rooms with pending transport cleanup
-///
-/// one second gives recoverable transport cleanup failures prompt progress
-/// without turning room teardown recovery into a busy poll
 const CLEANUP_RETRY_DRAIN_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Process-global shell for the server process.
+/// process-global shell for the server process
 ///
 /// [`Runtime`] keeps boot-time configuration plus the long-lived services
 /// shared by every request. It exists to keep process lifecycle decisions together:
 /// service construction, listener serving, background task supervision and
-/// graceful shutdown.
+/// graceful shutdown
 ///
-/// Request handlers do not receive this full object. They receive a runtime
+/// request handlers do not receive this full object
+/// they receive a runtime
 /// state handle with only the cheap service handles needed while a request or
-/// websocket connection is active.
+/// websocket connection is active
 #[derive(Debug)]
 pub struct Runtime {
     config: RuntimeConfig,
@@ -98,8 +83,9 @@ pub struct Runtime {
 /// cheap-to-clone snapshot of runtime dependencies for per-request handlers
 ///
 /// this is the standard shared state passed to axum handlers and websocket
-/// loops. it provides access to room management, diagnostics, media transport
-/// plus media core operations without exposing the full process lifecycle.
+/// loops
+/// it provides access to room management, diagnostics, media transport
+/// plus media core operations without exposing the full process lifecycle
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeState {
     config: RuntimeConfig,
@@ -129,15 +115,15 @@ impl Default for RuntimeServices {
 }
 
 impl Runtime {
-    /// Builds the process runtime from loaded configuration.
+    /// build the process runtime from loaded configuration
     ///
-    /// this bootstraps the entire server instance, initializing telemetry,
-    /// creating the room manager, and preparing the media transport workers.
+    /// this bootstraps the entire server instance by initializing telemetry,
+    /// creating the room manager and preparing the media transport workers
     ///
     /// # Errors
     ///
-    /// Returns an error when the media transport cannot be constructed from the
-    /// configured RTC settings.
+    /// returns an error when the media transport cannot be constructed from the
+    /// configured RTC settings
     pub fn new(config: &Config) -> Result<Self> {
         let runtime_config = RuntimeConfig::from_config(config);
         let options = RuntimeOptions::from_config(config);
@@ -158,16 +144,17 @@ impl Runtime {
         })
     }
 
-    /// Serves HTTP and WebSocket traffic on a caller-provided listener.
+    /// serve HTTP and websocket traffic on a caller-provided listener
     ///
-    /// This is the embedder-friendly sibling of [`run`]. It lets integration
+    /// this is the embedder-friendly sibling of [`run`]
+    /// it lets integration
     /// tests and external hosts bind an ephemeral port before handing the
-    /// socket to the production runtime.
+    /// socket to the production runtime
     ///
     /// # Errors
     ///
-    /// Returns an error when the Axum server fails while serving the supplied
-    /// listener.
+    /// returns an error when the Axum server fails while serving the supplied
+    /// listener
     pub async fn serve_listener(self, listener: TcpListener) -> Result<()> {
         let state = self.state();
         self.serve(|shutdown_token| serve_http_on(listener, state, shutdown_token))
@@ -208,12 +195,13 @@ impl Runtime {
     }
 }
 
-/// Runtime background tasks for the lifetime of one server future.
+/// runtime background tasks for the lifetime of one server future
 ///
-/// Normal shutdown asks tasks to exit through the shared cancellation token and
-/// waits for them. Dropping the server future cancels the token and aborts any
+/// normal shutdown asks tasks to exit through the shared cancellation token and
+/// waits for them
+/// dropping the server future cancels the token and aborts any
 /// remaining task so embedders cannot detach process workers by cancelling
-/// [`Runtime::serve_listener`].
+/// [`Runtime::serve_listener`]
 struct RuntimeTasks {
     shutdown_token: CancellationToken,
     source_packet_policy_sync: Option<JoinHandle<()>>,
@@ -326,11 +314,12 @@ impl RuntimeState {
     }
 }
 
-/// Room state decides which producer layers should remain routable from room-level
-/// facts like membership and publication state, while the transport layer owns the
-/// active-speaker observations that can change without any room mutation. This task
+/// room state decides which producer layers should remain routable from room-level
+/// facts like membership and publication state while transport owns the
+/// active-speaker observations that can change without room mutation
+/// this task
 /// waits on explicit transport-side updates plus the current active-speaker expiry
-/// deadline instead of polling the whole process on a fixed interval.
+/// deadline instead of polling the whole process on a fixed interval
 fn spawn_source_packet_policy_update_task(
     rooms: Arc<RoomManager>,
     media_transport: MediaTransport,
@@ -453,9 +442,9 @@ fn build_room_manager(
 
 /// # Errors
 ///
-/// Returns an error when tracing initialization fails, configuration loading fails,
+/// returns an error when tracing initialization fails, configuration loading fails,
 /// the Tokio runtime cannot be built, or the HTTP/WebSocket listener exits with an
-/// error.
+/// error
 pub fn run() -> Result<()> {
     let config = Config::from_env()?;
     let _telemetry = init_tracing(&config.telemetry, process::id())?;
