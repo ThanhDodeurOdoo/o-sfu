@@ -1,22 +1,7 @@
-//! shared post-lock room effect execution
-//!
-//! room transitions keep the `RoomState` lock only long enough to validate
-//! intent, mutate authoritative state and capture the facts needed by external
-//! systems
-//!
-//! [`RoomEffectBatch`] is the cold-path boundary that consumes those captured
-//! facts after unlock
-//! it gives membership, publish, unpublish and subscription
-//! workflows one ordering point for metrics, transport cleanup, relay updates,
-//! source policy events, lifecycle fan-out, diagnostics and outbound room
-//! requests
-//!
-//! callers should build a batch only from committed state results that have already
-//! committed
-//! the executor must not rediscover ownership from live room state
-//! after async work starts, because a replacement session may have claimed the
-//! same user-facing identity by then
+//! shared post-lock room commit execution
 
+use o_sfu_router::MediaKind;
+use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 
 use crate::{
@@ -25,35 +10,32 @@ use crate::{
         ConnectionId, UserId,
         diagnostics::DiagnosticsEventData,
         media_transport::{
-            MediaTransport, TransportRelayRouteAction, TransportRelayRouteEffect,
-            TransportSourceKey,
+            ConsumerActivity, MediaTransport, ProducerActivity, TransportMediaId,
+            TransportRelayRouteAction, TransportRelayRouteEffect, TransportSourceKey,
         },
         room::{
-            Room, RoomEventRequest, RoomMediaCounts, SourcePolicyEvent, UserOutbound,
+            RemoteTrackBootstrap, Room, RoomMediaCounts, SourcePolicyEvent, TrackBindingUpdate,
+            UserOutbound,
             cleanup::TransportCleanupOperation,
-            media_graph::{RelayRouteEffect, TransportMediaRemoval},
+            media_graph::{
+                ConsumerBootstrapOrigin, ConsumerRouteTransportRef, ConsumerRouteUpdate,
+                PendingConsumerBootstrapTarget, PlannedConsumerBootstrap,
+                PreparedConsumerBootstrap, RelayRouteEffect, TransportMediaRemoval,
+            },
             outbound::OutboundSender,
             state::LifecycleEffects,
         },
+        source_model::UserStreamId,
     },
 };
 
 #[derive(Debug, Clone, Copy)]
 pub struct RoomEffectContext<'a> {
-    /// transport handle available for post-lock observations and policy work
-    ///
-    /// state-only tests may provide this while still disabling cleanup mutation
-    /// so source policy can observe transport state without removing media
     media: Option<&'a MediaTransport>,
-    /// transport handle available for adapter mutation after room ownership ends
-    ///
-    /// relay updates, media removals and transport user closes use this handle
-    /// only when the caller authorizes cleanup side effects
     cleanup: Option<&'a MediaTransport>,
 }
 
 impl<'a> RoomEffectContext<'a> {
-    /// build the production context for normal runtime room work
     pub const fn runtime(media_transport: &'a MediaTransport) -> Self {
         Self {
             media: Some(media_transport),
@@ -61,7 +43,6 @@ impl<'a> RoomEffectContext<'a> {
         }
     }
 
-    /// build a context that preserves room state effects without mutating transport cleanup state
     #[cfg(any(test, feature = "testing-transport"))]
     pub const fn state_only(media_transport: Option<&'a MediaTransport>) -> Self {
         Self {
@@ -71,12 +52,8 @@ impl<'a> RoomEffectContext<'a> {
     }
 }
 
-/// media gauge delta captured while room state was authoritative
-///
-/// callers pass snapshots instead of recomputing counts after unlock, so metric
-/// updates describe the committed transition that produced the batch
 #[derive(Debug, Clone, Copy)]
-pub struct MediaCountDelta {
+struct MediaCountDelta {
     before: RoomMediaCounts,
     after: RoomMediaCounts,
 }
@@ -99,28 +76,19 @@ impl MediaCountDelta {
     }
 }
 
-/// ordered side effects for one committed room transition
-///
-/// this type is private to `engine::room` because it encodes room-local
-/// lifecycle rules, transport cleanup policy and diagnostics ordering
-/// each builder method records a fact that was already decided by room state or
-/// by a transport boundary that just completed
-///
-/// execution is cold-path room work
-/// the batch may allocate and move effect vectors by value, but it must not be
-/// called from packet forwarding paths
 #[derive(Debug, Default)]
-pub struct RoomEffectBatch {
-    /// facts captured while room state was authoritative
-    mutation: CommittedRoomMutation,
-    /// relay route mutations derived from room topology before unlock
+pub struct RoomCommit {
+    users: Option<UserCountDelta>,
+    media: Vec<MediaCountDelta>,
     relays: Vec<RelayRouteEffect>,
-    /// detached media ids that cleanup.rs may retry if the adapter is unavailable
-    removals: Vec<TransportMediaRemoval>,
-    /// detached transport users that no longer have an owning room session
-    closes: Vec<TransportUserCleanup>,
-    /// best-effort close requests and room fan-out captured by state
+    cleanup: RoomCleanup,
+    producers: Vec<ProducerActivityEffect>,
+    source_policy: Option<SourcePolicyEvent>,
     lifecycle: Vec<LifecycleEffects>,
+    routes: Vec<ConsumerRouteActivity>,
+    bootstraps: Vec<ConsumerBootstrapLease>,
+    track_bindings: Vec<TrackBindingFanout>,
+    diagnostics: Vec<DiagnosticsEffect>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -129,44 +97,41 @@ struct UserCountDelta {
     after: usize,
 }
 
-/// committed room-state facts consumed by the post-lock executor
+#[derive(Debug)]
+struct ConsumerRouteActivity {
+    route: ConsumerRouteTransportRef,
+    stream: UserStreamId,
+    kind: MediaKind,
+    active: bool,
+    diagnostics: DiagnosticsEventData,
+}
+
+#[derive(Debug)]
+struct ConsumerBootstrapLease {
+    bootstrap: PlannedConsumerBootstrap,
+    origin: ConsumerBootstrapOrigin,
+}
+
 #[derive(Debug, Default)]
-struct CommittedRoomMutation {
-    /// active-user gauge delta from a committed membership transition
-    user_count_delta: Option<UserCountDelta>,
-    /// media gauge deltas from committed publish, unpublish or subscribe work
-    media_deltas: Vec<MediaCountDelta>,
-    /// source policy event requested after committed room work
-    source_policy: Option<SourcePolicyEvent>,
-    /// diagnostics store mutations that must preserve caller order
-    diagnostics: Vec<DiagnosticsEffect>,
-    /// room event requests enqueued only after state and transport effects run
-    outbound: Vec<OutboundRequestEffect>,
+struct RoomCleanup {
+    before_close: Vec<TransportCleanupOperation>,
+    close_users: Vec<TransportCleanupOperation>,
 }
 
-/// detached transport user that should be closed after room state moves on
-///
-/// the identity is captured before async cleanup starts, so replacement joins
-/// cannot make cleanup target the new transport user by accident
-#[derive(Debug, Clone)]
-pub struct TransportUserCleanup {
-    user_id: UserId,
-    connection_id: ConnectionId,
+#[derive(Debug)]
+struct ProducerActivityEffect {
+    source: TransportSourceKey,
+    active: bool,
+    stream: UserStreamId,
+    diagnostics: DiagnosticsEventData,
 }
 
-impl TransportUserCleanup {
-    pub fn new(user_id: UserId, connection_id: ConnectionId) -> Self {
-        Self {
-            user_id,
-            connection_id,
-        }
-    }
+#[derive(Debug)]
+struct TrackBindingFanout {
+    recipients: Vec<OutboundSender>,
+    update: TrackBindingUpdate,
 }
 
-/// diagnostics mutations captured as ordered effects
-///
-/// register, record and forget operations stay in the batch so membership
-/// finalization cannot drift into a different diagnostics order per path
 #[derive(Debug)]
 enum DiagnosticsEffect {
     RegisterUser(UserId),
@@ -174,69 +139,41 @@ enum DiagnosticsEffect {
     ForgetUser(UserId),
 }
 
-/// outbound request emitted after the room transition and transport work finish
-///
-/// this keeps request enqueueing behind the same post-lock ordering as the rest
-/// of the transition, while send failure remains best-effort like room fan-out
-#[derive(Debug)]
-struct OutboundRequestEffect {
-    sender: OutboundSender,
-    request: RoomEventRequest,
-}
-
-/// result surface for follow-up decisions after batch execution
-///
-/// cleanup reports only retry-backed media removal outcome
-/// relay success stays separate because consumer bootstrap must release pending
-/// state when relay setup fails before the consumer can be created
 #[derive(Debug, Clone, Copy)]
-pub struct RoomEffectExecution {
+pub struct RoomCommitExecution {
     cleanup: TransportEffectOutcome,
-    relays_applied: bool,
+    producer_activity: TransportEffectOutcome,
 }
 
-impl RoomEffectExecution {
+impl RoomCommitExecution {
     pub const fn cleanup(self) -> TransportEffectOutcome {
         self.cleanup
     }
 
-    pub const fn relay_effects_applied(self) -> bool {
-        self.relays_applied
+    pub const fn producer_activity(self) -> TransportEffectOutcome {
+        self.producer_activity
     }
 }
 
-impl RoomEffectBatch {
-    /// start an empty batch for one committed transition
+impl RoomCommit {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// record the active-user gauge delta that belongs to this transition
     pub fn with_user_count_delta(mut self, before: usize, after: usize) -> Self {
-        self.mutation.user_count_delta = Some(UserCountDelta { before, after });
+        self.users = Some(UserCountDelta { before, after });
         self
     }
 
-    /// record a media-count gauge delta from state snapshots
-    pub fn with_media_count_delta(self, before: RoomMediaCounts, after: RoomMediaCounts) -> Self {
-        self.with_media_count_delta_value(MediaCountDelta::new(before, after))
-    }
-
-    /// record a media-count delta only when the caller planned one
-    pub fn with_optional_media_count_delta(mut self, delta: Option<MediaCountDelta>) -> Self {
-        if let Some(delta) = delta {
-            self.mutation.media_deltas.push(delta);
-        }
+    pub fn with_media_count_delta(
+        mut self,
+        before: RoomMediaCounts,
+        after: RoomMediaCounts,
+    ) -> Self {
+        self.media.push(MediaCountDelta::new(before, after));
         self
     }
 
-    /// record a prebuilt media-count delta
-    pub fn with_media_count_delta_value(mut self, delta: MediaCountDelta) -> Self {
-        self.mutation.media_deltas.push(delta);
-        self
-    }
-
-    /// queue relay route effects captured from room topology
     pub fn with_relay_effects(
         mut self,
         effects: impl IntoIterator<Item = RelayRouteEffect>,
@@ -245,112 +182,168 @@ impl RoomEffectBatch {
         self
     }
 
-    /// queue detached media removals under cleanup retry ownership
     pub fn with_transport_removals(
         mut self,
+        room: &Room,
         removals: impl IntoIterator<Item = TransportMediaRemoval>,
     ) -> Self {
-        self.removals.extend(removals);
+        self.cleanup
+            .before_close
+            .extend(removals.into_iter().map(|removal| {
+                let connection_id = removal.connection();
+                TransportCleanupOperation::RemoveMedia {
+                    session_key: room.transport_user_key(removal.user(), connection_id),
+                    connection_id,
+                    transport_media_id: removal.transport_media(),
+                }
+            }));
         self
     }
 
-    /// queue a transport user close after room state released ownership
-    pub fn with_transport_user_close(mut self, cleanup: TransportUserCleanup) -> Self {
-        self.closes.push(cleanup);
+    pub fn with_transport_user_close(
+        mut self,
+        room: &Room,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> Self {
+        self.cleanup
+            .close_users
+            .push(TransportCleanupOperation::CloseUser {
+                session_key: room.transport_user_key(user_id, connection_id),
+                connection_id,
+            });
         self
     }
 
-    /// record the source-policy consequence of the committed transition
+    pub fn with_producer_activity(
+        mut self,
+        source: TransportSourceKey,
+        active: bool,
+        stream: UserStreamId,
+        diagnostics: DiagnosticsEventData,
+    ) -> Self {
+        self.producers.push(ProducerActivityEffect {
+            source,
+            active,
+            stream,
+            diagnostics,
+        });
+        self
+    }
+
+    pub fn with_track_binding_update(
+        mut self,
+        recipients: Vec<OutboundSender>,
+        update: TrackBindingUpdate,
+    ) -> Self {
+        self.track_bindings
+            .push(TrackBindingFanout { recipients, update });
+        self
+    }
+
     pub fn with_source_policy_event(mut self, event: SourcePolicyEvent) -> Self {
-        self.mutation.source_policy = Some(event);
+        self.source_policy = Some(event);
         self
     }
 
-    /// queue lifecycle notifications captured by room state
     pub fn with_lifecycle_effects(mut self, effects: LifecycleEffects) -> Self {
         self.lifecycle.push(effects);
         self
     }
 
-    /// register a user in diagnostics after the join transition commits
+    pub fn with_route_updates(
+        mut self,
+        room: &Room,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+        updates: Vec<ConsumerRouteUpdate>,
+    ) -> Self {
+        let media_worker_id = room
+            .transport_user_key(user_id, connection_id)
+            .media_worker_id();
+        self.routes.extend(updates.into_iter().map(|update| {
+            let ConsumerRouteUpdate {
+                route,
+                stream,
+                kind,
+                active,
+            } = update;
+            let diagnostics = DiagnosticsEventData::for_user(
+                room.uuid(),
+                user_id,
+                telemetry_event::SUBSCRIPTION_ACTIVITY_CHANGED,
+            )
+            .with_connection_id(connection_id.as_u64())
+            .with_media_worker_id(media_worker_id.as_usize())
+            .with_transport_media_id(route.consumer_media().as_u64())
+            .insert_field("active", active)
+            .insert_field(
+                "producer_user_id",
+                serde_json::to_value(route.source_user_id()).unwrap_or(serde_json::Value::Null),
+            )
+            .insert_field("source_transport_media_id", route.source_media().as_u64())
+            .insert_field("stream_id", stream.to_string());
+            ConsumerRouteActivity {
+                route,
+                stream,
+                kind,
+                active,
+                diagnostics,
+            }
+        }));
+        self
+    }
+
+    pub fn with_bootstraps(
+        mut self,
+        bootstraps: Vec<PlannedConsumerBootstrap>,
+        origin: ConsumerBootstrapOrigin,
+    ) -> Self {
+        self.bootstraps.extend(
+            bootstraps
+                .into_iter()
+                .map(|bootstrap| ConsumerBootstrapLease { bootstrap, origin }),
+        );
+        self
+    }
+
     pub fn register_diagnostics_user(mut self, user_id: UserId) -> Self {
-        self.mutation
-            .diagnostics
+        self.diagnostics
             .push(DiagnosticsEffect::RegisterUser(user_id));
         self
     }
 
-    /// record a diagnostics event in the caller-selected position
     pub fn record_diagnostics(mut self, diagnostics: DiagnosticsEventData) -> Self {
-        self.mutation
-            .diagnostics
+        self.diagnostics
             .push(DiagnosticsEffect::Record(diagnostics));
         self
     }
 
-    /// forget a user in diagnostics after the room session is gone
     pub fn forget_diagnostics_user(mut self, user_id: UserId) -> Self {
-        self.mutation
-            .diagnostics
+        self.diagnostics
             .push(DiagnosticsEffect::ForgetUser(user_id));
         self
     }
 
-    /// enqueue a room event request after transport-facing effects have run
-    pub fn send_outbound_request(
-        mut self,
-        sender: OutboundSender,
-        request: RoomEventRequest,
-    ) -> Self {
-        self.mutation
-            .outbound
-            .push(OutboundRequestEffect { sender, request });
-        self
-    }
-
-    /// execute one committed post-lock batch in the room-wide effect order
-    ///
-    /// the order is fixed so future room workflows do not interleave async
-    /// cleanup and outward notifications differently
-    ///
-    /// 1. record room gauges from state-owned snapshots
-    /// 2. apply relay route effects that were captured before unlock
-    /// 3. run retry-backed transport media cleanup
-    /// 4. close detached transport users
-    /// 5. handle the source-policy event from transport observations
-    /// 6. emit lifecycle fan-out and user close messages
-    /// 7. write diagnostics effects in captured order
-    /// 8. enqueue outbound room-event requests
-    ///
-    /// relay failures are reported through [`RoomEffectExecution`] because
-    /// bootstrap callers may still need to release pending consumer state
-    /// cleanup failures stay owned by cleanup.rs retry state and are surfaced
-    /// through the returned cleanup outcome
-    pub async fn execute(self, room: &Room, context: RoomEffectContext<'_>) -> RoomEffectExecution {
-        let Self {
-            mutation,
-            relays,
-            removals,
-            closes,
-            lifecycle,
-        } = self;
-        let CommittedRoomMutation {
-            user_count_delta,
-            media_deltas,
-            source_policy,
-            diagnostics,
-            outbound,
-        } = mutation;
-        Self::record_gauge_deltas(room, user_count_delta, &media_deltas);
-        let relays_applied = Self::execute_relay_effects(room, context, &relays).await;
-        let cleanup = Self::execute_transport_cleanup(room, context, &removals, &closes).await;
-        Self::execute_source_policy_event(room, context, source_policy).await;
-        Self::emit_lifecycle_effects(lifecycle);
-        Self::record_diagnostics_effects(room, diagnostics);
-        Self::send_outbound_requests(outbound);
-        RoomEffectExecution {
+    pub async fn execute(self, room: &Room, context: RoomEffectContext<'_>) -> RoomCommitExecution {
+        Self::record_gauge_deltas(room, self.users, &self.media);
+        if let Some(media_transport) = context.cleanup {
+            execute_relay_route_effects(room, media_transport, &self.relays).await;
+        }
+        let cleanup = self.cleanup.execute(room, context).await;
+        let producer_activity =
+            Self::execute_producer_activity(room, context, self.producers).await;
+        Self::execute_route_activity(room, context, self.routes).await;
+        Self::execute_bootstraps(room, context, self.bootstraps).await;
+        Self::emit_track_binding_updates(self.track_bindings);
+        if let Some(event) = self.source_policy {
+            room.handle_source_policy_event(event, context.media).await;
+        }
+        Self::emit_lifecycle_effects(self.lifecycle);
+        Self::record_diagnostics_effects(room, self.diagnostics);
+        RoomCommitExecution {
             cleanup,
-            relays_applied,
+            producer_activity,
         }
     }
 
@@ -369,62 +362,81 @@ impl RoomEffectBatch {
         }
     }
 
-    async fn execute_relay_effects(
+    async fn execute_route_activity(
         room: &Room,
         context: RoomEffectContext<'_>,
-        relays: &[RelayRouteEffect],
-    ) -> bool {
-        let Some(media_transport) = context.cleanup else {
-            return true;
-        };
-        execute_relay_route_effects(room, media_transport, relays).await
-    }
-
-    async fn execute_transport_cleanup(
-        room: &Room,
-        context: RoomEffectContext<'_>,
-        removals: &[TransportMediaRemoval],
-        closes: &[TransportUserCleanup],
-    ) -> TransportEffectOutcome {
-        let Some(media_transport) = context.cleanup else {
-            return TransportEffectOutcome::Applied;
-        };
-        let removals = removals
-            .iter()
-            .map(|removal| {
-                let connection_id = removal.connection();
-                TransportCleanupOperation::RemoveMedia {
-                    session_key: room.transport_user_key(removal.user(), connection_id),
-                    connection_id,
-                    transport_media_id: removal.transport_media(),
-                }
-            })
-            .collect::<Vec<_>>();
-        let cleanup = room
-            .execute_transport_cleanup_operations(media_transport, &removals)
-            .await;
-        if !closes.is_empty() {
-            let closes = closes
-                .iter()
-                .map(|cleanup| TransportCleanupOperation::CloseUser {
-                    session_key: room.transport_user_key(&cleanup.user_id, cleanup.connection_id),
-                    connection_id: cleanup.connection_id,
-                })
-                .collect::<Vec<_>>();
-            let _ = room
-                .execute_transport_cleanup_operations(media_transport, &closes)
-                .await;
-        }
-        cleanup
-    }
-
-    async fn execute_source_policy_event(
-        room: &Room,
-        context: RoomEffectContext<'_>,
-        source_policy: Option<SourcePolicyEvent>,
+        routes: Vec<ConsumerRouteActivity>,
     ) {
-        if let Some(event) = source_policy {
-            room.handle_source_policy_event(event, context.media).await;
+        let Some(media_transport) = context.cleanup else {
+            return;
+        };
+        for op in routes {
+            let route = &op.route;
+            let transport_route = room.transport_consumer_route(route);
+            if media_transport
+                .set_consumer_active(&transport_route, ConsumerActivity::from_active(op.active))
+                .await
+                .is_err()
+            {
+                warn!(
+                    ?route,
+                    stream_id = %op.stream,
+                    active = op.active,
+                    "media transport failed to update consumer route activity"
+                );
+            } else if op.active
+                && op.kind == MediaKind::Video
+                && media_transport
+                    .request_consumer_keyframe(&transport_route)
+                    .await
+                    .is_err()
+            {
+                warn!(
+                    ?route,
+                    stream_id = %op.stream,
+                    "media transport failed to request a consumer keyframe refresh"
+                );
+            }
+            room.diagnostics.record(op.diagnostics);
+        }
+    }
+
+    async fn execute_producer_activity(
+        room: &Room,
+        context: RoomEffectContext<'_>,
+        producers: Vec<ProducerActivityEffect>,
+    ) -> TransportEffectOutcome {
+        let mut outcome = TransportEffectOutcome::Applied;
+        for op in producers {
+            if let Some(media_transport) = context.media
+                && media_transport
+                    .set_producer_active(&op.source, ProducerActivity::from_active(op.active))
+                    .await
+                    .is_err()
+            {
+                outcome = TransportEffectOutcome::Failed;
+                warn!(
+                    source = ?op.source,
+                    stream_id = %op.stream,
+                    active = op.active,
+                    "media transport failed to update producer route activity"
+                );
+            }
+            room.diagnostics.record(op.diagnostics);
+        }
+        outcome
+    }
+
+    async fn execute_bootstraps(
+        room: &Room,
+        context: RoomEffectContext<'_>,
+        bootstraps: Vec<ConsumerBootstrapLease>,
+    ) {
+        let Some(media_transport) = context.cleanup else {
+            return;
+        };
+        for lease in bootstraps {
+            lease.execute(room, media_transport).await;
         }
     }
 
@@ -437,6 +449,14 @@ impl RoomEffectBatch {
             }
             for fanout in effects.fanouts {
                 fanout.emit();
+            }
+        }
+    }
+
+    fn emit_track_binding_updates(fanouts: Vec<TrackBindingFanout>) {
+        for fanout in fanouts {
+            for recipient in fanout.recipients {
+                let _ = recipient.send(UserOutbound::TrackBindingUpdate(fanout.update.clone()));
             }
         }
     }
@@ -456,19 +476,204 @@ impl RoomEffectBatch {
             }
         }
     }
+}
 
-    fn send_outbound_requests(outbound: Vec<OutboundRequestEffect>) {
-        for request in outbound {
-            let _ = request
-                .sender
-                .send(UserOutbound::Request(Box::new(request.request)));
+impl RoomCleanup {
+    async fn execute(self, room: &Room, context: RoomEffectContext<'_>) -> TransportEffectOutcome {
+        let Some(media_transport) = context.cleanup else {
+            return TransportEffectOutcome::Applied;
+        };
+        let before_close =
+            Self::execute_operations(room, media_transport, &self.before_close).await;
+        let close_users = Self::execute_operations(room, media_transport, &self.close_users).await;
+        if before_close == TransportEffectOutcome::Failed
+            || close_users == TransportEffectOutcome::Failed
+        {
+            TransportEffectOutcome::Failed
+        } else {
+            TransportEffectOutcome::Applied
         }
     }
+
+    async fn execute_operations(
+        room: &Room,
+        media_transport: &MediaTransport,
+        operations: &[TransportCleanupOperation],
+    ) -> TransportEffectOutcome {
+        if operations.is_empty() {
+            return TransportEffectOutcome::Applied;
+        }
+        room.execute_transport_cleanup_operations(media_transport, operations)
+            .await
+    }
+}
+
+impl ConsumerBootstrapLease {
+    async fn execute(self, room: &Room, media_transport: &MediaTransport) {
+        let (target, prepared, pending, relays) = self.bootstrap.into_parts();
+        let origin = self.origin;
+        if !execute_relay_route_effects(room, media_transport, &relays).await {
+            release_consumer_bootstrap(room, &target, media_transport).await;
+            return;
+        }
+        let activity = ConsumerActivity::from_active(pending.consumer_active());
+        let Some((consumer_media, mid)) = Self::declare_transport_media(
+            &target,
+            &prepared,
+            activity,
+            origin,
+            room,
+            media_transport,
+        )
+        .await
+        else {
+            return;
+        };
+        let (before, outbound, after) = {
+            let mut state = room.state.write().await;
+            let before = state.media_counts();
+            let outbound = state.commit_bootstrap(&target, pending, consumer_media, mid);
+            let after = state.media_counts();
+            drop(state);
+            (before, outbound, after)
+        };
+        Self::finish(
+            room,
+            media_transport,
+            &target,
+            origin,
+            consumer_media,
+            MediaCountDelta::new(before, after),
+            outbound,
+        )
+        .await;
+    }
+
+    async fn declare_transport_media(
+        target: &PendingConsumerBootstrapTarget,
+        prepared: &PreparedConsumerBootstrap,
+        activity: ConsumerActivity,
+        origin: ConsumerBootstrapOrigin,
+        room: &Room,
+        media_transport: &MediaTransport,
+    ) -> Option<(TransportMediaId, Option<String>)> {
+        let consumer_session =
+            room.transport_user_key(target.consumer_user_id(), target.consumer_connection_id());
+        let producer_session =
+            room.transport_user_key(target.producer_user_id(), target.producer_connection_id());
+        match media_transport
+            .consume_media(
+                &consumer_session,
+                target.media_kind(),
+                &producer_session,
+                target.transport_media_id(),
+                &prepared.rtp,
+                activity,
+            )
+            .await
+        {
+            Ok(consumer_media) => {
+                let mid = media_transport
+                    .transport_media_mid(&consumer_session, consumer_media)
+                    .await;
+                Some((consumer_media, mid))
+            }
+            Err(error) => {
+                release_consumer_bootstrap(room, target, media_transport).await;
+                warn!(
+                    consumer_user_id = ?target.consumer_user_id(),
+                    consumer_connection_id = ?target.consumer_connection_id(),
+                    producer_user_id = ?target.producer_user_id(),
+                    producer_connection_id = ?target.producer_connection_id(),
+                    source_transport_media_id = ?target.transport_media_id(),
+                    error = ?error,
+                    consumer_mid = prepared.rtp.mid(),
+                    ?origin,
+                    "media transport rejected consume media declaration"
+                );
+                None
+            }
+        }
+    }
+
+    async fn finish(
+        room: &Room,
+        media_transport: &MediaTransport,
+        target: &PendingConsumerBootstrapTarget,
+        origin: ConsumerBootstrapOrigin,
+        consumer_media: TransportMediaId,
+        delta: MediaCountDelta,
+        outbound: Option<(OutboundSender, RemoteTrackBootstrap)>,
+    ) {
+        let Some((sender, bootstrap)) = outbound else {
+            delta.record(room);
+            release_consumer_bootstrap(room, target, media_transport).await;
+            let cleanup = [TransportCleanupOperation::RemoveMedia {
+                session_key: room
+                    .transport_user_key(target.consumer_user_id(), target.consumer_connection_id()),
+                connection_id: target.consumer_connection_id(),
+                transport_media_id: consumer_media,
+            }];
+            room.execute_transport_cleanup_operations(media_transport, &cleanup)
+                .await;
+            return;
+        };
+        delta.record(room);
+        room.diagnostics.record(
+            DiagnosticsEventData::for_user(
+                room.uuid(),
+                target.consumer_user_id(),
+                telemetry_event::SUBSCRIBE_SUCCEEDED,
+            )
+            .with_connection_id(target.consumer_connection_id().as_u64())
+            .with_media_worker_id(
+                room.transport_user_key(target.consumer_user_id(), target.consumer_connection_id())
+                    .media_worker_id()
+                    .as_usize(),
+            )
+            .with_transport_media_id(consumer_media.as_u64())
+            .insert_field(
+                "producer_user_id",
+                serde_json::to_value(target.producer_user_id()).unwrap_or(serde_json::Value::Null),
+            )
+            .insert_field(
+                "source_transport_media_id",
+                target.transport_media_id().as_u64(),
+            )
+            .insert_field("stream_id", target.stream_id().to_string())
+            .insert_field("origin", origin.as_diagnostic_str()),
+        );
+        let _ = sender.send(UserOutbound::Request(Box::new(
+            bootstrap.into_room_event_request(),
+        )));
+    }
+}
+
+async fn release_consumer_bootstrap(
+    room: &Room,
+    target: &PendingConsumerBootstrapTarget,
+    media_transport: &MediaTransport,
+) {
+    let (before, after, relays) = {
+        let mut state = room.state.write().await;
+        let before = state.media_counts();
+        let relays = state.release_bootstrap(target);
+        let after = state.media_counts();
+        drop(state);
+        (before, after, relays)
+    };
+    MediaCountDelta::new(before, after).record(room);
+    execute_relay_route_effects(room, media_transport, &relays).await;
+    room.handle_source_policy_event(
+        SourcePolicyEvent::FanoutPressureChanged,
+        Some(media_transport),
+    )
+    .await;
 }
 
 async fn execute_relay_route_effects(
     room: &Room,
-    media_port: &MediaTransport,
+    media_transport: &MediaTransport,
     effects: &[RelayRouteEffect],
 ) -> bool {
     let mut applied = true;
@@ -480,7 +685,7 @@ async fn execute_relay_route_effects(
                 route: effect.route.clone(),
             }];
             if room
-                .execute_transport_cleanup_operations(media_port, &operation)
+                .execute_transport_cleanup_operations(media_transport, &operation)
                 .await
                 == TransportEffectOutcome::Failed
             {
@@ -496,8 +701,10 @@ async fn execute_relay_route_effects(
             target_media_worker_id: effect.route.target_worker,
             action: effect.action,
         };
-        let result = media_port.apply_relay_route_effect(&transport_effect).await;
-        if let Err(error) = result {
+        if let Err(error) = media_transport
+            .apply_relay_route_effect(&transport_effect)
+            .await
+        {
             applied = false;
             warn!(
                 ?effect,

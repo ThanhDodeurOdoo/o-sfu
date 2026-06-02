@@ -47,9 +47,8 @@ pub(super) use self::{
     producer::ValidatedPublishDescriptor,
     route_graph::{RelayRouteEffect, RelayRouteKey},
     subscription::{
-        ConsumerBootstrapOrigin, ConsumerRouteUpdate, PendingConsumerBootstrap,
-        PendingConsumerBootstrapTarget, PlannedConsumerBootstrap, PlannedSubscriptionChange,
-        PreparedConsumerBootstrap,
+        ConsumerBootstrapOrigin, ConsumerRouteUpdate, PendingConsumerBootstrapTarget,
+        PlannedConsumerBootstrap, PreparedConsumerBootstrap,
     },
 };
 

@@ -79,7 +79,7 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
 
 #[tokio::test]
 async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
-    let mut scenario = setup_real_rtc_refresh_scenario().await;
+    let mut scenario = Box::pin(setup_real_rtc_refresh_scenario()).await;
 
     assert!(
         scenario
@@ -162,7 +162,7 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
 
 #[tokio::test]
 async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
-    let mut scenario = setup_real_rtc_refresh_scenario().await;
+    let mut scenario = Box::pin(setup_real_rtc_refresh_scenario()).await;
     let Some(publisher_connection_id) = scenario
         .room
         .test_api()

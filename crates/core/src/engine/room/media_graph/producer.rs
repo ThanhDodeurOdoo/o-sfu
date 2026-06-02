@@ -18,8 +18,7 @@ use tracing::{error, warn};
 
 use super::{
     super::{
-        TrackBindingUpdate, UserOutbound, outbound::OutboundSender, state::RoomState,
-        topology::RoutedProducerId,
+        TrackBindingUpdate, outbound::OutboundSender, state::RoomState, topology::RoutedProducerId,
     },
     ConsumerKey, ProducerRouteTarget, ProducerRuntimeId, PublishedProducer, PublishedSourceInstall,
     SourceTransportMediaIndexEntry, TransportMediaRemoval,
@@ -62,8 +61,6 @@ pub(in crate::engine::room) struct PreparedPublishedTrack {
 
 #[derive(Debug)]
 pub(in crate::engine::room) struct ProducerActivityOutcome {
-    pub transport_media_id: TransportMediaId,
-    pub active: bool,
     recipients: Vec<OutboundSender>,
     update: TrackBindingUpdate,
 }
@@ -71,6 +68,7 @@ pub(in crate::engine::room) struct ProducerActivityOutcome {
 #[derive(Debug)]
 pub(in crate::engine::room) struct UnpublishTrackOutcome {
     recipients: Vec<OutboundSender>,
+    update: TrackBindingUpdate,
     relay_effects: Vec<RelayRouteEffect>,
     transport_removals: Vec<TransportMediaRemoval>,
 }
@@ -380,6 +378,11 @@ impl RoomState {
                 .values()
                 .map(|user| user.sender.clone())
                 .collect(),
+            update: TrackBindingUpdate {
+                user_id: user_id.clone(),
+                stream_id: stream_id.clone(),
+                active: None,
+            },
             relay_effects,
             transport_removals,
         })
@@ -418,8 +421,6 @@ impl RoomState {
         }
         self.media.set_producer_active(producer_target, active);
         Some(ProducerActivityOutcome {
-            transport_media_id: producer_target.transport_media_id(),
-            active,
             recipients: self
                 .users
                 .values()
@@ -476,31 +477,26 @@ impl ValidatedPublishDescriptor {
 }
 
 impl ProducerActivityOutcome {
-    pub fn emit(self) {
-        for recipient in self.recipients {
-            let _ = recipient.send(UserOutbound::TrackBindingUpdate(self.update.clone()));
-        }
+    pub fn into_track_binding_update(self) -> (Vec<OutboundSender>, TrackBindingUpdate) {
+        (self.recipients, self.update)
     }
 }
 
 impl UnpublishTrackOutcome {
-    pub fn relay_effects(&self) -> &[RelayRouteEffect] {
-        &self.relay_effects
-    }
-
-    pub fn transport_removals(&self) -> &[TransportMediaRemoval] {
-        &self.transport_removals
-    }
-
-    pub fn emit(self, user_id: &UserId, stream_id: &UserStreamId) {
-        let track_update = UserOutbound::TrackBindingUpdate(TrackBindingUpdate {
-            user_id: user_id.clone(),
-            stream_id: stream_id.clone(),
-            active: None,
-        });
-        for recipient in self.recipients {
-            let _ = recipient.send(track_update.clone());
-        }
+    pub fn into_parts(
+        self,
+    ) -> (
+        Vec<OutboundSender>,
+        TrackBindingUpdate,
+        Vec<RelayRouteEffect>,
+        Vec<TransportMediaRemoval>,
+    ) {
+        (
+            self.recipients,
+            self.update,
+            self.relay_effects,
+            self.transport_removals,
+        )
     }
 }
 

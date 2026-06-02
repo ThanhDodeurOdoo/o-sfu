@@ -9,5 +9,3 @@ mod subscription;
 pub(super) use publication::PendingPublishTransactions;
 #[cfg(any(test, feature = "testing-transport"))]
 pub(super) use publication::ReservedPublish;
-#[cfg(test)]
-pub(super) use subscription::SubscriptionEffectPlan;
