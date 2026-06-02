@@ -30,11 +30,7 @@ pub enum ServerEnvelope {
 }
 
 impl ClientEnvelope {
-    /// Serialize a typed client-side envelope into the protocol websocket shape.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the payload cannot be serialized to JSON.
+    /// encode one typed client-side envelope into the websocket wire shape
     pub fn into_envelope(self) -> Result<Envelope, serde_json::Error> {
         match self {
             Self::Message(message) => message.into_envelope(),
@@ -49,12 +45,12 @@ impl ClientEnvelope {
         }
     }
 
-    /// Decode a raw websocket envelope into the typed native client contract.
+    /// decode a raw websocket envelope into the typed native client contract
     ///
     /// # Errors
     ///
-    /// Returns an error when the tag is unknown or the payload does not match
-    /// the declared message shape.
+    /// returns an error when the tag is unknown or the payload does not match
+    /// the declared message shape
     pub fn decode(envelope: Envelope) -> Result<Self, EnvelopeDecodeError> {
         let (tag, payload, route) = envelope.into_parts();
         match route {
@@ -78,11 +74,7 @@ impl ClientEnvelope {
 }
 
 impl ServerEnvelope {
-    /// Serialize a typed server-side envelope into the protocol websocket shape.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the payload cannot be serialized to JSON.
+    /// encode one typed server-side envelope into the websocket wire shape
     pub fn into_envelope(self) -> Result<Envelope, serde_json::Error> {
         match self {
             Self::Message(message) => message.into_envelope(),
@@ -97,12 +89,12 @@ impl ServerEnvelope {
         }
     }
 
-    /// Decode a raw websocket envelope into the typed native server contract.
+    /// decode a raw websocket envelope into the typed native server contract
     ///
     /// # Errors
     ///
-    /// Returns an error when the tag is unknown or the payload does not match
-    /// the declared message shape.
+    /// returns an error when the tag is unknown or the payload does not match
+    /// the declared message shape
     pub fn decode(envelope: Envelope) -> Result<Self, EnvelopeDecodeError> {
         let (tag, payload, route) = envelope.into_parts();
         match route {

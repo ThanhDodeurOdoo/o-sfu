@@ -54,18 +54,12 @@ impl MediaTransport {
 /// range.
 #[derive(Debug, Clone)]
 pub struct MediaTransportBuilder {
-    /// RTC-specific operator policy collected from runtime core options or a
-    /// test fixture.
     transport: Option<MediaTransportConfig>,
-    /// Process services needed by the transport while it emits diagnostics,
-    /// metrics and packet-sink fanout.
     deps: Option<MediaTransportDeps>,
-    /// Number of RTC workers to construct.
     worker_count: usize,
 }
 
 impl MediaTransportBuilder {
-    /// Creates a builder with one media worker and no required inputs.
     #[must_use]
     pub const fn new() -> Self {
         Self {

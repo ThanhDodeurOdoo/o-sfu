@@ -1,11 +1,12 @@
 use crate::engine::VideoLayoutIntent;
 
-/// Room policy applied to one published source.
+/// room policy applied to one published source
 ///
 /// [`SourcePolicy`] is the source contract between application publish intent
-/// and core room policy. It tells core what it may do with a source after
+/// and core room policy
+/// it tells core what it may do with a source after
 /// publish, but it does not name the product feature that created the stream
-/// and it does not limit how many streams a user may publish.
+/// and it does not limit how many streams a user may publish
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourcePolicy {
     layout: Option<SourceLayoutPolicy>,
@@ -48,15 +49,11 @@ impl SourcePolicy {
     }
 }
 
-/// Default receiver-layout role for one source.
+/// default receiver-layout role for one source
 ///
-/// The publish intent sets this when a source is published. Core combines it
-/// with a receiver's explicit layout preference and the active-speaker snapshot
-/// to choose a [`SourceRoomPolicySelector`] for each receiver/source route.
-///
-/// If a source has no layout policy, core treats it as hidden for video budget
-/// planning. That is useful for audio and for sources that should route
-/// without entering receiver video layout decisions.
+/// core combines publish intent, receiver layout preference and active-speaker
+/// state to choose one [`SourceRoomPolicySelector`] per receiver/source route
+/// sources without layout policy stay out of video budget planning
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceLayoutPolicy {
     visible_selector: SourceRoomPolicySelector,
@@ -94,56 +91,34 @@ impl SourceLayoutPolicy {
     }
 }
 
-/// Receiver bandwidth behavior for one published source.
+/// receiver bandwidth behavior for one published source
 ///
-/// Callers set this once when building
-/// [`SourcePublishIntent`](crate::prelude::SourcePublishIntent). Core then uses
-/// it to decide whether the source participates in receiver-video layer
-/// selection, route pausing and over-budget diagnostics.
-///
-/// # Example situations
-///
-/// Use [`Self::None`] for audio or metadata-like sources that should not spend
-/// receiver video budget. Use [`Self::ScalableVideo`] for video with cheap and
-/// high-quality encodings. Use [`Self::ReadableDetail`] when the receiver must
-/// keep enough detail to inspect text or other fine visual content.
+/// set by [`SourcePublishIntent`](crate::prelude::SourcePublishIntent) to decide
+/// whether the source participates in receiver-video layer selection, route
+/// pausing and over-budget diagnostics
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceAdaptationPolicy {
-    /// Keep this source out of receiver-video BWE control.
+    /// keep this source out of receiver-video BWE control
     ///
-    /// Core may still route the source through normal subscriptions. The
-    /// budget planner does not choose a video encoding for it, count it in the
-    /// receiver video budget or pause it because of BWE pressure.
-    ///
-    /// Example: a speech detector source can drive active-speaker state without
-    /// entering video-layer selection.
+    /// useful for audio or metadata-like sources that can route through normal
+    /// subscriptions without spending visible-video budget
     None,
-    /// Let the receiver-video planner choose among advertised encodings.
+    /// let the receiver-video planner choose among advertised encodings
     ///
-    /// The planner can pick a lower encoding for thumbnail routes, request a
-    /// keyframe after the selected encoding changes and pause non-protected
-    /// routes when the receiver budget cannot carry all selected video.
-    ///
-    /// Example: a two-layer video source can use the high layer while featured
-    /// and the low layer while shown as a secondary tile.
+    /// useful for sources where thumbnail routes may downswitch or pause under
+    /// receiver budget pressure
     ScalableVideo,
-    /// Keep readable detail ahead of normal thumbnail adaptation.
+    /// keep readable detail ahead of normal thumbnail adaptation
     ///
-    /// The planner targets the highest advertised encoding. Routes with this
-    /// policy are protected from normal overload pauses, so diagnostics report
-    /// a protected over-budget exception if they keep the receiver above BWE.
-    ///
-    /// Example: a text-heavy visual source should stay on the readable encoding
-    /// even when ordinary thumbnails are degraded or paused.
+    /// useful for text-heavy visual sources that must stay on the highest
+    /// advertised encoding even while ordinary thumbnails degrade or pause
     ReadableDetail,
 }
 
-/// Active-speaker relationship declared for one source.
+/// active-speaker relationship declared for one source
 ///
-/// Core receives transport active-speaker observations, but the publish intent
-/// decides which sources participate in that relationship. Audio-like sources
-/// normally detect speech. Video-like sources may be promotable by speech from
-/// another source in the same group.
+/// publish intent decides which sources participate in transport-observed
+/// speech relationships
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActiveSpeakerPolicy {
     group: ActiveSpeakerGroup,
@@ -167,12 +142,10 @@ impl ActiveSpeakerPolicy {
     }
 }
 
-/// Active-speaker group id used to separate speech relationships.
+/// active-speaker group id used to separate speech relationships
 ///
-/// Groups keep unrelated speech domains separate without teaching core about
-/// application stream names. The current Odoo
-/// compatibility layer uses [`Self::MAIN`] for the call's normal audio and
-/// camera relationship.
+/// groups keep unrelated speech domains separate without teaching core about
+/// application stream names
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActiveSpeakerGroup(u16);
 
@@ -180,81 +153,60 @@ impl ActiveSpeakerGroup {
     pub const MAIN: Self = Self(0);
 }
 
-/// Role one source plays inside an active-speaker group.
-///
-/// # Example situation
-///
-/// A speech source and a video source can share [`ActiveSpeakerGroup::MAIN`].
-/// The speech source uses [`Self::Detector`]. The video source uses
-/// [`Self::Promotable`], so speech observations can promote that user's video
-/// route for receivers.
+/// role one source plays inside an active-speaker group
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveSpeakerSourceRole {
-    /// Transport observations from this source can mark its owner active.
+    /// transport observations from this source can mark its owner active
     ///
-    /// A detector is usually an audio-like source. It does not receive video
-    /// layout treatment by itself.
+    /// detectors are usually audio-like and do not receive video layout
+    /// treatment by themselves
     Detector,
-    /// This source can receive active-speaker video treatment for its owner.
+    /// this source can receive active-speaker video treatment for its owner
     ///
-    /// Core promotes a promotable source only when a detector in the same group
-    /// marks the same owner as active.
+    /// core promotes it only when a detector in the same group marks the same
+    /// owner as active
     Promotable,
 }
 
-/// Receiver-specific layout role before a concrete encoding is chosen.
+/// receiver-specific layout role before a concrete encoding is chosen
 ///
-/// Layout code produces this role for each receiver/source route. The budget
-/// planner reads it to decide quality targets, overload protection and pause
-/// order. Transport code sees only the final packet gate after this role has
-/// been resolved.
-///
-/// # Example situations
-///
-/// A receiver action can produce [`Self::Pinned`] or [`Self::Featured`]. Source
-/// policy can produce [`Self::ReadableDetail`]. Active-speaker state can produce
-/// [`Self::ActiveSpeaker`]. Default visible video often starts as
-/// [`Self::VisibleThumbnail`], while receiver layout can move a subscribed
-/// route to [`Self::Hidden`] or [`Self::Overflow`].
+/// the budget planner reads this role to decide quality targets, overload
+/// protection and pause order
+/// transport code only sees the final packet gate after the role resolves
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceRoomPolicySelector {
-    /// The receiver explicitly pinned this source.
+    /// the receiver explicitly pinned this source
     ///
-    /// Pinned routes use featured quality and are protected from overload
-    /// pauses. They share the highest budget priority with featured routes.
+    /// pinned routes use featured quality and share the highest budget priority
+    /// with featured routes
     Pinned,
-    /// The receiver explicitly requested featured treatment for this source.
+    /// the receiver explicitly requested featured treatment for this source
     ///
-    /// Featured routes use featured quality and are protected from overload
-    /// pauses. They share the highest budget priority with pinned routes.
+    /// featured routes use featured quality and share the highest budget
+    /// priority with pinned routes
     Featured,
-    /// Source policy says readable detail matters for this route.
+    /// source policy says readable detail matters for this route
     ///
-    /// Readable-detail routes use featured quality and are protected from
-    /// overload pauses, but explicit pinned or featured receiver intent outranks
-    /// them.
+    /// explicit pinned or featured receiver intent outranks this role
     ReadableDetail,
-    /// Active-speaker policy promoted this source for the current receiver.
+    /// active-speaker policy promoted this source for the current receiver
     ///
-    /// Active-speaker routes use featured quality and are protected from
-    /// overload pauses. Explicit receiver intent and readable detail outrank
-    /// this role.
+    /// explicit receiver intent and readable detail outrank this role
     ActiveSpeaker,
-    /// The source is visible as a secondary tile.
+    /// the source is visible as a secondary tile
     ///
-    /// Visible thumbnails count toward the receiver's visible-video budget.
-    /// They can downswitch to cheaper encodings and can be paused if protected
-    /// routes still leave the receiver over budget.
+    /// visible thumbnails can downswitch or pause when protected routes leave
+    /// the receiver over budget
     VisibleThumbnail,
-    /// The receiver is subscribed but the source is not visible right now.
+    /// the receiver is subscribed but the source is not visible right now
     ///
-    /// Hidden routes do not count toward the visible-video budget. They are
-    /// first-class diagnostics and first candidates for overload pause.
+    /// hidden routes skip visible-video budget and are first candidates for
+    /// overload pause
     Hidden,
-    /// The source is outside the receiver's visible tile set.
+    /// the source is outside the receiver's visible tile set
     ///
-    /// Overflow routes behave like hidden routes for budget purposes, but keep
-    /// a distinct pause reason so diagnostics can explain the layout decision.
+    /// overflow routes behave like hidden routes but keep a distinct pause
+    /// reason for diagnostics
     Overflow,
 }
 
@@ -284,102 +236,76 @@ impl SourceRoomPolicySelector {
     }
 }
 
-/// Overload priority derived from a route's room-policy selector.
+/// overload priority derived from a route's room-policy selector
 ///
-/// The receiver budget planner uses this ordering when it has already tried
-/// cheaper encodings and still needs to pause routes. Lower-priority buckets are
-/// paused first. Protected buckets are not paused by normal overload handling.
-///
-/// # Example situation
-///
-/// When selected video exceeds the receiver BWE, hidden and overflow routes are
-/// paused before visible thumbnails. Active-speaker, readable-detail and pinned
-/// or featured routes stay protected, so they can produce a protected
-/// over-budget diagnostic instead of a pause.
+/// lower-priority buckets pause first after cheaper encodings are exhausted
+/// protected buckets are not paused by normal overload handling
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SourceRoutePriority {
-    /// Explicit receiver intent.
+    /// explicit receiver intent
     ///
-    /// Pinned and featured routes are protected and outrank every other route.
+    /// pinned and featured routes are protected and outrank every other route
     PinnedOrFeatured,
-    /// Detail-preserving source policy.
+    /// detail-preserving source policy
     ///
-    /// Readable-detail routes are protected. They outrank active-speaker routes
-    /// but stay below explicit pinned or featured receiver intent.
+    /// readable-detail routes outrank active-speaker routes but stay below
+    /// explicit pinned or featured receiver intent
     ReadableDetail,
-    /// Server-promoted active-speaker route.
+    /// server-promoted active-speaker route
     ///
-    /// Active-speaker routes are protected. Explicit receiver intent and
-    /// readable-detail source policy outrank them.
+    /// explicit receiver intent and readable-detail source policy outrank this
+    /// role
     ActiveSpeaker,
-    /// Visible secondary route.
+    /// visible secondary route
     ///
-    /// Visible thumbnails can be downswitched and then paused if protected
-    /// routes still leave the receiver over budget.
+    /// visible thumbnails can downswitch and then pause if protected
+    /// routes still leave the receiver over budget
     VisibleThumbnail,
-    /// Route that is not currently visible.
+    /// route that is not currently visible
     ///
-    /// Hidden and overflow routes are first to pause under receiver budget
-    /// pressure.
+    /// hidden and overflow routes are first to pause under receiver budget
+    /// pressure
     HiddenOrOverflow,
 }
 
-/// Reason why room policy withholds media for a subscribed route.
+/// reason why room policy withholds media for a subscribed route
 ///
-/// This is separate from subscription state. A receiver can remain subscribed
-/// while core temporarily closes the packet gate for budget or layout reasons.
-///
-/// # Example situations
-///
-/// [`Self::HiddenTile`] means layout hid the source. [`Self::OverflowTile`]
-/// means layout pushed it outside the visible tile set. [`Self::BudgetPressure`]
-/// means the route was useful, but the receiver BWE could not fit it after
-/// cheaper layers were tried. Hard activation caps use dedicated reasons so
-/// operators can distinguish them from bandwidth policy.
+/// subscription state can remain active while the packet gate is closed for
+/// budget, layout or activation-cap reasons
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyPauseReason {
-    /// The receiver budget cannot fit this route after cheaper layers were tried.
+    /// the receiver budget cannot fit this route after cheaper layers were tried
     BudgetPressure,
-    /// The receiver layout explicitly hides this source.
+    /// the receiver layout explicitly hides this source
     HiddenTile,
-    /// The receiver layout puts this source outside the visible tile set.
+    /// the receiver layout puts this source outside the visible tile set
     OverflowTile,
-    /// No negotiated encoding or operating point can be forwarded usefully.
+    /// no negotiated encoding or operating point can be forwarded usefully
     MissingUsableLayer,
-    /// The active-audio-speaker cap withheld this route.
+    /// the active-audio-speaker cap withheld this route
     AudioSpeakerLimit,
-    /// The per-receiver live-video cap withheld this route.
+    /// the per-receiver live-video cap withheld this route
     VideoDownloadLimit,
 }
 
-/// Server-defined role for one published source encoding.
+/// server-defined role for one published source encoding
 ///
-/// The role lets the budget planner understand what an encoding is meant for
-/// without reading application stream names. Room state assigns it when
-/// committing the source descriptor after transport negotiation.
-///
-/// # Example situation
-///
-/// A two-layer video source can mark the high layer as [`Self::Featured`] and
-/// the low layer as [`Self::Thumbnail`]. The budget planner can then choose the
-/// low layer for a secondary tile without knowing why the product created the
-/// source.
+/// the role lets the budget planner choose an encoding without reading
+/// application stream names
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadLayerPolicyRole {
-    /// Highest useful quality for protected or detail-focused routes.
+    /// highest useful quality for protected or detail-focused routes
     ///
-    /// The planner avoids using this as the first cheap fallback for thumbnail
-    /// routes when a lower-cost encoding exists.
+    /// the planner avoids this as the first cheap fallback when a lower-cost
+    /// encoding exists
     Featured,
-    /// Normal quality target for visible secondary video.
+    /// normal quality target for visible secondary video
     ///
-    /// This is the expected low-cost encoding for thumbnail routes before the
-    /// planner considers pausing the route.
+    /// expected low-cost encoding before the planner considers pausing the route
     Thumbnail,
-    /// Lower-cost thumbnail rung below the normal thumbnail target.
+    /// lower-cost thumbnail rung below the normal thumbnail target
     ///
-    /// This is reserved for an expanded upload ladder where the server advertises
-    /// more than two useful video encodings.
+    /// reserved for upload ladders with more than two useful video encodings
     DegradedThumbnail,
 }
 

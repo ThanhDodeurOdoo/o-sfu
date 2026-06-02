@@ -18,8 +18,6 @@ pub struct UserOutput {
 }
 
 impl UserOutput {
-    /// build an empty output for an accepted transition with no client-visible
-    /// websocket work
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -27,7 +25,6 @@ impl UserOutput {
         }
     }
 
-    /// append one signal while preserving the application ordering decision
     #[must_use]
     pub fn with_signal(mut self, signal: UserSignal) -> Self {
         self.signals.push(signal);
@@ -42,13 +39,11 @@ impl UserOutput {
         self.signals.extend(other.signals);
     }
 
-    /// consume the ordered signals for websocket serialization
     #[must_use]
     pub fn into_signals(self) -> Vec<UserSignal> {
         self.signals
     }
 
-    /// create an output from a sequence of compatibility messages
     pub fn from_messages(messages: impl IntoIterator<Item = ServerMessage>) -> Self {
         messages.into_iter().map(UserSignal::from).collect()
     }
@@ -75,22 +70,17 @@ pub enum UserSignal {
     Message(ServerMessage),
     /// server-authored request that expects a later client response
     Request {
-        /// server-local request id used to correlate the client answer
         request_id: RequestId,
-        /// typed request payload sent to the browser
         request: ServerRequest,
     },
     /// response to a request previously authored by the client
     Response {
-        /// client request id that this response resolves
         response_to: RequestId,
-        /// typed response payload sent back to the browser
         response: ServerResponse,
     },
 }
 
 impl UserSignal {
-    /// create a server-authored request signal
     #[must_use]
     pub const fn request(request_id: RequestId, request: ServerRequest) -> Self {
         Self::Request {
@@ -99,7 +89,6 @@ impl UserSignal {
         }
     }
 
-    /// create a response signal for a client-authored request
     #[must_use]
     pub const fn response(response_to: RequestId, response: ServerResponse) -> Self {
         Self::Response {
