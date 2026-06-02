@@ -1,7 +1,8 @@
 //! deterministic Callgrind coverage for packet-loop hot-path slices
 //!
-//! this suite measures fixed units of packet-loop work with `Ir`, (the
-//! instruction-count metric reported by Callgrind)
+//! this suite measures fixed units of packet-loop work with `Ir` and
+//! `EstimatedCycles`, which are the instruction-count and simulated cycle-cost
+//! metrics reported by Callgrind
 //! each benchmark builds the RTC-engine state outside the measured function,
 //! then repeats one stable packet-loop operation with reusable buffers
 //!
@@ -37,10 +38,14 @@ use o_sfu_core::server::transport::benchmark_support::{
 };
 
 const ROUTING_MISS_FINGERPRINT_ATTEMPTS: usize = 4096;
+const CALLGRIND_CACHE_SIM: &str = "--cache-sim=yes";
 
-fn callgrind_config(ir_soft_limit: f64) -> LibraryBenchmarkConfig {
-    let mut callgrind = Callgrind::default();
-    callgrind.soft_limits([(EventKind::Ir, ir_soft_limit)]);
+fn callgrind_config(soft_limit: f64) -> LibraryBenchmarkConfig {
+    let mut callgrind = Callgrind::with_args([CALLGRIND_CACHE_SIM]);
+    callgrind.soft_limits([
+        (EventKind::Ir, soft_limit),
+        (EventKind::EstimatedCycles, soft_limit),
+    ]);
     callgrind.fail_fast(false);
 
     let mut config = LibraryBenchmarkConfig::default();

@@ -345,7 +345,9 @@ jobs:
             const summaries = readJsonArray(summaryPath);
             const irRows = rowsForMetric(summaries, "Ir");
             const cycleRows = rowsForMetric(summaries, "EstimatedCycles");
-            const regressionCount = irRows.filter((row) => row.result === "regression").length;
+            const regressionCount = [...irRows, ...cycleRows]
+              .filter((row) => row.result === "regression")
+              .length;
             const status = benchmarkResult === "success" && regressionCount === 0
               ? "ok"
               : "needs review";
