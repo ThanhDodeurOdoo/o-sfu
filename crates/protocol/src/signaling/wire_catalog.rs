@@ -232,6 +232,11 @@ impl ServerRequest {
     ];
 
     /// encode one server-authored request into the Odoo wire envelope
+    ///
+    /// # Errors
+    ///
+    /// returns an error when the typed payload cannot be serialized into the
+    /// JSON envelope payload
     pub fn into_envelope(self, request_id: RequestId) -> Result<Envelope, serde_json::Error> {
         match self {
             Self::Offer(payload) => encode_request(WireTag::Offer, request_id, payload),
@@ -320,6 +325,11 @@ impl ServerMessage {
     ];
 
     /// encode one server message into the Odoo wire envelope
+    ///
+    /// # Errors
+    ///
+    /// returns an error when the typed payload cannot be serialized into the
+    /// JSON envelope payload
     pub fn into_envelope(self) -> Result<Envelope, serde_json::Error> {
         match self {
             Self::Welcome(payload) => encode_message(WireTag::Welcome, payload),
@@ -357,6 +367,11 @@ impl ServerResponse {
     ];
 
     /// encode one server response into the Odoo wire envelope
+    ///
+    /// # Errors
+    ///
+    /// returns an error when the typed payload cannot be serialized into the
+    /// JSON envelope payload
     pub fn into_envelope(self, response_to: RequestId) -> Result<Envelope, serde_json::Error> {
         match self {
             Self::StartRecording(payload) => {
