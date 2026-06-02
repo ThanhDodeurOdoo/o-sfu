@@ -422,7 +422,7 @@ impl DebugProbe for ObserveAudioActivityProbe {
         state: &mut PacketLoopState,
         _context: &WorkerCommandContext<'_>,
     ) -> Self::Output {
-        state.route_control.observe_audio_activity(
+        state.routes.observe_audio_activity(
             self.transport_media_id,
             self.voice_activity,
             self.audio_level_dbov,
@@ -479,14 +479,14 @@ fn debug_route_entry(
     source_transport_media_id: TransportMediaId,
 ) -> Option<DebugRouteEntry> {
     state
-        .media_route_index
-        .get(&source_transport_media_id)
+        .routes
+        .local_route(source_transport_media_id)
         .map(|entry| DebugRouteEntry {
             source_transport_media_id,
             source_active: entry.source_active,
             active_destination_count: entry.active_destination_count,
             effective_packet_gate: state
-                .route_control
+                .routes
                 .effective_packet_gate(source_transport_media_id)
                 .as_ref()
                 .map_or(DebugPacketGate::Open, debug_packet_gate),

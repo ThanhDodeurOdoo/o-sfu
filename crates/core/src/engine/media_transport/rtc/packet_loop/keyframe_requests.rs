@@ -185,8 +185,8 @@ pub(in crate::engine::media_transport::rtc) fn drain_due_keyframe_retries(
     now: Instant,
 ) {
     state
-        .keyframe_requests
-        .drain_due(now, &mut buffers.keyframe_retries);
+        .routes
+        .drain_due_keyframe_requests(now, &mut buffers.keyframe_retries);
     for retry in buffers.keyframe_retries.drain(..) {
         flush_keyframe_retry(state, metrics, retry);
     }
@@ -224,16 +224,19 @@ fn flush_keyframe_retry(
     let source_transport_media_id = retry.source_transport_media_id;
     let rid = retry.rid;
     let kind = retry.kind;
-    if !state.has_keyframe_demand(source_transport_media_id, rid) {
+    if !state
+        .routes
+        .has_keyframe_demand(source_transport_media_id, rid)
+    {
         state
-            .keyframe_requests
-            .forget(source_transport_media_id, rid);
+            .routes
+            .forget_keyframe_request(source_transport_media_id, rid);
         return;
     }
     let Some(route) = resolve_keyframe_route(state, source_transport_media_id) else {
         state
-            .keyframe_requests
-            .forget(source_transport_media_id, rid);
+            .routes
+            .forget_keyframe_request(source_transport_media_id, rid);
         return;
     };
     request_keyframe_for_target(
@@ -259,7 +262,8 @@ fn resolve_keyframe_route(
         });
     }
     state
-        .remote_source_registration(source_transport_media_id)
+        .routes
+        .remote_source(source_transport_media_id)
         .map(|remote_source| ResolvedKeyframeRoute::Remote {
             source: remote_source.source().clone(),
             source_control: remote_source.source_control().clone(),

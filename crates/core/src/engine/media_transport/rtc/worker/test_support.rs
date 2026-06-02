@@ -312,24 +312,26 @@ impl RtcWorker {
     }
 
     #[cfg(test)]
-    pub async fn debug_relay_target_count_for_source(
+    pub async fn debug_relay_target_count(
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> usize {
         self.read_debug_worker(move |state, _context| {
-            state.relay_target_count_for_source(source_transport_media_id)
+            state.routes.relay_target_count(source_transport_media_id)
         })
         .await
         .unwrap_or(0)
     }
 
     #[cfg(test)]
-    pub async fn debug_active_relay_target_count_for_source(
+    pub async fn debug_active_relay_target_count(
         &self,
         source_transport_media_id: TransportMediaId,
     ) -> usize {
         self.read_debug_worker(move |state, _context| {
-            state.active_relay_target_count_for_source(source_transport_media_id)
+            state
+                .routes
+                .active_relay_target_count(source_transport_media_id)
         })
         .await
         .unwrap_or(0)

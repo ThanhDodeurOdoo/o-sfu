@@ -76,12 +76,17 @@ impl RemoteSourceRollback {
         let previous_registration = is_remote_source
             .then(|| {
                 state
-                    .remote_source_registration(source_transport_media_id)
+                    .routes
+                    .remote_source(source_transport_media_id)
                     .cloned()
             })
             .flatten();
         let previous_decoder_refresh_codec = is_remote_source
-            .then(|| state.source_decoder_refresh_codec(source_transport_media_id))
+            .then(|| {
+                state
+                    .routes
+                    .decoder_refresh_codec(source_transport_media_id)
+            })
             .flatten();
         Self {
             is_remote_source,
@@ -95,11 +100,11 @@ impl RemoteSourceRollback {
         if !self.is_remote_source {
             return;
         }
-        state.restore_remote_source_registration(
+        state.routes.restore_remote_source(
             self.source_transport_media_id,
             self.previous_registration.clone(),
         );
-        state.restore_source_decoder_refresh_codec(
+        state.routes.set_decoder_refresh_codec(
             self.source_transport_media_id,
             self.previous_decoder_refresh_codec,
         );

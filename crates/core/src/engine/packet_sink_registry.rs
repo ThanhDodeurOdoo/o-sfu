@@ -109,12 +109,14 @@ impl PacketSinkRouteCache {
 }
 
 impl PacketSinkLookup for PacketSinkRouteCache {
+    #[inline]
     fn sink_for_room(&self, room_instance_id: RoomInstanceId) -> Option<RegisteredPacketSink> {
         self.active_rooms.get(&room_instance_id).cloned()
     }
 }
 
 impl PacketSinkLookup for RoomPacketSinkRegistry {
+    #[inline]
     fn sink_for_room(&self, room_instance_id: RoomInstanceId) -> Option<RegisteredPacketSink> {
         Self::sink_for_room(self, room_instance_id)
     }
@@ -126,6 +128,7 @@ struct PacketSinkRegistrySnapshot {
 }
 
 impl RoomPacketSinkRegistry {
+    #[inline]
     pub fn sink_for_room(&self, room_instance_id: RoomInstanceId) -> Option<RegisteredPacketSink> {
         if !self.any_active.load(Ordering::Acquire) {
             return None;

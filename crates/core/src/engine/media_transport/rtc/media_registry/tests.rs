@@ -361,9 +361,9 @@ fn expired_active_speaker_channels_are_resolved_from_source_owners() {
     let start = Instant::now();
 
     state
-        .route_control
+        .routes
         .observe_audio_activity(first_media_id, Some(true), None, start);
-    state.route_control.observe_audio_activity(
+    state.routes.observe_audio_activity(
         second_media_id,
         Some(true),
         None,

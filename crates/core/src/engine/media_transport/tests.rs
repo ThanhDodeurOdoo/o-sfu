@@ -169,13 +169,13 @@ async fn assert_relay_target_counts(
 ) {
     assert_eq!(
         source_worker
-            .debug_relay_target_count_for_source(source_media_id)
+            .debug_relay_target_count(source_media_id)
             .await,
         total
     );
     assert_eq!(
         source_worker
-            .debug_active_relay_target_count_for_source(source_media_id)
+            .debug_active_relay_target_count(source_media_id)
             .await,
         active
     );

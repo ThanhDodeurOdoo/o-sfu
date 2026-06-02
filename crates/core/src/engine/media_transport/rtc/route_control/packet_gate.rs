@@ -178,6 +178,7 @@ impl PacketLayerMetadata {
 /// relay-target and local-destination gates still run during destination
 /// planning so each downstream route can keep its own selected layer
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub(in crate::engine::media_transport::rtc) enum PacketRouteDecision {
     /// keep planning destinations for this packet
     Forward,
@@ -214,7 +215,7 @@ pub(in crate::engine::media_transport::rtc) fn aggregate_packet_gates<'a>(
 /// `None` means "no gate installed" and acts as the identity value
 /// this is used to apply source-level restrictions such as transport audio
 /// policy after downstream gates have already been widened into one source gate
-pub(super) fn intersect_packet_gates(
+pub(in crate::engine::media_transport::rtc) fn intersect_packet_gates(
     first: Option<PacketLayerGate>,
     second: Option<PacketLayerGate>,
 ) -> Option<PacketLayerGate> {

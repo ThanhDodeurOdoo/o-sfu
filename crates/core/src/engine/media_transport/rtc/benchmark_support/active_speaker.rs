@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use super::super::route_control::RouteControlState;
+use super::super::route_table::RouteTable;
 use crate::engine::media_transport::TransportMediaId;
 
 const ACTIVE_SPEAKER_SOURCE_COUNT: usize = 128;
@@ -12,7 +12,7 @@ const ACTIVE_SPEAKER_OBSERVATIONS: usize = 4;
 /// measured path observes speech for many sources, snapshots active speakers,
 /// checks the next expiry deadline and queries expired source ids
 pub struct ActiveSpeakerBenchFixture {
-    state: RouteControlState,
+    state: RouteTable,
     now: Instant,
     sources: Vec<TransportMediaId>,
 }
@@ -24,7 +24,7 @@ impl ActiveSpeakerBenchFixture {
             .map(|source_idx| TransportMediaId::new(u64::try_from(source_idx + 1).unwrap_or(1)))
             .collect();
         Self {
-            state: RouteControlState::default(),
+            state: RouteTable::default(),
             now: Instant::now(),
             sources,
         }

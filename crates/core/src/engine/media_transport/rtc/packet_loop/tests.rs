@@ -57,7 +57,7 @@ use crate::{
                     RemoteSourceControl, RouteControlRequest, RtcMediaControlCommand,
                     RtcWorkerCommand,
                 },
-                demux::{MediaRouteDestination, MediaRouteEntry},
+                demux::MediaRouteDestination,
                 forwarding_destination::PacketForward,
                 keyframe_tracker::KeyframeRequestDecision,
                 media_registry::RegisteredMediaHandle,
@@ -251,15 +251,9 @@ fn insert_consumer_route_fixture(
     let dest_session = destination.dest_session.clone();
     let dest_mid = destination.dest_mid;
     let dest_transport_media_id = destination.dest_transport_media_id;
-    let destination_index = {
-        let route_entry = state
-            .media_route_index
-            .entry(source_transport_media_id)
-            .or_insert_with(|| MediaRouteEntry::new(true));
-        let destination_index = route_entry.destinations.len();
-        route_entry.push_destination(destination);
-        destination_index
-    };
+    let destination_index = state
+        .routes
+        .add_consumer_route(source_transport_media_id, destination);
     state.set_consumer_destination_index(
         &dest_session,
         dest_mid,
@@ -406,6 +400,7 @@ fn remote_keyframe_source(
     let (control_tx, control_rx) = mpsc::channel(capacity);
     let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
     state
+        .routes
         .register_remote_source(&source, RemoteSourceControl::new(control_tx, target_id))
         .expect("remote source should register");
     control_rx
@@ -438,6 +433,7 @@ fn saturated_remote_keyframe_source(
         ))
         .expect("remote source control channel should be saturated");
     state
+        .routes
         .register_remote_source(
             &source,
             RemoteSourceControl::with_metrics(control_tx, target_id, metrics),
@@ -452,12 +448,28 @@ fn set_source_route_active(
     active: bool,
 ) -> bool {
     state
-        .media_route_index
-        .get_mut(&source_transport_media_id)
-        .is_some_and(|route_entry| {
-            route_entry.source_active = active;
-            true
-        })
+        .routes
+        .set_source_active(source_transport_media_id, active)
+        .is_ok()
+}
+
+#[allow(
+    clippy::panic,
+    reason = "test setup helpers should fail loudly when a fixture queues the wrong command"
+)]
+fn drain_remote_packet_gate_setup(control_rx: &mut mpsc::Receiver<RtcWorkerCommand>) {
+    loop {
+        match control_rx.try_recv() {
+            Ok(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+                request: RouteControlRequest::SetRemoteSourcePacketGate { .. },
+                response: None,
+            })) => {}
+            Ok(_) => panic!("expected only remote packet-gate setup commands"),
+            Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {
+                break;
+            }
+        }
+    }
 }
 
 #[allow(
@@ -476,23 +488,29 @@ fn recv_remote_keyframe_request(
     Option<Rid>,
     KeyframeRequestKind,
 ) {
-    match control_rx.try_recv() {
-        Ok(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
-            request:
-                RouteControlRequest::RequestRemoteKeyframe {
-                    source,
-                    target_id,
-                    rid,
-                    kind,
-                },
-            response: None,
-        })) => (source, target_id, rid, kind),
-        Ok(_) => panic!("expected a remote keyframe request"),
-        Err(mpsc::error::TryRecvError::Empty) => {
-            panic!("expected a remote keyframe request but channel was empty")
-        }
-        Err(mpsc::error::TryRecvError::Disconnected) => {
-            panic!("expected a remote keyframe request but channel was disconnected")
+    loop {
+        match control_rx.try_recv() {
+            Ok(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+                request:
+                    RouteControlRequest::RequestRemoteKeyframe {
+                        source,
+                        target_id,
+                        rid,
+                        kind,
+                    },
+                response: None,
+            })) => return (source, target_id, rid, kind),
+            Ok(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+                request: RouteControlRequest::SetRemoteSourcePacketGate { .. },
+                response: None,
+            })) => {}
+            Ok(_) => panic!("expected a remote keyframe request"),
+            Err(mpsc::error::TryRecvError::Empty) => {
+                panic!("expected a remote keyframe request but channel was empty")
+            }
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                panic!("expected a remote keyframe request but channel was disconnected")
+            }
         }
     }
 }
@@ -1576,22 +1594,20 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
         consumer_mid,
         source_transport_media_id,
     );
-    let mut route_entry = MediaRouteEntry::new(true);
-    route_entry.push_destination(MediaRouteDestination {
-        dest_session: consumer_session.clone(),
-        dest_transport_media_id: consumer_transport_media_id,
-        dest_stream: ConsumerStreamHandle::default(),
-        dest_mid: consumer_mid,
-        dest_payload_type: None,
-        nackable: false,
-        active: true,
-        packet_gate: PacketLayerGate::Open,
-        pending_packet_gate: None,
-    });
-    harness
-        .state
-        .media_route_index
-        .insert(source_transport_media_id, route_entry);
+    harness.state.routes.add_consumer_route(
+        source_transport_media_id,
+        MediaRouteDestination {
+            dest_session: consumer_session.clone(),
+            dest_transport_media_id: consumer_transport_media_id,
+            dest_stream: ConsumerStreamHandle::default(),
+            dest_mid: consumer_mid,
+            dest_payload_type: None,
+            nackable: false,
+            active: true,
+            packet_gate: PacketLayerGate::Open,
+            pending_packet_gate: None,
+        },
+    );
     harness.state.set_consumer_destination_index(
         &consumer_session,
         consumer_mid,
@@ -1695,13 +1711,13 @@ fn active_audio_rank_change_publishes_source_policy_dirty_room() {
     let second_transport_media_id =
         register_producer_media(&mut state, &second_producer_session, "aud-second");
     let shared_observed_at = Instant::now();
-    assert!(state.route_control.observe_audio_activity(
+    assert!(state.routes.observe_audio_activity(
         first_transport_media_id,
         Some(true),
         Some(-30),
         shared_observed_at,
     ));
-    assert!(state.route_control.observe_audio_activity(
+    assert!(state.routes.observe_audio_activity(
         second_transport_media_id,
         Some(true),
         Some(-10),
@@ -1891,6 +1907,7 @@ fn flush_pending_keyframe_requests_follow_route_scoped_feedback() {
             packet_gate,
             pending_packet_gate,
         );
+        drain_remote_packet_gate_setup(&mut control_rx);
         push_keyframe_request_with_rid(
             &mut harness.buffers,
             consumer_session,
@@ -1965,6 +1982,7 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
         "cam-down-2",
         source_transport_media_id,
     );
+    drain_remote_packet_gate_setup(&mut control_rx);
     push_keyframe_request(
         &mut harness.buffers,
         first_consumer_session,
@@ -2032,6 +2050,7 @@ fn flush_pending_keyframe_requests_keeps_distinct_rids_separate() {
         PacketLayerGate::Rid(second_rid),
         None,
     );
+    drain_remote_packet_gate_setup(&mut control_rx);
     push_keyframe_request(
         &mut harness.buffers,
         first_consumer_session,
@@ -2227,6 +2246,7 @@ fn keyframe_tracker_cancels_due_retry_when_route_goes_inactive() {
         "cam-down",
         source_transport_media_id,
     );
+    drain_remote_packet_gate_setup(&mut control_rx);
 
     push_keyframe_request(
         &mut harness.buffers,
@@ -2326,6 +2346,7 @@ fn keyframe_tracker_decoder_refresh_suppresses_remote_retry() {
         "cam-down",
         source_transport_media_id,
     );
+    drain_remote_packet_gate_setup(&mut control_rx);
 
     push_keyframe_request(
         &mut harness.buffers,
@@ -2443,7 +2464,7 @@ fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_f
         vec![source_session.clone()]
     );
     assert_eq!(
-        harness.state.keyframe_requests.track(
+        harness.state.routes.track_keyframe_request(
             source_transport_media_id,
             None,
             KeyframeRequestKind::Pli,

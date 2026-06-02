@@ -851,13 +851,13 @@ async fn rtc_relay_route_api_registers_and_removes_target_mailboxes() {
     );
     assert_eq!(
         source_adapter
-            .debug_relay_target_count_for_source(source_transport_media_id)
+            .debug_relay_target_count(source_transport_media_id)
             .await,
         1
     );
     assert_eq!(
         source_adapter
-            .debug_active_relay_target_count_for_source(source_transport_media_id)
+            .debug_active_relay_target_count(source_transport_media_id)
             .await,
         0
     );
@@ -870,7 +870,7 @@ async fn rtc_relay_route_api_registers_and_removes_target_mailboxes() {
     );
     assert_eq!(
         source_adapter
-            .debug_active_relay_target_count_for_source(source_transport_media_id)
+            .debug_active_relay_target_count(source_transport_media_id)
             .await,
         1
     );
@@ -883,7 +883,7 @@ async fn rtc_relay_route_api_registers_and_removes_target_mailboxes() {
     );
     assert_eq!(
         source_adapter
-            .debug_relay_target_count_for_source(source_transport_media_id)
+            .debug_relay_target_count(source_transport_media_id)
             .await,
         0
     );

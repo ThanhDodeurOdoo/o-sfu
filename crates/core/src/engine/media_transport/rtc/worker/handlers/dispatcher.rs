@@ -99,11 +99,11 @@ pub fn handle_worker_command(
         ),
         RtcWorkerCommand::ActiveSpeakerSourceSnapshot { response } => respond(
             response,
-            Ok(state.active_speaker_source_snapshot(context.now)),
+            Ok(state.routes.active_speaker_sources(context.now)),
         ),
         RtcWorkerCommand::ActiveSpeakerDiagnosticSnapshot { response } => respond(
             response,
-            Ok(state.active_speaker_diagnostic_snapshot(context.now)),
+            Ok(state.routes.active_speaker_diagnostics(context.now)),
         ),
         RtcWorkerCommand::SourceActivitySnapshot {
             transport_media_ids,
@@ -111,9 +111,7 @@ pub fn handle_worker_command(
         } => respond_source_activity_snapshot(state, &transport_media_ids, context.now, response),
         RtcWorkerCommand::NextActiveSpeakerDeadline { response } => respond(
             response,
-            Ok(state
-                .route_control
-                .next_active_speaker_deadline(context.now)),
+            Ok(state.routes.next_active_speaker_deadline(context.now)),
         ),
         RtcWorkerCommand::ExpiredActiveSpeakerRoomInstanceIds { now, response } => respond(
             response,
@@ -194,7 +192,11 @@ fn respond_source_activity_snapshot(
 ) {
     respond(
         response,
-        Ok(state.source_activity_snapshot(transport_media_ids, now)),
+        Ok(state.routes.source_activity_snapshot(
+            transport_media_ids,
+            now,
+            &state.incoming_bitrate_counters,
+        )),
     );
 }
 

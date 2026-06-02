@@ -406,7 +406,10 @@ impl ForwardedPacket {
         state: &PacketLoopState,
         source_transport_media_id: TransportMediaId,
     ) -> bool {
-        match state.source_decoder_refresh_codec(source_transport_media_id) {
+        match state
+            .routes
+            .decoder_refresh_codec(source_transport_media_id)
+        {
             Some(DecoderRefreshCodec::H264(packetization_mode)) => {
                 h264::payload_starts_idr(self.payload.as_ref(), packetization_mode)
             }

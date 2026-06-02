@@ -17,17 +17,25 @@ fn worker_local_relay_targets_track_active_sources() {
     let source_transport_media_id = TransportMediaId::new(8);
     let relay_target = RelayTargetId::new(1);
 
-    state.add_relay_target(source_transport_media_id, relay_target, mailbox);
-    state.set_relay_target_active(source_transport_media_id, relay_target, true);
+    state
+        .routes
+        .add_relay_target(source_transport_media_id, relay_target, mailbox);
+    state
+        .routes
+        .set_relay_target_active(source_transport_media_id, relay_target, true);
     assert!(
         state
+            .routes
             .relay_targets_for_source(source_transport_media_id)
             .is_some()
     );
 
-    state.remove_relay_target(source_transport_media_id, relay_target);
+    state
+        .routes
+        .remove_relay_target(source_transport_media_id, relay_target);
     assert!(
         state
+            .routes
             .relay_targets_for_source(source_transport_media_id)
             .is_none()
     );
@@ -42,10 +50,16 @@ fn worker_local_relay_targets_forward_packets_through_registered_mailboxes() {
     let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
     let relay_target = RelayTargetId::new(1);
 
-    state.add_relay_target(source_transport_media_id, relay_target, mailbox);
-    state.set_relay_target_active(source_transport_media_id, relay_target, true);
+    state
+        .routes
+        .add_relay_target(source_transport_media_id, relay_target, mailbox);
+    state
+        .routes
+        .set_relay_target_active(source_transport_media_id, relay_target, true);
 
-    let relay_targets = state.relay_targets_for_source(source_transport_media_id);
+    let relay_targets = state
+        .routes
+        .relay_targets_for_source(source_transport_media_id);
     assert!(relay_targets.is_some());
     if let Some(relay_targets) = relay_targets {
         assert_eq!(relay_targets.len(), 1);
@@ -74,20 +88,26 @@ fn worker_local_relay_targets_keep_multiple_target_mailboxes_per_source() {
     let session_key = test_transport_session_key(18, 0, 19, UserId::Integer(20));
     let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
 
-    state.add_relay_target(
+    state.routes.add_relay_target(
         source_transport_media_id,
         RelayTargetId::new(1),
         first_mailbox,
     );
-    state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(1), true);
-    state.add_relay_target(
+    state
+        .routes
+        .set_relay_target_active(source_transport_media_id, RelayTargetId::new(1), true);
+    state.routes.add_relay_target(
         source_transport_media_id,
         RelayTargetId::new(2),
         second_mailbox,
     );
-    state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(2), true);
+    state
+        .routes
+        .set_relay_target_active(source_transport_media_id, RelayTargetId::new(2), true);
 
-    let relay_targets = state.relay_targets_for_source(source_transport_media_id);
+    let relay_targets = state
+        .routes
+        .relay_targets_for_source(source_transport_media_id);
     assert!(relay_targets.is_some());
     if let Some(relay_targets) = relay_targets {
         assert_eq!(relay_targets.len(), 2);
@@ -107,22 +127,35 @@ fn worker_local_relay_targets_do_not_reference_count_room_owners() {
     let source_transport_media_id = TransportMediaId::new(12);
     let relay_target = RelayTargetId::new(1);
 
-    state.add_relay_target(source_transport_media_id, relay_target, mailbox.clone());
-    state.add_relay_target(source_transport_media_id, relay_target, mailbox);
-    state.set_relay_target_active(source_transport_media_id, relay_target, true);
-    state.set_relay_target_active(source_transport_media_id, relay_target, true);
+    state
+        .routes
+        .add_relay_target(source_transport_media_id, relay_target, mailbox.clone());
+    state
+        .routes
+        .add_relay_target(source_transport_media_id, relay_target, mailbox);
+    state
+        .routes
+        .set_relay_target_active(source_transport_media_id, relay_target, true);
+    state
+        .routes
+        .set_relay_target_active(source_transport_media_id, relay_target, true);
     assert_eq!(
-        state.relay_target_count_for_source(source_transport_media_id),
+        state.routes.relay_target_count(source_transport_media_id),
         1
     );
     assert_eq!(
-        state.active_relay_target_count_for_source(source_transport_media_id),
+        state
+            .routes
+            .active_relay_target_count(source_transport_media_id),
         1
     );
 
-    state.remove_relay_target(source_transport_media_id, relay_target);
+    state
+        .routes
+        .remove_relay_target(source_transport_media_id, relay_target);
     assert!(
         state
+            .routes
             .relay_targets_for_source(source_transport_media_id)
             .is_none()
     );
@@ -136,39 +169,51 @@ fn worker_local_relay_targets_keep_sources_independent() {
     let (first_mailbox, _first_rx) = RelayPacketMailbox::channel_for_test();
     let (second_mailbox, _second_rx) = RelayPacketMailbox::channel_for_test();
 
-    state.add_relay_target(
+    state.routes.add_relay_target(
         first_source_transport_media_id,
         RelayTargetId::new(1),
         first_mailbox,
     );
-    state.set_relay_target_active(first_source_transport_media_id, RelayTargetId::new(1), true);
-    state.add_relay_target(
+    state.routes.set_relay_target_active(
+        first_source_transport_media_id,
+        RelayTargetId::new(1),
+        true,
+    );
+    state.routes.add_relay_target(
         second_source_transport_media_id,
         RelayTargetId::new(2),
         second_mailbox,
     );
-    state.set_relay_target_active(
+    state.routes.set_relay_target_active(
         second_source_transport_media_id,
         RelayTargetId::new(2),
         true,
     );
 
     assert_eq!(
-        state.relay_target_count_for_source(first_source_transport_media_id),
+        state
+            .routes
+            .relay_target_count(first_source_transport_media_id),
         1
     );
     assert_eq!(
-        state.relay_target_count_for_source(second_source_transport_media_id),
+        state
+            .routes
+            .relay_target_count(second_source_transport_media_id),
         1
     );
-    state.remove_relay_target(first_source_transport_media_id, RelayTargetId::new(1));
+    state
+        .routes
+        .remove_relay_target(first_source_transport_media_id, RelayTargetId::new(1));
     assert!(
         state
+            .routes
             .relay_targets_for_source(first_source_transport_media_id)
             .is_none()
     );
     assert!(
         state
+            .routes
             .relay_targets_for_source(second_source_transport_media_id)
             .is_some()
     );
@@ -183,34 +228,50 @@ fn worker_local_relay_targets_only_forward_to_targets_with_active_routes() {
     let first_target = RelayTargetId::new(1);
     let second_target = RelayTargetId::new(2);
 
-    state.add_relay_target(source_transport_media_id, first_target, first_mailbox);
-    state.add_relay_target(source_transport_media_id, second_target, second_mailbox);
+    state
+        .routes
+        .add_relay_target(source_transport_media_id, first_target, first_mailbox);
+    state
+        .routes
+        .add_relay_target(source_transport_media_id, second_target, second_mailbox);
     assert!(
         state
+            .routes
             .relay_targets_for_source(source_transport_media_id)
             .is_none()
     );
 
-    state.set_relay_target_active(source_transport_media_id, second_target, true);
-    let relay_targets = state.relay_targets_for_source(source_transport_media_id);
+    state
+        .routes
+        .set_relay_target_active(source_transport_media_id, second_target, true);
+    let relay_targets = state
+        .routes
+        .relay_targets_for_source(source_transport_media_id);
     assert!(relay_targets.is_some());
     let Some(relay_targets) = relay_targets else {
         return;
     };
     assert_eq!(relay_targets.len(), 1);
     assert_eq!(
-        state.active_relay_target_count_for_source(source_transport_media_id),
+        state
+            .routes
+            .active_relay_target_count(source_transport_media_id),
         1
     );
 
-    state.set_relay_target_active(source_transport_media_id, second_target, false);
+    state
+        .routes
+        .set_relay_target_active(source_transport_media_id, second_target, false);
     assert!(
         state
+            .routes
             .relay_targets_for_source(source_transport_media_id)
             .is_none()
     );
     assert_eq!(
-        state.active_relay_target_count_for_source(source_transport_media_id),
+        state
+            .routes
+            .active_relay_target_count(source_transport_media_id),
         0
     );
 }

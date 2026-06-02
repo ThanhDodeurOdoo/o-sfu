@@ -14,7 +14,7 @@ use super::{
         keyframe_tracker::KeyframeRequestDecision, media_registry::RegisteredMediaHandle,
         route_control::PacketLayerGate, state::PacketLoopState,
     },
-    control::{ensure_existing_route_source, owned_local_producer_mid},
+    control::{ensure_existing_route_source, ensure_owned_local_producer_mid},
     types::RouteSourceKind,
 };
 use crate::engine::{
@@ -35,7 +35,10 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn worker_r
     rid: Option<Rid>,
     kind: KeyframeRequestKind,
 ) {
-    if !state.is_relay_target_active(source.transport_media_id(), target_id) {
+    if !state
+        .routes
+        .is_relay_target_active(source.transport_media_id(), target_id)
+    {
         metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
         return;
     }
@@ -147,8 +150,8 @@ fn request_local_keyframe(
         metrics.record_rtc_keyframe_request(mode.outcome());
     } else {
         state
-            .keyframe_requests
-            .forget(source_transport_media_id, rid);
+            .routes
+            .forget_keyframe_request(source_transport_media_id, rid);
     }
 }
 
@@ -169,8 +172,8 @@ fn request_remote_keyframe(
         metrics.record_rtc_keyframe_request(mode.outcome());
     } else {
         state
-            .keyframe_requests
-            .forget(source.transport_media_id(), rid);
+            .routes
+            .forget_keyframe_request(source.transport_media_id(), rid);
     }
 }
 
@@ -186,8 +189,8 @@ fn track_keyframe_request(
         return true;
     };
     match state
-        .keyframe_requests
-        .track(source_transport_media_id, rid, kind, now)
+        .routes
+        .track_keyframe_request(source_transport_media_id, rid, kind, now)
     {
         KeyframeRequestDecision::Forward => true,
         KeyframeRequestDecision::Absorb => {
@@ -222,8 +225,8 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn worker_r
         None => return Err(TransportAdapterError::TransportUnavailable),
     }
     let (destination_active, destination_rid) = state
-        .media_route_index
-        .get(&source_transport_media_id)
+        .routes
+        .local_route(source_transport_media_id)
         .and_then(|route_entry| {
             route_entry.destinations.iter().find(|destination| {
                 destination.dest_session == *consumer_session_key
@@ -249,7 +252,8 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn worker_r
         }
         RouteSourceKind::Remote => {
             let Some((source, source_control)) = state
-                .remote_source_registration(source_transport_media_id)
+                .routes
+                .remote_source(source_transport_media_id)
                 .map(|registration| {
                     (
                         registration.source().clone(),
@@ -291,7 +295,8 @@ fn local_keyframe_request_mid(
     rid: Option<Rid>,
     kind: KeyframeRequestKind,
 ) -> Option<Mid> {
-    let mid = owned_local_producer_mid(state, source_session_key, source_transport_media_id);
+    let mid =
+        ensure_owned_local_producer_mid(state, source_session_key, source_transport_media_id).ok();
     if mid.is_none() {
         log_ignored_keyframe_request(
             source_session_key,

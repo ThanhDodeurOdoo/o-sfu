@@ -4,18 +4,15 @@ use str0m::media::{KeyframeRequestKind, Rid};
 
 use super::super::{
     keyframe_tracker::{KeyframeRequestDecision, KeyframeRequestTracker},
-    relay_registry::RelayTargetId,
-    route_control::{PacketLayerGate, PacketLayerMetadata, PacketRouteDecision, RouteControlState},
+    relay_registry::{RelayPacketMailbox, RelayTargetId},
+    route_control::{PacketLayerGate, PacketLayerMetadata, PacketRouteDecision},
+    route_table::RouteTable,
 };
 use crate::engine::media_transport::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource, TransportMediaId,
 };
 
-fn assert_active_speaker_ids(
-    state: &RouteControlState,
-    now: Instant,
-    expected: &[TransportMediaId],
-) {
+fn assert_active_speaker_ids(state: &RouteTable, now: Instant, expected: &[TransportMediaId]) {
     let ids = state
         .active_speaker_sources(now)
         .into_iter()
@@ -25,7 +22,7 @@ fn assert_active_speaker_ids(
 }
 
 fn assert_single_active_speaker(
-    state: &RouteControlState,
+    state: &RouteTable,
     now: Instant,
     source_transport_media_id: TransportMediaId,
     last_audio_level_dbov: Option<i8>,
@@ -38,7 +35,7 @@ fn assert_single_active_speaker(
 }
 
 fn assert_single_active_speaker_diagnostic(
-    state: &RouteControlState,
+    state: &RouteTable,
     now: Instant,
     activity_state: ActiveSpeakerActivityState,
     reason: ActiveSpeakerActivityReason,
@@ -252,9 +249,9 @@ fn keyframe_tracker_decoder_refresh_clears_source_wide_pending_request() {
 
 #[test]
 fn route_control_drops_packets_when_the_is_source_blocked() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let source_transport_media_id = TransportMediaId::new(19);
-    state.set_packet_gate(source_transport_media_id, PacketLayerGate::Block);
+    state.set_local_packet_gate(source_transport_media_id, Some(PacketLayerGate::Block));
 
     assert_eq!(
         state.decide_packet_route(source_transport_media_id, PacketLayerMetadata::default()),
@@ -264,7 +261,7 @@ fn route_control_drops_packets_when_the_is_source_blocked() {
 
 #[test]
 fn route_control_combines_local_and_remote_target_gates() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let source_transport_media_id = TransportMediaId::new(21);
 
     state.set_local_packet_gate(
@@ -296,15 +293,18 @@ fn route_control_combines_local_and_remote_target_gates() {
 
 #[test]
 fn route_control_refreshes_source_gate_after_relay_gate_removal() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let source_transport_media_id = TransportMediaId::new(121);
+    let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
+    let relay_target = RelayTargetId::new(1);
     state.set_local_packet_gate(
         source_transport_media_id,
         Some(PacketLayerGate::Rid("hi".into())),
     );
+    state.add_relay_target(source_transport_media_id, relay_target, relay_mailbox);
     state.set_relay_packet_gate(
         source_transport_media_id,
-        RelayTargetId::new(1),
+        relay_target,
         PacketLayerGate::Rid("lo".into()),
     );
 
@@ -313,7 +313,7 @@ fn route_control_refreshes_source_gate_after_relay_gate_removal() {
         Some(PacketLayerGate::Open)
     );
 
-    state.forget_relay_packet_gate(source_transport_media_id, RelayTargetId::new(1));
+    state.remove_relay_target(source_transport_media_id, relay_target);
 
     assert_eq!(
         state.effective_packet_gate(source_transport_media_id),
@@ -330,15 +330,18 @@ fn route_control_refreshes_source_gate_after_relay_gate_removal() {
 
 #[test]
 fn route_control_refreshes_source_gate_after_local_gate_clear() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let source_transport_media_id = TransportMediaId::new(122);
+    let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
+    let relay_target = RelayTargetId::new(1);
     state.set_local_packet_gate(
         source_transport_media_id,
         Some(PacketLayerGate::Rid("hi".into())),
     );
+    state.add_relay_target(source_transport_media_id, relay_target, relay_mailbox);
     state.set_relay_packet_gate(
         source_transport_media_id,
-        RelayTargetId::new(1),
+        relay_target,
         PacketLayerGate::Rid("hi".into()),
     );
 
@@ -349,7 +352,7 @@ fn route_control_refreshes_source_gate_after_local_gate_clear() {
         Some(PacketLayerGate::Rid("hi".into()))
     );
 
-    state.forget_relay_packet_gate(source_transport_media_id, RelayTargetId::new(1));
+    state.remove_relay_target(source_transport_media_id, relay_target);
 
     assert_eq!(state.effective_packet_gate(source_transport_media_id), None);
     assert_eq!(
@@ -363,7 +366,7 @@ fn route_control_refreshes_source_gate_after_local_gate_clear() {
 
 #[test]
 fn route_control_transport_audio_policy_blocks_silent_sources() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let source_transport_media_id = TransportMediaId::new(22);
     let now = Instant::now();
 
@@ -378,7 +381,7 @@ fn route_control_transport_audio_policy_blocks_silent_sources() {
 
 #[test]
 fn route_control_vad_true_promotes_active_speaker_immediately() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let source_transport_media_id = TransportMediaId::new(28);
     let now = Instant::now();
 
@@ -395,7 +398,7 @@ fn route_control_vad_true_promotes_active_speaker_immediately() {
 
 #[test]
 fn route_control_vad_true_refresh_extends_deadline_without_dirtying_room_policy() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let source_transport_media_id = TransportMediaId::new(33);
     let now = Instant::now();
 
@@ -413,7 +416,7 @@ fn route_control_vad_true_refresh_extends_deadline_without_dirtying_room_policy(
 
 #[test]
 fn route_control_vad_false_inside_hold_window_does_not_dirty_room_policy() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let source_transport_media_id = TransportMediaId::new(34);
     let now = Instant::now();
 
@@ -438,7 +441,7 @@ fn route_control_vad_false_inside_hold_window_does_not_dirty_room_policy() {
 
 #[test]
 fn route_control_newer_speaker_order_change_dirties_room_policy() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let first_source_transport_media_id = TransportMediaId::new(35);
     let second_source_transport_media_id = TransportMediaId::new(36);
     let now = Instant::now();
@@ -477,7 +480,7 @@ fn route_control_newer_speaker_order_change_dirties_room_policy() {
 
 #[test]
 fn route_control_same_timestamp_audio_level_rank_change_dirties_room_policy() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let first_source_transport_media_id = TransportMediaId::new(37);
     let second_source_transport_media_id = TransportMediaId::new(38);
     let now = Instant::now();
@@ -500,7 +503,7 @@ fn route_control_same_timestamp_audio_level_rank_change_dirties_room_policy() {
 
 #[test]
 fn route_control_vad_false_overrides_loud_audio_level() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let source_transport_media_id = TransportMediaId::new(29);
     let now = Instant::now();
 
@@ -521,7 +524,7 @@ fn route_control_vad_false_overrides_loud_audio_level() {
 
 #[test]
 fn route_control_transport_audio_policy_holds_recent_speech_open() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let source_transport_media_id = TransportMediaId::new(23);
     let now = Instant::now();
 
@@ -545,7 +548,7 @@ fn route_control_transport_audio_policy_holds_recent_speech_open() {
 
 #[test]
 fn route_control_transport_audio_policy_reblocks_after_the_hold_window() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let source_transport_media_id = TransportMediaId::new(24);
     let now = Instant::now();
 
@@ -566,7 +569,7 @@ fn route_control_transport_audio_policy_reblocks_after_the_hold_window() {
 
 #[test]
 fn route_control_transport_audio_policy_uses_repeated_audio_level_fallback() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let source_transport_media_id = TransportMediaId::new(25);
     let now = Instant::now();
 
@@ -598,7 +601,7 @@ fn route_control_transport_audio_policy_uses_repeated_audio_level_fallback() {
 
 #[test]
 fn route_control_transport_audio_policy_rejects_persistent_low_noise() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let source_transport_media_id = TransportMediaId::new(26);
     let now = Instant::now();
 
@@ -630,7 +633,7 @@ fn route_control_transport_audio_policy_rejects_persistent_low_noise() {
 
 #[test]
 fn route_control_active_speaker_expiry_is_observable() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let source_transport_media_id = TransportMediaId::new(30);
     let now = Instant::now();
 
@@ -648,7 +651,7 @@ fn route_control_active_speaker_expiry_is_observable() {
 
 #[test]
 fn route_control_active_speaker_order_is_deterministic_for_equal_observations() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let first_source_transport_media_id = TransportMediaId::new(31);
     let second_source_transport_media_id = TransportMediaId::new(32);
     let now = Instant::now();
@@ -668,7 +671,7 @@ fn route_control_active_speaker_order_is_deterministic_for_equal_observations() 
 
 #[test]
 fn route_control_local_packet_gate_composes_with_transport_audio_policy() {
-    let mut state = RouteControlState::default();
+    let mut state = RouteTable::default();
     let source_transport_media_id = TransportMediaId::new(27);
     let now = Instant::now();
 
