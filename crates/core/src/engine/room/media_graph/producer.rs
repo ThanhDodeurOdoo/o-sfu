@@ -22,8 +22,8 @@ use super::{
         topology::RoutedProducerId,
     },
     ConsumerKey, ProducerRouteTarget, ProducerRuntimeId, PublishedProducer, PublishedSourceInstall,
-    SourceKey, SourceTransportMediaIndexEntry, TransportMediaRemoval,
-    relay::RelayRouteEffect,
+    SourceTransportMediaIndexEntry, TransportMediaRemoval,
+    route_graph::RelayRouteEffect,
     subscription::{ConsumerBootstrapProducerSnapshot, PendingConsumerBootstrapTarget},
 };
 use crate::{
@@ -41,12 +41,6 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-/// Publish request that passed the current user-level checks.
-///
-/// This exists so transport work can happen after validation without carrying
-/// a mutable room borrow.
-/// It only proves that the user was publish-ready at validation time.
-/// Commit must re-check the same ownership and readiness before state changes land.
 pub(in crate::engine::room) struct ValidatedPublishDescriptor {
     owner_user_id: UserId,
     owner_connection_id: ConnectionId,
@@ -56,12 +50,6 @@ pub(in crate::engine::room) struct ValidatedPublishDescriptor {
 }
 
 #[derive(Debug, Clone)]
-/// Publish payload that is ready to be committed into room state.
-///
-/// This is the last pure state input before a producer becomes live. The
-/// transport layer already allocated the media handle and the caller already
-/// derived consumable router parameters, so commit can stay a small
-/// all-or-nothing state transition.
 pub(in crate::engine::room) struct PreparedPublishedTrack {
     owner_user_id: UserId,
     owner_connection_id: ConnectionId,
@@ -73,12 +61,6 @@ pub(in crate::engine::room) struct PreparedPublishedTrack {
 }
 
 #[derive(Debug)]
-/// Result of toggling a producer between active and paused.
-///
-/// The room commits router route state first and only then stages the
-/// outward fanout. That keeps user info updates aligned with the lasting
-/// router state instead of reporting a producer activity change that never
-/// stuck.
 pub(in crate::engine::room) struct ProducerActivityOutcome {
     pub transport_media_id: TransportMediaId,
     pub active: bool,
@@ -87,11 +69,6 @@ pub(in crate::engine::room) struct ProducerActivityOutcome {
 }
 
 #[derive(Debug)]
-/// Deferred side effects for explicit unpublish.
-///
-/// The state transition removes the producer and all dependent consumer
-/// bookkeeping first. Emitting the track removal and optional user-info
-/// update stays outside the state lock.
 pub(in crate::engine::room) struct UnpublishTrackOutcome {
     recipients: Vec<OutboundSender>,
     relay_effects: Vec<RelayRouteEffect>,
@@ -99,12 +76,6 @@ pub(in crate::engine::room) struct UnpublishTrackOutcome {
 }
 
 impl RoomState {
-    /// Validates that a user may start a negotiated publish right now.
-    ///
-    /// This is the pure state gate in front of the staged publish flow. The
-    /// caller may use the returned descriptor to drive transport work, but it
-    /// must still commit through `commit_publish_reservation` because replacement,
-    /// disconnect or negotiation rollback can make the descriptor stale.
     pub fn validate_publish_descriptor(
         &self,
         user_id: &UserId,
@@ -148,19 +119,12 @@ impl RoomState {
         })
     }
 
-    /// Commits a negotiated publish after transport setup already succeeded.
-    ///
-    /// The commit re-checks ownership and publish readiness because the
-    /// transport step happen outside the lock and stale callbacks are normal
-    /// during replacement or disconnect. On success this install every
-    /// producer-facing index in one place, including the `TransportMediaId`
-    /// ownership index used by room policy and diagnostics.
     pub fn commit_publish_reservation(
         &mut self,
         pending: PreparedPublishedTrack,
         transport_media_id: TransportMediaId,
     ) -> Option<(ProducerRuntimeId, Vec<PendingConsumerBootstrapTarget>)> {
-        let source_key = self.validate_publish_commit(&pending, transport_media_id)?;
+        self.validate_publish_commit(&pending, transport_media_id)?;
         let source_descriptor = self
             .source_descriptor_for_publish(&pending)
             .map_err(|error| {
@@ -174,10 +138,6 @@ impl RoomState {
                 );
             })
             .ok()?;
-        let source_encoding_ids = source_descriptor
-            .encodings()
-            .map(SourceEncodingDescriptor::encoding_id)
-            .collect::<Vec<_>>();
         let producer_id = ProducerRuntimeId::allocate(&mut self.next_producer_id);
         let routed_producer_id = self.add_routed_producer_for_publish(&pending)?;
         let owner_user_id = pending.owner_user_id.clone();
@@ -187,9 +147,7 @@ impl RoomState {
         let source_id = source_descriptor.source_id();
 
         self.media.install_source(PublishedSourceInstall {
-            source_key,
             source_descriptor,
-            source_encoding_ids,
             producer_id,
             producer: PublishedProducer {
                 source_id,
@@ -221,7 +179,7 @@ impl RoomState {
         &self,
         pending: &PreparedPublishedTrack,
         transport_media_id: TransportMediaId,
-    ) -> Option<SourceKey> {
+    ) -> Option<()> {
         let Some(user) = self.users.get(&pending.owner_user_id) else {
             warn!(
                 user_id = ?pending.owner_user_id,
@@ -244,7 +202,6 @@ impl RoomState {
             );
             return None;
         }
-        let source_key = SourceKey::new(&pending.owner_user_id, &pending.stream_id);
         if self
             .media
             .has_source_for_owner_stream(&pending.owner_user_id, &pending.stream_id)
@@ -258,7 +215,7 @@ impl RoomState {
             );
             return None;
         }
-        Some(source_key)
+        Some(())
     }
 
     fn add_routed_producer_for_publish(
@@ -328,11 +285,6 @@ impl RoomState {
         })
     }
 
-    /// Plans bootstrap work for users that should consume a newly published track.
-    ///
-    /// This only computes the next transport-facing work. It does not mutate
-    /// consumer state yet, so callers can still stop out cleanly if the later
-    /// transport bootstrap fails.
     pub fn publish_consumer_targets(
         &self,
         producer: &ConsumerBootstrapProducerSnapshot,
@@ -397,13 +349,6 @@ impl RoomState {
         self.producer_route_target(user_id, connection_id, stream_id)
     }
 
-    /// Removes one published stream and its dependent consumer bookkeeping.
-    ///
-    /// This is the explicit unpublish state transition. It removes the router
-    /// producer, drops the producer and pending-consumer indexes for that
-    /// stream and clears the `TransportMediaId` ownership entry in the same
-    /// step so later diagnostics or room policy updates cannot resolve stale
-    /// ownership.
     pub fn unpublish_track(
         &mut self,
         user_id: &UserId,
@@ -440,16 +385,6 @@ impl RoomState {
         })
     }
 
-    /// Applies a publish-side active or paused transition for an existing producer.
-    ///
-    /// The `ProducerRouteTarget` comes from a fresh state lookup and is used as
-    /// a stale-callback guard. If any ownership field drifted since that lookup
-    /// the update becomes a no-op instead of mutating the wrong replacement
-    /// user.
-    ///
-    /// The pure router is updated before the room-level producer flag so a
-    /// failed router mutation cannot leave outbound user-info fanout ahead of
-    /// authoritative route state.
     pub fn apply_producer_activity(
         &mut self,
         user_id: &UserId,
@@ -512,7 +447,6 @@ impl ValidatedPublishDescriptor {
         &self.owner_user_id
     }
 
-    /// Freezes the validated publish inputs together with router-ready RTP data.
     #[allow(
         dead_code,
         reason = "room state tests use this helper when upload-profile metadata is irrelevant"
@@ -558,9 +492,6 @@ impl UnpublishTrackOutcome {
         &self.transport_removals
     }
 
-    /// Emits the unpublish side effects after state cleanup already landed
-    ///
-    /// Recipients always get the track binding removal.
     pub fn emit(self, user_id: &UserId, stream_id: &UserStreamId) {
         let track_update = UserOutbound::TrackBindingUpdate(TrackBindingUpdate {
             user_id: user_id.clone(),

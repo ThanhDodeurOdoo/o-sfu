@@ -2,12 +2,16 @@ use o_sfu_router::RouterId;
 #[cfg(test)]
 use {super::super::media_graph::ConsumerKey, crate::engine::source_model::PublishedSourceId};
 
-use super::{super::media_graph::SourceTransportMediaIndexEntry, shared::RoomState};
+#[cfg(test)]
+use super::super::media_graph::SourceTransportMediaIndexEntry;
+use super::shared::RoomState;
 use crate::engine::{
     ConnectionId, TestSourceKind, UserId,
     media_transport::TransportMediaId,
     room::RoomUserPermissions,
-    source_model::{SourceEncodingId, test_support::stream_id_for_source},
+    source_model::{
+        SourceEncodingDescriptor, SourceEncodingId, test_support::stream_id_for_source,
+    },
 };
 
 impl RoomState {
@@ -113,15 +117,26 @@ impl RoomState {
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<Vec<SourceEncodingId>> {
-        self.source_transport_media_entry(transport_media_id)
-            .map(|entry| entry.encoding_ids().to_vec())
+        let source_id = self
+            .source_transport_media_entry(transport_media_id)?
+            .source_id();
+        self.media.source(source_id).map(|source| {
+            source
+                .encodings()
+                .map(SourceEncodingDescriptor::encoding_id)
+                .collect()
+        })
     }
 
     pub fn inspect_producer_owner_connection_id_for_transport_media_id(
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<ConnectionId> {
-        self.source_transport_media_entry(transport_media_id)
-            .map(SourceTransportMediaIndexEntry::owner_connection_id)
+        let source_id = self
+            .source_transport_media_entry(transport_media_id)?
+            .source_id();
+        self.media
+            .producer_for_source(source_id)
+            .map(|producer| producer.owner_connection_id)
     }
 }

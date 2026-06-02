@@ -19,7 +19,7 @@ use o_sfu_router::{
 
 use super::{
     ConsumerKey, ConsumerRouteState, ConsumerState, ProducerRuntimeId, PublishedProducer,
-    PublishedSourceInstall, SourceKey,
+    PublishedSourceInstall,
 };
 use crate::{
     Bitrate, MediaCodecFlags, RoomMediaLimits,
@@ -132,6 +132,31 @@ fn set_test_publisher_ready(state: &mut RoomState, user_id: &UserId) -> Connecti
     connection_id
 }
 
+fn publish_video_track(
+    state: &mut RoomState,
+    user_id: &UserId,
+    connection_id: ConnectionId,
+    transport_media_id: TransportMediaId,
+    ssrc: u32,
+) -> bool {
+    let consumable_rtp_parameters = derive_consumable_rtp_parameters(
+        &sample_video_rtp_parameters(None, ssrc),
+        &state.router_rtp_capabilities(),
+    )
+    .expect("publisher RTP parameters should derive consumable router parameters");
+    let prepared_track = state
+        .validate_publish_descriptor(
+            user_id,
+            connection_id,
+            &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
+        )
+        .expect("publish descriptor should validate once the user is publish-ready")
+        .into_prepared_track(consumable_rtp_parameters);
+    state
+        .commit_publish_reservation(prepared_track, transport_media_id)
+        .is_some()
+}
+
 fn test_upload_encodings() -> Vec<SessionUploadEncoding> {
     vec![
         SessionUploadEncoding {
@@ -218,11 +243,11 @@ fn test_source_descriptor(
     state: &mut RoomState,
     user_id: &UserId,
     stream_type: TestSourceKind,
-) -> (PublishedSourceDescriptor, Vec<SourceEncodingId>) {
+) -> PublishedSourceDescriptor {
     let source_id = PublishedSourceId::allocate(&mut state.next_source_id);
     let encoding_id = SourceEncodingId::allocate(&mut state.next_source_encoding_id);
     let intent = source_publish_intent_for_source(stream_type);
-    let source = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+    PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
         source_id,
         owner: PublishedSourceOwner::new(user_id.clone()),
         stream_id: intent.stream_id().clone(),
@@ -245,8 +270,7 @@ fn test_source_descriptor(
             },
         )],
     })
-    .expect("test source graph should be valid");
-    (source, vec![encoding_id])
+    .expect("test source graph should be valid")
 }
 
 fn install_test_published_producer_with_route(
@@ -259,13 +283,10 @@ fn install_test_published_producer_with_route(
     transport_media_id: TransportMediaId,
 ) -> (ProducerRuntimeId, PublishedSourceId) {
     let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
-    let (source_descriptor, source_encoding_ids) =
-        test_source_descriptor(state, user_id, stream_type);
+    let source_descriptor = test_source_descriptor(state, user_id, stream_type);
     let source_id = source_descriptor.source_id();
     state.media.install_source(PublishedSourceInstall {
-        source_key: SourceKey::new(user_id, source_descriptor.stream_id()),
         source_descriptor,
-        source_encoding_ids,
         producer_id,
         producer: PublishedProducer {
             source_id,
@@ -550,7 +571,7 @@ fn subscription_change_reserves_missing_bootstrap_for_existing_publisher() {
     join_test_user(&mut state, &subscriber_user_id);
 
     let subscriber_connection_id = set_test_consumer_ready(&mut state, &subscriber_user_id);
-    let (_producer_id, source_id) = install_test_consumable_video_producer(
+    let (_, source_id) = install_test_consumable_video_producer(
         &mut state,
         &publisher_user_id,
         TestSourceKind::ScalableVideo,
@@ -604,14 +625,14 @@ fn missing_consumer_bootstrap_applies_video_download_cap_before_effects() {
     join_test_user(&mut state, &subscriber_user_id);
 
     let subscriber_connection_id = set_test_consumer_ready(&mut state, &subscriber_user_id);
-    let (_scalable_producer_id, scalable_source_id) = install_test_consumable_video_producer(
+    let (_, scalable_source_id) = install_test_consumable_video_producer(
         &mut state,
         &publisher_user_id,
         TestSourceKind::ScalableVideo,
         TransportMediaId::new(10),
         22_222,
     );
-    let (_readable_producer_id, readable_source_id) = install_test_consumable_video_producer(
+    let (_, readable_source_id) = install_test_consumable_video_producer(
         &mut state,
         &publisher_user_id,
         TestSourceKind::ReadableVideo,
@@ -812,26 +833,15 @@ fn unpublish_track_clears_transport_media_owner_index() {
     join_test_user(&mut state, &user_id);
     let connection_id = set_test_publisher_ready(&mut state, &user_id);
 
-    let consumable_rtp_parameters = derive_consumable_rtp_parameters(
-        &sample_video_rtp_parameters(None, 43_000),
-        &state.router_rtp_capabilities(),
-    )
-    .expect("publisher RTP parameters should derive consumable router parameters");
-    let prepared_track = state
-        .validate_publish_descriptor(
-            &user_id,
-            connection_id,
-            &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
-        )
-        .expect("publish descriptor should validate once the user is publish-ready")
-        .into_prepared_track(consumable_rtp_parameters);
     let transport_media_id = TransportMediaId::new(100);
 
-    assert!(
-        state
-            .commit_publish_reservation(prepared_track, transport_media_id)
-            .is_some()
-    );
+    assert!(publish_video_track(
+        &mut state,
+        &user_id,
+        connection_id,
+        transport_media_id,
+        43_000,
+    ));
     assert!(
         state
             .unpublish_track(
@@ -853,7 +863,14 @@ fn unpublish_track_clears_transport_media_owner_index() {
         state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
         None
     );
-    assert!(state.media.publication_state_is_empty());
+    assert_eq!(state.media.publication_count(), 0);
+    assert!(publish_video_track(
+        &mut state,
+        &user_id,
+        connection_id,
+        TransportMediaId::new(101),
+        44_000,
+    ));
 }
 
 #[test]
@@ -864,26 +881,15 @@ fn unpublish_track_repairs_missing_topology_router_and_clears_state() {
     join_test_user(&mut state, &user_id);
     let connection_id = set_test_publisher_ready(&mut state, &user_id);
 
-    let consumable_rtp_parameters = derive_consumable_rtp_parameters(
-        &sample_video_rtp_parameters(None, 43_000),
-        &state.router_rtp_capabilities(),
-    )
-    .expect("publisher RTP parameters should derive consumable router parameters");
-    let prepared_track = state
-        .validate_publish_descriptor(
-            &user_id,
-            connection_id,
-            &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
-        )
-        .expect("publish descriptor should validate once the user is publish-ready")
-        .into_prepared_track(consumable_rtp_parameters);
     let transport_media_id = TransportMediaId::new(100);
 
-    assert!(
-        state
-            .commit_publish_reservation(prepared_track, transport_media_id)
-            .is_some()
-    );
+    assert!(publish_video_track(
+        &mut state,
+        &user_id,
+        connection_id,
+        transport_media_id,
+        43_000,
+    ));
     state.topology.remove_router_for_test(RouterId(1));
     assert!(
         state
@@ -899,7 +905,16 @@ fn unpublish_track_repairs_missing_topology_router_and_clears_state() {
         state.producer_stream_id_for_transport_media_id(transport_media_id),
         None
     );
-    assert!(state.media.publication_state_is_empty());
+    assert_eq!(state.media.publication_count(), 0);
+    assert!(
+        state
+            .media
+            .source_id_for_owner_stream(
+                &user_id,
+                &stream_id_for_source(TestSourceKind::ScalableVideo)
+            )
+            .is_none()
+    );
 }
 
 #[test]
@@ -919,13 +934,13 @@ fn purge_user_media_state_removes_only_indexed_user_and_source_entries() {
     let other_publisher_connection_id = state
         .user_connection_id(&other_publisher_id)
         .expect("other publisher should have a connection id");
-    let (_publisher_producer_id, publisher_source_id) = install_test_published_producer(
+    let (_, publisher_source_id) = install_test_published_producer(
         &mut state,
         &publisher_id,
         TestSourceKind::ScalableVideo,
         TransportMediaId::new(10),
     );
-    let (other_producer_id, other_source_id) = install_test_published_producer(
+    let (_, other_source_id) = install_test_published_producer(
         &mut state,
         &other_publisher_id,
         TestSourceKind::ReadableVideo,
@@ -968,7 +983,7 @@ fn purge_user_media_state_removes_only_indexed_user_and_source_entries() {
     assert!(media.source(publisher_source_id).is_none());
     assert!(media.source(other_source_id).is_some());
     assert!(!media.contains_consumer(&removed_consumer_key));
-    assert!(!media.contains_pending_consumer_bootstrap(&pending_removed_key));
+    assert!(!media.consumer_bootstrap_exists(&pending_removed_key));
     assert!(
         media
             .consumer_source_selection(&removed_consumer_key)
@@ -981,18 +996,12 @@ fn purge_user_media_state_removes_only_indexed_user_and_source_entries() {
             .is_some()
     );
     assert_eq!(
-        media.consumer_keys_for_user(&subscriber_id),
+        media.consumer_keys_for_source(other_source_id),
         vec![surviving_consumer_key.clone()]
     );
-    assert_eq!(
-        media.consumer_keys_for_source(other_source_id),
-        vec![surviving_consumer_key]
-    );
-    assert_eq!(
-        media.producer_ids_for_user(&other_publisher_id),
-        vec![other_producer_id]
-    );
-    assert!(media.owner_publication_state_is_empty(&publisher_id));
+    state.purge_user_media_state(&other_publisher_id);
+    assert!(state.media.source(other_source_id).is_none());
+    assert!(!state.media.contains_consumer(&surviving_consumer_key));
 }
 
 #[test]
@@ -1009,7 +1018,7 @@ fn transport_removals_for_departing_users_deduplicate_overlapping_consumer_route
     let publisher_connection_id = state
         .user_connection_id(&publisher_id)
         .expect("publisher should have a connection id");
-    let (_producer_id, source_id) = install_test_published_producer(
+    let (_, source_id) = install_test_published_producer(
         &mut state,
         &publisher_id,
         TestSourceKind::ScalableVideo,

@@ -23,7 +23,7 @@ use crate::{
             LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext, UserOutboundSender,
             media_graph::{
                 ConsumerKey, ConsumerState, ProducerRuntimeId, PublishedProducer,
-                PublishedSourceInstall, SourceKey,
+                PublishedSourceInstall,
             },
             rtp_capabilities::router_rtp_capabilities,
             topology::{RoutedConsumerId, RoutedProducerId},
@@ -101,9 +101,7 @@ fn install_test_published_producer(
     })
     .expect("test source graph should be valid");
     state.media.install_source(PublishedSourceInstall {
-        source_key: SourceKey::new(user_id, intent.stream_id()),
         source_descriptor: source,
-        source_encoding_ids: vec![encoding_id],
         producer_id,
         producer: PublishedProducer {
             source_id,
@@ -238,7 +236,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
         .user_connection_id(&UserId::Integer(2))
         .expect("consumer user should exist");
     let routed_producer_id = RoutedProducerId::new(RouterId(1), ProducerId(10));
-    let (producer_id, source_id) = install_test_published_producer(
+    let (_, source_id) = install_test_published_producer(
         &mut state,
         &UserId::Integer(1),
         producer_connection_id,
@@ -264,10 +262,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
     assert!(outcome.is_some());
     assert_eq!(state.media.consumer_count(), 0);
     assert_eq!(state.media.producer_count(), 1);
-    assert_eq!(
-        state.media.producer_ids_for_user(&UserId::Integer(1)),
-        vec![producer_id]
-    );
+    assert!(state.media.source(source_id).is_some());
 }
 
 #[test]
@@ -388,5 +383,14 @@ fn replacement_join_clears_transport_media_owner_index() {
         state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
         None
     );
-    assert!(state.media.publication_state_is_empty());
+    assert_eq!(state.media.publication_count(), 0);
+    assert!(
+        state
+            .media
+            .source_id_for_owner_stream(
+                &user_id,
+                &stream_id_for_source(TestSourceKind::ScalableVideo)
+            )
+            .is_none()
+    );
 }
