@@ -19,27 +19,25 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_router::MediaKind;
 
-use self::{consumer_index::ConsumerIndex, relay::RoomRelayRoutes, source_index::SourceIndex};
+use self::{route_graph::RouteGraph, source_index::SourceIndex};
 use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
     media_transport::{RelayRouteActivity, TransportMediaId},
     room::topology::{RoutedConsumerId, RoutedProducerId},
     source_model::{
         ActiveSpeakerGroup, ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
-        SourceEncodingId, UserStreamId,
+        UserStreamId,
     },
 };
 
-mod consumer_index;
 mod ids;
 mod producer;
-mod relay;
+mod route_graph;
 mod source_index;
 mod subscription;
 
-#[cfg(any(test, feature = "testing-transport"))]
-mod test_support;
-
+#[cfg(test)]
+mod route_graph_tests;
 #[cfg(test)]
 mod tests;
 
@@ -47,7 +45,7 @@ pub use self::subscription::{ConsumerRouteState, RemoteTrackBootstrap};
 pub(super) use self::{
     ids::{ConsumerRuntimeId, ProducerRuntimeId},
     producer::ValidatedPublishDescriptor,
-    relay::{RelayRouteEffect, RelayRouteKey},
+    route_graph::{RelayRouteEffect, RelayRouteKey},
     subscription::{
         ConsumerBootstrapOrigin, ConsumerRouteUpdate, PendingConsumerBootstrap,
         PendingConsumerBootstrapTarget, PlannedConsumerBootstrap, PlannedSubscriptionChange,
@@ -55,27 +53,24 @@ pub(super) use self::{
     },
 };
 
-/// media graph for one room
+/// room-state facade for source records and receiver-source routes
 ///
-/// sources, producers, consumers, selections, pending bootstrap reservations
-/// and relay owners form one lifecycle graph, keeping their primary stores and
-/// reverse indexes behind this type lets user replacement, explicit unpublish
-/// and disconnect cleanup remove all dependent media with one owner
+/// callers mutate the graph while holding the room state lock, keep the returned
+/// relay effects or transport removals, then run transport work after the lock
+/// is released
 ///
-/// all methods are cold-path room-state work because packet forwarding never calls
-/// this graph directly
+/// this keeps source lookup state and route lookup state behind one API so
+/// cleanup paths do not rebuild joins across maps
 #[derive(Debug, Default)]
 pub(super) struct RoomMediaGraph {
     sources: SourceIndex,
-    consumers: ConsumerIndex,
-    relay_routes: RoomRelayRoutes,
+    routes: RouteGraph,
 }
 
-/// stable key for one receiver's relationship to one published source
+/// stable receiver-source edge key
 ///
-/// the key is used before and after a consumer route is transport-backed, it
-/// can point at stored receiver intent, a pending bootstrap reservation or a
-/// committed consumer route
+/// the same key represents receiver intent before transport work, an in-flight
+/// bootstrap reservation and a committed consumer route
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ConsumerKey {
     pub consumer_user_id: UserId,
@@ -83,7 +78,6 @@ pub(super) struct ConsumerKey {
 }
 
 impl ConsumerKey {
-    /// builds the graph key for one receiver and one source
     pub fn new(consumer_user_id: &UserId, source_id: PublishedSourceId) -> Self {
         Self {
             consumer_user_id: consumer_user_id.clone(),
@@ -92,21 +86,12 @@ impl ConsumerKey {
     }
 }
 
-/// source lookup key scoped by the publisher and the caller-provided stream id
-///
-/// this prevents producer workflows from depending on product stream labels
-/// the graph stores the normalized source id once a publish commit succeeds
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct SourceKey {
     owner_user_id: UserId,
     stream_id: UserStreamId,
 }
 
-/// committed producer realization for a published source
-///
-/// this is the graph-local join between the source model, room topology and
-/// transport media ownership, workflow modules read it to plan bootstraps or
-/// activity updates, but all index maintenance stays behind the graph facade
 #[derive(Debug, Clone)]
 pub(super) struct PublishedProducer {
     pub source_id: PublishedSourceId,
@@ -120,47 +105,35 @@ pub(super) struct PublishedProducer {
     pub active: bool,
 }
 
-/// all graph state needed to atomically commit a publish
-///
-/// callers construct this only after transport media exists and router producer
-/// mirroring has succeeded, [`RoomMediaGraph::install_source`] consumes it so
-/// the source descriptor, producer, owner indexes and transport-media index are
-/// installed as one graph update
 #[derive(Debug)]
 pub(super) struct PublishedSourceInstall {
-    pub source_key: SourceKey,
     pub source_descriptor: PublishedSourceDescriptor,
-    pub source_encoding_ids: Vec<SourceEncodingId>,
     pub producer_id: ProducerRuntimeId,
     pub producer: PublishedProducer,
     pub transport_media_id: TransportMediaId,
 }
 
-/// reverse lookup from transport media to source ownership
+/// compact lookup payload for a transport media id
 ///
-/// diagnostics, incoming bitrate aggregation and source-policy refreshes start
-/// from transport observations, this entry lets those cold-path readers resolve
-/// back to source identity without walking every producer
+/// source details stay in [`SourceIndex`] so users of this reverse lookup cannot
+/// accidentally keep stale descriptor data after a republish
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SourceTransportMediaIndexEntry {
-    source_id: PublishedSourceId,
-    encoding_ids: Vec<SourceEncodingId>,
-    owner_user_id: UserId,
-    owner_connection_id: ConnectionId,
-    stream_id: UserStreamId,
+    source: PublishedSourceId,
+    owner: UserId,
+    stream: UserStreamId,
 }
 
+/// producer-side stale callback guard
+///
+/// callbacks pass this value back before changing producer activity or
+/// unpublishing a source, so replaced sockets and republished streams become
+/// no-ops instead of mutating newer producer state
 #[allow(
     clippy::struct_field_names,
     reason = "postfix _id is intentional because the fields are all identity values"
 )]
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// stale-callback guard for a live producer route
-///
-/// callers resolve this immediately before a producer activity change or
-/// unpublish, later mutation methods compare the handle against current graph
-/// ownership, so callbacks from replaced sockets become no-ops instead of
-/// mutating a newer producer that reused the same user and stream
 pub(super) struct ProducerRouteTarget {
     source_id: PublishedSourceId,
     producer_id: ProducerRuntimeId,
@@ -169,11 +142,6 @@ pub(super) struct ProducerRouteTarget {
     transport_media_id: TransportMediaId,
 }
 
-/// transport media that must be cleaned after room state stops owning it
-///
-/// the graph returns these while it still has authoritative source and consumer
-/// ownership, async cleanup can then target the exact user connection and
-/// transport media id after the state lock has been released
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TransportMediaRemoval {
     user: UserId,
@@ -181,11 +149,6 @@ pub(super) struct TransportMediaRemoval {
     transport_media: TransportMediaId,
 }
 
-/// committed consumer route attached to transport media
-///
-/// the pure router id and transport ids are stored together because stale
-/// packet-gate, keyframe and diagnostics updates must validate both topology
-/// and transport ownership before changing source selection state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ConsumerState {
     pub routed_consumer_id: RoutedConsumerId,
@@ -195,10 +158,6 @@ pub(super) struct ConsumerState {
     pub consumer_media: TransportMediaId,
 }
 
-/// borrowed view over a committed consumer route
-///
-/// read-side code uses this instead of joining source, producer, selection and
-/// consumer maps itself, the view is only valid for the borrow of the graph
 #[derive(Debug, Clone)]
 pub(super) struct ConsumerRouteView<'a> {
     pub consumer_user_id: UserId,
@@ -209,13 +168,11 @@ pub(super) struct ConsumerRouteView<'a> {
 }
 
 impl ConsumerRouteView<'_> {
-    /// returns the stored selector or an open selector with the supplied active state
     pub fn selection_or_open(&self, active: bool) -> ConsumerSourceSelection {
         self.selection
             .unwrap_or_else(|| ConsumerSourceSelection::open(active))
     }
 
-    /// copies the transport identity needed to revalidate async policy effects
     pub fn transport_ref(&self) -> ConsumerRouteTransportRef {
         ConsumerRouteTransportRef::from_parts(
             self.consumer_user_id.clone(),
@@ -227,7 +184,6 @@ impl ConsumerRouteView<'_> {
         )
     }
 
-    /// checks whether this borrowed route still matches an async transport handle
     pub fn matches_transport_ref(&self, route: &ConsumerRouteTransportRef) -> bool {
         self.consumer_user_id == *route.consumer_user_id()
             && self.state.consumer_connection_id == route.consumer_connection_id()
@@ -238,11 +194,6 @@ impl ConsumerRouteView<'_> {
     }
 }
 
-/// borrowed view over a reserved consumer bootstrap
-///
-/// diagnostics need to show a pending subscription before transport has
-/// returned a consumer media id, this view exposes the source and any still-live
-/// producer without pretending the consumer route is committed
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PendingConsumerRouteView<'a> {
     pub source: &'a PublishedSourceDescriptor,
@@ -250,12 +201,10 @@ pub(super) struct PendingConsumerRouteView<'a> {
     pub selection: Option<ConsumerSourceSelection>,
 }
 
-/// transport identity for one committed consumer route
+/// transport identity captured before route effects leave the room lock
 ///
-/// effect code carries this value across an async transport boundary then asks
-/// the graph to revalidate it before committing packet-gate or policy state
-/// it deliberately carries transport identity rather than diagnostics or fanout
-/// payloads
+/// follow-up commits compare this value with the current graph route so stale
+/// packet-gate or policy work cannot update a replacement route
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ConsumerRouteTransportRef {
     consumer_user_id: UserId,
@@ -267,7 +216,6 @@ pub(super) struct ConsumerRouteTransportRef {
 }
 
 impl ConsumerRouteTransportRef {
-    /// builds a route identity from both receiver and source transport sides
     pub fn from_parts(
         consumer_user_id: UserId,
         consumer_connection_id: ConnectionId,
@@ -286,95 +234,54 @@ impl ConsumerRouteTransportRef {
         }
     }
 
-    /// receiver user that owns the consumer media
     pub fn consumer_user_id(&self) -> &UserId {
         &self.consumer_user_id
     }
 
-    /// receiver connection that owns the consumer media
     pub const fn consumer_connection_id(&self) -> ConnectionId {
         self.consumer_connection_id
     }
 
-    /// receiver-side transport media id for the consumer route
     pub const fn consumer_media(&self) -> TransportMediaId {
         self.consumer_media
     }
 
-    /// source user that owns the producer media
     pub fn source_user_id(&self) -> &UserId {
         &self.source_user_id
     }
 
-    /// source connection that owns the producer media
     pub const fn source_connection_id(&self) -> ConnectionId {
         self.source_connection_id
     }
 
-    /// source-side transport media id feeding this consumer route
     pub const fn source_media(&self) -> TransportMediaId {
         self.source_media
     }
 }
 
 impl SourceTransportMediaIndexEntry {
-    /// creates the transport-media ownership record installed with a source
-    ///
-    /// callers should pass the complete encoding id list from the committed
-    /// descriptor, diagnostics and test inspectors rely on this entry matching
-    /// the source descriptor owned by the graph
-    pub fn new(
-        source_id: PublishedSourceId,
-        encoding_ids: Vec<SourceEncodingId>,
-        owner_user_id: UserId,
-        owner_connection_id: ConnectionId,
-        stream_id: UserStreamId,
-    ) -> Self {
+    pub fn new(source: PublishedSourceId, owner: UserId, stream: UserStreamId) -> Self {
         Self {
-            source_id,
-            encoding_ids,
-            owner_user_id,
-            owner_connection_id,
-            stream_id,
+            source,
+            owner,
+            stream,
         }
     }
 
-    /// source owner resolved from the transport media id
     pub fn owner_user_id(&self) -> &UserId {
-        &self.owner_user_id
+        &self.owner
     }
 
-    /// published source resolved from the transport media id
     pub const fn source_id(&self) -> PublishedSourceId {
-        self.source_id
+        self.source
     }
 
-    /// source encoding ids mirrored into this transport-media lookup
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub fn encoding_ids(&self) -> &[SourceEncodingId] {
-        &self.encoding_ids
-    }
-
-    /// source connection resolved from the transport media id
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "kept for test-only inspection of the ownership index"
-        )
-    )]
-    pub const fn owner_connection_id(&self) -> ConnectionId {
-        self.owner_connection_id
-    }
-
-    /// caller stream id resolved from the transport media id
     pub const fn stream_id(&self) -> &UserStreamId {
-        &self.stream_id
+        &self.stream
     }
 }
 
 impl SourceKey {
-    /// builds the owner-scoped stream lookup key used during publish replacement
     pub fn new(owner_user_id: &UserId, stream_id: &UserStreamId) -> Self {
         Self {
             owner_user_id: owner_user_id.clone(),
@@ -384,70 +291,40 @@ impl SourceKey {
 }
 
 impl RoomMediaGraph {
-    /// current committed source count
-    ///
-    /// this is the room publication count used for metrics snapshots and
-    /// lifecycle deltas
     pub fn publication_count(&self) -> usize {
         self.sources.publication_count()
     }
 
-    /// current committed plus reserved subscription count
-    ///
-    /// pending bootstraps count because the room workflow has already accepted
-    /// the subscription intent and reserved cleanup tracking for the consumer
     pub fn subscription_count(&self) -> usize {
-        self.consumers.subscription_count()
+        self.routes.subscription_count()
     }
 
-    /// number of committed producers for transport-backed test assertions
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn producer_count(&self) -> usize {
         self.sources.producer_count()
     }
 
-    /// number of committed consumers for transport-backed test assertions
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn consumer_count(&self) -> usize {
-        self.consumers.count()
+        self.routes.count()
     }
 
-    /// borrowed source inventory for diagnostics and policy input assembly
-    ///
-    /// callers must keep this as a read-only projection because source
-    /// ownership and teardown stay behind graph mutation methods
     pub fn sources(&self) -> impl Iterator<Item = &PublishedSourceDescriptor> {
         self.sources.sources()
     }
 
-    /// borrowed producer inventory for bootstrap planning
-    ///
-    /// this returns the graph-local producer id beside the producer so callers
-    /// can snapshot the exact producer they will later revalidate during
-    /// consumer bootstrap commit
     pub fn producers(&self) -> impl Iterator<Item = (ProducerRuntimeId, &PublishedProducer)> {
         self.sources.producers()
     }
 
-    /// active producer owners grouped by stream for `/v1/stats`
-    ///
-    /// the query only exposes stream and owner identity because callers do not
-    /// need source or transport ids to build compatibility user counts
     pub fn active_producer_stream_owners(&self) -> impl Iterator<Item = (&UserStreamId, &UserId)> {
         self.sources.active_producer_stream_owners()
     }
 
-    /// resolves a source id to the current descriptor
-    ///
-    /// a missing source means the route or diagnostic snapshot is stale
     pub fn source(&self, source_id: PublishedSourceId) -> Option<&PublishedSourceDescriptor> {
         self.sources.source(source_id)
     }
 
-    /// resolves transport media observations back to source ownership
-    ///
-    /// this is a cold-path lookup used by diagnostics and receiver policy
-    /// refreshes after the transport layer reports media-scoped facts
     pub fn source_transport_media_entry(
         &self,
         transport_media_id: TransportMediaId,
@@ -455,10 +332,6 @@ impl RoomMediaGraph {
         self.sources.transport_media_entry(transport_media_id)
     }
 
-    /// returns the stream id associated with an incoming producer media handle
-    ///
-    /// this is the compatibility-facing lookup used when transport events are
-    /// keyed by `TransportMediaId` but room outputs need caller stream ids
     pub fn producer_stream_id_for_transport_media_id(
         &self,
         transport_media_id: TransportMediaId,
@@ -467,16 +340,11 @@ impl RoomMediaGraph {
             .map(|entry| entry.stream_id().clone())
     }
 
-    /// first producer transport media id exposed for test transport probes
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn first_published_transport_media_id(&self) -> Option<TransportMediaId> {
         self.sources.first_published_transport_media_id()
     }
 
-    /// producer transport media for one owner stream and connection
-    ///
-    /// a mismatched connection returns `None` so tests model the same stale
-    /// callback guard as runtime code
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn producer_transport_media_id(
         &self,
@@ -488,7 +356,6 @@ impl RoomMediaGraph {
             .producer_transport_media_id(user_id, connection_id, stream_id)
     }
 
-    /// resolves a publisher-owned stream to the canonical source id
     pub fn source_id_for_owner_stream(
         &self,
         owner_user_id: &UserId,
@@ -497,7 +364,6 @@ impl RoomMediaGraph {
         self.sources.id_for_owner_stream(owner_user_id, stream_id)
     }
 
-    /// checks whether a publisher-owned stream is currently published
     pub fn has_source_for_owner_stream(
         &self,
         owner_user_id: &UserId,
@@ -507,11 +373,6 @@ impl RoomMediaGraph {
             .is_some()
     }
 
-    /// resolves one currently owned producer into a stale-safe mutation target
-    ///
-    /// callers should obtain the target immediately before changing producer
-    /// activity or unpublishing, the target is later checked against the graph
-    /// again before any mutation is accepted
     pub fn producer_route_target(
         &self,
         owner_user_id: &UserId,
@@ -522,10 +383,6 @@ impl RoomMediaGraph {
             .producer_route_target(owner_user_id, owner_connection_id, stream_id)
     }
 
-    /// revalidates a producer target against current graph ownership
-    ///
-    /// this returns `None` when the user was replaced, the source was removed
-    /// or the transport media id no longer belongs to the resolved producer
     pub fn producer_for_route_target(
         &self,
         target: &ProducerRouteTarget,
@@ -535,19 +392,10 @@ impl RoomMediaGraph {
             .producer_for_route_target(target, current_connection_id)
     }
 
-    /// commits producer activity after router state accepted the same change
-    ///
-    /// the target must still match the current graph producer, a stale target
-    /// returns `false` so outward fanout cannot get ahead of lasting media
-    /// state
     pub fn set_producer_active(&mut self, target: &ProducerRouteTarget, active: bool) -> bool {
         self.sources.set_producer_active(target, active)
     }
 
-    /// borrowed publications for one current user connection
-    ///
-    /// diagnostics use this to show only publications that still belong to the
-    /// live connection being inspected
     pub fn publications_for_user_connection(
         &self,
         user_id: &UserId,
@@ -557,11 +405,6 @@ impl RoomMediaGraph {
             .publications_for_user_connection(user_id, connection_id)
     }
 
-    /// checks whether an active-speaker detector can promote the same owner
-    ///
-    /// transport reports detector media ids, room policy still needs to know
-    /// whether that owner has a promotable source in the same active-speaker
-    /// group before changing featured layout state
     pub fn owner_has_promotable_source_in_group(
         &self,
         owner_user_id: &UserId,
@@ -571,52 +414,26 @@ impl RoomMediaGraph {
             .owner_has_promotable_source_in_group(owner_user_id, group)
     }
 
-    /// atomically installs a published source and all producer-side indexes
-    ///
-    /// callers must already have a current room user, a routed producer and a
-    /// transport media id, after this method returns, source lookup, producer
-    /// lookup, owner teardown and transport-media diagnostics all see the same
-    /// graph state
     pub fn install_source(&mut self, install: PublishedSourceInstall) {
         self.sources.install_source(install);
     }
 
-    /// stores receiver intent for a source and keeps consumer reverse indexes live
-    ///
-    /// this can be called before a transport consumer exists, the selection is
-    /// retained so a later publish, late join or recovery bootstrap can inherit
-    /// the user's desired active state
     pub fn set_consumer_source_selection(&mut self, key: &ConsumerKey, active: bool) {
-        self.consumers.set_selection(key, active);
+        self.routes.set_selection(key, active);
     }
 
-    /// reads the stored receiver selection for one source
-    ///
-    /// absence means no receiver-specific choice has been stored yet, callers
-    /// may fall back to the effective subscription intent for that user
     pub fn consumer_source_selection(&self, key: &ConsumerKey) -> Option<ConsumerSourceSelection> {
-        self.consumers.selection(key)
+        self.routes.selection(key)
     }
 
-    /// ensures a receiver selection exists for the bootstrap state
-    ///
-    /// selections without committed consumers can only come from stored
-    /// subscription intent, so bootstrap planning may replace them with the
-    /// computed initial policy state, committed routes keep their current
-    /// selector and budget state until source policy updates them
     pub fn ensure_consumer_source_selection(
         &mut self,
         key: &ConsumerKey,
         selection: ConsumerSourceSelection,
     ) {
-        self.consumers.ensure_selection(key, selection);
+        self.routes.ensure_selection(key, selection);
     }
 
-    /// mutates a consumer selection only when the transport route is still current
-    ///
-    /// async source-policy effects call this after transport packet gates have
-    /// been applied, route identity is checked again so replaced users and
-    /// removed sources cannot commit stale selectors
     pub fn update_consumer_source_selection(
         &mut self,
         route: &ConsumerRouteTransportRef,
@@ -630,82 +447,48 @@ impl RoomMediaGraph {
         if !current_route.matches_transport_ref(route) {
             return false;
         }
-        update(self.consumers.selection_mut_or_open(key));
+        update(self.routes.selection_mut_or_open(key));
         true
     }
 
-    /// reserves cleanup ownership for a consumer bootstrap in flight
-    ///
-    /// the route is not committed yet, but the graph records the consumer key
-    /// so replacement and source teardown can release the pending work if the
-    /// async transport step fails or becomes stale
     pub fn reserve_consumer_bootstrap(&mut self, key: ConsumerKey) {
-        self.consumers.reserve_bootstrap(key);
+        self.routes.reserve_bootstrap(key);
     }
 
-    /// removes a pending bootstrap reservation after transport work finishes
-    ///
-    /// the consumer key indexes are pruned only when no committed route or
-    /// stored selection still references the key
     pub fn remove_pending_consumer_bootstrap(&mut self, key: &ConsumerKey) {
-        self.consumers.remove_pending_bootstrap(key);
+        self.routes.remove_pending_bootstrap(key);
     }
 
-    /// commits a transport-backed consumer route
-    ///
-    /// returns `false` if a route for the same consumer and source already
-    /// exists, the caller remains responsible for cleaning up any transport
-    /// media it created for a rejected commit
     pub fn commit_consumer(
         &mut self,
         key: ConsumerKey,
         state: ConsumerState,
         selection: ConsumerSourceSelection,
     ) -> bool {
-        self.consumers.commit(key, state, selection)
+        self.routes.commit(key, state, selection)
     }
 
-    /// resolves a committed consumer route without exposing the backing map
-    ///
-    /// callers use this for tests and explicit cleanup planning where a copied
-    /// route state is enough
     #[cfg(test)]
     pub fn consumer_state(&self, key: &ConsumerKey) -> Option<ConsumerState> {
-        self.consumers.consumer_state(key)
+        self.routes.consumer_state(key)
     }
 
-    /// committed consumer sessions as transport cleanup candidates
-    ///
-    /// room shutdown uses this shape because transport cleanup is scoped by
-    /// user connection before specific media cleanup runs
     pub fn committed_consumer_transport_entries(
         &self,
     ) -> impl Iterator<Item = (UserId, ConnectionId)> + '_ {
-        self.consumers.committed_consumer_transport_entries()
+        self.routes.committed_consumer_transport_entries()
     }
 
-    /// users with pending consumer bootstrap reservations
-    ///
-    /// this lets room transport cleanup include users whose consumer route is
-    /// not yet committed but whose bootstrap already reserved graph ownership
     pub fn pending_consumer_user_ids(&self) -> impl Iterator<Item = &UserId> {
-        self.consumers.pending_consumer_user_ids()
+        self.routes.pending_consumer_user_ids()
     }
 
-    /// borrowed live route views for diagnostics and policy planning
-    ///
-    /// the iterator joins source, producer, selection and consumer state inside
-    /// the graph so callers cannot accidentally observe mismatched indexes
     pub fn live_consumer_routes(&self) -> impl Iterator<Item = ConsumerRouteView<'_>> {
-        self.consumers
+        self.routes
             .committed_entries()
             .filter_map(|(key, state)| self.consumer_route_for_key(key, state))
     }
 
-    /// joins one consumer key and route state into a borrowed route view
-    ///
-    /// this returns `None` when the source or producer side vanished before a
-    /// stale consumer state could be pruned
     pub fn consumer_route_for_key(
         &self,
         key: &ConsumerKey,
@@ -718,71 +501,46 @@ impl RoomMediaGraph {
             state,
             source,
             producer,
-            selection: self.consumers.selection(key),
+            selection: self.routes.selection(key),
         })
     }
 
-    /// resolves one committed consumer key into its current route view
-    ///
-    /// callers use this before committing async receiver effects so the graph
-    /// can reject keys whose route disappeared or whose producer side changed
     pub fn committed_consumer_route_for_key(
         &self,
         key: &ConsumerKey,
     ) -> Option<ConsumerRouteView<'_>> {
-        let state = self.consumers.consumer_state(key)?;
+        let state = self.routes.consumer_state(key)?;
         self.consumer_route_for_key(key, state)
     }
 
-    /// pending consumer bootstraps for one user as diagnostic route views
-    ///
-    /// committed routes are skipped because they are exposed through
-    /// [`RoomMediaGraph::live_consumer_routes`]
     pub fn pending_consumer_routes_for_user(
         &self,
         user_id: &UserId,
     ) -> impl Iterator<Item = PendingConsumerRouteView<'_>> {
-        self.consumers
+        self.routes
             .pending_keys_for_user(user_id)
             .filter_map(|key| {
                 let source = self.sources.source(key.source_id)?;
                 Some(PendingConsumerRouteView {
                     source,
                     producer: self.producer_for_source(key.source_id),
-                    selection: self.consumers.selection(key),
+                    selection: self.routes.selection(key),
                 })
             })
     }
 
-    /// resolves the current producer attached to a source
-    ///
-    /// source removal and stale async callbacks can make this lookup fail even
-    /// while a caller still holds an older source id
     pub fn producer_for_source(&self, source_id: PublishedSourceId) -> Option<&PublishedProducer> {
         self.sources.producer_for_source(source_id)
     }
 
-    /// resolves a graph-local producer id into the current producer state
     pub fn producer(&self, producer_id: ProducerRuntimeId) -> Option<&PublishedProducer> {
         self.sources.producer(producer_id)
     }
 
-    /// removes all state attached to one consumer key
-    ///
-    /// this clears committed route state, pending bootstrap state, receiver
-    /// selection state and reverse indexes before releasing matching relay
-    /// ownership
     pub fn remove_consumer_key_state(&mut self, key: &ConsumerKey) -> Vec<RelayRouteEffect> {
-        self.consumers.remove_key_state(key);
-        self.relay_routes
-            .release_consumer_key(&key.consumer_user_id, key.source_id)
+        self.routes.remove_key_state(key)
     }
 
-    /// removes every publisher and subscriber edge owned by one user
-    ///
-    /// user replacement and disconnect cleanup use this as their single graph
-    /// entry point so producer routes, consumer routes, selections and relay
-    /// ownership are removed together
     pub fn remove_user_media(&mut self, user_id: &UserId) -> Vec<RelayRouteEffect> {
         let mut relay_effects = Vec::new();
         let source_ids = self.sources.ids_for_owner(user_id).collect::<Vec<_>>();
@@ -791,52 +549,26 @@ impl RoomMediaGraph {
                 relay_effects.extend(effects);
             }
         }
-        for key in self.consumers.keys_for_user(user_id) {
+        for key in self.routes.keys_for_user(user_id) {
             relay_effects.extend(self.remove_consumer_key_state(&key));
         }
         relay_effects
     }
 
-    /// consumer keys owned by a receiver user
-    ///
-    /// the returned vector is detached from the graph so callers can remove
-    /// keys while iterating without borrowing conflicts
-    #[cfg(test)]
-    pub fn consumer_keys_for_user(&self, user_id: &UserId) -> Vec<ConsumerKey> {
-        self.consumers.keys_for_user(user_id)
-    }
-
-    /// consumer keys that point at one published source
-    ///
-    /// the returned vector gives teardown code a stable snapshot before it
-    /// starts mutating the graph
     pub fn consumer_keys_for_source(&self, source_id: PublishedSourceId) -> Vec<ConsumerKey> {
-        self.consumers.keys_for_source(source_id)
+        self.routes.keys_for_source(source_id)
     }
 
-    #[cfg(test)]
-    pub fn producer_ids_for_user(&self, user_id: &UserId) -> Vec<ProducerRuntimeId> {
-        self.sources.producer_ids_for_owner(user_id)
-    }
-
-    /// routed consumer ids that receive from one published source
-    ///
-    /// source teardown passes this snapshot to topology before the media graph
-    /// removes the consumer edges tied to that source
     pub fn routed_consumer_ids_for_source(
         &self,
         source_id: PublishedSourceId,
     ) -> Vec<RoutedConsumerId> {
-        self.consumers.routed_consumer_ids_for_source(source_id)
+        self.routes.routed_consumer_ids_for_source(source_id)
     }
 
-    /// routed consumers affected when one room user leaves or is replaced
-    ///
-    /// the result includes consumers owned by the departing receiver plus
-    /// consumers attached to sources owned by the departing publisher
     pub fn routed_consumer_ids_affected_by_user(&self, user_id: &UserId) -> Vec<RoutedConsumerId> {
         let mut consumer_ids = self
-            .consumers
+            .routes
             .routed_consumer_ids_for_keys(self.consumer_keys_affected_by_user(user_id));
         consumer_ids.sort_unstable();
         consumer_ids.dedup();
@@ -844,15 +576,10 @@ impl RoomMediaGraph {
     }
 
     fn consumer_keys_affected_by_user(&self, user_id: &UserId) -> BTreeSet<ConsumerKey> {
-        self.consumers
+        self.routes
             .affected_keys_for_user(user_id, self.sources.ids_for_owner(user_id))
     }
 
-    /// removes one published source and every graph edge depending on it
-    ///
-    /// the returned producer tells callers which transport producer to close
-    /// after the room lock is released, while relay effects describe any relay
-    /// route ownership that must be reconciled outside the graph
     pub fn remove_source(
         &mut self,
         source_id: PublishedSourceId,
@@ -867,10 +594,6 @@ impl RoomMediaGraph {
         Some((producer, relay_effects))
     }
 
-    /// transport media removals needed before a set of users leaves the room
-    ///
-    /// producer media owned by departing users and consumer media that either
-    /// belongs to them or receives from them are returned as one cleanup batch
     pub fn transport_removals_for_users(
         &self,
         departing_user_ids: &BTreeSet<UserId>,
@@ -882,7 +605,6 @@ impl RoomMediaGraph {
         removals
     }
 
-    /// transport media removals needed before explicit source unpublish
     pub fn transport_removals_for_producer_target(
         &self,
         user_id: &UserId,
@@ -894,16 +616,12 @@ impl RoomMediaGraph {
             producer_target.transport_media_id,
         )];
         removals.extend(
-            self.consumers
+            self.routes
                 .transport_removals_for_source(producer_target.source_id),
         );
         removals
     }
 
-    /// consumer transport media affected by departing receivers or publishers
-    ///
-    /// publisher departures include consumers of the departed user's sources
-    /// because those receiver-side transport consumers must be closed as well
     fn consumer_transport_removals_for_users(
         &self,
         departing_user_ids: &BTreeSet<UserId>,
@@ -913,13 +631,9 @@ impl RoomMediaGraph {
             .flat_map(|user_id| self.consumer_keys_affected_by_user(user_id))
             .collect::<BTreeSet<_>>();
 
-        self.consumers.transport_removals_for_keys(keys)
+        self.routes.transport_removals_for_keys(keys)
     }
 
-    /// reserves a relay consumer target while bootstrap transport work is in flight
-    ///
-    /// relay ownership lives in the media graph so source teardown and receiver
-    /// teardown can release the same target even if bootstrap has not committed
     pub fn reserve_relay_consumer(
         &mut self,
         target: &PendingConsumerBootstrapTarget,
@@ -928,7 +642,7 @@ impl RoomMediaGraph {
         target_media_worker_id: MediaWorkerId,
         active: bool,
     ) -> Vec<RelayRouteEffect> {
-        self.relay_routes.reserve_consumer(
+        self.routes.reserve_relay(
             target,
             source_connection_id,
             source_transport_media_id,
@@ -937,10 +651,6 @@ impl RoomMediaGraph {
         )
     }
 
-    /// updates relay activity for a committed consumer route
-    ///
-    /// this forwards the graph-validated route identity into the relay table and
-    /// returns the external effects required to open or close relay consumers
     pub fn set_relay_consumer_active(
         &mut self,
         consumer_user_id: &UserId,
@@ -948,7 +658,7 @@ impl RoomMediaGraph {
         source_id: PublishedSourceId,
         activity: RelayRouteActivity,
     ) -> Vec<RelayRouteEffect> {
-        self.relay_routes.set_consumer_active(
+        self.routes.set_relay_active(
             consumer_user_id,
             consumer_connection_id,
             source_id,
@@ -956,50 +666,39 @@ impl RoomMediaGraph {
         )
     }
 
-    /// releases a relay reservation that never became a committed consumer
     pub fn release_pending_relay_target(
         &mut self,
         target: &PendingConsumerBootstrapTarget,
     ) -> Vec<RelayRouteEffect> {
-        self.relay_routes.release_target(target)
+        self.routes.release_target(target)
     }
 
-    /// checks whether a consumer key already has committed or pending bootstrap state
-    ///
-    /// subscription bootstrap uses this to avoid creating duplicate transport
-    /// work for the same receiver and source
     pub fn consumer_bootstrap_exists(&self, consumer_key: &ConsumerKey) -> bool {
-        self.consumers.has_bootstrap(consumer_key)
+        self.routes.has_bootstrap(consumer_key)
     }
 
-    /// checks whether a consumer key has a committed route
     pub fn contains_consumer(&self, key: &ConsumerKey) -> bool {
-        self.consumers.contains(key)
+        self.routes.contains(key)
     }
 }
 
 impl ProducerRouteTarget {
-    /// source guarded by this stale-callback target
     pub const fn source_id(&self) -> PublishedSourceId {
         self.source_id
     }
 
-    /// routed producer guarded by this stale-callback target
     pub const fn routed_producer_id(&self) -> RoutedProducerId {
         self.routed_producer_id
     }
 
-    /// transport media guarded by this stale-callback target
     pub const fn transport_media_id(&self) -> TransportMediaId {
         self.transport_media_id
     }
 
-    /// publisher connection guarded by this stale-callback target
     pub const fn owner_connection_id(&self) -> ConnectionId {
         self.owner_connection_id
     }
 
-    /// verifies that a current producer still matches the captured target
     fn matches_producer(&self, producer: &PublishedProducer) -> bool {
         producer.source_id == self.source_id
             && producer.owner_connection_id == self.owner_connection_id
@@ -1009,7 +708,6 @@ impl ProducerRouteTarget {
 }
 
 impl TransportMediaRemoval {
-    /// builds a transport media cleanup item for work after the room lock drops
     pub fn new(user: UserId, connection: ConnectionId, transport_media: TransportMediaId) -> Self {
         Self {
             user,
@@ -1018,17 +716,14 @@ impl TransportMediaRemoval {
         }
     }
 
-    /// user that owns the transport media to remove
     pub fn user(&self) -> &UserId {
         &self.user
     }
 
-    /// connection that owns the transport media to remove
     pub const fn connection(&self) -> ConnectionId {
         self.connection
     }
 
-    /// transport media id that should be removed
     pub const fn transport_media(&self) -> TransportMediaId {
         self.transport_media
     }

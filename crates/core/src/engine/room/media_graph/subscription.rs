@@ -25,7 +25,7 @@ use super::{
     },
     ConsumerKey, ConsumerRouteTransportRef, ConsumerRuntimeId, ConsumerState, ProducerRuntimeId,
     PublishedProducer,
-    relay::RelayRouteEffect,
+    route_graph::RelayRouteEffect,
 };
 use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
@@ -38,11 +38,6 @@ use crate::engine::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// Accepted consumer-route update that should be fanned out after state commit.
-///
-/// The route update only represents the receiver-local route choice. Producer
-/// activity is handled through producer state and is combined with this value
-/// when callers ask for the effective route.
 pub struct ConsumerRouteUpdate {
     pub route: ConsumerRouteTransportRef,
     pub stream: UserStreamId,
@@ -51,19 +46,9 @@ pub struct ConsumerRouteUpdate {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Effective room-level route state exposed to compatibility callers.
-///
-/// This is not the same type as the pure router's
-/// [`RouterConsumerRouteState`]. The router type stores only the
-/// receiver-local route choice. This value folds together producer activity,
-/// consumer source selection and whether the consumer route exists at all.
 pub enum ConsumerRouteState {
-    /// No committed consumer route exists for the requested source.
     Absent,
-    /// A route exists, but either the producer or the consumer-local selection
-    /// currently prevents forwarding.
     Inactive,
-    /// A committed route exists and all room-level activity inputs allow it.
     Active,
 }
 
@@ -265,11 +250,14 @@ impl RoomState {
             let Some(active) = intent.active() else {
                 continue;
             };
-            let Some(source_id) = self.source_id_for_subscription(target_user_id, stream_id) else {
+            let Some(source_id) = self
+                .media
+                .source_id_for_owner_stream(target_user_id, stream_id)
+            else {
                 continue;
             };
             let key = ConsumerKey::new(user_id, source_id);
-            self.set_consumer_source_selection(&key, active);
+            self.media.set_consumer_source_selection(&key, active);
             let Some(route) = self.media.committed_consumer_route_for_key(&key) else {
                 continue;
             };
@@ -377,19 +365,6 @@ impl RoomState {
                 transport_media_id,
             ),
         ))
-    }
-
-    fn source_id_for_subscription(
-        &self,
-        producer_user_id: &UserId,
-        stream_id: &UserStreamId,
-    ) -> Option<PublishedSourceId> {
-        self.media
-            .source_id_for_owner_stream(producer_user_id, stream_id)
-    }
-
-    fn set_consumer_source_selection(&mut self, key: &ConsumerKey, active: bool) {
-        self.media.set_consumer_source_selection(key, active);
     }
 
     fn plan_consumer(
@@ -664,13 +639,6 @@ impl RoomState {
             .unwrap_or(true)
     }
 
-    /// Returns the effective room route state for a source subscription.
-    ///
-    /// This is a cold-path query for signaling and diagnostics. It resolves the
-    /// stream id to current room indexes and combines producer
-    /// activity with the receiver-local source selection. Missing users return
-    /// `None`, while missing routes for an existing user return
-    /// [`ConsumerRouteState::Absent`].
     pub fn consumer_route_state(
         &self,
         consumer_user_id: &UserId,
@@ -678,7 +646,10 @@ impl RoomState {
         stream_id: &UserStreamId,
     ) -> Option<ConsumerRouteState> {
         self.users.get(consumer_user_id)?;
-        let Some(source) = self.source_id_for_subscription(producer_user_id, stream_id) else {
+        let Some(source) = self
+            .media
+            .source_id_for_owner_stream(producer_user_id, stream_id)
+        else {
             return Some(ConsumerRouteState::Absent);
         };
         let key = ConsumerKey::new(consumer_user_id, source);
