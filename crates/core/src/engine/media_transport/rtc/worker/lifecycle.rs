@@ -499,10 +499,7 @@ impl RtcWorker {
     /// produced by packet observation
     /// dispatch failures return an empty set so schedulers can retry on the
     /// next wakeup
-    pub async fn expired_active_speaker_room_instance_ids(
-        &self,
-        now: Instant,
-    ) -> BTreeSet<RoomInstanceId> {
+    pub async fn expired_active_speaker_rooms(&self, now: Instant) -> BTreeSet<RoomInstanceId> {
         let Some(worker_handle) = self.worker_handle().ok().flatten() else {
             return BTreeSet::new();
         };

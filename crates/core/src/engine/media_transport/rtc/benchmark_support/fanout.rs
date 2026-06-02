@@ -3,7 +3,7 @@ use str0m::media::Mid;
 use super::super::{
     forwarded_packet::ForwardedPacket,
     forwarding_destination::PacketForward,
-    forwarding_planner::populate_forward_routes_for_packet,
+    forwarding_planner::plan_forwards,
     state::PacketLoopState,
     test_support::{MediaWorkerScenario, sample_forwarded_packet, test_transport_session_key},
 };
@@ -36,14 +36,9 @@ impl FanoutBenchTopology {
         let consumer_session = test_transport_session_key(1, 0, 2, UserId::Integer(2));
         let mut state = PacketLoopState::default();
         let mut scenario = MediaWorkerScenario::new(&mut state);
-        let source_transport_media_id =
-            scenario.source(producer_session.clone(), Mid::from("cam-up"));
+        let src_media = scenario.source(producer_session.clone(), Mid::from("cam-up"));
         for _ in 0..destination_count {
-            scenario.destination(
-                source_transport_media_id,
-                consumer_session.clone(),
-                Mid::from("cam-down"),
-            );
+            scenario.destination(src_media, consumer_session.clone(), Mid::from("cam-down"));
         }
         let pending_packets = vec![sample_forwarded_packet(
             producer_session,
@@ -86,12 +81,12 @@ impl FanoutBenchTopology {
 
     #[inline(never)]
     fn plan_single_turn(&mut self) -> usize {
-        for (packet_idx, packet) in self.pending_packets.iter_mut().enumerate() {
-            populate_forward_routes_for_packet(
+        for (pkt_idx, packet) in self.pending_packets.iter_mut().enumerate() {
+            plan_forwards(
                 &self.state,
                 &self.packet_sinks,
                 &self.metrics,
-                packet_idx,
+                pkt_idx,
                 packet,
                 &mut self.forwards,
             );

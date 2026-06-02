@@ -9,7 +9,7 @@ use std::{
 use str0m::media::Mid;
 
 use super::super::{
-    forwarding_planner::populate_forward_routes_for_packet,
+    forwarding_planner::plan_forwards,
     media_registry::RegisteredMediaHandle,
     packet_loop::{PacketLoopBuffers, flush_forward_routes},
     state::PacketLoopState,
@@ -124,12 +124,12 @@ impl PacketSinkFanoutBenchFixture {
     }
 
     fn plan_and_flush_once(&mut self) {
-        for (packet_idx, packet) in self.buffers.pending_packets.iter_mut().enumerate() {
-            populate_forward_routes_for_packet(
+        for (pkt_idx, packet) in self.buffers.pending_packets.iter_mut().enumerate() {
+            plan_forwards(
                 &self.state,
                 &self.packet_sinks,
                 &*self.route_metrics,
-                packet_idx,
+                pkt_idx,
                 packet,
                 &mut self.buffers.forwards,
             );

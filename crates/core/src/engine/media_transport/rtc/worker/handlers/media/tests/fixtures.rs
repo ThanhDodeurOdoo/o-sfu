@@ -112,20 +112,20 @@ pub(super) fn add_source_rid_stream(
 
 pub(super) fn assert_consumer_packet_gate(
     state: &PacketLoopState,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     consumer_session: &TransportSessionKey,
     packet_gate: &PacketLayerGate,
-    pending_packet_gate: Option<&PacketLayerGate>,
+    pending_gate: Option<&PacketLayerGate>,
 ) {
     assert!(
         state
             .routes
-            .local_route(source_transport_media_id)
+            .local_route(src_media)
             .is_some_and(
                 |route_entry| route_entry.destinations.iter().any(|destination| {
                     destination.dest_session == *consumer_session
                         && &destination.packet_gate == packet_gate
-                        && destination.pending_packet_gate.as_ref() == pending_packet_gate
+                        && destination.pending_gate.as_ref() == pending_gate
                 })
             )
     );
@@ -133,14 +133,14 @@ pub(super) fn assert_consumer_packet_gate(
 
 pub(super) fn install_video_route_with_gate(
     state: &mut PacketLoopState,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     consumer_session: &TransportSessionKey,
     consumer_mid: Mid,
     packet_gate: PacketLayerGate,
 ) -> TransportMediaId {
     let mut scenario = MediaWorkerScenario::new(state);
     scenario.destination_with_gate(
-        source_transport_media_id,
+        src_media,
         consumer_session.clone(),
         consumer_mid,
         packet_gate,
@@ -151,15 +151,15 @@ pub(super) fn request_consumer_keyframe(
     state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
     consumer_session: &TransportSessionKey,
-    consumer_transport_media_id: TransportMediaId,
+    consumer_media: TransportMediaId,
     source_session: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
 ) {
     let (response_tx, response_rx) = oneshot::channel();
     let route = TransportConsumerRoute::new(
         consumer_session.clone(),
-        consumer_transport_media_id,
-        TransportSourceKey::new(source_session.clone(), source_transport_media_id),
+        consumer_media,
+        TransportSourceKey::new(source_session.clone(), src_media),
     );
     apply_route_control_request(
         state,
@@ -173,13 +173,13 @@ pub(super) fn request_consumer_keyframe(
 
 pub(super) fn register_remote_source(
     state: &mut PacketLoopState,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     source_session: &TransportSessionKey,
     target_id: RelayTargetId,
 ) -> mpsc::Receiver<RtcWorkerCommand> {
     register_remote_source_with_metrics(
         state,
-        source_transport_media_id,
+        src_media,
         source_session,
         target_id,
         Arc::new(RtcMetricsRecorder::default()),
@@ -188,13 +188,13 @@ pub(super) fn register_remote_source(
 
 pub(super) fn register_remote_source_with_metrics(
     state: &mut PacketLoopState,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     source_session: &TransportSessionKey,
     target_id: RelayTargetId,
     rtc_metrics: Arc<RtcMetricsRecorder>,
 ) -> mpsc::Receiver<RtcWorkerCommand> {
     let (control_tx, control_rx) = mpsc::channel(1);
-    let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
+    let source = TransportSourceKey::new(source_session.clone(), src_media);
     assert!(
         state
             .routes
@@ -209,13 +209,13 @@ pub(super) fn register_remote_source_with_metrics(
 
 pub(super) fn register_saturated_remote_source(
     state: &mut PacketLoopState,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     source_session: &TransportSessionKey,
     target_id: RelayTargetId,
     rtc_metrics: Arc<RtcMetricsRecorder>,
 ) -> mpsc::Receiver<RtcWorkerCommand> {
     let (control_tx, control_rx) = mpsc::channel(1);
-    let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
+    let source = TransportSourceKey::new(source_session.clone(), src_media);
     assert!(
         control_tx
             .try_send(RtcWorkerCommand::MediaControl(
@@ -245,7 +245,7 @@ pub(super) fn register_saturated_remote_source(
 pub(super) fn assert_remote_keyframe_command(
     control_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
     source_session: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     target_id: RelayTargetId,
     rid: Option<Rid>,
 ) {
@@ -267,7 +267,7 @@ pub(super) fn assert_remote_keyframe_command(
                         },
                         response: None,
                     })) if source.session_key() == source_session
-                        && source.transport_media_id() == source_transport_media_id
+                        && source.transport_media_id() == src_media
                         && forwarded_target_id == target_id
                         && forwarded_rid == rid
                 ));
@@ -280,7 +280,7 @@ pub(super) fn assert_remote_keyframe_command(
 pub(super) fn assert_remote_packet_gate_command(
     control_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
     source_session: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     target_id: RelayTargetId,
     packet_gate: PacketLayerGate,
 ) {
@@ -294,7 +294,7 @@ pub(super) fn assert_remote_packet_gate_command(
             },
             response: None,
         })) if source.session_key() == source_session
-            && source.transport_media_id() == source_transport_media_id
+            && source.transport_media_id() == src_media
             && forwarded_target_id == target_id
             && forwarded_packet_gate == packet_gate
     ));
@@ -305,8 +305,8 @@ pub(super) struct LocalVideoRoute {
     pub metrics: RuntimeMetrics,
     pub source_session: TransportSessionKey,
     pub consumer_session: TransportSessionKey,
-    pub source_transport_media_id: TransportMediaId,
-    pub consumer_transport_media_id: TransportMediaId,
+    pub src_media: TransportMediaId,
+    pub consumer_media: TransportMediaId,
 }
 
 impl LocalVideoRoute {
@@ -337,7 +337,7 @@ impl LocalVideoRoute {
         let consumer_session = consumer_session(seed);
         let mut state = PacketLoopState::default();
         let metrics = RuntimeMetrics::default();
-        let source_transport_media_id = match rid {
+        let src_media = match rid {
             Some(rid) => prepare_source_session_with_rid(
                 &mut state,
                 &source_session,
@@ -349,10 +349,10 @@ impl LocalVideoRoute {
                 prepare_source_session(&mut state, &source_session, Mid::from(SOURCE_MID), ssrc)
             }
         };
-        let consumer_transport_media_id = if pending_gate {
+        let consumer_media = if pending_gate {
             let mut scenario = MediaWorkerScenario::new(&mut state);
             scenario.destination_with_pending_gate(
-                source_transport_media_id,
+                src_media,
                 consumer_session.clone(),
                 Mid::from(CONSUMER_MID),
                 packet_gate,
@@ -360,7 +360,7 @@ impl LocalVideoRoute {
         } else {
             install_video_route_with_gate(
                 &mut state,
-                source_transport_media_id,
+                src_media,
                 &consumer_session,
                 Mid::from(CONSUMER_MID),
                 packet_gate,
@@ -371,27 +371,27 @@ impl LocalVideoRoute {
             metrics,
             source_session,
             consumer_session,
-            source_transport_media_id,
-            consumer_transport_media_id,
+            src_media,
+            consumer_media,
         }
     }
 
-    pub fn request_keyframe(&mut self) {
+    pub fn request_kf(&mut self) {
         request_consumer_keyframe(
             &mut self.state,
             &self.metrics,
             &self.consumer_session,
-            self.consumer_transport_media_id,
+            self.consumer_media,
             &self.source_session,
-            self.source_transport_media_id,
+            self.src_media,
         );
     }
 
     pub fn consumer_route(&self) -> TransportConsumerRoute {
         TransportConsumerRoute::new(
             self.consumer_session.clone(),
-            self.consumer_transport_media_id,
-            TransportSourceKey::new(self.source_session.clone(), self.source_transport_media_id),
+            self.consumer_media,
+            TransportSourceKey::new(self.source_session.clone(), self.src_media),
         )
     }
 }
@@ -401,43 +401,33 @@ pub(super) struct RemoteVideoRoute {
     pub metrics: RuntimeMetrics,
     pub source_session: TransportSessionKey,
     pub consumer_session: TransportSessionKey,
-    pub source_transport_media_id: TransportMediaId,
-    pub consumer_transport_media_id: TransportMediaId,
+    pub src_media: TransportMediaId,
+    pub consumer_media: TransportMediaId,
     pub target_id: RelayTargetId,
     pub control_rx: mpsc::Receiver<RtcWorkerCommand>,
 }
 
 impl RemoteVideoRoute {
-    pub fn new(seed: u64, source_transport_media_id: u64, target_id: u64) -> Self {
-        Self::with_gate(
-            seed,
-            source_transport_media_id,
-            target_id,
-            PacketLayerGate::Open,
-        )
+    pub fn new(seed: u64, src_media: u64, target_id: u64) -> Self {
+        Self::with_gate(seed, src_media, target_id, PacketLayerGate::Open)
     }
 
     pub fn with_gate(
         seed: u64,
-        source_transport_media_id: u64,
+        src_media: u64,
         target_id: u64,
         packet_gate: PacketLayerGate,
     ) -> Self {
         let source_session = source_session(seed);
         let consumer_session = consumer_session_on_worker(seed, 1);
-        let source_transport_media_id = TransportMediaId::new(source_transport_media_id);
+        let src_media = TransportMediaId::new(src_media);
         let target_id = RelayTargetId::new(target_id);
         let mut state = PacketLoopState::default();
         let metrics = RuntimeMetrics::default();
-        let control_rx = register_remote_source(
+        let control_rx = register_remote_source(&mut state, src_media, &source_session, target_id);
+        let consumer_media = install_video_route_with_gate(
             &mut state,
-            source_transport_media_id,
-            &source_session,
-            target_id,
-        );
-        let consumer_transport_media_id = install_video_route_with_gate(
-            &mut state,
-            source_transport_media_id,
+            src_media,
             &consumer_session,
             Mid::from(CONSUMER_MID),
             packet_gate,
@@ -447,21 +437,21 @@ impl RemoteVideoRoute {
             metrics,
             source_session,
             consumer_session,
-            source_transport_media_id,
-            consumer_transport_media_id,
+            src_media,
+            consumer_media,
             target_id,
             control_rx,
         }
     }
 
-    pub fn request_keyframe(&mut self) {
+    pub fn request_kf(&mut self) {
         request_consumer_keyframe(
             &mut self.state,
             &self.metrics,
             &self.consumer_session,
-            self.consumer_transport_media_id,
+            self.consumer_media,
             &self.source_session,
-            self.source_transport_media_id,
+            self.src_media,
         );
     }
 }
@@ -471,7 +461,7 @@ pub(super) struct PendingSelectedRidRoute {
     pub metrics: RuntimeMetrics,
     pub source_session: TransportSessionKey,
     pub consumer_session: TransportSessionKey,
-    pub source_transport_media_id: TransportMediaId,
+    pub src_media: TransportMediaId,
     pub selected_rid: Rid,
     pub fallback_rid: Rid,
 }
@@ -485,7 +475,7 @@ pub(super) fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
     let fallback_rid = Rid::from("lo");
     let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
-    let source_transport_media_id = prepare_source_session_with_rid(
+    let src_media = prepare_source_session_with_rid(
         &mut state,
         &source_session,
         source_mid,
@@ -500,15 +490,11 @@ pub(super) fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
         fallback_rid,
     );
     let mut scenario = MediaWorkerScenario::new(&mut state);
-    let consumer_transport_media_id = scenario.destination(
-        source_transport_media_id,
-        consumer_session.clone(),
-        consumer_mid,
-    );
+    let consumer_media = scenario.destination(src_media, consumer_session.clone(), consumer_mid);
     let route = TransportConsumerRoute::new(
         consumer_session.clone(),
-        consumer_transport_media_id,
-        TransportSourceKey::new(source_session.clone(), source_transport_media_id),
+        consumer_media,
+        TransportSourceKey::new(source_session.clone(), src_media),
     );
     let command_now = Instant::now();
     let (response_tx, response_rx) = oneshot::channel();
@@ -528,7 +514,7 @@ pub(super) fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
         metrics,
         source_session,
         consumer_session,
-        source_transport_media_id,
+        src_media,
         selected_rid,
         fallback_rid,
     }

@@ -38,7 +38,7 @@ use super::{
         negotiation,
     },
     control::{
-        ConsumerRouteRegistration, ensure_route_source_registered, register_consumer_route,
+        ConsumerRouteRegistration, ensure_route_src_registered, register_consumer_route,
         remove_consumer_route, remove_source_route,
     },
     types::{AddSendMediaRequest, RouteSourceKind},
@@ -62,7 +62,7 @@ pub struct RecvMediaPolicy {
 #[derive(Clone)]
 struct RemoteSourceRollback {
     is_remote_source: bool,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     previous_registration: Option<RemoteSourceRegistration>,
     previous_decoder_refresh_codec: Option<DecoderRefreshCodec>,
 }
@@ -71,26 +71,17 @@ impl RemoteSourceRollback {
     fn capture(
         state: &PacketLoopState,
         is_remote_source: bool,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
     ) -> Self {
         let previous_registration = is_remote_source
-            .then(|| {
-                state
-                    .routes
-                    .remote_source(source_transport_media_id)
-                    .cloned()
-            })
+            .then(|| state.routes.remote_source(src_media).cloned())
             .flatten();
         let previous_decoder_refresh_codec = is_remote_source
-            .then(|| {
-                state
-                    .routes
-                    .decoder_refresh_codec(source_transport_media_id)
-            })
+            .then(|| state.routes.decoder_refresh_codec(src_media))
             .flatten();
         Self {
             is_remote_source,
-            source_transport_media_id,
+            src_media,
             previous_registration,
             previous_decoder_refresh_codec,
         }
@@ -100,14 +91,12 @@ impl RemoteSourceRollback {
         if !self.is_remote_source {
             return;
         }
-        state.routes.restore_remote_source(
-            self.source_transport_media_id,
-            self.previous_registration.clone(),
-        );
-        state.routes.set_decoder_refresh_codec(
-            self.source_transport_media_id,
-            self.previous_decoder_refresh_codec,
-        );
+        state
+            .routes
+            .restore_remote_source(self.src_media, self.previous_registration.clone());
+        state
+            .routes
+            .set_decoder_refresh_codec(self.src_media, self.previous_decoder_refresh_codec);
     }
 }
 
@@ -179,15 +168,10 @@ fn unregister_media_handle(
         }
         RegisteredMediaHandle::Consumer {
             session_key,
-            source_transport_media_id,
+            src_media,
             ..
         } => {
-            remove_consumer_route(
-                state,
-                &session_key,
-                transport_media_id,
-                source_transport_media_id,
-            );
+            remove_consumer_route(state, &session_key, transport_media_id, src_media);
             state.mark_session_dirty(&session_key);
             Ok(())
         }
@@ -431,47 +415,40 @@ pub(in crate::engine::media_transport::rtc::worker::handlers) fn worker_add_send
     now: Instant,
 ) -> TransportResult<TransportMediaId> {
     let AddSendMediaRequest {
-        consumer_session_key,
+        consumer_key,
         media_kind,
         source,
         remote_source_control,
         consumer_rtp_parameters,
         active,
     } = request;
-    let source_session_key = source.session_key();
-    let source_transport_media_id = source.transport_media_id();
+    let src_key = source.session_key();
+    let src_media = source.transport_media_id();
     let remote_source_rollback = RemoteSourceRollback::capture(
         state,
-        source_session_key.media_worker_id() != consumer_session_key.media_worker_id(),
-        source_transport_media_id,
+        src_key.media_worker_id() != consumer_key.media_worker_id(),
+        src_media,
     );
-    let route_source = match ensure_route_source_registered(
-        state,
-        consumer_session_key,
-        source,
-        remote_source_control,
-    ) {
-        Ok(route_source) => route_source,
-        Err(error) => {
-            warn!(
-                consumer_user_id = ?consumer_session_key.user_id(),
-                consumer_media_worker_id = consumer_session_key.media_worker_id().as_usize(),
-                source_user_id = ?source_session_key.user_id(),
-                source_media_worker_id = source_session_key.media_worker_id().as_usize(),
-                ?source_transport_media_id,
-                error = ?error,
-                "failed to register route source for consumer media"
-            );
-            return Err(error);
-        }
-    };
+    let route_source =
+        match ensure_route_src_registered(state, consumer_key, source, remote_source_control) {
+            Ok(route_source) => route_source,
+            Err(error) => {
+                warn!(
+                    consumer_user_id = ?consumer_key.user_id(),
+                    consumer_media_worker_id = consumer_key.media_worker_id().as_usize(),
+                    source_user_id = ?src_key.user_id(),
+                    source_media_worker_id = src_key.media_worker_id().as_usize(),
+                    ?src_media,
+                    error = ?error,
+                    "failed to register route source for consumer media"
+                );
+                return Err(error);
+            }
+        };
     if matches!(route_source, RouteSourceKind::Remote) {
-        state.refresh_source_decoder_refresh_codec(
-            source_transport_media_id,
-            consumer_rtp_parameters,
-        );
+        state.refresh_src_decoder_codec(src_media, consumer_rtp_parameters);
     }
-    let Some(session_state) = state.users.get_mut(consumer_session_key) else {
+    let Some(session_state) = state.users.get_mut(consumer_key) else {
         remote_source_rollback.rollback(state);
         return Err(TransportAdapterError::TransportUnavailable);
     };
@@ -485,33 +462,33 @@ pub(in crate::engine::media_transport::rtc::worker::handlers) fn worker_add_send
             }
         };
     if should_mark_dirty {
-        state.mark_session_dirty(consumer_session_key);
+        state.mark_session_dirty(consumer_key);
     }
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Consumer {
-        session_key: consumer_session_key.clone(),
+        session_key: consumer_key.clone(),
         mid,
-        source_transport_media_id,
+        src_media,
     });
     register_consumer_route(
         state,
         ConsumerRouteRegistration {
-            consumer_session_key,
-            consumer_transport_media_id: transport_media_id,
+            consumer_key,
+            consumer_media: transport_media_id,
             consumer_stream,
             consumer_mid: mid,
             consumer_media_kind: media_kind,
-            source_transport_media_id,
-            consumer_rtp_parameters,
+            src_media,
+            consumer_rtp: consumer_rtp_parameters,
             active,
             now,
         },
     );
     debug!(
-        consumer_user_id = ?consumer_session_key.user_id(),
-        consumer_media_worker_id = consumer_session_key.media_worker_id().as_usize(),
-        source_user_id = ?source_session_key.user_id(),
-        source_media_worker_id = source_session_key.media_worker_id().as_usize(),
-        ?source_transport_media_id,
+        consumer_user_id = ?consumer_key.user_id(),
+        consumer_media_worker_id = consumer_key.media_worker_id().as_usize(),
+        source_user_id = ?src_key.user_id(),
+        source_media_worker_id = src_key.media_worker_id().as_usize(),
+        ?src_media,
         source_route_kind = route_source.label(),
         ?transport_media_id,
         ?media_kind,

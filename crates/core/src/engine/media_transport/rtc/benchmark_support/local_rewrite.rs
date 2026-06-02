@@ -75,21 +75,21 @@ impl LocalRewriteBenchFixture {
 
 fn rewrite_inputs(mode: RewriteMode) -> Vec<RewriteInput> {
     let mut inputs = Vec::with_capacity(RTP_REWRITE_PACKETS);
-    for packet_idx in 0..RTP_REWRITE_PACKETS {
-        let packet_idx_u32 = u32::try_from(packet_idx).unwrap_or(0);
-        let packet_idx_u16 = u16::try_from(packet_idx % 1024).unwrap_or(0);
-        let packet_idx_u8 = u8::try_from(packet_idx % 64).unwrap_or(0);
+    for pkt_idx in 0..RTP_REWRITE_PACKETS {
+        let pkt_idx_u32 = u32::try_from(pkt_idx).unwrap_or(0);
+        let pkt_idx_u16 = u16::try_from(pkt_idx % 1024).unwrap_or(0);
+        let pkt_idx_u8 = u8::try_from(pkt_idx % 64).unwrap_or(0);
         let source_ssrc = match mode {
             RewriteMode::Steady => Ssrc::from(11),
-            RewriteMode::Switching if packet_idx % 2 == 0 => Ssrc::from(11),
+            RewriteMode::Switching if pkt_idx % 2 == 0 => Ssrc::from(11),
             RewriteMode::Switching => Ssrc::from(12),
         };
         inputs.push(RewriteInput {
             source_ssrc,
-            timestamp: 90_000_u32.wrapping_add(packet_idx_u32),
+            timestamp: 90_000_u32.wrapping_add(pkt_idx_u32),
             vp8_payload: Vp8PayloadIdentity {
-                picture_id: Some(packet_idx_u16),
-                tl0_pic_idx: Some(packet_idx_u8),
+                picture_id: Some(pkt_idx_u16),
+                tl0_pic_idx: Some(pkt_idx_u8),
             },
         });
     }

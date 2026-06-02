@@ -52,10 +52,7 @@ fn forwarded_packet_resolves_transport_media_id_through_the_registry() {
     });
     let mut packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
 
-    assert_eq!(
-        packet.resolve_source_transport_media_id(&state),
-        Some(transport_media_id)
-    );
+    assert_eq!(packet.resolve_src_media(&state), Some(transport_media_id));
 }
 
 #[test]
@@ -73,11 +70,8 @@ fn local_forwarded_packet_resolves_transport_media_id_through_session_handle() {
     });
     let mut packet = sample_local_forwarded_packet(session_handle, "aud-up", b"payload");
 
-    assert_eq!(packet.source_session_key(&state), Some(&session_key));
-    assert_eq!(
-        packet.resolve_source_transport_media_id(&state),
-        Some(transport_media_id)
-    );
+    assert_eq!(packet.src_key(&state), Some(&session_key));
+    assert_eq!(packet.resolve_src_media(&state), Some(transport_media_id));
 }
 
 #[test]
@@ -98,7 +92,7 @@ fn stale_local_forwarded_packet_does_not_resolve_through_reused_slot() {
     });
     let mut packet = sample_local_forwarded_packet(stale_handle, "aud-up", b"payload");
 
-    assert!(packet.source_session_key(&state).is_none());
+    assert!(packet.src_key(&state).is_none());
     assert_eq!(packet.resolve_facts(&state), None);
     assert!(
         packet
@@ -126,7 +120,7 @@ fn forwarded_packet_facts_detect_h264_idr_for_decoder_refresh() {
         vec![],
         vec![],
     );
-    state.refresh_source_decoder_refresh_codec(transport_media_id, &parameters);
+    state.refresh_src_decoder_codec(transport_media_id, &parameters);
     let mut packet = sample_forwarded_packet(session_key, "cam-up", &[0x65, 0x88]);
     let facts = packet.resolve_facts(&state);
     assert!(facts.is_some());
@@ -134,7 +128,7 @@ fn forwarded_packet_facts_detect_h264_idr_for_decoder_refresh() {
         return;
     };
 
-    assert_eq!(facts.source_transport_media_id, transport_media_id);
+    assert_eq!(facts.src_media, transport_media_id);
     assert!(facts.decoder_refresh);
 }
 
@@ -156,7 +150,7 @@ fn forwarded_packet_h264_refresh_detection_uses_packetization_mode() {
         vec![],
         vec![],
     );
-    state.refresh_source_decoder_refresh_codec(transport_media_id, &mode_0_parameters);
+    state.refresh_src_decoder_codec(transport_media_id, &mode_0_parameters);
     let mut mode_0_packet = sample_forwarded_packet(session_key.clone(), "cam-up", stap_a_idr);
     let mode_0_facts = mode_0_packet.resolve_facts(&state);
     assert!(mode_0_facts.is_some());
@@ -173,7 +167,7 @@ fn forwarded_packet_h264_refresh_detection_uses_packetization_mode() {
         vec![],
         vec![],
     );
-    state.refresh_source_decoder_refresh_codec(transport_media_id, &mode_1_parameters);
+    state.refresh_src_decoder_codec(transport_media_id, &mode_1_parameters);
     let mut mode_1_packet = sample_forwarded_packet(session_key, "cam-up", stap_a_idr);
     let mode_1_facts = mode_1_packet.resolve_facts(&state);
     assert!(mode_1_facts.is_some());
@@ -186,10 +180,10 @@ fn forwarded_packet_h264_refresh_detection_uses_packetization_mode() {
 #[test]
 fn forwarded_packet_facts_detect_relayed_h264_idr_from_source_media_id() {
     let session_key = test_transport_session_key(49, 0, 17, UserId::Integer(15));
-    let source_transport_media_id = TransportMediaId::new(23);
+    let src_media = TransportMediaId::new(23);
     let mut state = PacketLoopState::default();
-    state.refresh_source_decoder_refresh_codec(
-        source_transport_media_id,
+    state.refresh_src_decoder_codec(
+        src_media,
         &RouterRtpParameters::new(
             vec![MediaFormat::new(
                 RouterMediaKind::Video,
@@ -202,7 +196,7 @@ fn forwarded_packet_facts_detect_relayed_h264_idr_from_source_media_id() {
         ),
     );
     let source_packet = sample_forwarded_packet(session_key, "cam-up", &[0x65, 0x88]);
-    let relay_packet = source_packet.share_for_relay(&state, source_transport_media_id);
+    let relay_packet = source_packet.share_for_relay(&state, src_media);
     assert!(relay_packet.is_some());
     let Some(mut relay_packet) = relay_packet else {
         return;
@@ -213,7 +207,7 @@ fn forwarded_packet_facts_detect_relayed_h264_idr_from_source_media_id() {
         return;
     };
 
-    assert_eq!(facts.source_transport_media_id, source_transport_media_id);
+    assert_eq!(facts.src_media, src_media);
     assert!(facts.decoder_refresh);
 }
 
@@ -223,7 +217,7 @@ fn forwarded_packet_exposes_recording_payload_and_received_at() {
     let state = PacketLoopState::default();
     let packet = sample_forwarded_packet(session_key.clone(), "aud-up", b"payload");
 
-    assert_eq!(packet.source_session_key(&state), Some(&session_key));
+    assert_eq!(packet.src_key(&state), Some(&session_key));
     assert_eq!(packet.payload(), b"payload");
     assert_eq!(packet.payload_len(), 7);
     assert!(packet.received_at() <= Instant::now());
@@ -240,10 +234,10 @@ fn forwarded_packet_relay_clone_keeps_payload_and_explicit_source_media_id() {
         return;
     };
 
-    assert_eq!(relay_packet.source_session_key(&state), Some(&session_key));
+    assert_eq!(relay_packet.src_key(&state), Some(&session_key));
     assert_eq!(relay_packet.payload(), b"payload");
     assert_eq!(
-        relay_packet.resolve_source_transport_media_id(&PacketLoopState::default()),
+        relay_packet.resolve_src_media(&PacketLoopState::default()),
         Some(TransportMediaId::new(18))
     );
 }
@@ -294,7 +288,7 @@ fn forwarded_packet_facts_expose_vp8_payload_identity() {
         return;
     };
 
-    assert_eq!(facts.source_transport_media_id, transport_media_id);
+    assert_eq!(facts.src_media, transport_media_id);
     assert_eq!(
         facts.layer_metadata,
         PacketLayerMetadata::new(Some(Rid::from("hi")), None)
@@ -314,7 +308,7 @@ fn forwarded_packet_recovers_rid_from_ssrc_binding_when_extension_is_absent() {
         session_key: session_key.clone(),
         mid: producer_mid,
     });
-    state.refresh_producer_ssrc_bindings(
+    state.refresh_producer_ssrcs(
         &session_key,
         producer_mid,
         &RouterRtpParameters::new(
@@ -337,13 +331,13 @@ fn forwarded_packet_relay_clone_preserves_resolved_rid_from_source_worker() {
     let session_key = test_transport_session_key(47, 0, 15, UserId::Integer(13));
     let producer_mid = Mid::from("cam-up");
     let producer_ssrc = 76_543_u32;
-    let source_transport_media_id = TransportMediaId::new(22);
+    let src_media = TransportMediaId::new(22);
     let mut source_state = PacketLoopState::default();
     source_state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: session_key.clone(),
         mid: producer_mid,
     });
-    source_state.refresh_producer_ssrc_bindings(
+    source_state.refresh_producer_ssrcs(
         &session_key,
         producer_mid,
         &RouterRtpParameters::new(
@@ -359,7 +353,7 @@ fn forwarded_packet_relay_clone_preserves_resolved_rid_from_source_worker() {
         packet.resolve_route_control_layer_metadata(&source_state),
         PacketLayerMetadata::new(Some(Rid::from("hi")), None)
     );
-    let relay_packet = packet.share_for_relay(&source_state, source_transport_media_id);
+    let relay_packet = packet.share_for_relay(&source_state, src_media);
     assert!(relay_packet.is_some());
     let Some(mut relay_packet) = relay_packet else {
         return;
@@ -381,7 +375,7 @@ fn forwarded_packet_falls_back_to_ssrc_when_mid_is_missing() {
         session_key: session_key.clone(),
         mid: producer_mid,
     });
-    state.refresh_producer_ssrc_bindings(
+    state.refresh_producer_ssrcs(
         &session_key,
         producer_mid,
         &RouterRtpParameters::new(
@@ -393,14 +387,11 @@ fn forwarded_packet_falls_back_to_ssrc_when_mid_is_missing() {
     );
     let mut packet = sample_forwarded_packet_without_mid(session_key, producer_ssrc, b"payload");
 
-    assert_eq!(
-        packet.resolve_source_transport_media_id(&state),
-        Some(transport_media_id)
-    );
+    assert_eq!(packet.resolve_src_media(&state), Some(transport_media_id));
 }
 
 #[test]
-fn forwarded_packet_caches_the_resolved_source_transport_media_id() {
+fn forwarded_packet_caches_the_resolved_src_media() {
     let session_key = test_transport_session_key(45, 0, 13, UserId::Integer(11));
     let mut state = PacketLoopState::default();
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
@@ -409,19 +400,13 @@ fn forwarded_packet_caches_the_resolved_source_transport_media_id() {
     });
     let mut packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
 
-    assert_eq!(
-        packet.resolve_source_transport_media_id(&state),
-        Some(transport_media_id)
-    );
+    assert_eq!(packet.resolve_src_media(&state), Some(transport_media_id));
     state.remove_media_handle(transport_media_id);
-    assert_eq!(
-        packet.resolve_source_transport_media_id(&state),
-        Some(transport_media_id)
-    );
+    assert_eq!(packet.resolve_src_media(&state), Some(transport_media_id));
 }
 
 #[test]
-fn forwarded_packet_facts_cache_the_resolved_source_transport_media_id() {
+fn forwarded_packet_facts_cache_the_resolved_src_media() {
     let session_key = test_transport_session_key(51, 0, 19, UserId::Integer(17));
     let mut state = PacketLoopState::default();
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
@@ -435,12 +420,10 @@ fn forwarded_packet_facts_cache_the_resolved_source_transport_media_id() {
         return;
     };
 
-    assert_eq!(facts.source_transport_media_id, transport_media_id);
+    assert_eq!(facts.src_media, transport_media_id);
     state.remove_media_handle(transport_media_id);
     assert_eq!(
-        packet
-            .resolve_facts(&state)
-            .map(|facts| facts.source_transport_media_id),
+        packet.resolve_facts(&state).map(|facts| facts.src_media),
         Some(transport_media_id)
     );
 }

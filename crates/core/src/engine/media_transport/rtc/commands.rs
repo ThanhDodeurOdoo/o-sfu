@@ -80,7 +80,7 @@ impl RemoteSourceControl {
     /// this never waits for the source worker
     /// if the command cannot be queued, the caller has no stronger recovery
     /// action than later media or control traffic triggering another request
-    pub(super) fn request_keyframe(
+    pub(super) fn request_kf(
         &self,
         source: &TransportSourceKey,
         rid: Option<Rid>,
@@ -101,7 +101,7 @@ impl RemoteSourceControl {
     }
 
     /// publishes the effective remote-source packet gate to the source worker
-    pub(super) fn set_packet_gate(
+    pub(super) fn set_pkt_gate(
         &self,
         source: &TransportSourceKey,
         packet_gate: PacketLayerGate,
@@ -119,12 +119,12 @@ impl RemoteSourceControl {
         )
     }
 
-    pub(super) fn record_packet_gate_retry(&self) {
+    pub(super) fn record_pkt_gate_retry(&self) {
         self.metrics
             .record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Retry);
     }
 
-    pub(super) fn record_packet_gate_flushed(&self) {
+    pub(super) fn record_pkt_gate_flushed(&self) {
         self.metrics
             .record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Flushed);
     }
@@ -156,32 +156,28 @@ pub type RtcWorkerResponse<T> = oneshot::Sender<TransportResult<T>>;
 /// returning one result per consumer update
 #[derive(Debug, Clone)]
 pub struct ConsumerPacketGateCommand {
-    consumer_session_key: TransportSessionKey,
-    consumer_transport_media_id: TransportMediaId,
+    consumer_key: TransportSessionKey,
+    consumer_media: TransportMediaId,
     packet_gate: PacketLayerGate,
 }
 
 impl ConsumerPacketGateCommand {
     /// builds one consumer update for a source-scoped packet-gate batch
     pub fn new(
-        consumer_session_key: TransportSessionKey,
-        consumer_transport_media_id: TransportMediaId,
+        consumer_key: TransportSessionKey,
+        consumer_media: TransportMediaId,
         packet_gate: PacketLayerGate,
     ) -> Self {
         Self {
-            consumer_session_key,
-            consumer_transport_media_id,
+            consumer_key,
+            consumer_media,
             packet_gate,
         }
     }
 
     /// splits the batch entry for worker-side validation and route mutation
     pub fn into_parts(self) -> (TransportSessionKey, TransportMediaId, PacketLayerGate) {
-        (
-            self.consumer_session_key,
-            self.consumer_transport_media_id,
-            self.packet_gate,
-        )
+        (self.consumer_key, self.consumer_media, self.packet_gate)
     }
 }
 
@@ -219,7 +215,7 @@ pub(super) enum RouteControlRequest {
         target: RelayPacketMailbox,
     },
     RemoveRelayTarget {
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
         target_id: RelayTargetId,
     },
     SetRelayTargetActive {
@@ -385,7 +381,7 @@ pub(super) enum RtcWorkerCommand {
     /// remote sources install rollback-protected control so failed consumer
     /// setup does not leave stale relay state behind
     AddSendMedia {
-        consumer_session_key: TransportSessionKey,
+        consumer_key: TransportSessionKey,
         media_kind: MediaKind,
         source: TransportSourceKey,
         remote_source_control: Option<RemoteSourceControl>,

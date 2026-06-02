@@ -33,21 +33,21 @@ pub(super) enum RegisteredMediaHandle {
     Consumer {
         session_key: TransportSessionKey,
         mid: Mid,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
     },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ConsumerKeyframeTarget {
-    pub(super) source_transport_media_id: TransportMediaId,
+    pub(super) src_media: TransportMediaId,
     pub(super) rid: Option<Rid>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ConsumerMidBinding {
-    consumer_transport_media_id: TransportMediaId,
-    source_transport_media_id: TransportMediaId,
-    destination_index: Option<usize>,
+    consumer_media: TransportMediaId,
+    src_media: TransportMediaId,
+    dst_idx: Option<usize>,
 }
 
 impl RegisteredMediaHandle {
@@ -69,7 +69,7 @@ pub(in crate::engine::media_transport::rtc) enum DestinationKeyframeTarget {
     Stale,
 }
 
-pub(in crate::engine::media_transport::rtc) fn destination_keyframe_target_rid(
+pub(in crate::engine::media_transport::rtc) fn dst_kf_target_rid(
     destination: &MediaRouteDestination,
     open_rid: Option<Rid>,
 ) -> DestinationKeyframeTarget {
@@ -77,7 +77,7 @@ pub(in crate::engine::media_transport::rtc) fn destination_keyframe_target_rid(
         PacketLayerGate::Rid(rid) => Some(rid),
         PacketLayerGate::OperatingPoint(operating_point) => operating_point.rid(),
         PacketLayerGate::Block => match destination
-            .pending_packet_gate
+            .pending_gate
             .as_ref()
             .and_then(PacketLayerGate::selected_rid)
         {
@@ -93,7 +93,7 @@ pub(in crate::engine::media_transport::rtc) fn destination_keyframe_target_rid(
 pub(super) struct RemoteSourceRegistration {
     source: TransportSourceKey,
     source_control: RemoteSourceControl,
-    pending_packet_gate: Option<PacketLayerGate>,
+    pending_gate: Option<PacketLayerGate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,11 +143,11 @@ impl RemoteSourceRegistration {
         Self {
             source,
             source_control,
-            pending_packet_gate: None,
+            pending_gate: None,
         }
     }
 
-    pub(super) fn source_session_key(&self) -> &TransportSessionKey {
+    pub(super) fn src_key(&self) -> &TransportSessionKey {
         self.source.session_key()
     }
 
@@ -160,41 +160,35 @@ impl RemoteSourceRegistration {
     }
 
     #[cfg(test)]
-    pub(super) const fn pending_packet_gate(&self) -> Option<PacketLayerGate> {
-        self.pending_packet_gate
+    pub(super) const fn pending_gate(&self) -> Option<PacketLayerGate> {
+        self.pending_gate
     }
 
-    pub(in crate::engine::media_transport::rtc) const fn has_pending_packet_gate(&self) -> bool {
-        self.pending_packet_gate.is_some()
+    pub(in crate::engine::media_transport::rtc) const fn has_pending_gate(&self) -> bool {
+        self.pending_gate.is_some()
     }
 
     pub(in crate::engine::media_transport::rtc) fn publish_packet_gate(
         &mut self,
         packet_gate: PacketLayerGate,
     ) -> bool {
-        if self
-            .source_control
-            .set_packet_gate(&self.source, packet_gate)
-        {
-            self.pending_packet_gate = None;
+        if self.source_control.set_pkt_gate(&self.source, packet_gate) {
+            self.pending_gate = None;
             false
         } else {
-            self.pending_packet_gate = Some(packet_gate);
+            self.pending_gate = Some(packet_gate);
             true
         }
     }
 
-    pub(in crate::engine::media_transport::rtc) fn flush_pending_packet_gate(&mut self) -> bool {
-        let Some(packet_gate) = self.pending_packet_gate else {
+    pub(in crate::engine::media_transport::rtc) fn flush_pending_gate(&mut self) -> bool {
+        let Some(packet_gate) = self.pending_gate else {
             return false;
         };
-        self.source_control.record_packet_gate_retry();
-        if self
-            .source_control
-            .set_packet_gate(&self.source, packet_gate)
-        {
-            self.pending_packet_gate = None;
-            self.source_control.record_packet_gate_flushed();
+        self.source_control.record_pkt_gate_retry();
+        if self.source_control.set_pkt_gate(&self.source, packet_gate) {
+            self.pending_gate = None;
+            self.source_control.record_pkt_gate_flushed();
             false
         } else {
             true
@@ -371,7 +365,7 @@ impl PacketLoopState {
         } else if let RegisteredMediaHandle::Consumer {
             session_key,
             mid,
-            source_transport_media_id,
+            src_media,
         } = &handle
         {
             let session_lookup = self.session_media.entry(session_key.clone()).or_default();
@@ -379,9 +373,9 @@ impl PacketLoopState {
             session_lookup.consumer_mids.insert(
                 *mid,
                 ConsumerMidBinding {
-                    consumer_transport_media_id: transport_media_id,
-                    source_transport_media_id: *source_transport_media_id,
-                    destination_index: None,
+                    consumer_media: transport_media_id,
+                    src_media: *src_media,
+                    dst_idx: None,
                 },
             );
         }
@@ -402,7 +396,7 @@ impl PacketLoopState {
         self.mid_registry.get(&transport_media_id)
     }
 
-    pub(super) fn producer_media_snapshot_for_session(
+    pub(super) fn producer_media_snapshot(
         &self,
         session_key: &TransportSessionKey,
     ) -> Vec<(TransportMediaId, Mid)> {
@@ -496,59 +490,52 @@ impl PacketLoopState {
     ///
     /// returns the previous classifier so route registration rollback can put
     /// the source metadata back exactly as it was before a failed mutation
-    pub(super) fn refresh_source_decoder_refresh_codec(
+    pub(super) fn refresh_src_decoder_codec(
         &mut self,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
         parameters: &o_sfu_router::MediaStream,
     ) -> Option<DecoderRefreshCodec> {
-        let previous = self.routes.decoder_refresh_codec(source_transport_media_id);
-        self.routes.set_decoder_refresh_codec(
-            source_transport_media_id,
-            DecoderRefreshCodec::from_parameters(parameters),
-        );
+        let previous = self.routes.decoder_refresh_codec(src_media);
+        self.routes
+            .set_decoder_refresh_codec(src_media, DecoderRefreshCodec::from_parameters(parameters));
         previous
     }
 
-    pub(super) fn expired_active_speaker_room_instance_ids(
-        &self,
-        now: Instant,
-    ) -> BTreeSet<RoomInstanceId> {
+    pub(super) fn expired_active_speaker_rooms(&self, now: Instant) -> BTreeSet<RoomInstanceId> {
         self.routes
-            .expired_active_speaker_source_ids(now)
+            .expired_active_speaker_srcs(now)
             .into_iter()
-            .filter_map(|source_transport_media_id| {
-                self.source_room_instance_id(source_transport_media_id)
-            })
+            .filter_map(|src_media| self.source_room_instance_id(src_media))
             .collect()
     }
 
-    pub(super) fn source_transport_media_id_for_mid(
+    pub(super) fn src_media_for_mid(
         &self,
-        source_session_key: &TransportSessionKey,
+        src_key: &TransportSessionKey,
         source_mid: Mid,
     ) -> Option<TransportMediaId> {
         self.session_media
-            .get(source_session_key)
+            .get(src_key)
             .and_then(|source_lookup| source_lookup.producer_mids.get(&source_mid))
     }
 
-    pub(super) fn source_transport_media_id_for_ssrc(
+    pub(super) fn src_media_for_ssrc(
         &self,
-        source_session_key: &TransportSessionKey,
+        src_key: &TransportSessionKey,
         source_ssrc: Ssrc,
     ) -> Option<TransportMediaId> {
         self.session_media
-            .get(source_session_key)
+            .get(src_key)
             .and_then(|source_lookup| source_lookup.producer_ssrcs.get(&source_ssrc))
     }
 
     pub(super) fn source_rid_for_ssrc(
         &self,
-        source_session_key: &TransportSessionKey,
+        src_key: &TransportSessionKey,
         source_ssrc: Ssrc,
     ) -> Option<Rid> {
         self.session_media
-            .get(source_session_key)
+            .get(src_key)
             .and_then(|source_lookup| source_lookup.producer_ssrc_rids.get(&source_ssrc))
     }
 
@@ -585,7 +572,7 @@ impl PacketLoopState {
         }
     }
 
-    pub(super) fn learn_producer_ssrc_binding_from_forwarded_source(
+    pub(super) fn learn_producer_ssrc_from_pkt(
         &mut self,
         source: &ForwardedPacketSource,
         transport_media_id: TransportMediaId,
@@ -597,7 +584,7 @@ impl PacketLoopState {
                 self.learn_producer_ssrc_binding(session_key, transport_media_id, ssrc, rid);
             }
             ForwardedPacketSource::Local(session_handle) => {
-                self.learn_producer_ssrc_binding_from_session_handle(
+                self.learn_producer_ssrc_from_handle(
                     *session_handle,
                     transport_media_id,
                     ssrc,
@@ -607,7 +594,7 @@ impl PacketLoopState {
         }
     }
 
-    fn learn_producer_ssrc_binding_from_session_handle(
+    fn learn_producer_ssrc_from_handle(
         &mut self,
         session_handle: SessionHandle,
         transport_media_id: TransportMediaId,
@@ -630,15 +617,15 @@ impl PacketLoopState {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(super) fn consumer_source_transport_media_id_for_mid(
+    pub(super) fn consumer_src_media_for_mid(
         &self,
-        consumer_session_key: &TransportSessionKey,
+        consumer_key: &TransportSessionKey,
         consumer_mid: Mid,
     ) -> Option<TransportMediaId> {
         self.session_media
-            .get(consumer_session_key)
+            .get(consumer_key)
             .and_then(|consumer_lookup| consumer_lookup.consumer_mids.get(&consumer_mid))
-            .map(|binding| binding.source_transport_media_id)
+            .map(|binding| binding.src_media)
     }
 
     /// resolve consumer RTCP feedback to the currently active producer target
@@ -651,35 +638,31 @@ impl PacketLoopState {
     /// selected destination gates override the feedback RID so RID-less browser
     /// PLI stays scoped to the routed simulcast layer
     #[inline]
-    pub(super) fn active_consumer_keyframe_target_for_mid(
+    pub(super) fn active_consumer_kf_target(
         &self,
-        consumer_session_key: &TransportSessionKey,
+        consumer_key: &TransportSessionKey,
         consumer_mid: Mid,
         feedback_rid: Option<Rid>,
     ) -> Option<ConsumerKeyframeTarget> {
         let binding = self
             .session_media
-            .get(consumer_session_key)?
+            .get(consumer_key)?
             .consumer_mids
             .get(&consumer_mid)?;
-        let route_entry = self.routes.local_route(binding.source_transport_media_id)?;
+        let route_entry = self.routes.local_route(binding.src_media)?;
         // a miss means feedback raced with route teardown or index repair
-        let destination = route_entry.destinations.get(binding.destination_index?)?;
-        debug_assert_eq!(&destination.dest_session, consumer_session_key);
-        debug_assert_eq!(
-            destination.dest_transport_media_id,
-            binding.consumer_transport_media_id
-        );
+        let destination = route_entry.destinations.get(binding.dst_idx?)?;
+        debug_assert_eq!(&destination.dest_session, consumer_key);
+        debug_assert_eq!(destination.dest_transport_media_id, binding.consumer_media);
         if !route_entry.source_active || !destination.active {
             return None;
         }
-        let DestinationKeyframeTarget::Current(rid) =
-            destination_keyframe_target_rid(destination, feedback_rid)
+        let DestinationKeyframeTarget::Current(rid) = dst_kf_target_rid(destination, feedback_rid)
         else {
             return None;
         };
         Some(ConsumerKeyframeTarget {
-            source_transport_media_id: binding.source_transport_media_id,
+            src_media: binding.src_media,
             rid,
         })
     }
@@ -688,55 +671,49 @@ impl PacketLoopState {
     ///
     /// callers pass both sides of the route identity so a late repair from an
     /// old route cannot relink a MID to a different source
-    pub(super) fn set_consumer_destination_index(
+    pub(super) fn set_consumer_dst_idx(
         &mut self,
-        consumer_session_key: &TransportSessionKey,
+        consumer_key: &TransportSessionKey,
         consumer_mid: Mid,
-        consumer_transport_media_id: TransportMediaId,
-        source_transport_media_id: TransportMediaId,
-        destination_index: Option<usize>,
+        consumer_media: TransportMediaId,
+        src_media: TransportMediaId,
+        dst_idx: Option<usize>,
     ) {
         let Some(binding) = self
             .session_media
-            .get_mut(consumer_session_key)
+            .get_mut(consumer_key)
             .and_then(|consumer_lookup| consumer_lookup.consumer_mids.get_mut(&consumer_mid))
         else {
             return;
         };
-        if binding.consumer_transport_media_id == consumer_transport_media_id
-            && binding.source_transport_media_id == source_transport_media_id
-        {
-            binding.destination_index = destination_index;
+        if binding.consumer_media == consumer_media && binding.src_media == src_media {
+            binding.dst_idx = dst_idx;
         }
     }
 
-    pub(super) fn consumer_destination_index(
+    pub(super) fn consumer_dst_idx(
         &self,
-        consumer_session_key: &TransportSessionKey,
+        consumer_key: &TransportSessionKey,
         consumer_mid: Mid,
-        consumer_transport_media_id: TransportMediaId,
-        source_transport_media_id: TransportMediaId,
+        consumer_media: TransportMediaId,
+        src_media: TransportMediaId,
     ) -> Option<usize> {
         let binding = self
             .session_media
-            .get(consumer_session_key)?
+            .get(consumer_key)?
             .consumer_mids
             .get(&consumer_mid)?;
-        (binding.consumer_transport_media_id == consumer_transport_media_id
-            && binding.source_transport_media_id == source_transport_media_id)
-            .then_some(binding.destination_index?)
+        (binding.consumer_media == consumer_media && binding.src_media == src_media)
+            .then_some(binding.dst_idx?)
     }
 
-    fn source_room_instance_id(
-        &self,
-        source_transport_media_id: TransportMediaId,
-    ) -> Option<RoomInstanceId> {
-        self.media_handle(source_transport_media_id)
+    fn source_room_instance_id(&self, src_media: TransportMediaId) -> Option<RoomInstanceId> {
+        self.media_handle(src_media)
             .map(|handle| handle.session_key().room_instance_id())
             .or_else(|| {
                 self.routes
-                    .remote_source(source_transport_media_id)
-                    .map(|registration| registration.source_session_key().room_instance_id())
+                    .remote_source(src_media)
+                    .map(|registration| registration.src_key().room_instance_id())
             })
     }
 
@@ -765,7 +742,7 @@ impl PacketLoopState {
         removed_handles
     }
 
-    pub(super) fn refresh_producer_ssrc_bindings(
+    pub(super) fn refresh_producer_ssrcs(
         &mut self,
         session_key: &TransportSessionKey,
         mid: Mid,
@@ -779,7 +756,7 @@ impl PacketLoopState {
             return;
         };
         self.clear_producer_ssrcs(session_key, transport_media_id);
-        self.refresh_source_decoder_refresh_codec(transport_media_id, parameters);
+        self.refresh_src_decoder_codec(transport_media_id, parameters);
         let accepted_ssrcs = parameters
             .bindings()
             .filter_map(|binding| {
@@ -802,7 +779,7 @@ impl PacketLoopState {
             .replace_producer_ssrcs(transport_media_id, accepted_ssrcs);
     }
 
-    pub(super) fn clear_producer_ssrc_bindings_for_mid(
+    pub(super) fn clear_producer_ssrcs_for_mid(
         &mut self,
         session_key: &TransportSessionKey,
         mid: Mid,

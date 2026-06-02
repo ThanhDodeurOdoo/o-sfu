@@ -184,26 +184,26 @@ impl Drop for RoomLifecycleLease {
 
 #[derive(Debug, Default)]
 pub(crate) struct RoomDirectory {
-    rooms_by_uuid: BTreeMap<String, RoomDirectoryEntry>,
-    uuids_by_instance_id: BTreeMap<RoomInstanceId, String>,
-    uuids_by_issuer: BTreeMap<String, String>,
+    by_uuid: BTreeMap<String, RoomDirectoryEntry>,
+    uuid_by_instance: BTreeMap<RoomInstanceId, String>,
+    uuid_by_issuer: BTreeMap<String, String>,
 }
 
 impl RoomDirectory {
     #[must_use]
     pub(crate) fn get_by_issuer(&self, issuer: &str) -> Option<Arc<Room>> {
-        let uuid = self.uuids_by_issuer.get(issuer)?;
+        let uuid = self.uuid_by_issuer.get(issuer)?;
         self.get_by_uuid(uuid)
     }
 
     #[must_use]
     pub(crate) fn get_by_uuid(&self, uuid: &str) -> Option<Arc<Room>> {
-        self.rooms_by_uuid.get(uuid).map(RoomDirectoryEntry::room)
+        self.by_uuid.get(uuid).map(RoomDirectoryEntry::room)
     }
 
     #[must_use]
     pub(crate) fn entry(&self, uuid: &str) -> Option<RoomDirectoryEntry> {
-        self.rooms_by_uuid.get(uuid).cloned()
+        self.by_uuid.get(uuid).cloned()
     }
 
     #[must_use]
@@ -211,42 +211,42 @@ impl RoomDirectory {
         &self,
         room_instance_id: RoomInstanceId,
     ) -> Option<RoomDirectoryEntry> {
-        let uuid = self.uuids_by_instance_id.get(&room_instance_id)?;
+        let uuid = self.uuid_by_instance.get(&room_instance_id)?;
         self.entry(uuid)
     }
 
     #[must_use]
     pub(crate) fn entries(&self) -> Vec<RoomDirectoryEntry> {
-        self.rooms_by_uuid.values().cloned().collect()
+        self.by_uuid.values().cloned().collect()
     }
 
     pub(crate) fn insert(&mut self, room: Arc<Room>, remote_address: Option<&str>) {
         let room_id = room.uuid().to_owned();
-        self.uuids_by_issuer
+        self.uuid_by_issuer
             .insert(room.issuer().to_owned(), room_id.clone());
-        self.uuids_by_instance_id
+        self.uuid_by_instance
             .insert(room.instance_id(), room_id.clone());
-        self.rooms_by_uuid
+        self.by_uuid
             .insert(room_id, RoomDirectoryEntry::new(room, remote_address));
     }
 
     #[must_use]
     pub(crate) fn contains_current(&self, uuid: &str, room: &Arc<Room>) -> bool {
-        self.rooms_by_uuid
+        self.by_uuid
             .get(uuid)
             .is_some_and(|entry| Arc::ptr_eq(&entry.room, room))
     }
 
     pub(crate) fn remove_if_current(&mut self, uuid: &str, room: &Arc<Room>) -> bool {
-        let Some(entry) = self.rooms_by_uuid.get(uuid) else {
+        let Some(entry) = self.by_uuid.get(uuid) else {
             return false;
         };
         if !Arc::ptr_eq(&entry.room, room) {
             return false;
         }
-        self.rooms_by_uuid.remove(uuid);
-        self.uuids_by_issuer.remove(room.issuer());
-        self.uuids_by_instance_id.remove(&room.instance_id());
+        self.by_uuid.remove(uuid);
+        self.uuid_by_issuer.remove(room.issuer());
+        self.uuid_by_instance.remove(&room.instance_id());
         true
     }
 }

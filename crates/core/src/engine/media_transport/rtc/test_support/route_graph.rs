@@ -22,44 +22,33 @@ impl<'a> MediaWorkerScenario<'a> {
 
     pub fn destination(
         &mut self,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
         session_key: TransportSessionKey,
         mid: Mid,
     ) -> TransportMediaId {
-        self.destination_with_gate(
-            source_transport_media_id,
-            session_key,
-            mid,
-            PacketLayerGate::Open,
-        )
+        self.destination_with_gate(src_media, session_key, mid, PacketLayerGate::Open)
     }
 
     pub fn destination_with_gate(
         &mut self,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
         session_key: TransportSessionKey,
         mid: Mid,
         packet_gate: PacketLayerGate,
     ) -> TransportMediaId {
-        self.install_destination(
-            source_transport_media_id,
-            session_key,
-            mid,
-            packet_gate,
-            None,
-        )
+        self.install_destination(src_media, session_key, mid, packet_gate, None)
     }
 
     #[cfg(any(test, feature = "internal-benchmarks"))]
     pub fn destination_with_pending_gate(
         &mut self,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
         session_key: TransportSessionKey,
         mid: Mid,
         packet_gate: PacketLayerGate,
     ) -> TransportMediaId {
         self.install_destination(
-            source_transport_media_id,
+            src_media,
             session_key,
             mid,
             PacketLayerGate::Open,
@@ -69,22 +58,22 @@ impl<'a> MediaWorkerScenario<'a> {
 
     fn install_destination(
         &mut self,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
         session_key: TransportSessionKey,
         mid: Mid,
         packet_gate: PacketLayerGate,
-        pending_packet_gate: Option<PacketLayerGate>,
+        pending_gate: Option<PacketLayerGate>,
     ) -> TransportMediaId {
         let transport_media_id =
             self.state
                 .register_media_handle(RegisteredMediaHandle::Consumer {
                     session_key: session_key.clone(),
                     mid,
-                    source_transport_media_id,
+                    src_media,
                 });
         let bind_session_key = session_key.clone();
-        let destination_index = self.state.routes.add_consumer_route(
-            source_transport_media_id,
+        let dst_idx = self.state.routes.add_consumer_route(
+            src_media,
             MediaRouteDestination {
                 dest_session: session_key,
                 dest_transport_media_id: transport_media_id,
@@ -94,15 +83,15 @@ impl<'a> MediaWorkerScenario<'a> {
                 nackable: true,
                 active: true,
                 packet_gate,
-                pending_packet_gate,
+                pending_gate,
             },
         );
-        self.state.set_consumer_destination_index(
+        self.state.set_consumer_dst_idx(
             &bind_session_key,
             mid,
             transport_media_id,
-            source_transport_media_id,
-            Some(destination_index),
+            src_media,
+            Some(dst_idx),
         );
         transport_media_id
     }

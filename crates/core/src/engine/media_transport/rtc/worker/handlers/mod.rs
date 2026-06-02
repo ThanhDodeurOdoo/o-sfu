@@ -25,8 +25,8 @@ pub(in crate::engine::media_transport::rtc) use dispatcher::{
     WorkerCommandContext, handle_worker_command,
 };
 #[cfg(feature = "internal-benchmarks")]
-pub(in crate::engine::media_transport::rtc) use media::worker_set_consumer_packet_gates_for_benchmark;
+pub(in crate::engine::media_transport::rtc) use media::worker_set_consumer_pkt_gates_for_bench;
 pub(in crate::engine::media_transport::rtc) use media::{
-    KeyframeRequestMode, KeyframeRequestTarget, apply_source_rid_readiness,
-    drain_due_rid_keyframe_refreshes, request_keyframe_for_target,
+    KeyframeRequestMode, KeyframeRequestTarget, apply_src_rid_ready, drain_due_rid_kf_refreshes,
+    request_kf_for_target,
 };

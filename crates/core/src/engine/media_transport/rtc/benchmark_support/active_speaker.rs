@@ -52,7 +52,7 @@ impl ActiveSpeakerBenchFixture {
         let has_deadline = usize::from(self.state.next_active_speaker_deadline(query_at).is_some());
         let expired = self
             .state
-            .expired_active_speaker_source_ids(query_at + Duration::from_millis(300))
+            .expired_active_speaker_srcs(query_at + Duration::from_millis(300))
             .len();
         self.now = query_at + Duration::from_millis(500);
         changes + active + has_deadline + expired

@@ -41,18 +41,16 @@ pub(super) fn worker_close_session(
         .forget_user_local_ice_ufrag(session_key);
     state
         .remote_addr_demux
-        .forget_user_remote_candidate_addrs(session_key);
+        .forget_user_remote_candidates(session_key);
     let removed_media_handles = state.remove_session_media_handles(session_key);
-    for (source_transport_media_id, _handle) in &removed_media_handles {
-        remove_source_route(state, *source_transport_media_id);
+    for (src_media, _handle) in &removed_media_handles {
+        remove_source_route(state, *src_media);
     }
-    state.routes.remove_destinations_for_session(session_key);
+    state.routes.remove_dsts_for_session(session_key);
     let mid_registry = &state.mid_registry;
     state
         .routes
-        .prune_unrouted_remote_sources(|source_transport_media_id| {
-            mid_registry.contains_key(source_transport_media_id)
-        });
+        .prune_unrouted_remote_srcs(|src_media| mid_registry.contains_key(src_media));
     if state.users.is_empty() {
         state.shared_socket = None;
     }

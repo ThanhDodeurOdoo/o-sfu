@@ -409,7 +409,7 @@ impl RoomMediaGraph {
     /// number of committed consumers for transport-backed test assertions
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn consumer_count(&self) -> usize {
-        self.consumers.consumer_count()
+        self.consumers.count()
     }
 
     /// borrowed source inventory for diagnostics and policy input assembly
@@ -452,8 +452,7 @@ impl RoomMediaGraph {
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<&SourceTransportMediaIndexEntry> {
-        self.sources
-            .source_transport_media_entry(transport_media_id)
+        self.sources.transport_media_entry(transport_media_id)
     }
 
     /// returns the stream id associated with an incoming producer media handle
@@ -495,8 +494,7 @@ impl RoomMediaGraph {
         owner_user_id: &UserId,
         stream_id: &UserStreamId,
     ) -> Option<PublishedSourceId> {
-        self.sources
-            .source_id_for_owner_stream(owner_user_id, stream_id)
+        self.sources.id_for_owner_stream(owner_user_id, stream_id)
     }
 
     /// checks whether a publisher-owned stream is currently published
@@ -589,7 +587,7 @@ impl RoomMediaGraph {
     /// retained so a later publish, late join or recovery bootstrap can inherit
     /// the user's desired active state
     pub fn set_consumer_source_selection(&mut self, key: &ConsumerKey, active: bool) {
-        self.consumers.set_source_selection(key, active);
+        self.consumers.set_selection(key, active);
     }
 
     /// reads the stored receiver selection for one source
@@ -597,7 +595,7 @@ impl RoomMediaGraph {
     /// absence means no receiver-specific choice has been stored yet, callers
     /// may fall back to the effective subscription intent for that user
     pub fn consumer_source_selection(&self, key: &ConsumerKey) -> Option<ConsumerSourceSelection> {
-        self.consumers.source_selection(key)
+        self.consumers.selection(key)
     }
 
     /// ensures a receiver selection exists for the bootstrap state
@@ -611,7 +609,7 @@ impl RoomMediaGraph {
         key: &ConsumerKey,
         selection: ConsumerSourceSelection,
     ) {
-        self.consumers.ensure_source_selection(key, selection);
+        self.consumers.ensure_selection(key, selection);
     }
 
     /// mutates a consumer selection only when the transport route is still current
@@ -720,7 +718,7 @@ impl RoomMediaGraph {
             state,
             source,
             producer,
-            selection: self.consumers.source_selection(key),
+            selection: self.consumers.selection(key),
         })
     }
 
@@ -751,7 +749,7 @@ impl RoomMediaGraph {
                 Some(PendingConsumerRouteView {
                     source,
                     producer: self.producer_for_source(key.source_id),
-                    selection: self.consumers.source_selection(key),
+                    selection: self.consumers.selection(key),
                 })
             })
     }
@@ -787,10 +785,7 @@ impl RoomMediaGraph {
     /// ownership are removed together
     pub fn remove_user_media(&mut self, user_id: &UserId) -> Vec<RelayRouteEffect> {
         let mut relay_effects = Vec::new();
-        let source_ids = self
-            .sources
-            .source_ids_for_owner(user_id)
-            .collect::<Vec<_>>();
+        let source_ids = self.sources.ids_for_owner(user_id).collect::<Vec<_>>();
         for source_id in source_ids {
             if let Some((_producer, effects)) = self.remove_source(source_id) {
                 relay_effects.extend(effects);
@@ -821,7 +816,7 @@ impl RoomMediaGraph {
 
     #[cfg(test)]
     pub fn producer_ids_for_user(&self, user_id: &UserId) -> Vec<ProducerRuntimeId> {
-        self.sources.producer_ids_for_user(user_id)
+        self.sources.producer_ids_for_owner(user_id)
     }
 
     /// routed consumer ids that receive from one published source
@@ -850,7 +845,7 @@ impl RoomMediaGraph {
 
     fn consumer_keys_affected_by_user(&self, user_id: &UserId) -> BTreeSet<ConsumerKey> {
         self.consumers
-            .affected_keys_for_user(user_id, self.sources.source_ids_for_owner(user_id))
+            .affected_keys_for_user(user_id, self.sources.ids_for_owner(user_id))
     }
 
     /// removes one published source and every graph edge depending on it
@@ -974,12 +969,12 @@ impl RoomMediaGraph {
     /// subscription bootstrap uses this to avoid creating duplicate transport
     /// work for the same receiver and source
     pub fn consumer_bootstrap_exists(&self, consumer_key: &ConsumerKey) -> bool {
-        self.consumers.bootstrap_exists(consumer_key)
+        self.consumers.has_bootstrap(consumer_key)
     }
 
     /// checks whether a consumer key has a committed route
     pub fn contains_consumer(&self, key: &ConsumerKey) -> bool {
-        self.consumers.contains_consumer(key)
+        self.consumers.contains(key)
     }
 }
 

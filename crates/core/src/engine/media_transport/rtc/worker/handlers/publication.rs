@@ -113,10 +113,10 @@ pub(super) fn refresh_negotiated_producer_parameters(
         }
     }
     for producer_mid in producer_mids {
-        state.clear_producer_ssrc_bindings_for_mid(session_key, *producer_mid);
+        state.clear_producer_ssrcs_for_mid(session_key, *producer_mid);
     }
     for (mid, parameters) in &refreshed_parameters {
-        state.refresh_producer_ssrc_bindings(session_key, *mid, parameters);
+        state.refresh_producer_ssrcs(session_key, *mid, parameters);
     }
     Ok(refreshed_parameters)
 }

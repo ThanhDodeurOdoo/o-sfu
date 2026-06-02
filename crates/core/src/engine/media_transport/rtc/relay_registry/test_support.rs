@@ -30,10 +30,10 @@ impl ActiveRelayTarget {
         &self,
         state: &PacketLoopState,
         packet: &ForwardedPacket,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
     ) -> Option<RelayEnqueueOutcome> {
         self.target
-            .forward_packet(state, packet, source_transport_media_id)
+            .forward_packet(state, packet, src_media)
             .map(|report| report.outcome)
     }
 }

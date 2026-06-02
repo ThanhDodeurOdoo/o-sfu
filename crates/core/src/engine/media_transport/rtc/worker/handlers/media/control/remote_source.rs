@@ -1,6 +1,6 @@
 //! Remote-source relay control for worker-local route state.
 
-use super::routes::ensure_owned_local_producer_mid;
+use super::routes::ensure_local_producer_mid;
 use crate::engine::media_transport::{
     TransportAdapterError, TransportSourceKey,
     rtc::{
@@ -10,21 +10,19 @@ use crate::engine::media_transport::{
     },
 };
 
-pub(super) fn set_remote_source_packet_gate(
+pub(super) fn set_remote_src_pkt_gate(
     state: &mut PacketLoopState,
     source: &TransportSourceKey,
     target_id: RelayTargetId,
     packet_gate: PacketLayerGate,
 ) {
-    let source_transport_media_id = source.transport_media_id();
-    if ensure_owned_local_producer_mid(state, source.session_key(), source_transport_media_id)
-        .is_err()
-    {
+    let src_media = source.transport_media_id();
+    if ensure_local_producer_mid(state, source.session_key(), src_media).is_err() {
         return;
     }
     state
         .routes
-        .set_relay_packet_gate(source_transport_media_id, target_id, packet_gate);
+        .set_relay_pkt_gate(src_media, target_id, packet_gate);
 }
 
 pub(super) fn worker_add_relay_target(
@@ -33,11 +31,9 @@ pub(super) fn worker_add_relay_target(
     target_id: RelayTargetId,
     target: RelayPacketMailbox,
 ) -> Result<(), TransportAdapterError> {
-    let source_transport_media_id = source.transport_media_id();
-    ensure_owned_local_producer_mid(state, source.session_key(), source_transport_media_id)?;
-    state
-        .routes
-        .add_relay_target(source_transport_media_id, target_id, target);
+    let src_media = source.transport_media_id();
+    ensure_local_producer_mid(state, source.session_key(), src_media)?;
+    state.routes.add_relay_target(src_media, target_id, target);
     Ok(())
 }
 
@@ -47,12 +43,12 @@ pub(super) fn worker_set_relay_target_active(
     target_id: RelayTargetId,
     active: bool,
 ) -> Result<(), TransportAdapterError> {
-    let source_transport_media_id = source.transport_media_id();
+    let src_media = source.transport_media_id();
     if active {
-        ensure_owned_local_producer_mid(state, source.session_key(), source_transport_media_id)?;
+        ensure_local_producer_mid(state, source.session_key(), src_media)?;
     }
     state
         .routes
-        .set_relay_target_active(source_transport_media_id, target_id, active);
+        .set_relay_target_active(src_media, target_id, active);
     Ok(())
 }

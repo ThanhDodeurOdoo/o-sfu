@@ -288,7 +288,7 @@ impl DebugProbe for SessionStreamTxSsrcProbe {
 
 #[cfg(any(test, feature = "testing-transport"))]
 pub(in crate::engine::media_transport::rtc) struct RouteEntryProbe {
-    pub source_session_key: TransportSessionKey,
+    pub src_key: TransportSessionKey,
     pub source_mid: Mid,
 }
 
@@ -302,15 +302,13 @@ impl DebugProbe for RouteEntryProbe {
         _context: &WorkerCommandContext<'_>,
     ) -> Self::Output {
         state
-            .source_transport_media_id_for_mid(&self.source_session_key, self.source_mid)
-            .and_then(|source_transport_media_id| {
-                debug_route_entry(state, source_transport_media_id)
-            })
+            .src_media_for_mid(&self.src_key, self.source_mid)
+            .and_then(|src_media| debug_route_entry(state, src_media))
     }
 }
 
 pub(in crate::engine::media_transport::rtc) struct RouteEntryByConsumerMidProbe {
-    pub consumer_session_key: TransportSessionKey,
+    pub consumer_key: TransportSessionKey,
     pub consumer_mid: Mid,
 }
 
@@ -323,19 +321,14 @@ impl DebugProbe for RouteEntryByConsumerMidProbe {
         _context: &WorkerCommandContext<'_>,
     ) -> Self::Output {
         state
-            .consumer_source_transport_media_id_for_mid(
-                &self.consumer_session_key,
-                self.consumer_mid,
-            )
-            .and_then(|source_transport_media_id| {
-                debug_route_entry(state, source_transport_media_id)
-            })
+            .consumer_src_media_for_mid(&self.consumer_key, self.consumer_mid)
+            .and_then(|src_media| debug_route_entry(state, src_media))
     }
 }
 
 #[cfg(any(test, feature = "testing-transport"))]
 pub(in crate::engine::media_transport::rtc) struct RouteEntryByMediaIdProbe {
-    pub source_transport_media_id: TransportMediaId,
+    pub src_media: TransportMediaId,
 }
 
 #[cfg(any(test, feature = "testing-transport"))]
@@ -347,7 +340,7 @@ impl DebugProbe for RouteEntryByMediaIdProbe {
         state: &mut PacketLoopState,
         _context: &WorkerCommandContext<'_>,
     ) -> Self::Output {
-        debug_route_entry(state, self.source_transport_media_id)
+        debug_route_entry(state, self.src_media)
     }
 }
 
@@ -476,18 +469,18 @@ pub enum DebugPacketGate {
 
 fn debug_route_entry(
     state: &PacketLoopState,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
 ) -> Option<DebugRouteEntry> {
     state
         .routes
-        .local_route(source_transport_media_id)
+        .local_route(src_media)
         .map(|entry| DebugRouteEntry {
-            source_transport_media_id,
+            source_transport_media_id: src_media,
             source_active: entry.source_active,
             active_destination_count: entry.active_destination_count,
             effective_packet_gate: state
                 .routes
-                .effective_packet_gate(source_transport_media_id)
+                .effective_packet_gate(src_media)
                 .as_ref()
                 .map_or(DebugPacketGate::Open, debug_packet_gate),
             destinations: entry

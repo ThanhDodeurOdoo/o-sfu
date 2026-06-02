@@ -20,7 +20,7 @@
 //! outputs or configuration dependencies
 
 use std::{
-    io::{Error as IoError, ErrorKind},
+    io::ErrorKind,
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -33,16 +33,16 @@ use super::{
     super::{
         bitrate::BitrateRegistry,
         forwarded_packet::ForwardedPacket,
-        forwarding_planner::populate_forward_routes_for_packet,
+        forwarding_planner::plan_forwards,
         routing_miss::DemuxRecoveryState,
         state::{PacketLoopState, RtcSnapshotState},
-        worker::{WorkerCommandContext, drain_due_rid_keyframe_refreshes},
+        worker::{WorkerCommandContext, drain_due_rid_kf_refreshes},
     },
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers, RECEIVE_BUFFER_LEN},
     forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
-    ingress_routing::route_packet_to_matching_session,
+    ingress_routing::route_pkt_to_session,
     input::{PacketLoopControlInput, PacketLoopInputReceivers, PacketLoopMailboxInput},
-    keyframe_requests::{drain_due_keyframe_retries, flush_pending_keyframe_requests},
+    keyframe_requests::{drain_due_kf_retries, flush_pending_kf_reqs},
     lag::{PacketLoopLagPublisher, PacketLoopLagSnapshot},
     session_drain::{SessionDrainContext, drain_ready_sessions},
 };
@@ -201,9 +201,9 @@ impl PacketLoopTurn {
             MAX_RELAY_PACKETS_PER_ITERATION,
             &config.rtc_metrics,
         );
-        state.routes.flush_remote_packet_gates();
-        drain_due_rid_keyframe_refreshes(state, &*config.rtc_metrics, now);
-        flush_pending_keyframe_requests(state, &*config.rtc_metrics, &mut self.buffers);
+        state.routes.flush_remote_pkt_gates();
+        drain_due_rid_kf_refreshes(state, &*config.rtc_metrics, now);
+        flush_pending_kf_reqs(state, &*config.rtc_metrics, &mut self.buffers);
         // packet observations must run before fanout planning because layer gates
         // and first-ingress keyframes depend on facts learned from this batch
         record_incoming_stats(
@@ -213,20 +213,20 @@ impl PacketLoopTurn {
             &config.rtp_metrics,
             &mut self.buffers,
         );
-        drain_due_keyframe_retries(state, &*config.rtc_metrics, &mut self.buffers, now);
+        drain_due_kf_retries(state, &*config.rtc_metrics, &mut self.buffers, now);
         // sink routes are refreshed once per turn so recording lookups do not take
         // the shared registry lock per packet
         self.packet_sink_cache
             .refresh_from(&config.packet_sink_registry);
         // planning is separated from flushing so all destinations for the batch are
         // known before any send mutates local session state
-        for (packet_idx, packet) in self.buffers.pending_packets.iter_mut().enumerate() {
-            populate_forward_routes_for_packet(
+        for (pkt_idx, pkt) in self.buffers.pending_packets.iter_mut().enumerate() {
+            plan_forwards(
                 state,
                 &self.packet_sink_cache,
                 &*config.rtc_metrics,
-                packet_idx,
-                packet,
+                pkt_idx,
+                pkt,
                 &mut self.buffers.forwards,
             );
         }
@@ -260,7 +260,8 @@ impl PacketLoopTurn {
             return;
         };
         self.flush_staged_transmits(&info.socket).await;
-        self.record_packet_loop_lag(packet_loop_lag, info.turn_started_at);
+        self.lag_publisher
+            .observe(packet_loop_lag, info.turn_started_at, Instant::now());
     }
 
     /// waits for the next event that should resume the worker loop
@@ -326,7 +327,7 @@ impl PacketLoopTurn {
         // real external input proves the loop yielded to its environment, so
         // immediate internal wakeups get a fresh fairness budget
         if !matches!(next_input, PacketLoopTurnInput::Timeout) {
-            self.reset_ready_now_budget();
+            self.ready_now_budget = MAX_READY_NOW_INPUTS_BEFORE_YIELD;
         }
 
         match next_input {
@@ -445,25 +446,13 @@ impl PacketLoopTurn {
         };
         // successful receives reset the burst budget around this first datagram
         // so follow-up queued datagrams can be tried without awaiting again
-        self.handle_socket_receive_result(result, info.candidate_addr)
-    }
-
-    /// keeps socket receive errors recoverable
-    ///
-    /// a receive error becomes a timeout wake so the worker can continue handling
-    /// control input and future timeouts
-    fn handle_socket_receive_result(
-        &mut self,
-        result: Result<(usize, SocketAddr), IoError>,
-        candidate_addr: SocketAddr,
-    ) -> PacketLoopTurnInput {
         match result {
             Ok((received_size, source_addr)) => {
                 // one datagram is already consumed from the new burst
                 self.udp_burst_budget = MAX_UDP_DATAGRAMS_PER_TURN.saturating_sub(1);
                 PacketLoopTurnInput::Datagram {
                     source_addr,
-                    candidate_addr,
+                    candidate_addr: info.candidate_addr,
                     received_size,
                 }
             }
@@ -472,22 +461,6 @@ impl PacketLoopTurn {
                 PacketLoopTurnInput::Timeout
             }
         }
-    }
-
-    /// updates lag through the coalescing publisher
-    ///
-    /// this avoids writing the shared atomic snapshot on every loop turn
-    fn record_packet_loop_lag(
-        &mut self,
-        snapshot: &PacketLoopLagSnapshot,
-        turn_started_at: Instant,
-    ) {
-        self.lag_publisher
-            .observe(snapshot, turn_started_at, Instant::now());
-    }
-
-    fn reset_ready_now_budget(&mut self) {
-        self.ready_now_budget = MAX_READY_NOW_INPUTS_BEFORE_YIELD;
     }
 }
 
@@ -586,7 +559,7 @@ fn route_received_datagram(
     };
     // ingress routing owns demux recovery and calls `Rtc::accepts()` before a
     // packet can mutate a session
-    route_packet_to_matching_session(
+    route_pkt_to_session(
         context.packet_loop_state,
         context.snapshot_state,
         context.demux,
@@ -647,7 +620,7 @@ fn next_timeout_deadline_at(state: &mut PacketLoopState, now: Instant) -> Option
     [
         state.next_timeout_deadline(),
         state.routes.next_rid_refresh_deadline(),
-        state.routes.next_keyframe_deadline(),
+        state.routes.next_kf_deadline(),
     ]
     .into_iter()
     .flatten()

@@ -52,15 +52,15 @@ pub(super) fn transport_key_on_worker(
 }
 
 pub(super) fn transport_consumer_route(
-    consumer_session_key: &TransportSessionKey,
-    consumer_transport_media_id: TransportMediaId,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    consumer_key: &TransportSessionKey,
+    consumer_media: TransportMediaId,
+    src_key: &TransportSessionKey,
+    src_media: TransportMediaId,
 ) -> TransportConsumerRoute {
     TransportConsumerRoute::new(
-        consumer_session_key.clone(),
-        consumer_transport_media_id,
-        TransportSourceKey::new(source_session_key.clone(), source_transport_media_id),
+        consumer_key.clone(),
+        consumer_media,
+        TransportSourceKey::new(src_key.clone(), src_media),
     )
 }
 

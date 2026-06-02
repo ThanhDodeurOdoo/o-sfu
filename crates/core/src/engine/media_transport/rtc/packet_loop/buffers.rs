@@ -62,7 +62,7 @@ impl PendingTransmit {
 
 pub(super) struct PendingRidReadiness {
     pub(super) source: ForwardedPacketSource,
-    pub(super) source_transport_media_id: TransportMediaId,
+    pub(super) src_media: TransportMediaId,
     pub(super) rid: Rid,
     pub(super) is_keyframe: bool,
     pub(super) observed_at: Instant,
@@ -70,7 +70,7 @@ pub(super) struct PendingRidReadiness {
 
 pub(super) struct PendingFirstVideoKeyframe {
     pub(super) source: ForwardedPacketSource,
-    pub(super) source_transport_media_id: TransportMediaId,
+    pub(super) src_media: TransportMediaId,
     pub(super) observed_at: Instant,
 }
 
@@ -180,14 +180,16 @@ impl PacketLoopBuffers {
     pub(super) fn push_rid_readiness(
         &mut self,
         source: &ForwardedPacketSource,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
         rid: Rid,
         is_keyframe: bool,
         observed_at: Instant,
     ) {
-        if let Some(pending) = self.pending_rid_readiness.iter_mut().find(|pending| {
-            pending.source_transport_media_id == source_transport_media_id && pending.rid == rid
-        }) {
+        if let Some(pending) = self
+            .pending_rid_readiness
+            .iter_mut()
+            .find(|pending| pending.src_media == src_media && pending.rid == rid)
+        {
             pending.is_keyframe |= is_keyframe;
             if pending.observed_at < observed_at {
                 pending.observed_at = observed_at;
@@ -196,7 +198,7 @@ impl PacketLoopBuffers {
         }
         self.pending_rid_readiness.push(PendingRidReadiness {
             source: source.clone(),
-            source_transport_media_id,
+            src_media,
             rid,
             is_keyframe,
             observed_at,
@@ -206,20 +208,20 @@ impl PacketLoopBuffers {
     pub(super) fn push_first_video_keyframe(
         &mut self,
         source: &ForwardedPacketSource,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
         observed_at: Instant,
     ) {
         if self
             .pending_first_video_keyframes
             .iter()
-            .any(|pending| pending.source_transport_media_id == source_transport_media_id)
+            .any(|pending| pending.src_media == src_media)
         {
             return;
         }
         self.pending_first_video_keyframes
             .push(PendingFirstVideoKeyframe {
                 source: source.clone(),
-                source_transport_media_id,
+                src_media,
                 observed_at,
             });
     }

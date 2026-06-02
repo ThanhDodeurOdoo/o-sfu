@@ -13,7 +13,7 @@ pub(super) enum RouteSourceKind {
 }
 
 pub struct AddSendMediaRequest<'a> {
-    pub consumer_session_key: &'a TransportSessionKey,
+    pub consumer_key: &'a TransportSessionKey,
     pub media_kind: MediaKind,
     pub source: &'a TransportSourceKey,
     pub remote_source_control: Option<RemoteSourceControl>,

@@ -40,17 +40,13 @@ impl IncomingObservationBenchFixture {
         let source_session = test_transport_session_key(101, 0, 102, UserId::Integer(103));
         let mut state = PacketLoopState::default();
         let mut scenario = MediaWorkerScenario::new(&mut state);
-        let source_transport_media_id =
-            scenario.source(source_session.clone(), Mid::from("cam-up"));
+        let src_media = scenario.source(source_session.clone(), Mid::from("cam-up"));
 
         let now = Instant::now();
         let mut bitrate_registry = BitrateRegistry::default();
-        let bitrate_counter = bitrate_registry.register_incoming_media(
-            &source_session,
-            source_transport_media_id,
-            now,
-        );
-        state.register_incoming_bitrate_counter(source_transport_media_id, bitrate_counter);
+        let bitrate_counter =
+            bitrate_registry.register_incoming_media(&source_session, src_media, now);
+        state.register_incoming_bitrate_counter(src_media, bitrate_counter);
 
         let metrics = RuntimeMetrics::default();
         let route_metrics = metrics.register_rtc_worker();

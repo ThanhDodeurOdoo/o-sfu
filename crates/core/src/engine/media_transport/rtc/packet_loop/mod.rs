@@ -106,7 +106,7 @@ pub use event_observation::{transport_health_from_event, transport_ice_state};
 
 #[cfg(any(test, feature = "internal-benchmarks", feature = "fuzzing"))]
 pub(in crate::engine::media_transport::rtc) use self::ingress_routing::{
-    PacketRouteDatagram, route_packet_to_matching_session_at,
+    PacketRouteDatagram, route_pkt_to_session_at,
 };
 #[cfg(feature = "internal-benchmarks")]
 pub(in crate::engine::media_transport::rtc) use self::{
@@ -114,7 +114,7 @@ pub(in crate::engine::media_transport::rtc) use self::{
     forward_flush::{
         drain_relay_packets, flush_forward_routes, record_incoming_stats_for_benchmark,
     },
-    keyframe_requests::{PendingKeyframeRequest, flush_pending_keyframe_requests_at},
+    keyframe_requests::{PendingKeyframeRequest, flush_pending_kf_reqs_at},
     session_drain::{SessionDrainContext, drain_ready_sessions},
 };
 pub(in crate::engine::media_transport::rtc) use self::{
