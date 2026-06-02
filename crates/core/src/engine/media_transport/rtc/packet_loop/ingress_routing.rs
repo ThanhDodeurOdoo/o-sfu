@@ -139,7 +139,7 @@ impl<'a> Iterator for CandidateSessionKeys<'a> {
 /// `Rtc::handle_input()` error after a successful ownership decision is logged,
 /// but the route can still be considered learned because ownership and packet
 /// validity are separate concerns.
-pub(super) fn route_packet_to_matching_session(
+pub(super) fn route_pkt_to_session(
     state: &mut PacketLoopState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     demux: &mut DemuxRecoveryState,
@@ -148,7 +148,7 @@ pub(super) fn route_packet_to_matching_session(
     candidate_addr: SocketAddr,
     packet: &[u8],
 ) {
-    route_packet_to_matching_session_at(
+    route_pkt_to_session_at(
         state,
         snapshot_state,
         demux,
@@ -157,14 +157,14 @@ pub(super) fn route_packet_to_matching_session(
     );
 }
 
-pub(in crate::engine::media_transport::rtc) fn route_packet_to_matching_session_at(
+pub(in crate::engine::media_transport::rtc) fn route_pkt_to_session_at(
     state: &mut PacketLoopState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     demux: &mut DemuxRecoveryState,
     metrics: &RtcMetricsRecorder,
     datagram: PacketRouteDatagram<'_>,
 ) {
-    match route_packet_with_cached_session(
+    match route_cached_pkt(
         state,
         snapshot_state,
         datagram.source_addr,
@@ -220,13 +220,13 @@ pub(in crate::engine::media_transport::rtc) fn route_packet_to_matching_session_
     // With one live session, routing degenerates to one `accepts()` check.
     // No recovery index is needed to narrow the candidate set.
     if state.users.len() == 1 {
-        route_packet_by_single_session(state, demux, miss_key, &route);
+        route_pkt_by_session(state, demux, miss_key, &route);
         return;
     }
-    route_packet_by_recovery_index(state, demux, miss_key, &route);
+    route_pkt_by_recovery(state, demux, miss_key, &route);
 }
 
-fn route_packet_with_cached_session(
+fn route_cached_pkt(
     state: &mut PacketLoopState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     source_addr: SocketAddr,
@@ -303,7 +303,7 @@ fn route_packet_with_cached_session(
     CachedRouteOutcome::Routed
 }
 
-fn matching_indexed_session_key_for_packet(
+fn indexed_session_for_pkt(
     state: &mut PacketLoopState,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
@@ -326,11 +326,11 @@ fn matching_indexed_session_key_for_packet(
         PacketIndexProbe::LocalIceUfrag(local_ice_ufrag) => CandidateSessionKeys::Single(
             state
                 .remote_addr_demux
-                .session_key_for_local_ice_ufrag(local_ice_ufrag),
+                .session_for_local_ufrag(local_ice_ufrag),
         ),
         PacketIndexProbe::RemoteCandidateAddr(remote_candidate_addr) => state
             .remote_addr_demux
-            .candidate_sessions_for_source_addr(*remote_candidate_addr)
+            .candidates_for_src_addr(*remote_candidate_addr)
             .map_or(
                 CandidateSessionKeys::Single(None),
                 |candidate_session_keys| CandidateSessionKeys::Slice(candidate_session_keys.iter()),
@@ -363,7 +363,7 @@ fn matching_indexed_session_key_for_packet(
         for stale_session_key in stale_session_keys {
             state
                 .remote_addr_demux
-                .forget_user_remote_candidate_addrs(&stale_session_key);
+                .forget_user_remote_candidates(&stale_session_key);
             state
                 .remote_addr_demux
                 .forget_user_local_ice_ufrag(&stale_session_key);
@@ -385,7 +385,7 @@ fn matching_indexed_session_key_for_packet(
     for stale_session_key in stale_session_keys {
         state
             .remote_addr_demux
-            .forget_user_remote_candidate_addrs(&stale_session_key);
+            .forget_user_remote_candidates(&stale_session_key);
         state
             .remote_addr_demux
             .forget_user_local_ice_ufrag(&stale_session_key);
@@ -462,7 +462,7 @@ fn log_malformed_datagram(source_addr: SocketAddr) {
     );
 }
 
-fn record_unknown_source_miss(
+fn record_unknown_src_miss(
     demux: &mut DemuxRecoveryState,
     miss_key: PacketLoopRoutingMissKey,
     route: &PacketRouteContext<'_>,
@@ -563,7 +563,7 @@ fn route_packet_to_session(
 /// The single-session case still calls `Rtc::accepts()` and records misses.
 /// It only avoids the recovery-index probe because there is no candidate set to
 /// narrow.
-fn route_packet_by_single_session(
+fn route_pkt_by_session(
     state: &mut PacketLoopState,
     demux: &mut DemuxRecoveryState,
     miss_key: PacketLoopRoutingMissKey,
@@ -589,11 +589,11 @@ fn route_packet_by_single_session(
         .is_some_and(|session_state| session_state.rtc.accepts(&input));
     route.metrics.record_rtc_datagram_fallback_scan(1);
     if !accepts_input {
-        record_no_user_fallback_miss(demux, miss_key, route);
+        record_no_user_miss(demux, miss_key, route);
         return;
     }
     if route_packet_to_session(state, &session_key, route, input, "single-user-scan") {
-        record_successful_fallback_route(demux, miss_key, route);
+        record_route_success(demux, miss_key, route);
     }
 }
 
@@ -602,7 +602,7 @@ fn route_packet_by_single_session(
 /// Multi-session recovery never scans every session. It probes packet shape,
 /// consults the corresponding demux index and verifies only the resulting
 /// candidate sessions with `Rtc::accepts()`.
-fn route_packet_by_recovery_index(
+fn route_pkt_by_recovery(
     state: &mut PacketLoopState,
     demux: &mut DemuxRecoveryState,
     miss_key: PacketLoopRoutingMissKey,
@@ -619,7 +619,7 @@ fn route_packet_by_recovery_index(
         drop_malformed_fallback(route);
         return;
     };
-    let session_key = match matching_indexed_session_key_for_packet(
+    let session_key = match indexed_session_for_pkt(
         state,
         route.source_addr,
         route.candidate_addr,
@@ -639,7 +639,7 @@ fn route_packet_by_recovery_index(
             route
                 .metrics
                 .record_rtc_datagram_fallback_scan(examined_sessions);
-            record_no_user_fallback_miss(demux, miss_key, route);
+            record_no_user_miss(demux, miss_key, route);
             return;
         }
         IndexedSessionRecoveryOutcome::Malformed => {
@@ -648,7 +648,7 @@ fn route_packet_by_recovery_index(
         }
     };
     if route_packet_to_session(state, &session_key, route, input, "recovery-index") {
-        record_successful_fallback_route(demux, miss_key, route);
+        record_route_success(demux, miss_key, route);
     }
 }
 
@@ -659,7 +659,7 @@ fn drop_malformed_fallback(route: &PacketRouteContext<'_>) {
     log_malformed_datagram(route.source_addr);
 }
 
-fn record_no_user_fallback_miss(
+fn record_no_user_miss(
     demux: &mut DemuxRecoveryState,
     miss_key: PacketLoopRoutingMissKey,
     route: &PacketRouteContext<'_>,
@@ -667,14 +667,14 @@ fn record_no_user_fallback_miss(
     route
         .metrics
         .record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
-    record_unknown_source_miss(demux, miss_key, route);
+    record_unknown_src_miss(demux, miss_key, route);
     trace!(
         source = %route.source_addr,
         "dropping UDP datagram because no rtc user accepted it"
     );
 }
 
-fn record_successful_fallback_route(
+fn record_route_success(
     demux: &mut DemuxRecoveryState,
     miss_key: PacketLoopRoutingMissKey,
     route: &PacketRouteContext<'_>,

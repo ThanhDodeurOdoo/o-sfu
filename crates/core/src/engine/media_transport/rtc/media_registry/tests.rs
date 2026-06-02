@@ -13,54 +13,53 @@ fn rtp_parameters_with_ssrc(mid: Mid, ssrc: u32) -> RouterRtpParameters {
 #[test]
 fn consumer_media_lookup_uses_the_reverse_index() {
     let mut state = PacketLoopState::default();
-    let source_transport_media_id = TransportMediaId::new(8);
+    let src_media = TransportMediaId::new(8);
     let consumer_session = test_transport_session_key(12, 0, 13, UserId::Integer(14));
     let consumer_mid = Mid::from("aud-down");
 
     state.register_media_handle(RegisteredMediaHandle::Consumer {
         session_key: consumer_session.clone(),
         mid: consumer_mid,
-        source_transport_media_id,
+        src_media,
     });
 
     assert_eq!(
-        state.consumer_source_transport_media_id_for_mid(&consumer_session, consumer_mid),
-        Some(source_transport_media_id)
+        state.consumer_src_media_for_mid(&consumer_session, consumer_mid),
+        Some(src_media)
     );
 }
 
 #[test]
 fn consumer_media_lookup_clears_when_the_handle_is_removed() {
     let mut state = PacketLoopState::default();
-    let source_transport_media_id = TransportMediaId::new(9);
+    let src_media = TransportMediaId::new(9);
     let consumer_session = test_transport_session_key(15, 0, 16, UserId::Integer(17));
     let consumer_mid = Mid::from("cam-down");
 
-    let consumer_transport_media_id =
-        state.register_media_handle(RegisteredMediaHandle::Consumer {
-            session_key: consumer_session.clone(),
-            mid: consumer_mid,
-            source_transport_media_id,
-        });
+    let consumer_media = state.register_media_handle(RegisteredMediaHandle::Consumer {
+        session_key: consumer_session.clone(),
+        mid: consumer_mid,
+        src_media,
+    });
     assert_eq!(
-        state.consumer_source_transport_media_id_for_mid(&consumer_session, consumer_mid),
-        Some(source_transport_media_id)
+        state.consumer_src_media_for_mid(&consumer_session, consumer_mid),
+        Some(src_media)
     );
 
-    let removed_handle = state.remove_media_handle(consumer_transport_media_id);
+    let removed_handle = state.remove_media_handle(consumer_media);
 
     assert!(matches!(
         removed_handle,
         Some(RegisteredMediaHandle::Consumer {
             session_key,
             mid,
-            source_transport_media_id: removed_source_transport_media_id,
+            src_media: removed_src_media,
         }) if session_key == consumer_session
             && mid == consumer_mid
-            && removed_source_transport_media_id == source_transport_media_id
+            && removed_src_media == src_media
     ));
     assert_eq!(
-        state.consumer_source_transport_media_id_for_mid(&consumer_session, consumer_mid),
+        state.consumer_src_media_for_mid(&consumer_session, consumer_mid),
         None
     );
 }
@@ -80,7 +79,7 @@ fn session_media_index_drives_bulk_session_removal() {
     let consumer_media_id = state.register_media_handle(RegisteredMediaHandle::Consumer {
         session_key: removed_session.clone(),
         mid: consumer_mid,
-        source_transport_media_id: producer_media_id,
+        src_media: producer_media_id,
     });
     let kept_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: kept_session.clone(),
@@ -97,15 +96,15 @@ fn session_media_index_drives_bulk_session_removal() {
     assert_eq!(removed_ids, vec![producer_media_id, consumer_media_id]);
     assert!(!state.session_has_registered_media(&removed_session));
     assert_eq!(
-        state.source_transport_media_id_for_mid(&removed_session, producer_mid),
+        state.src_media_for_mid(&removed_session, producer_mid),
         None
     );
     assert_eq!(
-        state.consumer_source_transport_media_id_for_mid(&removed_session, consumer_mid),
+        state.consumer_src_media_for_mid(&removed_session, consumer_mid),
         None
     );
     assert_eq!(
-        state.source_transport_media_id_for_mid(&kept_session, kept_mid),
+        state.src_media_for_mid(&kept_session, kept_mid),
         Some(kept_media_id)
     );
 }
@@ -126,22 +125,19 @@ fn producer_media_lookup_is_session_scoped_by_mid() {
     });
 
     assert_eq!(
-        state.source_transport_media_id_for_mid(&first_session, shared_mid),
+        state.src_media_for_mid(&first_session, shared_mid),
         Some(first_media_id)
     );
     assert_eq!(
-        state.source_transport_media_id_for_mid(&second_session, shared_mid),
+        state.src_media_for_mid(&second_session, shared_mid),
         Some(second_media_id)
     );
 
     let _removed_handle = state.remove_media_handle(first_media_id);
 
+    assert_eq!(state.src_media_for_mid(&first_session, shared_mid), None);
     assert_eq!(
-        state.source_transport_media_id_for_mid(&first_session, shared_mid),
-        None
-    );
-    assert_eq!(
-        state.source_transport_media_id_for_mid(&second_session, shared_mid),
+        state.src_media_for_mid(&second_session, shared_mid),
         Some(second_media_id)
     );
 }
@@ -156,14 +152,14 @@ fn producer_media_lookup_falls_back_to_negotiated_ssrc() {
         session_key: producer_session.clone(),
         mid: producer_mid,
     });
-    state.refresh_producer_ssrc_bindings(
+    state.refresh_producer_ssrcs(
         &producer_session,
         producer_mid,
         &rtp_parameters_with_ssrc(producer_mid, producer_ssrc),
     );
 
     assert_eq!(
-        state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(producer_ssrc)),
+        state.src_media_for_ssrc(&producer_session, Ssrc::from(producer_ssrc)),
         Some(transport_media_id)
     );
 }
@@ -188,7 +184,7 @@ fn dynamic_producer_ssrc_rid_lookup_clears_with_media_handle() {
     );
 
     assert_eq!(
-        state.source_transport_media_id_for_ssrc(&producer_session, producer_ssrc),
+        state.src_media_for_ssrc(&producer_session, producer_ssrc),
         Some(transport_media_id)
     );
     assert_eq!(
@@ -199,7 +195,7 @@ fn dynamic_producer_ssrc_rid_lookup_clears_with_media_handle() {
     let _removed_handle = state.remove_media_handle(transport_media_id);
 
     assert_eq!(
-        state.source_transport_media_id_for_ssrc(&producer_session, producer_ssrc),
+        state.src_media_for_ssrc(&producer_session, producer_ssrc),
         None
     );
     assert_eq!(
@@ -220,28 +216,28 @@ fn producer_ssrc_lookup_refresh_replaces_stale_bindings() {
         mid: producer_mid,
     });
 
-    state.refresh_producer_ssrc_bindings(
+    state.refresh_producer_ssrcs(
         &producer_session,
         producer_mid,
         &rtp_parameters_with_ssrc(producer_mid, first_ssrc),
     );
     assert_eq!(
-        state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(first_ssrc)),
+        state.src_media_for_ssrc(&producer_session, Ssrc::from(first_ssrc)),
         Some(transport_media_id)
     );
 
-    state.refresh_producer_ssrc_bindings(
+    state.refresh_producer_ssrcs(
         &producer_session,
         producer_mid,
         &rtp_parameters_with_ssrc(producer_mid, second_ssrc),
     );
 
     assert_eq!(
-        state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(first_ssrc)),
+        state.src_media_for_ssrc(&producer_session, Ssrc::from(first_ssrc)),
         None
     );
     assert_eq!(
-        state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(second_ssrc)),
+        state.src_media_for_ssrc(&producer_session, Ssrc::from(second_ssrc)),
         Some(transport_media_id)
     );
 }
@@ -258,22 +254,22 @@ fn producer_mid_lookup_survives_ssrc_binding_refresh() {
     });
 
     assert_eq!(
-        state.source_transport_media_id_for_mid(&producer_session, producer_mid),
+        state.src_media_for_mid(&producer_session, producer_mid),
         Some(transport_media_id)
     );
 
-    state.refresh_producer_ssrc_bindings(
+    state.refresh_producer_ssrcs(
         &producer_session,
         producer_mid,
         &rtp_parameters_with_ssrc(producer_mid, producer_ssrc),
     );
 
     assert_eq!(
-        state.source_transport_media_id_for_mid(&producer_session, producer_mid),
+        state.src_media_for_mid(&producer_session, producer_mid),
         Some(transport_media_id)
     );
     assert_eq!(
-        state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(producer_ssrc)),
+        state.src_media_for_ssrc(&producer_session, Ssrc::from(producer_ssrc)),
         Some(transport_media_id)
     );
 }
@@ -298,11 +294,11 @@ fn dynamic_producer_ssrc_binding_cannot_steal_another_media_id() {
     state.learn_producer_ssrc_binding(&producer_session, second_media_id, shared_ssrc, None);
 
     assert_eq!(
-        state.source_transport_media_id_for_ssrc(&producer_session, shared_ssrc),
+        state.src_media_for_ssrc(&producer_session, shared_ssrc),
         Some(first_media_id)
     );
     assert_eq!(
-        state.source_transport_media_id_for_mid(&producer_session, second_mid),
+        state.src_media_for_mid(&producer_session, second_mid),
         Some(second_media_id)
     );
 }
@@ -323,24 +319,24 @@ fn rejected_negotiated_ssrc_binding_does_not_clear_existing_owner() {
         mid: second_mid,
     });
 
-    state.refresh_producer_ssrc_bindings(
+    state.refresh_producer_ssrcs(
         &producer_session,
         first_mid,
         &rtp_parameters_with_ssrc(first_mid, shared_ssrc),
     );
-    state.refresh_producer_ssrc_bindings(
+    state.refresh_producer_ssrcs(
         &producer_session,
         second_mid,
         &rtp_parameters_with_ssrc(second_mid, shared_ssrc),
     );
-    state.clear_producer_ssrc_bindings_for_mid(&producer_session, second_mid);
+    state.clear_producer_ssrcs_for_mid(&producer_session, second_mid);
 
     assert_eq!(
-        state.source_transport_media_id_for_ssrc(&producer_session, Ssrc::from(shared_ssrc)),
+        state.src_media_for_ssrc(&producer_session, Ssrc::from(shared_ssrc)),
         Some(first_media_id)
     );
     assert_eq!(
-        state.source_transport_media_id_for_mid(&producer_session, second_mid),
+        state.src_media_for_mid(&producer_session, second_mid),
         Some(second_media_id)
     );
 }
@@ -371,7 +367,7 @@ fn expired_active_speaker_channels_are_resolved_from_source_owners() {
     );
 
     assert_eq!(
-        state.expired_active_speaker_room_instance_ids(start + Duration::from_millis(251)),
+        state.expired_active_speaker_rooms(start + Duration::from_millis(251)),
         BTreeSet::from([first_session.room_instance_id()])
     );
 }

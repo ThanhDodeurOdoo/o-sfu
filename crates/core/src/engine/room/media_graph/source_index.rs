@@ -16,13 +16,12 @@ use crate::engine::{
 #[derive(Debug, Default)]
 pub(super) struct SourceIndex {
     pub(super) descriptors: BTreeMap<PublishedSourceId, PublishedSourceDescriptor>,
-    pub(super) source_ids_by_owner_stream: BTreeMap<SourceKey, PublishedSourceId>,
-    pub(super) source_ids_by_owner: BTreeMap<UserId, BTreeSet<PublishedSourceId>>,
-    pub(super) producer_id_by_source_id: BTreeMap<PublishedSourceId, ProducerRuntimeId>,
-    pub(super) producer_ids_by_owner: BTreeMap<UserId, BTreeSet<ProducerRuntimeId>>,
+    pub(super) id_by_key: BTreeMap<SourceKey, PublishedSourceId>,
+    pub(super) ids_by_owner: BTreeMap<UserId, BTreeSet<PublishedSourceId>>,
+    pub(super) producer_by_source: BTreeMap<PublishedSourceId, ProducerRuntimeId>,
+    pub(super) producers_by_owner: BTreeMap<UserId, BTreeSet<ProducerRuntimeId>>,
     pub(super) producers: BTreeMap<ProducerRuntimeId, PublishedProducer>,
-    pub(super) source_transport_media_index:
-        BTreeMap<TransportMediaId, SourceTransportMediaIndexEntry>,
+    pub(super) by_transport_media: BTreeMap<TransportMediaId, SourceTransportMediaIndexEntry>,
 }
 
 impl SourceIndex {
@@ -63,11 +62,11 @@ impl SourceIndex {
         self.descriptors.get(&source_id)
     }
 
-    pub(super) fn source_transport_media_entry(
+    pub(super) fn transport_media_entry(
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<&SourceTransportMediaIndexEntry> {
-        self.source_transport_media_index.get(&transport_media_id)
+        self.by_transport_media.get(&transport_media_id)
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
@@ -84,7 +83,7 @@ impl SourceIndex {
         connection_id: ConnectionId,
         stream_id: &UserStreamId,
     ) -> Option<TransportMediaId> {
-        let producer_id = self.producer_id_for_source_key(&SourceKey::new(user_id, stream_id))?;
+        let producer_id = self.producer_id_for_key(&SourceKey::new(user_id, stream_id))?;
         let producer = self.producers.get(&producer_id)?;
         if producer.owner_connection_id == connection_id {
             producer.transport_media_id
@@ -93,12 +92,12 @@ impl SourceIndex {
         }
     }
 
-    pub(super) fn source_id_for_owner_stream(
+    pub(super) fn id_for_owner_stream(
         &self,
         owner_user_id: &UserId,
         stream_id: &UserStreamId,
     ) -> Option<PublishedSourceId> {
-        self.source_ids_by_owner_stream
+        self.id_by_key
             .get(&SourceKey::new(owner_user_id, stream_id))
             .copied()
     }
@@ -109,8 +108,7 @@ impl SourceIndex {
         owner_connection_id: ConnectionId,
         stream_id: &UserStreamId,
     ) -> Option<ProducerRouteTarget> {
-        let producer_id =
-            self.producer_id_for_source_key(&SourceKey::new(owner_user_id, stream_id))?;
+        let producer_id = self.producer_id_for_key(&SourceKey::new(owner_user_id, stream_id))?;
         let producer = self.producers.get(&producer_id)?;
         if producer.owner_connection_id != owner_connection_id {
             return None;
@@ -158,7 +156,7 @@ impl SourceIndex {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> impl Iterator<Item = (&PublishedSourceDescriptor, &PublishedProducer)> {
-        self.producer_ids_by_owner
+        self.producers_by_owner
             .get(user_id)
             .into_iter()
             .flat_map(BTreeSet::iter)
@@ -179,7 +177,7 @@ impl SourceIndex {
         owner_user_id: &UserId,
         group: ActiveSpeakerGroup,
     ) -> bool {
-        self.source_ids_by_owner
+        self.ids_by_owner
             .get(owner_user_id)
             .into_iter()
             .flat_map(BTreeSet::iter)
@@ -206,12 +204,11 @@ impl SourceIndex {
         let stream_id = producer.stream_id.clone();
         self.producers.insert(producer_id, producer);
         self.descriptors.insert(source_id, source_descriptor);
-        self.source_ids_by_owner_stream
-            .insert(source_key, source_id);
-        self.producer_id_by_source_id.insert(source_id, producer_id);
-        self.register_source_owner(&owner_user_id, source_id);
+        self.id_by_key.insert(source_key, source_id);
+        self.producer_by_source.insert(source_id, producer_id);
+        self.register_owner(&owner_user_id, source_id);
         self.register_producer_owner(&owner_user_id, producer_id);
-        self.source_transport_media_index.insert(
+        self.by_transport_media.insert(
             transport_media_id,
             SourceTransportMediaIndexEntry::new(
                 source_id,
@@ -223,19 +220,19 @@ impl SourceIndex {
         );
     }
 
-    pub(super) fn source_ids_for_owner(
+    pub(super) fn ids_for_owner(
         &self,
         user_id: &UserId,
     ) -> impl Iterator<Item = PublishedSourceId> + '_ {
-        self.source_ids_by_owner
+        self.ids_by_owner
             .get(user_id)
             .into_iter()
             .flat_map(|source_ids| source_ids.iter().copied())
     }
 
     #[cfg(test)]
-    pub(super) fn producer_ids_for_user(&self, user_id: &UserId) -> Vec<ProducerRuntimeId> {
-        self.producer_ids_by_owner
+    pub(super) fn producer_ids_for_owner(&self, user_id: &UserId) -> Vec<ProducerRuntimeId> {
+        self.producers_by_owner
             .get(user_id)
             .map(|producer_ids| producer_ids.iter().copied().collect())
             .unwrap_or_default()
@@ -247,14 +244,13 @@ impl SourceIndex {
     ) -> Option<PublishedProducer> {
         let source = self.descriptors.remove(&source_id)?;
         let source_key = SourceKey::new(source.owner().user_id(), source.stream_id());
-        self.source_ids_by_owner_stream.remove(&source_key);
-        self.unregister_source_owner(source.owner().user_id(), source_id);
-        let producer_id = self.producer_id_by_source_id.remove(&source_id)?;
+        self.id_by_key.remove(&source_key);
+        self.unregister_owner(source.owner().user_id(), source_id);
+        let producer_id = self.producer_by_source.remove(&source_id)?;
         let producer = self.producers.remove(&producer_id)?;
         self.unregister_producer_owner(&producer.owner_user_id, producer_id);
         if let Some(transport_media_id) = producer.transport_media_id {
-            self.source_transport_media_index
-                .remove(&transport_media_id);
+            self.by_transport_media.remove(&transport_media_id);
         }
         Some(producer)
     }
@@ -265,7 +261,7 @@ impl SourceIndex {
     ) -> Vec<TransportMediaRemoval> {
         departing_user_ids
             .iter()
-            .filter_map(|user_id| self.producer_ids_by_owner.get(user_id))
+            .filter_map(|user_id| self.producers_by_owner.get(user_id))
             .flat_map(|producer_ids| producer_ids.iter())
             .filter_map(|producer_id| {
                 let producer = self.producers.get(producer_id)?;
@@ -283,7 +279,7 @@ impl SourceIndex {
         &self,
         source_id: PublishedSourceId,
     ) -> Option<&PublishedProducer> {
-        let producer_id = self.producer_id_by_source_id.get(&source_id)?;
+        let producer_id = self.producer_by_source.get(&source_id)?;
         self.producers.get(producer_id)
     }
 
@@ -291,30 +287,30 @@ impl SourceIndex {
         self.producers.get(&producer_id)
     }
 
-    fn producer_id_for_source_key(&self, source_key: &SourceKey) -> Option<ProducerRuntimeId> {
-        let source_id = self.source_ids_by_owner_stream.get(source_key)?;
-        self.producer_id_by_source_id.get(source_id).copied()
+    fn producer_id_for_key(&self, source_key: &SourceKey) -> Option<ProducerRuntimeId> {
+        let source_id = self.id_by_key.get(source_key)?;
+        self.producer_by_source.get(source_id).copied()
     }
 
-    fn register_source_owner(&mut self, user_id: &UserId, source_id: PublishedSourceId) {
-        self.source_ids_by_owner
+    fn register_owner(&mut self, user_id: &UserId, source_id: PublishedSourceId) {
+        self.ids_by_owner
             .entry(user_id.clone())
             .or_default()
             .insert(source_id);
     }
 
-    fn unregister_source_owner(&mut self, user_id: &UserId, source_id: PublishedSourceId) {
-        remove_from_index_set(&mut self.source_ids_by_owner, user_id, &source_id);
+    fn unregister_owner(&mut self, user_id: &UserId, source_id: PublishedSourceId) {
+        remove_from_index_set(&mut self.ids_by_owner, user_id, &source_id);
     }
 
     fn register_producer_owner(&mut self, user_id: &UserId, producer_id: ProducerRuntimeId) {
-        self.producer_ids_by_owner
+        self.producers_by_owner
             .entry(user_id.clone())
             .or_default()
             .insert(producer_id);
     }
 
     fn unregister_producer_owner(&mut self, user_id: &UserId, producer_id: ProducerRuntimeId) {
-        remove_from_index_set(&mut self.producer_ids_by_owner, user_id, &producer_id);
+        remove_from_index_set(&mut self.producers_by_owner, user_id, &producer_id);
     }
 }

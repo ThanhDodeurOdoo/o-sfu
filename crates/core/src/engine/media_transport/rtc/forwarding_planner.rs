@@ -48,45 +48,41 @@ use crate::engine::{
 /// Origin-side sinks and relay fanout only apply to packets that still visit
 /// their source worker. Relayed packets already consumed those source-side
 /// effects and must not be sent back into second-hop relay sinks.
-pub(super) fn populate_forward_routes_for_packet(
+pub(super) fn plan_forwards(
     state: &PacketLoopState,
     packet_sinks: &impl PacketSinkLookup,
     metrics: &impl RtcRouteControlMetrics,
-    packet_idx: usize,
-    packet: &mut ForwardedPacket,
+    pkt_idx: usize,
+    pkt: &mut ForwardedPacket,
     forwards: &mut Vec<PacketForward>,
 ) {
-    let Some(facts) = packet.resolve_facts(state) else {
+    let Some(facts) = pkt.resolve_facts(state) else {
         return;
     };
-    let source_transport_media_id = facts.source_transport_media_id;
-    let visits_origin = packet.visits_origin_sinks();
+    let src_media = facts.src_media;
+    let visits_origin = pkt.visits_origin_sinks();
     let origin_sink = visits_origin
         .then(|| packet_sinks.sink_for_room(facts.room_instance_id))
         .flatten();
     let (route_entry, relay_targets, source_gate) = if let Some(origin_sink) = origin_sink {
         if !state.routes.has_sources() {
             forwards.push(PacketForward::from_packet_sink(
-                packet_idx,
-                source_transport_media_id,
+                pkt_idx,
+                src_media,
                 origin_sink,
             ));
             return;
         }
-        let view = state
-            .routes
-            .forward_view(source_transport_media_id, visits_origin);
+        let view = state.routes.forward_view(src_media, visits_origin);
         reserve_forward_capacity(Some(&origin_sink), view.1, view.0, forwards);
         forwards.push(PacketForward::from_packet_sink(
-            packet_idx,
-            source_transport_media_id,
+            pkt_idx,
+            src_media,
             origin_sink,
         ));
         view
     } else {
-        let view = state
-            .routes
-            .forward_view(source_transport_media_id, visits_origin);
+        let view = state.routes.forward_view(src_media, visits_origin);
         reserve_forward_capacity(None, view.1, view.0, forwards);
         view
     };
@@ -94,27 +90,14 @@ pub(super) fn populate_forward_routes_for_packet(
         return;
     }
     let metadata = facts.layer_metadata;
-    if !source_packet_gate_permits(metrics, source_gate, metadata) {
+    if !src_gate_permits(metrics, source_gate, metadata) {
         return;
     }
     if let Some(relay_targets) = relay_targets {
-        populate_relay_forwards(
-            state,
-            relay_targets,
-            packet_idx,
-            source_transport_media_id,
-            metadata,
-            forwards,
-        );
+        populate_relay_forwards(state, relay_targets, pkt_idx, src_media, metadata, forwards);
     }
     if let Some(route_entry) = route_entry {
-        populate_local_forwards(
-            route_entry,
-            packet_idx,
-            source_transport_media_id,
-            metadata,
-            forwards,
-        );
+        populate_local_forwards(route_entry, pkt_idx, src_media, metadata, forwards);
     }
 }
 
@@ -145,13 +128,13 @@ fn reserve_forward_capacity(
 /// suppresses local and relay fanout together, which keeps active-speaker,
 /// selected-layer and source-wide policy gates authoritative for every
 /// downstream destination.
-fn source_packet_gate_permits(
+fn src_gate_permits(
     metrics: &impl RtcRouteControlMetrics,
-    source_gate: Option<PacketLayerGate>,
+    src_gate: Option<PacketLayerGate>,
     metadata: PacketLayerMetadata,
 ) -> bool {
-    if let Some(source_gate) = source_gate
-        && !source_gate.permits(metadata)
+    if let Some(src_gate) = src_gate
+        && !src_gate.permits(metadata)
     {
         metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
         return false;
@@ -169,23 +152,18 @@ fn source_packet_gate_permits(
 fn populate_relay_forwards(
     state: &PacketLoopState,
     relay_targets: &[ActiveRelayTarget],
-    packet_idx: usize,
-    source_transport_media_id: RouteTransportMediaId,
+    pkt_idx: usize,
+    src_media: RouteTransportMediaId,
     metadata: PacketLayerMetadata,
     forwards: &mut Vec<PacketForward>,
 ) {
     for relay_target in relay_targets {
-        if !relay_target_gate_permits(
-            state,
-            source_transport_media_id,
-            relay_target.target_id,
-            metadata,
-        ) {
+        if !relay_target_gate_permits(state, src_media, relay_target.target_id, metadata) {
             continue;
         }
         forwards.push(PacketForward::from_relay_target(
-            packet_idx,
-            source_transport_media_id,
+            pkt_idx,
+            src_media,
             relay_target.target.clone(),
         ));
     }
@@ -204,36 +182,32 @@ fn populate_relay_forwards(
 /// consumer identity
 fn populate_local_forwards(
     route_entry: &MediaRouteEntry,
-    packet_idx: usize,
-    source_transport_media_id: RouteTransportMediaId,
+    pkt_idx: usize,
+    src_media: RouteTransportMediaId,
     metadata: PacketLayerMetadata,
     forwards: &mut Vec<PacketForward>,
 ) {
     if !route_entry.source_active {
         debug!(
-            ?source_transport_media_id,
+            source_transport_media_id = ?src_media,
             "skipped forwarding because source route is inactive"
         );
         return;
     }
     if route_entry.active_destination_count == route_entry.destinations.len() {
-        for (destination_index, destination) in route_entry.destinations.iter().enumerate() {
-            if destination.packet_gate.permits(metadata) {
+        for (dst_idx, dst) in route_entry.destinations.iter().enumerate() {
+            if dst.packet_gate.permits(metadata) {
                 forwards.push(PacketForward::from_local_route_destination(
-                    packet_idx,
-                    source_transport_media_id,
-                    destination_index,
+                    pkt_idx, src_media, dst_idx,
                 ));
             }
         }
         return;
     }
-    for (destination_index, destination) in route_entry.destinations.iter().enumerate() {
-        if destination.active && destination.packet_gate.permits(metadata) {
+    for (dst_idx, dst) in route_entry.destinations.iter().enumerate() {
+        if dst.active && dst.packet_gate.permits(metadata) {
             forwards.push(PacketForward::from_local_route_destination(
-                packet_idx,
-                source_transport_media_id,
-                destination_index,
+                pkt_idx, src_media, dst_idx,
             ));
         }
     }
@@ -246,13 +220,13 @@ fn populate_local_forwards(
 /// room or transport policy installs a narrower packet gate.
 fn relay_target_gate_permits(
     state: &PacketLoopState,
-    source_transport_media_id: RouteTransportMediaId,
+    src_media: RouteTransportMediaId,
     target_id: RelayTargetId,
     metadata: PacketLayerMetadata,
 ) -> bool {
     state
         .routes
-        .relay_packet_gate(source_transport_media_id, target_id)
+        .relay_packet_gate(src_media, target_id)
         .is_none_or(|packet_gate| packet_gate.permits(metadata))
 }
 

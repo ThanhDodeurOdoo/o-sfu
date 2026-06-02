@@ -30,13 +30,13 @@ pub fn sample_forwarded_packet(
 #[cfg(test)]
 #[must_use]
 pub(in crate::engine::media_transport::rtc) fn sample_already_relayed_packet(
-    source_session_key: TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    src_key: TransportSessionKey,
+    src_media: TransportMediaId,
     mid: &str,
     payload: &[u8],
 ) -> ForwardedPacket {
-    let mut packet = sample_forwarded_packet(source_session_key, mid, payload);
-    packet.source_transport_media_id = Some(source_transport_media_id);
+    let mut packet = sample_forwarded_packet(src_key, mid, payload);
+    packet.src_media = Some(src_media);
     packet.visits_origin_sinks = false;
     packet
 }
@@ -60,31 +60,25 @@ pub(in crate::engine::media_transport::rtc) fn sample_local_forwarded_packet(
 #[cfg(test)]
 #[must_use]
 pub fn sample_forwarded_packet_with_rid(
-    source_session_key: TransportSessionKey,
+    src_key: TransportSessionKey,
     mid: &str,
     rid: Option<&str>,
     payload: &[u8],
 ) -> ForwardedPacket {
-    sample_forwarded_packet_with_extensions(
-        source_session_key,
-        mid,
-        rid,
-        ExtensionValues::default(),
-        payload,
-    )
+    sample_forwarded_packet_with_extensions(src_key, mid, rid, ExtensionValues::default(), payload)
 }
 
 #[cfg(test)]
 #[must_use]
 pub fn sample_forwarded_packet_with_audio_activity(
-    source_session_key: TransportSessionKey,
+    src_key: TransportSessionKey,
     mid: &str,
     voice_activity: Option<bool>,
     audio_level: Option<i8>,
     payload: &[u8],
 ) -> ForwardedPacket {
     sample_forwarded_packet_with_extensions(
-        source_session_key,
+        src_key,
         mid,
         None,
         ExtensionValues {
@@ -99,7 +93,7 @@ pub fn sample_forwarded_packet_with_audio_activity(
 #[cfg(feature = "internal-benchmarks")]
 #[must_use]
 pub fn sample_forwarded_packet_with_rid_and_audio_activity(
-    source_session_key: TransportSessionKey,
+    src_key: TransportSessionKey,
     mid: &str,
     rid: Option<&str>,
     voice_activity: Option<bool>,
@@ -107,7 +101,7 @@ pub fn sample_forwarded_packet_with_rid_and_audio_activity(
     payload: &[u8],
 ) -> ForwardedPacket {
     sample_forwarded_packet_with_extensions(
-        source_session_key,
+        src_key,
         mid,
         rid,
         ExtensionValues {
@@ -122,14 +116,14 @@ pub fn sample_forwarded_packet_with_rid_and_audio_activity(
 #[cfg(test)]
 #[must_use]
 pub fn sample_forwarded_packet_with_frame_mark(
-    source_session_key: TransportSessionKey,
+    src_key: TransportSessionKey,
     mid: &str,
     rid: Option<&str>,
     frame_mark: u32,
     payload: &[u8],
 ) -> ForwardedPacket {
     sample_forwarded_packet_with_extensions(
-        source_session_key,
+        src_key,
         mid,
         rid,
         ExtensionValues {
@@ -141,14 +135,14 @@ pub fn sample_forwarded_packet_with_frame_mark(
 }
 
 fn sample_forwarded_packet_with_extensions(
-    source_session_key: TransportSessionKey,
+    src_key: TransportSessionKey,
     mid: &str,
     rid: Option<&str>,
     ext_vals: ExtensionValues,
     payload: &[u8],
 ) -> ForwardedPacket {
     sample_forwarded_packet_with_source(
-        ForwardedPacketSource::Relayed(source_session_key),
+        ForwardedPacketSource::Relayed(src_key),
         mid,
         rid,
         ext_vals,
@@ -166,7 +160,7 @@ fn sample_forwarded_packet_with_source(
     let received_at = Instant::now();
     ForwardedPacket {
         source,
-        source_transport_media_id: None,
+        src_media: None,
         resolved_source_rid: None,
         facts: None,
         visits_origin_sinks: true,
@@ -198,14 +192,14 @@ fn sample_forwarded_packet_with_source(
 #[cfg(any(test, feature = "internal-benchmarks"))]
 #[must_use]
 pub fn sample_forwarded_packet_without_mid(
-    source_session_key: TransportSessionKey,
+    src_key: TransportSessionKey,
     ssrc: u32,
     payload: &[u8],
 ) -> ForwardedPacket {
     let received_at = Instant::now();
     ForwardedPacket {
-        source: ForwardedPacketSource::Relayed(source_session_key),
-        source_transport_media_id: None,
+        source: ForwardedPacketSource::Relayed(src_key),
+        src_media: None,
         resolved_source_rid: None,
         facts: None,
         visits_origin_sinks: true,
@@ -233,6 +227,6 @@ pub fn sample_forwarded_packet_without_mid(
 #[cfg(feature = "internal-benchmarks")]
 pub fn reset_packet_resolution(packet: &mut ForwardedPacket) {
     packet.facts = None;
-    packet.source_transport_media_id = None;
+    packet.src_media = None;
     packet.resolved_source_rid = None;
 }

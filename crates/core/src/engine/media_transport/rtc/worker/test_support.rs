@@ -239,11 +239,11 @@ impl RtcWorker {
     #[cfg(any(test, feature = "testing-transport"))]
     pub async fn debug_route_entry(
         &self,
-        source_session_key: &TransportSessionKey,
+        src_key: &TransportSessionKey,
         source_mid: Mid,
     ) -> Option<DebugRouteEntry> {
         self.probe_debug_worker(RouteEntryProbe {
-            source_session_key: source_session_key.clone(),
+            src_key: src_key.clone(),
             source_mid,
         })
         .await
@@ -252,11 +252,11 @@ impl RtcWorker {
 
     pub async fn debug_route_entry_by_consumer_mid(
         &self,
-        consumer_session_key: &TransportSessionKey,
+        consumer_key: &TransportSessionKey,
         consumer_mid: Mid,
     ) -> Option<DebugRouteEntry> {
         self.probe_debug_worker(RouteEntryByConsumerMidProbe {
-            consumer_session_key: consumer_session_key.clone(),
+            consumer_key: consumer_key.clone(),
             consumer_mid,
         })
         .await
@@ -266,13 +266,11 @@ impl RtcWorker {
     #[cfg(any(test, feature = "testing-transport"))]
     pub async fn debug_route_entry_by_media_id(
         &self,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
     ) -> Option<DebugRouteEntry> {
-        self.probe_debug_worker(RouteEntryByMediaIdProbe {
-            source_transport_media_id,
-        })
-        .await
-        .flatten()
+        self.probe_debug_worker(RouteEntryByMediaIdProbe { src_media })
+            .await
+            .flatten()
     }
 
     #[cfg(test)]
@@ -312,26 +310,16 @@ impl RtcWorker {
     }
 
     #[cfg(test)]
-    pub async fn debug_relay_target_count(
-        &self,
-        source_transport_media_id: TransportMediaId,
-    ) -> usize {
-        self.read_debug_worker(move |state, _context| {
-            state.routes.relay_target_count(source_transport_media_id)
-        })
-        .await
-        .unwrap_or(0)
+    pub async fn debug_relay_target_count(&self, src_media: TransportMediaId) -> usize {
+        self.read_debug_worker(move |state, _context| state.routes.relay_target_count(src_media))
+            .await
+            .unwrap_or(0)
     }
 
     #[cfg(test)]
-    pub async fn debug_active_relay_target_count(
-        &self,
-        source_transport_media_id: TransportMediaId,
-    ) -> usize {
+    pub async fn debug_active_relay_target_count(&self, src_media: TransportMediaId) -> usize {
         self.read_debug_worker(move |state, _context| {
-            state
-                .routes
-                .active_relay_target_count(source_transport_media_id)
+            state.routes.active_relay_target_count(src_media)
         })
         .await
         .unwrap_or(0)

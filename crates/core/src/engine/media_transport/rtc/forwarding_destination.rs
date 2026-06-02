@@ -22,12 +22,12 @@ use crate::engine::{
 
 /// one planned packet-to-destination edge for the current packet-loop turn
 ///
-/// `packet_idx` points into the turn-local pending packet buffer
+/// `pkt_idx` points into the turn-local pending packet buffer
 /// the value is only valid until the current flush completes, which keeps the
 /// hot path from cloning packet payloads while destinations are being planned
 #[derive(Debug, Clone)]
 pub(super) struct PacketForward {
-    packet_idx: usize,
+    pkt_idx: usize,
     destination: ForwardingDestination,
 }
 
@@ -70,9 +70,9 @@ pub(super) enum ForwardSendOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct LocalRtcPacketDestination {
     /// source route that owned the destination when planning ran
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     /// destination slot inside the route for this packet-loop turn
-    destination_index: usize,
+    dst_idx: usize,
 }
 
 /// packet sink destination tied to the source transport media id
@@ -96,27 +96,26 @@ impl PacketForward {
     /// current `MediaRouteEntry`
     /// the index is resolved again during flush so planning can stay clone-free
     pub(super) fn from_local_route_destination(
-        packet_idx: usize,
-        source_transport_media_id: TransportMediaId,
-        destination_index: usize,
+        pkt_idx: usize,
+        src_media: TransportMediaId,
+        dst_idx: usize,
     ) -> Self {
         Self {
-            packet_idx,
+            pkt_idx,
             destination: ForwardingDestination::LocalRtc(LocalRtcPacketDestination::new(
-                source_transport_media_id,
-                destination_index,
+                src_media, dst_idx,
             )),
         }
     }
 
     /// builds a packet sink destination for the source side of a route
     pub(super) fn from_packet_sink(
-        packet_idx: usize,
+        pkt_idx: usize,
         transport_media_id: TransportMediaId,
         sink: RegisteredPacketSink,
     ) -> Self {
         Self {
-            packet_idx,
+            pkt_idx,
             destination: ForwardingDestination::PacketSink(PacketSinkDestination {
                 transport_media_id,
                 sink,
@@ -126,12 +125,12 @@ impl PacketForward {
 
     /// builds a relay destination for the source side of a route
     pub(super) fn from_relay_target(
-        packet_idx: usize,
+        pkt_idx: usize,
         transport_media_id: TransportMediaId,
         target: RelayPacketMailbox,
     ) -> Self {
         Self {
-            packet_idx,
+            pkt_idx,
             destination: ForwardingDestination::Relay(RelayPacketDestination {
                 transport_media_id,
                 target,
@@ -140,8 +139,8 @@ impl PacketForward {
     }
 
     /// returns the pending packet buffer index for this planned destination
-    pub(super) const fn packet_idx(&self) -> usize {
-        self.packet_idx
+    pub(super) const fn pkt_idx(&self) -> usize {
+        self.pkt_idx
     }
 
     /// returns the executable destination for the flush step
@@ -202,21 +201,18 @@ impl LocalRtcPacketDestination {
     /// this constructor is private so only the forwarding planner can create a
     /// local rtc destination after route-control gates have already accepted
     /// the packet
-    const fn new(source_transport_media_id: TransportMediaId, destination_index: usize) -> Self {
-        Self {
-            source_transport_media_id,
-            destination_index,
-        }
+    const fn new(src_media: TransportMediaId, dst_idx: usize) -> Self {
+        Self { src_media, dst_idx }
     }
 
     #[cfg(test)]
-    pub(super) const fn source_transport_media_id(self) -> TransportMediaId {
-        self.source_transport_media_id
+    pub(super) const fn src_media(self) -> TransportMediaId {
+        self.src_media
     }
 
     #[cfg(test)]
-    pub(super) const fn destination_index(self) -> usize {
-        self.destination_index
+    pub(super) const fn dst_idx(self) -> usize {
+        self.dst_idx
     }
 
     /// writes one packet to the destination session when the route is still live
@@ -232,8 +228,8 @@ impl LocalRtcPacketDestination {
         let (payload_bytes, dirty_session_key) = {
             let Some(route_destination) = state
                 .routes
-                .local_route(self.source_transport_media_id)
-                .and_then(|route_entry| route_entry.destinations.get(self.destination_index))
+                .local_route(self.src_media)
+                .and_then(|route_entry| route_entry.destinations.get(self.dst_idx))
             else {
                 return ForwardSendOutcome::LocalRtc {
                     payload_bytes: None,
@@ -273,11 +269,11 @@ impl PacketSinkDestination {
 
     /// records the source packet without mutating rtc session state
     fn send(&self, state: &PacketLoopState, packet: &ForwardedPacket) -> ForwardSendOutcome {
-        let Some(source_session_key) = packet.source_session_key(state) else {
+        let Some(src_key) = packet.src_key(state) else {
             return ForwardSendOutcome::SideEffect;
         };
         self.sink.record_packet(
-            source_session_key,
+            src_key,
             self.transport_media_id,
             packet.received_at(),
             packet.payload(),
@@ -377,14 +373,14 @@ mod tests {
 
     #[test]
     fn packet_forward_wraps_local_route_destinations_in_the_named_contract() {
-        let source_transport_media_id = TransportMediaId::new(7);
-        let forward = PacketForward::from_local_route_destination(4, source_transport_media_id, 3);
+        let src_media = TransportMediaId::new(7);
+        let forward = PacketForward::from_local_route_destination(4, src_media, 3);
 
-        assert_eq!(forward.packet_idx(), 4);
+        assert_eq!(forward.pkt_idx(), 4);
         assert!(matches!(
             forward.destination(),
             ForwardingDestination::LocalRtc(destination)
-                if *destination == LocalRtcPacketDestination::new(source_transport_media_id, 3)
+                if *destination == LocalRtcPacketDestination::new(src_media, 3)
         ));
     }
 
@@ -396,7 +392,7 @@ mod tests {
         );
         let forward = PacketForward::from_packet_sink(5, TransportMediaId::new(8), sink);
 
-        assert_eq!(forward.packet_idx(), 5);
+        assert_eq!(forward.pkt_idx(), 5);
         assert!(matches!(
             forward.destination(),
             ForwardingDestination::PacketSink(destination)
@@ -416,7 +412,7 @@ mod tests {
         let forward = PacketForward::from_relay_target(6, TransportMediaId::new(9), mailbox);
         let mut state = PacketLoopState::default();
 
-        assert_eq!(forward.packet_idx(), 6);
+        assert_eq!(forward.pkt_idx(), 6);
         assert!(matches!(
             forward.destination(),
             ForwardingDestination::Relay(destination)

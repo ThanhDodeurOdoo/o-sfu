@@ -113,10 +113,9 @@ pub fn handle_worker_command(
             response,
             Ok(state.routes.next_active_speaker_deadline(context.now)),
         ),
-        RtcWorkerCommand::ExpiredActiveSpeakerRoomInstanceIds { now, response } => respond(
-            response,
-            Ok(state.expired_active_speaker_room_instance_ids(now)),
-        ),
+        RtcWorkerCommand::ExpiredActiveSpeakerRoomInstanceIds { now, response } => {
+            respond(response, Ok(state.expired_active_speaker_rooms(now)));
+        }
         RtcWorkerCommand::SetReceiverBweTargetBatch { updates, response } => respond(
             response,
             Ok(bwe::worker_set_receiver_bwe_targets(
@@ -250,7 +249,7 @@ fn handle_media_command(
             ),
         ),
         RtcWorkerCommand::AddSendMedia {
-            consumer_session_key,
+            consumer_key,
             media_kind,
             source,
             remote_source_control,
@@ -262,7 +261,7 @@ fn handle_media_command(
             media::worker_add_send_media(
                 state,
                 media::AddSendMediaRequest {
-                    consumer_session_key: &consumer_session_key,
+                    consumer_key: &consumer_key,
                     media_kind,
                     source: &source,
                     remote_source_control,
@@ -293,6 +292,6 @@ fn handle_media_route_control_command(
             source,
             updates,
             response,
-        } => media::respond_set_consumer_packet_gates(state, &source, updates, now, response),
+        } => media::respond_set_consumer_pkt_gates(state, &source, updates, now, response),
     }
 }

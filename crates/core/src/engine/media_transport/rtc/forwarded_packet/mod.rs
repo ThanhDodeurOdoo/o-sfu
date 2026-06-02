@@ -53,7 +53,7 @@ pub struct ForwardedPacket {
     ///
     /// once this is known it is cached so later state churn during the same
     /// flush cannot make the packet point at a different source
-    source_transport_media_id: Option<TransportMediaId>,
+    src_media: Option<TransportMediaId>,
     /// resolved RID recovered from the packet header or from the worker SSRC binding
     ///
     /// relay clones carry this value so a target worker can apply the same
@@ -129,7 +129,7 @@ pub(super) struct ForwardedRelayRtpData {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct PacketFacts {
     /// source producer selected by MID, SSRC or relay metadata
-    pub(super) source_transport_media_id: TransportMediaId,
+    pub(super) src_media: TransportMediaId,
     /// route-control layer key derived from RID and frame marking metadata
     pub(super) layer_metadata: PacketLayerMetadata,
     /// payload length observed before local egress can move the payload
@@ -180,7 +180,7 @@ impl ForwardedPacket {
     ) -> Self {
         Self {
             source: ForwardedPacketSource::Local(source_session_handle),
-            source_transport_media_id: None,
+            src_media: None,
             resolved_source_rid: None,
             facts: None,
             visits_origin_sinks: true,
@@ -196,7 +196,7 @@ impl ForwardedPacket {
     }
 
     #[must_use]
-    pub(super) fn source_session_key<'a>(
+    pub(super) fn src_key<'a>(
         &'a self,
         state: &'a PacketLoopState,
     ) -> Option<&'a TransportSessionKey> {
@@ -204,7 +204,7 @@ impl ForwardedPacket {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(in crate::engine) fn stable_source_session_key(&self) -> Option<&TransportSessionKey> {
+    pub(in crate::engine) fn stable_src_key(&self) -> Option<&TransportSessionKey> {
         match &self.source {
             ForwardedPacketSource::Local(_) => None,
             ForwardedPacketSource::Relayed(session_key) => Some(session_key),
@@ -247,15 +247,15 @@ impl ForwardedPacket {
         if let Some(facts) = self.facts {
             return Some(facts);
         }
-        let source_transport_media_id = self.resolve_source_transport_media_id(state)?;
+        let src_media = self.resolve_src_media(state)?;
         let layer_metadata = self.compute_route_control_layer_metadata(state);
-        let decoder_refresh = self.decoder_refresh_for_source(state, source_transport_media_id);
+        let decoder_refresh = self.decoder_refresh_for_source(state, src_media);
         let extensions = self.route_control_extension_values();
         let facts = PacketFacts {
-            source_transport_media_id,
+            src_media,
             layer_metadata,
             payload_len: self.payload_len(),
-            room_instance_id: self.source_session_key(state)?.room_instance_id(),
+            room_instance_id: self.src_key(state)?.room_instance_id(),
             voice_activity: extensions.voice_activity,
             audio_level: extensions.audio_level,
             decoder_refresh,
@@ -311,11 +311,11 @@ impl ForwardedPacket {
     pub(super) fn share_for_relay(
         &self,
         state: &PacketLoopState,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
     ) -> Option<Self> {
         Some(Self {
             source: ForwardedPacketSource::Relayed(self.source.session_key(state)?.clone()),
-            source_transport_media_id: Some(source_transport_media_id),
+            src_media: Some(src_media),
             resolved_source_rid: self.resolved_source_rid,
             facts: self.facts,
             visits_origin_sinks: false,
@@ -341,28 +341,27 @@ impl ForwardedPacket {
     /// source-worker MID and SSRC registries
     /// a successful lookup is cached on the packet so a later registry update
     /// cannot split one packet across different source identities
-    pub(super) fn resolve_source_transport_media_id(
+    pub(super) fn resolve_src_media(
         &mut self,
         state: &PacketLoopState,
     ) -> Option<TransportMediaId> {
         if let Some(facts) = self.facts {
-            return Some(facts.source_transport_media_id);
+            return Some(facts.src_media);
         }
-        if let Some(source_transport_media_id) = self.source_transport_media_id {
-            return Some(source_transport_media_id);
+        if let Some(src_media) = self.src_media {
+            return Some(src_media);
         }
-        let source_session_key = self.source.session_key(state)?;
+        let src_key = self.source.session_key(state)?;
         let header = self.rtp_header();
         let resolved = if let Some(source_mid) = header.ext_vals.mid
-            && let Some(source_transport_media_id) =
-                state.source_transport_media_id_for_mid(source_session_key, source_mid)
+            && let Some(src_media) = state.src_media_for_mid(src_key, source_mid)
         {
-            Some(source_transport_media_id)
+            Some(src_media)
         } else {
-            state.source_transport_media_id_for_ssrc(source_session_key, header.ssrc)
+            state.src_media_for_ssrc(src_key, header.ssrc)
         };
-        if let Some(source_transport_media_id) = resolved {
-            self.source_transport_media_id = Some(source_transport_media_id);
+        if let Some(src_media) = resolved {
+            self.src_media = Some(src_media);
         }
         resolved
     }
@@ -397,19 +396,16 @@ impl ForwardedPacket {
     }
 
     fn route_control_rid_from_ssrc(&self, state: &PacketLoopState) -> Option<Rid> {
-        let source_session_key = self.source.session_key(state)?;
-        state.source_rid_for_ssrc(source_session_key, self.rtp_header().ssrc)
+        let src_key = self.source.session_key(state)?;
+        state.source_rid_for_ssrc(src_key, self.rtp_header().ssrc)
     }
 
     fn decoder_refresh_for_source(
         &self,
         state: &PacketLoopState,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
     ) -> bool {
-        match state
-            .routes
-            .decoder_refresh_codec(source_transport_media_id)
-        {
+        match state.routes.decoder_refresh_codec(src_media) {
             Some(DecoderRefreshCodec::H264(packetization_mode)) => {
                 h264::payload_starts_idr(self.payload.as_ref(), packetization_mode)
             }

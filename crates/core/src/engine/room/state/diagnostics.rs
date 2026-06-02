@@ -209,7 +209,7 @@ impl RoomState {
                     return None;
                 }
                 let source = route.source;
-                let selection = route.selection_or_open(self.desired_source_active(
+                let route_selection = route.selection_or_open(self.desired_source_active(
                     user_id,
                     source.owner().user_id(),
                     source.stream_id(),
@@ -220,10 +220,10 @@ impl RoomState {
                     layout_priority: layout_intent.map(|intent| intent.priority().into()),
                     layout_role: layout_intent.map(|intent| intent.role().into()),
                     producer_user_id: source.owner().user_id().clone(),
-                    selection: source_selection(source, selection),
+                    selection: selection(source, route_selection),
                     source_id: source.source_id().as_u64(),
                     source_transport_media_id: Some(route.state.source_media.as_u64()),
-                    state: if route.producer.active && selection.delivery_active() {
+                    state: if route.producer.active && route_selection.delivery_active() {
                         DiagnosticsRouteState::Active
                     } else {
                         DiagnosticsRouteState::Inactive
@@ -238,7 +238,7 @@ impl RoomState {
                 .pending_consumer_routes_for_user(user_id)
                 .map(|route| {
                     let source = route.source;
-                    let selection = route
+                    let route_selection = route
                         .selection
                         .unwrap_or_else(|| ConsumerSourceSelection::open(true));
                     let layout_intent = self.diagnostics_video_layout_intent(user_id, source);
@@ -247,7 +247,7 @@ impl RoomState {
                         layout_priority: layout_intent.map(|intent| intent.priority().into()),
                         layout_role: layout_intent.map(|intent| intent.role().into()),
                         producer_user_id: source.owner().user_id().clone(),
-                        selection: source_selection(source, selection),
+                        selection: selection(source, route_selection),
                         source_id: source.source_id().as_u64(),
                         source_transport_media_id: route
                             .producer
@@ -310,7 +310,7 @@ fn rid_activity<'a>(
         .find(|activity| activity.rid() == rid)
 }
 
-fn source_selection(
+fn selection(
     source: &PublishedSourceDescriptor,
     selection: ConsumerSourceSelection,
 ) -> DiagnosticsSourceSelection {
@@ -618,7 +618,7 @@ mod tests {
 
         let mut rid_selection = ConsumerSourceSelection::open(true);
         rid_selection.set_selector(SourceSelector::Encoding(encoding_id));
-        let rid_diagnostics = source_selection(&source, rid_selection);
+        let rid_diagnostics = selection(&source, rid_selection);
         assert_eq!(
             rid_diagnostics.temporal_layer_selection,
             DiagnosticsTemporalLayerSelection::NotSelected
@@ -629,7 +629,7 @@ mod tests {
         base_layer_selection.set_selector(SourceSelector::OperatingPoint(
             SourceOperatingPoint::new(encoding_id, SourceTemporalLayerId::base()),
         ));
-        let base_layer_diagnostics = source_selection(&source, base_layer_selection);
+        let base_layer_diagnostics = selection(&source, base_layer_selection);
         assert_eq!(
             base_layer_diagnostics.temporal_layer_selection,
             DiagnosticsTemporalLayerSelection::Selected

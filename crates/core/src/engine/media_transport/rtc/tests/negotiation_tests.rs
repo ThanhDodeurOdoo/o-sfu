@@ -661,31 +661,26 @@ async fn rtc_session_renegotiation_projects_multiple_protocol_producers_from_one
 #[tokio::test]
 async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
     let adapter = RtcWorker::default();
-    let source_session_key = transport_key(1, 36, UserId::Integer(36));
-    let consumer_session_key = transport_key(1, 37, UserId::Integer(37));
+    let src_key = transport_key(1, 36, UserId::Integer(36));
+    let consumer_key = transport_key(1, 37, UserId::Integer(37));
 
-    assert!(
-        adapter
-            .create_initial_session_offer(&source_session_key)
-            .await
-            .is_ok()
-    );
+    assert!(adapter.create_initial_session_offer(&src_key).await.is_ok());
     let source_media_id = adapter
         .add_recv_media(
-            &source_session_key,
+            &src_key,
             Str0mMediaKind::Video,
             &sample_router_rtp_parameters("source-up", 81_000),
         )
         .await
         .expect("source media should register");
 
-    let mut remote = complete_initial_offer_answer(&adapter, &consumer_session_key, 55_002).await;
+    let mut remote = complete_initial_offer_answer(&adapter, &consumer_key, 55_002).await;
 
     let consumer_media_id = adapter
         .add_send_media(
-            &consumer_session_key,
+            &consumer_key,
             Str0mMediaKind::Video,
-            RtcSendMediaSource::local(&source_session_key, source_media_id),
+            RtcSendMediaSource::local(&src_key, source_media_id),
             &sample_router_rtp_parameters("compat-mid", 82_000),
             true,
         )
@@ -693,7 +688,7 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
         .expect("protocol consumer media should stage a renegotiation offer");
 
     let renegotiation_offer = adapter
-        .create_session_renegotiation_offer(&consumer_session_key)
+        .create_session_renegotiation_offer(&consumer_key)
         .await
         .expect("staged renegotiation offer should be available");
     let renegotiation_sdp = renegotiation_offer.into_sdp();
@@ -705,17 +700,11 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
         .expect("transport media should resolve to the server-assigned mid");
     assert!(renegotiation_sdp.contains(&format!("a=mid:{renegotiated_mid}")));
 
-    apply_offer_answer(
-        &adapter,
-        &consumer_session_key,
-        &mut remote,
-        renegotiation_sdp,
-    )
-    .await;
+    apply_offer_answer(&adapter, &consumer_key, &mut remote, renegotiation_sdp).await;
 
     assert!(
         adapter
-            .debug_session_stream_tx_ssrc(&consumer_session_key, renegotiated_mid)
+            .debug_session_stream_tx_ssrc(&consumer_key, renegotiated_mid)
             .await
             .is_some(),
         "renegotiated send media should exist after the answer is applied"
@@ -725,31 +714,26 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
 #[tokio::test]
 async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
     let adapter = RtcWorker::default();
-    let source_session_key = transport_key(1, 39, UserId::Integer(39));
-    let consumer_session_key = transport_key(1, 40, UserId::Integer(40));
+    let src_key = transport_key(1, 39, UserId::Integer(39));
+    let consumer_key = transport_key(1, 40, UserId::Integer(40));
 
-    assert!(
-        adapter
-            .create_initial_session_offer(&source_session_key)
-            .await
-            .is_ok()
-    );
+    assert!(adapter.create_initial_session_offer(&src_key).await.is_ok());
     let source_media_id = adapter
         .add_recv_media(
-            &source_session_key,
+            &src_key,
             Str0mMediaKind::Video,
             &sample_router_rtp_parameters("source-up-remove", 83_000),
         )
         .await
         .expect("source media should register");
 
-    let mut remote = complete_initial_offer_answer(&adapter, &consumer_session_key, 55_004).await;
+    let mut remote = complete_initial_offer_answer(&adapter, &consumer_key, 55_004).await;
 
     let consumer_media_id = adapter
         .add_send_media(
-            &consumer_session_key,
+            &consumer_key,
             Str0mMediaKind::Video,
-            RtcSendMediaSource::local(&source_session_key, source_media_id),
+            RtcSendMediaSource::local(&src_key, source_media_id),
             &sample_router_rtp_parameters("compat-mid-remove", 84_000),
             true,
         )
@@ -761,12 +745,12 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
         .expect("consumer media should expose its staged mid");
 
     let addition_offer = adapter
-        .create_session_renegotiation_offer(&consumer_session_key)
+        .create_session_renegotiation_offer(&consumer_key)
         .await
         .expect("staged addition offer should be available");
     apply_offer_answer(
         &adapter,
-        &consumer_session_key,
+        &consumer_key,
         &mut remote,
         addition_offer.into_sdp(),
     )
@@ -774,7 +758,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
 
     assert!(
         adapter
-            .remove_media(&consumer_session_key, consumer_media_id)
+            .remove_media(&consumer_key, consumer_media_id)
             .await
             .is_ok()
     );
@@ -784,7 +768,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
     );
 
     let removal_offer = adapter
-        .create_session_renegotiation_offer(&consumer_session_key)
+        .create_session_renegotiation_offer(&consumer_key)
         .await
         .expect("removal should stage a renegotiation offer");
     let removal_sdp = removal_offer.into_sdp();
@@ -792,10 +776,10 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
         .expect("removed consumer mid should remain in the renegotiation offer");
     assert!(removal_section.contains("a=inactive"));
 
-    apply_offer_answer(&adapter, &consumer_session_key, &mut remote, removal_sdp).await;
+    apply_offer_answer(&adapter, &consumer_key, &mut remote, removal_sdp).await;
     assert_eq!(
         adapter
-            .create_session_renegotiation_offer(&consumer_session_key)
+            .create_session_renegotiation_offer(&consumer_key)
             .await,
         Err(TransportAdapterError::UnsupportedFeature)
     );
@@ -976,18 +960,18 @@ async fn rtc_session_cleanup_releases_declined_staged_producer_without_follow_up
 #[tokio::test]
 async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pending() {
     let adapter = RtcWorker::default();
-    let source_session_key = transport_key(1, 42, UserId::Integer(42));
-    let consumer_session_key = transport_key(1, 43, UserId::Integer(43));
+    let src_key = transport_key(1, 42, UserId::Integer(42));
+    let consumer_key = transport_key(1, 43, UserId::Integer(43));
 
     let (first_source_media_id, second_source_media_id) =
-        setup_queued_removal_sources(&adapter, &source_session_key).await;
+        setup_queued_removal_sources(&adapter, &src_key).await;
 
-    let mut remote = complete_initial_offer_answer(&adapter, &consumer_session_key, 55_005).await;
+    let mut remote = complete_initial_offer_answer(&adapter, &consumer_key, 55_005).await;
 
     let (first_consumer_media_id, first_consumer_mid) = add_negotiated_consumer_media(
         &adapter,
-        &consumer_session_key,
-        &source_session_key,
+        &consumer_key,
+        &src_key,
         first_source_media_id,
         "compat-mid-queued-remove-a",
         87_000,
@@ -997,23 +981,23 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
 
     let _second_consumer_media_id = adapter
         .add_send_media(
-            &consumer_session_key,
+            &consumer_key,
             Str0mMediaKind::Video,
-            RtcSendMediaSource::local(&source_session_key, second_source_media_id),
+            RtcSendMediaSource::local(&src_key, second_source_media_id),
             &sample_router_rtp_parameters("compat-mid-queued-remove-b", 88_000),
             true,
         )
         .await
         .expect("second protocol consumer media should stage an addition offer");
     let second_addition_offer = adapter
-        .create_session_renegotiation_offer(&consumer_session_key)
+        .create_session_renegotiation_offer(&consumer_key)
         .await
         .expect("second addition offer should be available");
     let second_addition_sdp = second_addition_offer.into_sdp();
 
     assert!(
         adapter
-            .remove_media(&consumer_session_key, first_consumer_media_id)
+            .remove_media(&consumer_key, first_consumer_media_id)
             .await
             .is_ok()
     );
@@ -1025,21 +1009,15 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
     );
     assert_eq!(
         adapter
-            .create_session_renegotiation_offer(&consumer_session_key)
+            .create_session_renegotiation_offer(&consumer_key)
             .await,
         Err(TransportAdapterError::InvalidInput)
     );
 
-    apply_offer_answer(
-        &adapter,
-        &consumer_session_key,
-        &mut remote,
-        second_addition_sdp,
-    )
-    .await;
+    apply_offer_answer(&adapter, &consumer_key, &mut remote, second_addition_sdp).await;
 
     let queued_removal_offer = adapter
-        .create_session_renegotiation_offer(&consumer_session_key)
+        .create_session_renegotiation_offer(&consumer_key)
         .await
         .expect("queued removal should stage after the in-flight answer lands");
     let queued_removal_sdp = queued_removal_offer.into_sdp();
@@ -1047,16 +1025,10 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
         .expect("queued removal mid should remain in the follow-up offer");
     assert!(removal_section.contains("a=inactive"));
 
-    apply_offer_answer(
-        &adapter,
-        &consumer_session_key,
-        &mut remote,
-        queued_removal_sdp,
-    )
-    .await;
+    apply_offer_answer(&adapter, &consumer_key, &mut remote, queued_removal_sdp).await;
     assert_eq!(
         adapter
-            .create_session_renegotiation_offer(&consumer_session_key)
+            .create_session_renegotiation_offer(&consumer_key)
             .await,
         Err(TransportAdapterError::UnsupportedFeature)
     );
@@ -1251,17 +1223,12 @@ async fn apply_offer_answer(
 
 async fn setup_queued_removal_sources(
     adapter: &RtcWorker,
-    source_session_key: &TransportSessionKey,
+    src_key: &TransportSessionKey,
 ) -> (TransportMediaId, TransportMediaId) {
-    assert!(
-        adapter
-            .create_initial_session_offer(source_session_key)
-            .await
-            .is_ok()
-    );
+    assert!(adapter.create_initial_session_offer(src_key).await.is_ok());
     let first_source_media_id = adapter
         .add_recv_media(
-            source_session_key,
+            src_key,
             Str0mMediaKind::Video,
             &sample_router_rtp_parameters("source-up-queued-remove-a", 85_000),
         )
@@ -1269,7 +1236,7 @@ async fn setup_queued_removal_sources(
         .expect("first source media should register");
     let second_source_media_id = adapter
         .add_recv_media(
-            source_session_key,
+            src_key,
             Str0mMediaKind::Video,
             &sample_router_rtp_parameters("source-up-queued-remove-b", 86_000),
         )
@@ -1280,8 +1247,8 @@ async fn setup_queued_removal_sources(
 
 async fn add_negotiated_consumer_media(
     adapter: &RtcWorker,
-    consumer_session_key: &TransportSessionKey,
-    source_session_key: &TransportSessionKey,
+    consumer_key: &TransportSessionKey,
+    src_key: &TransportSessionKey,
     source_media_id: TransportMediaId,
     mid: &str,
     ssrc: u32,
@@ -1289,9 +1256,9 @@ async fn add_negotiated_consumer_media(
 ) -> (TransportMediaId, Mid) {
     let consumer_media_id = adapter
         .add_send_media(
-            consumer_session_key,
+            consumer_key,
             Str0mMediaKind::Video,
-            RtcSendMediaSource::local(source_session_key, source_media_id),
+            RtcSendMediaSource::local(src_key, source_media_id),
             &sample_router_rtp_parameters(mid, ssrc),
             true,
         )
@@ -1302,16 +1269,10 @@ async fn add_negotiated_consumer_media(
         .await
         .expect("consumer media should expose its staged mid");
     let addition_offer = adapter
-        .create_session_renegotiation_offer(consumer_session_key)
+        .create_session_renegotiation_offer(consumer_key)
         .await
         .expect("addition offer should be available");
-    apply_offer_answer(
-        adapter,
-        consumer_session_key,
-        remote,
-        addition_offer.into_sdp(),
-    )
-    .await;
+    apply_offer_answer(adapter, consumer_key, remote, addition_offer.into_sdp()).await;
     (consumer_media_id, consumer_mid)
 }
 

@@ -31,11 +31,11 @@ use tokio_util::sync::CancellationToken;
 use super::{
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers, RECEIVE_BUFFER_LEN},
     forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
-    ingress_routing::route_packet_to_matching_session,
+    ingress_routing::route_pkt_to_session,
     input::{PacketLoopInputReceivers, PacketLoopMailboxInput},
     keyframe_requests::{
-        PendingKeyframeRequest, drain_due_keyframe_retries, flush_pending_keyframe_requests,
-        flush_pending_keyframe_requests_at,
+        PendingKeyframeRequest, drain_due_kf_retries, flush_pending_kf_reqs,
+        flush_pending_kf_reqs_at,
     },
     lag::PacketLoopLagSnapshot,
     loop_driver::{
@@ -149,7 +149,7 @@ impl IngressRoutingHarness {
     }
 
     fn route(&mut self, packet: &[u8]) {
-        route_packet_to_matching_session(
+        route_pkt_to_session(
             &mut self.packet_loop_state,
             &self.snapshot_state,
             &mut self.demux,
@@ -220,46 +220,44 @@ fn declare_video_tx(
 
 fn insert_open_route(
     state: &mut PacketLoopState,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     consumer_session: &TransportSessionKey,
-    consumer_transport_media_id: TransportMediaId,
+    consumer_media: TransportMediaId,
     consumer_stream: ConsumerStreamHandle,
     consumer_mid: Mid,
 ) {
     insert_consumer_route_fixture(
         state,
-        source_transport_media_id,
+        src_media,
         MediaRouteDestination {
             dest_session: consumer_session.clone(),
-            dest_transport_media_id: consumer_transport_media_id,
+            dest_transport_media_id: consumer_media,
             dest_stream: consumer_stream,
             dest_mid: consumer_mid,
             dest_payload_type: None,
             nackable: true,
             active: true,
             packet_gate: PacketLayerGate::Open,
-            pending_packet_gate: None,
+            pending_gate: None,
         },
     );
 }
 
 fn insert_consumer_route_fixture(
     state: &mut PacketLoopState,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     destination: MediaRouteDestination,
 ) {
     let dest_session = destination.dest_session.clone();
     let dest_mid = destination.dest_mid;
     let dest_transport_media_id = destination.dest_transport_media_id;
-    let destination_index = state
-        .routes
-        .add_consumer_route(source_transport_media_id, destination);
-    state.set_consumer_destination_index(
+    let dst_idx = state.routes.add_consumer_route(src_media, destination);
+    state.set_consumer_dst_idx(
         &dest_session,
         dest_mid,
         dest_transport_media_id,
-        source_transport_media_id,
-        Some(destination_index),
+        src_media,
+        Some(dst_idx),
     );
 }
 
@@ -301,12 +299,12 @@ fn register_consumer_media(
     state: &mut PacketLoopState,
     consumer_session: &TransportSessionKey,
     consumer_mid: Mid,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
 ) -> TransportMediaId {
     state.register_media_handle(RegisteredMediaHandle::Consumer {
         session_key: consumer_session.clone(),
         mid: consumer_mid,
-        source_transport_media_id,
+        src_media,
     })
 }
 
@@ -314,31 +312,26 @@ fn register_consumer_route_fixture(
     state: &mut PacketLoopState,
     consumer_session: &TransportSessionKey,
     consumer_mid: &str,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     active: bool,
     packet_gate: PacketLayerGate,
-    pending_packet_gate: Option<PacketLayerGate>,
+    pending_gate: Option<PacketLayerGate>,
 ) {
     let consumer_mid = Mid::from(consumer_mid);
-    let consumer_transport_media_id = register_consumer_media(
-        state,
-        consumer_session,
-        consumer_mid,
-        source_transport_media_id,
-    );
+    let consumer_media = register_consumer_media(state, consumer_session, consumer_mid, src_media);
     insert_consumer_route_fixture(
         state,
-        source_transport_media_id,
+        src_media,
         MediaRouteDestination {
             dest_session: consumer_session.clone(),
-            dest_transport_media_id: consumer_transport_media_id,
+            dest_transport_media_id: consumer_media,
             dest_stream: ConsumerStreamHandle::default(),
             dest_mid: consumer_mid,
             dest_payload_type: None,
             nackable: true,
             active,
             packet_gate,
-            pending_packet_gate,
+            pending_gate,
         },
     );
 }
@@ -347,13 +340,13 @@ fn register_open_consumer_route_fixture(
     state: &mut PacketLoopState,
     consumer_session: &TransportSessionKey,
     consumer_mid: &str,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
 ) {
     register_consumer_route_fixture(
         state,
         consumer_session,
         consumer_mid,
-        source_transport_media_id,
+        src_media,
         true,
         PacketLayerGate::Open,
         None,
@@ -392,13 +385,13 @@ fn push_keyframe_request_with_rid(
 )]
 fn remote_keyframe_source(
     state: &mut PacketLoopState,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     source_session: &TransportSessionKey,
     target_id: RelayTargetId,
     capacity: usize,
 ) -> mpsc::Receiver<RtcWorkerCommand> {
     let (control_tx, control_rx) = mpsc::channel(capacity);
-    let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
+    let source = TransportSourceKey::new(source_session.clone(), src_media);
     state
         .routes
         .register_remote_source(&source, RemoteSourceControl::new(control_tx, target_id))
@@ -413,12 +406,12 @@ fn remote_keyframe_source(
 fn saturated_remote_keyframe_source(
     state: &mut PacketLoopState,
     metrics: Arc<RtcMetricsRecorder>,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     source_session: &TransportSessionKey,
     target_id: RelayTargetId,
 ) -> mpsc::Receiver<RtcWorkerCommand> {
     let (control_tx, control_rx) = mpsc::channel(1);
-    let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
+    let source = TransportSourceKey::new(source_session.clone(), src_media);
     control_tx
         .try_send(RtcWorkerCommand::MediaControl(
             RtcMediaControlCommand::Apply {
@@ -444,13 +437,10 @@ fn saturated_remote_keyframe_source(
 
 fn set_source_route_active(
     state: &mut PacketLoopState,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     active: bool,
 ) -> bool {
-    state
-        .routes
-        .set_source_active(source_transport_media_id, active)
-        .is_ok()
+    state.routes.set_source_active(src_media, active).is_ok()
 }
 
 #[allow(
@@ -518,7 +508,7 @@ fn recv_remote_keyframe_request(
 fn assert_remote_keyframe_request(
     control_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
     source_session: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     target_id: RelayTargetId,
     rid: Option<Rid>,
     kind: KeyframeRequestKind,
@@ -526,7 +516,7 @@ fn assert_remote_keyframe_request(
     let (source, actual_target_id, actual_rid, actual_kind) =
         recv_remote_keyframe_request(control_rx);
     assert_eq!(source.session_key(), source_session);
-    assert_eq!(source.transport_media_id(), source_transport_media_id);
+    assert_eq!(source.transport_media_id(), src_media);
     assert_eq!(actual_target_id, target_id);
     assert_eq!(actual_rid, rid);
     assert_eq!(actual_kind, kind);
@@ -656,12 +646,12 @@ fn populate_forward_routes(
     pending_packets: &mut [super::super::forwarded_packet::ForwardedPacket],
     forwards: &mut Vec<super::super::forwarding_destination::PacketForward>,
 ) {
-    for (packet_idx, packet) in pending_packets.iter_mut().enumerate() {
-        super::super::forwarding_planner::populate_forward_routes_for_packet(
+    for (pkt_idx, packet) in pending_packets.iter_mut().enumerate() {
+        super::super::forwarding_planner::plan_forwards(
             state,
             packet_sinks,
             metrics,
-            packet_idx,
+            pkt_idx,
             packet,
             forwards,
         );
@@ -709,15 +699,11 @@ impl PacketLoopHarness {
         0
     }
 
-    fn add_recording_sink(
-        &mut self,
-        source_transport_media_id: TransportMediaId,
-        sink: &Arc<CountingSink>,
-    ) {
+    fn add_recording_sink(&mut self, src_media: TransportMediaId, sink: &Arc<CountingSink>) {
         let packet_index = self.only_packet_index();
         self.buffers.forwards.push(PacketForward::from_packet_sink(
             packet_index,
-            source_transport_media_id,
+            src_media,
             RegisteredPacketSink::new(
                 Arc::<CountingSink>::clone(sink),
                 RtpForwardDestinationKind::Recording,
@@ -725,27 +711,23 @@ impl PacketLoopHarness {
         ));
     }
 
-    fn add_relay(
-        &mut self,
-        source_transport_media_id: TransportMediaId,
-        target: RelayPacketMailbox,
-    ) {
+    fn add_relay(&mut self, src_media: TransportMediaId, target: RelayPacketMailbox) {
         let packet_index = self.only_packet_index();
         self.buffers.forwards.push(PacketForward::from_relay_target(
             packet_index,
-            source_transport_media_id,
+            src_media,
             target,
         ));
     }
 
-    fn add_local(&mut self, source_transport_media_id: TransportMediaId, destination_index: usize) {
+    fn add_local(&mut self, src_media: TransportMediaId, dst_idx: usize) {
         let packet_index = self.only_packet_index();
         self.buffers
             .forwards
             .push(PacketForward::from_local_route_destination(
                 packet_index,
-                source_transport_media_id,
-                destination_index,
+                src_media,
+                dst_idx,
             ));
     }
 }
@@ -1073,7 +1055,7 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
 #[test]
 fn flush_forward_routes_writes_hot_rtp_metrics_only_to_the_worker_recorder() {
     let source_session = test_transport_session_key(128, 0, 129, UserId::Integer(130));
-    let source_transport_media_id = TransportMediaId::new(131);
+    let src_media = TransportMediaId::new(131);
     let mut harness = PacketLoopHarness::without_registered_worker_recorders();
     let sink = Arc::new(CountingSink::new());
 
@@ -1085,7 +1067,7 @@ fn flush_forward_routes_writes_hot_rtp_metrics_only_to_the_worker_recorder() {
             "aud-up",
             b"payload",
         ));
-    harness.add_recording_sink(source_transport_media_id, &sink);
+    harness.add_recording_sink(src_media, &sink);
 
     flush_forward_routes(
         &mut harness.state,
@@ -1106,8 +1088,7 @@ fn flush_forward_routes_writes_hot_rtp_metrics_only_to_the_worker_recorder() {
 fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() {
     let producer_session = test_transport_session_key(88, 0, 89, UserId::Integer(90));
     let mut state = PacketLoopState::default();
-    let source_transport_media_id =
-        register_producer_media(&mut state, &producer_session, "cam-up");
+    let src_media = register_producer_media(&mut state, &producer_session, "cam-up");
     let metrics = RuntimeMetrics::default();
     let rtp_metrics = metrics.register_rtp_worker();
     let mut buffers = PacketLoopBuffers::new();
@@ -1131,8 +1112,8 @@ fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() 
     let mut packet_without_extensions =
         sample_forwarded_packet_without_mid(producer_session, 4321, b"payload");
     assert_eq!(
-        packet_without_extensions.resolve_source_transport_media_id(&state),
-        Some(source_transport_media_id)
+        packet_without_extensions.resolve_src_media(&state),
+        Some(src_media)
     );
     assert_eq!(
         packet_without_extensions
@@ -1145,7 +1126,7 @@ fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() 
 #[test]
 fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
     let source_session = test_transport_session_key(118, 0, 119, UserId::Integer(120));
-    let source_transport_media_id = TransportMediaId::new(121);
+    let src_media = TransportMediaId::new(121);
     let mut harness = PacketLoopHarness::new();
     let sink = Arc::new(CountingSink::new());
     let (relay_mailbox, mut intra_node_rx) = RelayPacketMailbox::channel_for_test();
@@ -1155,12 +1136,12 @@ fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
         .pending_packets
         .push(sample_already_relayed_packet(
             source_session,
-            source_transport_media_id,
+            src_media,
             "aud-up",
             b"payload",
         ));
-    harness.add_recording_sink(source_transport_media_id, &sink);
-    harness.add_relay(source_transport_media_id, relay_mailbox);
+    harness.add_recording_sink(src_media, &sink);
+    harness.add_relay(src_media, relay_mailbox);
     flush_forward_routes(
         &mut harness.state,
         &harness.metrics,
@@ -1189,7 +1170,7 @@ fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
 fn flush_forward_routes_records_packet_sink_source_key_for_local_packet() -> Result<(), &'static str>
 {
     let source_session = test_transport_session_key(130, 0, 131, UserId::Integer(132));
-    let source_transport_media_id = TransportMediaId::new(133);
+    let src_media = TransportMediaId::new(133);
     let mut harness = PacketLoopHarness::new();
     create_rtc_session(&mut harness.state, &source_session, 9);
     let source_handle = harness
@@ -1207,7 +1188,7 @@ fn flush_forward_routes_records_packet_sink_source_key_for_local_packet() -> Res
             "aud-up",
             b"payload",
         ));
-    harness.add_recording_sink(source_transport_media_id, &sink);
+    harness.add_recording_sink(src_media, &sink);
 
     flush_forward_routes(
         &mut harness.state,
@@ -1224,7 +1205,7 @@ fn flush_forward_routes_records_packet_sink_source_key_for_local_packet() -> Res
 #[test]
 fn flush_forward_routes_records_closed_relays_and_keeps_later_destinations() {
     let source_session = test_transport_session_key(119, 0, 120, UserId::Integer(121));
-    let source_transport_media_id = TransportMediaId::new(122);
+    let src_media = TransportMediaId::new(122);
     let mut harness = PacketLoopHarness::new();
     let sink = Arc::new(CountingSink::new());
     let (relay_mailbox, relay_rx) = RelayPacketMailbox::channel_for_test();
@@ -1234,14 +1215,14 @@ fn flush_forward_routes_records_closed_relays_and_keeps_later_destinations() {
         .pending_packets
         .push(sample_already_relayed_packet(
             source_session,
-            source_transport_media_id,
+            src_media,
             "aud-up",
             b"payload",
         ));
 
     drop(relay_rx);
-    harness.add_relay(source_transport_media_id, relay_mailbox);
-    harness.add_recording_sink(source_transport_media_id, &sink);
+    harness.add_relay(src_media, relay_mailbox);
+    harness.add_recording_sink(src_media, &sink);
     flush_forward_routes(
         &mut harness.state,
         &harness.metrics,
@@ -1287,16 +1268,16 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() -> Result<(), &'st
             "cam-up",
             b"payload",
         ));
-    let source_transport_media_id = TransportMediaId::new(224);
+    let src_media = TransportMediaId::new(224);
     insert_open_route(
         &mut harness.state,
-        source_transport_media_id,
+        src_media,
         &consumer_session,
         TransportMediaId::new(223),
         consumer_stream,
         consumer_mid,
     );
-    harness.add_local(source_transport_media_id, 0);
+    harness.add_local(src_media, 0);
 
     flush_forward_routes(
         &mut harness.state,
@@ -1339,16 +1320,16 @@ fn flush_forward_routes_drops_stale_local_consumer_stream_handle() {
             "cam-up",
             b"payload",
         ));
-    let source_transport_media_id = TransportMediaId::new(225);
+    let src_media = TransportMediaId::new(225);
     insert_open_route(
         &mut harness.state,
-        source_transport_media_id,
+        src_media,
         &consumer_session,
         TransportMediaId::new(224),
         ConsumerStreamHandle::default(),
         consumer_mid,
     );
-    harness.add_local(source_transport_media_id, 0);
+    harness.add_local(src_media, 0);
 
     flush_forward_routes(
         &mut harness.state,
@@ -1585,34 +1566,33 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
     let consumer_session = test_transport_session_key(28, 0, 31, UserId::Integer(32));
     let mut harness = PacketLoopHarness::new();
     let packet_sink_registry = RoomPacketSinkRegistry::default();
-    let source_transport_media_id =
-        register_producer_media(&mut harness.state, &producer_session, "aud-up");
+    let src_media = register_producer_media(&mut harness.state, &producer_session, "aud-up");
     let consumer_mid = Mid::from("aud-down");
-    let consumer_transport_media_id = register_consumer_media(
+    let consumer_media = register_consumer_media(
         &mut harness.state,
         &consumer_session,
         consumer_mid,
-        source_transport_media_id,
+        src_media,
     );
     harness.state.routes.add_consumer_route(
-        source_transport_media_id,
+        src_media,
         MediaRouteDestination {
             dest_session: consumer_session.clone(),
-            dest_transport_media_id: consumer_transport_media_id,
+            dest_transport_media_id: consumer_media,
             dest_stream: ConsumerStreamHandle::default(),
             dest_mid: consumer_mid,
             dest_payload_type: None,
             nackable: false,
             active: true,
             packet_gate: PacketLayerGate::Open,
-            pending_packet_gate: None,
+            pending_gate: None,
         },
     );
-    harness.state.set_consumer_destination_index(
+    harness.state.set_consumer_dst_idx(
         &consumer_session,
         consumer_mid,
-        consumer_transport_media_id,
-        source_transport_media_id,
+        consumer_media,
+        src_media,
         Some(0),
     );
     harness
@@ -1798,12 +1778,12 @@ fn drain_relay_packets_ingests_owned_forwarded_packets_from_the_mailbox() {
         return;
     };
     assert_eq!(
-        forwarded.source_session_key(&PacketLoopState::default()),
+        forwarded.src_key(&PacketLoopState::default()),
         Some(&source_session)
     );
     assert_eq!(forwarded.payload(), b"payload");
     assert_eq!(
-        forwarded.resolve_source_transport_media_id(&PacketLoopState::default()),
+        forwarded.resolve_src_media(&PacketLoopState::default()),
         Some(TransportMediaId::new(17))
     );
     assert_eq!(metrics.snapshot().rtc_relay_drained_packets(), 1);
@@ -1843,7 +1823,7 @@ fn drain_relay_packets_stops_at_the_configured_cap() {
 #[test]
 fn flush_forward_routes_records_relay_overload_drops() {
     let source_session = test_transport_session_key(29, 0, 30, UserId::Integer(31));
-    let source_transport_media_id = TransportMediaId::new(32);
+    let src_media = TransportMediaId::new(32);
     let mut harness = PacketLoopHarness::new();
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test_with_capacity(1);
 
@@ -1852,7 +1832,7 @@ fn flush_forward_routes_records_relay_overload_drops() {
         .pending_packets
         .push(sample_already_relayed_packet(
             source_session.clone(),
-            source_transport_media_id,
+            src_media,
             "aud-up",
             b"payload",
         ));
@@ -1860,9 +1840,9 @@ fn flush_forward_routes_records_relay_overload_drops() {
     relay_mailbox.forward_packet(
         &harness.state,
         &sample_forwarded_packet(source_session, "aud-up", b"prefill"),
-        source_transport_media_id,
+        src_media,
     );
-    harness.add_relay(source_transport_media_id, relay_mailbox);
+    harness.add_relay(src_media, relay_mailbox);
 
     flush_forward_routes(
         &mut harness.state,
@@ -1881,31 +1861,26 @@ fn flush_forward_routes_records_relay_overload_drops() {
 }
 
 #[test]
-fn flush_pending_keyframe_requests_follow_route_scoped_feedback() {
+fn flush_pending_kf_reqs_follow_route_scoped_feedback() {
     for case in route_feedback_cases() {
         let source_session =
             test_transport_session_key(case.id, 0, case.id + 100, UserId::Integer(1000));
         let consumer_session =
             test_transport_session_key(case.id, 1, case.id + 200, UserId::Integer(2000));
-        let source_transport_media_id = TransportMediaId::new(case.id);
+        let src_media = TransportMediaId::new(case.id);
         let target_id = RelayTargetId::new(case.id);
         let mut harness = PacketLoopHarness::new();
-        let mut control_rx = remote_keyframe_source(
-            &mut harness.state,
-            source_transport_media_id,
-            &source_session,
-            target_id,
-            1,
-        );
-        let (packet_gate, pending_packet_gate) = case.gate.gates();
+        let mut control_rx =
+            remote_keyframe_source(&mut harness.state, src_media, &source_session, target_id, 1);
+        let (packet_gate, pending_gate) = case.gate.gates();
         register_consumer_route_fixture(
             &mut harness.state,
             &consumer_session,
             "cam-down",
-            source_transport_media_id,
+            src_media,
             case.active,
             packet_gate,
-            pending_packet_gate,
+            pending_gate,
         );
         drain_remote_packet_gate_setup(&mut control_rx);
         push_keyframe_request_with_rid(
@@ -1916,7 +1891,7 @@ fn flush_pending_keyframe_requests_follow_route_scoped_feedback() {
             case.kind,
         );
 
-        flush_pending_keyframe_requests(
+        flush_pending_kf_reqs(
             &mut harness.state,
             harness.rtc_metrics.as_ref(),
             &mut harness.buffers,
@@ -1931,7 +1906,7 @@ fn flush_pending_keyframe_requests_follow_route_scoped_feedback() {
                 assert_remote_keyframe_request(
                     &mut control_rx,
                     &source_session,
-                    source_transport_media_id,
+                    src_media,
                     target_id,
                     None,
                     case.kind,
@@ -1942,7 +1917,7 @@ fn flush_pending_keyframe_requests_follow_route_scoped_feedback() {
                 assert_remote_keyframe_request(
                     &mut control_rx,
                     &source_session,
-                    source_transport_media_id,
+                    src_media,
                     target_id,
                     Some(Rid::from(rid)),
                     case.kind,
@@ -1956,15 +1931,15 @@ fn flush_pending_keyframe_requests_follow_route_scoped_feedback() {
 }
 
 #[test]
-fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
+fn flush_pending_kf_reqs_coalesces_duplicate_remote_requests() {
     let source_session = test_transport_session_key(81, 0, 82, UserId::Integer(83));
     let first_consumer_session = test_transport_session_key(81, 1, 84, UserId::Integer(85));
     let second_consumer_session = test_transport_session_key(81, 1, 86, UserId::Integer(87));
-    let source_transport_media_id = TransportMediaId::new(101);
+    let src_media = TransportMediaId::new(101);
     let mut harness = PacketLoopHarness::new();
     let mut control_rx = remote_keyframe_source(
         &mut harness.state,
-        source_transport_media_id,
+        src_media,
         &source_session,
         RelayTargetId::new(4),
         2,
@@ -1974,13 +1949,13 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
         &mut harness.state,
         &first_consumer_session,
         "cam-down",
-        source_transport_media_id,
+        src_media,
     );
     register_open_consumer_route_fixture(
         &mut harness.state,
         &second_consumer_session,
         "cam-down-2",
-        source_transport_media_id,
+        src_media,
     );
     drain_remote_packet_gate_setup(&mut control_rx);
     push_keyframe_request(
@@ -1996,7 +1971,7 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
         KeyframeRequestKind::Fir,
     );
 
-    flush_pending_keyframe_requests(
+    flush_pending_kf_reqs(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
@@ -2005,7 +1980,7 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
     assert_remote_keyframe_request(
         &mut control_rx,
         &source_session,
-        source_transport_media_id,
+        src_media,
         RelayTargetId::new(4),
         None,
         KeyframeRequestKind::Fir,
@@ -2017,17 +1992,17 @@ fn flush_pending_keyframe_requests_coalesces_duplicate_remote_requests() {
 }
 
 #[test]
-fn flush_pending_keyframe_requests_keeps_distinct_rids_separate() {
+fn flush_pending_kf_reqs_keeps_distinct_rids_separate() {
     let source_session = test_transport_session_key(84, 0, 85, UserId::Integer(86));
     let first_consumer_session = test_transport_session_key(84, 1, 87, UserId::Integer(88));
     let second_consumer_session = test_transport_session_key(84, 1, 89, UserId::Integer(90));
-    let source_transport_media_id = TransportMediaId::new(104);
+    let src_media = TransportMediaId::new(104);
     let first_rid = Rid::from("lo");
     let second_rid = Rid::from("hi");
     let mut harness = PacketLoopHarness::new();
     let mut control_rx = remote_keyframe_source(
         &mut harness.state,
-        source_transport_media_id,
+        src_media,
         &source_session,
         RelayTargetId::new(6),
         2,
@@ -2036,7 +2011,7 @@ fn flush_pending_keyframe_requests_keeps_distinct_rids_separate() {
         &mut harness.state,
         &first_consumer_session,
         "cam-down-1",
-        source_transport_media_id,
+        src_media,
         true,
         PacketLayerGate::Rid(first_rid),
         None,
@@ -2045,7 +2020,7 @@ fn flush_pending_keyframe_requests_keeps_distinct_rids_separate() {
         &mut harness.state,
         &second_consumer_session,
         "cam-down-2",
-        source_transport_media_id,
+        src_media,
         true,
         PacketLayerGate::Rid(second_rid),
         None,
@@ -2064,7 +2039,7 @@ fn flush_pending_keyframe_requests_keeps_distinct_rids_separate() {
         KeyframeRequestKind::Fir,
     );
 
-    flush_pending_keyframe_requests(
+    flush_pending_kf_reqs(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
@@ -2074,7 +2049,7 @@ fn flush_pending_keyframe_requests_keeps_distinct_rids_separate() {
     for _ in 0..2 {
         let (source, target_id, rid, kind) = recv_remote_keyframe_request(&mut control_rx);
         assert_eq!(source.session_key(), &source_session);
-        assert_eq!(source.transport_media_id(), source_transport_media_id);
+        assert_eq!(source.transport_media_id(), src_media);
         assert_eq!(target_id, RelayTargetId::new(6));
         requests.push((rid, kind));
     }
@@ -2088,22 +2063,17 @@ fn flush_pending_keyframe_requests_keeps_distinct_rids_separate() {
 fn keyframe_tracker_retries_unsatisfied_duplicate_remote_request() {
     let source_session = test_transport_session_key(184, 0, 185, UserId::Integer(186));
     let consumer_session = test_transport_session_key(184, 1, 187, UserId::Integer(188));
-    let source_transport_media_id = TransportMediaId::new(1840);
+    let src_media = TransportMediaId::new(1840);
     let target_id = RelayTargetId::new(184);
     let now = Instant::now();
     let mut harness = PacketLoopHarness::new();
-    let mut control_rx = remote_keyframe_source(
-        &mut harness.state,
-        source_transport_media_id,
-        &source_session,
-        target_id,
-        2,
-    );
+    let mut control_rx =
+        remote_keyframe_source(&mut harness.state, src_media, &source_session, target_id, 2);
     register_open_consumer_route_fixture(
         &mut harness.state,
         &consumer_session,
         "cam-down",
-        source_transport_media_id,
+        src_media,
     );
 
     push_keyframe_request(
@@ -2112,7 +2082,7 @@ fn keyframe_tracker_retries_unsatisfied_duplicate_remote_request() {
         "cam-down",
         KeyframeRequestKind::Pli,
     );
-    flush_pending_keyframe_requests_at(
+    flush_pending_kf_reqs_at(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
@@ -2121,7 +2091,7 @@ fn keyframe_tracker_retries_unsatisfied_duplicate_remote_request() {
     assert_remote_keyframe_request(
         &mut control_rx,
         &source_session,
-        source_transport_media_id,
+        src_media,
         target_id,
         None,
         KeyframeRequestKind::Pli,
@@ -2133,7 +2103,7 @@ fn keyframe_tracker_retries_unsatisfied_duplicate_remote_request() {
         "cam-down",
         KeyframeRequestKind::Fir,
     );
-    flush_pending_keyframe_requests_at(
+    flush_pending_kf_reqs_at(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
@@ -2141,7 +2111,7 @@ fn keyframe_tracker_retries_unsatisfied_duplicate_remote_request() {
     );
     assert_no_remote_keyframe_request(&mut control_rx);
 
-    drain_due_keyframe_retries(
+    drain_due_kf_retries(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
@@ -2151,7 +2121,7 @@ fn keyframe_tracker_retries_unsatisfied_duplicate_remote_request() {
     assert_remote_keyframe_request(
         &mut control_rx,
         &source_session,
-        source_transport_media_id,
+        src_media,
         target_id,
         None,
         KeyframeRequestKind::Fir,
@@ -2166,14 +2136,14 @@ fn keyframe_tracker_retries_unsatisfied_duplicate_remote_request() {
 fn keyframe_tracker_cancels_remote_pending_state_after_send_drop() {
     let source_session = test_transport_session_key(186, 0, 187, UserId::Integer(188));
     let consumer_session = test_transport_session_key(186, 1, 189, UserId::Integer(190));
-    let source_transport_media_id = TransportMediaId::new(1860);
+    let src_media = TransportMediaId::new(1860);
     let target_id = RelayTargetId::new(186);
     let now = Instant::now();
     let mut harness = PacketLoopHarness::new();
     let mut control_rx = saturated_remote_keyframe_source(
         &mut harness.state,
         Arc::clone(&harness.rtc_metrics),
-        source_transport_media_id,
+        src_media,
         &source_session,
         target_id,
     );
@@ -2181,7 +2151,7 @@ fn keyframe_tracker_cancels_remote_pending_state_after_send_drop() {
         &mut harness.state,
         &consumer_session,
         "cam-down",
-        source_transport_media_id,
+        src_media,
     );
 
     push_keyframe_request(
@@ -2190,7 +2160,7 @@ fn keyframe_tracker_cancels_remote_pending_state_after_send_drop() {
         "cam-down",
         KeyframeRequestKind::Pli,
     );
-    flush_pending_keyframe_requests_at(
+    flush_pending_kf_reqs_at(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
@@ -2204,7 +2174,7 @@ fn keyframe_tracker_cancels_remote_pending_state_after_send_drop() {
         "cam-down",
         KeyframeRequestKind::Pli,
     );
-    flush_pending_keyframe_requests_at(
+    flush_pending_kf_reqs_at(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
@@ -2214,7 +2184,7 @@ fn keyframe_tracker_cancels_remote_pending_state_after_send_drop() {
     assert_remote_keyframe_request(
         &mut control_rx,
         &source_session,
-        source_transport_media_id,
+        src_media,
         target_id,
         None,
         KeyframeRequestKind::Pli,
@@ -2229,22 +2199,17 @@ fn keyframe_tracker_cancels_remote_pending_state_after_send_drop() {
 fn keyframe_tracker_cancels_due_retry_when_route_goes_inactive() {
     let source_session = test_transport_session_key(187, 0, 188, UserId::Integer(189));
     let consumer_session = test_transport_session_key(187, 1, 190, UserId::Integer(191));
-    let source_transport_media_id = TransportMediaId::new(1870);
+    let src_media = TransportMediaId::new(1870);
     let target_id = RelayTargetId::new(187);
     let now = Instant::now();
     let mut harness = PacketLoopHarness::new();
-    let mut control_rx = remote_keyframe_source(
-        &mut harness.state,
-        source_transport_media_id,
-        &source_session,
-        target_id,
-        2,
-    );
+    let mut control_rx =
+        remote_keyframe_source(&mut harness.state, src_media, &source_session, target_id, 2);
     register_open_consumer_route_fixture(
         &mut harness.state,
         &consumer_session,
         "cam-down",
-        source_transport_media_id,
+        src_media,
     );
     drain_remote_packet_gate_setup(&mut control_rx);
 
@@ -2254,7 +2219,7 @@ fn keyframe_tracker_cancels_due_retry_when_route_goes_inactive() {
         "cam-down",
         KeyframeRequestKind::Pli,
     );
-    flush_pending_keyframe_requests_at(
+    flush_pending_kf_reqs_at(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
@@ -2263,7 +2228,7 @@ fn keyframe_tracker_cancels_due_retry_when_route_goes_inactive() {
     assert_remote_keyframe_request(
         &mut control_rx,
         &source_session,
-        source_transport_media_id,
+        src_media,
         target_id,
         None,
         KeyframeRequestKind::Pli,
@@ -2274,7 +2239,7 @@ fn keyframe_tracker_cancels_due_retry_when_route_goes_inactive() {
         "cam-down",
         KeyframeRequestKind::Pli,
     );
-    flush_pending_keyframe_requests_at(
+    flush_pending_kf_reqs_at(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
@@ -2282,11 +2247,11 @@ fn keyframe_tracker_cancels_due_retry_when_route_goes_inactive() {
     );
     assert!(set_source_route_active(
         &mut harness.state,
-        source_transport_media_id,
+        src_media,
         false
     ));
 
-    drain_due_keyframe_retries(
+    drain_due_kf_retries(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
@@ -2294,18 +2259,14 @@ fn keyframe_tracker_cancels_due_retry_when_route_goes_inactive() {
     );
 
     assert_no_remote_keyframe_request(&mut control_rx);
-    assert!(set_source_route_active(
-        &mut harness.state,
-        source_transport_media_id,
-        true
-    ));
+    assert!(set_source_route_active(&mut harness.state, src_media, true));
     push_keyframe_request(
         &mut harness.buffers,
         consumer_session,
         "cam-down",
         KeyframeRequestKind::Pli,
     );
-    flush_pending_keyframe_requests_at(
+    flush_pending_kf_reqs_at(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
@@ -2315,7 +2276,7 @@ fn keyframe_tracker_cancels_due_retry_when_route_goes_inactive() {
     assert_remote_keyframe_request(
         &mut control_rx,
         &source_session,
-        source_transport_media_id,
+        src_media,
         target_id,
         None,
         KeyframeRequestKind::Pli,
@@ -2329,22 +2290,17 @@ fn keyframe_tracker_cancels_due_retry_when_route_goes_inactive() {
 fn keyframe_tracker_decoder_refresh_suppresses_remote_retry() {
     let source_session = test_transport_session_key(185, 0, 186, UserId::Integer(187));
     let consumer_session = test_transport_session_key(185, 1, 188, UserId::Integer(189));
-    let source_transport_media_id = TransportMediaId::new(1850);
+    let src_media = TransportMediaId::new(1850);
     let target_id = RelayTargetId::new(185);
     let now = Instant::now();
     let mut harness = PacketLoopHarness::new();
-    let mut control_rx = remote_keyframe_source(
-        &mut harness.state,
-        source_transport_media_id,
-        &source_session,
-        target_id,
-        2,
-    );
+    let mut control_rx =
+        remote_keyframe_source(&mut harness.state, src_media, &source_session, target_id, 2);
     register_open_consumer_route_fixture(
         &mut harness.state,
         &consumer_session,
         "cam-down",
-        source_transport_media_id,
+        src_media,
     );
     drain_remote_packet_gate_setup(&mut control_rx);
 
@@ -2354,7 +2310,7 @@ fn keyframe_tracker_decoder_refresh_suppresses_remote_retry() {
         "cam-down",
         KeyframeRequestKind::Pli,
     );
-    flush_pending_keyframe_requests_at(
+    flush_pending_kf_reqs_at(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
@@ -2363,7 +2319,7 @@ fn keyframe_tracker_decoder_refresh_suppresses_remote_retry() {
     assert_remote_keyframe_request(
         &mut control_rx,
         &source_session,
-        source_transport_media_id,
+        src_media,
         target_id,
         None,
         KeyframeRequestKind::Pli,
@@ -2375,7 +2331,7 @@ fn keyframe_tracker_decoder_refresh_suppresses_remote_retry() {
         "cam-down",
         KeyframeRequestKind::Pli,
     );
-    flush_pending_keyframe_requests_at(
+    flush_pending_kf_reqs_at(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
@@ -2386,7 +2342,7 @@ fn keyframe_tracker_decoder_refresh_suppresses_remote_retry() {
         .pending_packets
         .push(sample_already_relayed_packet(
             source_session,
-            source_transport_media_id,
+            src_media,
             "cam-up",
             &[0x10, 0x00],
         ));
@@ -2397,7 +2353,7 @@ fn keyframe_tracker_decoder_refresh_suppresses_remote_retry() {
         &harness.rtp_metrics,
         &mut harness.buffers,
     );
-    drain_due_keyframe_retries(
+    drain_due_kf_retries(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
@@ -2412,13 +2368,13 @@ fn keyframe_tracker_decoder_refresh_suppresses_remote_retry() {
 }
 
 #[test]
-fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_flush() {
+fn flush_pending_kf_reqs_absorbs_duplicate_local_requests_within_one_flush() {
     let source_session = test_transport_session_key(91, 0, 92, UserId::Integer(93));
     let first_consumer_session = test_transport_session_key(91, 0, 94, UserId::Integer(95));
     let second_consumer_session = test_transport_session_key(91, 0, 96, UserId::Integer(97));
     let mut harness = PacketLoopHarness::new();
 
-    let source_transport_media_id = local_keyframe_source(
+    let src_media = local_keyframe_source(
         &mut harness.state,
         &source_session,
         45_060,
@@ -2429,13 +2385,13 @@ fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_f
         &mut harness.state,
         &first_consumer_session,
         "cam-down-1",
-        source_transport_media_id,
+        src_media,
     );
     register_open_consumer_route_fixture(
         &mut harness.state,
         &second_consumer_session,
         "cam-down-2",
-        source_transport_media_id,
+        src_media,
     );
     push_keyframe_request(
         &mut harness.buffers,
@@ -2450,7 +2406,7 @@ fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_f
         KeyframeRequestKind::Fir,
     );
 
-    flush_pending_keyframe_requests(
+    flush_pending_kf_reqs(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
@@ -2464,8 +2420,8 @@ fn flush_pending_keyframe_requests_absorbs_duplicate_local_requests_within_one_f
         vec![source_session.clone()]
     );
     assert_eq!(
-        harness.state.routes.track_keyframe_request(
-            source_transport_media_id,
+        harness.state.routes.track_kf_req(
+            src_media,
             None,
             KeyframeRequestKind::Pli,
             Instant::now()

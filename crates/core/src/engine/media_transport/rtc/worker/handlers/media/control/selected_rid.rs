@@ -3,7 +3,7 @@
 //! selected-rid gates are stricter than ordinary packet gates because the
 //! receiver must not be switched to a simulcast layer until that layer is fresh
 //! enough to decode
-//! this module keeps the room-selected gate in `pending_packet_gate` while the
+//! this module keeps the room-selected gate in `pending_gate` while the
 //! packet loop waits for recent rtp and a keyframe on that rid
 //!
 //! the effective gate is allowed to differ from the selected gate during
@@ -27,8 +27,8 @@ use str0m::media::{KeyframeRequestKind, Rid};
 use tracing::{debug, warn};
 
 use super::{
-    super::keyframe::{KeyframeRequestMode, KeyframeRequestTarget, request_keyframe_for_target},
-    routes::ensure_owned_local_producer_mid,
+    super::keyframe::{KeyframeRequestMode, KeyframeRequestTarget, request_kf_for_target},
+    routes::ensure_local_producer_mid,
 };
 use crate::engine::{
     media_transport::{
@@ -67,42 +67,33 @@ const SELECTED_RID_KEYFRAME_RETRY_DELAYS: [Duration; 5] = [
 /// this test helper mirrors the packet-loop sequence by recording liveness
 /// before applying readiness work
 /// production packet-loop batches record liveness per packet and then call
-/// [`apply_source_rid_readiness`] once per unique source/rid
+/// [`apply_src_rid_ready`] once per unique source/rid
 ///
 /// returns `true` when an effective packet gate changed
 #[cfg(test)]
-pub fn observe_source_rid_readiness(
+pub fn observe_src_rid_ready(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    src_key: &TransportSessionKey,
+    src_media: TransportMediaId,
     rid: Rid,
     is_keyframe: bool,
     now: Instant,
 ) -> bool {
-    let first_observed =
-        state
-            .routes
-            .observe_producer_packet(source_transport_media_id, Some(rid), false, now);
+    let first_observed = state
+        .routes
+        .observe_producer_packet(src_media, Some(rid), false, now);
     if first_observed {
         debug!(
-            user_id = ?source_session_key.user_id(),
-            media_worker_id = source_session_key.media_worker_id().as_usize(),
-            ?source_transport_media_id,
+            user_id = ?src_key.user_id(),
+            media_worker_id = src_key.media_worker_id().as_usize(),
+            source_transport_media_id = ?src_media,
             ?rid,
             is_keyframe,
             "observed first live RTP for producer RID"
         );
     }
-    apply_source_rid_readiness(
-        state,
-        metrics,
-        source_session_key,
-        source_transport_media_id,
-        rid,
-        is_keyframe,
-        now,
-    )
+    apply_src_rid_ready(state, metrics, src_key, src_media, rid, is_keyframe, now)
 }
 
 /// applies source/rid readiness work after packet-level liveness was recorded
@@ -118,76 +109,63 @@ pub fn observe_source_rid_readiness(
 ///
 /// returns `true` when an effective gate changed and downstream planning should
 /// treat the source as route-control dirty
-pub(in crate::engine::media_transport::rtc) fn apply_source_rid_readiness(
+pub(in crate::engine::media_transport::rtc) fn apply_src_rid_ready(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    src_key: &TransportSessionKey,
+    src_media: TransportMediaId,
     rid: Rid,
     is_keyframe: bool,
     now: Instant,
 ) -> bool {
     let mut scratch = take(&mut state.rid_readiness_scratch);
-    let route_update = update_rid_readiness_routes(
-        state,
-        source_transport_media_id,
-        rid,
-        is_keyframe,
-        now,
-        &mut scratch,
-    );
+    let route_update =
+        update_rid_readiness_routes(state, src_media, rid, is_keyframe, now, &mut scratch);
     for stale_rid in scratch.stale.iter().copied() {
-        request_live_rid_keyframe(
+        request_live_rid_kf(
             state,
             metrics,
-            source_session_key,
-            source_transport_media_id,
+            src_key,
+            src_media,
             stale_rid,
             KeyframeRequestMode::Track(now),
         );
     }
     match route_update.selected_gate {
         RidReadinessSelectedGateUpdate::Activated => {
-            request_live_rid_keyframe(
+            request_live_rid_kf(
                 state,
                 metrics,
-                source_session_key,
-                source_transport_media_id,
+                src_key,
+                src_media,
                 rid,
                 KeyframeRequestMode::Track(now),
             );
-            schedule_live_rid_keyframe_retries(state, source_transport_media_id, rid, now);
+            schedule_live_rid_kf_retries(state, src_media, rid, now);
         }
         RidReadinessSelectedGateUpdate::BootstrapFallback => {
             for pending_rid in scratch.pending_selected.iter().copied() {
-                request_live_rid_keyframe(
+                request_live_rid_kf(
                     state,
                     metrics,
-                    source_session_key,
-                    source_transport_media_id,
+                    src_key,
+                    src_media,
                     pending_rid,
                     KeyframeRequestMode::Track(now),
                 );
             }
         }
-        RidReadinessSelectedGateUpdate::Pending => request_live_rid_keyframe(
+        RidReadinessSelectedGateUpdate::Pending => request_live_rid_kf(
             state,
             metrics,
-            source_session_key,
-            source_transport_media_id,
+            src_key,
+            src_media,
             rid,
             KeyframeRequestMode::Track(now),
         ),
         RidReadinessSelectedGateUpdate::None => {}
     }
-    drain_live_rid_keyframe_retries(
-        state,
-        metrics,
-        source_session_key,
-        source_transport_media_id,
-        rid,
-        now,
-    );
+    drain_live_rid_kf_retries(state, metrics, src_key, src_media, rid, now);
     scratch.clear();
     state.rid_readiness_scratch = scratch;
     route_update.changed_gate()
@@ -199,34 +177,32 @@ pub(in crate::engine::media_transport::rtc) fn apply_source_rid_readiness(
 /// does not keep sending packets
 /// missing source ownership is expected after teardown and is handled as a
 /// dropped best-effort refresh
-pub fn drain_due_rid_keyframe_refreshes(
+pub fn drain_due_rid_kf_refreshes(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     now: Instant,
 ) {
-    for (source_transport_media_id, rid) in state.routes.drain_due_rid_refreshes_for_all(now) {
-        let Some(source_session_key) =
-            keyframe_refresh_source_session(state, source_transport_media_id)
-        else {
+    for (src_media, rid) in state.routes.drain_all_due_rid_refreshes(now) {
+        let Some(src_key) = kf_refresh_src_key(state, src_media) else {
             warn!(
-                ?source_transport_media_id,
+                source_transport_media_id = ?src_media,
                 ?rid,
                 "dropped selected RID keyframe refresh because source ownership is unavailable"
             );
             continue;
         };
         debug!(
-            user_id = ?source_session_key.user_id(),
-            media_worker_id = source_session_key.media_worker_id().as_usize(),
-            ?source_transport_media_id,
+            user_id = ?src_key.user_id(),
+            media_worker_id = src_key.media_worker_id().as_usize(),
+            source_transport_media_id = ?src_media,
             ?rid,
             "draining scheduled selected RID keyframe refresh"
         );
-        request_live_rid_keyframe(
+        request_live_rid_kf(
             state,
             metrics,
-            &source_session_key,
-            source_transport_media_id,
+            &src_key,
+            src_media,
             rid,
             KeyframeRequestMode::Retry,
         );
@@ -243,25 +219,23 @@ pub fn drain_due_rid_keyframe_refreshes(
 /// non-rid gates pass through unchanged
 /// rid gates become effective immediately only when the producer rid has recent
 /// packet liveness
-pub(super) fn guarded_packet_gate(
+pub(super) fn guarded_pkt_gate(
     state: &PacketLoopState,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     packet_gate: PacketLayerGate,
     now: Instant,
 ) -> (PacketLayerGate, Option<PacketLayerGate>) {
     let Some(rid) = packet_gate.selected_rid() else {
         return (packet_gate, None);
     };
-    if state.routes.producer_rid_is_ready(
-        source_transport_media_id,
-        rid,
-        now,
-        SELECTED_RID_READY_MAX_AGE,
-    ) {
+    if state
+        .routes
+        .producer_rid_is_ready(src_media, rid, now, SELECTED_RID_READY_MAX_AGE)
+    {
         return (packet_gate, None);
     }
     debug!(
-        ?source_transport_media_id,
+        source_transport_media_id = ?src_media,
         ?rid,
         requested_packet_gate = ?packet_gate,
         "blocked selected RID route until selected producer RID has live RTP"
@@ -278,7 +252,7 @@ pub(super) fn guarded_packet_gate(
 /// once per sub-decision
 fn update_rid_readiness_routes(
     state: &mut PacketLoopState,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     incoming_rid: Rid,
     is_keyframe: bool,
     now: Instant,
@@ -286,13 +260,13 @@ fn update_rid_readiness_routes(
 ) -> RidReadinessRouteUpdate {
     scratch.clear();
     state.routes.collect_ready_producer_rids(
-        source_transport_media_id,
+        src_media,
         now,
         SELECTED_RID_READY_MAX_AGE,
         &mut scratch.ready,
     );
     state.routes.update_rid_readiness(
-        source_transport_media_id,
+        src_media,
         incoming_rid,
         is_keyframe,
         &scratch.ready,
@@ -306,37 +280,34 @@ fn update_rid_readiness_routes(
 /// local sources can be refreshed directly through their registered producer
 /// remote sources are refreshed through the relay source control after the
 /// observed ownership is checked against the current registration
-fn request_live_rid_keyframe(
+fn request_live_rid_kf(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    src_key: &TransportSessionKey,
+    src_media: TransportMediaId,
     rid: Rid,
     mode: KeyframeRequestMode,
 ) {
     debug!(
-        user_id = ?source_session_key.user_id(),
-        media_worker_id = source_session_key.media_worker_id().as_usize(),
-        ?source_transport_media_id,
+        user_id = ?src_key.user_id(),
+        media_worker_id = src_key.media_worker_id().as_usize(),
+        source_transport_media_id = ?src_media,
         ?rid,
         "requesting selected RID producer keyframe"
     );
-    if ensure_owned_local_producer_mid(state, source_session_key, source_transport_media_id).is_ok()
-    {
-        request_keyframe_for_target(
+    if ensure_local_producer_mid(state, src_key, src_media).is_ok() {
+        request_kf_for_target(
             state,
             metrics,
-            KeyframeRequestTarget::Local(source_session_key, source_transport_media_id),
+            KeyframeRequestTarget::Local(src_key, src_media),
             Some(rid),
             KeyframeRequestKind::Pli,
             mode,
         );
         return;
     }
-    let Some((registered_source, source_control)) = state
-        .routes
-        .remote_source(source_transport_media_id)
-        .map(|registration| {
+    let Some((registered_src, src_control)) =
+        state.routes.remote_source(src_media).map(|registration| {
             (
                 registration.source().clone(),
                 registration.source_control().clone(),
@@ -344,30 +315,30 @@ fn request_live_rid_keyframe(
         })
     else {
         warn!(
-            user_id = ?source_session_key.user_id(),
-            media_worker_id = source_session_key.media_worker_id().as_usize(),
-            ?source_transport_media_id,
+            user_id = ?src_key.user_id(),
+            media_worker_id = src_key.media_worker_id().as_usize(),
+            source_transport_media_id = ?src_media,
             ?rid,
             "could not request selected RID keyframe because source ownership is unavailable"
         );
         return;
     };
-    if registered_source.session_key() != source_session_key {
+    if registered_src.session_key() != src_key {
         warn!(
-            observed_source_user_id = ?source_session_key.user_id(),
-            observed_media_worker_id = source_session_key.media_worker_id().as_usize(),
-            registered_source_user_id = ?registered_source.session_key().user_id(),
-            registered_media_worker_id = registered_source.session_key().media_worker_id().as_usize(),
-            ?source_transport_media_id,
+            observed_source_user_id = ?src_key.user_id(),
+            observed_media_worker_id = src_key.media_worker_id().as_usize(),
+            registered_source_user_id = ?registered_src.session_key().user_id(),
+            registered_media_worker_id = registered_src.session_key().media_worker_id().as_usize(),
+            source_transport_media_id = ?src_media,
             ?rid,
             "could not request selected RID keyframe because source ownership changed"
         );
         return;
     }
-    request_keyframe_for_target(
+    request_kf_for_target(
         state,
         metrics,
-        KeyframeRequestTarget::Remote(&registered_source, &source_control),
+        KeyframeRequestTarget::Remote(&registered_src, &src_control),
         Some(rid),
         KeyframeRequestKind::Pli,
         mode,
@@ -378,19 +349,19 @@ fn request_live_rid_keyframe(
 ///
 /// the retry schedule is tied to the source/rid pair rather than a destination
 /// so multiple consumers selecting the same rid share the same refresh stream
-fn schedule_live_rid_keyframe_retries(
+fn schedule_live_rid_kf_retries(
     state: &mut PacketLoopState,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
     rid: Rid,
     now: Instant,
 ) {
     for delay in SELECTED_RID_KEYFRAME_RETRY_DELAYS {
         state
             .routes
-            .schedule_rid_refresh(source_transport_media_id, rid, now + delay);
+            .schedule_rid_refresh(src_media, rid, now + delay);
     }
     debug!(
-        ?source_transport_media_id,
+        source_transport_media_id = ?src_media,
         ?rid,
         retry_count = SELECTED_RID_KEYFRAME_RETRY_DELAYS.len(),
         "scheduled follow-up selected RID keyframe refreshes"
@@ -401,30 +372,28 @@ fn schedule_live_rid_keyframe_retries(
 ///
 /// this catches retry deadlines naturally when the rid remains active and keeps
 /// the packet-loop timer path as a fallback for quiet rids
-fn drain_live_rid_keyframe_retries(
+fn drain_live_rid_kf_retries(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
+    src_key: &TransportSessionKey,
+    src_media: TransportMediaId,
     rid: Rid,
     now: Instant,
 ) {
-    let due_count = state
-        .routes
-        .drain_due_rid_refreshes(source_transport_media_id, rid, now);
+    let due_count = state.routes.drain_due_rid_refreshes(src_media, rid, now);
     for _ in 0..due_count {
         debug!(
-            user_id = ?source_session_key.user_id(),
-            media_worker_id = source_session_key.media_worker_id().as_usize(),
-            ?source_transport_media_id,
+            user_id = ?src_key.user_id(),
+            media_worker_id = src_key.media_worker_id().as_usize(),
+            source_transport_media_id = ?src_media,
             ?rid,
             "draining follow-up selected RID keyframe refresh"
         );
-        request_live_rid_keyframe(
+        request_live_rid_kf(
             state,
             metrics,
-            source_session_key,
-            source_transport_media_id,
+            src_key,
+            src_media,
             rid,
             KeyframeRequestMode::Retry,
         );
@@ -437,15 +406,15 @@ fn drain_live_rid_keyframe_retries(
 /// registration
 /// the returned session key is only a best-effort snapshot and request-time
 /// ownership checks still apply before a remote keyframe request is sent
-fn keyframe_refresh_source_session(
+fn kf_refresh_src_key(
     state: &PacketLoopState,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
 ) -> Option<TransportSessionKey> {
-    match state.media_handle(source_transport_media_id) {
+    match state.media_handle(src_media) {
         Some(RegisteredMediaHandle::Producer { session_key, .. }) => Some(session_key.clone()),
         Some(RegisteredMediaHandle::Consumer { .. }) | None => state
             .routes
-            .remote_source(source_transport_media_id)
-            .map(|registration| registration.source_session_key().clone()),
+            .remote_source(src_media)
+            .map(|registration| registration.src_key().clone()),
     }
 }

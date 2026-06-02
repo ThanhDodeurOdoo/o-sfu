@@ -199,7 +199,7 @@ fn install_test_consumer_route(
     )
     .1;
     let route_key = ConsumerKey::new(consumer_user_id, source_id);
-    let consumer_state = ConsumerState {
+    let consumer = ConsumerState {
         routed_consumer_id,
         consumer_connection_id,
         source_connection_id: producer_connection_id,
@@ -208,7 +208,7 @@ fn install_test_consumer_route(
     };
     assert!(state.media.commit_consumer(
         route_key.clone(),
-        consumer_state,
+        consumer,
         ConsumerSourceSelection::open(true),
     ));
     (route_key, consumer_connection_id)

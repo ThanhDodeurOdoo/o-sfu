@@ -112,15 +112,15 @@ impl RoomFactory {
     /// partial side effect beyond the counters themselves. Recovering the inner
     /// value keeps later room creation possible after an unrelated panic.
     fn allocate_runtime_context(&self) -> RoomRuntimeContext {
-        let (room_instance_id, primary_router) = {
+        let (room_instance_id, primary_router_id) = {
             let mut allocator = lock_unpoisoned(&self.allocator);
             let room_instance_id = RoomInstanceId::allocate(&mut allocator.next_room_instance_id);
-            let primary_router = RouterId(allocator.next_router_id);
+            let primary_router_id = RouterId(allocator.next_router_id);
             allocator.next_router_id = allocator.next_router_id.saturating_add(1);
             drop(allocator);
-            (room_instance_id, primary_router)
+            (room_instance_id, primary_router_id)
         };
-        RoomRuntimeContext::new_unassigned(room_instance_id, primary_router)
+        RoomRuntimeContext::new_unassigned(room_instance_id, primary_router_id)
     }
 
     /// reserve a new process-unique identifier for a spillover router
@@ -131,8 +131,8 @@ impl RoomFactory {
     /// the cold-path creation from blocking active request loops
     pub(super) fn allocate_spillover_router(&self) -> RouterId {
         let mut allocator = lock_unpoisoned(&self.allocator);
-        let router = RouterId(allocator.next_router_id);
+        let router_id = RouterId(allocator.next_router_id);
         allocator.next_router_id = allocator.next_router_id.saturating_add(1);
-        router
+        router_id
     }
 }

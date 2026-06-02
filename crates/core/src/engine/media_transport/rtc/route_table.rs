@@ -76,7 +76,7 @@ impl RidReadinessRouteUpdate {
         self.selected_gate = RidReadinessSelectedGateUpdate::Activated;
     }
 
-    fn mark_activated_bootstrap_fallback_gate(&mut self) {
+    fn mark_bootstrap_fallback(&mut self) {
         self.selected_gate = RidReadinessSelectedGateUpdate::BootstrapFallback;
     }
 }
@@ -143,7 +143,7 @@ impl RouteTable {
             route.push_destination(destination);
             index
         };
-        self.refresh_source_packet_gate(source_id);
+        self.refresh_src_pkt_gate(source_id);
         index
     }
 
@@ -173,8 +173,8 @@ impl RouteTable {
         if empty && let Some(source) = self.sources.get_mut(&source_id) {
             source.local_route = None;
         }
-        self.refresh_source_packet_gate(source_id);
-        self.prune_remote_source_if_unrouted(source_id);
+        self.refresh_src_pkt_gate(source_id);
+        self.prune_unrouted_remote_src(source_id);
         self.prune_empty(source_id);
         Some((removed, moved))
     }
@@ -194,7 +194,7 @@ impl RouteTable {
     pub(super) fn set_consumer_active(
         &mut self,
         source_id: TransportMediaId,
-        destination_index: usize,
+        dst_idx: usize,
         session_key: &TransportSessionKey,
         media_id: TransportMediaId,
         active: bool,
@@ -202,54 +202,53 @@ impl RouteTable {
         let route = self
             .route_mut(source_id)
             .ok_or(TransportAdapterError::TransportUnavailable)?;
-        validate_destination(route, destination_index, session_key, media_id)?;
-        let changed = route.set_destination_active(destination_index, active);
+        validate_destination(route, dst_idx, session_key, media_id)?;
+        let changed = route.set_destination_active(dst_idx, active);
         if changed {
-            self.refresh_source_packet_gate(source_id);
+            self.refresh_src_pkt_gate(source_id);
         }
         Ok(changed)
     }
 
-    pub(super) fn set_consumer_packet_gate(
+    pub(super) fn set_consumer_pkt_gate(
         &mut self,
         source_id: TransportMediaId,
-        destination_index: usize,
+        dst_idx: usize,
         session_key: &TransportSessionKey,
         media_id: TransportMediaId,
         packet_gate: PacketLayerGate,
-        pending_packet_gate: Option<PacketLayerGate>,
+        pending_gate: Option<PacketLayerGate>,
     ) -> Result<bool, TransportAdapterError> {
-        let changed = self.set_consumer_packet_gate_in_batch(
+        let changed = self.set_consumer_pkt_gate_batch(
             source_id,
-            destination_index,
+            dst_idx,
             session_key,
             media_id,
             packet_gate,
-            pending_packet_gate,
+            pending_gate,
         )?;
         if changed {
-            self.refresh_source_packet_gate(source_id);
+            self.refresh_src_pkt_gate(source_id);
         }
         Ok(changed)
     }
 
-    pub(super) fn set_consumer_packet_gate_in_batch(
+    pub(super) fn set_consumer_pkt_gate_batch(
         &mut self,
         source_id: TransportMediaId,
-        destination_index: usize,
+        dst_idx: usize,
         session_key: &TransportSessionKey,
         media_id: TransportMediaId,
         packet_gate: PacketLayerGate,
-        pending_packet_gate: Option<PacketLayerGate>,
+        pending_gate: Option<PacketLayerGate>,
     ) -> Result<bool, TransportAdapterError> {
         let route = self
             .route_mut(source_id)
             .ok_or(TransportAdapterError::TransportUnavailable)?;
-        let destination = validate_destination(route, destination_index, session_key, media_id)?;
-        let changed = destination.packet_gate != packet_gate
-            || destination.pending_packet_gate != pending_packet_gate;
-        destination.packet_gate = packet_gate;
-        destination.pending_packet_gate = pending_packet_gate;
+        let dst = validate_destination(route, dst_idx, session_key, media_id)?;
+        let changed = dst.packet_gate != packet_gate || dst.pending_gate != pending_gate;
+        dst.packet_gate = packet_gate;
+        dst.pending_gate = pending_gate;
         Ok(changed)
     }
 
@@ -266,7 +265,7 @@ impl RouteTable {
             let Some(route) = self.route_mut(source_id) else {
                 return RidReadinessRouteUpdate::default();
             };
-            update_selected_rid_destinations(
+            update_selected_rid_dsts(
                 route,
                 source_id,
                 incoming_rid,
@@ -277,7 +276,7 @@ impl RouteTable {
             )
         };
         if update.changed_gate() {
-            self.refresh_source_packet_gate(source_id);
+            self.refresh_src_pkt_gate(source_id);
         }
         update
     }
@@ -285,13 +284,13 @@ impl RouteTable {
     pub(super) fn take_route(&mut self, source_id: TransportMediaId) -> Option<MediaRouteEntry> {
         let source = self.sources.get_mut(&source_id)?;
         let route = source.local_route.take();
-        self.refresh_source_packet_gate(source_id);
-        self.prune_remote_source_if_unrouted(source_id);
+        self.refresh_src_pkt_gate(source_id);
+        self.prune_unrouted_remote_src(source_id);
         self.prune_empty(source_id);
         route
     }
 
-    pub(super) fn remove_destinations_for_session(&mut self, session_key: &TransportSessionKey) {
+    pub(super) fn remove_dsts_for_session(&mut self, session_key: &TransportSessionKey) {
         let mut affected = Vec::new();
         for (source_id, source) in &mut self.sources {
             let Some(route) = source.local_route.as_mut() else {
@@ -315,27 +314,21 @@ impl RouteTable {
             affected.push(*source_id);
         }
         for source_id in affected {
-            self.refresh_source_packet_gate(source_id);
-            self.prune_remote_source_if_unrouted(source_id);
+            self.refresh_src_pkt_gate(source_id);
+            self.prune_unrouted_remote_src(source_id);
             self.prune_empty(source_id);
         }
     }
 
-    pub(super) fn refresh_source_packet_gate(&mut self, source_id: TransportMediaId) {
-        let local_packet_gate = self
-            .local_route(source_id)
-            .and_then(local_source_packet_gate);
+    pub(super) fn refresh_src_pkt_gate(&mut self, source_id: TransportMediaId) {
+        let local_packet_gate = self.local_route(source_id).and_then(local_src_pkt_gate);
         let remote_packet_gate =
-            remote_packet_gate_for_route(self.local_route(source_id), local_packet_gate);
-        self.set_local_packet_gate(source_id, local_packet_gate);
-        self.publish_remote_packet_gate(source_id, remote_packet_gate);
+            remote_pkt_gate_for_route(self.local_route(source_id), local_packet_gate);
+        self.set_local_pkt_gate(source_id, local_packet_gate);
+        self.publish_remote_pkt_gate(source_id, remote_packet_gate);
     }
 
-    pub(super) fn has_keyframe_demand(
-        &self,
-        source_id: TransportMediaId,
-        rid: Option<Rid>,
-    ) -> bool {
+    pub(super) fn has_kf_demand(&self, source_id: TransportMediaId, rid: Option<Rid>) -> bool {
         let Some(source) = self.sources.get(&source_id) else {
             return false;
         };
@@ -344,7 +337,7 @@ impl RouteTable {
                 && route.destinations.iter().any(|destination| {
                     destination.active
                         && matches!(
-                            super::media_registry::destination_keyframe_target_rid(
+                            super::media_registry::dst_kf_target_rid(
                                 destination,
                                 None
                             ),
@@ -424,7 +417,7 @@ impl RouteTable {
         previous_registration: Option<RemoteSourceRegistration>,
     ) {
         if let Some(previous_registration) = previous_registration {
-            let pending = previous_registration.has_pending_packet_gate();
+            let pending = previous_registration.has_pending_gate();
             self.sources.entry(source_id).or_default().remote = Some(previous_registration);
             if pending {
                 self.queue_remote_gate(source_id);
@@ -443,7 +436,7 @@ impl RouteTable {
             .and_then(|source| source.remote.as_ref())
     }
 
-    pub(super) fn publish_remote_packet_gate(
+    pub(super) fn publish_remote_pkt_gate(
         &mut self,
         source_id: TransportMediaId,
         packet_gate: PacketLayerGate,
@@ -458,7 +451,7 @@ impl RouteTable {
         }
     }
 
-    pub(super) fn flush_remote_packet_gates(&mut self) {
+    pub(super) fn flush_remote_pkt_gates(&mut self) {
         let count = self.remote_gate_queue.len();
         for index in 0..count {
             let Some(source_id) = self.remote_gate_queue.get(index).copied() else {
@@ -468,7 +461,7 @@ impl RouteTable {
                 .sources
                 .get_mut(&source_id)
                 .and_then(|source| source.remote.as_mut())
-                .is_some_and(RemoteSourceRegistration::flush_pending_packet_gate)
+                .is_some_and(RemoteSourceRegistration::flush_pending_gate)
             {
                 self.remote_gate_queue.push(source_id);
             }
@@ -476,7 +469,7 @@ impl RouteTable {
         self.remote_gate_queue.drain(..count);
     }
 
-    pub(super) fn prune_remote_source_if_unrouted(&mut self, source_id: TransportMediaId) {
+    pub(super) fn prune_unrouted_remote_src(&mut self, source_id: TransportMediaId) {
         if self
             .local_route(source_id)
             .is_some_and(|route| !route.destinations.is_empty())
@@ -488,7 +481,7 @@ impl RouteTable {
         }
     }
 
-    pub(super) fn prune_unrouted_remote_sources(
+    pub(super) fn prune_unrouted_remote_srcs(
         &mut self,
         mut keep_local: impl FnMut(&TransportMediaId) -> bool,
     ) {
@@ -649,7 +642,7 @@ impl RouteTable {
         due_count
     }
 
-    pub(super) fn drain_due_rid_refreshes_for_all(
+    pub(super) fn drain_all_due_rid_refreshes(
         &mut self,
         now: Instant,
     ) -> Vec<(TransportMediaId, Rid)> {
@@ -676,7 +669,7 @@ impl RouteTable {
         }
     }
 
-    pub(super) fn track_keyframe_request(
+    pub(super) fn track_kf_req(
         &mut self,
         source_id: TransportMediaId,
         rid: Option<Rid>,
@@ -686,11 +679,7 @@ impl RouteTable {
         self.keyframe_requests.track(source_id, rid, kind, now)
     }
 
-    pub(super) fn forget_keyframe_request(
-        &mut self,
-        source_id: TransportMediaId,
-        rid: Option<Rid>,
-    ) {
+    pub(super) fn forget_kf_req(&mut self, source_id: TransportMediaId, rid: Option<Rid>) {
         self.keyframe_requests.forget(source_id, rid);
     }
 
@@ -702,7 +691,7 @@ impl RouteTable {
         self.keyframe_requests.observe_refresh(source_id, rid)
     }
 
-    pub(super) fn drain_due_keyframe_requests(
+    pub(super) fn drain_due_kf_reqs(
         &mut self,
         now: Instant,
         retries: &mut Vec<SourceKeyframeRequest>,
@@ -710,7 +699,7 @@ impl RouteTable {
         self.keyframe_requests.drain_due(now, retries);
     }
 
-    pub(super) fn next_keyframe_deadline(&self) -> Option<Instant> {
+    pub(super) fn next_kf_deadline(&self) -> Option<Instant> {
         self.keyframe_requests.next_deadline()
     }
 
@@ -734,14 +723,14 @@ impl RouteTable {
         }
     }
 
-    pub(super) fn set_local_packet_gate(
+    pub(super) fn set_local_pkt_gate(
         &mut self,
         source_id: TransportMediaId,
         packet_gate: Option<PacketLayerGate>,
     ) {
         match self.sources.entry(source_id) {
             Entry::Occupied(mut entry) => {
-                entry.get_mut().set_local_packet_gate(packet_gate);
+                entry.get_mut().set_local_pkt_gate(packet_gate);
                 if entry.get().is_empty() {
                     entry.remove();
                 }
@@ -751,7 +740,7 @@ impl RouteTable {
                     return;
                 };
                 let mut source = RouteSource::default();
-                source.set_local_packet_gate(Some(packet_gate));
+                source.set_local_pkt_gate(Some(packet_gate));
                 entry.insert(source);
             }
         }
@@ -783,7 +772,7 @@ impl RouteTable {
             }
             return false;
         }
-        let previous_active_speakers = self.room_policy_ranked_active_speaker_sources(now);
+        let previous_active_speakers = self.ranked_active_speakers(now);
         let previous_packet_gate = self.effective_packet_gate(source_id);
         let Some(source) = self.sources.get_mut(&source_id) else {
             return false;
@@ -794,11 +783,11 @@ impl RouteTable {
         previous_packet_gate != self.effective_packet_gate(source_id)
             || !same_active_speaker_order(
                 &previous_active_speakers,
-                &self.room_policy_ranked_active_speaker_sources(now),
+                &self.ranked_active_speakers(now),
             )
     }
 
-    pub(super) fn set_relay_packet_gate(
+    pub(super) fn set_relay_pkt_gate(
         &mut self,
         source_id: TransportMediaId,
         target_id: RelayTargetId,
@@ -807,7 +796,7 @@ impl RouteTable {
         self.sources
             .entry(source_id)
             .or_default()
-            .set_relay_packet_gate(target_id, packet_gate);
+            .set_relay_pkt_gate(target_id, packet_gate);
     }
 
     pub(super) fn relay_packet_gate(
@@ -821,7 +810,7 @@ impl RouteTable {
     }
 
     pub(super) fn active_speaker_sources(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
-        let mut sources = self.active_speaker_sources_unsorted(now);
+        let mut sources = self.unsorted_active_speakers(now);
         sources.sort_unstable_by_key(|source| {
             (
                 Reverse(source.observed_at()),
@@ -848,7 +837,7 @@ impl RouteTable {
             .min()
     }
 
-    pub(super) fn expired_active_speaker_source_ids(&self, now: Instant) -> Vec<TransportMediaId> {
+    pub(super) fn expired_active_speaker_srcs(&self, now: Instant) -> Vec<TransportMediaId> {
         self.sources
             .iter()
             .filter_map(|(source_id, source)| {
@@ -953,15 +942,15 @@ impl RouteTable {
             .map_or(0, RelaySourceRegistration::active_target_count)
     }
 
-    fn active_speaker_sources_unsorted(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
+    fn unsorted_active_speakers(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
         self.sources
             .iter()
             .filter_map(|(source_id, source)| source.active_speaker_source(*source_id, now))
             .collect()
     }
 
-    fn room_policy_ranked_active_speaker_sources(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
-        let mut sources = self.active_speaker_sources_unsorted(now);
+    fn ranked_active_speakers(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
+        let mut sources = self.unsorted_active_speakers(now);
         sources.sort_unstable_by_key(|source| {
             (
                 Reverse(source.observed_at()),
@@ -1083,12 +1072,12 @@ impl RouteSource {
         changed
     }
 
-    fn set_local_packet_gate(&mut self, gate: Option<PacketLayerGate>) {
+    fn set_local_pkt_gate(&mut self, gate: Option<PacketLayerGate>) {
         self.local_gate = gate;
         self.refresh_gate();
     }
 
-    fn set_relay_packet_gate(&mut self, target_id: RelayTargetId, gate: PacketLayerGate) {
+    fn set_relay_pkt_gate(&mut self, target_id: RelayTargetId, gate: PacketLayerGate) {
         self.relay_gates.insert(target_id, gate);
         self.refresh_gate();
     }
@@ -1280,17 +1269,17 @@ fn validate_destination<'a>(
     session_key: &TransportSessionKey,
     media_id: TransportMediaId,
 ) -> Result<&'a mut MediaRouteDestination, TransportAdapterError> {
-    let destination = route
+    let dst = route
         .destinations
         .get_mut(index)
         .ok_or(TransportAdapterError::TransportUnavailable)?;
-    if destination.dest_session != *session_key || destination.dest_transport_media_id != media_id {
+    if dst.dest_session != *session_key || dst.dest_transport_media_id != media_id {
         return Err(TransportAdapterError::TransportUnavailable);
     }
-    Ok(destination)
+    Ok(dst)
 }
 
-fn update_selected_rid_destinations(
+fn update_selected_rid_dsts(
     route: &mut MediaRouteEntry,
     source_id: TransportMediaId,
     incoming_rid: Rid,
@@ -1300,17 +1289,10 @@ fn update_selected_rid_destinations(
     pending_selected: &mut Vec<Rid>,
 ) -> RidReadinessRouteUpdate {
     let mut update = RidReadinessRouteUpdate::default();
-    for destination in &mut route.destinations {
-        suspend_stale_destination_gate(
-            destination,
-            source_id,
-            incoming_rid,
-            ready,
-            stale,
-            &mut update,
-        );
-        let Some(selected_rid) = destination
-            .pending_packet_gate
+    for dst in &mut route.destinations {
+        suspend_stale_dst_gate(dst, source_id, incoming_rid, ready, stale, &mut update);
+        let Some(selected_rid) = dst
+            .pending_gate
             .as_ref()
             .and_then(PacketLayerGate::selected_rid)
         else {
@@ -1321,87 +1303,85 @@ fn update_selected_rid_destinations(
             continue;
         }
         update.mark_pending_selected_gate();
-        if is_keyframe && let Some(packet_gate) = destination.pending_packet_gate.take() {
+        if is_keyframe && let Some(packet_gate) = dst.pending_gate.take() {
             debug!(
                 ?source_id,
-                consumer_session_key = ?destination.dest_session,
-                consumer_transport_media_id = ?destination.dest_transport_media_id,
+                consumer_session_key = ?dst.dest_session,
+                consumer_transport_media_id = ?dst.dest_transport_media_id,
                 ?incoming_rid,
                 activated_packet_gate = ?packet_gate,
                 "activated deferred strict RID packet gate after producer RID became live"
             );
-            destination.packet_gate = packet_gate;
+            dst.packet_gate = packet_gate;
             update.mark_activated_pending_gate();
         }
     }
     if is_keyframe && update.selected_gate != RidReadinessSelectedGateUpdate::Activated {
-        activate_bootstrap_fallback_destinations(route, source_id, incoming_rid, &mut update);
+        activate_bootstrap_dsts(route, source_id, incoming_rid, &mut update);
     }
     update
 }
 
-fn suspend_stale_destination_gate(
-    destination: &mut MediaRouteDestination,
+fn suspend_stale_dst_gate(
+    dst: &mut MediaRouteDestination,
     source_id: TransportMediaId,
     incoming_rid: Rid,
     ready: &[Rid],
     stale: &mut Vec<Rid>,
     update: &mut RidReadinessRouteUpdate,
 ) {
-    if destination.pending_packet_gate.is_some() {
+    if dst.pending_gate.is_some() {
         return;
     }
-    let Some(selected_rid) = destination.packet_gate.selected_rid() else {
+    let Some(selected_rid) = dst.packet_gate.selected_rid() else {
         return;
     };
     if selected_rid == incoming_rid || ready.contains(&selected_rid) {
         return;
     }
-    let packet_gate = destination.packet_gate;
+    let packet_gate = dst.packet_gate;
     debug!(
         ?source_id,
-        consumer_session_key = ?destination.dest_session,
-        consumer_transport_media_id = ?destination.dest_transport_media_id,
+        consumer_session_key = ?dst.dest_session,
+        consumer_transport_media_id = ?dst.dest_transport_media_id,
         ?incoming_rid,
         stale_rid = ?selected_rid,
         pending_packet_gate = ?packet_gate,
         "blocked stale selected RID route until selected producer RID resumes"
     );
-    destination.packet_gate = PacketLayerGate::Block;
-    destination.pending_packet_gate = Some(packet_gate);
+    dst.packet_gate = PacketLayerGate::Block;
+    dst.pending_gate = Some(packet_gate);
     push_unique_rid(stale, selected_rid);
     update.suspended_stale_gate = true;
 }
 
-fn activate_bootstrap_fallback_destinations(
+fn activate_bootstrap_dsts(
     route: &mut MediaRouteEntry,
     source_id: TransportMediaId,
     incoming_rid: Rid,
     update: &mut RidReadinessRouteUpdate,
 ) {
-    for destination in &mut route.destinations {
-        let Some(selected_rid) = destination
-            .pending_packet_gate
+    for dst in &mut route.destinations {
+        let Some(selected_rid) = dst
+            .pending_gate
             .as_ref()
             .and_then(PacketLayerGate::selected_rid)
         else {
             continue;
         };
-        if selected_rid == incoming_rid
-            || !matches!(destination.packet_gate, PacketLayerGate::Block)
-        {
+        if selected_rid == incoming_rid || !matches!(dst.packet_gate, PacketLayerGate::Block) {
             continue;
         }
         debug!(
             ?source_id,
-            consumer_session_key = ?destination.dest_session,
-            consumer_transport_media_id = ?destination.dest_transport_media_id,
+            consumer_session_key = ?dst.dest_session,
+            consumer_transport_media_id = ?dst.dest_transport_media_id,
             fallback_rid = ?incoming_rid,
             pending_selected_rid = ?selected_rid,
             "activated bootstrap fallback RID packet gate while selected producer RID is pending"
         );
-        destination.packet_gate = PacketLayerGate::Rid(incoming_rid);
-        update.mark_activated_bootstrap_fallback_gate();
+        dst.packet_gate = PacketLayerGate::Rid(incoming_rid);
+        update.mark_bootstrap_fallback();
     }
 }
 
@@ -1411,7 +1391,7 @@ fn push_unique_rid(rids: &mut Vec<Rid>, rid: Rid) {
     }
 }
 
-fn local_source_packet_gate(route_entry: &MediaRouteEntry) -> Option<PacketLayerGate> {
+fn local_src_pkt_gate(route_entry: &MediaRouteEntry) -> Option<PacketLayerGate> {
     aggregate_packet_gates(
         route_entry
             .destinations
@@ -1421,7 +1401,7 @@ fn local_source_packet_gate(route_entry: &MediaRouteEntry) -> Option<PacketLayer
     )
 }
 
-fn remote_packet_gate_for_route(
+fn remote_pkt_gate_for_route(
     route_entry: Option<&MediaRouteEntry>,
     local_packet_gate: Option<PacketLayerGate>,
 ) -> PacketLayerGate {
@@ -1438,7 +1418,7 @@ fn remote_packet_gate_for_route(
             if route_entry
                 .destinations
                 .iter()
-                .any(|destination| destination.pending_packet_gate.is_some()) =>
+                .any(|destination| destination.pending_gate.is_some()) =>
         {
             PacketLayerGate::Open
         }

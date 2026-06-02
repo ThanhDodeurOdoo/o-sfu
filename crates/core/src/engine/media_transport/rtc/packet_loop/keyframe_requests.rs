@@ -11,10 +11,10 @@ use str0m::media::{KeyframeRequest as RtcKeyframeRequest, KeyframeRequestKind, M
 use super::{
     super::{
         commands::RemoteSourceControl,
-        keyframe_tracker::{SourceKeyframeRequest, coalesce_keyframe_kind},
+        keyframe_tracker::{SourceKeyframeRequest, coalesce_kf_kind},
         media_registry::RegisteredMediaHandle,
         state::PacketLoopState,
-        worker::{KeyframeRequestMode, KeyframeRequestTarget, request_keyframe_for_target},
+        worker::{KeyframeRequestMode, KeyframeRequestTarget, request_kf_for_target},
     },
     buffers::PacketLoopBuffers,
 };
@@ -52,118 +52,111 @@ impl PendingKeyframeRequest {
 
 pub(super) enum ResolvedKeyframeRoute {
     Local {
-        source_session_key: TransportSessionKey,
+        src_key: TransportSessionKey,
     },
     Remote {
-        source: TransportSourceKey,
-        source_control: RemoteSourceControl,
+        src: TransportSourceKey,
+        src_control: RemoteSourceControl,
     },
 }
 
 impl ResolvedKeyframeRoute {
-    fn target(&self, source_transport_media_id: TransportMediaId) -> KeyframeRequestTarget<'_> {
+    fn target(&self, src_media: TransportMediaId) -> KeyframeRequestTarget<'_> {
         match self {
-            Self::Local { source_session_key } => {
-                KeyframeRequestTarget::Local(source_session_key, source_transport_media_id)
-            }
-            Self::Remote {
-                source,
-                source_control,
-            } => KeyframeRequestTarget::Remote(source, source_control),
+            Self::Local { src_key } => KeyframeRequestTarget::Local(src_key, src_media),
+            Self::Remote { src, src_control } => KeyframeRequestTarget::Remote(src, src_control),
         }
     }
 }
 
 /// resolve and flush every keyframe request staged during the current turn
-pub(super) fn flush_pending_keyframe_requests(
+pub(super) fn flush_pending_kf_reqs(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     buffers: &mut PacketLoopBuffers,
 ) {
-    flush_pending_keyframe_requests_at(state, metrics, buffers, Instant::now());
+    flush_pending_kf_reqs_at(state, metrics, buffers, Instant::now());
 }
 
 /// resolves staged keyframe requests at a supplied time for tests and benchmarks
-pub(in crate::engine::media_transport::rtc) fn flush_pending_keyframe_requests_at(
+pub(in crate::engine::media_transport::rtc) fn flush_pending_kf_reqs_at(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     buffers: &mut PacketLoopBuffers,
     now: Instant,
 ) {
-    let pending_keyframe_requests = &mut buffers.pending_keyframe_requests;
-    let coalesced_requests = &mut buffers.coalesced_keyframe_requests;
-    coalesced_requests.clear();
+    let pending_reqs = &mut buffers.pending_keyframe_requests;
+    let coalesced_reqs = &mut buffers.coalesced_keyframe_requests;
+    coalesced_reqs.clear();
     let mut has_rid = false;
     let mut same_request: Option<SourceKeyframeRequest> = None;
-    for (consumer_session_key, request) in pending_keyframe_requests.drain(..) {
-        let Some(target) = state.active_consumer_keyframe_target_for_mid(
-            &consumer_session_key,
+    for (consumer_key, request) in pending_reqs.drain(..) {
+        let Some(target) = state.active_consumer_kf_target(
+            &consumer_key,
             request.consumer_mid,
             request.consumer_rid,
         ) else {
             continue;
         };
         let resolved_request = SourceKeyframeRequest {
-            source_transport_media_id: target.source_transport_media_id,
+            src_media: target.src_media,
             rid: target.rid,
             kind: request.kind,
         };
         has_rid |= resolved_request.rid.is_some();
         // most turns carry repeated feedback for one target
         // keep that path out of sorting
-        if coalesced_requests.is_empty() {
+        if coalesced_reqs.is_empty() {
             match &mut same_request {
                 Some(current)
-                    if current.source_transport_media_id
-                        == resolved_request.source_transport_media_id
+                    if current.src_media == resolved_request.src_media
                         && current.rid == resolved_request.rid =>
                 {
-                    current.kind = coalesce_keyframe_kind(current.kind, resolved_request.kind);
+                    current.kind = coalesce_kf_kind(current.kind, resolved_request.kind);
                 }
                 Some(_) => {
                     if let Some(current) = same_request.take() {
-                        coalesced_requests.push(current);
+                        coalesced_reqs.push(current);
                     }
-                    coalesced_requests.push(resolved_request);
+                    coalesced_reqs.push(resolved_request);
                 }
                 None => {
                     same_request = Some(resolved_request);
                 }
             }
         } else {
-            coalesced_requests.push(resolved_request);
+            coalesced_reqs.push(resolved_request);
         }
     }
-    if coalesced_requests.is_empty() {
+    if coalesced_reqs.is_empty() {
         if let Some(request) = same_request {
-            flush_coalesced_keyframe_request(state, metrics, request, now);
+            flush_coalesced_kf_req(state, metrics, request, now);
         }
         return;
     }
     if has_rid {
         // rid-scoped batches need the full source/RID key to avoid widening
         // simulcast feedback
-        coalesced_requests.sort_unstable_by(|left, right| {
-            left.source_transport_media_id
-                .cmp(&right.source_transport_media_id)
-                .then_with(|| compare_keyframe_rids(left.rid, right.rid))
+        coalesced_reqs.sort_unstable_by(|left, right| {
+            left.src_media
+                .cmp(&right.src_media)
+                .then_with(|| compare_kf_rids(left.rid, right.rid))
         });
     } else {
-        coalesced_requests.sort_unstable_by_key(|request| request.source_transport_media_id);
+        coalesced_reqs.sort_unstable_by_key(|request| request.src_media);
     }
     let mut current_request: Option<SourceKeyframeRequest> = None;
-    for coalesced_request in coalesced_requests.drain(..) {
+    for coalesced_request in coalesced_reqs.drain(..) {
         match &mut current_request {
             Some(current)
-                if current.source_transport_media_id
-                    == coalesced_request.source_transport_media_id
+                if current.src_media == coalesced_request.src_media
                     && current.rid == coalesced_request.rid =>
             {
-                current.kind = coalesce_keyframe_kind(current.kind, coalesced_request.kind);
+                current.kind = coalesce_kf_kind(current.kind, coalesced_request.kind);
             }
             Some(_) => {
                 if let Some(request) = current_request.take() {
-                    flush_coalesced_keyframe_request(state, metrics, request, now);
+                    flush_coalesced_kf_req(state, metrics, request, now);
                 }
                 current_request = Some(coalesced_request);
             }
@@ -173,12 +166,12 @@ pub(in crate::engine::media_transport::rtc) fn flush_pending_keyframe_requests_a
         }
     }
     if let Some(request) = current_request {
-        flush_coalesced_keyframe_request(state, metrics, request, now);
+        flush_coalesced_kf_req(state, metrics, request, now);
     }
 }
 
 /// drain retry deadlines after new feedback has had a chance to arm them
-pub(in crate::engine::media_transport::rtc) fn drain_due_keyframe_retries(
+pub(in crate::engine::media_transport::rtc) fn drain_due_kf_retries(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     buffers: &mut PacketLoopBuffers,
@@ -186,63 +179,55 @@ pub(in crate::engine::media_transport::rtc) fn drain_due_keyframe_retries(
 ) {
     state
         .routes
-        .drain_due_keyframe_requests(now, &mut buffers.keyframe_retries);
+        .drain_due_kf_reqs(now, &mut buffers.keyframe_retries);
     for retry in buffers.keyframe_retries.drain(..) {
-        flush_keyframe_retry(state, metrics, retry);
+        flush_kf_retry(state, metrics, retry);
     }
 }
 
-fn compare_keyframe_rids(left: Option<Rid>, right: Option<Rid>) -> Ordering {
+fn compare_kf_rids(left: Option<Rid>, right: Option<Rid>) -> Ordering {
     left.as_deref().cmp(&right.as_deref())
 }
 
-fn flush_coalesced_keyframe_request(
+fn flush_coalesced_kf_req(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     coalesced_request: SourceKeyframeRequest,
     now: Instant,
 ) {
-    let Some(route) = resolve_keyframe_route(state, coalesced_request.source_transport_media_id)
-    else {
+    let Some(route) = resolve_kf_route(state, coalesced_request.src_media) else {
         return;
     };
-    request_keyframe_for_target(
+    request_kf_for_target(
         state,
         metrics,
-        route.target(coalesced_request.source_transport_media_id),
+        route.target(coalesced_request.src_media),
         coalesced_request.rid,
         coalesced_request.kind,
         KeyframeRequestMode::Track(now),
     );
 }
 
-fn flush_keyframe_retry(
+fn flush_kf_retry(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     retry: SourceKeyframeRequest,
 ) {
-    let source_transport_media_id = retry.source_transport_media_id;
+    let src_media = retry.src_media;
     let rid = retry.rid;
     let kind = retry.kind;
-    if !state
-        .routes
-        .has_keyframe_demand(source_transport_media_id, rid)
-    {
-        state
-            .routes
-            .forget_keyframe_request(source_transport_media_id, rid);
+    if !state.routes.has_kf_demand(src_media, rid) {
+        state.routes.forget_kf_req(src_media, rid);
         return;
     }
-    let Some(route) = resolve_keyframe_route(state, source_transport_media_id) else {
-        state
-            .routes
-            .forget_keyframe_request(source_transport_media_id, rid);
+    let Some(route) = resolve_kf_route(state, src_media) else {
+        state.routes.forget_kf_req(src_media, rid);
         return;
     };
-    request_keyframe_for_target(
+    request_kf_for_target(
         state,
         metrics,
-        route.target(source_transport_media_id),
+        route.target(src_media),
         rid,
         kind,
         KeyframeRequestMode::Retry,
@@ -250,22 +235,21 @@ fn flush_keyframe_retry(
 }
 
 /// resolve a producer media id to its local or relayed control path
-fn resolve_keyframe_route(
+fn resolve_kf_route(
     state: &PacketLoopState,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
 ) -> Option<ResolvedKeyframeRoute> {
-    if let Some(RegisteredMediaHandle::Producer { session_key, .. }) =
-        state.media_handle(source_transport_media_id)
+    if let Some(RegisteredMediaHandle::Producer { session_key, .. }) = state.media_handle(src_media)
     {
         return Some(ResolvedKeyframeRoute::Local {
-            source_session_key: session_key.clone(),
+            src_key: session_key.clone(),
         });
     }
     state
         .routes
-        .remote_source(source_transport_media_id)
+        .remote_source(src_media)
         .map(|remote_source| ResolvedKeyframeRoute::Remote {
-            source: remote_source.source().clone(),
-            source_control: remote_source.source_control().clone(),
+            src: remote_source.source().clone(),
+            src_control: remote_source.source_control().clone(),
         })
 }

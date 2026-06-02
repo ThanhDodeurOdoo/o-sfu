@@ -62,7 +62,7 @@ pub(super) struct MediaRouteDestination {
     ///
     /// pending gates keep a route from opening to multiple publisher RIDs while
     /// a browser is still bringing up or refreshing the selected layer
-    pub(super) pending_packet_gate: Option<PacketLayerGate>,
+    pub(super) pending_gate: Option<PacketLayerGate>,
 }
 
 /// packet-loop fanout state for one producer media id
@@ -218,7 +218,7 @@ impl RemoteAddrDemux {
             .remote_addr_index
             .insert(source_addr, session_key.clone());
         if let Some(previous_session) = previous_session {
-            self.remove_remote_addr_from_session(&previous_session, source_addr);
+            self.remove_remote_addr(&previous_session, source_addr);
         }
         let session_addrs = self
             .remote_addrs_by_session
@@ -235,7 +235,7 @@ impl RemoteAddrDemux {
     /// this index is used to narrow STUN recovery when the USERNAME attribute
     /// names the local fragment
     /// the returned session is still only a candidate for `Rtc::accepts()`
-    pub(super) fn session_key_for_local_ice_ufrag(
+    pub(super) fn session_for_local_ufrag(
         &self,
         local_ice_ufrag: &str,
     ) -> Option<&TransportSessionKey> {
@@ -282,7 +282,7 @@ impl RemoteAddrDemux {
     /// callers must treat the slice as a bounded probe set and let
     /// `Rtc::accepts()` decide ownership
     #[must_use]
-    pub fn candidate_sessions_for_source_addr(
+    pub fn candidates_for_src_addr(
         &self,
         source_addr: SocketAddr,
     ) -> Option<&[TransportSessionKey]> {
@@ -297,14 +297,14 @@ impl RemoteAddrDemux {
     /// candidate set
     /// old hints are removed first so recovery cannot keep probing a session
     /// through candidates that no longer belong to it
-    pub fn replace_session_remote_candidate_addrs<I>(
+    pub fn replace_remote_candidates<I>(
         &mut self,
         session_key: &TransportSessionKey,
         candidate_addrs: I,
     ) where
         I: IntoIterator<Item = SocketAddr>,
     {
-        self.forget_user_remote_candidate_addrs(session_key);
+        self.forget_user_remote_candidates(session_key);
         let session_candidate_addrs = self
             .remote_candidate_addrs_by_session
             .entry(session_key.clone())
@@ -332,7 +332,7 @@ impl RemoteAddrDemux {
         let Some(session_key) = self.remote_addr_index.remove(&source_addr) else {
             return;
         };
-        self.remove_remote_addr_from_session(&session_key, source_addr);
+        self.remove_remote_addr(&session_key, source_addr);
     }
 
     /// removes every learned UDP source tuple owned by a session
@@ -361,7 +361,7 @@ impl RemoteAddrDemux {
     /// candidate address indexes can contain several sessions for one address
     /// cleanup removes only the target session from each fanout list and drops
     /// empty address entries afterward
-    pub(super) fn forget_user_remote_candidate_addrs(&mut self, session_key: &TransportSessionKey) {
+    pub(super) fn forget_user_remote_candidates(&mut self, session_key: &TransportSessionKey) {
         let Some(candidate_addrs) = self.remote_candidate_addrs_by_session.remove(session_key)
         else {
             return;
@@ -414,11 +414,7 @@ impl RemoteAddrDemux {
             && self.remote_candidate_addrs_by_session.is_empty()
     }
 
-    fn remove_remote_addr_from_session(
-        &mut self,
-        session_key: &TransportSessionKey,
-        source_addr: SocketAddr,
-    ) {
+    fn remove_remote_addr(&mut self, session_key: &TransportSessionKey, source_addr: SocketAddr) {
         let should_remove_session_entry = self
             .remote_addrs_by_session
             .get_mut(session_key)
@@ -477,7 +473,7 @@ mod tests {
         assert!(demux.remember_local_ice_ufrag("ufrag-a", &second_session));
 
         assert_eq!(
-            demux.session_key_for_local_ice_ufrag("ufrag-a"),
+            demux.session_for_local_ufrag("ufrag-a"),
             Some(&second_session)
         );
         assert_eq!(demux.local_ice_ufrag_for(&first_session), None);
@@ -485,36 +481,36 @@ mod tests {
     }
 
     #[test]
-    fn replace_session_remote_candidate_addrs_deduplicates_and_cleans_previous_entries() {
+    fn replace_remote_candidates_deduplicates_and_cleans_previous_entries() {
         let mut demux = RemoteAddrDemux::default();
         let first_session = session_key(9, 3);
         let second_session = session_key(9, 4);
         let first_candidate = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 46_001);
         let second_candidate = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 46_002);
 
-        demux.replace_session_remote_candidate_addrs(
+        demux.replace_remote_candidates(
             &first_session,
             [first_candidate, first_candidate, second_candidate],
         );
-        demux.replace_session_remote_candidate_addrs(&second_session, [second_candidate]);
+        demux.replace_remote_candidates(&second_session, [second_candidate]);
 
         assert_eq!(
             demux.remote_candidate_addrs_for(&first_session),
             Some([first_candidate, second_candidate].as_slice())
         );
         assert_eq!(
-            demux.candidate_sessions_for_source_addr(second_candidate),
+            demux.candidates_for_src_addr(second_candidate),
             Some([first_session.clone(), second_session.clone()].as_slice())
         );
 
-        demux.replace_session_remote_candidate_addrs(&first_session, [first_candidate]);
+        demux.replace_remote_candidates(&first_session, [first_candidate]);
 
         assert_eq!(
             demux.remote_candidate_addrs_for(&first_session),
             Some([first_candidate].as_slice())
         );
         assert_eq!(
-            demux.candidate_sessions_for_source_addr(second_candidate),
+            demux.candidates_for_src_addr(second_candidate),
             Some([second_session].as_slice())
         );
     }

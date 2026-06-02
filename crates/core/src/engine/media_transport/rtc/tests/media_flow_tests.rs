@@ -230,7 +230,7 @@ async fn rtc_recv_media_applies_configured_incoming_bitrate_cap() {
 async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
     let adapter = RtcWorker::default();
     let producer_session_key = transport_key(1, 19, UserId::Integer(19));
-    let consumer_session_key = transport_key(1, 20, UserId::Integer(20));
+    let consumer_key = transport_key(1, 20, UserId::Integer(20));
     let producer_rtp_parameters = sample_router_rtp_parameters("aud-up", 51_000);
     let consumer_rtp_parameters = sample_router_rtp_parameters("aud-down", 61_000);
 
@@ -242,7 +242,7 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
     );
     assert!(
         adapter
-            .create_initial_session_offer(&consumer_session_key)
+            .create_initial_session_offer(&consumer_key)
             .await
             .is_ok()
     );
@@ -261,7 +261,7 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
 
     let consumer_media_id = adapter
         .add_send_media(
-            &consumer_session_key,
+            &consumer_key,
             Str0mMediaKind::Audio,
             RtcSendMediaSource::local(&producer_session_key, source_media_id),
             &consumer_rtp_parameters,
@@ -283,13 +283,13 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
     assert!(route_entry.source_active);
     assert_eq!(route_entry.active_destination_count, 1);
     assert!(route_entry.destinations.iter().any(|dest| {
-        dest.dest_session == consumer_session_key
+        dest.dest_session == consumer_key
             && dest.dest_transport_media_id == consumer_media_id
             && dest.dest_mid == expected_dest_mid
     }));
     assert_eq!(
         adapter
-            .debug_session_stream_tx_ssrc(&consumer_session_key, expected_dest_mid)
+            .debug_session_stream_tx_ssrc(&consumer_key, expected_dest_mid)
             .await,
         Some(61_000)
     );
@@ -300,7 +300,7 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
 async fn rtc_consume_media_can_start_route_inactive() {
     let adapter = RtcWorker::default();
     let producer_session_key = transport_key(1, 221, UserId::Integer(221));
-    let consumer_session_key = transport_key(1, 222, UserId::Integer(222));
+    let consumer_key = transport_key(1, 222, UserId::Integer(222));
     let producer_rtp_parameters = sample_router_rtp_parameters("aud-up", 51_100);
     let consumer_rtp_parameters = sample_router_rtp_parameters("aud-down", 61_100);
 
@@ -312,7 +312,7 @@ async fn rtc_consume_media_can_start_route_inactive() {
     );
     assert!(
         adapter
-            .create_initial_session_offer(&consumer_session_key)
+            .create_initial_session_offer(&consumer_key)
             .await
             .is_ok()
     );
@@ -327,7 +327,7 @@ async fn rtc_consume_media_can_start_route_inactive() {
         .expect("producer media should be accepted");
     let consumer_media_id = adapter
         .add_send_media(
-            &consumer_session_key,
+            &consumer_key,
             Str0mMediaKind::Audio,
             RtcSendMediaSource::local(&producer_session_key, source_media_id),
             &consumer_rtp_parameters,
@@ -342,7 +342,7 @@ async fn rtc_consume_media_can_start_route_inactive() {
         .expect("source route should exist");
     assert_eq!(route_entry.active_destination_count, 0);
     assert!(route_entry.destinations.iter().any(|dest| {
-        dest.dest_session == consumer_session_key
+        dest.dest_session == consumer_key
             && dest.dest_transport_media_id == consumer_media_id
             && !dest.active
     }));
@@ -352,8 +352,8 @@ async fn rtc_consume_media_can_start_route_inactive() {
 async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate() {
     let adapter = RtcWorker::default();
     let producer_session_key = transport_key(1, 21, UserId::Integer(21));
-    let first_consumer_session_key = transport_key(1, 22, UserId::Integer(22));
-    let second_consumer_session_key = transport_key(1, 23, UserId::Integer(23));
+    let first_consumer_key = transport_key(1, 22, UserId::Integer(22));
+    let second_consumer_key = transport_key(1, 23, UserId::Integer(23));
     let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 71_000);
     let selected_consumer_rtp_parameters =
         sample_router_rtp_parameters_with_rid("vid-down-1", 72_000, "hi");
@@ -361,8 +361,8 @@ async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate
 
     for session_key in [
         &producer_session_key,
-        &first_consumer_session_key,
-        &second_consumer_session_key,
+        &first_consumer_key,
+        &second_consumer_key,
     ] {
         assert!(
             adapter
@@ -383,7 +383,7 @@ async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate
 
     let _first_consumer_media_id = adapter
         .add_send_media(
-            &first_consumer_session_key,
+            &first_consumer_key,
             Str0mMediaKind::Video,
             RtcSendMediaSource::local(&producer_session_key, source_media_id),
             &selected_consumer_rtp_parameters,
@@ -400,7 +400,7 @@ async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate
 
     let _second_consumer_media_id = adapter
         .add_send_media(
-            &second_consumer_session_key,
+            &second_consumer_key,
             Str0mMediaKind::Video,
             RtcSendMediaSource::local(&producer_session_key, source_media_id),
             &open_consumer_rtp_parameters,
@@ -420,11 +420,11 @@ async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate
 async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggregate_gate() {
     let adapter = RtcWorker::default();
     let producer_session_key = transport_key(1, 123, UserId::Integer(123));
-    let consumer_session_key = transport_key(1, 124, UserId::Integer(124));
+    let consumer_key = transport_key(1, 124, UserId::Integer(124));
     let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 81_000);
     let consumer_rtp_parameters = sample_router_rtp_parameters_with_rid("vid-down", 82_000, "hi");
 
-    for session_key in [&producer_session_key, &consumer_session_key] {
+    for session_key in [&producer_session_key, &consumer_key] {
         assert!(
             adapter
                 .create_initial_session_offer(session_key)
@@ -444,7 +444,7 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
 
     let consumer_media_id = adapter
         .add_send_media(
-            &consumer_session_key,
+            &consumer_key,
             Str0mMediaKind::Video,
             RtcSendMediaSource::local(&producer_session_key, source_media_id),
             &consumer_rtp_parameters,
@@ -460,14 +460,14 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
     assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
 
     let route = transport_consumer_route(
-        &consumer_session_key,
+        &consumer_key,
         consumer_media_id,
         &producer_session_key,
         source_media_id,
     );
     assert!(
         adapter
-            .set_consumer_packet_gate(&route, SourcePacketGate::Rid("lo".into()))
+            .set_consumer_pkt_gate(&route, SourcePacketGate::Rid("lo".into()))
             .await
             .is_ok()
     );
@@ -480,7 +480,7 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
 
     assert!(
         adapter
-            .set_consumer_packet_gate(&route, SourcePacketGate::Open)
+            .set_consumer_pkt_gate(&route, SourcePacketGate::Open)
             .await
             .is_ok()
     );
@@ -497,11 +497,11 @@ async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
     let adapter = RtcWorker::default();
     let producer_session_key = transport_key(1, 125, UserId::Integer(125));
     let stale_producer_session_key = transport_key(1, 126, UserId::Integer(125));
-    let consumer_session_key = transport_key(1, 127, UserId::Integer(127));
+    let consumer_key = transport_key(1, 127, UserId::Integer(127));
     let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 83_000);
     let consumer_rtp_parameters = sample_router_rtp_parameters("vid-down", 84_000);
 
-    for session_key in [&producer_session_key, &consumer_session_key] {
+    for session_key in [&producer_session_key, &consumer_key] {
         assert!(
             adapter
                 .create_initial_session_offer(session_key)
@@ -521,7 +521,7 @@ async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
 
     let consumer_media_id = adapter
         .add_send_media(
-            &consumer_session_key,
+            &consumer_key,
             Str0mMediaKind::Video,
             RtcSendMediaSource::local(&producer_session_key, source_media_id),
             &consumer_rtp_parameters,
@@ -532,9 +532,9 @@ async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
 
     assert!(
         adapter
-            .set_consumer_packet_gate(
+            .set_consumer_pkt_gate(
                 &transport_consumer_route(
-                    &consumer_session_key,
+                    &consumer_key,
                     consumer_media_id,
                     &stale_producer_session_key,
                     source_media_id,
@@ -550,7 +550,7 @@ async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
 async fn rtc_route_activity_updates_producer_and_consumer_flags() {
     let adapter = RtcWorker::default();
     let producer_session_key = transport_key(1, 23, UserId::Integer(23));
-    let consumer_session_key = transport_key(1, 24, UserId::Integer(24));
+    let consumer_key = transport_key(1, 24, UserId::Integer(24));
     let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 91_000);
     let consumer_rtp_parameters = sample_router_rtp_parameters("vid-down", 92_000);
 
@@ -562,7 +562,7 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
     );
     assert!(
         adapter
-            .create_initial_session_offer(&consumer_session_key)
+            .create_initial_session_offer(&consumer_key)
             .await
             .is_ok()
     );
@@ -581,7 +581,7 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
 
     let consumer_media_id = adapter
         .add_send_media(
-            &consumer_session_key,
+            &consumer_key,
             Str0mMediaKind::Video,
             RtcSendMediaSource::local(&producer_session_key, source_media_id),
             &consumer_rtp_parameters,
@@ -599,7 +599,7 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
         adapter
             .set_consumer_active(
                 &transport_consumer_route(
-                    &consumer_session_key,
+                    &consumer_key,
                     consumer_media_id,
                     &producer_session_key,
                     source_media_id,
@@ -619,7 +619,7 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
     assert!(!route_entry.source_active);
     assert_eq!(route_entry.active_destination_count, 0);
     assert!(route_entry.destinations.iter().any(|destination| {
-        destination.dest_session == consumer_session_key
+        destination.dest_session == consumer_key
             && destination.dest_transport_media_id == consumer_media_id
             && destination.dest_mid == Mid::from("vid-down")
             && !destination.active
@@ -834,14 +834,14 @@ async fn rtc_relay_route_api_registers_and_removes_target_mailboxes() {
             .await
             .is_ok()
     );
-    let source_transport_media_id = source_adapter
+    let src_media = source_adapter
         .add_recv_media(&source_session, Str0mMediaKind::Audio, &rtp_parameters)
         .await;
-    assert!(source_transport_media_id.is_ok());
-    let Some(source_transport_media_id) = source_transport_media_id.ok() else {
+    assert!(src_media.is_ok());
+    let Some(src_media) = src_media.ok() else {
         return;
     };
-    let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
+    let source = TransportSourceKey::new(source_session.clone(), src_media);
 
     assert!(
         source_adapter
@@ -849,15 +849,10 @@ async fn rtc_relay_route_api_registers_and_removes_target_mailboxes() {
             .await
             .is_ok()
     );
+    assert_eq!(source_adapter.debug_relay_target_count(src_media).await, 1);
     assert_eq!(
         source_adapter
-            .debug_relay_target_count(source_transport_media_id)
-            .await,
-        1
-    );
-    assert_eq!(
-        source_adapter
-            .debug_active_relay_target_count(source_transport_media_id)
+            .debug_active_relay_target_count(src_media)
             .await,
         0
     );
@@ -870,21 +865,16 @@ async fn rtc_relay_route_api_registers_and_removes_target_mailboxes() {
     );
     assert_eq!(
         source_adapter
-            .debug_active_relay_target_count(source_transport_media_id)
+            .debug_active_relay_target_count(src_media)
             .await,
         1
     );
 
     assert!(
         source_adapter
-            .deactivate_relay_route(source_transport_media_id, &target_adapter)
+            .deactivate_relay_route(src_media, &target_adapter)
             .await
             .is_ok()
     );
-    assert_eq!(
-        source_adapter
-            .debug_relay_target_count(source_transport_media_id)
-            .await,
-        0
-    );
+    assert_eq!(source_adapter.debug_relay_target_count(src_media).await, 0);
 }

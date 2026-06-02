@@ -37,9 +37,9 @@ impl RelayPacketMailbox {
         &self,
         state: &PacketLoopState,
         packet: &ForwardedPacket,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
     ) -> Option<RelayEnqueueReport> {
-        let outcome = forward_packet_to_target(state, &self.tx, packet, source_transport_media_id)?;
+        let outcome = forward_packet_to_target(state, &self.tx, packet, src_media)?;
         Some(RelayEnqueueReport {
             outcome,
             mailbox_depth: self.backlog_depth(),
@@ -61,9 +61,9 @@ fn forward_packet_to_target(
     state: &PacketLoopState,
     tx: &mpsc::Sender<ForwardedPacket>,
     packet: &ForwardedPacket,
-    source_transport_media_id: TransportMediaId,
+    src_media: TransportMediaId,
 ) -> Option<RelayEnqueueOutcome> {
-    let packet = packet.share_for_relay(state, source_transport_media_id)?;
+    let packet = packet.share_for_relay(state, src_media)?;
     Some(match tx.try_send(packet) {
         Ok(()) => RelayEnqueueOutcome::Enqueued,
         Err(mpsc::error::TrySendError::Full(_packet)) => RelayEnqueueOutcome::Overloaded,

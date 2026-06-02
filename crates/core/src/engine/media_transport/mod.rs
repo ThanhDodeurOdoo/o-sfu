@@ -460,7 +460,7 @@ impl MediaTransport {
     ) -> Result<(), TransportAdapterError> {
         async {
             self.require_consumer_worker_for_route(route)?
-                .set_consumer_packet_gate(route, packet_gate.clone())
+                .set_consumer_pkt_gate(route, packet_gate.clone())
                 .await
         }
         .await
@@ -480,7 +480,7 @@ impl MediaTransport {
         &self,
         updates: &[ConsumerPacketGateUpdate],
     ) -> Vec<Result<(), TransportAdapterError>> {
-        let results = self.execute_consumer_packet_gate_batch(updates).await;
+        let results = self.apply_consumer_pkt_gate_batch(updates).await;
         for (update, result) in updates.iter().zip(results.iter()) {
             if let Err(error) = result {
                 warn!(
@@ -658,8 +658,7 @@ impl MediaTransport {
         &self,
         now: Instant,
     ) -> BTreeSet<RoomInstanceId> {
-        self.expired_active_speaker_room_instance_ids_from_workers(now)
-            .await
+        self.expired_active_speaker_rooms_from_workers(now).await
     }
 
     /// Returns the latest known transport health for one session.

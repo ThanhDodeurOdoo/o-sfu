@@ -28,14 +28,14 @@ impl RoomRouterState {
     }
 
     pub fn remove_session_mapping_for_test(&mut self, user_id: &UserId) {
-        self.router_user_ids_by_user_id.remove(user_id);
+        self.sessions_by_user.remove(user_id);
     }
 
     pub fn remove_transport_mapping_for_test(&mut self, user_id: &UserId) {
-        self.transport_ids_by_user_id.remove(user_id);
+        self.transports_by_user.remove(user_id);
     }
 
     pub fn mapped_session_count_for_test(&self) -> usize {
-        self.router_user_ids_by_user_id.len()
+        self.sessions_by_user.len()
     }
 }

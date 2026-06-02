@@ -146,7 +146,7 @@ pub(super) fn worker_apply_session_answer(
     session_key: &TransportSessionKey,
     answer_sdp: &str,
 ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-    let producer_media_snapshot = state.producer_media_snapshot_for_session(session_key);
+    let producer_media_snapshot = state.producer_media_snapshot(session_key);
     let producer_mids = producer_media_snapshot
         .iter()
         .map(|(_transport_media_id, mid)| *mid)
@@ -192,10 +192,7 @@ pub(super) fn worker_apply_session_answer(
     state.mark_session_dirty(session_key);
     state
         .remote_addr_demux
-        .replace_session_remote_candidate_addrs(
-            session_key,
-            remote_candidate_addrs.iter().copied(),
-        );
+        .replace_remote_candidates(session_key, remote_candidate_addrs.iter().copied());
     Ok(AppliedSessionAnswer::from_negotiated_producer_details(
         producer_media_snapshot
             .into_iter()

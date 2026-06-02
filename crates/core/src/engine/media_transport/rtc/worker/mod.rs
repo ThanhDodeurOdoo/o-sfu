@@ -49,10 +49,10 @@ use std::{
 };
 
 #[cfg(feature = "internal-benchmarks")]
-pub(in crate::engine::media_transport::rtc) use handlers::worker_set_consumer_packet_gates_for_benchmark;
+pub(in crate::engine::media_transport::rtc) use handlers::worker_set_consumer_pkt_gates_for_bench;
 pub(super) use handlers::{
-    KeyframeRequestMode, KeyframeRequestTarget, WorkerCommandContext, apply_source_rid_readiness,
-    drain_due_rid_keyframe_refreshes, handle_worker_command, request_keyframe_for_target,
+    KeyframeRequestMode, KeyframeRequestTarget, WorkerCommandContext, apply_src_rid_ready,
+    drain_due_rid_kf_refreshes, handle_worker_command, request_kf_for_target,
 };
 use lifecycle::WorkerHandleSlot;
 use o_sfu_router::MediaStream as RouterRtpParameters;
@@ -94,12 +94,9 @@ pub(in crate::engine) struct RtcSendMediaSource {
 
 impl RtcSendMediaSource {
     #[cfg(test)]
-    pub fn local(
-        source_session_key: &TransportSessionKey,
-        source_transport_media_id: TransportMediaId,
-    ) -> Self {
+    pub fn local(src_key: &TransportSessionKey, src_media: TransportMediaId) -> Self {
         Self {
-            source: TransportSourceKey::new(source_session_key.clone(), source_transport_media_id),
+            source: TransportSourceKey::new(src_key.clone(), src_media),
             remote_source_control: None,
         }
     }
@@ -432,14 +429,14 @@ impl RtcWorker {
     /// consumer setup violates worker SDP or route ownership rules
     pub async fn add_send_media(
         &self,
-        consumer_session_key: &TransportSessionKey,
+        consumer_key: &TransportSessionKey,
         media_kind: MediaKind,
         source: RtcSendMediaSource,
         consumer_rtp_parameters: &RouterRtpParameters,
         active: bool,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.request_worker(|response| RtcWorkerCommand::AddSendMedia {
-            consumer_session_key: consumer_session_key.clone(),
+            consumer_key: consumer_key.clone(),
             media_kind,
             source: source.source,
             remote_source_control: source.remote_source_control,
@@ -505,7 +502,7 @@ impl RtcWorker {
     ///
     /// returns [`TransportAdapterError`] when the worker cannot receive the
     /// command or the route references stale source or consumer media
-    pub async fn set_consumer_packet_gate(
+    pub async fn set_consumer_pkt_gate(
         &self,
         route: &TransportConsumerRoute,
         packet_gate: SourcePacketGate,
@@ -562,11 +559,11 @@ impl RtcWorker {
     /// the command or the relay target no longer matches worker-local state
     pub async fn deactivate_relay_route(
         &self,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
         target: &Self,
     ) -> Result<(), TransportAdapterError> {
         self.request_media_control(RouteControlRequest::RemoveRelayTarget {
-            source_transport_media_id,
+            src_media,
             target_id: target.relay_target_id,
         })
         .await
@@ -603,7 +600,7 @@ impl RtcWorker {
     ///
     /// returns [`TransportAdapterError`] when the worker cannot receive or
     /// answer the batch command
-    pub async fn set_consumer_packet_gates<'a>(
+    pub async fn set_consumer_pkt_gates<'a>(
         &self,
         source: &TransportSourceKey,
         updates: impl IntoIterator<Item = &'a ConsumerPacketGateUpdate>,

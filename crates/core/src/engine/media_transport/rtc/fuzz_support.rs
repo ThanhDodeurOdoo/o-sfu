@@ -6,7 +6,7 @@ use std::{
 
 use super::{
     bootstrap,
-    packet_loop::{PacketRouteDatagram, route_packet_to_matching_session_at},
+    packet_loop::{PacketRouteDatagram, route_pkt_to_session_at},
     routing_miss::DemuxRecoveryState,
     state::{PacketLoopState, RtcSnapshotState},
 };
@@ -115,7 +115,7 @@ impl IngressDemuxFuzzFixture {
 
     fn route_once(&mut self, packet: &[u8]) {
         let packet = packet.get(..MAX_PACKET_LEN).unwrap_or(packet);
-        route_packet_to_matching_session_at(
+        route_pkt_to_session_at(
             &mut self.state,
             &self.snapshot_state,
             &mut self.demux,

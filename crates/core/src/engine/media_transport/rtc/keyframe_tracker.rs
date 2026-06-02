@@ -24,14 +24,14 @@ pub(in crate::engine::media_transport::rtc) enum KeyframeRequestDecision {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::engine::media_transport::rtc) struct SourceKeyframeRequest {
-    pub(in crate::engine::media_transport::rtc) source_transport_media_id: TransportMediaId,
+    pub(in crate::engine::media_transport::rtc) src_media: TransportMediaId,
     pub(in crate::engine::media_transport::rtc) rid: Option<Rid>,
     pub(in crate::engine::media_transport::rtc) kind: KeyframeRequestKind,
 }
 
 impl SourceKeyframeRequest {
-    fn targets(self, source_transport_media_id: TransportMediaId, rid: Option<Rid>) -> bool {
-        self.source_transport_media_id == source_transport_media_id && self.rid == rid
+    fn targets(self, src_media: TransportMediaId, rid: Option<Rid>) -> bool {
+        self.src_media == src_media && self.rid == rid
     }
 }
 
@@ -48,7 +48,7 @@ struct KeyframeRequestDeadline {
     id: u64,
 }
 
-pub(in crate::engine::media_transport::rtc) fn coalesce_keyframe_kind(
+pub(in crate::engine::media_transport::rtc) fn coalesce_kf_kind(
     current: KeyframeRequestKind,
     incoming: KeyframeRequestKind,
 ) -> KeyframeRequestKind {
@@ -61,7 +61,7 @@ pub(in crate::engine::media_transport::rtc) fn coalesce_keyframe_kind(
 impl KeyframeRequestTracker {
     pub fn track(
         &mut self,
-        source_transport_media_id: TransportMediaId,
+        src_media: TransportMediaId,
         rid: Option<Rid>,
         kind: KeyframeRequestKind,
         now: Instant,
@@ -69,10 +69,10 @@ impl KeyframeRequestTracker {
         let Some(request) = self
             .pending
             .iter_mut()
-            .find(|request| request.request.targets(source_transport_media_id, rid))
+            .find(|request| request.request.targets(src_media, rid))
         else {
             let request = SourceKeyframeRequest {
-                source_transport_media_id,
+                src_media,
                 rid,
                 kind,
             };
@@ -87,35 +87,30 @@ impl KeyframeRequestTracker {
             self.pending.push(pending);
             return KeyframeRequestDecision::Forward;
         };
-        request.request.kind = coalesce_keyframe_kind(request.request.kind, kind);
+        request.request.kind = coalesce_kf_kind(request.request.kind, kind);
         request.retry_on_timeout = true;
         KeyframeRequestDecision::Absorb
     }
 
-    pub fn forget(&mut self, source_transport_media_id: TransportMediaId, rid: Option<Rid>) {
+    pub fn forget(&mut self, src_media: TransportMediaId, rid: Option<Rid>) {
         if let Some(index) = self
             .pending
             .iter()
-            .position(|request| request.request.targets(source_transport_media_id, rid))
+            .position(|request| request.request.targets(src_media, rid))
         {
             self.pending.swap_remove(index);
         }
     }
 
-    pub fn forget_source(&mut self, source_transport_media_id: TransportMediaId) {
-        self.pending.retain(|request| {
-            request.request.source_transport_media_id != source_transport_media_id
-        });
+    pub fn forget_source(&mut self, src_media: TransportMediaId) {
+        self.pending
+            .retain(|request| request.request.src_media != src_media);
     }
 
-    pub fn observe_refresh(
-        &mut self,
-        source_transport_media_id: TransportMediaId,
-        rid: Option<Rid>,
-    ) -> usize {
+    pub fn observe_refresh(&mut self, src_media: TransportMediaId, rid: Option<Rid>) -> usize {
         let before = self.pending.len();
         self.pending.retain(|request| {
-            request.request.source_transport_media_id != source_transport_media_id
+            request.request.src_media != src_media
                 || (request.request.rid.is_some() && request.request.rid != rid)
         });
         before - self.pending.len()

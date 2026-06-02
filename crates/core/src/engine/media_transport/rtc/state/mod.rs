@@ -414,7 +414,7 @@ impl RtcSnapshotState {
         self.remote_addr_demux
             .forget_user_local_ice_ufrag(session_key);
         self.remote_addr_demux
-            .forget_user_remote_candidate_addrs(session_key);
+            .forget_user_remote_candidates(session_key);
         self.receiver_bandwidth_by_session.remove(session_key);
         self.transport_quality_by_session.remove(session_key);
         self.transport_health_by_session.remove(session_key)

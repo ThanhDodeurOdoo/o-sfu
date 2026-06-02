@@ -212,7 +212,7 @@ impl MediaTransport {
     /// failures with planned policy updates. Cross-room updates are rejected
     /// before reaching worker state because a consumer route must never target
     /// media owned by another room instance.
-    pub(super) async fn execute_consumer_packet_gate_batch(
+    pub(super) async fn apply_consumer_pkt_gate_batch(
         &self,
         updates: &[ConsumerPacketGateUpdate],
     ) -> Vec<Result<(), TransportAdapterError>> {
@@ -242,7 +242,7 @@ impl MediaTransport {
             };
             let update_count = batch.len();
             let batch_results = worker
-                .set_consumer_packet_gates(
+                .set_consumer_pkt_gates(
                     &key.source,
                     batch.iter().filter_map(|index| updates.get(*index)),
                 )
@@ -349,13 +349,13 @@ impl MediaTransport {
     ///
     /// This bridges packet-loop observations back into room policy. The
     /// room remains authoritative for layout and subscription decisions.
-    pub(super) async fn expired_active_speaker_room_instance_ids_from_workers(
+    pub(super) async fn expired_active_speaker_rooms_from_workers(
         &self,
         now: Instant,
     ) -> BTreeSet<RoomInstanceId> {
         let mut room_instance_ids = BTreeSet::new();
         for worker in self.workers.iter() {
-            room_instance_ids.extend(worker.expired_active_speaker_room_instance_ids(now).await);
+            room_instance_ids.extend(worker.expired_active_speaker_rooms(now).await);
         }
         room_instance_ids
     }

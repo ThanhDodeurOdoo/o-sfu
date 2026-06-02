@@ -5,7 +5,7 @@ use std::time::Instant;
 use tokio::sync::oneshot;
 
 use super::{
-    super::keyframe::{worker_request_consumer_keyframe, worker_request_remote_keyframe},
+    super::keyframe::{worker_request_consumer_kf, worker_request_remote_kf},
     remote_source, routes,
 };
 use crate::engine::{
@@ -34,10 +34,10 @@ pub fn apply_route_control_request(
             routes::worker_set_consumer_active(state, &route, active)
         }
         RouteControlRequest::SetConsumerPacketGate { route, packet_gate } => {
-            routes::worker_set_consumer_packet_gate(state, &route, packet_gate, now)
+            routes::worker_set_consumer_pkt_gate(state, &route, packet_gate, now)
         }
         RouteControlRequest::RequestConsumerKeyframe { route } => {
-            worker_request_consumer_keyframe(state, metrics, &route)
+            worker_request_consumer_kf(state, metrics, &route)
         }
         RouteControlRequest::AddRelayTarget {
             source,
@@ -45,12 +45,10 @@ pub fn apply_route_control_request(
             target,
         } => remote_source::worker_add_relay_target(state, &source, target_id, target),
         RouteControlRequest::RemoveRelayTarget {
-            source_transport_media_id,
+            src_media,
             target_id,
         } => {
-            state
-                .routes
-                .remove_relay_target(source_transport_media_id, target_id);
+            state.routes.remove_relay_target(src_media, target_id);
             Ok(())
         }
         RouteControlRequest::SetRelayTargetActive {
@@ -64,7 +62,7 @@ pub fn apply_route_control_request(
             rid,
             kind,
         } => {
-            worker_request_remote_keyframe(state, metrics, &source, target_id, rid, kind);
+            worker_request_remote_kf(state, metrics, &source, target_id, rid, kind);
             Ok(())
         }
         RouteControlRequest::SetRemoteSourcePacketGate {
@@ -72,7 +70,7 @@ pub fn apply_route_control_request(
             target_id,
             packet_gate,
         } => {
-            remote_source::set_remote_source_packet_gate(state, &source, target_id, packet_gate);
+            remote_source::set_remote_src_pkt_gate(state, &source, target_id, packet_gate);
             Ok(())
         }
     };
@@ -81,14 +79,14 @@ pub fn apply_route_control_request(
     }
 }
 
-pub fn respond_set_consumer_packet_gates(
+pub fn respond_set_consumer_pkt_gates(
     state: &mut PacketLoopState,
     source: &TransportSourceKey,
     updates: Vec<ConsumerPacketGateCommand>,
     now: Instant,
     response: oneshot::Sender<TransportResult<Vec<TransportResult<()>>>>,
 ) {
-    let _ = response.send(Ok(routes::worker_set_consumer_packet_gates(
+    let _ = response.send(Ok(routes::worker_set_consumer_pkt_gates(
         state, source, updates, now,
     )));
 }
