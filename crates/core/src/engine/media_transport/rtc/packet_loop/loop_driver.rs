@@ -201,7 +201,7 @@ impl PacketLoopTurn {
             MAX_RELAY_PACKETS_PER_ITERATION,
             &config.rtc_metrics,
         );
-        state.flush_pending_remote_source_packet_gates();
+        state.routes.flush_remote_packet_gates();
         drain_due_rid_keyframe_refreshes(state, &*config.rtc_metrics, now);
         flush_pending_keyframe_requests(state, &*config.rtc_metrics, &mut self.buffers);
         // packet observations must run before fanout planning because layer gates
@@ -646,8 +646,8 @@ fn next_timeout_deadline_at(state: &mut PacketLoopState, now: Instant) -> Option
     }
     [
         state.next_timeout_deadline(),
-        state.next_rid_keyframe_refresh_deadline(),
-        state.keyframe_requests.next_deadline(),
+        state.routes.next_rid_refresh_deadline(),
+        state.routes.next_keyframe_deadline(),
     ]
     .into_iter()
     .flatten()

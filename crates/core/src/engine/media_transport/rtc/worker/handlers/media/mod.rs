@@ -12,8 +12,7 @@ use control::observe_source_rid_readiness;
 #[cfg(feature = "internal-benchmarks")]
 pub(in crate::engine::media_transport::rtc) use control::worker_set_consumer_packet_gates_for_benchmark;
 pub(super) use control::{
-    apply_route_control_request, refresh_source_packet_gate, remove_source_route,
-    respond_set_consumer_packet_gates,
+    apply_route_control_request, remove_source_route, respond_set_consumer_packet_gates,
 };
 pub(in crate::engine::media_transport::rtc) use control::{
     apply_source_rid_readiness, drain_due_rid_keyframe_refreshes,

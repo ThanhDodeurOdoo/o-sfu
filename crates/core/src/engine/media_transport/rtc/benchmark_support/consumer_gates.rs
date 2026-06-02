@@ -81,12 +81,12 @@ fn gate_state_evidence(
     source_transport_media_id: TransportMediaId,
 ) -> usize {
     let pending_gate = state
-        .media_route_index
-        .get(&source_transport_media_id)
+        .routes
+        .local_route(source_transport_media_id)
         .and_then(|entry| entry.destinations.first())
         .is_some_and(|destination| destination.pending_packet_gate.is_some());
     let effective_gate = state
-        .route_control
+        .routes
         .effective_packet_gate(source_transport_media_id)
         .is_some();
     usize::from(pending_gate) + usize::from(effective_gate)

@@ -48,7 +48,9 @@ pub fn apply_route_control_request(
             source_transport_media_id,
             target_id,
         } => {
-            remote_source::remove_relay_target(state, source_transport_media_id, target_id);
+            state
+                .routes
+                .remove_relay_target(source_transport_media_id, target_id);
             Ok(())
         }
         RouteControlRequest::SetRelayTargetActive {

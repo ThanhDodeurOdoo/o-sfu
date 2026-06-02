@@ -119,8 +119,8 @@ pub(super) fn assert_consumer_packet_gate(
 ) {
     assert!(
         state
-            .media_route_index
-            .get(&source_transport_media_id)
+            .routes
+            .local_route(source_transport_media_id)
             .is_some_and(
                 |route_entry| route_entry.destinations.iter().any(|destination| {
                     destination.dest_session == *consumer_session
@@ -139,7 +139,6 @@ pub(super) fn install_video_route_with_gate(
     packet_gate: PacketLayerGate,
 ) -> TransportMediaId {
     let mut scenario = MediaWorkerScenario::new(state);
-    scenario.existing_source(source_transport_media_id);
     scenario.destination_with_gate(
         source_transport_media_id,
         consumer_session.clone(),
@@ -198,6 +197,7 @@ pub(super) fn register_remote_source_with_metrics(
     let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
     assert!(
         state
+            .routes
             .register_remote_source(
                 &source,
                 RemoteSourceControl::with_metrics(control_tx, target_id, rtc_metrics),
@@ -232,6 +232,7 @@ pub(super) fn register_saturated_remote_source(
     );
     assert!(
         state
+            .routes
             .register_remote_source(
                 &source,
                 RemoteSourceControl::with_metrics(control_tx, target_id, rtc_metrics),
@@ -248,21 +249,32 @@ pub(super) fn assert_remote_keyframe_command(
     target_id: RelayTargetId,
     rid: Option<Rid>,
 ) {
-    assert!(matches!(
-        control_rx.try_recv().ok(),
-        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
-            request: RouteControlRequest::RequestRemoteKeyframe {
-                source,
-                target_id: forwarded_target_id,
-                rid: forwarded_rid,
-                kind: KeyframeRequestKind::Pli,
-            },
-            response: None,
-        })) if source.session_key() == source_session
-            && source.transport_media_id() == source_transport_media_id
-            && forwarded_target_id == target_id
-            && forwarded_rid == rid
-    ));
+    loop {
+        match control_rx.try_recv().ok() {
+            Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+                request: RouteControlRequest::SetRemoteSourcePacketGate { .. },
+                response: None,
+            })) => {}
+            command => {
+                assert!(matches!(
+                    command,
+                    Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+                        request: RouteControlRequest::RequestRemoteKeyframe {
+                            source,
+                            target_id: forwarded_target_id,
+                            rid: forwarded_rid,
+                            kind: KeyframeRequestKind::Pli,
+                        },
+                        response: None,
+                    })) if source.session_key() == source_session
+                        && source.transport_media_id() == source_transport_media_id
+                        && forwarded_target_id == target_id
+                        && forwarded_rid == rid
+                ));
+                return;
+            }
+        }
+    }
 }
 
 pub(super) fn assert_remote_packet_gate_command(
@@ -339,7 +351,6 @@ impl LocalVideoRoute {
         };
         let consumer_transport_media_id = if pending_gate {
             let mut scenario = MediaWorkerScenario::new(&mut state);
-            scenario.existing_source(source_transport_media_id);
             scenario.destination_with_pending_gate(
                 source_transport_media_id,
                 consumer_session.clone(),
@@ -489,7 +500,6 @@ pub(super) fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
         fallback_rid,
     );
     let mut scenario = MediaWorkerScenario::new(&mut state);
-    scenario.existing_source(source_transport_media_id);
     let consumer_transport_media_id = scenario.destination(
         source_transport_media_id,
         consumer_session.clone(),

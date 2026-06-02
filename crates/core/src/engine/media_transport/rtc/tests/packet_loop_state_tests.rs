@@ -194,15 +194,20 @@ fn packet_loop_state_snapshots_source_and_rid_packet_activity() {
     let rid = Rid::from("hi");
     let now = Instant::now();
 
-    state.observe_producer_packet(transport_media_id, Some(rid), false, now);
-    state.observe_producer_packet(
+    state
+        .routes
+        .observe_producer_packet(transport_media_id, Some(rid), false, now);
+    state.routes.observe_producer_packet(
         transport_media_id,
         Some(rid),
         true,
         now + Duration::from_millis(40),
     );
-    let activity =
-        state.source_activity_snapshot(&[transport_media_id], now + Duration::from_millis(100));
+    let activity = state.routes.source_activity_snapshot(
+        &[transport_media_id],
+        now + Duration::from_millis(100),
+        &state.incoming_bitrate_counters,
+    );
 
     let source = activity
         .per_media
@@ -232,7 +237,9 @@ fn packet_loop_state_snapshots_ridless_packet_activity_from_ingress_counter() {
     let counter = bitrate_registry.register_incoming_media(&session_key, transport_media_id, now);
     state.register_incoming_bitrate_counter(transport_media_id, counter);
 
-    state.observe_producer_packet(transport_media_id, None, true, now);
+    state
+        .routes
+        .observe_producer_packet(transport_media_id, None, true, now);
     assert_eq!(
         state.record_incoming_bitrate(transport_media_id, now, 32),
         Some(true)
@@ -241,8 +248,11 @@ fn packet_loop_state_snapshots_ridless_packet_activity_from_ingress_counter() {
         state.record_incoming_bitrate(transport_media_id, now + Duration::from_millis(40), 32,),
         Some(false)
     );
-    let activity =
-        state.source_activity_snapshot(&[transport_media_id], now + Duration::from_millis(100));
+    let activity = state.routes.source_activity_snapshot(
+        &[transport_media_id],
+        now + Duration::from_millis(100),
+        &state.incoming_bitrate_counters,
+    );
 
     let source = activity
         .per_media

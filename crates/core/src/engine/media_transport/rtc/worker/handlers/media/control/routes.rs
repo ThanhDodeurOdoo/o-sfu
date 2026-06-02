@@ -1,123 +1,37 @@
-//! worker-local consumer-route control for media fanout
-//!
-//! this file is the mutation boundary for `media_route_index`
-//! lifecycle code creates and removes browser media handles, command adapters
-//! deliver room effects and selected-rid readiness turns packet observations
-//! into effective gates
-//! this module keeps those paths on the same ownership checks before the packet
-//! loop can observe a route
-//!
-//! route ownership has two valid shapes:
-//!
-//! ```text
-//! same media worker
-//!   source id -> RegisteredMediaHandle::Producer
-//!
-//! different media worker
-//!   source id -> RemoteSourceRegistration
-//! ```
-//!
-//! only consumer-route registration may create a remote-source entry
-//! later active state, packet-gate and keyframe paths must find the existing
-//! registration so stale room effects cannot recreate a removed remote source
-//!
-//! destination gates live on the route entry
-//! [`refresh_source_packet_gate`] projects active destination gates into
-//! source-local route control and mirrors the remote-source aggregate back to
-//! the worker that owns the producer when the source is remote
-
 use std::time::Instant;
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{MediaKind, Mid, Pt};
 
-use super::{super::types::RouteSourceKind, remote_source, selected_rid};
+use super::{super::types::RouteSourceKind, selected_rid};
 use crate::engine::media_transport::{
     TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportResult,
     TransportSessionKey, TransportSourceKey,
     rtc::{
         commands::{ConsumerPacketGateCommand, RemoteSourceControl},
-        demux::{MediaRouteDestination, MediaRouteEntry},
+        demux::MediaRouteDestination,
         local_send_rewrite::forget_transport_media_stream,
         media_registry::RegisteredMediaHandle,
-        route_control::{PacketLayerGate, aggregate_packet_gates},
+        route_control::PacketLayerGate,
         simulcast,
         slots::ConsumerStreamHandle,
         state::PacketLoopState,
     },
 };
 
-/// access mode for source validation
-///
-/// `Register` is restricted to route creation because it may install the
-/// command path used to relay gates and keyframe requests back to the producer
-/// worker
-/// `Existing` is used by later mutations so they cannot recreate deleted remote
-/// source state
-enum RouteSourceAccess {
-    /// require that local or remote source state already exists
-    Existing,
-    /// allow remote-source registration while the consumer route is created
-    ///
-    /// local sources ignore the control handle and are validated through media
-    /// ownership
-    Register(Option<RemoteSourceControl>),
-}
-
-/// route data captured after consumer media declaration
-///
-/// lifecycle builds this only after the source has been validated and the
-/// consumer media handle has been registered
-/// the values stay borrowed so route setup cannot outlive the command state or
-/// copy negotiated RTP parameters just to pass them across this boundary
 #[derive(Clone, Copy)]
 pub(in crate::engine::media_transport::rtc::worker::handlers::media) struct ConsumerRouteRegistration<
     'a,
 > {
-    /// session that owns the destination `Rtc`
     pub consumer_session_key: &'a TransportSessionKey,
-    /// registered consumer media handle that receives forwarded packets
     pub consumer_transport_media_id: TransportMediaId,
-    /// destination-local RTP rewrite handle allocated by the consumer session
-    ///
-    /// route registration moves this handle onto the destination entry
-    /// route or session teardown must release it before the slot can be reused
     pub consumer_stream: ConsumerStreamHandle,
-    /// consumer MID used when packets are rewritten for local egress
     pub consumer_mid: Mid,
-    /// committed consumer media kind used to cache local egress nackability
-    ///
-    /// route registration is the point where consumer ownership and negotiated
-    /// media kind are both known, so the packet loop can later avoid a per-send
-    /// media lookup
     pub consumer_media_kind: MediaKind,
-    /// producer or remote-source media id that feeds this destination
     pub source_transport_media_id: TransportMediaId,
-    /// router-negotiated consumer stream used for payload rewriting and the
-    /// initial packet gate
     pub consumer_rtp_parameters: &'a RouterRtpParameters,
-    /// first destination-level activity state installed with the route
     pub active: bool,
-    /// packet-loop clock sample used for selected-rid freshness checks
     pub now: Instant,
-}
-
-/// projects consumer RTP parameters into the gate installed on a new route
-///
-/// strict selected-rid gates may stay pending until packet-path liveness proves
-/// that the selected rid can be decoded
-fn consumer_packet_gate_for_source(
-    state: &PacketLoopState,
-    source_transport_media_id: TransportMediaId,
-    consumer_rtp_parameters: &RouterRtpParameters,
-    now: Instant,
-) -> (PacketLayerGate, Option<PacketLayerGate>) {
-    selected_rid::guarded_packet_gate(
-        state,
-        source_transport_media_id,
-        simulcast::initial_consumer_packet_gate(consumer_rtp_parameters),
-        now,
-    )
 }
 
 /// validates source ownership for a route that is about to be created
@@ -138,12 +52,19 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn ensure_r
     source: &TransportSourceKey,
     remote_source_control: Option<RemoteSourceControl>,
 ) -> Result<RouteSourceKind, TransportAdapterError> {
-    ensure_route_source(
-        state,
-        route_owner_session_key,
-        source,
-        RouteSourceAccess::Register(remote_source_control),
-    )
+    let source_session_key = source.session_key();
+    let source_id = source.transport_media_id();
+    if source_session_key.media_worker_id() == route_owner_session_key.media_worker_id() {
+        ensure_owned_local_producer_mid(state, source_session_key, source_id)?;
+        return Ok(RouteSourceKind::Local);
+    }
+    let Some(remote_source_control) = remote_source_control else {
+        return Err(TransportAdapterError::InvalidInput);
+    };
+    state
+        .routes
+        .register_remote_source(source, remote_source_control)?;
+    Ok(RouteSourceKind::Remote)
 }
 
 /// validates source ownership for a mutation on an existing route
@@ -159,39 +80,25 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn ensure_r
 /// returns `TransportUnavailable` when the expected local producer or remote
 /// source registration is gone
 pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn ensure_existing_route_source(
-    state: &mut PacketLoopState,
+    state: &PacketLoopState,
     route_owner_session_key: &TransportSessionKey,
     source: &TransportSourceKey,
 ) -> Result<RouteSourceKind, TransportAdapterError> {
-    ensure_route_source(
-        state,
-        route_owner_session_key,
-        source,
-        RouteSourceAccess::Existing,
-    )
+    let source_session_key = source.session_key();
+    let source_id = source.transport_media_id();
+    if source_session_key.media_worker_id() == route_owner_session_key.media_worker_id() {
+        ensure_owned_local_producer_mid(state, source_session_key, source_id)?;
+        return Ok(RouteSourceKind::Local);
+    }
+    match state.routes.remote_source(source_id) {
+        Some(registration) if registration.source_session_key() == source_session_key => {
+            Ok(RouteSourceKind::Remote)
+        }
+        Some(_) => Err(TransportAdapterError::InvalidInput),
+        None => Err(TransportAdapterError::TransportUnavailable),
+    }
 }
 
-/// registers one consumer route in the worker-local forwarding index
-///
-/// this binds the consumer transport media to its source route, installs the
-/// negotiated packet gate that drives the initial RID selection and updates any
-/// remote-source relay activity that depends on the route existing
-/// room policy may later replace the gate for this one consumer without
-/// changing other destinations on the same source
-///
-/// local egress retransmission policy is captured here from the committed
-/// consumer media kind
-/// if a future renegotiation can change media kind without recreating the route,
-/// that path must refresh the route destination before packets are forwarded
-///
-/// a strict selected-rid route is not made effective until packet-path liveness
-/// proves that the rid exists for this producer
-/// the pending gate keeps the room-selected target attached to the destination
-/// while the effective gate remains blocked or temporarily points at one
-/// decodable fallback rid
-///
-/// callers must validate the source with [`ensure_route_source_registered`] and
-/// register the consumer media handle before calling this function
 pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn register_consumer_route(
     state: &mut PacketLoopState,
     registration: ConsumerRouteRegistration<'_>,
@@ -207,20 +114,16 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn register
         active,
         now,
     } = registration;
-    let (packet_gate, pending_packet_gate) = consumer_packet_gate_for_source(
+    let (packet_gate, pending_packet_gate) = selected_rid::guarded_packet_gate(
         state,
         source_transport_media_id,
-        consumer_rtp_parameters,
+        simulcast::initial_consumer_packet_gate(consumer_rtp_parameters),
         now,
     );
     let dest_payload_type = consumer_payload_type(consumer_rtp_parameters);
-    let destination_index = {
-        let route_entry = state
-            .media_route_index
-            .entry(source_transport_media_id)
-            .or_insert_with(|| MediaRouteEntry::new(true));
-        let destination_index = route_entry.destinations.len();
-        route_entry.push_destination(MediaRouteDestination {
+    let destination_index = state.routes.add_consumer_route(
+        source_transport_media_id,
+        MediaRouteDestination {
             dest_session: consumer_session_key.clone(),
             dest_transport_media_id: consumer_transport_media_id,
             dest_stream: consumer_stream,
@@ -230,9 +133,8 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn register
             active,
             packet_gate,
             pending_packet_gate,
-        });
-        destination_index
-    };
+        },
+    );
     state.set_consumer_destination_index(
         consumer_session_key,
         consumer_mid,
@@ -240,15 +142,8 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn register
         source_transport_media_id,
         Some(destination_index),
     );
-    refresh_source_packet_gate(state, source_transport_media_id);
 }
 
-/// returns the payload type to write on packets sent to a consumer
-///
-/// binding-level payload types are preferred because they are the most
-/// specific negotiated value
-/// when bindings do not carry one, the first primary codec supplies the
-/// rewrite target
 pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn consumer_payload_type(
     consumer_rtp_parameters: &RouterRtpParameters,
 ) -> Option<Pt> {
@@ -263,80 +158,49 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn consumer
         })
 }
 
-/// removes one consumer destination from a source route
-///
-/// teardown may call this after partial cleanup, so missing route state is
-/// treated as already removed
-/// when the last destination disappears, remote-source placeholders and their
-/// packet-loop side tables are pruned with the route
 pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn remove_consumer_route(
     state: &mut PacketLoopState,
     consumer_session_key: &TransportSessionKey,
     consumer_transport_media_id: TransportMediaId,
     source_transport_media_id: TransportMediaId,
 ) {
-    let Some(route_entry) = state.media_route_index.get_mut(&source_transport_media_id) else {
-        state.prune_remote_source_if_unrouted(source_transport_media_id);
+    let Some(removed) = state.routes.remove_consumer_route(
+        source_transport_media_id,
+        consumer_session_key,
+        consumer_transport_media_id,
+    ) else {
+        state
+            .routes
+            .prune_remote_source_if_unrouted(source_transport_media_id);
         return;
     };
-    let (removed_destination, moved_destination, remove_route_entry) = {
-        let Some(position) = route_entry.destinations.iter().position(|destination| {
-            destination.dest_session == *consumer_session_key
-                && destination.dest_transport_media_id == consumer_transport_media_id
-        }) else {
-            return;
-        };
-        let removed_destination = route_entry.remove_destination(position);
-        let moved_destination = route_entry.destinations.get(position).map(|destination| {
-            (
-                destination.dest_session.clone(),
-                destination.dest_mid,
-                destination.dest_transport_media_id,
-                position,
-            )
-        });
-        (
-            removed_destination,
-            moved_destination,
-            route_entry.destinations.is_empty(),
-        )
-    };
+    let (removed, moved) = removed;
     state.set_consumer_destination_index(
-        &removed_destination.dest_session,
-        removed_destination.dest_mid,
-        removed_destination.dest_transport_media_id,
+        &removed.dest_session,
+        removed.dest_mid,
+        removed.dest_transport_media_id,
         source_transport_media_id,
         None,
     );
-    if let Some((session_key, mid, transport_media_id, destination_index)) = moved_destination {
+    if let Some((session, mid, media_id, index)) = moved {
         // `swap_remove` can move another consumer into `position`
         // repair that consumer's feedback index before the route is reused
         state.set_consumer_destination_index(
-            &session_key,
+            &session,
             mid,
-            transport_media_id,
+            media_id,
             source_transport_media_id,
-            Some(destination_index),
+            Some(index),
         );
     }
-    release_destination_stream(state, &removed_destination);
-    if remove_route_entry {
-        state.media_route_index.remove(&source_transport_media_id);
-    }
-    refresh_source_packet_gate(state, source_transport_media_id);
-    state.prune_remote_source_if_unrouted(source_transport_media_id);
+    release_destination_stream(state, &removed);
 }
 
-/// removes the local fanout route for one source media id
-///
-/// producer teardown uses this before source media ownership disappears
-/// every destination stream handle is released because the rewrite state is
-/// owned by the receiving session, not by the producer route
 pub(in crate::engine::media_transport::rtc::worker) fn remove_source_route(
     state: &mut PacketLoopState,
     source_transport_media_id: TransportMediaId,
 ) {
-    let Some(route_entry) = state.media_route_index.remove(&source_transport_media_id) else {
+    let Some(route_entry) = state.routes.take_route(source_transport_media_id) else {
         return;
     };
     for destination in route_entry.destinations {
@@ -349,67 +213,14 @@ pub(in crate::engine::media_transport::rtc::worker) fn remove_source_route(
         );
         release_destination_stream(state, &destination);
     }
-    refresh_source_packet_gate(state, source_transport_media_id);
-    state.prune_remote_source_if_unrouted(source_transport_media_id);
 }
 
-/// release rewrite state owned by one local route destination
-///
-/// a missing destination session is treated as already gone
-/// stale forwarding plans will fail generation validation if they still carry
-/// the released handle
 fn release_destination_stream(state: &mut PacketLoopState, destination: &MediaRouteDestination) {
     if let Some(session_state) = state.users.get_mut(&destination.dest_session) {
         forget_transport_media_stream(&mut session_state.consumer_streams, destination.dest_stream);
     }
 }
 
-/// recomputes the effective packet gate for one source after route changes
-///
-/// route creation, resume, pause, selected-rid activation and removal all
-/// converge here so local forwarding and remote relay control observe the same
-/// route selection
-/// the local route-control gate is the union of active destination gates
-/// remote sources receive the producer-worker gate derived from that union
-pub(in crate::engine::media_transport::rtc::worker) fn refresh_source_packet_gate(
-    state: &mut PacketLoopState,
-    source_transport_media_id: TransportMediaId,
-) {
-    let route_entry = state.media_route_index.get(&source_transport_media_id);
-    let local_packet_gate = route_entry.and_then(local_source_packet_gate);
-    let remote_packet_gate =
-        remote_source::remote_source_packet_gate_for_route(route_entry, local_packet_gate);
-    state
-        .route_control
-        .set_local_packet_gate(source_transport_media_id, local_packet_gate);
-    state.publish_remote_source_packet_gate(source_transport_media_id, remote_packet_gate);
-}
-
-/// returns the MID for a local producer when ownership still matches
-///
-/// this is the best-effort form of [`ensure_owned_local_producer_mid`]
-/// callers use it when teardown or feedback should ignore a source that already
-/// disappeared
-pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn owned_local_producer_mid(
-    state: &PacketLoopState,
-    source_session_key: &TransportSessionKey,
-    source_transport_media_id: TransportMediaId,
-) -> Option<Mid> {
-    ensure_owned_local_producer_mid(state, source_session_key, source_transport_media_id).ok()
-}
-
-/// updates the source-wide activity gate for one local producer route
-///
-/// source activity is enforced by the forwarding planner through
-/// `MediaRouteEntry::source_active`
-/// it stays separate from packet-layer gates because producer
-/// activity is a route-lifecycle fact, not a layer-selection predicate
-///
-/// # errors
-///
-/// returns `InvalidInput` when the media id does not name a producer owned by
-/// `session_key`
-/// returns `TransportUnavailable` when the producer or route entry is gone
 pub(super) fn worker_set_producer_active(
     state: &mut PacketLoopState,
     source: &TransportSourceKey,
@@ -417,73 +228,33 @@ pub(super) fn worker_set_producer_active(
 ) -> Result<(), TransportAdapterError> {
     let source_transport_media_id = source.transport_media_id();
     ensure_owned_local_producer_mid(state, source.session_key(), source_transport_media_id)?;
-    let route_entry = state
-        .media_route_index
-        .get_mut(&source_transport_media_id)
-        .ok_or(TransportAdapterError::TransportUnavailable)?;
-    route_entry.source_active = active;
-    Ok(())
+    state
+        .routes
+        .set_source_active(source_transport_media_id, active)
 }
 
-/// updates the destination activity gate for one existing consumer route
-///
-/// consumer activity changes the route aggregate only when the visible active
-/// state changes
-/// the source is revalidated before mutation so stale room effects cannot touch
-/// a route after replacement or teardown
-///
-/// # errors
-///
-/// returns `InvalidInput` when the source or consumer media id belongs to a
-/// different owner
-/// returns `TransportUnavailable` when the source, consumer handle or route
-/// destination is gone
 pub(super) fn worker_set_consumer_active(
     state: &mut PacketLoopState,
     route: &TransportConsumerRoute,
     active: bool,
 ) -> Result<(), TransportAdapterError> {
-    if update_consumer_route(state, route, ConsumerRouteMutation::Active(active))? {
-        refresh_source_packet_gate(state, route.source_transport_media_id());
-    }
-    Ok(())
+    update_consumer_route(state, route, ConsumerRouteMutation::Active(active)).map(|_| ())
 }
 
-/// replaces the packet gate for exactly one consumer route
-///
-/// source ownership is checked first because a stale room effect may arrive
-/// after user replacement or route cleanup
-/// the source aggregate is refreshed only when the effective or pending
-/// destination gate actually changed
-///
-/// # errors
-///
-/// returns `InvalidInput` when the source or consumer media id belongs to a
-/// different owner
-/// returns `TransportUnavailable` when the source, consumer handle or route
-/// destination is gone
 pub(super) fn worker_set_consumer_packet_gate(
     state: &mut PacketLoopState,
     route: &TransportConsumerRoute,
     packet_gate: PacketLayerGate,
     now: Instant,
 ) -> Result<(), TransportAdapterError> {
-    if update_consumer_route(
+    update_consumer_route(
         state,
         route,
-        ConsumerRouteMutation::PacketGate(packet_gate, now),
-    )? {
-        refresh_source_packet_gate(state, route.source_transport_media_id());
-    }
-    Ok(())
+        ConsumerRouteMutation::PacketGate(packet_gate, now, true),
+    )
+    .map(|_| ())
 }
 
-/// applies a batch of packet-gate updates for one source route
-///
-/// each update is validated independently so callers receive one result per
-/// requested consumer route
-/// the source aggregate is refreshed once after the batch when at least one
-/// destination gate changed
 pub(super) fn worker_set_consumer_packet_gates(
     state: &mut PacketLoopState,
     source: &TransportSourceKey,
@@ -491,7 +262,7 @@ pub(super) fn worker_set_consumer_packet_gates(
     now: Instant,
 ) -> Vec<TransportResult<()>> {
     let source_transport_media_id = source.transport_media_id();
-    let mut route_changed = false;
+    let mut changed = false;
     let mut results = Vec::with_capacity(updates.len());
     for update in updates {
         let (consumer_session_key, consumer_transport_media_id, packet_gate) = update.into_parts();
@@ -503,17 +274,19 @@ pub(super) fn worker_set_consumer_packet_gates(
         match update_consumer_route(
             state,
             &route,
-            ConsumerRouteMutation::PacketGate(packet_gate, now),
+            ConsumerRouteMutation::PacketGate(packet_gate, now, false),
         ) {
-            Ok(changed) => {
-                route_changed |= changed;
+            Ok(route_changed) => {
+                changed |= route_changed;
                 results.push(Ok(()));
             }
             Err(error) => results.push(Err(error)),
         }
     }
-    if route_changed {
-        refresh_source_packet_gate(state, source_transport_media_id);
+    if changed {
+        state
+            .routes
+            .refresh_source_packet_gate(source_transport_media_id);
     }
     results
 }
@@ -528,38 +301,12 @@ pub(in crate::engine::media_transport::rtc) fn worker_set_consumer_packet_gates_
     worker_set_consumer_packet_gates(state, source, updates, now)
 }
 
-/// destination mutation requested by a route-control command
-///
-/// both variants must pass through the same ownership checks before touching
-/// `media_route_index`
-/// this keeps late active-state and packet-gate commands from reaching a route
-/// after cleanup has removed or replaced either side of the binding
 #[derive(Clone, Copy)]
 enum ConsumerRouteMutation {
-    /// replace the destination activity bit
     Active(bool),
-    /// replace the destination packet-layer gate after selected-rid guarding
-    PacketGate(PacketLayerGate, Instant),
+    PacketGate(PacketLayerGate, Instant, bool),
 }
 
-/// validate and mutate one existing consumer destination
-///
-/// this is the shared mutation path for consumer activity and packet-gate
-/// updates
-/// it first proves that the source still exists under the expected owner, then
-/// proves that the consumer handle still points at that source before borrowing
-/// the route destination mutably
-///
-/// selected-rid packet gates are guarded before the route entry is borrowed so
-/// packet-path liveness checks can read the broader packet-loop state without
-/// aliasing the destination mutation
-///
-/// # errors
-///
-/// returns `InvalidInput` when the source or consumer media id belongs to a
-/// different owner
-/// returns `TransportUnavailable` when the source, consumer handle or route
-/// destination has already been removed
 fn update_consumer_route(
     state: &mut PacketLoopState,
     route: &TransportConsumerRoute,
@@ -569,20 +316,9 @@ fn update_consumer_route(
     let consumer_transport_media_id = route.consumer_transport_media_id();
     let source_transport_media_id = route.source_transport_media_id();
     ensure_existing_route_source(state, consumer_session_key, route.source())?;
-    let (active, packet_gate_update) = match mutation {
-        ConsumerRouteMutation::Active(active) => (Some(active), None),
-        ConsumerRouteMutation::PacketGate(packet_gate, now) => (
-            None,
-            Some(selected_rid::guarded_packet_gate(
-                state,
-                source_transport_media_id,
-                packet_gate,
-                now,
-            )),
-        ),
-    };
     let RegisteredMediaHandle::Consumer {
         session_key,
+        mid,
         source_transport_media_id: consumer_source_transport_media_id,
         ..
     } = state
@@ -596,79 +332,51 @@ fn update_consumer_route(
     {
         return Err(TransportAdapterError::InvalidInput);
     }
-    let route_entry = state
-        .media_route_index
-        .get_mut(&source_transport_media_id)
+    let destination_index = state
+        .consumer_destination_index(
+            consumer_session_key,
+            *mid,
+            consumer_transport_media_id,
+            source_transport_media_id,
+        )
         .ok_or(TransportAdapterError::TransportUnavailable)?;
-    let destination_index = route_entry
-        .destinations
-        .iter()
-        .position(|destination| {
-            destination.dest_session == *consumer_session_key
-                && destination.dest_transport_media_id == consumer_transport_media_id
-        })
-        .ok_or(TransportAdapterError::TransportUnavailable)?;
-    Ok(match (active, packet_gate_update) {
-        (Some(active), None) => route_entry.set_destination_active(destination_index, active),
-        (None, Some((packet_gate, pending_packet_gate))) => {
-            let destination = route_entry
-                .destinations
-                .get_mut(destination_index)
-                .ok_or(TransportAdapterError::TransportUnavailable)?;
-            let route_changed = destination.packet_gate != packet_gate
-                || destination.pending_packet_gate != pending_packet_gate;
-            destination.packet_gate = packet_gate;
-            destination.pending_packet_gate = pending_packet_gate;
-            route_changed
-        }
-        _ => false,
-    })
-}
-/// validates the source side of a route and optionally registers remote state
-///
-/// local sources are resolved through worker media handles because they must be
-/// producer media owned by the source session
-/// remote sources are resolved through `remote_source_registry` because this
-/// worker only owns a command path back to the producer worker
-///
-/// # errors
-///
-/// returns `InvalidInput` for owner mismatches, consumer media ids used as
-/// sources or remote registration without a control handle
-/// returns `TransportUnavailable` when the expected source state is absent
-fn ensure_route_source(
-    state: &mut PacketLoopState,
-    route_owner_session_key: &TransportSessionKey,
-    source: &TransportSourceKey,
-    access: RouteSourceAccess,
-) -> Result<RouteSourceKind, TransportAdapterError> {
-    let source_session_key = source.session_key();
-    let source_transport_media_id = source.transport_media_id();
-    if source_session_key.media_worker_id() == route_owner_session_key.media_worker_id() {
-        ensure_owned_local_producer_mid(state, source_session_key, source_transport_media_id)?;
-        return Ok(RouteSourceKind::Local);
-    }
-    match access {
-        RouteSourceAccess::Existing => {
-            match state.remote_source_registration(source_transport_media_id) {
-                Some(registration) if registration.source_session_key() == source_session_key => {
-                    Ok(RouteSourceKind::Remote)
-                }
-                Some(_) => Err(TransportAdapterError::InvalidInput),
-                None => Err(TransportAdapterError::TransportUnavailable),
+    match mutation {
+        ConsumerRouteMutation::Active(active) => state.routes.set_consumer_active(
+            source_transport_media_id,
+            destination_index,
+            consumer_session_key,
+            consumer_transport_media_id,
+            active,
+        ),
+        ConsumerRouteMutation::PacketGate(packet_gate, now, refresh) => {
+            let (packet_gate, pending_packet_gate) = selected_rid::guarded_packet_gate(
+                state,
+                source_transport_media_id,
+                packet_gate,
+                now,
+            );
+            if refresh {
+                state.routes.set_consumer_packet_gate(
+                    source_transport_media_id,
+                    destination_index,
+                    consumer_session_key,
+                    consumer_transport_media_id,
+                    packet_gate,
+                    pending_packet_gate,
+                )
+            } else {
+                state.routes.set_consumer_packet_gate_in_batch(
+                    source_transport_media_id,
+                    destination_index,
+                    consumer_session_key,
+                    consumer_transport_media_id,
+                    packet_gate,
+                    pending_packet_gate,
+                )
             }
         }
-        RouteSourceAccess::Register(remote_source_control) => {
-            let Some(remote_source_control) = remote_source_control else {
-                return Err(TransportAdapterError::InvalidInput);
-            };
-            let _previous_registration =
-                state.register_remote_source(source, remote_source_control)?;
-            Ok(RouteSourceKind::Remote)
-        }
     }
 }
-
 /// returns the MID for a local producer after enforcing source ownership
 ///
 /// this is the strict form used by command paths that must reject stale or
@@ -679,7 +387,7 @@ fn ensure_route_source(
 /// returns `InvalidInput` when the media id exists but is not owned by
 /// `source_session_key` as a producer
 /// returns `TransportUnavailable` when the media id is not registered
-pub(super) fn ensure_owned_local_producer_mid(
+pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn ensure_owned_local_producer_mid(
     state: &PacketLoopState,
     source_session_key: &TransportSessionKey,
     source_transport_media_id: TransportMediaId,
@@ -695,18 +403,4 @@ pub(super) fn ensure_owned_local_producer_mid(
         }
         None => Err(TransportAdapterError::TransportUnavailable),
     }
-}
-
-/// computes the source-local packet gate required by active destinations
-///
-/// `source_active` is not part of this aggregate because the forwarding planner
-/// applies that route-lifecycle gate before destination fanout
-fn local_source_packet_gate(route_entry: &MediaRouteEntry) -> Option<PacketLayerGate> {
-    aggregate_packet_gates(
-        route_entry
-            .destinations
-            .iter()
-            .filter(|destination| destination.active)
-            .map(|destination| &destination.packet_gate),
-    )
 }

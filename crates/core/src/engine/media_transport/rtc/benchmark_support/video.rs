@@ -56,7 +56,7 @@ impl RidReadinessBenchFixture {
         let rtc_metrics = metrics.register_rtc_worker();
         let (control_tx, control_rx) = mpsc::channel(8);
         let source = TransportSourceKey::new(source_session.clone(), source_transport_media_id);
-        let _ = state.register_remote_source(
+        let _ = state.routes.register_remote_source(
             &source,
             RemoteSourceControl::with_metrics(
                 control_tx,
@@ -66,7 +66,6 @@ impl RidReadinessBenchFixture {
         );
 
         let mut scenario = MediaWorkerScenario::new(&mut state);
-        scenario.existing_source(source_transport_media_id);
         for destination_idx in 0..SELECTED_RID_DESTINATIONS {
             let mid = Mid::from(format!("cam-down-{destination_idx}").as_str());
             scenario.destination_with_pending_gate(
@@ -91,9 +90,10 @@ impl RidReadinessBenchFixture {
 
     #[must_use]
     pub fn activate_selected_rid(&mut self) -> usize {
-        let first_observed = self.state.observe_producer_rid_packet(
+        let first_observed = self.state.routes.observe_producer_packet(
             self.source_transport_media_id,
-            self.rid,
+            Some(self.rid),
+            false,
             self.now,
         );
         let changed = apply_source_rid_readiness(
@@ -133,7 +133,7 @@ impl KeyframeCoalescingBenchFixture {
         let rtc_metrics = metrics.register_rtc_worker();
         let (control_tx, control_rx) = mpsc::channel(1);
         let source = TransportSourceKey::new(source_session, source_transport_media_id);
-        let _ = state.register_remote_source(
+        let _ = state.routes.register_remote_source(
             &source,
             RemoteSourceControl::with_metrics(
                 control_tx,
@@ -143,7 +143,6 @@ impl KeyframeCoalescingBenchFixture {
         );
 
         let mut scenario = MediaWorkerScenario::new(&mut state);
-        scenario.existing_source(source_transport_media_id);
         for request_idx in 0..KEYFRAME_COALESCING_REQUESTS_I64 {
             let connection_offset = u64::try_from(request_idx).unwrap_or(0);
             let consumer_session = test_transport_session_key(

@@ -231,8 +231,8 @@ impl LocalRtcPacketDestination {
     fn send(&self, state: &mut PacketLoopState, packet: &ForwardedPacket) -> ForwardSendOutcome {
         let (payload_bytes, dirty_session_key) = {
             let Some(route_destination) = state
-                .media_route_index
-                .get(&self.source_transport_media_id)
+                .routes
+                .local_route(self.source_transport_media_id)
                 .and_then(|route_entry| route_entry.destinations.get(self.destination_index))
             else {
                 return ForwardSendOutcome::LocalRtc {

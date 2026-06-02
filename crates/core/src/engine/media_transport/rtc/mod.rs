@@ -49,6 +49,7 @@ mod negotiated_capabilities;
 mod packet_loop;
 mod relay_registry;
 mod route_control;
+mod route_table;
 mod routing_miss;
 mod simulcast;
 mod slots;

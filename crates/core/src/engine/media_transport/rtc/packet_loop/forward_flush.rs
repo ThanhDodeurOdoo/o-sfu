@@ -72,7 +72,7 @@ pub(super) fn record_incoming_stats(
                     packet.route_control_rid_extension(),
                 );
             }
-            let audio_policy_changed = state.route_control.observe_audio_activity(
+            let audio_policy_changed = state.routes.observe_audio_activity(
                 transport_media_id,
                 facts.voice_activity,
                 facts.audio_level,
@@ -80,8 +80,8 @@ pub(super) fn record_incoming_stats(
             );
             if facts.decoder_refresh {
                 let cleared = state
-                    .keyframe_requests
-                    .observe_refresh(transport_media_id, facts.layer_metadata.rid());
+                    .routes
+                    .observe_decoder_refresh(transport_media_id, facts.layer_metadata.rid());
                 for _ in 0..cleared {
                     metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
                 }
@@ -93,7 +93,7 @@ pub(super) fn record_incoming_stats(
             }
             let packet_rid = facts.layer_metadata.rid();
             if packet_rid.is_some() || facts.decoder_refresh {
-                state.observe_producer_packet(
+                state.routes.observe_producer_packet(
                     transport_media_id,
                     packet_rid,
                     facts.decoder_refresh,

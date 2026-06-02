@@ -6,7 +6,6 @@
 //! packet-loop-visible stuff behind
 
 use std::{
-    collections::BTreeSet,
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -17,7 +16,7 @@ use super::{
         commands::CloseSessionState,
         state::{PacketLoopState, RtcSnapshotState},
     },
-    media::{refresh_source_packet_gate, remove_source_route},
+    media::remove_source_route,
 };
 use crate::engine::{
     media_transport::TransportSessionKey,
@@ -44,31 +43,16 @@ pub(super) fn worker_close_session(
         .remote_addr_demux
         .forget_user_remote_candidate_addrs(session_key);
     let removed_media_handles = state.remove_session_media_handles(session_key);
-    let mut affected_route_sources = BTreeSet::new();
     for (source_transport_media_id, _handle) in &removed_media_handles {
         remove_source_route(state, *source_transport_media_id);
     }
+    state.routes.remove_destinations_for_session(session_key);
+    let mid_registry = &state.mid_registry;
     state
-        .media_route_index
-        .retain(|source_transport_media_id, entry| {
-            let destination_count = entry.destinations.len();
-            entry
-                .destinations
-                .retain(|destination| destination.dest_session != *session_key);
-            if entry.destinations.len() != destination_count {
-                entry.active_destination_count = entry
-                    .destinations
-                    .iter()
-                    .filter(|destination| destination.active)
-                    .count();
-                affected_route_sources.insert(*source_transport_media_id);
-            }
-            !entry.destinations.is_empty()
+        .routes
+        .prune_unrouted_remote_sources(|source_transport_media_id| {
+            mid_registry.contains_key(source_transport_media_id)
         });
-    for source_transport_media_id in affected_route_sources {
-        refresh_source_packet_gate(state, source_transport_media_id);
-    }
-    state.prune_unrouted_remote_sources();
     if state.users.is_empty() {
         state.shared_socket = None;
     }

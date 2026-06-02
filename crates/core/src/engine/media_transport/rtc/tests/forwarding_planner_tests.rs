@@ -84,8 +84,8 @@ fn local_destination_session<'a>(
 ) -> Option<&'a TransportSessionKey> {
     let local_route = destination.local_route()?;
     state
-        .media_route_index
-        .get(&local_route.source_transport_media_id())?
+        .routes
+        .local_route(local_route.source_transport_media_id())?
         .destinations
         .get(local_route.destination_index())
         .map(|destination| &destination.dest_session)
@@ -258,6 +258,56 @@ fn populate_forward_routes_reserves_dense_fanout_before_pushing_destinations() {
 }
 
 #[test]
+fn populate_forward_routes_skips_inactive_consumer_destinations() {
+    let producer_session = test_transport_session_key(29, 0, 30, UserId::Integer(31));
+    let inactive_consumer_session = test_transport_session_key(29, 0, 32, UserId::Integer(33));
+    let active_consumer_session = test_transport_session_key(29, 0, 34, UserId::Integer(35));
+    let mut state = PacketLoopState::default();
+    let packet_sink_registry = RoomPacketSinkRegistry::default();
+    let metrics = RuntimeMetrics::default();
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    let source_transport_media_id = scenario.source(producer_session.clone(), Mid::from("cam-up"));
+    let inactive_transport_media_id = scenario.destination(
+        source_transport_media_id,
+        inactive_consumer_session.clone(),
+        Mid::from("cam-down-inactive"),
+    );
+    scenario.destination(
+        source_transport_media_id,
+        active_consumer_session.clone(),
+        Mid::from("cam-down-active"),
+    );
+
+    state
+        .routes
+        .set_consumer_active(
+            source_transport_media_id,
+            0,
+            &inactive_consumer_session,
+            inactive_transport_media_id,
+            false,
+        )
+        .unwrap();
+
+    let forwards = plan_forwards(
+        &state,
+        &packet_sink_registry,
+        &metrics,
+        vec![sample_forwarded_packet(
+            producer_session,
+            "cam-up",
+            b"payload",
+        )],
+    );
+
+    assert_forward_plan(
+        &state,
+        &forwards,
+        &[(0, ExpectedForward::Local(&active_consumer_session))],
+    );
+}
+
+#[test]
 fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc_flush_order() {
     let producer_session = test_transport_session_key(31, 0, 32, UserId::Integer(33));
     let consumer_session = test_transport_session_key(31, 0, 32, UserId::Integer(34));
@@ -279,18 +329,22 @@ fn populate_forward_routes_plans_relay_destinations_without_displacing_local_rtc
         Arc::<CountingSink>::clone(&recording_sink),
         RtpForwardDestinationKind::Recording,
     );
-    state.add_relay_target(
+    state.routes.add_relay_target(
         source_transport_media_id,
         RelayTargetId::new(1),
         first_relay_mailbox,
     );
-    state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(1), true);
-    state.add_relay_target(
+    state
+        .routes
+        .set_relay_target_active(source_transport_media_id, RelayTargetId::new(1), true);
+    state.routes.add_relay_target(
         source_transport_media_id,
         RelayTargetId::new(2),
         second_relay_mailbox,
     );
-    state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(2), true);
+    state
+        .routes
+        .set_relay_target_active(source_transport_media_id, RelayTargetId::new(2), true);
     let forwards = plan_forwards(
         &state,
         &packet_sink_registry,
@@ -334,7 +388,6 @@ fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_r
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
     let source_transport_media_id = TransportMediaId::new(51);
     let mut scenario = MediaWorkerScenario::new(&mut state);
-    scenario.existing_source(source_transport_media_id);
     scenario.destination(
         source_transport_media_id,
         consumer_session,
@@ -345,12 +398,14 @@ fn populate_forward_routes_keeps_relay_packets_out_of_recording_and_second_hop_r
         Arc::<CountingSink>::clone(&recording_sink),
         RtpForwardDestinationKind::Recording,
     );
-    state.add_relay_target(
+    state.routes.add_relay_target(
         source_transport_media_id,
         RelayTargetId::new(1),
         relay_mailbox,
     );
-    state.set_relay_target_active(source_transport_media_id, RelayTargetId::new(1), true);
+    state
+        .routes
+        .set_relay_target_active(source_transport_media_id, RelayTargetId::new(1), true);
     let forwards = plan_forwards(
         &state,
         &packet_sink_registry,
@@ -392,12 +447,16 @@ fn populate_forward_routes_only_relays_the_registered_source_media() {
         remote_consumer_session,
         Mid::from("aud-down"),
     );
-    state.add_relay_target(
+    state.routes.add_relay_target(
         first_source_transport_media_id,
         RelayTargetId::new(1),
         relay_mailbox,
     );
-    state.set_relay_target_active(first_source_transport_media_id, RelayTargetId::new(1), true);
+    state.routes.set_relay_target_active(
+        first_source_transport_media_id,
+        RelayTargetId::new(1),
+        true,
+    );
     let pending_packets = vec![
         sample_forwarded_packet(first_producer_session, "aud-up-1", b"payload-1"),
         sample_forwarded_packet(second_producer_session, "aud-up-2", b"payload-2"),
@@ -462,7 +521,7 @@ fn populate_forward_routes_enforces_per_consumer_rid_gates_after_aggregate_admit
         PacketLayerGate::Rid("hi".into()),
     );
     state
-        .route_control
+        .routes
         .set_local_packet_gate(source_transport_media_id, Some(PacketLayerGate::Open));
     let mut pending_packets = vec![
         sample_forwarded_packet_with_rid(
@@ -522,7 +581,7 @@ fn populate_forward_routes_enforces_per_consumer_temporal_ceilings_after_aggrega
         Mid::from("cam-down-high"),
         PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 2)),
     );
-    state.route_control.set_local_packet_gate(
+    state.routes.set_local_packet_gate(
         source_transport_media_id,
         Some(PacketLayerGate::OperatingPoint(
             PacketOperatingPointGate::new(Some("hi".into()), 2),
@@ -584,16 +643,24 @@ fn populate_forward_routes_enforces_per_relay_target_gates_after_aggregate_admit
     let source_transport_media_id = scenario.source(producer_session.clone(), Mid::from("cam-up"));
     let hi_target_id = RelayTargetId::new(1);
     let lo_target_id = RelayTargetId::new(2);
-    state.add_relay_target(source_transport_media_id, hi_target_id, hi_mailbox);
-    state.set_relay_target_active(source_transport_media_id, hi_target_id, true);
-    state.add_relay_target(source_transport_media_id, lo_target_id, lo_mailbox);
-    state.set_relay_target_active(source_transport_media_id, lo_target_id, true);
-    state.route_control.set_relay_packet_gate(
+    state
+        .routes
+        .add_relay_target(source_transport_media_id, hi_target_id, hi_mailbox);
+    state
+        .routes
+        .set_relay_target_active(source_transport_media_id, hi_target_id, true);
+    state
+        .routes
+        .add_relay_target(source_transport_media_id, lo_target_id, lo_mailbox);
+    state
+        .routes
+        .set_relay_target_active(source_transport_media_id, lo_target_id, true);
+    state.routes.set_relay_packet_gate(
         source_transport_media_id,
         hi_target_id,
         PacketLayerGate::Rid("hi".into()),
     );
-    state.route_control.set_relay_packet_gate(
+    state.routes.set_relay_packet_gate(
         source_transport_media_id,
         lo_target_id,
         PacketLayerGate::Rid("lo".into()),
@@ -666,21 +733,25 @@ fn populate_forward_routes_gates_only_the_selected_source_media() {
         open_consumer_session.clone(),
         Mid::from("screen-down"),
     );
-    state.set_local_packet_gate(
+    state.routes.set_local_packet_gate(
         gated_source_transport_media_id,
-        PacketLayerGate::Rid("hi".into()),
+        Some(PacketLayerGate::Rid("hi".into())),
     );
     packet_sink_registry.register_room(
         gated_producer_session.room_instance_id(),
         Arc::<CountingSink>::clone(&recording_sink),
         RtpForwardDestinationKind::Recording,
     );
-    state.add_relay_target(
+    state.routes.add_relay_target(
         gated_source_transport_media_id,
         RelayTargetId::new(1),
         relay_mailbox,
     );
-    state.set_relay_target_active(gated_source_transport_media_id, RelayTargetId::new(1), true);
+    state.routes.set_relay_target_active(
+        gated_source_transport_media_id,
+        RelayTargetId::new(1),
+        true,
+    );
     let forwards = plan_forwards(
         &state,
         &packet_sink_registry,
@@ -724,9 +795,11 @@ fn populate_forward_routes_applies_operating_point_packet_gates() {
         consumer_session.clone(),
         Mid::from("cam-down"),
     );
-    state.set_local_packet_gate(
+    state.routes.set_local_packet_gate(
         source_transport_media_id,
-        PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 1)),
+        Some(PacketLayerGate::OperatingPoint(
+            PacketOperatingPointGate::new(Some("hi".into()), 1),
+        )),
     );
     let forwards = plan_forwards(
         &state,

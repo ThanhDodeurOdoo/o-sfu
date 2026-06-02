@@ -3,9 +3,9 @@
 //! This module exists because consumer-route mutation touches several pieces of
 //! state that must stay consistent:
 //!
-//! - `media_route_index` records which consumer transports depend on a source
-//! - remote-source registrations track cross-worker packet gates and keyframes
-//! - route control keeps the effective local, relay and source policy gates
+//! - `RouteTable` records source routes and remote-source registrations
+//! - relay targets track cross-worker packet fanout
+//! - packet gates keep effective local, relay and source policy decisions
 //!
 //! [`lifecycle`](super::lifecycle) handles media declaration and teardown against
 //! [`RtcSessionState`](crate::engine::media_transport::rtc::state::RtcSessionState).
@@ -23,7 +23,7 @@
 //!
 //! control/
 //!   |-- validate source ownership (local vs remote)
-//!   |-- mutate media_route_index
+//!   |-- mutate RouteTable
 //!   |-- refresh route-control packet gates
 //!   `-- keep remote-source packet gates executable
 //!
@@ -43,15 +43,13 @@ mod selected_rid;
 pub(in crate::engine::media_transport::rtc::worker) use responses::{
     apply_route_control_request, respond_set_consumer_packet_gates,
 };
+pub(in crate::engine::media_transport::rtc::worker) use routes::remove_source_route;
 #[cfg(feature = "internal-benchmarks")]
 pub(in crate::engine::media_transport::rtc) use routes::worker_set_consumer_packet_gates_for_benchmark;
 pub(super) use routes::{
     ConsumerRouteRegistration, consumer_payload_type, ensure_existing_route_source,
-    ensure_route_source_registered, owned_local_producer_mid, register_consumer_route,
+    ensure_owned_local_producer_mid, ensure_route_source_registered, register_consumer_route,
     remove_consumer_route,
-};
-pub(in crate::engine::media_transport::rtc::worker) use routes::{
-    refresh_source_packet_gate, remove_source_route,
 };
 #[cfg(test)]
 pub(in crate::engine::media_transport::rtc::worker::handlers::media) use selected_rid::observe_source_rid_readiness;

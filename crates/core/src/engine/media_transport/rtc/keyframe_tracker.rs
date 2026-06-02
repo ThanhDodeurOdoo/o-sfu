@@ -108,11 +108,6 @@ impl KeyframeRequestTracker {
         });
     }
 
-    pub fn retain_sources(&mut self, mut retain: impl FnMut(&TransportMediaId) -> bool) {
-        self.pending
-            .retain(|request| retain(&request.request.source_transport_media_id));
-    }
-
     pub fn observe_refresh(
         &mut self,
         source_transport_media_id: TransportMediaId,

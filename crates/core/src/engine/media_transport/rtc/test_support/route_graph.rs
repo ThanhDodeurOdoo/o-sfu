@@ -1,11 +1,8 @@
 use str0m::media::Mid;
 
 use super::super::{
-    demux::{MediaRouteDestination, MediaRouteEntry},
-    media_registry::RegisteredMediaHandle,
-    route_control::PacketLayerGate,
-    slots::ConsumerStreamHandle,
-    state::PacketLoopState,
+    demux::MediaRouteDestination, media_registry::RegisteredMediaHandle,
+    route_control::PacketLayerGate, slots::ConsumerStreamHandle, state::PacketLoopState,
 };
 use crate::engine::media_transport::{TransportMediaId, TransportSessionKey};
 
@@ -19,17 +16,8 @@ impl<'a> MediaWorkerScenario<'a> {
     }
 
     pub fn source(&mut self, session_key: TransportSessionKey, mid: Mid) -> TransportMediaId {
-        let transport_media_id = self
-            .state
-            .register_media_handle(RegisteredMediaHandle::Producer { session_key, mid });
-        self.install_source_route(transport_media_id);
-        transport_media_id
-    }
-
-    #[cfg(any(test, feature = "internal-benchmarks"))]
-    pub fn existing_source(&mut self, transport_media_id: TransportMediaId) -> TransportMediaId {
-        self.install_source_route(transport_media_id);
-        transport_media_id
+        self.state
+            .register_media_handle(RegisteredMediaHandle::Producer { session_key, mid })
     }
 
     pub fn destination(
@@ -79,14 +67,6 @@ impl<'a> MediaWorkerScenario<'a> {
         )
     }
 
-    fn install_source_route(&mut self, transport_media_id: TransportMediaId) {
-        self.state
-            .media_route_index
-            .entry(transport_media_id)
-            .and_modify(|route_entry| route_entry.source_active = true)
-            .or_insert_with(|| MediaRouteEntry::new(true));
-    }
-
     fn install_destination(
         &mut self,
         source_transport_media_id: TransportMediaId,
@@ -103,14 +83,9 @@ impl<'a> MediaWorkerScenario<'a> {
                     source_transport_media_id,
                 });
         let bind_session_key = session_key.clone();
-        let destination_index = {
-            let route_entry = self
-                .state
-                .media_route_index
-                .entry(source_transport_media_id)
-                .or_insert_with(|| MediaRouteEntry::new(true));
-            let destination_index = route_entry.destinations.len();
-            route_entry.push_destination(MediaRouteDestination {
+        let destination_index = self.state.routes.add_consumer_route(
+            source_transport_media_id,
+            MediaRouteDestination {
                 dest_session: session_key,
                 dest_transport_media_id: transport_media_id,
                 dest_stream: ConsumerStreamHandle::default(),
@@ -120,9 +95,8 @@ impl<'a> MediaWorkerScenario<'a> {
                 active: true,
                 packet_gate,
                 pending_packet_gate,
-            });
-            destination_index
-        };
+            },
+        );
         self.state.set_consumer_destination_index(
             &bind_session_key,
             mid,
