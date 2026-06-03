@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::{net::IpAddr, num::NonZeroUsize, thread};
 
 use anyhow::{Result, anyhow, ensure};
 use o_sfu_core::prelude::{
@@ -56,7 +56,10 @@ env_block! {
             VideoBitrateLimits::DEFAULT_MAX_VIDEO_BITRATE.as_bps()
         ).check(positive);
         rtc_max_port: u16 = default("RTC_MAX_PORT", 49_999);
-        rtc_media_worker_count: usize = default("RTC_MEDIA_WORKER_COUNT", 1).check(positive);
+        rtc_media_worker_count: usize = default(
+            "RTC_MEDIA_WORKER_COUNT",
+            default_rtc_media_worker_count()
+        ).check(positive);
         room_max_local_routers: usize = default("ROOM_MAX_LOCAL_ROUTERS", 1).check(positive);
         room_spillover_mode: Option<String> = optional("ROOM_SPILLOVER_MODE");
     }
@@ -136,6 +139,10 @@ impl LocalSpilloverEnv {
         };
         LocalSpilloverPolicy::try_new(parts).map_err(local_spillover_policy_error)
     }
+}
+
+pub(in crate::config) fn default_rtc_media_worker_count() -> usize {
+    thread::available_parallelism().map_or(1, NonZeroUsize::get)
 }
 
 /// Translate the operator local-router cap into the core room policy.
@@ -223,7 +230,7 @@ mod tests {
 
     use super::{
         Bitrate, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, TransportConfig,
-        VideoBitrateLimits, load_transport_config,
+        VideoBitrateLimits, default_rtc_media_worker_count, load_transport_config,
     };
 
     fn load_transport_config_with_defaults(overrides: &[(&str, &str)]) -> Result<TransportConfig> {
@@ -260,6 +267,7 @@ mod tests {
             "PUBLIC_IP" => Some("203.0.113.10".to_owned()),
             _ => None,
         });
+        let worker_count = default_rtc_media_worker_count();
         assert_eq!(
             config.ok(),
             Some(TransportConfig {
@@ -268,7 +276,7 @@ mod tests {
                 max_bitrate_out: Bitrate::from_mbps(10),
                 video_bitrate_limits: VideoBitrateLimits::default(),
                 rtc_port_range: RtcPortRange::new(40_000, 49_999),
-                rtc_media_worker_count: 1,
+                rtc_media_worker_count: worker_count,
                 room_worker_policy: RoomWorkerPolicy::strict_single_router(),
                 room_media_limits: RoomMediaLimits::default(),
             })

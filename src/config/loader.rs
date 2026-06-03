@@ -49,6 +49,7 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    use super::super::transport::default_rtc_media_worker_count;
     use crate::{
         config::{
             Bitrate, CodecPreferences, Config, DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS,
@@ -132,7 +133,10 @@ mod tests {
             config.transport.rtc_port_range,
             RtcPortRange::new(40_000, 49_999)
         );
-        assert_eq!(config.transport.rtc_media_worker_count, 1);
+        assert_eq!(
+            config.transport.rtc_media_worker_count,
+            default_rtc_media_worker_count()
+        );
         Ok(())
     }
 
