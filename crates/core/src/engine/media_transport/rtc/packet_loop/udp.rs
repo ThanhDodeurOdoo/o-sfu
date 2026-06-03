@@ -1,39 +1,32 @@
 //! UDP I/O boundary for the RTC packet loop.
-//!
-//! Linux production workers use `tokio-uring` from a worker-local runtime
-//! thread. Other targets keep the Tokio UDP socket so local development can
-//! compile and run the same packet-loop tests.
 
 #[cfg(target_os = "linux")]
 use std::rc::Rc;
-#[cfg(not(target_os = "linux"))]
-use std::sync::Arc;
 use std::{
     io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket as StdUdpSocket},
+    sync::Arc,
     time::Instant,
 };
 
-#[cfg(not(target_os = "linux"))]
-use tokio::net::UdpSocket as TokioUdpSocket;
-use tokio::sync::mpsc;
+use tokio::{net::UdpSocket as TokioUdpSocket, sync::mpsc};
 #[cfg(target_os = "linux")]
 use tokio_uring::net::UdpSocket as TokioUringUdpSocket;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::buffers::RECEIVE_BUFFER_LEN;
+use crate::RtcUdpIoBackend;
 
 const INGRESS_QUEUE_CAPACITY: usize = 32;
 const RECEIVE_BUFFER_POOL_CAPACITY: usize = 32;
 
 /// Shared worker UDP socket.
 #[derive(Clone)]
-pub(in crate::engine::media_transport::rtc) struct RtcUdpSocket {
+pub(in crate::engine::media_transport::rtc) enum RtcUdpSocket {
+    Tokio(Arc<TokioUdpSocket>),
     #[cfg(target_os = "linux")]
-    inner: Rc<TokioUringUdpSocket>,
-    #[cfg(not(target_os = "linux"))]
-    inner: Arc<TokioUdpSocket>,
+    IoUring(Rc<TokioUringUdpSocket>),
 }
 
 /// Completed UDP datagram ready for one packet-loop turn.
@@ -53,27 +46,30 @@ pub(in crate::engine::media_transport::rtc) struct UdpIngress {
 }
 
 impl RtcUdpSocket {
-    #[cfg_attr(
-        target_os = "linux",
-        allow(
-            clippy::unnecessary_wraps,
-            reason = "the private socket API is fallible on the Tokio fallback and keeps one call shape across targets"
-        )
-    )]
     pub(in crate::engine::media_transport::rtc) fn from_std(
         socket: StdUdpSocket,
+        backend: RtcUdpIoBackend,
     ) -> io::Result<Self> {
-        #[cfg(target_os = "linux")]
-        {
-            Ok(Self {
-                inner: Rc::new(TokioUringUdpSocket::from_std(socket)),
-            })
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            TokioUdpSocket::from_std(socket).map(|socket| Self {
-                inner: Arc::new(socket),
-            })
+        match backend {
+            RtcUdpIoBackend::Tokio => TokioUdpSocket::from_std(socket)
+                .map(Arc::new)
+                .map(Self::Tokio),
+            RtcUdpIoBackend::IoUring => {
+                #[cfg(target_os = "linux")]
+                {
+                    Ok(Self::IoUring(Rc::new(TokioUringUdpSocket::from_std(
+                        socket,
+                    ))))
+                }
+
+                #[cfg(not(target_os = "linux"))]
+                {
+                    Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "io_uring RTC UDP I/O backend is only supported on Linux",
+                    ))
+                }
+            }
         }
     }
 
@@ -82,26 +78,14 @@ impl RtcUdpSocket {
         packet: Vec<u8>,
         destination: SocketAddr,
     ) -> io::Result<usize> {
-        #[cfg(target_os = "linux")]
-        {
-            let (result, _packet) = self.inner.send_to(packet, destination).await;
-            result
+        match self {
+            Self::Tokio(socket) => socket.send_to(packet.as_slice(), destination).await,
+            #[cfg(target_os = "linux")]
+            Self::IoUring(socket) => {
+                let (result, _packet) = socket.send_to(packet, destination).await;
+                result
+            }
         }
-        #[cfg(not(target_os = "linux"))]
-        {
-            self.inner.send_to(packet.as_slice(), destination).await
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    async fn recv_from(&self, buffer: Vec<u8>) -> (io::Result<(usize, SocketAddr)>, Vec<u8>) {
-        self.inner.recv_from(buffer).await
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    async fn recv_from(&self, mut buffer: Vec<u8>) -> (io::Result<(usize, SocketAddr)>, Vec<u8>) {
-        let result = self.inner.recv_from(buffer.as_mut_slice()).await;
-        (result, buffer)
     }
 }
 
@@ -155,26 +139,55 @@ fn spawn_ingress(
     recycle_rx: mpsc::Receiver<Vec<u8>>,
     shutdown: CancellationToken,
 ) {
-    #[cfg(target_os = "linux")]
-    tokio_uring::spawn(run_ingress(
-        socket,
-        candidate_addr,
-        tx,
-        recycle_rx,
-        shutdown,
-    ));
-    #[cfg(not(target_os = "linux"))]
-    tokio::spawn(run_ingress(
-        socket,
-        candidate_addr,
-        tx,
-        recycle_rx,
-        shutdown,
-    ));
+    match socket {
+        RtcUdpSocket::Tokio(socket) => {
+            tokio::spawn(run_tokio_ingress(
+                socket,
+                candidate_addr,
+                tx,
+                recycle_rx,
+                shutdown,
+            ));
+        }
+        #[cfg(target_os = "linux")]
+        RtcUdpSocket::IoUring(socket) => {
+            tokio_uring::spawn(run_io_uring_ingress(
+                socket,
+                candidate_addr,
+                tx,
+                recycle_rx,
+                shutdown,
+            ));
+        }
+    }
 }
 
-async fn run_ingress(
-    socket: RtcUdpSocket,
+async fn run_tokio_ingress(
+    socket: Arc<TokioUdpSocket>,
+    candidate_addr: SocketAddr,
+    tx: mpsc::Sender<UdpDatagram>,
+    mut recycle_rx: mpsc::Receiver<Vec<u8>>,
+    shutdown: CancellationToken,
+) {
+    loop {
+        if shutdown.is_cancelled() {
+            return;
+        }
+        let mut packet = receive_buffer(&mut recycle_rx);
+        let result = socket.recv_buf_from(&mut packet).await;
+        let received_at = Instant::now();
+        if shutdown.is_cancelled() {
+            return;
+        }
+        if ingress_should_stop(result, packet, candidate_addr, received_at, &tx, &shutdown).await {
+            return;
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn run_io_uring_ingress(
+    socket: Rc<TokioUringUdpSocket>,
     candidate_addr: SocketAddr,
     tx: mpsc::Sender<UdpDatagram>,
     mut recycle_rx: mpsc::Receiver<Vec<u8>>,
@@ -185,33 +198,43 @@ async fn run_ingress(
             return;
         }
         let buffer = receive_buffer(&mut recycle_rx);
-        let (result, mut packet) = socket.recv_from(buffer).await;
+        let (result, packet) = socket.recv_from(buffer).await;
         let received_at = Instant::now();
         if shutdown.is_cancelled() {
             return;
         }
-        match result {
-            Ok((received_size, source_addr)) => {
-                packet.truncate(received_size);
-                let datagram = UdpDatagram {
-                    source_addr,
-                    candidate_addr,
-                    received_at,
-                    packet,
-                };
-                tokio::select! {
-                    biased;
-                    () = shutdown.cancelled() => return,
-                    send_result = tx.send(datagram) => {
-                        if send_result.is_err() {
-                            return;
-                        }
-                    }
-                }
+        if ingress_should_stop(result, packet, candidate_addr, received_at, &tx, &shutdown).await {
+            return;
+        }
+    }
+}
+
+async fn ingress_should_stop(
+    result: io::Result<(usize, SocketAddr)>,
+    mut packet: Vec<u8>,
+    candidate_addr: SocketAddr,
+    received_at: Instant,
+    tx: &mpsc::Sender<UdpDatagram>,
+    shutdown: &CancellationToken,
+) -> bool {
+    match result {
+        Ok((received_size, source_addr)) => {
+            packet.truncate(received_size);
+            let datagram = UdpDatagram {
+                source_addr,
+                candidate_addr,
+                received_at,
+                packet,
+            };
+            tokio::select! {
+                biased;
+                () = shutdown.cancelled() => true,
+                send_result = tx.send(datagram) => send_result.is_err(),
             }
-            Err(error) => {
-                warn!(?error, "rtc packet loop failed to receive datagram");
-            }
+        }
+        Err(error) => {
+            warn!(?error, "rtc packet loop failed to receive datagram");
+            false
         }
     }
 }
@@ -243,10 +266,7 @@ fn receive_buffer(recycle_rx: &mut mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
     let mut buffer = recycle_rx
         .try_recv()
         .unwrap_or_else(|_| Vec::with_capacity(RECEIVE_BUFFER_LEN));
-    #[cfg(target_os = "linux")]
     buffer.clear();
-    #[cfg(not(target_os = "linux"))]
-    buffer.resize(RECEIVE_BUFFER_LEN, 0);
     buffer
 }
 
@@ -258,9 +278,7 @@ mod tests {
         time::Duration,
     };
 
-    #[cfg(not(target_os = "linux"))]
-    use tokio::runtime::Builder;
-    use tokio::time::timeout;
+    use tokio::{runtime::Builder, time::timeout};
 
     use super::*;
 
@@ -271,8 +289,8 @@ mod tests {
             let socket_addr = socket
                 .local_addr()
                 .map_err(|_error| "socket should have a local addr")?;
-            let socket =
-                RtcUdpSocket::from_std(socket).map_err(|_error| "rtc UDP socket should convert")?;
+            let socket = RtcUdpSocket::from_std(socket, RtcUdpIoBackend::Tokio)
+                .map_err(|_error| "rtc UDP socket should convert")?;
             let mut ingress = UdpIngress::new(socket, socket_addr, socket_addr);
             let sender = StdUdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
                 .map_err(|_error| "sender socket should bind")?;
@@ -304,10 +322,10 @@ mod tests {
             let receiver_addr = receiver
                 .local_addr()
                 .map_err(|_error| "receiver socket should have a local addr")?;
-            let receiver =
-                RtcUdpSocket::from_std(receiver).map_err(|_error| "receiver should convert")?;
+            let receiver = RtcUdpSocket::from_std(receiver, RtcUdpIoBackend::Tokio)
+                .map_err(|_error| "receiver should convert")?;
             let mut ingress = UdpIngress::new(receiver, receiver_addr, receiver_addr);
-            let sender = RtcUdpSocket::from_std(bind_std_socket()?)
+            let sender = RtcUdpSocket::from_std(bind_std_socket()?, RtcUdpIoBackend::Tokio)
                 .map_err(|_error| "rtc UDP socket should convert")?;
 
             let sent_len = sender
@@ -327,6 +345,78 @@ mod tests {
         })
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn io_uring_udp_ingress_delivers_received_datagrams() -> Result<(), &'static str> {
+        let socket = bind_std_socket()?;
+        let socket_addr = socket
+            .local_addr()
+            .map_err(|_error| "socket should have a local addr")?;
+        let sender = StdUdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .map_err(|_error| "sender socket should bind")?;
+        let sender_addr = sender
+            .local_addr()
+            .map_err(|_error| "sender should have a local addr")?;
+        sender
+            .send_to(b"packet", socket_addr)
+            .map_err(|_error| "sender should send the datagram")?;
+
+        tokio_uring::start(async {
+            let socket = RtcUdpSocket::from_std(socket, RtcUdpIoBackend::IoUring)
+                .map_err(|_error| "io_uring receiver should convert")?;
+            let mut ingress = UdpIngress::new(socket, socket_addr, socket_addr);
+
+            let datagram = timeout(Duration::from_secs(1), ingress.recv())
+                .await
+                .map_err(|_error| "io_uring receiver should receive before timeout")?
+                .ok_or("io_uring receiver should read the sent packet")?;
+
+            assert_eq!(datagram.packet.as_slice(), b"packet");
+            assert_eq!(datagram.source_addr, sender_addr);
+            assert_eq!(datagram.candidate_addr, socket_addr);
+            assert!(datagram.received_at <= Instant::now());
+            Ok(())
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn io_uring_udp_socket_sends_owned_datagram_buffers() -> Result<(), &'static str> {
+        let receiver = StdUdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .map_err(|_error| "receiver socket should bind")?;
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .map_err(|_error| "receiver socket should set a read timeout")?;
+        let receiver_addr = receiver
+            .local_addr()
+            .map_err(|_error| "receiver socket should have a local addr")?;
+        let sender = bind_std_socket()?;
+
+        let sent_len = tokio_uring::start(async {
+            let sender = RtcUdpSocket::from_std(sender, RtcUdpIoBackend::IoUring)
+                .map_err(|_error| "io_uring sender should convert")?;
+            sender
+                .send_to(b"packet".to_vec(), receiver_addr)
+                .await
+                .map_err(|_error| "io_uring send should succeed")
+        })?;
+
+        assert_eq!(sent_len, b"packet".len());
+
+        let mut packet = [0; RECEIVE_BUFFER_LEN];
+        let (size, _source_addr) = receiver
+            .recv_from(&mut packet)
+            .map_err(|_error| "receiver should get the sent packet before timeout")?;
+
+        assert_eq!(
+            packet
+                .get(..size)
+                .ok_or("receiver size should stay within packet buffer")?,
+            b"packet"
+        );
+        Ok(())
+    }
+
     fn bind_std_socket() -> Result<StdUdpSocket, &'static str> {
         let socket = StdUdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
             .map_err(|_error| "UDP socket should bind")?;
@@ -336,14 +426,6 @@ mod tests {
         Ok(socket)
     }
 
-    #[cfg(target_os = "linux")]
-    fn run_udp_test(
-        test: impl Future<Output = Result<(), &'static str>>,
-    ) -> Result<(), &'static str> {
-        tokio_uring::start(test)
-    }
-
-    #[cfg(not(target_os = "linux"))]
     fn run_udp_test(
         test: impl Future<Output = Result<(), &'static str>>,
     ) -> Result<(), &'static str> {

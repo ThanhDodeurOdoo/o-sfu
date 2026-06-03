@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::{fmt, net::IpAddr};
 
 use crate::Bitrate;
 
@@ -6,8 +6,32 @@ use crate::Bitrate;
 pub struct MediaOptions {
     pub public_ip: IpAddr,
     pub rtc_port_range: RtcPortRange,
+    pub rtc_udp_io_backend: RtcUdpIoBackend,
     pub bitrate_limits: SessionBitrateLimits,
     pub video_bitrate_limits: VideoBitrateLimits,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RtcUdpIoBackend {
+    #[default]
+    Tokio,
+    IoUring,
+}
+
+impl RtcUdpIoBackend {
+    #[must_use]
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Tokio => "tokio",
+            Self::IoUring => "io_uring",
+        }
+    }
+}
+
+impl fmt::Display for RtcUdpIoBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.wire_name())
+    }
 }
 
 /// Room media activation limits.

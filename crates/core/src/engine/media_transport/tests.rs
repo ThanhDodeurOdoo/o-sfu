@@ -25,6 +25,13 @@ use crate::{
         },
     },
 };
+#[cfg(not(target_os = "linux"))]
+use crate::{
+    RtcUdpIoBackend,
+    engine::media_transport::test_support::{
+        test_media_transport_config, test_media_transport_deps,
+    },
+};
 
 fn test_session_key(
     room_instance_id: u64,
@@ -294,6 +301,25 @@ fn media_transport_builder_rejects_invalid_port_split() {
         Some(MediaTransportBuildError::InvalidPortSplit {
             worker_count: 3,
             port_count: 2,
+        })
+    );
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn media_transport_builder_rejects_non_linux_io_uring_backend() {
+    let mut config = test_media_transport_config(test_rtc_range(1));
+    config.rtc_udp_io_backend = RtcUdpIoBackend::IoUring;
+
+    let result = MediaTransport::builder()
+        .transport_config(config)
+        .deps(test_media_transport_deps())
+        .build();
+
+    assert_eq!(
+        result.err(),
+        Some(MediaTransportBuildError::UnsupportedUdpIoBackend {
+            backend: RtcUdpIoBackend::IoUring,
         })
     );
 }

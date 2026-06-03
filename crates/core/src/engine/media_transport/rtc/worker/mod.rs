@@ -70,7 +70,8 @@ use super::{
     state::RtcSnapshotState,
 };
 use crate::{
-    Bitrate, CodecPreferences, MediaCodecFlags, MediaWorkerId, RtcPortRange, VideoBitrateLimits,
+    Bitrate, CodecPreferences, MediaCodecFlags, MediaWorkerId, RtcPortRange, RtcUdpIoBackend,
+    VideoBitrateLimits,
     engine::{
         diagnostics::DiagnosticsStore,
         media_transport::{
@@ -155,6 +156,7 @@ pub struct RtcWorker {
     pub(super) max_bitrate_out: Bitrate,
     pub(super) video_bitrate_limits: VideoBitrateLimits,
     pub(super) rtc_port_range: RtcPortRange,
+    pub(super) rtc_udp_io_backend: RtcUdpIoBackend,
     pub(super) codec_flags: MediaCodecFlags,
     pub(super) codec_preferences: CodecPreferences,
     pub(super) media_quality_interval: Option<Duration>,
@@ -195,6 +197,7 @@ impl RtcWorker {
             max_bitrate_out: config.bitrate_limits.max_bitrate_out(),
             video_bitrate_limits: config.video_bitrate_limits,
             rtc_port_range: config.rtc_port_range,
+            rtc_udp_io_backend: config.rtc_udp_io_backend,
             codec_flags: config.codec_flags,
             codec_preferences: config.codec_preferences,
             media_quality_interval: config.media_quality_interval,
@@ -707,6 +710,7 @@ impl fmt::Debug for RtcWorker {
             .debug_struct("RtcWorker")
             .field("public_ip", &self.public_ip)
             .field("rtc_port_range", &self.rtc_port_range)
+            .field("rtc_udp_io_backend", &self.rtc_udp_io_backend)
             .finish_non_exhaustive()
     }
 }

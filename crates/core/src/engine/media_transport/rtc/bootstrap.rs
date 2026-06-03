@@ -31,7 +31,7 @@ use super::{
     state::{RtcSessionState, SessionSdpNegotiationState, SharedRtcSocket},
 };
 use crate::{
-    Bitrate, MediaCodecFlags, RtcPortRange,
+    Bitrate, MediaCodecFlags, RtcPortRange, RtcUdpIoBackend,
     engine::{
         h264_payloads::H264_PAYLOAD_SPECS,
         media_transport::{TransportAdapterError, TransportSessionKey},
@@ -60,6 +60,7 @@ const VIDEO_PAYLOAD_TYPE_VP8: u8 = 96;
 pub(super) fn bind_shared_rtc_socket(
     public_ip: IpAddr,
     rtc_port_range: RtcPortRange,
+    rtc_udp_io_backend: RtcUdpIoBackend,
 ) -> Result<SharedRtcSocket, TransportAdapterError> {
     let bind_ip = bind_ip_for_public_ip(public_ip);
     for port in rtc_port_range.ports() {
@@ -69,7 +70,7 @@ pub(super) fn bind_shared_rtc_socket(
                 if socket.set_nonblocking(true).is_err() {
                     continue;
                 }
-                let Ok(socket) = RtcUdpSocket::from_std(socket) else {
+                let Ok(socket) = RtcUdpSocket::from_std(socket, rtc_udp_io_backend) else {
                     continue;
                 };
                 let candidate_addr = SocketAddr::new(public_ip, port);

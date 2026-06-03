@@ -15,8 +15,8 @@ use o_sfu_core::{
     ConnectionId,
     prelude::{
         Bitrate, CodecPreferences, LocalSpilloverPolicy, LocalSpilloverPolicyParts,
-        MediaCodecFlags, RoomWorkerPolicy, RuntimeFeatureFlags, SessionBitrateLimits, UserStreamId,
-        VideoBitrateLimits,
+        MediaCodecFlags, RoomWorkerPolicy, RtcUdpIoBackend, RuntimeFeatureFlags,
+        SessionBitrateLimits, UserStreamId, VideoBitrateLimits,
     },
     server::{
         diagnostics::DiagnosticsStore,
@@ -61,6 +61,7 @@ pub fn media_transport() -> Result<MediaTransport> {
             ),
             video_bitrate_limits: VideoBitrateLimits::default(),
             rtc_port_range,
+            rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: CodecPreferences::default(),
             media_quality_interval: None,

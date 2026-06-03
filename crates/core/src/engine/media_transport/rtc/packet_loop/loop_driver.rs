@@ -48,7 +48,7 @@ use super::{
     udp::{RtcUdpSocket, UdpDatagram, UdpIngress},
 };
 use crate::{
-    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
+    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, RtcUdpIoBackend, VideoBitrateLimits,
     engine::{
         diagnostics::DiagnosticsStore,
         media_transport::SourcePolicySignal,
@@ -69,6 +69,7 @@ pub(in crate::engine::media_transport::rtc) struct PacketLoopConfig {
     pub max_bitrate_out: Bitrate,
     pub video_bitrate_limits: VideoBitrateLimits,
     pub rtc_port_range: RtcPortRange,
+    pub rtc_udp_io_backend: RtcUdpIoBackend,
     pub codec_flags: MediaCodecFlags,
     pub codec_preferences: CodecPreferences,
     pub media_quality_interval: Option<Duration>,
@@ -534,6 +535,7 @@ fn handle_control_input(
             max_bitrate_out: config.max_bitrate_out,
             video_bitrate_limits: config.video_bitrate_limits,
             rtc_port_range: config.rtc_port_range,
+            rtc_udp_io_backend: config.rtc_udp_io_backend,
             codec_flags: config.codec_flags,
             codec_preferences: config.codec_preferences,
             media_quality_interval: config.media_quality_interval,

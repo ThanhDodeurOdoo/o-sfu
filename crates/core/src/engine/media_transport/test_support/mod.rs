@@ -22,7 +22,8 @@ use {
 use {
     super::{MediaTransportConfig, MediaTransportDeps},
     crate::{
-        Bitrate, CodecPreferences, MediaCodecFlags, SessionBitrateLimits, VideoBitrateLimits,
+        Bitrate, CodecPreferences, MediaCodecFlags, RtcUdpIoBackend, SessionBitrateLimits,
+        VideoBitrateLimits,
         engine::{
             diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
             packet_sink_registry::RoomPacketSinkRegistry,
@@ -304,6 +305,7 @@ pub(crate) fn test_media_transport_config(rtc_port_range: RtcPortRange) -> Media
         bitrate_limits: SessionBitrateLimits::new(Bitrate::from_mbps(8), Bitrate::from_mbps(10)),
         video_bitrate_limits: VideoBitrateLimits::default(),
         rtc_port_range,
+        rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
         codec_flags: MediaCodecFlags::default(),
         codec_preferences: CodecPreferences::default(),
         media_quality_interval: None,

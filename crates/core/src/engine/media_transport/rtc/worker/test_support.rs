@@ -14,7 +14,8 @@ use {
         WorkerCommandContext,
     },
     crate::{
-        CodecPreferences, MediaCodecFlags, MediaWorkerId, RtcPortRange, SessionBitrateLimits,
+        CodecPreferences, MediaCodecFlags, MediaWorkerId, RtcPortRange, RtcUdpIoBackend,
+        SessionBitrateLimits,
         engine::{
             diagnostics::DiagnosticsStore,
             media_transport::{
@@ -376,6 +377,7 @@ impl RtcWorkerTestBuilder {
                 ),
                 video_bitrate_limits: crate::VideoBitrateLimits::default(),
                 rtc_port_range: self.rtc_port_range,
+                rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
                 codec_flags: self.codec_flags,
                 codec_preferences: self.codec_preferences,
                 media_quality_interval: None,

@@ -34,18 +34,23 @@
 //! a worker that has never started has no packet observations, so the snapshot
 //! surface returns empty or default values instead of creating transport state
 #[cfg(target_os = "linux")]
-use std::thread;
+use std::{
+    any::Any,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 use std::{
     collections::BTreeSet,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc as std_mpsc},
+    thread,
     time::Instant,
 };
 
-#[cfg(not(target_os = "linux"))]
-use tokio::runtime::Handle;
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    runtime::Builder as TokioRuntimeBuilder,
+    sync::{mpsc, oneshot},
+};
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{
     super::{
@@ -53,12 +58,12 @@ use super::{
         commands::{RtcWorkerCommand, RtcWorkerResponse},
         packet_loop::{self, PacketLoopConfig},
         relay_registry::{RELAY_MAILBOX_CAPACITY, RelayPacketMailbox, sender_backlog_depth},
-        state::TransportSessionHealth,
+        state::{RtcSnapshotState, TransportSessionHealth},
     },
     RtcWorker, RtcWorkerHandle,
 };
 use crate::{
-    Bitrate, MediaWorkerId,
+    Bitrate, MediaWorkerId, RtcUdpIoBackend,
     engine::{
         RoomInstanceId,
         media_transport::{
@@ -107,6 +112,97 @@ impl<T: Clone> WorkerHandleSlot<T> {
     }
 }
 
+fn spawn_tokio_packet_loop(
+    thread_name: String,
+    packet_loop_config: PacketLoopConfig,
+    bitrate_registry: Arc<Mutex<BitrateRegistry>>,
+    snapshot_state: Arc<Mutex<RtcSnapshotState>>,
+    packet_loop_inputs: packet_loop::PacketLoopInputReceivers,
+) -> Result<(), TransportAdapterError> {
+    let (startup_tx, startup_rx) = std_mpsc::sync_channel(1);
+    thread::Builder::new()
+        .name(thread_name)
+        .spawn(move || {
+            match TokioRuntimeBuilder::new_current_thread()
+                .enable_io()
+                .enable_time()
+                .build()
+            {
+                Ok(runtime) => {
+                    let _ = startup_tx.send(Ok(()));
+                    runtime.block_on(packet_loop::run_packet_loop(
+                        packet_loop_config,
+                        bitrate_registry,
+                        snapshot_state,
+                        packet_loop_inputs,
+                    ));
+                }
+                Err(error) => {
+                    warn!(?error, "failed to boot rtc packet loop Tokio runtime");
+                    let _ = startup_tx.send(Err(()));
+                }
+            }
+        })
+        .map_err(|_error| TransportAdapterError::TransportUnavailable)?;
+    wait_for_packet_loop_startup(&startup_rx)
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_io_uring_packet_loop(
+    thread_name: String,
+    packet_loop_config: PacketLoopConfig,
+    bitrate_registry: Arc<Mutex<BitrateRegistry>>,
+    snapshot_state: Arc<Mutex<RtcSnapshotState>>,
+    packet_loop_inputs: packet_loop::PacketLoopInputReceivers,
+) -> Result<(), TransportAdapterError> {
+    let (startup_tx, startup_rx) = std_mpsc::sync_channel(1);
+    thread::Builder::new()
+        .name(thread_name)
+        .spawn(move || {
+            let startup_err_tx = startup_tx.clone();
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                tokio_uring::start(async move {
+                    let _ = startup_tx.send(Ok(()));
+                    packet_loop::run_packet_loop(
+                        packet_loop_config,
+                        bitrate_registry,
+                        snapshot_state,
+                        packet_loop_inputs,
+                    )
+                    .await;
+                });
+            })) {
+                warn!(
+                    panic = panic_message(payload.as_ref()),
+                    "rtc packet loop io_uring runtime panicked"
+                );
+                let _ = startup_err_tx.send(Err(()));
+            }
+        })
+        .map_err(|_error| TransportAdapterError::TransportUnavailable)?;
+    wait_for_packet_loop_startup(&startup_rx)
+}
+
+fn wait_for_packet_loop_startup(
+    startup_rx: &std_mpsc::Receiver<Result<(), ()>>,
+) -> Result<(), TransportAdapterError> {
+    match startup_rx.recv() {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(())) | Err(_) => Err(TransportAdapterError::TransportUnavailable),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn panic_message(payload: &(dyn Any + Send)) -> &str {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        message
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.as_str()
+    } else {
+        "unknown panic payload"
+    }
+}
+
 impl RtcWorker {
     /// clones the current worker handle if the packet loop has been started
     ///
@@ -151,7 +247,6 @@ impl RtcWorker {
     /// lock worker slot
     ///   |
     ///   +-- return existing handle when another caller already started it
-    ///   +-- capture current Tokio runtime on non-Linux targets
     ///   +-- create command, relay and snapshot channels
     ///   +-- spawn packet loop with receiver-side inputs
     ///   `-- publish cloned sender-side handle in the slot
@@ -173,8 +268,7 @@ impl RtcWorker {
     /// # Errors
     ///
     /// returns [`TransportAdapterError::TransportUnavailable`] when the handle
-    /// slot is poisoned, when non-Linux fallback spawning is called outside a
-    /// Tokio runtime or when Linux thread creation fails
+    /// slot is poisoned or when packet-loop thread creation fails
     pub(super) fn ensure_packet_loop_started(
         &self,
     ) -> Result<RtcWorkerHandle, TransportAdapterError> {
@@ -185,12 +279,6 @@ impl RtcWorker {
         if let Some(worker_handle) = worker_slot.worker_handle() {
             return Ok(worker_handle);
         }
-        // non-linux fallback spawning uses the caller's current runtime so tests
-        // and embedded runtimes keep ownership of the worker task
-        #[cfg(not(target_os = "linux"))]
-        let Ok(current_runtime) = Handle::try_current() else {
-            return Err(TransportAdapterError::TransportUnavailable);
-        };
         let (command_tx, command_rx) = mpsc::channel(64);
         #[cfg(any(test, feature = "testing-transport"))]
         let debug_channels = super::super::test_support::RtcWorkerDebugChannels::new();
@@ -198,7 +286,7 @@ impl RtcWorker {
         // observability reads these side channels without entering the packet
         // loop, while authoritative state stays owned by the worker task
         let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
-        let snapshot_state = Arc::new(Mutex::new(super::super::state::RtcSnapshotState::default()));
+        let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
         let packet_loop_lag = Arc::new(packet_loop::PacketLoopLagSnapshot::new(Instant::now()));
         let shutdown_token = CancellationToken::new();
         let worker_handle = RtcWorkerHandle {
@@ -220,6 +308,7 @@ impl RtcWorker {
             max_bitrate_out: self.max_bitrate_out,
             video_bitrate_limits: self.video_bitrate_limits,
             rtc_port_range: self.rtc_port_range,
+            rtc_udp_io_backend: self.rtc_udp_io_backend,
             codec_flags: self.codec_flags,
             codec_preferences: self.codec_preferences,
             media_quality_interval: self.media_quality_interval,
@@ -239,32 +328,31 @@ impl RtcWorker {
             max_bitrate_out_bps = self.max_bitrate_out.as_bps(),
             rtc_port_range_min = self.rtc_port_range.min(),
             rtc_port_range_max = self.rtc_port_range.max(),
+            rtc_udp_io_backend = self.rtc_udp_io_backend.wire_name(),
             "booted rtc packet loop worker"
         );
-        #[cfg(target_os = "linux")]
-        {
-            if thread::Builder::new()
-                .name(format!("rtc-packet-loop-{:?}", self.relay_target_id))
-                .spawn(move || {
-                    tokio_uring::start(packet_loop::run_packet_loop(
-                        packet_loop_config,
-                        bitrate_registry,
-                        snapshot_state,
-                        packet_loop_inputs,
-                    ));
-                })
-                .is_err()
-            {
+        let thread_name = format!("rtc-packet-loop-{:?}", self.relay_target_id);
+        match self.rtc_udp_io_backend {
+            RtcUdpIoBackend::Tokio => spawn_tokio_packet_loop(
+                thread_name,
+                packet_loop_config,
+                bitrate_registry,
+                snapshot_state,
+                packet_loop_inputs,
+            )?,
+            RtcUdpIoBackend::IoUring => {
+                #[cfg(target_os = "linux")]
+                spawn_io_uring_packet_loop(
+                    thread_name,
+                    packet_loop_config,
+                    bitrate_registry,
+                    snapshot_state,
+                    packet_loop_inputs,
+                )?;
+                #[cfg(not(target_os = "linux"))]
                 return Err(TransportAdapterError::TransportUnavailable);
             }
         }
-        #[cfg(not(target_os = "linux"))]
-        current_runtime.spawn(packet_loop::run_packet_loop(
-            packet_loop_config,
-            bitrate_registry,
-            snapshot_state,
-            packet_loop_inputs,
-        ));
         // publication happens while the lock is held so competing callers see
         // one complete handle
         Ok(worker_slot.store(worker_handle))

@@ -9,7 +9,7 @@ use super::{
     MediaTransport,
     config::{MediaTransportConfig, MediaTransportDeps},
 };
-use crate::CoreOptions;
+use crate::{CoreOptions, RtcUdpIoBackend};
 
 impl MediaTransport {
     /// Starts named media transport construction.
@@ -122,6 +122,7 @@ impl MediaTransportBuilder {
         let transport = self
             .transport
             .ok_or(MediaTransportBuildError::MissingTransportConfig)?;
+        validate_rtc_udp_io_backend(transport.rtc_udp_io_backend)?;
         let deps = self.deps.ok_or(MediaTransportBuildError::MissingDeps)?;
         let worker_ranges = split_worker_ranges(transport.rtc_port_range, self.worker_count)?;
         Ok(MediaTransport::new(&transport, &deps, worker_ranges))
@@ -159,6 +160,18 @@ pub enum MediaTransportBuildError {
         worker_count: usize,
         port_count: u16,
     },
+    /// The selected UDP I/O backend is not available on this build target.
+    #[error("rtc UDP I/O backend `{backend}` is not supported on this target")]
+    UnsupportedUdpIoBackend { backend: RtcUdpIoBackend },
+}
+
+fn validate_rtc_udp_io_backend(backend: RtcUdpIoBackend) -> Result<(), MediaTransportBuildError> {
+    match backend {
+        RtcUdpIoBackend::IoUring if !cfg!(target_os = "linux") => {
+            Err(MediaTransportBuildError::UnsupportedUdpIoBackend { backend })
+        }
+        RtcUdpIoBackend::Tokio | RtcUdpIoBackend::IoUring => Ok(()),
+    }
 }
 
 fn split_worker_ranges(

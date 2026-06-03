@@ -35,7 +35,10 @@ pub(super) use crate::{
     application::stream_catalog::{
         source_publish_intent_for_stream_type, stream_id_for_stream_type,
     },
-    config::{Bitrate, CodecPreferences, MediaCodecFlags, RuntimeFeatureFlags, VideoBitrateLimits},
+    config::{
+        Bitrate, CodecPreferences, MediaCodecFlags, RtcUdpIoBackend, RuntimeFeatureFlags,
+        VideoBitrateLimits,
+    },
     runtime::{
         RoomPacketSinkRegistry, RuntimeState,
         auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
@@ -244,6 +247,7 @@ pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
             ),
             video_bitrate_limits: VideoBitrateLimits::default(),
             rtc_port_range,
+            rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: CodecPreferences::default(),
             media_quality_interval: None,
