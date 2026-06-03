@@ -31,31 +31,35 @@ RTC Server URL = https://<sfu-domain>
 RTC server KEY = <same value as AUTH_KEY>
 ```
 
-`AUTH_KEY` only has to be valid base64 at the runtime boundary, but production keys should be generated from at least 32 bytes of cryptographically safe randomness
+`AUTH_KEY` only has to be valid base64, but production keys should be generated from at least 32 bytes of cryptographically safe randomness
 
 ```bash
 openssl rand -base64 32
 ```
 
-## minimum production environment
+## recomended production environment
 
 ```env
-BIND_ADDRESS=0.0.0.0:8070
 PROXY=true
 PUBLIC_IP=<vm-public-ip>
 AUTH_KEY=<base64-auth-key>
 DIAGNOSTICS_AUTH_TOKEN=<diagnostics-token>
-RTC_MEDIA_WORKER_COUNT=<worker-count>
-ROOM_MAX_LOCAL_ROUTERS=<room-router-cap>
 RTC_MIN_PORT=40000
 RTC_MAX_PORT=40099
-RUST_LOG=info
+RTC_UDP_IO_BACKEND=io_uring # needs unconfined docker, otherwise run 'tokio'
 TELEMETRY_LOG_FORMAT=json
 ```
 
 `PROXY=true` is valid only when the trusted public proxy overwrites forwarded headers before requests reach `o-sfu`
 
 `RTC_MIN_PORT` and `RTC_MAX_PORT` must match the cloud firewall, host firewall and container or service binding
+
+`RTC_UDP_IO_BACKEND=tokio` is the standard Docker default. `RTC_UDP_IO_BACKEND=io_uring` is a Linux optimization mode that requires a Docker or host runtime policy that allows io-uring syscalls:
+
+```
+security_opt:
+      - seccomp=unconfined
+```
 
 `ROOM_MAX_LOCAL_ROUTERS` must be less than or equal to `RTC_MEDIA_WORKER_COUNT`
 
@@ -257,6 +261,7 @@ RTC transport:
 | --- | --- | --- |
 | `RTC_MIN_PORT` | `40000` | lower bound for the RTC UDP port range |
 | `RTC_MAX_PORT` | `49999` | upper bound for the RTC UDP port range |
+| `RTC_UDP_IO_BACKEND` | `tokio` | UDP socket backend for RTC workers, either `tokio` or Linux-only `io_uring` |
 | `RTC_MEDIA_WORKER_COUNT` | available parallelism | number of RTC media workers, falling back to `1` when the host cannot report available parallelism |
 | `MAX_BITRATE_IN` | `8000000` | maximum incoming bitrate in bps per user |
 | `MAX_BITRATE_OUT` | `10000000` | receiver-side BWE ceiling in bps per user |

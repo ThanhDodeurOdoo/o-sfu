@@ -4,8 +4,8 @@ use o_sfu_core::prelude::Bitrate;
 
 use super::{
     CodecPreferences, MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange,
-    VideoBitrateLimits, diagnostics::DiagnosticsConfig, feature_flags::RuntimeFeatureFlags,
-    telemetry::TelemetryConfig,
+    RtcUdpIoBackend, VideoBitrateLimits, diagnostics::DiagnosticsConfig,
+    feature_flags::RuntimeFeatureFlags, telemetry::TelemetryConfig,
 };
 
 pub const DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS: usize = 512;
@@ -53,6 +53,7 @@ pub struct TransportConfig {
     pub max_bitrate_out: Bitrate,
     pub video_bitrate_limits: VideoBitrateLimits,
     pub rtc_port_range: RtcPortRange,
+    pub rtc_udp_io_backend: RtcUdpIoBackend,
     pub rtc_media_worker_count: usize,
     pub room_worker_policy: RoomWorkerPolicy,
     pub room_media_limits: RoomMediaLimits,

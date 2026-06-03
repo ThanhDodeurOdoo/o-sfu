@@ -3,7 +3,7 @@ use std::{net::IpAddr, num::NonZeroUsize, thread};
 use anyhow::{Result, anyhow, ensure};
 use o_sfu_core::prelude::{
     Bitrate, LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts,
-    RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, VideoBitrateLimits,
+    RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend, VideoBitrateLimits,
 };
 
 use super::{
@@ -39,6 +39,7 @@ pub(super) fn load_transport_config(
         max_bitrate_out: Bitrate::from_bps(env.max_bitrate_out_bps),
         video_bitrate_limits: VideoBitrateLimits::new(Bitrate::from_bps(env.max_video_bitrate_bps)),
         rtc_port_range,
+        rtc_udp_io_backend: rtc_udp_io_backend(env.rtc_udp_io_backend.as_deref())?,
         rtc_media_worker_count: env.rtc_media_worker_count,
         room_worker_policy,
         room_media_limits,
@@ -56,6 +57,7 @@ env_block! {
             VideoBitrateLimits::DEFAULT_MAX_VIDEO_BITRATE.as_bps()
         ).check(positive);
         rtc_max_port: u16 = default("RTC_MAX_PORT", 49_999);
+        rtc_udp_io_backend: Option<String> = optional("RTC_UDP_IO_BACKEND");
         rtc_media_worker_count: usize = default(
             "RTC_MEDIA_WORKER_COUNT",
             default_rtc_media_worker_count()
@@ -197,6 +199,22 @@ fn local_spillover_policy_error(error: LocalSpilloverPolicyError) -> anyhow::Err
     }
 }
 
+fn rtc_udp_io_backend(value: Option<&str>) -> Result<RtcUdpIoBackend> {
+    match value {
+        None | Some("tokio") => Ok(RtcUdpIoBackend::Tokio),
+        Some("io_uring") => {
+            ensure!(
+                cfg!(target_os = "linux"),
+                "RTC_UDP_IO_BACKEND=io_uring is only supported on Linux"
+            );
+            Ok(RtcUdpIoBackend::IoUring)
+        }
+        Some(other) => Err(anyhow!(
+            "RTC_UDP_IO_BACKEND must be one of tokio or io_uring, got {other}"
+        )),
+    }
+}
+
 fn validate_transport_config(env: &TransportEnv, rtc_port_range: RtcPortRange) -> Result<()> {
     ensure!(
         env.rtc_min_port <= env.rtc_max_port,
@@ -229,7 +247,7 @@ mod tests {
     use o_sfu_core::prelude::{LocalSpilloverPolicy, RoomSpilloverMode};
 
     use super::{
-        Bitrate, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, TransportConfig,
+        Bitrate, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend, TransportConfig,
         VideoBitrateLimits, default_rtc_media_worker_count, load_transport_config,
     };
 
@@ -276,6 +294,7 @@ mod tests {
                 max_bitrate_out: Bitrate::from_mbps(10),
                 video_bitrate_limits: VideoBitrateLimits::default(),
                 rtc_port_range: RtcPortRange::new(40_000, 49_999),
+                rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
                 rtc_media_worker_count: worker_count,
                 room_worker_policy: RoomWorkerPolicy::strict_single_router(),
                 room_media_limits: RoomMediaLimits::default(),
@@ -297,6 +316,31 @@ mod tests {
             VideoBitrateLimits::new(Bitrate::from_bps(2_345_678))
         );
         Ok(())
+    }
+
+    #[test]
+    fn load_transport_config_accepts_explicit_rtc_udp_io_backend() -> Result<()> {
+        let config = load_transport_config_with_defaults(&[("RTC_UDP_IO_BACKEND", "tokio")])?;
+        assert_eq!(config.rtc_udp_io_backend, RtcUdpIoBackend::Tokio);
+
+        #[cfg(target_os = "linux")]
+        {
+            let config =
+                load_transport_config_with_defaults(&[("RTC_UDP_IO_BACKEND", "io_uring")])?;
+            assert_eq!(config.rtc_udp_io_backend, RtcUdpIoBackend::IoUring);
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn load_transport_config_rejects_io_uring_backend_on_non_linux() {
+        assert_invalid_transport_cases(&[InvalidTransportCase {
+            name: "non-Linux io_uring backend",
+            overrides: &[("RTC_UDP_IO_BACKEND", "io_uring")],
+            message: "RTC_UDP_IO_BACKEND=io_uring is only supported on Linux",
+        }]);
     }
 
     #[test]
@@ -428,6 +472,11 @@ mod tests {
                 name: "removed transport backend",
                 overrides: &[("TRANSPORT_BACKEND", "rtc")],
                 message: "TRANSPORT_BACKEND is no longer supported; o-sfu always boots the RTC transport",
+            },
+            InvalidTransportCase {
+                name: "invalid RTC UDP IO backend",
+                overrides: &[("RTC_UDP_IO_BACKEND", "epoll")],
+                message: "RTC_UDP_IO_BACKEND must be one of tokio or io_uring, got epoll",
             },
             InvalidTransportCase {
                 name: "unspecified public IP",

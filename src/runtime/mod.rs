@@ -132,6 +132,7 @@ impl Runtime {
         let room_runtime_policy = build_room_runtime_policy(&runtime_config, &options);
         info!(
             event = telemetry_event::RUNTIME_BOOT,
+            rtc_udp_io_backend = options.core.media.rtc_udp_io_backend.wire_name(),
             "runtime configuration loaded"
         );
         let room_manager = build_room_manager(&options, room_runtime_policy, &services);
@@ -474,7 +475,8 @@ mod tests {
         config::{
             AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig,
             HttpConfig, MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange,
-            RuntimeFeatureFlags, TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
+            RtcUdpIoBackend, RuntimeFeatureFlags, TelemetryConfig, TransportConfig, UserConfig,
+            VideoBitrateLimits,
         },
         core::server::room::{
             DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
@@ -546,6 +548,7 @@ mod tests {
                 max_bitrate_out: Bitrate::from_mbps(10),
                 video_bitrate_limits: VideoBitrateLimits::default(),
                 rtc_port_range: RtcPortRange::new(41_000, 41_009),
+                rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
                 rtc_media_worker_count: 1,
                 room_worker_policy: RoomWorkerPolicy::strict_single_router(),
                 room_media_limits: RoomMediaLimits::default(),

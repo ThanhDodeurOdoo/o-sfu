@@ -19,8 +19,8 @@ mod sfu;
 
 pub(crate) use options::{
     AudioCodecPreference, CodecPreferences, CoreOptions, LocalSpilloverPolicy, MediaCodecFlags,
-    RoomMediaLimits, RoomSpilloverMode, RoomWorkerPolicy, RtcPortRange, RuntimeFeatureFlags,
-    SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
+    RoomMediaLimits, RoomSpilloverMode, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend,
+    RuntimeFeatureFlags, SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
 };
 pub(crate) use room::{
     MediaSessionIdentity, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,

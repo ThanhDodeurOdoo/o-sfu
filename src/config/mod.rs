@@ -13,7 +13,7 @@ mod user;
 
 pub use o_sfu_core::prelude::{
     Bitrate, CodecPreferences, MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange,
-    VideoBitrateLimits,
+    RtcUdpIoBackend, VideoBitrateLimits,
 };
 
 pub use self::{

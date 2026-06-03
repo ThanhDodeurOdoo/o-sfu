@@ -31,7 +31,7 @@ use super::{
     recv_stream::{StaleSsrcPolicy, apply_recv_stream},
 };
 use crate::{
-    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
+    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, RtcUdpIoBackend, VideoBitrateLimits,
     engine::{
         media_transport::{
             AppliedProducer, AppliedSessionAnswer, SessionOffer, SessionUploadEncoding,
@@ -50,6 +50,7 @@ pub(super) struct OfferBootstrapConfig<'a> {
     pub(super) max_bitrate_out: Bitrate,
     pub(super) video_bitrate_limits: VideoBitrateLimits,
     pub(super) rtc_port_range: RtcPortRange,
+    pub(super) rtc_udp_io_backend: RtcUdpIoBackend,
     pub(super) codec_flags: MediaCodecFlags,
     pub(super) codec_preferences: CodecPreferences,
     pub(super) media_quality_interval: Option<Duration>,
@@ -371,8 +372,11 @@ fn ensure_session_ready_for_offer(
     let candidate_addr = if let Some(shared_socket) = state.shared_socket.as_ref() {
         shared_socket.candidate_addr
     } else {
-        let shared_socket =
-            bootstrap::bind_shared_rtc_socket(config.public_ip, config.rtc_port_range)?;
+        let shared_socket = bootstrap::bind_shared_rtc_socket(
+            config.public_ip,
+            config.rtc_port_range,
+            config.rtc_udp_io_backend,
+        )?;
         let candidate_addr = shared_socket.candidate_addr;
         state.shared_socket = Some(shared_socket);
         candidate_addr

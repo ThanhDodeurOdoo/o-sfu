@@ -26,7 +26,7 @@ use super::{
     session,
 };
 use crate::{
-    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, VideoBitrateLimits,
+    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, RtcUdpIoBackend, VideoBitrateLimits,
     engine::{
         media_transport::{
             TransportMediaId, TransportResult, TransportSessionKey, TransportSourceActivitySnapshot,
@@ -44,6 +44,7 @@ pub struct WorkerCommandContext<'a> {
     pub max_bitrate_out: Bitrate,
     pub video_bitrate_limits: VideoBitrateLimits,
     pub rtc_port_range: RtcPortRange,
+    pub rtc_udp_io_backend: RtcUdpIoBackend,
     pub codec_flags: MediaCodecFlags,
     pub codec_preferences: CodecPreferences,
     pub media_quality_interval: Option<Duration>,
@@ -57,6 +58,7 @@ impl WorkerCommandContext<'_> {
             max_bitrate_out: self.max_bitrate_out,
             video_bitrate_limits: self.video_bitrate_limits,
             rtc_port_range: self.rtc_port_range,
+            rtc_udp_io_backend: self.rtc_udp_io_backend,
             codec_flags: self.codec_flags,
             codec_preferences: self.codec_preferences,
             media_quality_interval: self.media_quality_interval,

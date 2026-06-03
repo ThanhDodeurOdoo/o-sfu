@@ -7,8 +7,8 @@ pub(super) use crate::runtime::metrics::test_support::RuntimeMetricsSnapshotTest
 use crate::{
     config::{
         AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
-        MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RuntimeFeatureFlags,
-        TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
+        MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend,
+        RuntimeFeatureFlags, TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
     },
     runtime::{
         DiagnosticsStore, MediaTransport, RoomPacketSinkRegistry, RuntimeMetrics, RuntimeState,
@@ -69,6 +69,7 @@ impl RuntimeTestBuilder {
                     rtc_media_worker_count: 1,
                     room_worker_policy: RoomWorkerPolicy::strict_single_router(),
                     room_media_limits: RoomMediaLimits::default(),
+                    rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
                 },
                 codecs: CodecConfig {
                     flags: MediaCodecFlags::default(),
@@ -204,6 +205,7 @@ fn build_real_media_transport_for_test_config(
             ),
             video_bitrate_limits: config.transport.video_bitrate_limits,
             rtc_port_range: config.transport.rtc_port_range,
+            rtc_udp_io_backend: config.transport.rtc_udp_io_backend,
             codec_flags: config.codecs.flags,
             codec_preferences: config.codecs.preferences,
             media_quality_interval: config.telemetry.media_quality_interval,

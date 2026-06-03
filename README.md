@@ -26,8 +26,6 @@ you can read the one at [odoo/sfu](https://github.com/odoo/sfu), it's roughly th
 
 see [DEPLOYMENT.md](DEPLOYMENT.md) for the runtime environment variables, Odoo binding, reverse proxy setup and rollout checklist
 
-
 ## Running the server and contributing
 
 See [CONTRIBUTING.md](https://github.com/ThanhDodeurOdoo/o-sfu/blob/master/.github/CONTRIBUTING.md)
-

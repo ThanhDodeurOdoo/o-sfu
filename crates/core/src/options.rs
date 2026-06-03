@@ -10,8 +10,8 @@ pub use codecs::{
     AudioCodecPreference, CodecOptions, CodecPreferences, MediaCodecFlags, VideoCodecPreference,
 };
 pub use media::{
-    MediaOptions, RoomMediaLimits, RoomMediaLimitsError, RtcPortRange, SessionBitrateLimits,
-    VideoBitrateLimits,
+    MediaOptions, RoomMediaLimits, RoomMediaLimitsError, RtcPortRange, RtcUdpIoBackend,
+    SessionBitrateLimits, VideoBitrateLimits,
 };
 pub use observability::{ObservabilityOptions, RuntimeFeatureFlags};
 pub use routing::{

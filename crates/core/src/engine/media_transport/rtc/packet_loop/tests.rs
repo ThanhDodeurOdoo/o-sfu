@@ -22,9 +22,8 @@ use str0m::{
     media::{KeyframeRequestKind, MediaKind, Mid, Rid},
     rtp::Ssrc,
 };
-#[cfg(not(target_os = "linux"))]
-use tokio::runtime::Builder;
 use tokio::{
+    runtime::Builder,
     sync::{mpsc, oneshot},
     time::timeout,
 };
@@ -47,7 +46,7 @@ use super::{
     udp::{RtcUdpSocket, UdpIngress},
 };
 use crate::{
-    Bitrate, CodecPreferences, MediaCodecFlags, VideoBitrateLimits,
+    Bitrate, CodecPreferences, MediaCodecFlags, RtcUdpIoBackend, VideoBitrateLimits,
     engine::{
         RoomInstanceId, UserId,
         diagnostics::DiagnosticsStore,
@@ -209,14 +208,6 @@ fn bind_std_socket() -> Result<StdUdpSocket, &'static str> {
     Ok(socket)
 }
 
-#[cfg(target_os = "linux")]
-fn run_packet_loop_io_test(
-    test: impl Future<Output = Result<(), &'static str>>,
-) -> Result<(), &'static str> {
-    tokio_uring::start(test)
-}
-
-#[cfg(not(target_os = "linux"))]
 fn run_packet_loop_io_test(
     test: impl Future<Output = Result<(), &'static str>>,
 ) -> Result<(), &'static str> {
@@ -779,6 +770,7 @@ fn packet_loop_config_for_test() -> PacketLoopConfig {
         video_bitrate_limits: VideoBitrateLimits::default(),
         rtc_port_range: test_rtc_port_range(1)
             .unwrap_or_else(|| panic!("test RTC port range should be available")),
+        rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
         codec_flags: MediaCodecFlags::default(),
         codec_preferences: CodecPreferences::default(),
         media_quality_interval: None,
@@ -1432,8 +1424,8 @@ fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Res
         let candidate_addr = socket
             .local_addr()
             .map_err(|_error| "packet-loop socket should have a local addr")?;
-        let socket =
-            RtcUdpSocket::from_std(socket).map_err(|_error| "packet-loop socket should convert")?;
+        let socket = RtcUdpSocket::from_std(socket, RtcUdpIoBackend::Tokio)
+            .map_err(|_error| "packet-loop socket should convert")?;
         let ingress = UdpIngress::new(socket.clone(), candidate_addr, candidate_addr);
         let (dirty_response, dirty_result) = oneshot::channel();
         let (queued_response, _queued_result) = oneshot::channel();
@@ -1532,8 +1524,8 @@ fn packet_loop_wait_takes_one_completed_datagram_per_turn() -> Result<(), &'stat
         let socket_addr = socket
             .local_addr()
             .map_err(|_error| "socket should have a local addr")?;
-        let socket =
-            RtcUdpSocket::from_std(socket).map_err(|_error| "packet-loop socket should convert")?;
+        let socket = RtcUdpSocket::from_std(socket, RtcUdpIoBackend::Tokio)
+            .map_err(|_error| "packet-loop socket should convert")?;
         let ingress = UdpIngress::new(socket.clone(), socket_addr, socket_addr);
         let sender = StdUdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
             .map_err(|_error| "sender socket should bind")?;
