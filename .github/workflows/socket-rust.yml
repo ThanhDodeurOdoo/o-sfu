@@ -73,6 +73,18 @@ jobs:
           --spec-version 1.5
           --override-filename socket-rust.cdx
 
+      - name: Upload Rust CycloneDX SBOM
+        # actions/upload-artifact v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: socket-rust-sbom
+          path: |
+            socket-rust.cdx.json
+            crates/**/socket-rust.cdx.json
+            tests/**/socket-rust.cdx.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Run Socket Rust scan
         env:
           BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
