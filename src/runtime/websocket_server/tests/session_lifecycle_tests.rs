@@ -301,21 +301,10 @@ async fn websocket_finish_rolls_back_staged_publish_before_room_cleanup() {
     );
 
     assert!(websocket.close(None).await.is_ok());
-    let cleanup = timeout(Duration::from_secs(1), async {
-        loop {
-            if !room.has_staged_publish(
-                &core_user_id,
-                connection_id,
-                &stream_id_for_stream_type(StreamType::Camera),
-            ) {
-                break;
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await;
     assert!(
-        cleanup.is_ok(),
+        wait_for_staged_publish_cleanup(&room, &core_user_id, connection_id)
+            .await
+            .is_some(),
         "user finish should explicitly roll back staged publishes"
     );
 }
@@ -634,11 +623,14 @@ async fn wait_for_staged_publish_cleanup(
 ) -> Option<()> {
     timeout(Duration::from_secs(1), async {
         loop {
-            if !room.has_staged_publish(
+            let publish_cleaned = !room.has_staged_publish(
                 user_id,
                 connection_id,
                 &stream_id_for_stream_type(StreamType::Camera),
-            ) {
+            );
+            let connection_closed =
+                room.test_api().inspect().user_connection_id(user_id).await != Some(connection_id);
+            if publish_cleaned && connection_closed {
                 break;
             }
             sleep(Duration::from_millis(10)).await;

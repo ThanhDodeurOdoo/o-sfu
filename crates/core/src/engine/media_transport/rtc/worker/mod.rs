@@ -58,7 +58,6 @@ use lifecycle::WorkerHandleSlot;
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::MediaKind;
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 
 use super::{
     bitrate::BitrateRegistry,
@@ -109,9 +108,9 @@ impl RtcSendMediaSource {
 /// it contains command channels plus the read-mostly snapshot state that can be
 /// observed without entering the packet-loop task
 ///
-/// dropping this handle does not stop the worker
-/// shutdown is explicit through `shutdown_token` after the worker reports that
-/// its last session has been closed
+/// dropping the last handle stops the worker by closing the command channel
+/// drained workers keep this handle so a new session can reuse the idle packet
+/// loop without racing the previous socket teardown
 #[derive(Clone)]
 pub struct RtcWorkerHandle {
     pub(super) command_tx: mpsc::Sender<RtcWorkerCommand>,
@@ -121,7 +120,6 @@ pub struct RtcWorkerHandle {
     pub bitrate_registry: Arc<Mutex<BitrateRegistry>>,
     pub snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     pub(super) packet_loop_lag: Arc<PacketLoopLagSnapshot>,
-    pub(super) shutdown_token: CancellationToken,
 }
 
 impl fmt::Debug for RtcWorkerHandle {
@@ -301,9 +299,9 @@ impl RtcWorker {
     ///
     /// if the packet loop was never started, the session is treated as already
     /// closed
-    /// when the worker reports [`CloseSessionState::WorkerDrained`], this
-    /// method clears the published worker handle and cancels the worker
-    /// shutdown token
+    /// when the worker reports [`CloseSessionState::WorkerIdle`], the published
+    /// handle is kept so the idle worker can serve the next session through its
+    /// reusable shared socket
     ///
     /// # Errors
     ///
@@ -322,12 +320,6 @@ impl RtcWorker {
                 response,
             })
             .await?;
-        if close_state == CloseSessionState::WorkerDrained {
-            worker_handle.shutdown_token.cancel();
-            if let Ok(mut worker_slot) = self.worker_handle.lock() {
-                worker_slot.clear();
-            }
-        }
         Ok(close_state)
     }
 }

@@ -701,7 +701,11 @@ pub async fn read_close_code(websocket: &mut TestWebSocket) -> Option<CloseCode>
     loop {
         let message = read_message(websocket).await?;
         match message.ok()? {
-            Message::Close(frame) => return frame.map(|frame| frame.code),
+            Message::Close(frame) => {
+                let code = frame.map(|frame| frame.code);
+                let _ = websocket.close(None).await;
+                return code;
+            }
             Message::Ping(payload) => {
                 websocket.send(Message::Pong(payload)).await.ok()?;
             }

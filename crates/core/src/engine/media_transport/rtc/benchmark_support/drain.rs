@@ -8,16 +8,12 @@
 )]
 
 use std::{
-    net::{SocketAddr, UdpSocket as StdUdpSocket},
+    net::SocketAddr,
     sync::{Arc, Mutex},
     time::Instant,
 };
 
-use tokio::{
-    net::UdpSocket,
-    runtime::{Builder, Runtime},
-    sync::mpsc,
-};
+use tokio::sync::mpsc;
 
 use super::super::{
     bootstrap::ensure_session_rtc_state,
@@ -44,18 +40,13 @@ pub struct SessionDrainBenchFixture {
     diagnostics: Arc<DiagnosticsStore>,
     metrics: RuntimeMetrics,
     source_policy_signal: Arc<SourcePolicySignal>,
-    socket: UdpSocket,
     buffers: PacketLoopBuffers,
     now: Instant,
-    runtime: Runtime,
 }
 
 impl SessionDrainBenchFixture {
     #[must_use]
     pub fn new() -> Self {
-        let runtime = Builder::new_current_thread().enable_io().build().unwrap();
-        let _guard = runtime.enter();
-
         let mut state = PacketLoopState::default();
         let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 46_300));
         let session_count = 128_u32;
@@ -79,26 +70,18 @@ impl SessionDrainBenchFixture {
             state.mark_session_dirty(&session_key);
         }
 
-        let std_socket = StdUdpSocket::bind("127.0.0.1:0").unwrap();
-        std_socket.set_nonblocking(true).unwrap();
-        let socket = UdpSocket::from_std(std_socket).unwrap();
-
         Self {
             state,
             snapshot_state: Arc::new(Mutex::new(RtcSnapshotState::default())),
             diagnostics: Arc::new(DiagnosticsStore::default()),
             metrics: RuntimeMetrics::default(),
             source_policy_signal: Arc::new(SourcePolicySignal::default()),
-            socket,
             buffers: PacketLoopBuffers::new(),
             now: Instant::now(),
-            runtime,
         }
     }
 
     pub fn drain_sessions(&mut self) -> usize {
-        let _guard = self.runtime.enter();
-
         for session_key in self.state.users.keys().cloned().collect::<Vec<_>>() {
             self.state.mark_session_dirty(&session_key);
         }
@@ -109,7 +92,6 @@ impl SessionDrainBenchFixture {
             diagnostics: &self.diagnostics,
             metrics: &self.metrics,
             source_policy_signal: &self.source_policy_signal,
-            socket: &self.socket,
         };
         drain_ready_sessions(&mut self.state, &context, &mut self.buffers, self.now);
         self.buffers.pending_packets.len()

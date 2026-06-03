@@ -12,7 +12,6 @@
 
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket as StdUdpSocket},
-    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -23,11 +22,11 @@ use str0m::{
     format::{Codec, CodecConfig, FormatParams},
     media::Frequency,
 };
-use tokio::net::UdpSocket;
 use tracing::info;
 
 use super::{
     local_send_rewrite::ConsumerStreamStore,
+    packet_loop::{RtcUdpSocket, UdpIngress},
     slots::SessionStore,
     state::{RtcSessionState, SessionSdpNegotiationState, SharedRtcSocket},
 };
@@ -51,7 +50,7 @@ const VIDEO_PAYLOAD_TYPE_VP8: u8 = 96;
 ///
 /// ports are tried in configured order
 /// a port that cannot be bound, switched to
-/// nonblocking mode or converted into a tokio socket is skipped so startup can
+/// nonblocking mode or converted into an RTC UDP socket is skipped so startup can
 /// continue with the next candidate
 ///
 /// # errors
@@ -70,17 +69,19 @@ pub(super) fn bind_shared_rtc_socket(
                 if socket.set_nonblocking(true).is_err() {
                     continue;
                 }
-                let Ok(socket) = UdpSocket::from_std(socket) else {
+                let Ok(socket) = RtcUdpSocket::from_std(socket) else {
                     continue;
                 };
                 let candidate_addr = SocketAddr::new(public_ip, port);
+                let ingress = UdpIngress::new(socket.clone(), bind_addr, candidate_addr);
                 info!(
                     %bind_addr,
                     %candidate_addr,
                     "booted shared rtc UDP socket"
                 );
                 return Ok(SharedRtcSocket {
-                    socket: Arc::new(socket),
+                    socket,
+                    ingress,
                     candidate_addr,
                 });
             }

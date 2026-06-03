@@ -38,13 +38,13 @@ use str0m::{
     media::{Mid, Rid},
     rtp::Ssrc,
 };
-use tokio::net::UdpSocket;
 
 use super::{
     bitrate::MediaBitrateCounter,
     demux::RemoteAddrDemux,
     local_send_rewrite::ConsumerStreamStore,
     media_registry::SessionMediaRegistry,
+    packet_loop::{RtcUdpSocket, UdpIngress},
     route_table::RouteTable,
     slots::{MediaStore, SessionHandle, SessionStore},
 };
@@ -63,8 +63,10 @@ use crate::{
 /// uses `Rtc::accepts()` to decide whether an inbound datagram belongs to that
 /// session
 pub(super) struct SharedRtcSocket {
-    /// tokio socket used by the packet loop after worker bootstrap
-    pub(super) socket: Arc<UdpSocket>,
+    /// worker socket used by packet-loop UDP sends
+    pub(super) socket: RtcUdpSocket,
+    /// completed datagrams received by the worker-local ingress pump
+    pub(super) ingress: UdpIngress,
     /// public candidate tuple inserted into local SDP for sessions on this worker
     pub(super) candidate_addr: SocketAddr,
 }

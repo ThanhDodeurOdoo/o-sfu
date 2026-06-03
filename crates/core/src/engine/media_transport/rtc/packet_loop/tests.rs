@@ -8,7 +8,8 @@
 
 use std::{
     collections::BTreeSet,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    future::Future,
+    net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket as StdUdpSocket},
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -21,15 +22,16 @@ use str0m::{
     media::{KeyframeRequestKind, MediaKind, Mid, Rid},
     rtp::Ssrc,
 };
+#[cfg(not(target_os = "linux"))]
+use tokio::runtime::Builder;
 use tokio::{
-    net::UdpSocket,
     sync::{mpsc, oneshot},
     time::timeout,
 };
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers, RECEIVE_BUFFER_LEN},
+    buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers},
     forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
     ingress_routing::route_pkt_to_session,
     input::{PacketLoopInputReceivers, PacketLoopMailboxInput},
@@ -42,6 +44,7 @@ use super::{
         PacketLoopApplyContext, PacketLoopConfig, PacketLoopTurn, PacketLoopTurnInput,
         WaitPhaseSnapshot,
     },
+    udp::{RtcUdpSocket, UdpIngress},
 };
 use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, VideoBitrateLimits,
@@ -195,6 +198,34 @@ fn create_rtc_session(state: &mut PacketLoopState, session: &TransportSessionKey
     )
     .expect("test session should enter RTC state");
     assert!(created, "test session should be newly created");
+}
+
+fn bind_std_socket() -> Result<StdUdpSocket, &'static str> {
+    let socket = StdUdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .map_err(|_error| "UDP socket should bind")?;
+    socket
+        .set_nonblocking(true)
+        .map_err(|_error| "UDP socket should become nonblocking")?;
+    Ok(socket)
+}
+
+#[cfg(target_os = "linux")]
+fn run_packet_loop_io_test(
+    test: impl Future<Output = Result<(), &'static str>>,
+) -> Result<(), &'static str> {
+    tokio_uring::start(test)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn run_packet_loop_io_test(
+    test: impl Future<Output = Result<(), &'static str>>,
+) -> Result<(), &'static str> {
+    Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .map_err(|_error| "test runtime should build")?
+        .block_on(test)
 }
 
 #[allow(
@@ -1380,167 +1411,208 @@ fn packet_loop_wakes_immediately_when_forwarding_marks_a_session_dirty() {
     assert!(deadline.is_some_and(|deadline| deadline <= Instant::now()));
 }
 
-#[tokio::test]
-async fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control()
--> Result<(), &'static str> {
-    let mut state = PacketLoopState::default();
-    let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
-    let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
-    let config = packet_loop_config_for_test();
-    let mut demux = super::super::routing_miss::DemuxRecoveryState::new();
-    let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
-    let mut turn = PacketLoopTurn::new(Instant::now());
-    let (_command_tx, command_rx) = mpsc::channel(1);
-    let (_relay_tx, relay_rx) = mpsc::channel(1);
-    let (probe_tx, probe_rx) = mpsc::channel(2);
-    let mut inputs = PacketLoopInputReceivers::new(command_rx, relay_rx, CancellationToken::new())
-        .with_probe_receiver(probe_rx);
-    let session = test_transport_session_key(418, 0, 419, UserId::Integer(420));
-    let socket = UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-        .await
-        .map_err(|_error| "packet-loop socket should bind")?;
-    let socket = Arc::new(socket);
-    let candidate_addr = socket
-        .local_addr()
-        .map_err(|_error| "packet-loop socket should have a local addr")?;
-    let (dirty_response, dirty_result) = oneshot::channel();
-    let (queued_response, _queued_result) = oneshot::channel();
+#[test]
+fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Result<(), &'static str>
+{
+    run_packet_loop_io_test(async {
+        let mut state = PacketLoopState::default();
+        let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+        let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
+        let config = packet_loop_config_for_test();
+        let mut demux = super::super::routing_miss::DemuxRecoveryState::new();
+        let mut turn = PacketLoopTurn::new(Instant::now());
+        let (_command_tx, command_rx) = mpsc::channel(1);
+        let (_relay_tx, relay_rx) = mpsc::channel(1);
+        let (probe_tx, probe_rx) = mpsc::channel(2);
+        let mut inputs =
+            PacketLoopInputReceivers::new(command_rx, relay_rx, CancellationToken::new())
+                .with_probe_receiver(probe_rx);
+        let session = test_transport_session_key(418, 0, 419, UserId::Integer(420));
+        let socket = bind_std_socket()?;
+        let candidate_addr = socket
+            .local_addr()
+            .map_err(|_error| "packet-loop socket should have a local addr")?;
+        let socket =
+            RtcUdpSocket::from_std(socket).map_err(|_error| "packet-loop socket should convert")?;
+        let ingress = UdpIngress::new(socket.clone(), candidate_addr, candidate_addr);
+        let (dirty_response, dirty_result) = oneshot::channel();
+        let (queued_response, _queued_result) = oneshot::channel();
 
-    state.shared_socket = Some(SharedRtcSocket {
-        socket,
-        candidate_addr,
-    });
-    assert!(
-        bootstrap::ensure_session_rtc_state(
-            &mut state.users,
-            &session,
+        state.shared_socket = Some(SharedRtcSocket {
+            socket,
+            ingress,
             candidate_addr,
-            Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
-        )
-        .is_ok()
-    );
-    assert!(
-        probe_tx
-            .send(DebugProbeRequest::new(
-                MarkSessionDirtyProbe {
-                    session_key: session.clone(),
-                },
-                dirty_response,
-            ))
-            .await
+        });
+        assert!(
+            bootstrap::ensure_session_rtc_state(
+                &mut state.users,
+                &session,
+                candidate_addr,
+                Bitrate::from_mbps(10),
+                MediaCodecFlags::default(),
+            )
             .is_ok()
-    );
-    assert!(
-        probe_tx
-            .send(DebugProbeRequest::new(
-                MarkSessionDirtyProbe {
-                    session_key: session.clone(),
-                },
-                queued_response,
-            ))
+        );
+        assert!(
+            probe_tx
+                .send(DebugProbeRequest::new(
+                    MarkSessionDirtyProbe {
+                        session_key: session.clone(),
+                    },
+                    dirty_response,
+                ))
+                .await
+                .is_ok()
+        );
+        assert!(
+            probe_tx
+                .send(DebugProbeRequest::new(
+                    MarkSessionDirtyProbe {
+                        session_key: session.clone(),
+                    },
+                    queued_response,
+                ))
+                .await
+                .is_ok()
+        );
+
+        let first_input = turn
+            .wait_for_next_input(None, None, &mut inputs)
             .await
-            .is_ok()
-    );
+            .ok_or("first queued control input should wake the turn")?;
 
-    let first_input = turn
-        .wait_for_next_input(None, &mut inputs, &mut receive_buffer)
-        .await
-        .ok_or("first queued control input should wake the turn")?;
+        turn.apply_input(
+            &mut PacketLoopApplyContext {
+                packet_loop_state: &mut state,
+                bitrate_registry: &bitrate_registry,
+                snapshot_state: &snapshot_state,
+                config: &config,
+                demux: &mut demux,
+                inputs: &mut inputs,
+            },
+            first_input,
+        );
+        dirty_result
+            .await
+            .map_err(|_error| "dirty probe response should arrive")?;
+        assert!(state.has_dirty_sessions());
 
-    turn.apply_input(
-        &mut PacketLoopApplyContext {
-            packet_loop_state: &mut state,
-            bitrate_registry: &bitrate_registry,
-            snapshot_state: &snapshot_state,
-            config: &config,
-            demux: &mut demux,
-            inputs: &mut inputs,
-            receive_buffer: &mut receive_buffer,
-        },
-        first_input,
-    );
-    dirty_result
-        .await
-        .map_err(|_error| "dirty probe response should arrive")?;
-    assert!(state.has_dirty_sessions());
+        let snapshot = turn
+            .pump(&mut state, &snapshot_state, &config, inputs.relay_rx())
+            .ok_or("packet loop should keep the socket snapshot")?;
 
-    let snapshot = turn
-        .pump(&mut state, &snapshot_state, &config, inputs.relay_rx())
-        .ok_or("packet loop should keep the socket snapshot")?;
+        assert!(!state.has_dirty_sessions());
 
-    assert!(!state.has_dirty_sessions());
+        let second_input = {
+            let ingress = &mut state
+                .shared_socket
+                .as_mut()
+                .ok_or("packet loop should still own its shared socket")?
+                .ingress;
+            turn.wait_for_next_input(Some(snapshot), Some(ingress), &mut inputs)
+                .await
+                .ok_or("second control input should wake after the pump")?
+        };
 
-    let second_input = turn
-        .wait_for_next_input(Some(snapshot), &mut inputs, &mut receive_buffer)
-        .await
-        .ok_or("second control input should wake after the pump")?;
-
-    assert!(matches!(second_input, PacketLoopTurnInput::Control(_)));
-    assert!(!state.has_dirty_sessions());
-    Ok(())
+        assert!(matches!(second_input, PacketLoopTurnInput::Control(_)));
+        assert!(!state.has_dirty_sessions());
+        Ok(())
+    })
 }
 
-#[tokio::test]
-async fn packet_loop_wait_takes_one_queued_datagram() -> Result<(), &'static str> {
-    let socket = UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-        .await
-        .map_err(|_error| "packet-loop socket should bind")?;
-    let socket = Arc::new(socket);
-    let sender = UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-        .await
-        .map_err(|_error| "sender socket should bind")?;
-    let socket_addr = socket
-        .local_addr()
-        .map_err(|_error| "socket should have a local addr")?;
-    let (_command_tx, command_rx) = mpsc::channel(1);
-    let (_relay_tx, relay_rx) = mpsc::channel(1);
-    let mut inputs = PacketLoopInputReceivers::new(command_rx, relay_rx, CancellationToken::new());
-    let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
-    let mut turn = PacketLoopTurn::new(Instant::now());
+#[test]
+fn packet_loop_wait_takes_one_completed_datagram_per_turn() -> Result<(), &'static str> {
+    run_packet_loop_io_test(async {
+        let mut state = PacketLoopState::default();
+        let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+        let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
+        let config = packet_loop_config_for_test();
+        let mut demux = super::super::routing_miss::DemuxRecoveryState::new();
+        let socket = bind_std_socket()?;
+        let socket_addr = socket
+            .local_addr()
+            .map_err(|_error| "socket should have a local addr")?;
+        let socket =
+            RtcUdpSocket::from_std(socket).map_err(|_error| "packet-loop socket should convert")?;
+        let ingress = UdpIngress::new(socket.clone(), socket_addr, socket_addr);
+        let sender = StdUdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .map_err(|_error| "sender socket should bind")?;
+        let (_command_tx, command_rx) = mpsc::channel(1);
+        let (_relay_tx, relay_rx) = mpsc::channel(1);
+        let mut inputs =
+            PacketLoopInputReceivers::new(command_rx, relay_rx, CancellationToken::new());
+        let mut turn = PacketLoopTurn::new(Instant::now());
+        state.shared_socket = Some(SharedRtcSocket {
+            socket,
+            ingress,
+            candidate_addr: socket_addr,
+        });
 
-    assert!(sender.send_to(b"one", socket_addr).await.is_ok());
-    assert!(sender.send_to(b"second", socket_addr).await.is_ok());
+        assert!(sender.send_to(b"one", socket_addr).is_ok());
+        assert!(sender.send_to(b"second", socket_addr).is_ok());
 
-    let input = turn
-        .wait_for_next_input(
-            Some(WaitPhaseSnapshot {
-                socket: Arc::clone(&socket),
-                candidate_addr: socket_addr,
-                next_timeout: None,
-                turn_started_at: Instant::now(),
-            }),
-            &mut inputs,
-            &mut receive_buffer,
-        )
-        .await
-        .ok_or("queued datagram should wake the turn")?;
+        let input = {
+            let ingress = &mut state
+                .shared_socket
+                .as_mut()
+                .ok_or("packet loop should own shared socket")?
+                .ingress;
+            turn.wait_for_next_input(
+                Some(WaitPhaseSnapshot {
+                    next_timeout: None,
+                    turn_started_at: Instant::now(),
+                }),
+                Some(ingress),
+                &mut inputs,
+            )
+            .await
+            .ok_or("queued datagram should wake the turn")?
+        };
 
-    let first_payload = match input {
-        PacketLoopTurnInput::Datagram { received_size, .. } => receive_buffer
-            .get(..received_size)
-            .ok_or("first datagram size should fit the receive buffer")?,
-        _ => return Err("queued datagram should become a datagram input"),
-    };
+        let first_payload = match input {
+            PacketLoopTurnInput::Datagram(ref datagram) => datagram.packet.clone(),
+            _ => return Err("queued datagram should become a datagram input"),
+        };
+        turn.apply_input(
+            &mut PacketLoopApplyContext {
+                packet_loop_state: &mut state,
+                bitrate_registry: &bitrate_registry,
+                snapshot_state: &snapshot_state,
+                config: &config,
+                demux: &mut demux,
+                inputs: &mut inputs,
+            },
+            input,
+        );
+        let snapshot = turn
+            .pump(&mut state, &snapshot_state, &config, inputs.relay_rx())
+            .ok_or("packet loop should keep the socket snapshot")?;
 
-    let mut second_datagram = [0_u8; RECEIVE_BUFFER_LEN];
-    let Ok(Ok((received_size, _source_addr))) = timeout(
-        Duration::from_millis(100),
-        socket.recv_from(&mut second_datagram),
-    )
-    .await
-    else {
-        return Err("second datagram should remain available for a later turn");
-    };
+        let second_input = {
+            let ingress = &mut state
+                .shared_socket
+                .as_mut()
+                .ok_or("packet loop should still own shared socket")?
+                .ingress;
+            timeout(
+                Duration::from_secs(1),
+                turn.wait_for_next_input(Some(snapshot), Some(ingress), &mut inputs),
+            )
+            .await
+            .map_err(|_error| "second datagram should remain available for a later turn")?
+            .ok_or("second datagram input should be delivered")?
+        };
 
-    let second_payload = second_datagram
-        .get(..received_size)
-        .ok_or("second datagram size should fit the receive buffer")?;
+        let second_payload = match second_input {
+            PacketLoopTurnInput::Datagram(datagram) => datagram.packet,
+            _ => return Err("second queued datagram should become a datagram input"),
+        };
 
-    assert_ne!(first_payload, second_payload);
-    assert!([b"one".as_slice(), b"second".as_slice()].contains(&first_payload));
-    assert!([b"one".as_slice(), b"second".as_slice()].contains(&second_payload));
-    Ok(())
+        assert_ne!(first_payload, second_payload);
+        assert!([b"one".as_slice(), b"second".as_slice()].contains(&first_payload.as_slice()));
+        assert!([b"one".as_slice(), b"second".as_slice()].contains(&second_payload.as_slice()));
+        Ok(())
+    })
 }
 
 #[tokio::test]

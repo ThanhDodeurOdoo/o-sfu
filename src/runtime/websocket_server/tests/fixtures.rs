@@ -35,10 +35,7 @@ pub(super) use crate::{
     application::stream_catalog::{
         source_publish_intent_for_stream_type, stream_id_for_stream_type,
     },
-    config::{
-        Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, RuntimeFeatureFlags,
-        VideoBitrateLimits,
-    },
+    config::{Bitrate, CodecPreferences, MediaCodecFlags, RuntimeFeatureFlags, VideoBitrateLimits},
     runtime::{
         RoomPacketSinkRegistry, RuntimeState,
         auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
@@ -46,6 +43,7 @@ pub(super) use crate::{
         http_server::app,
         media_transport::{
             MediaTransport, MediaTransportConfig, MediaTransportDeps, SessionBitrateLimits,
+            test_support::test_rtc_port_range,
         },
         metrics::RuntimeMetrics,
         room::{
@@ -58,7 +56,6 @@ pub(super) use crate::{
 
 pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
 pub(super) const OTHER_ROOM_KEY: &str = "b3RoZXItcm9vbS1rZXk=";
-static NEXT_WEBSOCKET_TEST_RTC_PORT: AtomicU16 = AtomicU16::new(49_000);
 static NEXT_WEBSOCKET_TEST_PEER_PORT: AtomicU16 = AtomicU16::new(58_000);
 pub(super) type TestWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
@@ -236,7 +233,8 @@ impl Default for TestServerBuilder {
     reason = "the test fixture builds a constant valid RTC transport and failing here means the fixture itself is invalid"
 )]
 pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
-    let rtc_port_range = next_websocket_test_rtc_port_range();
+    let rtc_port_range = test_rtc_port_range(1)
+        .unwrap_or_else(|| panic!("websocket test RTC ports should be available"));
     match MediaTransport::builder()
         .transport_config(MediaTransportConfig {
             public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -261,11 +259,6 @@ pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
         Ok(transport) => transport,
         Err(error) => panic!("constant RTC test transport config should be valid: {error}"),
     }
-}
-
-fn next_websocket_test_rtc_port_range() -> RtcPortRange {
-    let port_start = NEXT_WEBSOCKET_TEST_RTC_PORT.fetch_add(100, Ordering::Relaxed);
-    RtcPortRange::new(port_start, port_start.saturating_add(99))
 }
 
 fn next_websocket_test_peer_addr() -> SocketAddr {
@@ -678,7 +671,11 @@ pub(super) async fn read_close_code(websocket: &mut TestWebSocket) -> Option<Clo
     loop {
         let message = read_message(websocket).await?;
         match message.ok()? {
-            tungstenite::Message::Close(frame) => return frame.map(|frame| frame.code),
+            tungstenite::Message::Close(frame) => {
+                let code = frame.map(|frame| frame.code);
+                let _ = websocket.close(None).await;
+                return code;
+            }
             tungstenite::Message::Ping(payload) => {
                 websocket
                     .send(tungstenite::Message::Pong(payload))

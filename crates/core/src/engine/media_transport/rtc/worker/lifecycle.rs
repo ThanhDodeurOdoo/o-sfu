@@ -33,16 +33,17 @@
 //! observability methods in this file deliberately avoid lazy boot
 //! a worker that has never started has no packet observations, so the snapshot
 //! surface returns empty or default values instead of creating transport state
+#[cfg(target_os = "linux")]
+use std::thread;
 use std::{
     collections::BTreeSet,
     sync::{Arc, Mutex},
     time::Instant,
 };
 
-use tokio::{
-    runtime::Handle,
-    sync::{mpsc, oneshot},
-};
+#[cfg(not(target_os = "linux"))]
+use tokio::runtime::Handle;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -100,13 +101,6 @@ impl<T: Clone> WorkerHandleSlot<T> {
         handle
     }
 
-    /// clears the published handle after the worker reports it has drained
-    ///
-    /// this makes the next mutating worker call start a fresh packet loop
-    pub fn clear(&mut self) {
-        self.handle = None;
-    }
-
     #[cfg(test)]
     pub fn is_started(&self) -> bool {
         self.handle.is_some()
@@ -157,20 +151,19 @@ impl RtcWorker {
     /// lock worker slot
     ///   |
     ///   +-- return existing handle when another caller already started it
-    ///   +-- capture current Tokio runtime before building worker resources
+    ///   +-- capture current Tokio runtime on non-Linux targets
     ///   +-- create command, relay and snapshot channels
-    ///   +-- publish cloned sender-side handle in the slot
-    ///   +-- release slot lock before spawning the task
-    ///   `-- spawn packet loop with receiver-side inputs
+    ///   +-- spawn packet loop with receiver-side inputs
+    ///   `-- publish cloned sender-side handle in the slot
     /// ```
     ///
-    /// publishing before spawn is safe because commands sent immediately after
-    /// publication queue in bounded mailboxes until the spawned task polls them
-    /// publishing after spawn would leave a window where a second caller can
+    /// the slot lock stays held until publication so a second caller cannot
     /// start another packet loop for the same worker
+    /// the worker starts before publication so spawn failure never exposes a
+    /// handle whose receiver task does not exist
     ///
-    /// the published handle contains sender-side control, shared observations
-    /// and the shutdown token
+    /// the published handle contains sender-side control and shared
+    /// observations
     /// authoritative RTC state is created and owned by the spawned packet-loop
     /// task
     ///
@@ -180,7 +173,8 @@ impl RtcWorker {
     /// # Errors
     ///
     /// returns [`TransportAdapterError::TransportUnavailable`] when the handle
-    /// slot is poisoned or the call is made outside a Tokio runtime
+    /// slot is poisoned, when non-Linux fallback spawning is called outside a
+    /// Tokio runtime or when Linux thread creation fails
     pub(super) fn ensure_packet_loop_started(
         &self,
     ) -> Result<RtcWorkerHandle, TransportAdapterError> {
@@ -191,8 +185,9 @@ impl RtcWorker {
         if let Some(worker_handle) = worker_slot.worker_handle() {
             return Ok(worker_handle);
         }
-        // spawning must use the caller's current runtime so tests and embedded
-        // runtimes keep ownership of the worker task
+        // non-linux fallback spawning uses the caller's current runtime so tests
+        // and embedded runtimes keep ownership of the worker task
+        #[cfg(not(target_os = "linux"))]
         let Ok(current_runtime) = Handle::try_current() else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
@@ -214,19 +209,29 @@ impl RtcWorker {
             bitrate_registry: Arc::clone(&bitrate_registry),
             snapshot_state: Arc::clone(&snapshot_state),
             packet_loop_lag: Arc::clone(&packet_loop_lag),
-            shutdown_token: shutdown_token.clone(),
         };
-        // publication happens while the lock is held so competing callers see
-        // one complete handle
-        let worker_handle = worker_slot.store(worker_handle);
-        // the lock protects publication only
-        // task spawn, logging and packet-loop construction do not need to extend
-        // the critical section
-        drop(worker_slot);
         let packet_loop_inputs =
             packet_loop::PacketLoopInputReceivers::new(command_rx, relay_rx, shutdown_token);
         #[cfg(any(test, feature = "testing-transport"))]
         let packet_loop_inputs = debug_channels.install(packet_loop_inputs);
+        let packet_loop_config = PacketLoopConfig {
+            public_ip: self.public_ip,
+            max_bitrate_in: self.max_bitrate_in,
+            max_bitrate_out: self.max_bitrate_out,
+            video_bitrate_limits: self.video_bitrate_limits,
+            rtc_port_range: self.rtc_port_range,
+            codec_flags: self.codec_flags,
+            codec_preferences: self.codec_preferences,
+            media_quality_interval: self.media_quality_interval,
+            media_id_base: self.media_id_base,
+            diagnostics: Arc::clone(&self.diagnostics),
+            packet_sink_registry: Arc::clone(&self.packet_sink_registry),
+            source_policy_signal: Arc::clone(&self.source_policy_signal),
+            metrics: Arc::clone(&self.metrics),
+            rtp_metrics: Arc::clone(&self.rtp_metrics),
+            rtc_metrics: Arc::clone(&self.rtc_metrics),
+            packet_loop_lag,
+        };
         info!(
             relay_target_id = ?self.relay_target_id,
             public_ip = %self.public_ip,
@@ -236,30 +241,33 @@ impl RtcWorker {
             rtc_port_range_max = self.rtc_port_range.max(),
             "booted rtc packet loop worker"
         );
+        #[cfg(target_os = "linux")]
+        {
+            if thread::Builder::new()
+                .name(format!("rtc-packet-loop-{:?}", self.relay_target_id))
+                .spawn(move || {
+                    tokio_uring::start(packet_loop::run_packet_loop(
+                        packet_loop_config,
+                        bitrate_registry,
+                        snapshot_state,
+                        packet_loop_inputs,
+                    ));
+                })
+                .is_err()
+            {
+                return Err(TransportAdapterError::TransportUnavailable);
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
         current_runtime.spawn(packet_loop::run_packet_loop(
-            PacketLoopConfig {
-                public_ip: self.public_ip,
-                max_bitrate_in: self.max_bitrate_in,
-                max_bitrate_out: self.max_bitrate_out,
-                video_bitrate_limits: self.video_bitrate_limits,
-                rtc_port_range: self.rtc_port_range,
-                codec_flags: self.codec_flags,
-                codec_preferences: self.codec_preferences,
-                media_quality_interval: self.media_quality_interval,
-                media_id_base: self.media_id_base,
-                diagnostics: Arc::clone(&self.diagnostics),
-                packet_sink_registry: Arc::clone(&self.packet_sink_registry),
-                source_policy_signal: Arc::clone(&self.source_policy_signal),
-                metrics: Arc::clone(&self.metrics),
-                rtp_metrics: Arc::clone(&self.rtp_metrics),
-                rtc_metrics: Arc::clone(&self.rtc_metrics),
-                packet_loop_lag,
-            },
+            packet_loop_config,
             bitrate_registry,
             snapshot_state,
             packet_loop_inputs,
         ));
-        Ok(worker_handle)
+        // publication happens while the lock is held so competing callers see
+        // one complete handle
+        Ok(worker_slot.store(worker_handle))
     }
 
     /// sends a request command to the worker after starting it if needed
@@ -588,7 +596,6 @@ mod tests {
                 super::super::super::state::RtcSnapshotState::default(),
             )),
             packet_loop_lag,
-            shutdown_token: CancellationToken::new(),
         };
         {
             let Ok(mut worker_slot) = adapter.worker_handle.lock() else {

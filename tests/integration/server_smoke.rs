@@ -439,6 +439,8 @@ async fn disconnect_api_kicks_target_and_notifies_remaining_from_integration_tes
     } else {
         panic!("expected user departure notification");
     }
+    require_some(alice.close().await, "alice should close")?;
+    assert!(server.wait_for_room_absence(&room).await);
     Ok(())
 }
 
@@ -490,6 +492,8 @@ async fn replaced_socket_cannot_broadcast_or_change_info_from_integration_test()
     );
     assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4108)));
     require_some(replacement.close().await, "replacement should close")?;
+    require_some(alice.close().await, "alice should close")?;
+    assert!(server.wait_for_room_absence(&room).await);
     Ok(())
 }
 
@@ -538,6 +542,8 @@ async fn numeric_string_user_ids_share_one_runtime_identity() -> TestResult {
         Some(CloseCode::Library(4108))
     );
     assert_peer_left(&mut observer, UserId::Integer(42)).await?;
+    require_some(observer.close().await, "observer should close")?;
+    assert!(server.wait_for_room_absence(&room).await);
     Ok(())
 }
 
@@ -672,6 +678,8 @@ async fn bulk_disconnected_socket_cannot_broadcast_after_logical_removal() -> Te
         "bulk-disconnected sockets must not squeeze extra broadcast traffic through after removal"
     );
     assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4108)));
+    require_some(alice.close().await, "alice should close")?;
+    assert!(server.wait_for_room_absence(&room).await);
     Ok(())
 }
 
