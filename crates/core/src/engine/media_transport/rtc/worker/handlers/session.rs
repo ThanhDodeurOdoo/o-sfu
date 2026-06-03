@@ -2,8 +2,9 @@
 //!
 //! Closing a user is more than removing `RtcSessionState`: the worker also
 //! has to clear demux indexes, media registries, route ownership, snapshot
-//! state, bitrate tracking, and lifetime metrics without leaving
-//! packet-loop-visible stuff behind
+//! state, bitrate tracking, and lifetime metrics. A drained worker keeps the
+//! shared UDP socket idle so a new session can reuse the packet loop without
+//! racing socket teardown.
 
 use std::{
     sync::{Arc, Mutex},
@@ -51,9 +52,6 @@ pub(super) fn worker_close_session(
     state
         .routes
         .prune_unrouted_remote_srcs(|src_media| mid_registry.contains_key(src_media));
-    if state.users.is_empty() {
-        state.shared_socket = None;
-    }
     if let Ok(mut snapshot) = snapshot_state.lock() {
         let previous = snapshot.remove_session(session_key);
         metrics.record_transport_health_transition(
@@ -71,7 +69,7 @@ pub(super) fn worker_close_session(
         metrics.add_active_transport_users(-1);
     }
     if state.users.is_empty() {
-        CloseSessionState::WorkerDrained
+        CloseSessionState::WorkerIdle
     } else {
         CloseSessionState::SessionClosed
     }

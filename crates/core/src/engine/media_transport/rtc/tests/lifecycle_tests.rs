@@ -176,7 +176,7 @@ async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
 }
 
 #[tokio::test]
-async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
+async fn rtc_transport_close_last_session_reuses_idle_packet_loop_worker() {
     let adapter = RtcWorker::default();
     let first_session_key = transport_key(1, 141, UserId::Integer(141));
     assert!(
@@ -189,8 +189,8 @@ async fn rtc_transport_close_last_session_resets_packet_loop_worker() {
     assert!(adapter.packet_loop_started());
 
     assert!(adapter.close_session(&first_session_key).await.is_ok());
-    assert!(!adapter.packet_loop_started());
-    assert!(matches!(adapter.worker_handle(), Ok(None)));
+    assert!(adapter.packet_loop_started());
+    assert!(matches!(adapter.worker_handle(), Ok(Some(_))));
 
     let second_session_key = transport_key(1, 142, UserId::Integer(142));
     assert!(
@@ -269,7 +269,7 @@ async fn rtc_transport_concurrent_initial_offers_deliver_all_worker_responses() 
 }
 
 #[tokio::test]
-async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() {
+async fn rtc_transport_concurrent_last_session_close_keeps_worker_reusable() {
     let adapter = Arc::new(RtcWorker::default());
     let first_session_key = transport_key(4, 301, UserId::Integer(301));
     let second_session_key = transport_key(4, 302, UserId::Integer(302));
@@ -304,8 +304,8 @@ async fn rtc_transport_concurrent_last_session_shutdown_drains_worker_cleanly() 
     assert!(second_close.is_ok());
 
     sleep(Duration::from_millis(5)).await;
-    assert!(!adapter.packet_loop_started());
-    assert!(matches!(adapter.worker_handle(), Ok(None)));
+    assert!(adapter.packet_loop_started());
+    assert!(matches!(adapter.worker_handle(), Ok(Some(_))));
 
     let next_session_key = transport_key(4, 303, UserId::Integer(303));
     assert!(

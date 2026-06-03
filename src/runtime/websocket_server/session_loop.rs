@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{str, time::Duration};
 
 use axum::{Error as AxumError, extract::ws::Message};
 use futures_util::{SinkExt, StreamExt};
@@ -79,6 +79,13 @@ impl VerifiedUserSession<'_> {
         self.user.disconnect_reason().map(|_reason| ())
     }
 
+    async fn is_stale(&self) -> bool {
+        !self
+            .room
+            .has_connection(self.user_id, self.connection_id)
+            .await
+    }
+
     async fn start_recording(&self, payload: RecordingOptions) -> bool {
         self.room
             .start_recording_runtime(self.user_id, self.connection_id, payload)
@@ -123,6 +130,8 @@ async fn run_until_exit(user_loop: &mut UserLoop<'_>) -> WsSessionLoopExitReason
         tokio::pin!(ping_tick);
         let pong_deadline = liveness_state.pong_deadline();
         tokio::select! {
+            biased;
+
             () = &mut transport_state_tick => {
                 next_transport_state_check_at = Instant::now() + ping_interval;
                 if let Some(reason) = handle_transport_state_tick(user_loop).await {
@@ -152,17 +161,17 @@ async fn run_until_exit(user_loop: &mut UserLoop<'_>) -> WsSessionLoopExitReason
                 close_writer_bounded(user_loop.socket.writer, WebSocketCloseCode::Error).await;
                 return WsSessionLoopExitReason::PingTimeout;
             }
+            outbound = user_loop.socket.outbound_rx.recv_event() => {
+                if let Some(reason) = handle_outbound_event(user_loop, outbound).await {
+                    return reason;
+                }
+            }
             message = user_loop.socket.reader.next() => {
                 if let Some(reason) = handle_incoming_socket_event(
                     user_loop,
                     message,
                     &mut liveness_state,
                 ).await {
-                    return reason;
-                }
-            }
-            outbound = user_loop.socket.outbound_rx.recv_event() => {
-                if let Some(reason) = handle_outbound_event(user_loop, outbound).await {
                     return reason;
                 }
             }
@@ -259,16 +268,14 @@ async fn handle_binary_payload(
             max_len = MAX_CLIENT_FRAME_BYTES,
             "received oversized websocket binary frame"
         );
-        close_writer_bounded(user_loop.socket.writer, WebSocketCloseCode::ProtocolError).await;
-        return Some(WsSessionLoopExitReason::BusBreak);
+        return Some(close_client_error(user_loop, WebSocketCloseCode::ProtocolError).await);
     }
-    match String::from_utf8(payload.to_vec()) {
-        Ok(payload) => handle_text_payload(user_loop, &payload).await,
+    match str::from_utf8(payload) {
+        Ok(payload) => handle_text_payload(user_loop, payload).await,
         Err(_error) => {
             user_loop.metrics.record_ws_bus_invalid_input_failure();
             warn!("received websocket binary frame with invalid UTF-8");
-            close_writer_bounded(user_loop.socket.writer, WebSocketCloseCode::ProtocolError).await;
-            Some(WsSessionLoopExitReason::BusBreak)
+            Some(close_client_error(user_loop, WebSocketCloseCode::ProtocolError).await)
         }
     }
 }
@@ -296,8 +303,7 @@ async fn handle_text_payload(
                     );
                 }
             }
-            close_writer_bounded(user_loop.socket.writer, WebSocketCloseCode::ProtocolError).await;
-            return Some(WsSessionLoopExitReason::BusBreak);
+            return Some(close_client_error(user_loop, WebSocketCloseCode::ProtocolError).await);
         }
     };
     user_loop.metrics.record_ws_bus_batch_received(batch.len());
@@ -308,8 +314,7 @@ async fn handle_text_payload(
             Ok(user_output) => output.extend(user_output),
             Err(error) => {
                 let close_code = map_user_error(error);
-                close_writer_bounded(user_loop.socket.writer, close_code).await;
-                return Some(WsSessionLoopExitReason::BusBreak);
+                return Some(close_client_error(user_loop, close_code).await);
             }
         }
     }
@@ -320,6 +325,19 @@ async fn handle_text_payload(
             Some(WsSessionLoopExitReason::BusBreak)
         }
     }
+}
+
+async fn close_client_error(
+    user_loop: &mut UserLoop<'_>,
+    fallback_code: WebSocketCloseCode,
+) -> WsSessionLoopExitReason {
+    let close_code = if user_loop.session.is_stale().await {
+        WebSocketCloseCode::Kicked
+    } else {
+        fallback_code
+    };
+    close_writer_bounded(user_loop.socket.writer, close_code).await;
+    WsSessionLoopExitReason::BusBreak
 }
 
 fn record_client_envelope_metrics(metrics: &RuntimeMetrics, envelope: &ClientEnvelope) {

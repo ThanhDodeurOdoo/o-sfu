@@ -74,8 +74,9 @@
 //!
 //! # Submodules
 //!
-//! - [`loop_driver`] owns worker lifecycle, turn ordering, socket waits and the
-//!   shared configuration passed in by the worker.
+//! - [`loop_driver`] owns worker lifecycle, turn ordering, completed-datagram
+//!   waits and the shared configuration passed in by the worker.
+//! - [`udp`] owns the private target-specific RTC UDP socket and ingress pump.
 //! - [`ingress_routing`] maps inbound UDP datagrams to a session with
 //!   source-address pins, bounded recovery and `Rtc::accepts()` as the final
 //!   authority.
@@ -100,6 +101,7 @@ mod loop_driver;
 mod session_drain;
 #[cfg(test)]
 mod tests;
+mod udp;
 
 #[cfg(test)]
 pub use event_observation::{transport_health_from_event, transport_ice_state};
@@ -121,4 +123,5 @@ pub(in crate::engine::media_transport::rtc) use self::{
     input::PacketLoopInputReceivers,
     lag::PacketLoopLagSnapshot,
     loop_driver::{PacketLoopConfig, run_packet_loop},
+    udp::{RtcUdpSocket, UdpIngress},
 };

@@ -35,29 +35,12 @@ pub(super) const MAX_RELAY_PACKETS_PER_ITERATION: usize = 64;
 
 /// One queued UDP datagram ready to be written to the worker socket.
 ///
-/// The payload buffer is reused across turns. A slot can remain allocated after
-/// it leaves the logical transmit list, so readers must access transmits
-/// through [`PacketLoopBuffers::pending_transmits`] instead of iterating the
-/// backing vector directly.
+/// The backing storage is reused across turns, while the payload buffer is moved
+/// from `str0m` output into the socket send path.
 #[derive(Debug)]
 pub(super) struct PendingTransmit {
     pub(super) destination: SocketAddr,
     pub(super) contents: Vec<u8>,
-}
-
-impl PendingTransmit {
-    fn empty() -> Self {
-        Self {
-            destination: SocketAddr::from(([0, 0, 0, 0], 0)),
-            contents: Vec::new(),
-        }
-    }
-
-    fn overwrite(&mut self, destination: SocketAddr, contents: &[u8]) {
-        self.destination = destination;
-        self.contents.clear();
-        self.contents.extend_from_slice(contents);
-    }
 }
 
 pub(super) struct PendingRidReadiness {
@@ -87,8 +70,6 @@ pub(super) struct PendingFirstVideoKeyframe {
 pub(in crate::engine::media_transport::rtc) struct PacketLoopBuffers {
     /// reusable UDP transmit slots produced by `str0m::Output::Transmit`
     pub(super) pending_transmits: Vec<PendingTransmit>,
-    /// logical length of [`Self::pending_transmits`] for the current turn
-    pub(super) pending_transmit_count: usize,
     /// media packets produced by local adapter sessions or inbound relays
     pub pending_packets: Vec<ForwardedPacket>,
     /// raw keyframe feedback emitted by consumer sessions before source lookup
@@ -121,7 +102,6 @@ impl PacketLoopBuffers {
     pub fn new() -> Self {
         Self {
             pending_transmits: Vec::with_capacity(64),
-            pending_transmit_count: 0,
             pending_packets: Vec::with_capacity(32),
             pending_keyframe_requests: Vec::with_capacity(8),
             ready_sessions: Vec::with_capacity(32),
@@ -136,12 +116,8 @@ impl PacketLoopBuffers {
     }
 
     /// Reset all staged work while retaining allocation capacity.
-    ///
-    /// This must run before a new packet-loop turn starts. It
-    /// leaves `pending_transmits` slots allocated because each slot owns a byte
-    /// buffer that is cheaper to overwrite than recreate.
     pub fn clear(&mut self) {
-        self.pending_transmit_count = 0;
+        self.pending_transmits.clear();
         self.pending_packets.clear();
         self.pending_keyframe_requests.clear();
         self.ready_sessions.clear();
@@ -154,27 +130,16 @@ impl PacketLoopBuffers {
         self.forwards.clear();
     }
 
-    /// Queue a UDP transmit by overwriting an existing slot when possible.
-    ///
-    /// `str0m` owns the source transmit buffer, so the packet loop must copy the
-    /// bytes before the async `send_to` await point. Reusing slots bounds that
-    /// copy to existing capacity after warmup.
-    pub(super) fn push_pending_transmit(&mut self, destination: SocketAddr, contents: &[u8]) {
-        if let Some(slot) = self.pending_transmits.get_mut(self.pending_transmit_count) {
-            slot.overwrite(destination, contents);
-        } else {
-            let mut slot = PendingTransmit::empty();
-            slot.overwrite(destination, contents);
-            self.pending_transmits.push(slot);
-        }
-        self.pending_transmit_count = self.pending_transmit_count.saturating_add(1);
+    /// Queue a UDP transmit by moving the owned `str0m` datagram buffer.
+    pub(super) fn push_pending_transmit(&mut self, destination: SocketAddr, contents: Vec<u8>) {
+        self.pending_transmits.push(PendingTransmit {
+            destination,
+            contents,
+        });
     }
 
-    /// Iterate only the logical transmit slots staged for this turn.
-    pub(super) fn pending_transmits(&self) -> impl Iterator<Item = &PendingTransmit> {
-        self.pending_transmits
-            .iter()
-            .take(self.pending_transmit_count)
+    pub(super) fn pending_transmits_mut(&mut self) -> impl Iterator<Item = &mut PendingTransmit> {
+        self.pending_transmits.iter_mut()
     }
 
     pub(super) fn push_rid_readiness(

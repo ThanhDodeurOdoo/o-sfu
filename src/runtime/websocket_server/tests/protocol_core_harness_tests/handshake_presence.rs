@@ -217,7 +217,7 @@ async fn protocol_user_replacement_emits_peerleft_then_peerjoined_for_existing_p
     .await?;
     alice.updates.clear();
 
-    let _replacement = connect_protocol_peer(&server, &room, UserId::Integer(46)).await?;
+    let mut replacement = connect_protocol_peer(&server, &room, UserId::Integer(46)).await?;
 
     let close_code = {
         let websocket = require_some(
@@ -258,5 +258,19 @@ async fn protocol_user_replacement_emits_peerleft_then_peerjoined_for_existing_p
             ProtocolSessionInfo::snapshot_defaults(),
         )]))),
     );
+    require_some(
+        close_peer_and_wait_for_room_cleanup(&mut alice, &room, &ProtocolSessionId::Integer(45))
+            .await,
+        "alice should clean up",
+    )?;
+    require_some(
+        close_peer_and_wait_for_room_cleanup(
+            &mut replacement,
+            &room,
+            &ProtocolSessionId::Integer(46),
+        )
+        .await,
+        "replacement should clean up",
+    )?;
     Ok(())
 }

@@ -1,9 +1,6 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{
-        Arc,
-        atomic::{AtomicU16, Ordering},
-    },
+    sync::Arc,
 };
 
 pub(super) use crate::runtime::metrics::test_support::RuntimeMetricsSnapshotTestExt;
@@ -15,7 +12,10 @@ use crate::{
     },
     runtime::{
         DiagnosticsStore, MediaTransport, RoomPacketSinkRegistry, RuntimeMetrics, RuntimeState,
-        media_transport::{MediaTransportConfig, MediaTransportDeps, SessionBitrateLimits},
+        media_transport::{
+            MediaTransportConfig, MediaTransportDeps, SessionBitrateLimits,
+            test_support::test_rtc_port_range,
+        },
         room::{
             DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
             RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomManagerDeps,
@@ -26,7 +26,6 @@ use crate::{
 
 pub(super) const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
 pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
-static NEXT_RUNTIME_TEST_RTC_PORT: AtomicU16 = AtomicU16::new(52_000);
 
 pub(super) struct RuntimeTestState {
     pub(super) state: RuntimeState,
@@ -178,9 +177,12 @@ impl RuntimeTestBuilder {
     }
 }
 
+#[allow(
+    clippy::panic,
+    reason = "runtime test fixtures need a real UDP range and should fail loudly when the host cannot provide one"
+)]
 fn next_runtime_test_rtc_port_range() -> RtcPortRange {
-    let port_start = NEXT_RUNTIME_TEST_RTC_PORT.fetch_add(100, Ordering::Relaxed);
-    RtcPortRange::new(port_start, port_start.saturating_add(99))
+    test_rtc_port_range(1).unwrap_or_else(|| panic!("runtime test RTC ports should be available"))
 }
 
 #[allow(

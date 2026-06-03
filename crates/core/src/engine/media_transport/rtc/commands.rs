@@ -28,7 +28,8 @@ use crate::engine::{
 
 /// result class returned by a close-session command
 ///
-/// close requests can remove only one session or drain the whole worker
+/// close requests can remove only one session or leave the worker without live
+/// sessions
 /// the worker lifecycle uses this distinction to decide whether the lazy handle
 /// must be cleared after the command completes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,7 +37,7 @@ pub enum CloseSessionState {
     /// the requested session is no longer present while the worker can stay live
     SessionClosed,
     /// the requested session was the last live session on the worker
-    WorkerDrained,
+    WorkerIdle,
 }
 
 /// command handle used by remote consumers to push control back to a source worker
@@ -320,11 +321,12 @@ pub(super) enum RtcWorkerCommand {
         answer_sdp: String,
         response: RtcWorkerResponse<AppliedSessionAnswer>,
     },
-    /// remove a session and report whether the worker can be shut down
+    /// remove a session and report whether the worker has no live sessions
     ///
     /// cleanup removes rtc state, media handles, route destinations, demux
     /// indexes, bitrate counters and snapshot entries owned by the session
-    /// `WorkerDrained` tells the worker lifecycle to clear the lazy handle
+    /// `WorkerIdle` tells the worker lifecycle that only the idle packet loop
+    /// and its reusable shared socket remain
     CloseSession {
         session_key: TransportSessionKey,
         response: RtcWorkerResponse<CloseSessionState>,

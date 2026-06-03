@@ -136,6 +136,7 @@ impl<'a> Iterator for CandidateSessionKeys<'a> {
 /// are dropped with metrics
 /// `Rtc::handle_input()` errors are logged but keep the route learned because
 /// ownership and packet validity are separate concerns
+#[cfg(test)]
 pub(super) fn route_pkt_to_session(
     state: &mut PacketLoopState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,

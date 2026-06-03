@@ -11,15 +11,12 @@
 //! turn.
 
 use std::{
-    io::ErrorKind,
     mem::take,
-    net::SocketAddr,
     sync::{Arc, Mutex},
     time::Instant,
 };
 
 use str0m::{Event, Input, Output};
-use tokio::net::UdpSocket;
 use tracing::{trace, warn};
 
 use super::{
@@ -42,7 +39,6 @@ pub(crate) struct SessionDrainContext<'a> {
     pub diagnostics: &'a Arc<DiagnosticsStore>,
     pub metrics: &'a RuntimeMetrics,
     pub source_policy_signal: &'a SourcePolicySignal,
-    pub socket: &'a UdpSocket,
 }
 
 /// Poll every session that the scheduler reports as ready.
@@ -93,11 +89,9 @@ fn drain_single_session(
     loop {
         match session_state.rtc.poll_output() {
             Ok(Output::Transmit(transmit)) => {
-                try_send_or_stage_transmit(
-                    context.socket,
-                    buffers,
+                buffers.push_pending_transmit(
                     transmit.destination,
-                    &transmit.contents,
+                    Vec::<u8>::from(transmit.contents),
                 );
             }
             Ok(Output::Event(Event::RtpPacket(packet))) => {
@@ -156,26 +150,6 @@ fn drain_single_session(
                 );
                 return None;
             }
-        }
-    }
-}
-
-fn try_send_or_stage_transmit(
-    socket: &UdpSocket,
-    buffers: &mut PacketLoopBuffers,
-    destination: SocketAddr,
-    contents: &[u8],
-) {
-    match socket.try_send_to(contents, destination) {
-        Ok(_sent) => {}
-        Err(error) if error.kind() == ErrorKind::WouldBlock => {
-            buffers.push_pending_transmit(destination, contents);
-        }
-        Err(_error) => {
-            warn!(
-                destination = %destination,
-                "failed to send packet-loop transport datagram"
-            );
         }
     }
 }
