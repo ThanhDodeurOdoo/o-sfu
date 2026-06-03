@@ -57,11 +57,21 @@ jobs:
       - name: Check Cargo metadata
         run: cargo metadata --locked --format-version 1 >/dev/null
 
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --version 0.5.9 --locked
+
       - name: Install Socket CLI
         run: npm install --global socket@1.1.112
 
       - name: Generate Rust CycloneDX SBOM
-        run: socket cdxgen -t cargo -o socket-rust.cdx.json --no-install-deps --fail-on-error .
+        run: >-
+          cargo cyclonedx
+          --format json
+          --all
+          --all-features
+          --target all
+          --spec-version 1.5
+          --override-filename socket-rust.cdx
 
       - name: Run Socket Rust scan
         env:
@@ -78,6 +88,12 @@ jobs:
           fi
           if [[ -z "$SOCKET_SECURITY_ORG" ]]; then
             echo "SOCKET_SECURITY_ORG repository variable is required" >&2
+            exit 1
+          fi
+
+          mapfile -t sbom_files < <(find . -name 'socket-rust.cdx.json' -type f | sort)
+          if [[ "${#sbom_files[@]}" -eq 0 ]]; then
+            echo "No Rust CycloneDX SBOM files were generated" >&2
             exit 1
           fi
 
@@ -98,8 +114,8 @@ jobs:
           fi
 
           if [[ "$BRANCH_NAME" == "$DEFAULT_BRANCH" ]]; then
-            scan_args+=(--default-branch="$DEFAULT_BRANCH")
+            scan_args+=(--default-branch)
           fi
 
-          scan_args+=(socket-rust.cdx.json)
+          scan_args+=("${sbom_files[@]}")
           socket "${scan_args[@]}"
