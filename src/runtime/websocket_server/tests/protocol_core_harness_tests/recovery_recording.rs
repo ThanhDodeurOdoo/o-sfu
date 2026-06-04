@@ -126,7 +126,7 @@ async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery()
     .await?;
 
     let published_track = require_some(
-        publish_camera_and_bootstrap_subscriber(
+        publish_camera_and_setup_subscriber(
             &mut alice,
             &mut bob,
             &alice_user_id,
@@ -135,7 +135,7 @@ async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery()
             "subscriber should receive the initial translated track snapshot on the real rtc path",
         )
         .await,
-        "real RTC publish should bootstrap the subscriber",
+        "real RTC publish should setup the subscriber",
     )?;
     require_some(
         assert_real_rtc_subscribe_activity(
@@ -329,7 +329,7 @@ async fn protocol_core_replays_latest_publish_after_real_server_recovery() -> Te
         recovery_peers(UserId::Integer(81), UserId::Integer(82)).await?;
 
     require_some(
-        publish_camera_and_bootstrap_subscriber(
+        publish_camera_and_setup_subscriber(
             &mut bob,
             &mut alice,
             &ProtocolSessionId::Integer(82),
@@ -338,7 +338,7 @@ async fn protocol_core_replays_latest_publish_after_real_server_recovery() -> Te
             "subscriber should receive the initial translated track snapshot",
         )
         .await,
-        "camera publish should bootstrap the subscriber",
+        "camera publish should setup the subscriber",
     )?;
 
     require_some(
@@ -365,7 +365,7 @@ async fn protocol_core_replays_latest_publish_after_real_rtc_server_recovery() -
     .await?;
 
     require_some(
-        publish_camera_and_bootstrap_subscriber(
+        publish_camera_and_setup_subscriber(
             &mut bob,
             &mut alice,
             &ProtocolSessionId::Integer(92),
@@ -374,7 +374,7 @@ async fn protocol_core_replays_latest_publish_after_real_rtc_server_recovery() -
             "subscriber should receive the initial translated track snapshot",
         )
         .await,
-        "real RTC camera publish should bootstrap the subscriber",
+        "real RTC camera publish should setup the subscriber",
     )?;
 
     require_some(

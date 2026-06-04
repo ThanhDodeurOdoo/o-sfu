@@ -14,7 +14,7 @@ use tokio::sync::{
 use super::{
     events::{MAX_BROADCAST_PAYLOAD_BYTES, RoomEventMessage},
     lifecycle::UserCloseReason,
-    media_graph::RemoteTrackBootstrap,
+    media_graph::RemoteTrackSetup,
 };
 use crate::engine::{UserId, metrics::RuntimeMetrics, source_model::UserStreamId};
 
@@ -24,47 +24,27 @@ pub const DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY: usize =
 
 pub(super) type OutboundSender = UserOutboundSender;
 
-/// delta sent from room state to one post-auth user's wire track state
-///
-/// the room only names the publisher and user stream. the websocket
-/// user maps that pair onto its own current browser-side binding so room state
-/// stays independent from wire `mid` assignment and renegotiation details
+/// outbound track state change queued for websocket delivery
 #[derive(Debug, Clone)]
 pub struct TrackBindingUpdate {
-    /// publisher whose wire track set changed
     pub user_id: UserId,
-    /// logical stream changed for that publisher
     pub stream_id: UserStreamId,
-    /// active update for an existing binding or `None` when the binding ends
     pub active: Option<bool>,
 }
 
-/// outbound work the room wants one websocket user to perform
-///
-/// this is the main handoff from room state transitions to user
-/// protocol handling. the room never writes websocket frames or serializes
-/// protocol envelopes. it emits these values and leaves user-local wire state
-/// to post-auth websocket code
+/// room output that belongs to one connected user
 #[derive(Debug, Clone)]
 pub enum UserOutbound {
-    /// fan-out payload that maps directly to server messages
     Message(RoomEventMessage),
-    /// targeted bootstrap or renegotiation work for one live user
     Request(Box<RoomEventRequest>),
-    /// minimal track-binding delta for the user's wire track state
     TrackBindingUpdate(TrackBindingUpdate),
-    /// ask the user owner to close the websocket with the mapped reason
     Close(UserCloseReason),
 }
 
-/// user-local work requested by the room after a room-state transition
-///
-/// these requests are more specific than `RoomEventMessage` because they must
-/// run in the context of one live websocket user
+/// targeted room request that requires websocket-side handling
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoomEventRequest {
-    /// bootstrap one newly visible remote track on the targeted user
-    BootstrapRemoteTrack(RemoteTrackBootstrap),
+    SetupRemoteTrack(RemoteTrackSetup),
 }
 
 impl UserOutbound {
@@ -77,6 +57,7 @@ impl UserOutbound {
     }
 }
 
+/// queue overflow details captured when a user cannot accept more outbound work
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UserOutboundOverflow {
     kind: UserOutboundOverflowKind,
@@ -86,6 +67,7 @@ pub struct UserOutboundOverflow {
     message_bytes: usize,
 }
 
+/// outbound queue limit that rejected a message
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserOutboundOverflowKind {
     MessageCount,
@@ -135,12 +117,14 @@ impl UserOutboundOverflow {
     }
 }
 
+/// non-blocking outbound send failure
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserOutboundSendError {
     Full(UserOutboundOverflow),
     Closed,
 }
 
+/// receiver-side queue event for user-session loops
 #[derive(Debug)]
 pub enum UserOutboundEvent {
     Message(UserOutbound),
@@ -148,6 +132,7 @@ pub enum UserOutboundEvent {
     Closed,
 }
 
+/// message and byte capacity for one user outbound queue
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UserOutboundQueueLimits {
     message_capacity: usize,
@@ -242,9 +227,8 @@ impl UserOutboundSender {
 
     /// # Errors
     ///
-    /// Returns `Full` when the bounded queue has reached its message or byte
-    /// capacity. Returns `Closed` when the receiver was dropped before the
-    /// message could be queued.
+    /// returns `Full` when message or byte capacity is exhausted and `Closed`
+    /// when the receiver has gone away
     pub fn send(&self, outbound: UserOutbound) -> Result<(), UserOutboundSendError> {
         let bytes = outbound.queued_bytes();
         self.reserve_bytes(bytes)?;
@@ -336,8 +320,8 @@ impl UserOutboundReceiver {
 
     /// # Errors
     ///
-    /// Returns `Empty` when no queued message is immediately available. Returns
-    /// `Disconnected` when every sender was dropped and the queue is empty.
+    /// returns the underlying non-blocking receive error when the queue is
+    /// empty or closed
     pub fn try_recv(&mut self) -> Result<UserOutbound, mpsc::error::TryRecvError> {
         self.messages
             .try_recv()

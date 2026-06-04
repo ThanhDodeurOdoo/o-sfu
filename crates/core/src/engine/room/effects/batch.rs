@@ -1,9 +1,8 @@
-//! shared post-lock room commit execution
-
 use o_sfu_router::MediaKind;
 use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 
+use super::consumer_setup::ConsumerSetupEffect;
 use crate::{
     TransportEffectOutcome,
     engine::{
@@ -11,16 +10,14 @@ use crate::{
         diagnostics::DiagnosticsEventData,
         media_transport::{
             ConsumerActivity, MediaTransport, ProducerActivity, TransportConsumerRoute,
-            TransportMediaId, TransportRelayRouteAction, TransportRelayRouteEffect,
-            TransportSessionKey, TransportSourceKey,
+            TransportRelayRouteAction, TransportRelayRouteEffect, TransportSourceKey,
         },
         room::{
-            RemoteTrackBootstrap, Room, RoomMediaCounts, SourcePolicyEvent, TrackBindingUpdate,
-            UserOutbound,
+            Room, RoomMediaCounts, SourcePolicyEvent, TrackBindingUpdate, UserOutbound,
             cleanup::TransportCleanupOperation,
             media_graph::{
-                ConsumerBootstrapOrigin, ConsumerRouteUpdate, PendingConsumerBootstrapTarget,
-                PlannedConsumerBootstrap, PreparedConsumerBootstrap, ResolvedRelayRouteEffect,
+                ConsumerRouteUpdate, ConsumerSetupOrigin, ConsumerSetupPlan,
+                ResolvedRelayRouteEffect,
             },
             outbound::OutboundSender,
             state::{LifecycleEffects, RoomState},
@@ -53,17 +50,17 @@ impl<'a> RoomEffectContext<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct MediaCountDelta {
+pub(super) struct MediaCountDelta {
     before: RoomMediaCounts,
     after: RoomMediaCounts,
 }
 
 impl MediaCountDelta {
-    pub const fn new(before: RoomMediaCounts, after: RoomMediaCounts) -> Self {
+    pub(super) const fn new(before: RoomMediaCounts, after: RoomMediaCounts) -> Self {
         Self { before, after }
     }
 
-    fn record(self, room: &Room) {
+    pub(super) fn record(self, room: &Room) {
         let before_publications = i64::try_from(self.before.publications).unwrap_or(i64::MAX);
         let after_publications = i64::try_from(self.after.publications).unwrap_or(i64::MAX);
         room.metrics
@@ -86,7 +83,7 @@ pub struct RoomCommit {
     source_policy: Option<SourcePolicyEvent>,
     lifecycle: Vec<LifecycleEffects>,
     routes: Vec<ConsumerRouteActivity>,
-    bootstraps: Vec<ConsumerBootstrapLease>,
+    consumer_setups: Vec<ConsumerSetupEffect>,
     track_bindings: Vec<TrackBindingFanout>,
     diagnostics: Vec<DiagnosticsEffect>,
 }
@@ -104,17 +101,6 @@ struct ConsumerRouteActivity {
     kind: MediaKind,
     active: bool,
     diagnostics: DiagnosticsEventData,
-}
-
-#[derive(Debug)]
-struct ConsumerBootstrapLease {
-    bootstrap: PlannedConsumerBootstrap,
-    origin: ConsumerBootstrapOrigin,
-}
-
-struct DeclaredConsumerMedia {
-    consumer_session_key: TransportSessionKey,
-    consumer_media: TransportMediaId,
 }
 
 #[derive(Debug, Default)]
@@ -286,15 +272,15 @@ impl RoomCommit {
         self
     }
 
-    pub fn with_bootstraps(
+    pub fn with_consumer_setups(
         mut self,
-        bootstraps: Vec<PlannedConsumerBootstrap>,
-        origin: ConsumerBootstrapOrigin,
+        setups: Vec<ConsumerSetupPlan>,
+        origin: ConsumerSetupOrigin,
     ) -> Self {
-        self.bootstraps.extend(
-            bootstraps
+        self.consumer_setups.extend(
+            setups
                 .into_iter()
-                .map(|bootstrap| ConsumerBootstrapLease { bootstrap, origin }),
+                .map(|setup| ConsumerSetupEffect::new(setup, origin)),
         );
         self
     }
@@ -326,13 +312,14 @@ impl RoomCommit {
         let producer_activity =
             Self::execute_producer_activity(room, context, self.producers).await;
         Self::execute_route_activity(room, context, self.routes).await;
-        Self::execute_bootstraps(room, context, self.bootstraps).await;
+        let mut diagnostics = self.diagnostics;
+        Self::execute_consumer_setups(room, context, self.consumer_setups, &mut diagnostics).await;
         Self::emit_track_binding_updates(self.track_bindings);
         if let Some(event) = self.source_policy {
             room.handle_source_policy_event(event, context.media).await;
         }
         Self::emit_lifecycle_effects(self.lifecycle);
-        Self::record_diagnostics_effects(room, self.diagnostics);
+        Self::record_diagnostics_effects(room, diagnostics);
         RoomCommitExecution {
             cleanup,
             producer_activity,
@@ -418,16 +405,19 @@ impl RoomCommit {
         outcome
     }
 
-    async fn execute_bootstraps(
+    async fn execute_consumer_setups(
         room: &Room,
         context: RoomEffectContext<'_>,
-        bootstraps: Vec<ConsumerBootstrapLease>,
+        setups: Vec<ConsumerSetupEffect>,
+        diagnostics: &mut Vec<DiagnosticsEffect>,
     ) {
         let Some(media_transport) = context.cleanup else {
             return;
         };
-        for lease in bootstraps {
-            lease.execute(room, media_transport).await;
+        for setup in setups {
+            if let Some(diagnostic) = setup.execute(room, media_transport).await {
+                diagnostics.push(DiagnosticsEffect::Record(diagnostic));
+            }
         }
     }
 
@@ -499,196 +489,7 @@ impl RoomCleanup {
     }
 }
 
-impl ConsumerBootstrapLease {
-    async fn execute(self, room: &Room, media_transport: &MediaTransport) {
-        let (target, prepared, pending, relays) = self.bootstrap.into_parts();
-        let origin = self.origin;
-        if !execute_relay_route_effects(room, media_transport, &relays).await {
-            release_consumer_bootstrap(room, &target, media_transport).await;
-            return;
-        }
-        let activity = ConsumerActivity::from_active(pending.consumer_active());
-        let Some((declared, mid)) = Self::declare_transport_media(
-            &target,
-            &prepared,
-            activity,
-            origin,
-            room,
-            media_transport,
-        )
-        .await
-        else {
-            return;
-        };
-        let (before, outbound, after) = {
-            let mut state = room.state.write().await;
-            let before = state.media_counts();
-            let outbound = state.commit_bootstrap(&target, pending, declared.consumer_media, mid);
-            let after = state.media_counts();
-            drop(state);
-            (before, outbound, after)
-        };
-        Self::finish(
-            room,
-            media_transport,
-            &target,
-            origin,
-            declared,
-            MediaCountDelta::new(before, after),
-            outbound,
-        )
-        .await;
-    }
-
-    async fn declare_transport_media(
-        target: &PendingConsumerBootstrapTarget,
-        prepared: &PreparedConsumerBootstrap,
-        activity: ConsumerActivity,
-        origin: ConsumerBootstrapOrigin,
-        room: &Room,
-        media_transport: &MediaTransport,
-    ) -> Option<(DeclaredConsumerMedia, Option<String>)> {
-        let (consumer_session, producer_session) = {
-            let state = room.state.read().await;
-            (
-                state.committed_transport_user_key(
-                    target.consumer_user_id(),
-                    target.consumer_connection_id(),
-                ),
-                state.committed_transport_user_key(
-                    target.producer_user_id(),
-                    target.producer_connection_id(),
-                ),
-            )
-        };
-        let Some((consumer_session, producer_session)) = consumer_session.zip(producer_session)
-        else {
-            release_consumer_bootstrap(room, target, media_transport).await;
-            warn!(
-                consumer_user_id = ?target.consumer_user_id(),
-                consumer_connection_id = ?target.consumer_connection_id(),
-                producer_user_id = ?target.producer_user_id(),
-                producer_connection_id = ?target.producer_connection_id(),
-                source_transport_media_id = ?target.transport_media_id(),
-                consumer_mid = prepared.rtp.mid(),
-                ?origin,
-                "skipping consumer bootstrap because routing no longer owns the target sessions"
-            );
-            return None;
-        };
-        match media_transport
-            .consume_media(
-                &consumer_session,
-                target.media_kind(),
-                &producer_session,
-                target.transport_media_id(),
-                &prepared.rtp,
-                activity,
-            )
-            .await
-        {
-            Ok(consumer_media) => {
-                let mid = media_transport
-                    .transport_media_mid(&consumer_session, consumer_media)
-                    .await;
-                Some((
-                    DeclaredConsumerMedia {
-                        consumer_session_key: consumer_session,
-                        consumer_media,
-                    },
-                    mid,
-                ))
-            }
-            Err(error) => {
-                release_consumer_bootstrap(room, target, media_transport).await;
-                warn!(
-                    consumer_user_id = ?target.consumer_user_id(),
-                    consumer_connection_id = ?target.consumer_connection_id(),
-                    producer_user_id = ?target.producer_user_id(),
-                    producer_connection_id = ?target.producer_connection_id(),
-                    source_transport_media_id = ?target.transport_media_id(),
-                    error = ?error,
-                    consumer_mid = prepared.rtp.mid(),
-                    ?origin,
-                    "media transport rejected consume media declaration"
-                );
-                None
-            }
-        }
-    }
-
-    async fn finish(
-        room: &Room,
-        media_transport: &MediaTransport,
-        target: &PendingConsumerBootstrapTarget,
-        origin: ConsumerBootstrapOrigin,
-        declared: DeclaredConsumerMedia,
-        delta: MediaCountDelta,
-        outbound: Option<(OutboundSender, RemoteTrackBootstrap)>,
-    ) {
-        let Some((sender, bootstrap)) = outbound else {
-            delta.record(room);
-            release_consumer_bootstrap(room, target, media_transport).await;
-            let cleanup = [TransportCleanupOperation::RemoveMedia {
-                session_key: declared.consumer_session_key,
-                connection_id: target.consumer_connection_id(),
-                transport_media_id: declared.consumer_media,
-            }];
-            room.execute_transport_cleanup_operations(media_transport, &cleanup)
-                .await;
-            return;
-        };
-        delta.record(room);
-        room.diagnostics.record(
-            DiagnosticsEventData::for_user(
-                room.uuid(),
-                target.consumer_user_id(),
-                telemetry_event::SUBSCRIBE_SUCCEEDED,
-            )
-            .with_connection_id(target.consumer_connection_id().as_u64())
-            .with_media_worker_id(declared.consumer_session_key.media_worker_id().as_usize())
-            .with_transport_media_id(declared.consumer_media.as_u64())
-            .insert_field(
-                "producer_user_id",
-                serde_json::to_value(target.producer_user_id()).unwrap_or(serde_json::Value::Null),
-            )
-            .insert_field(
-                "source_transport_media_id",
-                target.transport_media_id().as_u64(),
-            )
-            .insert_field("stream_id", target.stream_id().to_string())
-            .insert_field("origin", origin.as_diagnostic_str()),
-        );
-        let _ = sender.send(UserOutbound::Request(Box::new(
-            bootstrap.into_room_event_request(),
-        )));
-    }
-}
-
-async fn release_consumer_bootstrap(
-    room: &Room,
-    target: &PendingConsumerBootstrapTarget,
-    media_transport: &MediaTransport,
-) {
-    let (before, after, relays) = {
-        let mut state = room.state.write().await;
-        let before = state.media_counts();
-        let relays = state.release_bootstrap(target);
-        let relays = state.resolved_relay_route_effects(relays);
-        let after = state.media_counts();
-        drop(state);
-        (before, after, relays)
-    };
-    MediaCountDelta::new(before, after).record(room);
-    execute_relay_route_effects(room, media_transport, &relays).await;
-    room.handle_source_policy_event(
-        SourcePolicyEvent::FanoutPressureChanged,
-        Some(media_transport),
-    )
-    .await;
-}
-
-async fn execute_relay_route_effects(
+pub(super) async fn execute_relay_route_effects(
     room: &Room,
     media_transport: &MediaTransport,
     effects: &[ResolvedRelayRouteEffect],

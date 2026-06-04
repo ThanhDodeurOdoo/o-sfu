@@ -214,7 +214,7 @@ async fn apply_negotiation_update(
     if update.became_consumer_ready {
         return room
             .user_operation(user_id, connection_id, media_transport)
-            .bootstrap_consumers()
+            .setup_missing_consumers()
             .await;
     }
     true
@@ -400,7 +400,7 @@ impl ReadyRoomFixtureOptions {
         }
     }
 
-    const fn late_join_bootstrap() -> Self {
+    const fn late_join_consumer_setup() -> Self {
         Self {
             publish_camera_before_subscriber_ready: true,
         }
@@ -455,13 +455,14 @@ pub(super) async fn setup_two_ready_users() -> (
     )
 }
 
-pub(super) async fn setup_late_join_bootstrap_scenario() -> (
+pub(super) async fn setup_late_join_consumer_setup_scenario() -> (
     Arc<super::super::Room>,
     MediaTransport,
     UserOutboundReceiver,
     UserOutboundReceiver,
 ) {
-    let fixture = setup_ready_room_fixture(ReadyRoomFixtureOptions::late_join_bootstrap()).await;
+    let fixture =
+        setup_ready_room_fixture(ReadyRoomFixtureOptions::late_join_consumer_setup()).await;
     (
         fixture.room,
         fixture.adapter,

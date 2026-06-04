@@ -1,9 +1,10 @@
-use o_sfu_router::{ConsumerId, MediaKind, RouterId};
+use o_sfu_router::{ConsumerId, MediaKind, MediaStream, ProducerId, RouterId};
 
 use super::{
-    ConsumerKey, ConsumerSourceSelection, ConsumerState, ProducerRuntimeId,
+    super::routing::RoutedProducerId,
+    ConsumerKey, ConsumerSourceSelection, ConsumerState, ProducerRuntimeId, PublishedProducer,
     route_graph::{RelayRouteEffect, RouteGraph},
-    subscription::{ConsumerBootstrapProducerSnapshot, PendingConsumerBootstrapTarget},
+    subscription::{ConsumerSetupProducerSnapshot, ConsumerSetupTarget},
 };
 use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
@@ -16,20 +17,25 @@ fn target(
     consumer: UserId,
     connection: ConnectionId,
     source_id: PublishedSourceId,
-) -> PendingConsumerBootstrapTarget {
+) -> ConsumerSetupTarget {
     let mut next_producer_id = 1;
-    PendingConsumerBootstrapTarget::new(
+    let producer_id = ProducerRuntimeId::allocate(&mut next_producer_id);
+    let transport_media_id = TransportMediaId::new(50);
+    let producer = PublishedProducer {
+        source_id,
+        owner_user_id: UserId::Integer(1),
+        owner_connection_id: ConnectionId::from_raw(10),
+        stream_id: UserStreamId::from("camera"),
+        media_kind: MediaKind::Video,
+        consumable_rtp_parameters: MediaStream::new(vec![], vec![], vec![]),
+        routed_producer_id: RoutedProducerId::new(RouterId(1), ProducerId(10)),
+        transport_media_id: Some(transport_media_id),
+        active: true,
+    };
+    ConsumerSetupTarget::new(
         consumer,
         connection,
-        ConsumerBootstrapProducerSnapshot::pending(
-            source_id,
-            UserId::Integer(1),
-            ConnectionId::from_raw(10),
-            ProducerRuntimeId::allocate(&mut next_producer_id),
-            UserStreamId::from("camera"),
-            MediaKind::Video,
-            TransportMediaId::new(50),
-        ),
+        ConsumerSetupProducerSnapshot::from_producer(producer_id, &producer, transport_media_id),
     )
 }
 
@@ -58,7 +64,7 @@ fn subscription_count_tracks_route_state_transitions() {
     graph.set_selection(&stored, false);
     assert_eq!(graph.subscription_count(), 0);
 
-    graph.reserve_bootstrap(pending.clone());
+    graph.reserve_consumer_setup(pending.clone());
     assert_eq!(graph.subscription_count(), 1);
 
     assert!(graph.commit(
@@ -75,7 +81,7 @@ fn subscription_count_tracks_route_state_transitions() {
     ));
     assert_eq!(graph.subscription_count(), 2);
 
-    graph.remove_pending_bootstrap(&pending);
+    graph.release_consumer_setup(&pending);
     assert_eq!(graph.subscription_count(), 2);
 
     graph.remove_key_state(&pending);

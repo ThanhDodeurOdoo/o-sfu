@@ -14,13 +14,7 @@ async fn production_change_pauses_producer_and_broadcasts_track_binding() {
     )
     .await;
 
-    let bootstrap_msgs = drain_outbound(&mut rx2);
-    assert!(
-        bootstrap_msgs
-            .iter()
-            .any(|m| matches!(m, UserOutbound::Request(..))),
-        "user 2 should have received a bootstrap remote track request"
-    );
+    assert_remote_track_setup_for_stream(&drain_outbound(&mut rx2), TestSourceKind::ScalableVideo);
     assert!(drain_outbound(&mut rx1).is_empty());
 
     let publisher_id = UserId::Integer(1);
@@ -180,7 +174,7 @@ async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
             | UserOutbound::Close(_) => None,
         })
         .expect("subscriber should receive INIT_CONSUMER");
-    let RoomEventRequest::BootstrapRemoteTrack(payload) = request;
+    let RoomEventRequest::SetupRemoteTrack(payload) = request;
     let formats = payload.rtp_parameters().formats().collect::<Vec<_>>();
     assert_eq!(formats.len(), 1);
     assert_eq!(formats[0].codec_name(), "VP8");
@@ -288,7 +282,7 @@ async fn user_replacement_purges_all_published_stream_mappings() {
             .filter(|message| matches!(message, UserOutbound::Request(_)))
             .count(),
         2,
-        "subscriber should receive one bootstrap per published stream"
+        "subscriber should receive one setup request per published stream"
     );
 
     let camera_transport_media_id = room

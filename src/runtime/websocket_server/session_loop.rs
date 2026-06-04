@@ -508,7 +508,7 @@ async fn dispatch_room_outbound(
             .await
             .map_err(map_user_error),
         UserOutbound::Request(request) => match *request {
-            RoomEventRequest::BootstrapRemoteTrack(payload) => {
+            RoomEventRequest::SetupRemoteTrack(payload) => {
                 user.add_remote_track(payload).await.map_err(map_user_error)
             }
         },

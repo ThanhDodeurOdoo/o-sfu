@@ -1,25 +1,3 @@
-//! main application-flow layer of the SFU.
-//!
-//! ```text
-//! RoomManager
-//! |- directory / definition -> process-global lookup and immutable identity
-//! `- Room
-//!    |- controller          -> room-facing facade and immutable accessors
-//!    |- lifecycle           -> close reasons and permission translation
-//!    |- membership          -> join, leave and disconnect transitions
-//!    |- operation           -> user-scoped membership, media and publish work
-//!    |- cleanup             -> transport cleanup execution and retry reconciliation
-//!    |- effects             -> explicit side-effect plans for transport, fanout, and diagnostics
-//!    |- state               -> locked mutable room model
-//!    |- media_graph         -> source, producer, consumer and relay indexes
-//!    |- user_negotiation    -> per-user transport readiness
-//!    |- media               -> room-wide consumer bootstrap and publication lookup
-//!    |- recording           -> room-scoped recording policy
-//!    |- routing             -> committed router and transport placement
-//!    |- source_policy       -> room source selection and refresh bridge
-//!    |- outbound            -> shared server-to-client fanout helpers
-//! ```
-
 mod cleanup;
 mod controller;
 mod definition;
@@ -59,7 +37,7 @@ pub use manager::{
     JoinUserRequest, JoinedRoomSession, RoomManager, RoomManagerConfig, RoomManagerDeps,
     RuntimeRoomDirectorySnapshot, RuntimeRoomStatsSnapshot,
 };
-pub use media_graph::{ConsumerRouteState, RemoteTrackBootstrap};
+pub use media_graph::{ConsumerRouteState, RemoteTrackSetup};
 pub(crate) use operation::RoomUserOperation;
 pub use outbound::{
     DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,

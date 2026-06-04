@@ -1,9 +1,9 @@
 use super::support::*;
 
 #[tokio::test]
-async fn client_capabilities_bootstrap_late_join_when_download_connected_first() {
+async fn client_capabilities_setup_late_join_when_download_connected_first() {
     let (room, media_transport, mut publisher_rx, mut subscriber_rx) =
-        setup_late_join_bootstrap_scenario().await;
+        setup_late_join_consumer_setup_scenario().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
 
@@ -28,20 +28,18 @@ async fn client_capabilities_bootstrap_late_join_when_download_connected_first()
             .await
     );
 
-    assert!(
-        drain_outbound(&mut subscriber_rx)
-            .iter()
-            .any(|message| matches!(message, UserOutbound::Request(_))),
-        "subscriber should receive a consumer bootstrap after capabilities make it ready"
+    assert_remote_track_setup_for_stream(
+        &drain_outbound(&mut subscriber_rx),
+        TestSourceKind::ScalableVideo,
     );
     assert_eq!(room.test_api().inspect().consumer_count().await, 1);
     assert!(refresh_session_consumers(&room, &UserId::Integer(2), &media_transport).await);
 }
 
 #[tokio::test]
-async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() {
+async fn transport_connect_setup_late_join_when_capabilities_arrive_first() {
     let (room, media_transport, mut publisher_rx, mut subscriber_rx) =
-        setup_late_join_bootstrap_scenario().await;
+        setup_late_join_consumer_setup_scenario().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
 
@@ -67,18 +65,16 @@ async fn transport_connect_bootstrap_late_join_when_capabilities_arrive_first() 
         .await
     );
 
-    assert!(
-        drain_outbound(&mut subscriber_rx)
-            .iter()
-            .any(|message| matches!(message, UserOutbound::Request(_))),
-        "subscriber should receive a consumer bootstrap after download connect makes it ready"
+    assert_remote_track_setup_for_stream(
+        &drain_outbound(&mut subscriber_rx),
+        TestSourceKind::ScalableVideo,
     );
     assert_eq!(room.test_api().inspect().consumer_count().await, 1);
     assert!(refresh_session_consumers(&room, &UserId::Integer(2), &media_transport).await);
 }
 
 #[tokio::test]
-async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
+async fn refresh_retry_sets_up_only_missing_consumers_on_real_rtc() {
     let mut scenario = Box::pin(setup_real_rtc_refresh_scenario()).await;
 
     assert!(
@@ -97,7 +93,7 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
             .is_some()
     );
     assert!(drain_outbound(&mut scenario.publisher_rx).is_empty());
-    assert_bootstrap_for_stream(
+    assert_remote_track_setup_for_stream(
         &drain_outbound(&mut scenario.subscriber_rx),
         TestSourceKind::ScalableVideo,
     );
@@ -131,13 +127,13 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
     );
     assert!(
         drain_outbound(&mut scenario.subscriber_rx).is_empty(),
-        "no second bootstrap should be emitted before the first refresh answer lands"
+        "no second setup should be emitted before the first refresh answer lands"
     );
 
     settle_refresh_offer(&mut scenario, first_refresh_offer).await;
 
     assert_eq!(scenario.room.test_api().inspect().consumer_count().await, 2);
-    assert_bootstrap_for_stream(
+    assert_remote_track_setup_for_stream(
         &drain_outbound(&mut scenario.subscriber_rx),
         TestSourceKind::ReadableVideo,
     );
@@ -156,22 +152,15 @@ async fn refresh_retry_bootstraps_only_missing_consumers_on_real_rtc() {
     );
     assert!(
         drain_outbound(&mut scenario.subscriber_rx).is_empty(),
-        "no new bootstrap should be emitted once every consumer already exists"
+        "no new setup should be emitted once every consumer already exists"
     );
 }
 
 #[tokio::test]
-async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
+async fn negotiated_publish_commit_sets_up_consumers_on_real_rtc() {
     let mut scenario = Box::pin(setup_real_rtc_refresh_scenario()).await;
-    let Some(publisher_connection_id) = scenario
-        .room
-        .test_api()
-        .inspect()
-        .user_connection_id(&scenario.publisher_user_id)
-        .await
-    else {
-        panic!("publisher connection should exist");
-    };
+    let publisher_connection_id =
+        user_connection_id(&scenario.room, &scenario.publisher_user_id).await;
     let publisher_session_key = scenario
         .room
         .transport_user_key(&scenario.publisher_user_id, publisher_connection_id)
@@ -233,7 +222,7 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
             .is_some()
     );
     assert!(drain_outbound(&mut scenario.publisher_rx).is_empty());
-    assert_bootstrap_for_stream(
+    assert_remote_track_setup_for_stream(
         &drain_outbound(&mut scenario.subscriber_rx),
         TestSourceKind::ScalableVideo,
     );

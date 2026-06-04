@@ -14,7 +14,7 @@ async fn explicit_unpublish_removes_state_and_transport_media() {
     )
     .await;
     drain_outbound(&mut publisher_rx);
-    assert_bootstrap_for_stream(
+    assert_remote_track_setup_for_stream(
         &drain_outbound(&mut subscriber_rx),
         TestSourceKind::AudioDetector,
     );
@@ -113,30 +113,4 @@ async fn explicit_unpublish_queues_cleanup_when_real_transport_owner_is_gone() {
             .pending_cleanup_retry_count()
             > 0
     );
-}
-
-#[tokio::test]
-async fn late_join_bootstrap_commits_one_consumer_after_subscriber_readiness() {
-    let (room, media_transport, mut publisher_rx, mut subscriber_rx) =
-        setup_late_join_bootstrap_scenario().await;
-    drain_outbound(&mut publisher_rx);
-    drain_outbound(&mut subscriber_rx);
-    set_consume_transport_ready(&room, &UserId::Integer(2)).await;
-
-    assert!(
-        apply_client_rtp_capabilities(
-            &room,
-            &UserId::Integer(2),
-            user_connection_id(&room, &UserId::Integer(2)).await,
-            test_client_rtp_capabilities(),
-            &media_transport,
-        )
-        .await
-    );
-
-    assert_bootstrap_for_stream(
-        &drain_outbound(&mut subscriber_rx),
-        TestSourceKind::ScalableVideo,
-    );
-    assert_eq!(room.test_api().inspect().consumer_count().await, 1);
 }

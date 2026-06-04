@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use super::{
     ConsumerKey, ConsumerSourceSelection, ConsumerState, TransportMediaRemoval,
-    remove_from_index_set, subscription::PendingConsumerBootstrapTarget,
+    remove_from_index_set, subscription::ConsumerSetupTarget,
 };
 use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
@@ -13,13 +13,6 @@ use crate::engine::{
     source_model::PublishedSourceId,
 };
 
-/// receiver-source route graph
-///
-/// every entry tracks the receiver selection, bootstrap state, committed
-/// consumer route and relay owner for one source relationship
-///
-/// relay effects are returned as transport commands so callers can mutate graph
-/// state under room authority and execute transport work after releasing the lock
 #[derive(Debug, Default)]
 pub(super) struct RouteGraph {
     entries: BTreeMap<ConsumerKey, RouteEntry>,
@@ -32,11 +25,6 @@ pub(super) struct RouteGraph {
 
 type RelayOwners = BTreeMap<ConsumerKey, RelayRouteActivity>;
 
-/// state for one receiver-source relationship
-///
-/// selection may exist before a transport consumer, state records whether
-/// bootstrap or consumer transport exists and relay links pending relay transport
-/// work to the same cleanup key
 #[derive(Debug, Default)]
 struct RouteEntry {
     selection: Option<ConsumerSourceSelection>,
@@ -44,10 +32,6 @@ struct RouteEntry {
     relay: Option<RouteRelay>,
 }
 
-/// lifecycle stage that contributes to subscription counts
-///
-/// stored preserves receiver intent only, pending reserves accepted bootstrap
-/// work and committed carries the transport consumer handle
 #[derive(Debug, Default)]
 enum RouteState {
     #[default]
@@ -56,10 +40,6 @@ enum RouteState {
     Committed(ConsumerState),
 }
 
-/// relay owner attached to one receiver-source route
-///
-/// the connection field rejects stale release or activity updates from replaced
-/// sockets while the route key identifies the transport relay aggregate
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RouteRelay {
     route: RelayRouteKey,
@@ -67,17 +47,12 @@ struct RouteRelay {
     activity: RelayRouteActivity,
 }
 
-/// relay transport change required after a graph mutation
-///
-/// graph methods return these values while still under room state authority so
-/// callers can execute transport work after the lock is released
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::engine::room) struct RelayRouteEffect {
     pub route: RelayRouteKey,
     pub action: TransportRelayRouteAction,
 }
 
-/// relay transport change with its source transport session resolved
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::engine::room) struct ResolvedRelayRouteEffect {
     pub route: RelayRouteKey,
@@ -85,10 +60,6 @@ pub(in crate::engine::room) struct ResolvedRelayRouteEffect {
     pub action: TransportRelayRouteAction,
 }
 
-/// aggregate key for one source media forwarded to one target worker
-///
-/// multiple consumer routes may share this key, so effects are emitted only when
-/// the aggregate changes between no routes, inactive routes and active routes
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(in crate::engine::room) struct RelayRouteKey {
     pub source_user: UserId,
@@ -131,7 +102,7 @@ impl RouteGraph {
         self.entry(key).selection()
     }
 
-    pub(super) fn reserve_bootstrap(&mut self, key: ConsumerKey) {
+    pub(super) fn reserve_consumer_setup(&mut self, key: ConsumerKey) {
         let reserved = {
             let entry = self.entry(key);
             if matches!(entry.state, RouteState::Stored) {
@@ -146,7 +117,7 @@ impl RouteGraph {
         }
     }
 
-    pub(super) fn remove_pending_bootstrap(&mut self, key: &ConsumerKey) {
+    pub(super) fn release_consumer_setup(&mut self, key: &ConsumerKey) {
         let removed = if let Some(entry) = self.entries.get_mut(key)
             && matches!(entry.state, RouteState::Pending)
         {
@@ -324,10 +295,10 @@ impl RouteGraph {
             .collect()
     }
 
-    pub(super) fn has_bootstrap(&self, key: &ConsumerKey) -> bool {
+    pub(super) fn has_consumer_setup_or_route(&self, key: &ConsumerKey) -> bool {
         self.entries
             .get(key)
-            .is_some_and(|entry| entry.state.has_bootstrap())
+            .is_some_and(|entry| entry.state.has_consumer_setup_or_route())
     }
 
     pub(super) fn contains(&self, key: &ConsumerKey) -> bool {
@@ -338,7 +309,7 @@ impl RouteGraph {
 
     pub(super) fn reserve_relay(
         &mut self,
-        target: &PendingConsumerBootstrapTarget,
+        target: &ConsumerSetupTarget,
         source_connection: ConnectionId,
         source_media: TransportMediaId,
         target_worker: MediaWorkerId,
@@ -382,10 +353,7 @@ impl RouteGraph {
         self.set_relay_owner(&key, &relay, false)
     }
 
-    pub(super) fn release_target(
-        &mut self,
-        target: &PendingConsumerBootstrapTarget,
-    ) -> Vec<RelayRouteEffect> {
+    pub(super) fn release_target(&mut self, target: &ConsumerSetupTarget) -> Vec<RelayRouteEffect> {
         let key = ConsumerKey::new(target.consumer_user_id(), target.source_id());
         let Some(relay) = self
             .entries
@@ -526,7 +494,7 @@ impl RouteState {
         matches!(self, Self::Committed(_))
     }
 
-    const fn has_bootstrap(&self) -> bool {
+    const fn has_consumer_setup_or_route(&self) -> bool {
         matches!(self, Self::Pending | Self::Committed(_))
     }
 

@@ -9,7 +9,7 @@
 //! - can this user consume ?
 //!
 //! It also reports the one transition where a user becomes consumer-ready so
-//! the caller can bootstrap missing consumers exactly once when readiness
+//! the caller can set up missing consumers exactly once when readiness
 //! crosses that boundary.
 
 #[cfg(test)]
