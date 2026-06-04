@@ -25,8 +25,8 @@ use crate::{
                 ConsumerKey, ConsumerState, ProducerRuntimeId, PublishedProducer,
                 PublishedSourceInstall,
             },
+            routing::{RoutedConsumerId, RoutedProducerId},
             rtp_capabilities::router_rtp_capabilities,
-            topology::{RoutedConsumerId, RoutedProducerId},
         },
         source_model::{
             ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceDescriptorParts,
@@ -174,13 +174,13 @@ fn leave_repairs_missing_topology_router_and_removes_member() {
     let connection_id = state
         .user_connection_id(&user_id)
         .expect("joined user should have a connection id");
-    state.topology.remove_router_for_test(RouterId(1));
+    state.routing.remove_router_for_test(RouterId(1));
 
     let outcome = state.apply_leave(&user_id, connection_id);
 
     assert!(outcome.is_some());
     assert!(!state.users.contains_key(&user_id));
-    assert_eq!(state.topology.home_router_id_for_user(&user_id), None);
+    assert_eq!(state.routing.home_router_id_for_user(&user_id), None);
 }
 
 #[test]
@@ -193,13 +193,13 @@ fn disconnect_repairs_missing_topology_router_and_removes_member() {
             .apply_join(&user_id, None, UserPermissions::default(), sender, false,)
             .is_ok()
     );
-    state.topology.remove_router_for_test(RouterId(1));
+    state.routing.remove_router_for_test(RouterId(1));
 
     let outcome = state.apply_disconnect_users(from_ref(&user_id));
 
     assert_eq!(outcome.disconnected_users.len(), 1);
     assert!(!state.users.contains_key(&user_id));
-    assert_eq!(state.topology.home_router_id_for_user(&user_id), None);
+    assert_eq!(state.routing.home_router_id_for_user(&user_id), None);
 }
 
 #[test]
@@ -321,7 +321,7 @@ fn disconnect_sessions_ignores_missing_members() {
     let mut state = test_state();
     let outcome = state.apply_disconnect_users(&[UserId::Integer(1)]);
 
-    assert!(outcome.transport_removals.is_empty());
+    assert!(outcome.transport_cleanup.is_empty());
     assert!(outcome.effects.close_requests.is_empty());
     assert!(outcome.effects.fanouts.is_empty());
 }
@@ -342,7 +342,7 @@ fn replacement_join_clears_transport_media_owner_index() {
         .expect("user should have a connection id");
     let transport_media_id = TransportMediaId::new(30);
     let routed_producer_id = state
-        .topology
+        .routing
         .add_producer(&user_id, MediaKind::Video)
         .expect("replacement test producer route should be added");
     install_test_published_producer(

@@ -45,6 +45,7 @@ async fn sfu_core_facade_drives_join_publish_renegotiate_and_subscribe() {
     let publish_intent = source_publish_intent_for_source(TestSourceKind::ScalableVideo);
     assert_eq!(
         core.session(&room, &publisher_user_id, publisher_connection_id)
+            .await
             .publication()
             .stage(&publish_intent)
             .await
@@ -53,6 +54,7 @@ async fn sfu_core_facade_drives_join_publish_renegotiate_and_subscribe() {
     );
     assert!(
         core.session(&room, &publisher_user_id, publisher_connection_id)
+            .await
             .publication()
             .has_staged(&stream_id_for_source(TestSourceKind::ScalableVideo))
     );
@@ -71,6 +73,7 @@ async fn sfu_core_facade_drives_join_publish_renegotiate_and_subscribe() {
     });
     assert_eq!(
         core.session(&room, &subscriber_user_id, subscriber_connection_id)
+            .await
             .subscription()
             .update(&publisher_user_id, &subscription_intents)
             .await,
@@ -88,6 +91,7 @@ async fn apply_initial_core_answer(
 ) {
     let initial_offer = core
         .session(room, user_id, connection_id)
+        .await
         .negotiation()
         .create_initial_offer()
         .await
@@ -95,6 +99,7 @@ async fn apply_initial_core_answer(
     let answer_sdp = remote_answer_sdp(remote, &initial_offer.offer().sdp);
     assert!(
         core.session(room, user_id, connection_id)
+            .await
             .negotiation()
             .apply_initial_answer(&answer_sdp, initial_offer)
             .await
@@ -112,6 +117,7 @@ async fn commit_staged_scalable_video(
 ) {
     let renegotiation_offer = core
         .session(room, publisher_user_id, publisher_connection_id)
+        .await
         .negotiation()
         .create_renegotiation_offer()
         .await
@@ -120,6 +126,7 @@ async fn commit_staged_scalable_video(
     let answer_sdp = remote_answer_sdp(publisher_remote, &renegotiation_offer.sdp);
     let committed_streams = core
         .session(room, publisher_user_id, publisher_connection_id)
+        .await
         .negotiation()
         .apply_renegotiation_answer(&answer_sdp)
         .await
@@ -130,6 +137,7 @@ async fn commit_staged_scalable_video(
     );
     assert!(
         core.session(room, publisher_user_id, publisher_connection_id)
+            .await
             .publication()
             .is_published(&stream_id_for_source(TestSourceKind::ScalableVideo))
             .await

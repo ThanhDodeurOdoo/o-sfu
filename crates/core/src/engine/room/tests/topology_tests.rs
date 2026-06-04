@@ -6,8 +6,7 @@ use crate::engine::{
     room::{
         LocalRoomRouterPlacements, LocalRoomRouterPlacementsError, LocalRouterRuntimeContext,
         ResolvedPlacement,
-        router_state::RoomRouterStateError,
-        topology::{RoomTopologyError, RoutedProducerId},
+        routing::{RoomRoutingError, RoutedProducerId, router_state::RoomRouterStateError},
     },
 };
 
@@ -19,12 +18,12 @@ fn placement(router: u64, media_worker: usize) -> LocalRouterRuntimeContext {
 }
 
 fn join_on_router(
-    topology: &mut RoomTopology,
+    topology: &mut RoomRoutingState,
     user_id: &UserId,
     seed: u64,
     router: u64,
     media_worker: usize,
-) -> Result<(), RoomTopologyError> {
+) -> Result<(), RoomRoutingError> {
     topology.apply_client_join_on_placement(
         user_id,
         seed,
@@ -33,12 +32,12 @@ fn join_on_router(
 }
 
 fn replace_on_router(
-    topology: &mut RoomTopology,
+    topology: &mut RoomRoutingState,
     user_id: &UserId,
     seed: u64,
     router: u64,
     media_worker: usize,
-) -> Result<(), RoomTopologyError> {
+) -> Result<(), RoomRoutingError> {
     topology.replace_client_session_on_placement(
         user_id,
         seed,
@@ -49,7 +48,7 @@ fn replace_on_router(
 
 #[test]
 fn topology_assigns_the_primary_router_to_joined_users() {
-    let mut topology = RoomTopology::new(RouterId(7));
+    let mut topology = RoomRoutingState::new(RouterId(7));
     let user_id = UserId::Integer(10);
 
     assert!(join_on_router(&mut topology, &user_id, 42, 7, 0).is_ok());
@@ -63,7 +62,7 @@ fn topology_assigns_the_primary_router_to_joined_users() {
 
 #[test]
 fn topology_rejoin_does_not_duplicate_router_users() {
-    let mut topology = RoomTopology::new(RouterId(7));
+    let mut topology = RoomRoutingState::new(RouterId(7));
     let user_id = UserId::Integer(10);
 
     assert!(join_on_router(&mut topology, &user_id, 42, 7, 0).is_ok());
@@ -74,7 +73,7 @@ fn topology_rejoin_does_not_duplicate_router_users() {
 
 #[test]
 fn topology_returns_router_scoped_entity_handles() {
-    let mut topology = RoomTopology::new(RouterId(9));
+    let mut topology = RoomRoutingState::new(RouterId(9));
     let producer_user_id = UserId::Integer(10);
     let consumer_user_id = UserId::Integer(20);
 
@@ -84,11 +83,7 @@ fn topology_returns_router_scoped_entity_handles() {
 
     let producer = topology
         .add_producer(&producer_user_id, RouterMediaKind::Audio)
-        .ok();
-    assert!(producer.is_some());
-    let Some(producer) = producer else {
-        return;
-    };
+        .expect("producer should be routed");
 
     let consumer = topology
         .add_consumer(
@@ -97,11 +92,7 @@ fn topology_returns_router_scoped_entity_handles() {
             RouterMediaKind::Audio,
             ConsumerCapability::Compatible,
         )
-        .ok();
-    assert!(consumer.is_some());
-    let Some(consumer) = consumer else {
-        return;
-    };
+        .expect("consumer should be routed");
 
     assert_eq!(producer.router_id(), RouterId(9));
     assert_eq!(consumer.router_id(), RouterId(9));
@@ -109,7 +100,7 @@ fn topology_returns_router_scoped_entity_handles() {
 
 #[test]
 fn topology_attaches_spillover_router_for_bounded_policy() {
-    let mut topology = RoomTopology::new(RouterId(9));
+    let mut topology = RoomRoutingState::new(RouterId(9));
     let first_user_id = UserId::Integer(10);
     let second_user_id = UserId::Integer(20);
 
@@ -130,7 +121,7 @@ fn topology_attaches_spillover_router_for_bounded_policy() {
 
 #[test]
 fn topology_replacement_rehomes_from_the_new_connection_seed() {
-    let mut topology = RoomTopology::new(RouterId(9));
+    let mut topology = RoomRoutingState::new(RouterId(9));
     let user_id = UserId::Integer(10);
 
     assert!(join_on_router(&mut topology, &user_id, 0, 9, 0).is_ok());
@@ -150,7 +141,7 @@ fn topology_replacement_rehomes_from_the_new_connection_seed() {
 
 #[test]
 fn topology_routes_cross_router_consumers_through_source_router() {
-    let mut topology = RoomTopology::new(RouterId(9));
+    let mut topology = RoomRoutingState::new(RouterId(9));
     let producer_user_id = UserId::Integer(10);
     let consumer_user_id = UserId::Integer(20);
 
@@ -159,11 +150,7 @@ fn topology_routes_cross_router_consumers_through_source_router() {
 
     let producer = topology
         .add_producer(&producer_user_id, RouterMediaKind::Audio)
-        .ok();
-    assert!(producer.is_some());
-    let Some(producer) = producer else {
-        return;
-    };
+        .expect("producer should be routed");
     let consumer = topology
         .add_consumer(
             &consumer_user_id,
@@ -171,11 +158,7 @@ fn topology_routes_cross_router_consumers_through_source_router() {
             RouterMediaKind::Audio,
             ConsumerCapability::Compatible,
         )
-        .ok();
-    assert!(consumer.is_some());
-    let Some(consumer) = consumer else {
-        return;
-    };
+        .expect("consumer should be routed");
 
     assert_eq!(producer.router_id(), RouterId(9));
     assert_eq!(consumer.router_id(), RouterId(9));
@@ -187,7 +170,7 @@ fn topology_routes_cross_router_consumers_through_source_router() {
 
 #[test]
 fn topology_prunes_receiver_shadow_when_cross_router_source_leaves_first() {
-    let mut topology = RoomTopology::new(RouterId(9));
+    let mut topology = RoomRoutingState::new(RouterId(9));
     let producer_user_id = UserId::Integer(10);
     let consumer_user_id = UserId::Integer(20);
 
@@ -196,11 +179,7 @@ fn topology_prunes_receiver_shadow_when_cross_router_source_leaves_first() {
 
     let producer = topology
         .add_producer(&producer_user_id, RouterMediaKind::Audio)
-        .ok();
-    assert!(producer.is_some());
-    let Some(producer) = producer else {
-        return;
-    };
+        .expect("producer should be routed");
     let consumer = topology
         .add_consumer(
             &consumer_user_id,
@@ -208,11 +187,7 @@ fn topology_prunes_receiver_shadow_when_cross_router_source_leaves_first() {
             RouterMediaKind::Audio,
             ConsumerCapability::Compatible,
         )
-        .ok();
-    assert!(consumer.is_some());
-    let Some(consumer) = consumer else {
-        return;
-    };
+        .expect("consumer should be routed");
 
     assert_eq!(
         topology.mapped_session_count_for_router(RouterId(9)),
@@ -240,7 +215,7 @@ fn topology_prunes_receiver_shadow_when_cross_router_source_leaves_first() {
 
 #[test]
 fn topology_keeps_receiver_shadow_until_last_source_router_consumer_is_removed() {
-    let mut topology = RoomTopology::new(RouterId(9));
+    let mut topology = RoomRoutingState::new(RouterId(9));
     let producer_user_id = UserId::Integer(10);
     let consumer_user_id = UserId::Integer(20);
 
@@ -251,15 +226,10 @@ fn topology_keeps_receiver_shadow_until_last_source_router_consumer_is_removed()
     }
     let first_producer = topology
         .add_producer(&producer_user_id, RouterMediaKind::Audio)
-        .ok();
+        .expect("first producer should be routed");
     let second_producer = topology
         .add_producer(&producer_user_id, RouterMediaKind::Audio)
-        .ok();
-    assert!(first_producer.is_some());
-    assert!(second_producer.is_some());
-    let (Some(first_producer), Some(second_producer)) = (first_producer, second_producer) else {
-        return;
-    };
+        .expect("second producer should be routed");
 
     let mut consumers = Vec::new();
     for producer in [first_producer, second_producer] {
@@ -270,11 +240,7 @@ fn topology_keeps_receiver_shadow_until_last_source_router_consumer_is_removed()
                 RouterMediaKind::Audio,
                 ConsumerCapability::Compatible,
             )
-            .ok();
-        assert!(consumer.is_some());
-        let Some(consumer) = consumer else {
-            return;
-        };
+            .expect("consumer should be routed");
         consumers.push(consumer);
     }
 
@@ -304,7 +270,7 @@ fn topology_keeps_receiver_shadow_until_last_source_router_consumer_is_removed()
 
 #[test]
 fn topology_remove_consumer_prunes_cross_router_shadow() {
-    let mut topology = RoomTopology::new(RouterId(9));
+    let mut topology = RoomRoutingState::new(RouterId(9));
     let producer_user_id = UserId::Integer(10);
     let consumer_user_id = UserId::Integer(20);
 
@@ -340,7 +306,7 @@ fn topology_remove_consumer_prunes_cross_router_shadow() {
 
 #[test]
 fn topology_rejects_shadow_consumer_without_receiver_home_placement() {
-    let mut topology = RoomTopology::new(RouterId(9));
+    let mut topology = RoomRoutingState::new(RouterId(9));
     let missing_consumer_user_id = UserId::Integer(20);
 
     assert_eq!(
@@ -350,7 +316,7 @@ fn topology_rejects_shadow_consumer_without_receiver_home_placement() {
             RouterMediaKind::Audio,
             ConsumerCapability::Compatible,
         ),
-        Err(RoomTopologyError::MissingSessionPlacement {
+        Err(RoomRoutingError::MissingSessionPlacement {
             user_id: missing_consumer_user_id,
         })
     );
@@ -358,7 +324,7 @@ fn topology_rejects_shadow_consumer_without_receiver_home_placement() {
 
 #[test]
 fn topology_rejects_consumer_on_missing_attached_router() {
-    let mut topology = RoomTopology::new(RouterId(9));
+    let mut topology = RoomRoutingState::new(RouterId(9));
     let consumer_user_id = UserId::Integer(20);
     assert!(join_on_router(&mut topology, &consumer_user_id, 0, 9, 0).is_ok());
 
@@ -369,7 +335,7 @@ fn topology_rejects_consumer_on_missing_attached_router() {
             RouterMediaKind::Audio,
             ConsumerCapability::Compatible,
         ),
-        Err(RoomTopologyError::MissingRouter {
+        Err(RoomRoutingError::MissingRouter {
             router_id: RouterId(99),
         })
     );
@@ -377,7 +343,7 @@ fn topology_rejects_consumer_on_missing_attached_router() {
 
 #[test]
 fn topology_reports_idle_spillover_router_after_last_home_session_leaves() {
-    let mut topology = RoomTopology::new(RouterId(9));
+    let mut topology = RoomRoutingState::new(RouterId(9));
     let first_user_id = UserId::Integer(10);
     let second_user_id = UserId::Integer(20);
 
@@ -396,7 +362,7 @@ fn topology_reports_idle_spillover_router_after_last_home_session_leaves() {
 
 #[test]
 fn topology_never_reports_primary_router_as_idle_spillover() {
-    let mut topology = RoomTopology::new(RouterId(9));
+    let mut topology = RoomRoutingState::new(RouterId(9));
     let user_id = UserId::Integer(10);
 
     assert!(join_on_router(&mut topology, &user_id, 0, 9, 0).is_ok());
@@ -409,14 +375,14 @@ fn topology_never_reports_primary_router_as_idle_spillover() {
 
 #[test]
 fn topology_reports_missing_router_for_user_lookup() {
-    let mut topology = RoomTopology::new(RouterId(7));
+    let mut topology = RoomRoutingState::new(RouterId(7));
     let user_id = UserId::Integer(10);
     assert!(join_on_router(&mut topology, &user_id, 42, 7, 0).is_ok());
     topology.remove_router_for_test(RouterId(7));
 
     assert_eq!(
         topology.remove_session(&user_id, []),
-        Err(RoomTopologyError::MissingRouterForSession {
+        Err(RoomRoutingError::MissingRouterForSession {
             user_id,
             router_id: RouterId(7),
         })
@@ -433,7 +399,7 @@ fn topology_placement_bundle_rejects_empty_router_sets() {
 
 #[test]
 fn topology_reports_missing_user_mapping_from_router_state() {
-    let mut topology = RoomTopology::new(RouterId(7));
+    let mut topology = RoomRoutingState::new(RouterId(7));
     let user_id = UserId::Integer(10);
     assert!(join_on_router(&mut topology, &user_id, 42, 7, 0).is_ok());
     topology.remove_session_mapping_for_test(&user_id);
@@ -441,7 +407,7 @@ fn topology_reports_missing_user_mapping_from_router_state() {
 
     assert_eq!(
         topology.ensure_session_transports(&user_id),
-        Err(RoomTopologyError::RouterState(
+        Err(RoomRoutingError::RouterState(
             RoomRouterStateError::MissingSessionMapping { user_id }
         ))
     );
@@ -449,15 +415,15 @@ fn topology_reports_missing_user_mapping_from_router_state() {
 
 #[test]
 fn topology_preserves_pure_router_errors_without_synthetic_user_ids() {
-    let mut topology = RoomTopology::new(RouterId(9));
+    let mut topology = RoomRoutingState::new(RouterId(9));
 
     assert_eq!(
         topology.remove_producer(
             RoutedProducerId::new(RouterId(9), RouterProducerId(99),),
             []
         ),
-        Err(RoomTopologyError::RouterState(
-            RoomRouterStateError::Router(RouterError::MissingProducer(RouterProducerId(99)))
-        ))
+        Err(RoomRoutingError::RouterState(RoomRouterStateError::Router(
+            RouterError::MissingProducer(RouterProducerId(99))
+        )))
     );
 }

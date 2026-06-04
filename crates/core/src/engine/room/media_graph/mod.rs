@@ -23,7 +23,7 @@ use self::{route_graph::RouteGraph, source_index::SourceIndex};
 use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
     media_transport::{RelayRouteActivity, TransportMediaId},
-    room::topology::{RoutedConsumerId, RoutedProducerId},
+    room::routing::{RoutedConsumerId, RoutedProducerId},
     source_model::{
         ActiveSpeakerGroup, ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
         UserStreamId,
@@ -45,7 +45,7 @@ pub use self::subscription::{ConsumerRouteState, RemoteTrackBootstrap};
 pub(super) use self::{
     ids::{ConsumerRuntimeId, ProducerRuntimeId},
     producer::ValidatedPublishDescriptor,
-    route_graph::{RelayRouteEffect, RelayRouteKey},
+    route_graph::{RelayRouteEffect, RelayRouteKey, ResolvedRelayRouteEffect},
     subscription::{
         ConsumerBootstrapOrigin, ConsumerRouteUpdate, PendingConsumerBootstrapTarget,
         PlannedConsumerBootstrap, PreparedConsumerBootstrap,

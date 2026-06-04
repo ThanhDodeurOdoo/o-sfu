@@ -55,7 +55,8 @@ async fn staged_publish_duplicate_after_transport_reservation_cleans_second_medi
     let scenario = StagedPublishScenario::new().await;
     let session_key = scenario
         .room
-        .transport_user_key(&scenario.user_id, scenario.connection_id);
+        .transport_user_key(&scenario.user_id, scenario.connection_id)
+        .await;
     let pre_reserved_media_id = scenario
         .adapter
         .publish_media(

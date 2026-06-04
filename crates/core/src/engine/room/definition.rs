@@ -9,8 +9,8 @@
 //!
 //! The first identity is visible at the HTTP and websocket edge. The second
 //! identity is process-local and drives transport ownership, diagnostics and
-//! room topology. Mutable placement directories live on `Room` rather than in
-//! this immutable definition.
+//! room topology. Mutable committed routing directories live in `RoomState`
+//! rather than in this immutable definition.
 
 use uuid::Uuid;
 

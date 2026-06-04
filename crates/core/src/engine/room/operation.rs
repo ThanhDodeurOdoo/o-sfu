@@ -47,8 +47,9 @@ impl<'a> RoomUserOperation<'a> {
         self.media_transport
     }
 
-    pub(in crate::engine::room) fn transport_user_key(self) -> TransportSessionKey {
+    pub(in crate::engine::room) async fn transport_user_key(self) -> TransportSessionKey {
         self.room
             .transport_user_key(self.user_id, self.connection_id)
+            .await
     }
 }

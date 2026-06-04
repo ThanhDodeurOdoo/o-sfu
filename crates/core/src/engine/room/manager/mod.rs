@@ -28,7 +28,7 @@ use crate::{
     engine::{
         ConnectionId, RoomInstanceId, UserId, UserPermissions,
         diagnostics::{self, DiagnosticsEventData, DiagnosticsStore},
-        media_transport::MediaTransport,
+        media_transport::{MediaTransport, TransportSessionKey},
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
         sync::lock_unpoisoned,
@@ -87,6 +87,34 @@ pub struct JoinUserRequest {
     pub label: Option<String>,
     pub permissions: UserPermissions,
     pub sender: UserOutboundSender,
+}
+
+/// Room admission result with the committed transport routing key.
+///
+/// The room manager returns this after the room state has accepted the join and
+/// the routing boundary has committed the connection placement.
+#[derive(Debug, Clone)]
+pub struct JoinedRoomSession {
+    room: Arc<Room>,
+    connection_id: ConnectionId,
+    transport_session_key: TransportSessionKey,
+}
+
+impl JoinedRoomSession {
+    #[must_use]
+    pub fn room(&self) -> &Arc<Room> {
+        &self.room
+    }
+
+    #[must_use]
+    pub const fn connection_id(&self) -> ConnectionId {
+        self.connection_id
+    }
+
+    #[must_use]
+    pub const fn transport_session_key(&self) -> &TransportSessionKey {
+        &self.transport_session_key
+    }
 }
 
 /// Read-only directory snapshot for runtime-facing listing and inspection
@@ -338,8 +366,8 @@ impl RoomManager {
     /// Joins a user through the current live room entry for `room_id`.
     ///
     /// On success this returns the current room and its new runtime connection
-    /// id. The room state transition records live user and media deltas before
-    /// async transport effects run.
+    /// id plus the committed transport routing key. The room state transition
+    /// records live user and media deltas before async transport effects run.
     ///
     /// # Errors
     ///
@@ -350,7 +378,7 @@ impl RoomManager {
         room_id: &str,
         request: JoinUserRequest,
         media_transport: &MediaTransport,
-    ) -> Result<(Arc<Room>, ConnectionId), RoomManagerJoinError> {
+    ) -> Result<JoinedRoomSession, RoomManagerJoinError> {
         let Some((room, join_result)) = self
             .run_current_room_mutation(
                 room_id,
@@ -378,11 +406,15 @@ impl RoomManager {
         else {
             return Err(RoomManagerJoinError::MissingRoom);
         };
-        let connection_id = join_result.map_err(|error| match error {
+        let routing_receipt = join_result.map_err(|error| match error {
             RoomJoinError::RoomFull => RoomManagerJoinError::RoomFull,
             RoomJoinError::RouterState => RoomManagerJoinError::RouterState,
         })?;
-        Ok((room, connection_id))
+        Ok(JoinedRoomSession {
+            room,
+            connection_id: routing_receipt.connection_id(),
+            transport_session_key: routing_receipt.transport_session_key().clone(),
+        })
     }
 
     async fn prepare_join_placement(
@@ -390,7 +422,7 @@ impl RoomManager {
         room: &Arc<Room>,
         media_transport: &MediaTransport,
     ) -> JoinPlacementPlan {
-        let room_snapshot = room.placement_usage_snapshot();
+        let room_snapshot = room.placement_usage_snapshot().await;
         let worker_loads = self.worker_load_index(media_transport).await;
         let policy = room.room_worker_policy();
         let planner = RoomPlacementPlanner::new(self.media_worker_count, policy);

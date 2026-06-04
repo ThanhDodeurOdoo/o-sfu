@@ -1,6 +1,6 @@
 //! Cross-router receiver shadow ownership for room topology.
 //!
-//! `RoomTopology` creates a receiver shadow session on a producer's source
+//! `RoomRoutingState` creates a receiver shadow session on a producer's source
 //! router when a receiver's home router is different. The pure router owns the
 //! real session, transport, producer and consumer maps. This module contains only
 //! the derived question that the pure router cannot answer by itself:
@@ -52,7 +52,7 @@ impl ShadowSessionKey {
 /// Tracks which routed consumer edges keep cross-router shadows alive.
 ///
 /// The tracker does not call into `RoomRouterState` and it does not decide
-/// placement. `RoomTopology` registers routed producers and consumers after the
+/// placement. `RoomRoutingState` registers routed producers and consumers after the
 /// pure router accepts them. On teardown, the tracker releases its derived
 /// ownership and returns the shadow sessions whose reference count reached
 /// zero. The caller then removes those sessions from the relevant router.
@@ -96,7 +96,7 @@ impl ShadowSessionTracker {
 
     /// Return whether a shadow currently has any tracked routed edge.
     ///
-    /// `RoomTopology` uses this before finishing consumer creation. If the pure
+    /// `RoomRoutingState` uses this before finishing consumer creation. If the pure
     /// router later rejects the consumer, the topology can remove a newly
     /// materialized shadow without touching an older shadow that still belongs
     /// to another live consumer.

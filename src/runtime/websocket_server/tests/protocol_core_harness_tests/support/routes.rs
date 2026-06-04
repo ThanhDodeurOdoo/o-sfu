@@ -28,8 +28,9 @@ pub(crate) async fn real_rtc_route_activity(
         .inspect()
         .user_connection_id(&core_consumer_user_id)
         .await?;
-    let consumer_session_key =
-        room.transport_user_key(&core_consumer_user_id, consumer_connection_id);
+    let consumer_session_key = room
+        .transport_user_key(&core_consumer_user_id, consumer_connection_id)
+        .await;
     let route_entry = server
         .media_transport
         .test_api()

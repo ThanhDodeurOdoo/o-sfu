@@ -654,7 +654,7 @@ async fn join_large_snapshot_peer(
         UserOutboundQueueLimits::new(1, 1024),
         Arc::clone(&server.state.metrics),
     );
-    let result = server
+    server
         .room_manager
         .join_user(
             room.uuid(),
@@ -668,7 +668,6 @@ async fn join_large_snapshot_peer(
         )
         .await
         .ok()?;
-    let (_room, _connection_id) = result;
     peer_receivers.push(receiver);
     Some(())
 }

@@ -12,10 +12,10 @@ use {
     std::sync::Arc,
 };
 
-use super::RoomTopology;
+use super::RoomRoutingState;
 use crate::engine::UserId;
 
-impl RoomTopology {
+impl RoomRoutingState {
     #[cfg(test)]
     pub fn new(primary_router_id: RouterId) -> Self {
         let packet_sink_registry = Arc::new(RoomPacketSinkRegistry::default());
@@ -25,7 +25,9 @@ impl RoomTopology {
             Arc::new(RuntimeMetrics::default()),
         ));
         Self::new_with_router_state_factory(
+            RoomInstanceId::from_raw(0),
             primary_router_id,
+            None,
             router_rtp_capabilities(MediaCodecFlags::default()),
             &RoomRouterStateFactory::new(event_sink),
         )

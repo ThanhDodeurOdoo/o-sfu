@@ -178,26 +178,22 @@ impl RoomTestInspect<'_> {
         self.room.definition.recording_address()
     }
 
-    pub async fn topology_home_router_id(self, user_id: &UserId) -> Option<RouterId> {
-        self.room
-            .state
-            .read()
-            .await
-            .topology_home_router_id(user_id)
+    pub async fn routing_home_router_id(self, user_id: &UserId) -> Option<RouterId> {
+        self.room.state.read().await.routing_home_router_id(user_id)
     }
 
-    pub async fn topology_home_media_worker_id(self, user_id: &UserId) -> Option<usize> {
-        let connection_id = self.room.state.read().await.user_connection_id(user_id)?;
+    pub async fn routing_home_media_worker_id(self, user_id: &UserId) -> Option<usize> {
+        let state = self.room.state.read().await;
+        let connection_id = state.user_connection_id(user_id)?;
         Some(
-            self.room
-                .placement_state
+            state
                 .media_worker_id_for_connection(connection_id)
                 .as_usize(),
         )
     }
 
-    pub async fn topology_router_count(self) -> usize {
-        self.room.state.read().await.topology_router_count()
+    pub async fn routing_router_count(self) -> usize {
+        self.room.state.read().await.routing_router_count()
     }
 
     pub fn load_triggered_last_decision_reason(self) -> Option<TestPlacementReason> {
@@ -207,9 +203,11 @@ impl RoomTestInspect<'_> {
     }
 
     #[must_use]
-    pub fn assigned_primary_media_worker_id(self) -> Option<usize> {
+    pub async fn assigned_primary_media_worker_id(self) -> Option<usize> {
         self.room
-            .placement_state
+            .state
+            .read()
+            .await
             .assigned_primary_media_worker_id()
             .map(crate::MediaWorkerId::as_usize)
     }

@@ -23,22 +23,18 @@
 //! [`JoinPlacementPlan::resolve_for_commit`] converts that decision into a
 //! concrete [`ResolvedPlacement`] while the membership transition is being
 //! applied
-//! [`RoomPlacementState::register_committed_placement`] records the final mapping
-//! only after the join is accepted
+//! the room routing state records the final mapping only after the join is
+//! accepted
 
-use std::{collections::BTreeMap, iter, sync::Mutex};
+use std::{collections::BTreeMap, iter};
 
 use o_sfu_router::RouterId;
 
 use crate::{
     LocalSpilloverPolicy, RoomSpilloverMode, RoomWorkerPolicy,
     engine::{
-        ConnectionId, MediaWorkerId, RoomInstanceId, UserId,
-        media_transport::{
-            TransportPlacementPressureSnapshot, TransportSessionKey,
-            TransportWorkerPressureSnapshot,
-        },
-        sync::lock_unpoisoned,
+        MediaWorkerId, RoomInstanceId,
+        media_transport::{TransportPlacementPressureSnapshot, TransportWorkerPressureSnapshot},
     },
 };
 
@@ -233,43 +229,6 @@ impl RoomRuntimeContext {
     }
 }
 
-/// committed room-local placement state
-///
-/// joins register the selected router and media worker for each committed
-/// connection
-/// later transport commands use the same mapping to build stable session keys
-/// without deriving placement from topology internals
-#[derive(Debug)]
-pub(super) struct RoomPlacementState {
-    instance_id: RoomInstanceId,
-    inner: Mutex<RoomPlacementStateInner>,
-}
-
-#[derive(Debug)]
-struct RoomPlacementStateInner {
-    /// primary router kept even before worker placement exists
-    primary_router: RouterId,
-    /// local placements after the first committed assignment
-    local_routers: Option<LocalRoomRouterPlacements>,
-    /// connection-specific placements that override primary fallback
-    placement_by_connection: BTreeMap<ConnectionId, LocalRouterRuntimeContext>,
-}
-
-/// placement data returned by a committed join transition
-///
-/// async finalization uses this receipt instead of rebuilding transport keys
-/// from topology state after the room lock has been released
-/// the receipt only exists for accepted joins
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct CommittedPlacementReceipt {
-    /// connection accepted by the membership transition
-    connection_id: ConnectionId,
-    /// placement recorded for that connection
-    placement: LocalRouterRuntimeContext,
-    /// transport key derived from the committed placement
-    transport_session_key: TransportSessionKey,
-}
-
 /// concrete placement selected for a join but not yet recorded
 ///
 /// this separates planning from mutation
@@ -278,209 +237,6 @@ pub(super) struct CommittedPlacementReceipt {
 /// transition succeeds
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::engine::room) struct ResolvedPlacement(LocalRouterRuntimeContext);
-
-impl RoomPlacementState {
-    /// creates the mutable placement map for one room
-    ///
-    /// `local_routers` is present only for contexts that started with an explicit
-    /// worker placement
-    /// production rooms normally start without one and commit the first
-    /// [`LocalRoomRouterPlacements`] during join finalization
-    #[must_use]
-    pub(super) fn new(
-        instance_id: RoomInstanceId,
-        primary_router: RouterId,
-        local_routers: Option<LocalRoomRouterPlacements>,
-    ) -> Self {
-        Self {
-            instance_id,
-            inner: Mutex::new(RoomPlacementStateInner {
-                primary_router,
-                local_routers,
-                placement_by_connection: BTreeMap::new(),
-            }),
-        }
-    }
-
-    /// builds the transport key for a live connection
-    ///
-    /// callers must only ask for keys after the connection has either a committed
-    /// placement or can validly fall back to the room primary placement
-    /// asking before the first room placement is a caller-ordering bug
-    #[must_use]
-    pub(super) fn transport_user_key(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-    ) -> TransportSessionKey {
-        TransportSessionKey::new(
-            self.instance_id,
-            self.media_worker_id_for_connection(connection_id),
-            connection_id,
-            user_id.clone(),
-        )
-    }
-
-    /// records the placement selected by an accepted join
-    ///
-    /// this is the only path that turns a newly created room from "router only"
-    /// into a room with assigned worker placement
-    /// it also returns the transport key that async finalization should use for
-    /// bootstrap effects
-    pub(super) fn register_committed_placement(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-        placement: ResolvedPlacement,
-    ) -> CommittedPlacementReceipt {
-        let placement = placement.into_context();
-        {
-            let mut inner = lock_unpoisoned(&self.inner);
-            match &mut inner.local_routers {
-                Some(local_routers) => local_routers.upsert(placement),
-                None => {
-                    inner.local_routers =
-                        Some(LocalRoomRouterPlacements::new(placement, Vec::new()));
-                }
-            }
-            inner
-                .placement_by_connection
-                .insert(connection_id, placement);
-        }
-        let transport_session_key = TransportSessionKey::new(
-            self.instance_id,
-            placement.media_worker,
-            connection_id,
-            user_id.clone(),
-        );
-        CommittedPlacementReceipt {
-            connection_id,
-            placement,
-            transport_session_key,
-        }
-    }
-
-    /// removes the connection-specific placement after leave or replacement
-    ///
-    /// the room-local placement set remains available so strict rooms can reuse
-    /// their first worker after becoming temporarily empty
-    pub(super) fn unregister_committed_placement(&self, connection_id: ConnectionId) {
-        lock_unpoisoned(&self.inner)
-            .placement_by_connection
-            .remove(&connection_id);
-    }
-
-    /// returns the placement for a connection or the committed primary fallback
-    ///
-    /// older room flows may build source routes for state that predates a
-    /// connection-specific entry
-    /// the fallback is valid only after the room has a real primary placement
-    #[expect(
-        clippy::unreachable,
-        reason = "transport routing must fail loudly if called before join placement commits instead of inventing a worker id"
-    )]
-    fn placement_for_connection(&self, connection_id: ConnectionId) -> LocalRouterRuntimeContext {
-        let inner = lock_unpoisoned(&self.inner);
-        let placement = inner
-            .placement_by_connection
-            .get(&connection_id)
-            .copied()
-            .unwrap_or_else(|| {
-                let Some(local_routers) = &inner.local_routers else {
-                    unreachable!("connection placement lookup requires an assigned room worker");
-                };
-                local_routers.primary()
-            });
-        drop(inner);
-        placement
-    }
-
-    pub(super) fn media_worker_id_for_connection(
-        &self,
-        connection_id: ConnectionId,
-    ) -> MediaWorkerId {
-        self.placement_for_connection(connection_id).media_worker
-    }
-
-    /// returns the committed primary worker when the room has one
-    ///
-    /// diagnostics use this as a best-effort room-level summary
-    /// a newly created room without accepted joins has no worker assignment yet
-    pub(super) fn assigned_primary_media_worker_id(&self) -> Option<MediaWorkerId> {
-        lock_unpoisoned(&self.inner)
-            .local_routers
-            .as_ref()
-            .map(|local_routers| local_routers.primary().media_worker)
-    }
-
-    /// captures a stable connection-to-worker lookup for media planning
-    ///
-    /// the returned closure is detached from the mutex guard so subscription and
-    /// graph planning can call it without holding placement state locked
-    #[expect(
-        clippy::unreachable,
-        reason = "source fanout lookup requires committed worker placement and must not synthesize worker identity"
-    )]
-    pub(super) fn worker_lookup(&self) -> impl Fn(ConnectionId) -> MediaWorkerId {
-        let (primary_media_worker, media_worker_by_connection) = {
-            let inner = lock_unpoisoned(&self.inner);
-            (
-                inner
-                    .local_routers
-                    .as_ref()
-                    .map(|local_routers| local_routers.primary().media_worker),
-                inner
-                    .placement_by_connection
-                    .iter()
-                    .map(|(connection_id, placement)| (*connection_id, placement.media_worker))
-                    .collect::<BTreeMap<_, _>>(),
-            )
-        };
-        move |connection_id| {
-            media_worker_by_connection
-                .get(&connection_id)
-                .copied()
-                .unwrap_or_else(|| {
-                    let Some(media_worker) = primary_media_worker else {
-                        unreachable!("worker lookup requires an assigned room worker");
-                    };
-                    media_worker
-                })
-        }
-    }
-
-    /// snapshots placement state for join planning
-    ///
-    /// the snapshot is read-only and may become stale before commit
-    /// final resolution rechecks the current state under the room write lock
-    pub(super) fn usage_snapshot(&self) -> RoomPlacementUsageSnapshot {
-        let inner = lock_unpoisoned(&self.inner);
-        let placements = inner
-            .local_routers
-            .as_ref()
-            .map(|local_routers| local_routers.iter().collect())
-            .unwrap_or_default();
-        RoomPlacementUsageSnapshot::new(
-            inner.primary_router,
-            inner.local_routers.is_some(),
-            placements,
-        )
-    }
-}
-
-impl CommittedPlacementReceipt {
-    pub(super) const fn connection_id(&self) -> ConnectionId {
-        self.connection_id
-    }
-
-    pub(super) const fn media_worker_id(&self) -> MediaWorkerId {
-        self.placement.media_worker
-    }
-
-    pub(super) const fn transport_session_key(&self) -> &TransportSessionKey {
-        &self.transport_session_key
-    }
-}
 
 impl ResolvedPlacement {
     /// builds a resolved placement without running the planner

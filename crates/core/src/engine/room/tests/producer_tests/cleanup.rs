@@ -80,7 +80,8 @@ async fn explicit_unpublish_queues_cleanup_when_real_transport_owner_is_gone() {
         .expect("published audio should expose a transport media id");
     let transport_user_key = scenario
         .room
-        .transport_user_key(&scenario.publisher_user_id, connection_id);
+        .transport_user_key(&scenario.publisher_user_id, connection_id)
+        .await;
     scenario
         .media_transport
         .close_session(&transport_user_key)

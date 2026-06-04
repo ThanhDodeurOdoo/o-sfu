@@ -7,12 +7,13 @@ use o_sfu_router::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities
 
 use super::super::{
     RoomAdmissionPolicy, RoomMediaCounts, RoomUserPermissions,
+    cleanup::TransportCleanupOperation,
     media_graph::{
-        ConsumerRouteTransportRef, ConsumerRouteView, RelayRouteEffect, RoomMediaGraph,
-        TransportMediaRemoval,
+        ConsumerRouteTransportRef, ConsumerRouteView, RelayRouteEffect, ResolvedRelayRouteEffect,
+        RoomMediaGraph, TransportMediaRemoval,
     },
     outbound::OutboundSender,
-    topology::{RoomRouterStateFactory, RoomTopology},
+    routing::{RoomRouterStateFactory, RoomRoutingState},
     user_negotiation::UserNegotiation,
 };
 use crate::{
@@ -20,7 +21,8 @@ use crate::{
     engine::{
         ConnectionId, MediaWorkerId, PeerSnapshot, RecordingState, UserId, UserInfo,
         VideoLayoutIntent,
-        room::placement::LoadTriggeredPlacementState,
+        media_transport::{TransportConsumerRoute, TransportSessionKey, TransportSourceKey},
+        room::placement::{LoadTriggeredPlacementState, RoomPlacementUsageSnapshot},
         router_events::RoomRouterEventSink,
         source_model::{
             ActiveSpeakerGroup, ConsumerSourceSelection, PublishedSourceDescriptor,
@@ -53,8 +55,8 @@ pub(in crate::engine::room) struct RoomState {
     pub(in crate::engine::room) next_consumer_id: u64,
     pub(super) recording_state: RecordingState,
     pub(in crate::engine::room) media: RoomMediaGraph,
-    /// Shadow of user/producer/consumer state inside the pure router core.
-    pub(in crate::engine::room) topology: RoomTopology,
+    /// committed routing identity inside the room state lock
+    pub(in crate::engine::room) routing: RoomRoutingState,
 }
 
 #[derive(Debug)]
@@ -126,8 +128,10 @@ impl RoomState {
                 video: Some(false),
             },
             media: RoomMediaGraph::default(),
-            topology: RoomTopology::new_with_router_state_factory(
+            routing: RoomRoutingState::new_with_router_state_factory(
+                runtime_context.instance(),
                 runtime_context.primary_router(),
+                runtime_context.initial_local_router_placements().cloned(),
                 router_rtp_capabilities,
                 &RoomRouterStateFactory::new(router_event_sink),
             ),
@@ -174,7 +178,7 @@ impl RoomState {
     }
 
     pub fn router_rtp_capabilities(&self) -> MediaCapabilities {
-        self.topology.rtp_capabilities().clone()
+        self.routing.rtp_capabilities().clone()
     }
 
     pub fn transport_user_entries(&self) -> Vec<(UserId, ConnectionId)> {
@@ -182,6 +186,85 @@ impl RoomState {
             .iter()
             .map(|(user_id, user)| (user_id.clone(), user.connection_id))
             .collect()
+    }
+
+    pub fn transport_user_key(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> TransportSessionKey {
+        self.routing.transport_user_key(user_id, connection_id)
+    }
+
+    pub fn committed_transport_user_key(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> Option<TransportSessionKey> {
+        self.routing
+            .committed_transport_user_key(user_id, connection_id)
+    }
+
+    pub fn transport_consumer_route(
+        &self,
+        route: &ConsumerRouteTransportRef,
+    ) -> TransportConsumerRoute {
+        TransportConsumerRoute::new(
+            self.transport_user_key(route.consumer_user_id(), route.consumer_connection_id()),
+            route.consumer_media(),
+            TransportSourceKey::new(
+                self.transport_user_key(route.source_user_id(), route.source_connection_id()),
+                route.source_media(),
+            ),
+        )
+    }
+
+    pub fn transport_cleanup_operations(
+        &self,
+        removals: impl IntoIterator<Item = TransportMediaRemoval>,
+    ) -> Vec<TransportCleanupOperation> {
+        removals
+            .into_iter()
+            .map(|removal| {
+                let connection_id = removal.connection();
+                TransportCleanupOperation::RemoveMedia {
+                    session_key: self.transport_user_key(removal.user(), connection_id),
+                    connection_id,
+                    transport_media_id: removal.transport_media(),
+                }
+            })
+            .collect()
+    }
+
+    pub fn resolved_relay_route_effects(
+        &self,
+        effects: impl IntoIterator<Item = RelayRouteEffect>,
+    ) -> Vec<ResolvedRelayRouteEffect> {
+        effects
+            .into_iter()
+            .map(|effect| ResolvedRelayRouteEffect {
+                source_session_key: self
+                    .transport_user_key(&effect.route.source_user, effect.route.source_connection),
+                route: effect.route,
+                action: effect.action,
+            })
+            .collect()
+    }
+
+    pub fn placement_usage_snapshot(&self) -> RoomPlacementUsageSnapshot {
+        self.routing.usage_snapshot()
+    }
+
+    pub fn media_worker_id_for_connection(&self, connection_id: ConnectionId) -> MediaWorkerId {
+        self.routing.media_worker_id_for_connection(connection_id)
+    }
+
+    pub fn assigned_primary_media_worker_id(&self) -> Option<MediaWorkerId> {
+        self.routing.assigned_primary_media_worker_id()
+    }
+
+    pub fn worker_lookup(&self) -> impl Fn(ConnectionId) -> MediaWorkerId + use<> {
+        self.routing.worker_lookup()
     }
 
     pub fn transport_consumer_entries(&self) -> Vec<(UserId, ConnectionId)> {
@@ -253,16 +336,16 @@ impl RoomState {
         match spillover {
             RoomSpilloverMode::StrictSingleRouter => {}
             RoomSpilloverMode::BoundedLocalSpillover => {
-                let idle_router_ids = self.topology.idle_spillover_routers();
-                self.topology.detach_spillover_routers(&idle_router_ids);
+                let idle_router_ids = self.routing.idle_spillover_routers();
+                self.routing.detach_spillover_routers(&idle_router_ids);
                 placement.clear_cooldowns(&idle_router_ids);
             }
             RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) => {
-                let idle_router_ids = self.topology.idle_spillover_routers();
+                let idle_router_ids = self.routing.idle_spillover_routers();
                 let policy = policy.parts();
                 let detachments =
                     placement.cooldown_detachments(&idle_router_ids, policy.cooldown_window);
-                self.topology.detach_spillover_routers(&detachments);
+                self.routing.detach_spillover_routers(&detachments);
             }
         }
     }

@@ -28,7 +28,7 @@ use crate::{
         UserId, UserInfo,
         media_transport::{
             AppliedSessionAnswer, MediaTransport, SessionOffer, SessionUploadEncoding,
-            SessionUploadSlot, TransportAdapterError, TransportSessionHealth,
+            SessionUploadSlot, TransportAdapterError, TransportSessionHealth, TransportSessionKey,
         },
         room::{Room, RoomUserOperation},
         source_model::{SourcePublishIntent, SourceSubscriptionIntent, UserStreamId},
@@ -186,7 +186,7 @@ pub struct SfuCore {
 /// Creating a session and requesting an initial offer:
 ///
 /// ```ignore
-/// let session = core.session(&room, &user_id, connection_id);
+/// let session = core.session(&room, &user_id, connection_id).await;
 /// let initial_offer = session.negotiation().create_initial_offer().await?;
 /// ```
 ///
@@ -235,20 +235,32 @@ impl SfuCore {
     /// operation validates the current connection at the point where room state
     /// would change.
     #[must_use]
-    pub fn session<'a>(
+    pub async fn session<'a>(
         &'a self,
         room: &'a Room,
         user_id: &'a UserId,
         connection_id: ConnectionId,
     ) -> MediaSession<'a> {
+        let transport_user_key = room.transport_user_key(user_id, connection_id).await;
+        self.session_with_transport_key(room, user_id, connection_id, transport_user_key)
+    }
+
+    /// Create the canonical media handle from a committed transport key.
+    ///
+    /// Callers that already crossed room admission should use the key returned
+    /// by that transition instead of taking another room-state snapshot.
+    #[must_use]
+    pub fn session_with_transport_key<'a>(
+        &'a self,
+        room: &'a Room,
+        user_id: &'a UserId,
+        connection_id: ConnectionId,
+        transport_user_key: TransportSessionKey,
+    ) -> MediaSession<'a> {
         MediaSession {
             core: self,
             room,
-            identity: MediaSessionIdentity::new(
-                user_id,
-                connection_id,
-                room.transport_user_key(user_id, connection_id),
-            ),
+            identity: MediaSessionIdentity::new(user_id, connection_id, transport_user_key),
         }
     }
 }

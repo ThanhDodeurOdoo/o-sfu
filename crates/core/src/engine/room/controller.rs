@@ -6,8 +6,7 @@
 //! - `media`: producer/consumer bootstrap plus upload/download activity transitions
 //! - `outbound`: shared outbound fan-out helpers for user handlers
 //! - `state`: room-local mutable state and internal bootstrap bookkeeping
-//! - `router_state`: post-auth bridge from signaling user ids into the router core
-//! - `topology`: room-local routing placement boundary
+//! - `routing`: committed room routing, placement identity and router adapters
 //! - `rtp_capabilities`: default router RTP capability surface
 //! - signaling edges own the protocol wire mapping. the room boundary consumes
 //!   browser codec baseline RTP capabilities, negotiated parameters and track bootstrap data
@@ -19,8 +18,8 @@
 //!
 //! The file exists to keep one clear contract at the room boundary:
 //!
-//! - immutable room identity lives in `RoomDefinition`, while committed
-//!   placement lookup lives in `RoomPlacementState`
+//! - immutable room identity lives in `RoomDefinition`
+//! - committed routing identity lives in `RoomState`
 //! - mutable membership and media topology live behind `RoomState`
 //! - websocket and transport work must happen after room locks are released
 //! - signaling code consumes high-level room events instead of reaching into
@@ -38,11 +37,10 @@ use super::{
     cleanup::CleanupReconciler,
     definition::RoomDefinition,
     init::RoomInit,
-    media_graph::{ConsumerRouteState, ConsumerRouteTransportRef},
+    media_graph::ConsumerRouteState,
     operation::RoomUserOperation,
     placement::{
-        LoadTriggeredPlacementState, RoomPlacementState, RoomPlacementUsageSnapshot,
-        RoomWorkerLoadContribution,
+        LoadTriggeredPlacementState, RoomPlacementUsageSnapshot, RoomWorkerLoadContribution,
     },
     state::RoomState,
     transition::PendingPublishTransactions,
@@ -57,8 +55,8 @@ use crate::{
             DiagnosticsStore, DiagnosticsUserTransport, DiagnosticsUserView,
         },
         media_transport::{
-            ActiveSpeakerSourceDiagnostic, MediaTransport, TransportConsumerRoute,
-            TransportMediaId, TransportQualitySample, TransportSessionKey, TransportSourceKey,
+            ActiveSpeakerSourceDiagnostic, MediaTransport, TransportMediaId,
+            TransportQualitySample, TransportSessionKey, TransportSourceKey,
         },
         metrics::RuntimeMetrics,
         recording::RecordingService,
@@ -196,21 +194,15 @@ pub struct Room {
     /// `definition` is the stable read-only half of the room, while `state`
     /// contains the mutable membership and media graph.
     pub(super) definition: RoomDefinition,
-    /// Mutable placement lookup for committed room connections.
-    ///
-    /// The pure topology owns router execution state. This state keeps the
-    /// full committed placement needed to build session keys after placement
-    /// has been committed.
-    pub(super) placement_state: RoomPlacementState,
     /// Room-local memory for load-triggered placement hysteresis.
     pub(super) load_triggered_placement: StdMutex<LoadTriggeredPlacementState>,
     #[allow(
         dead_code,
         reason = "recording control-plane wiring is deferred until the replacement baseline is validated"
     )]
-    /// Room recording service shared with topology observers.
+    /// Room recording service shared with routing observers.
     ///
-    /// The service is injected into the topology side so recording can observe
+    /// The service is injected into the routing side so recording can observe
     /// routed media without making router state recording-aware.
     pub(super) recording_service: Arc<RecordingService>,
     /// Process-wide metrics catalog used by room-facing work.
@@ -269,15 +261,9 @@ impl Room {
         ));
         let recording_event_sink = Arc::<RecordingService>::clone(&recording_service);
         let router_event_sink: Arc<dyn RoomRouterEventSink> = recording_event_sink;
-        let instance_id = definition.instance_id();
         Self {
             diagnostics: services.diagnostics,
             definition,
-            placement_state: RoomPlacementState::new(
-                instance_id,
-                runtime_context.primary_router(),
-                runtime_context.initial_local_router_placements().cloned(),
-            ),
             load_triggered_placement: StdMutex::new(LoadTriggeredPlacementState::default()),
             recording_service: Arc::clone(&recording_service),
             metrics: services.metrics,
@@ -325,32 +311,21 @@ impl Room {
     /// This helper keeps transport addressing derived from the room's stable
     /// runtime placement plus the current `(user_id, connection_id)` pair.
     /// Callers should prefer this over rebuilding transport keys themselves.
-    pub fn transport_user_key(
+    pub async fn transport_user_key(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> TransportSessionKey {
-        self.placement_state
+        self.state
+            .read()
+            .await
             .transport_user_key(user_id, connection_id)
     }
 
-    #[must_use]
-    pub(in crate::engine::room) fn transport_consumer_route(
+    pub(in crate::engine::room) async fn placement_usage_snapshot(
         &self,
-        route: &ConsumerRouteTransportRef,
-    ) -> TransportConsumerRoute {
-        TransportConsumerRoute::new(
-            self.transport_user_key(route.consumer_user_id(), route.consumer_connection_id()),
-            route.consumer_media(),
-            TransportSourceKey::new(
-                self.transport_user_key(route.source_user_id(), route.source_connection_id()),
-                route.source_media(),
-            ),
-        )
-    }
-
-    pub(in crate::engine::room) fn placement_usage_snapshot(&self) -> RoomPlacementUsageSnapshot {
-        self.placement_state.usage_snapshot()
+    ) -> RoomPlacementUsageSnapshot {
+        self.state.read().await.placement_usage_snapshot()
     }
 
     pub(in crate::engine::room) async fn worker_load_contribution(
@@ -359,25 +334,25 @@ impl Room {
         let (session_entries, consumer_entries) = {
             let state = self.state.read().await;
             (
-                state.transport_user_entries(),
-                state.transport_consumer_entries(),
+                state
+                    .transport_user_entries()
+                    .into_iter()
+                    .map(|(user_id, connection_id)| {
+                        state
+                            .transport_user_key(&user_id, connection_id)
+                            .media_worker_id()
+                    })
+                    .collect::<Vec<_>>(),
+                state
+                    .transport_consumer_entries()
+                    .into_iter()
+                    .map(|(_, connection_id)| state.media_worker_id_for_connection(connection_id))
+                    .collect::<Vec<_>>(),
             )
         };
         RoomWorkerLoadContribution {
-            session_worker_ids: session_entries
-                .into_iter()
-                .map(|(user_id, connection_id)| {
-                    self.transport_user_key(&user_id, connection_id)
-                        .media_worker_id()
-                })
-                .collect(),
-            consumer_worker_ids: consumer_entries
-                .into_iter()
-                .map(|(_, connection_id)| {
-                    self.placement_state
-                        .media_worker_id_for_connection(connection_id)
-                })
-                .collect(),
+            session_worker_ids: session_entries,
+            consumer_worker_ids: consumer_entries,
         }
     }
 
@@ -502,7 +477,7 @@ impl Room {
         let session_keys = state
             .transport_user_entries()
             .into_iter()
-            .map(|(user_id, connection_id)| self.transport_user_key(&user_id, connection_id))
+            .map(|(user_id, connection_id)| state.transport_user_key(&user_id, connection_id))
             .collect::<Vec<_>>();
         let transport_snapshot = transport.transport_bitrate_snapshot(&session_keys);
         let mut incoming_bitrate = IncomingBitrateSnapshot {
@@ -552,8 +527,8 @@ impl Room {
     ///
     /// Runtime diagnostics and transport command paths use this to route work
     /// to the correct RTC worker.
-    pub fn assigned_primary_media_worker_id(&self) -> Option<MediaWorkerId> {
-        self.placement_state.assigned_primary_media_worker_id()
+    pub async fn assigned_primary_media_worker_id(&self) -> Option<MediaWorkerId> {
+        self.state.read().await.assigned_primary_media_worker_id()
     }
 
     pub(in crate::engine::room) fn room_worker_policy(&self) -> RoomWorkerPolicy {
@@ -591,7 +566,7 @@ impl Room {
         let session_entries = state.transport_user_entries();
         let session_keys = session_entries
             .iter()
-            .map(|(user_id, connection_id)| self.transport_user_key(user_id, *connection_id))
+            .map(|(user_id, connection_id)| state.transport_user_key(user_id, *connection_id))
             .collect::<Vec<_>>();
         let transport_snapshot = transport.transport_bitrate_snapshot(&session_keys);
         let quality_by_session = transport
@@ -604,7 +579,7 @@ impl Room {
         let transport_by_session = session_entries
             .into_iter()
             .map(|(user_id, connection_id)| {
-                let session_key = self.transport_user_key(&user_id, connection_id);
+                let session_key = state.transport_user_key(&user_id, connection_id);
                 let transport = DiagnosticsUserTransport {
                     connection_id: connection_id.as_u64(),
                     health: transport
@@ -623,7 +598,7 @@ impl Room {
             })
             .collect();
         state.diagnostics_user_views(
-            self.placement_state
+            state
                 .assigned_primary_media_worker_id()
                 .map_or(0, MediaWorkerId::as_usize),
             &transport_by_session,
@@ -644,7 +619,7 @@ impl Room {
         let session_keys = state
             .transport_user_entries()
             .iter()
-            .map(|(user_id, connection_id)| self.transport_user_key(user_id, *connection_id))
+            .map(|(user_id, connection_id)| state.transport_user_key(user_id, *connection_id))
             .collect::<Vec<_>>();
         let transport_snapshot = transport.transport_bitrate_snapshot(&session_keys);
         let incoming_bitrate_by_source =
@@ -654,7 +629,7 @@ impl Room {
             .into_iter()
             .map(|media| {
                 TransportSourceKey::new(
-                    self.transport_user_key(&media.owner, media.connection),
+                    state.transport_user_key(&media.owner, media.connection),
                     media.media,
                 )
             })
@@ -735,8 +710,10 @@ fn diagnostics_quality_summary(
 impl fmt::Debug for Room {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let media_worker_id = self
-            .placement_state
-            .assigned_primary_media_worker_id()
+            .state
+            .try_read()
+            .ok()
+            .and_then(|state| state.assigned_primary_media_worker_id())
             .map(MediaWorkerId::as_usize);
         formatter
             .debug_struct("Room")

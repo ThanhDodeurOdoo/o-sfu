@@ -49,6 +49,7 @@ impl RoomTestLifecycle<'_> {
                 || RouterId(0),
             )
             .await
+            .map(|receipt| receipt.connection_id())
     }
 
     /// Join one user while keeping transport cleanup outside the lifecycle path.
@@ -83,6 +84,7 @@ impl RoomTestLifecycle<'_> {
                 || RouterId(0),
             )
             .await
+            .map(|receipt| receipt.connection_id())
     }
 
     pub async fn force_cleanup_retry_cycle(self, media_transport: &MediaTransport) {
@@ -110,8 +112,9 @@ impl RoomTestLifecycle<'_> {
             .await
             .user_connection_id(user_id)
             .ok_or(TransportAdapterError::InvalidInput)?;
+        let session_key = self.room.transport_user_key(user_id, connection_id).await;
         media_transport
-            .create_initial_session_offer(&self.room.transport_user_key(user_id, connection_id))
+            .create_initial_session_offer(&session_key)
             .await?;
         match self
             .room

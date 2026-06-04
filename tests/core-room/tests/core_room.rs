@@ -3,7 +3,7 @@
     reason = "integration tests use panic-based assertions for clear failures"
 )]
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::Result;
 use o_sfu_core::{
@@ -281,6 +281,7 @@ async fn source_fanout_pressure_clears_after_unpublish() -> Result<()> {
 
     assert_eq!(
         core.session(&room, &publisher_id, publisher_connection)
+            .await
             .publication()
             .unpublish(&stream_id)
             .await,
@@ -343,6 +344,7 @@ async fn subscription_change_pauses_and_resumes_consumer_silently() -> Result<()
     let subscriber_connection_id = user_connection_id(&ready.room, &subscriber_id).await?;
     assert_eq!(
         core.session(&ready.room, &subscriber_id, subscriber_connection_id)
+            .await
             .subscription()
             .update(&publisher_id, &pause_scalable_video_intents())
             .await,
@@ -354,6 +356,7 @@ async fn subscription_change_pauses_and_resumes_consumer_silently() -> Result<()
 
     assert_eq!(
         core.session(&ready.room, &subscriber_id, subscriber_connection_id)
+            .await
             .subscription()
             .update(&publisher_id, &resume_scalable_video_intents())
             .await,
@@ -376,6 +379,7 @@ async fn subscription_change_persists_preference_for_future_consumer_bootstrap()
     let subscriber_connection_id = user_connection_id(&ready.room, &subscriber_id).await?;
     assert_eq!(
         core.session(&ready.room, &subscriber_id, subscriber_connection_id)
+            .await
             .subscription()
             .update(&publisher_id, &pause_audio_and_scalable_video_intents())
             .await,
@@ -410,6 +414,7 @@ async fn subscription_change_handles_multiple_stream_types() -> Result<()> {
     let subscriber_connection_id = user_connection_id(&ready.room, &subscriber_id).await?;
     assert_eq!(
         core.session(&ready.room, &subscriber_id, subscriber_connection_id)
+            .await
             .subscription()
             .update(&publisher_id, &pause_audio_and_scalable_video_intents())
             .await,
@@ -437,6 +442,11 @@ async fn publication_activity_after_source_owner_leave_is_a_noop() -> Result<()>
     ready.drain_user(2)?;
     let publisher_id = UserId::Integer(1);
     let publisher_connection = user_connection_id(&ready.room, &publisher_id).await?;
+    let core = SfuCore::new(ready.media_transport.clone());
+    let publisher_room = Arc::clone(&ready.room);
+    let publisher_session = core
+        .session(&publisher_room, &publisher_id, publisher_connection)
+        .await;
 
     close_user(
         &ready.manager,
@@ -448,11 +458,11 @@ async fn publication_activity_after_source_owner_leave_is_a_noop() -> Result<()>
     .await?;
     ready.drain_user(2)?;
 
-    let core = SfuCore::new(ready.media_transport.clone());
     let subscriber_id = UserId::Integer(2);
     let subscriber_connection = user_connection_id(&ready.room, &subscriber_id).await?;
     assert_eq!(
         core.session(&ready.room, &subscriber_id, subscriber_connection)
+            .await
             .subscription()
             .update(&publisher_id, &pause_scalable_video_intents())
             .await,
@@ -462,7 +472,7 @@ async fn publication_activity_after_source_owner_leave_is_a_noop() -> Result<()>
 
     let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
     assert_eq!(
-        core.session(&ready.room, &publisher_id, publisher_connection)
+        publisher_session
             .publication()
             .set_activity(&stream_id, PublicationActivity::Inactive)
             .await,

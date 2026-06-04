@@ -16,9 +16,9 @@ use crate::{
 impl RoomUserOperation<'_> {
     pub(crate) async fn bootstrap_consumers(self) -> bool {
         let room = self.room();
-        let worker_lookup = room.placement_state.worker_lookup();
         let mut state = room.state.write().await;
         let before = state.media_counts();
+        let worker_lookup = state.worker_lookup();
         let Some(bootstraps) =
             state.plan_missing_consumers(self.user_id(), self.connection_id(), worker_lookup)
         else {
@@ -42,7 +42,6 @@ impl RoomUserOperation<'_> {
     ) -> SubscriptionUpdateOutcome {
         let room = self.room();
         let effects = {
-            let worker_lookup = room.placement_state.worker_lookup();
             let mut state = room.state.write().await;
             if state
                 .user_for_connection(self.user_id(), self.connection_id())
@@ -51,6 +50,8 @@ impl RoomUserOperation<'_> {
                 return SubscriptionUpdateOutcome::StaleConnection;
             }
             let before = state.media_counts();
+            let worker_lookup = state.worker_lookup();
+            let media_worker_id = state.media_worker_id_for_connection(self.connection_id());
             let change = state.plan_subscription_change(
                 self.user_id(),
                 self.connection_id(),
@@ -64,14 +65,22 @@ impl RoomUserOperation<'_> {
                 SourcePolicyEvent::ReceiverIntentChanged
             };
             let after = state.media_counts();
-            drop(state);
             let (updates, bootstraps, relays) = change.into_parts();
-            RoomCommit::new()
+            let commit = RoomCommit::new()
                 .with_media_count_delta(before, after)
                 .with_relay_effects(relays)
-                .with_route_updates(room, self.user_id(), self.connection_id(), updates)
+                .with_route_updates(
+                    &state,
+                    room,
+                    self.user_id(),
+                    self.connection_id(),
+                    media_worker_id,
+                    updates,
+                )
                 .with_bootstraps(bootstraps, ConsumerBootstrapOrigin::Subscribe)
-                .with_source_policy_event(source_policy_event)
+                .with_source_policy_event(source_policy_event);
+            drop(state);
+            commit
         };
         effects
             .execute(room, RoomEffectContext::runtime(self.media_transport()))
@@ -156,7 +165,7 @@ mod tests {
             .await
             .expect("test user should join");
         if create_transport_session {
-            let session_key = room.transport_user_key(user_id, connection_id);
+            let session_key = room.transport_user_key(user_id, connection_id).await;
             media_transport
                 .create_initial_session_offer(&session_key)
                 .await
@@ -383,8 +392,9 @@ mod tests {
         .await;
 
         assert_eq!(room.test_api().inspect().consumer_count().await, 0);
-        let subscriber_session_key =
-            room.transport_user_key(&subscriber_id, subscriber_connection_id);
+        let subscriber_session_key = room
+            .transport_user_key(&subscriber_id, subscriber_connection_id)
+            .await;
         media_transport
             .create_initial_session_offer(&subscriber_session_key)
             .await

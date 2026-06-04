@@ -1,5 +1,5 @@
 use super::fixtures::*;
-use crate::engine::room::router_state::{RoomRouterState, RoomRouterStateError};
+use crate::engine::room::routing::router_state::{RoomRouterState, RoomRouterStateError};
 
 #[test]
 fn router_state_reports_missing_user_mapping_when_transports_are_requested_without_join() {

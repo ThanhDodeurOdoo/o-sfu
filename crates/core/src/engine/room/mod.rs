@@ -15,9 +15,8 @@
 //!    |- user_negotiation    -> per-user transport readiness
 //!    |- media               -> room-wide consumer bootstrap and publication lookup
 //!    |- recording           -> room-scoped recording policy
-//!    |- router_state        -> bridge into the router core
+//!    |- routing             -> committed router and transport placement
 //!    |- source_policy       -> room source selection and refresh bridge
-//!    |- topology            -> routing placement boundary
 //!    |- outbound            -> shared server-to-client fanout helpers
 //! ```
 
@@ -38,13 +37,12 @@ mod operation;
 mod outbound;
 mod placement;
 mod recording;
-mod router_state;
+mod routing;
 pub mod rtp_capabilities;
 mod source_policy;
 mod state;
 #[cfg(any(test, feature = "testing-transport"))]
 mod tests;
-mod topology;
 mod transition;
 mod user_negotiation;
 
@@ -58,8 +56,8 @@ pub use events::{
 pub use init::{RoomAdmissionPolicy, RoomConfig, RoomRuntimePolicy};
 pub use lifecycle::{RoomUserPermissions, UserCloseReason};
 pub use manager::{
-    JoinUserRequest, RoomManager, RoomManagerConfig, RoomManagerDeps, RuntimeRoomDirectorySnapshot,
-    RuntimeRoomStatsSnapshot,
+    JoinUserRequest, JoinedRoomSession, RoomManager, RoomManagerConfig, RoomManagerDeps,
+    RuntimeRoomDirectorySnapshot, RuntimeRoomStatsSnapshot,
 };
 pub use media_graph::{ConsumerRouteState, RemoteTrackBootstrap};
 pub(crate) use operation::RoomUserOperation;

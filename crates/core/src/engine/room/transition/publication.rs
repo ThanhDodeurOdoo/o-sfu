@@ -315,6 +315,10 @@ impl AnsweredPublish {
         let committed_publish = {
             let mut state = room.state.write().await;
             let before = state.media_counts();
+            let media_worker_id = state
+                .transport_user_key(&user, connection)
+                .media_worker_id()
+                .as_usize();
             let prepared_track =
                 descriptor.into_prepared_track_with_upload_encodings(rtp, encodings);
             let consumers = state.commit_publish_reservation(prepared_track, media);
@@ -330,11 +334,7 @@ impl AnsweredPublish {
                     telemetry_event::PUBLISH_COMMITTED,
                 )
                 .with_connection_id(connection.as_u64())
-                .with_media_worker_id(
-                    room.transport_user_key(&user, connection)
-                        .media_worker_id()
-                        .as_usize(),
-                )
+                .with_media_worker_id(media_worker_id)
                 .with_transport_media_id(media.as_u64()),
             })
         };
@@ -401,7 +401,8 @@ impl StagedMediaReservation {
         let cleanup = [TransportCleanupOperation::RemoveMedia {
             session_key: operation
                 .room()
-                .transport_user_key(&self.user, self.connection),
+                .transport_user_key(&self.user, self.connection)
+                .await,
             connection_id: self.connection,
             transport_media_id: self.media,
         }];
@@ -457,9 +458,9 @@ impl CommittedPublish {
     async fn finish(self, operation: RoomUserOperation<'_>) {
         let room = operation.room();
         let commit = {
-            let worker_lookup = room.placement_state.worker_lookup();
             let mut state = room.state.write().await;
             let before = state.media_counts();
+            let worker_lookup = state.worker_lookup();
             let bootstraps = state.plan_consumers(self.consumers, worker_lookup);
             let after = state.media_counts();
             drop(state);
@@ -517,7 +518,7 @@ impl RoomUserOperation<'_> {
         ) {
             return Ok(PublishStageOutcome::Duplicate);
         }
-        let session_key = self.transport_user_key();
+        let session_key = self.transport_user_key().await;
         let rtp_parameters = RouterRtpParameters::default();
         let media = match self
             .media_transport()
@@ -632,14 +633,20 @@ impl RoomUserOperation<'_> {
     ) -> PublicationActivityOutcome {
         let room = self.room();
         let active = activity.is_active();
-        let Some(producer_target) = ({
+        let Some((producer_target, transport_user_key)) = ({
             let state = room.state.read().await;
-            state.producer_route_target(self.user_id(), self.connection_id(), stream_id)
+            state
+                .producer_route_target(self.user_id(), self.connection_id(), stream_id)
+                .and_then(|producer_target| {
+                    let transport_user_key = state.committed_transport_user_key(
+                        self.user_id(),
+                        producer_target.owner_connection_id(),
+                    )?;
+                    Some((producer_target, transport_user_key))
+                })
         }) else {
             return PublicationActivityOutcome::MissingPublication;
         };
-        let transport_user_key =
-            room.transport_user_key(self.user_id(), producer_target.owner_connection_id());
         let media_worker_id = transport_user_key.media_worker_id();
         let Some(outcome) = ({
             let mut state = room.state.write().await;
@@ -680,6 +687,15 @@ impl RoomUserOperation<'_> {
             let mut state = room.state.write().await;
             let before = state.media_counts();
             let outcome = state.unpublish_track(user_id, connection_id, stream_id);
+            let outcome = outcome.map(|outcome| {
+                let (recipients, track_update, relays, removals) = outcome.into_parts();
+                (
+                    recipients,
+                    track_update,
+                    state.resolved_relay_route_effects(relays),
+                    state.transport_cleanup_operations(removals),
+                )
+            });
             let after = state.media_counts();
             drop(state);
             (before, outcome, after)
@@ -687,11 +703,11 @@ impl RoomUserOperation<'_> {
         let Some(outcome) = outcome else {
             return UnpublishOutcome::MissingPublication;
         };
-        let (recipients, track_update, relays, removals) = outcome.into_parts();
+        let (recipients, track_update, relays, cleanup) = outcome;
         let execution = RoomCommit::new()
             .with_media_count_delta(before, after)
             .with_relay_effects(relays)
-            .with_transport_removals(room, removals)
+            .with_pre_close_transport_cleanup(cleanup)
             .with_track_binding_update(recipients, track_update)
             .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged)
             .execute(room, RoomEffectContext::runtime(media_port))
@@ -785,7 +801,7 @@ mod tests {
         user_id: &UserId,
     ) -> ConnectionId {
         let connection_id = join_user(room, user_id).await;
-        let session_key = room.transport_user_key(user_id, connection_id);
+        let session_key = room.transport_user_key(user_id, connection_id).await;
         media_transport
             .create_initial_session_offer(&session_key)
             .await
@@ -862,7 +878,7 @@ mod tests {
     async fn staged_publish_is_not_visible_in_room_graph_before_answer() {
         let (room, media_transport, user_id, connection_id) = staged_room().await;
         let transport_media_id = staged_media_id(&room, &user_id, connection_id).await;
-        let session_key = room.transport_user_key(&user_id, connection_id);
+        let session_key = room.transport_user_key(&user_id, connection_id).await;
 
         assert_eq!(room.test_api().inspect().producer_count().await, 0);
         assert!(

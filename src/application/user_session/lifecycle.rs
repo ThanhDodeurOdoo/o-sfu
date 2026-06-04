@@ -6,7 +6,7 @@ use tracing::{debug, error};
 use super::{User, UserDisconnectReason, UserError, UserOutput};
 use crate::{
     core::prelude::{MediaSession, SfuCore, TransportSessionHealth, UserInfoRefresh},
-    runtime::{ConnectionId, room::Room},
+    runtime::{ConnectionId, media_transport::TransportSessionKey, room::Room},
 };
 
 impl User {
@@ -14,6 +14,7 @@ impl User {
     pub fn new(
         user_id: UserId,
         connection_id: ConnectionId,
+        transport_session_key: TransportSessionKey,
         remote_address: Arc<str>,
         room: Arc<Room>,
         sfu_core: SfuCore,
@@ -21,6 +22,7 @@ impl User {
         Self {
             id: user_id,
             connection_id,
+            transport_session_key,
             remote_address,
             sfu_core,
             room,
@@ -30,14 +32,18 @@ impl User {
     }
 
     pub(super) fn media(&self) -> MediaSession<'_> {
-        self.sfu_core
-            .session(self.room.as_ref(), &self.id, self.connection_id)
+        self.sfu_core.session_with_transport_key(
+            self.room.as_ref(),
+            &self.id,
+            self.connection_id,
+            self.transport_session_key.clone(),
+        )
     }
 
     /// Return the current transport-driven disconnect reason, if one is known.
     ///
-    /// no terminal transport health has been reported yet
-    /// disconnection. It does not prove that this is still the current room
+    /// No terminal transport health means there is no transport-driven
+    /// disconnection yet. It does not prove that this is still the current room
     /// connection.
     #[must_use]
     pub fn disconnect_reason(&self) -> Option<UserDisconnectReason> {

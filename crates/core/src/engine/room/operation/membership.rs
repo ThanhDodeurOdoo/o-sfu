@@ -106,24 +106,30 @@ impl RoomUserOperation<'_> {
     /// best-effort because a later media packet or refresh can recover video.
     async fn request_video_keyframes(self) -> bool {
         let room = self.room();
-        let Some(keyframe_refresh_targets) = ({
+        let keyframe_refresh_targets = {
             let state = room.state.read().await;
-            state.active_video_keyframe_targets(self.user_id(), self.connection_id())
-        }) else {
-            return false;
+            let Some(targets) =
+                state.active_video_keyframe_targets(self.user_id(), self.connection_id())
+            else {
+                return false;
+            };
+            let consumer_session_key =
+                state.transport_user_key(self.user_id(), self.connection_id());
+            let mut refresh_targets = Vec::with_capacity(targets.len());
+            for target in targets {
+                let producer_session_key = state
+                    .transport_user_key(&target.producer_user_id, target.producer_connection_id);
+                let route = TransportConsumerRoute::new(
+                    consumer_session_key.clone(),
+                    target.consumer_media,
+                    TransportSourceKey::new(producer_session_key, target.source_media),
+                );
+                refresh_targets.push((target, route));
+            }
+            drop(state);
+            refresh_targets
         };
-        for target in keyframe_refresh_targets {
-            let route = TransportConsumerRoute::new(
-                self.transport_user_key(),
-                target.consumer_media,
-                TransportSourceKey::new(
-                    room.transport_user_key(
-                        &target.producer_user_id,
-                        target.producer_connection_id,
-                    ),
-                    target.source_media,
-                ),
-            );
+        for (target, route) in keyframe_refresh_targets {
             if self
                 .media_transport()
                 .request_consumer_keyframe(&route)
