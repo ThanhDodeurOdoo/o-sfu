@@ -258,6 +258,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
             .state
             .sfu_core
             .session(&room, &alice_session_id, alice_connection_id)
+            .await
             .presence()
             .update_info(UserInfo::default(), UserInfoRefresh::NotNeeded)
             .await;
@@ -543,7 +544,7 @@ async fn diagnostics_user_lookup_drops_room_teardown_entries() -> TestResult {
     let room_id = room.uuid().to_owned();
     let user_id = UserId::Integer(11);
     let (tx, _rx) = test_outbound_sender(&test_state.state);
-    let (_room, connection_id) = require_ok(
+    let session = require_ok(
         test_state
             .room_manager
             .join_user(
@@ -559,6 +560,7 @@ async fn diagnostics_user_lookup_drops_room_teardown_entries() -> TestResult {
             .await,
         "user should join before teardown",
     )?;
+    let connection_id = session.connection_id();
     assert!(
         test_state
             .room_manager

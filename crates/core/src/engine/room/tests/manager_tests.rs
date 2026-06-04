@@ -17,7 +17,7 @@ use super::{
 use crate::{
     LocalSpilloverPolicy, MediaCodecFlags, RoomWorkerPolicy, RuntimeFeatureFlags,
     engine::{
-        diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
+        MediaWorkerId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
     },
     prelude::LocalSpilloverPolicyParts,
@@ -32,7 +32,7 @@ async fn manager_join_user(
     media_transport: &MediaTransport,
 ) -> ConnectionId {
     let (tx, _rx) = test_sender();
-    let (_room, connection_id) = manager
+    let session = manager
         .join_user(
             room.uuid(),
             JoinUserRequest {
@@ -45,7 +45,7 @@ async fn manager_join_user(
         )
         .await
         .expect("user should join through manager");
-    connection_id
+    session.connection_id()
 }
 
 fn manager_with_room_worker_policy(room_worker_policy: RoomWorkerPolicy) -> RoomManager {
@@ -113,7 +113,7 @@ async fn assert_home_worker(room: &Arc<TestRoom>, raw_user_id: i64, media_worker
     assert_eq!(
         room.test_api()
             .inspect()
-            .topology_home_media_worker_id(&UserId::Integer(raw_user_id))
+            .routing_home_media_worker_id(&UserId::Integer(raw_user_id))
             .await,
         Some(media_worker)
     );
@@ -121,7 +121,7 @@ async fn assert_home_worker(room: &Arc<TestRoom>, raw_user_id: i64, media_worker
 
 async fn assert_router_count(room: &Arc<TestRoom>, expected: usize) {
     assert_eq!(
-        room.test_api().inspect().topology_router_count().await,
+        room.test_api().inspect().routing_router_count().await,
         expected
     );
 }
@@ -263,7 +263,7 @@ async fn manager_lifecycle_future_does_not_block_empty_cleanup() {
     let room_id = room.uuid().to_owned();
     let first_user = UserId::Integer(1);
     let (first_tx, _first_rx) = test_sender();
-    let (_room, first_connection_id) = manager
+    let first_session = manager
         .join_user(
             &room_id,
             JoinUserRequest {
@@ -276,6 +276,7 @@ async fn manager_lifecycle_future_does_not_block_empty_cleanup() {
         )
         .await
         .expect("initial user should join");
+    let first_connection_id = first_session.connection_id();
 
     let lifecycle_entered = Arc::new(Notify::new());
     let release_lifecycle = Arc::new(Notify::new());
@@ -390,7 +391,7 @@ async fn manager_concurrent_load_triggered_joins_revalidate_local_router_cap_at_
     for join_task in join_tasks {
         join_task.await.expect("join task should not panic");
         assert!(
-            room.test_api().inspect().topology_router_count().await <= LOCAL_ROUTER_CAP,
+            room.test_api().inspect().routing_router_count().await <= LOCAL_ROUTER_CAP,
             "concurrent placement should not exceed the configured local router cap"
         );
     }
@@ -469,13 +470,20 @@ async fn spillover_media_diagnostics_use_connection_worker() {
         kind: MediaKind::Audio,
         active: false,
     };
-    RoomCommit::new()
-        .with_route_updates(
+    let route_update_commit = {
+        let state = room.state.read().await;
+        let commit = RoomCommit::new().with_route_updates(
+            &state,
             &room,
             &publisher_id,
             publisher_connection_id,
+            MediaWorkerId::from_raw(media_worker_id),
             vec![subscription_update],
-        )
+        );
+        drop(state);
+        commit
+    };
+    route_update_commit
         .execute(&room, RoomEffectContext::runtime(&media_transport))
         .await;
     assert_event_worker(

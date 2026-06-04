@@ -202,7 +202,9 @@ pub(super) async fn assert_receiver_bwe_target(
     expected_target: Bitrate,
 ) {
     let connection_id = user_connection_id(room, receiver_user_id).await;
-    let session_key = room.transport_user_key(receiver_user_id, connection_id);
+    let session_key = room
+        .transport_user_key(receiver_user_id, connection_id)
+        .await;
     assert_eq!(
         adapter
             .test_api()
@@ -256,10 +258,12 @@ pub(super) async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario 
         .await
         .expect("subscriber should join");
     let media_transport = build_real_rtc_media_transport();
-    let publisher_session_key =
-        room.transport_user_key(&publisher_user_id, publisher_connection_id);
-    let subscriber_session_key =
-        room.transport_user_key(&subscriber_user_id, subscriber_connection_id);
+    let publisher_session_key = room
+        .transport_user_key(&publisher_user_id, publisher_connection_id)
+        .await;
+    let subscriber_session_key = room
+        .transport_user_key(&subscriber_user_id, subscriber_connection_id)
+        .await;
 
     let publisher_initial_offer =
         bootstrap_real_rtc_user(&media_transport, &publisher_session_key).await;

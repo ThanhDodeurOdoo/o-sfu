@@ -164,7 +164,7 @@ pub(super) async fn create_transport_session_offer(
         .inspect()
         .user_connection_id(user_id)
         .await?;
-    let session_key = room.transport_user_key(user_id, connection_id);
+    let session_key = room.transport_user_key(user_id, connection_id).await;
     media_transport
         .create_initial_session_offer(&session_key)
         .await

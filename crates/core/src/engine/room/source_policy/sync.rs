@@ -71,13 +71,12 @@ impl Room {
             return;
         };
         let policy = policy.parts();
-        let pressured = self.state.read().await.source_fanout_pressure(
-            policy.max_fanout_per_source,
-            |connection_id| {
-                self.placement_state
-                    .media_worker_id_for_connection(connection_id)
-            },
-        );
+        let pressured = {
+            let state = self.state.read().await;
+            state.source_fanout_pressure(policy.max_fanout_per_source, |connection_id| {
+                state.media_worker_id_for_connection(connection_id)
+            })
+        };
         lock_unpoisoned(&self.load_triggered_placement).set_source_fanout_pressure(pressured);
     }
 
@@ -120,7 +119,7 @@ impl Room {
             state
                 .transport_user_entries()
                 .into_iter()
-                .map(|(user_id, connection_id)| self.transport_user_key(&user_id, connection_id))
+                .map(|(user_id, connection_id)| state.transport_user_key(&user_id, connection_id))
                 .collect::<Vec<_>>()
         };
         let receiver_bandwidth_snapshot =

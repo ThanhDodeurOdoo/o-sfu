@@ -174,7 +174,8 @@ async fn negotiated_publish_commit_bootstraps_consumers_on_real_rtc() {
     };
     let publisher_session_key = scenario
         .room
-        .transport_user_key(&scenario.publisher_user_id, publisher_connection_id);
+        .transport_user_key(&scenario.publisher_user_id, publisher_connection_id)
+        .await;
     let mut publisher_remote = build_remote_rtc(55_101);
     apply_offer_answer(
         &scenario.media_transport,

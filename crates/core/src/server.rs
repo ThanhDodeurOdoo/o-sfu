@@ -54,7 +54,7 @@ pub mod room {
         engine::room::{
             BroadcastPayload, BroadcastPayloadError, ConsumerRouteState,
             DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
-            IncomingBitrateSnapshot, JoinUserRequest, LocalRoomRouterPlacements,
+            IncomingBitrateSnapshot, JoinUserRequest, JoinedRoomSession, LocalRoomRouterPlacements,
             LocalRoomRouterPlacementsError, LocalRouterRuntimeContext, MAX_BROADCAST_PAYLOAD_BYTES,
             RemoteTrackBootstrap, Room, RoomAdmissionPolicy, RoomConfig, RoomEventMessage,
             RoomEventRequest, RoomJoinError, RoomManager, RoomManagerConfig, RoomManagerDeps,

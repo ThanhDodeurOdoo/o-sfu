@@ -17,7 +17,7 @@ pub(super) use tokio::time::timeout;
 pub(super) use super::super::{
     JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomEffectContext, RoomEventMessage,
     RoomEventRequest, RoomJoinError, RoomManager, UserCloseReason, UserOutbound,
-    UserOutboundReceiver, UserOutboundSender, topology::RoomTopology,
+    UserOutboundReceiver, UserOutboundSender, routing::RoomRoutingState,
 };
 use crate::engine::room::user_negotiation::{UserNegotiationUpdate, UserTransportReady};
 pub(super) use crate::{
@@ -245,7 +245,7 @@ pub(super) async fn create_transport_session_offer(
     media_transport: &MediaTransport,
 ) {
     let connection_id = user_connection_id(room, user_id).await;
-    let session_key = room.transport_user_key(user_id, connection_id);
+    let session_key = room.transport_user_key(user_id, connection_id).await;
     media_transport
         .create_initial_session_offer(&session_key)
         .await

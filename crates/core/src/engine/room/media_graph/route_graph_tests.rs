@@ -8,7 +8,7 @@ use super::{
 use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
     media_transport::{RelayRouteActivity, TransportMediaId, TransportRelayRouteAction},
-    room::topology::RoutedConsumerId,
+    room::routing::RoutedConsumerId,
     source_model::{PublishedSourceId, UserStreamId},
 };
 

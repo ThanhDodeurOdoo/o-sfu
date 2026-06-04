@@ -6,8 +6,10 @@ use super::{
 };
 use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
-    media_transport::{RelayRouteActivity, TransportMediaId, TransportRelayRouteAction},
-    room::topology::RoutedConsumerId,
+    media_transport::{
+        RelayRouteActivity, TransportMediaId, TransportRelayRouteAction, TransportSessionKey,
+    },
+    room::routing::RoutedConsumerId,
     source_model::PublishedSourceId,
 };
 
@@ -72,6 +74,14 @@ struct RouteRelay {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::engine::room) struct RelayRouteEffect {
     pub route: RelayRouteKey,
+    pub action: TransportRelayRouteAction,
+}
+
+/// relay transport change with its source transport session resolved
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::engine::room) struct ResolvedRelayRouteEffect {
+    pub route: RelayRouteKey,
+    pub source_session_key: TransportSessionKey,
     pub action: TransportRelayRouteAction,
 }
 

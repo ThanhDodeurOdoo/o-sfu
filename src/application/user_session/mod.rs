@@ -22,7 +22,7 @@ use o_sfu_protocol::wire::UserId;
 
 use crate::{
     core::prelude::SfuCore,
-    runtime::{ConnectionId, room::Room},
+    runtime::{ConnectionId, media_transport::TransportSessionKey, room::Room},
 };
 
 mod lifecycle;
@@ -89,6 +89,8 @@ pub struct User {
     id: UserId,
     /// Runtime-local identity that separates replacement sockets for one user.
     connection_id: ConnectionId,
+    /// Committed transport routing identity returned by room admission.
+    transport_session_key: TransportSessionKey,
     /// Log context for negotiation and media failures.
     ///
     /// The address is not part of authentication or room identity.

@@ -50,12 +50,12 @@ impl RoomState {
         self.users.contains_key(user_id)
     }
 
-    pub fn topology_home_router_id(&self, user_id: &UserId) -> Option<RouterId> {
-        self.topology.home_router_id_for_user(user_id)
+    pub fn routing_home_router_id(&self, user_id: &UserId) -> Option<RouterId> {
+        self.routing.home_router_id_for_user(user_id)
     }
 
-    pub fn topology_router_count(&self) -> usize {
-        self.topology.router_count()
+    pub fn routing_router_count(&self) -> usize {
+        self.routing.router_count()
     }
 
     pub fn first_published_transport_media_id(&self) -> Option<TransportMediaId> {

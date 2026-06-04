@@ -31,9 +31,9 @@ use crate::{
         recording::RecordingService,
         room::{
             LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext, UserOutboundSender,
+            routing::{RoutedConsumerId, RoutedProducerId},
             rtp_capabilities::router_rtp_capabilities,
             state::RoomState,
-            topology::{RoutedConsumerId, RoutedProducerId},
             user_negotiation::UserTransportReady,
         },
         source_model::{
@@ -201,11 +201,11 @@ fn install_test_consumer_route(
         .user_connection_id(consumer_user_id)
         .expect("consumer user should have a connection id");
     let routed_producer_id = state
-        .topology
+        .routing
         .add_producer(producer_user_id, RouterMediaKind::Video)
         .unwrap_or_else(|error| panic!("failed to create test producer route: {error:?}"));
     let routed_consumer_id = state
-        .topology
+        .routing
         .add_consumer(
             consumer_user_id,
             routed_producer_id,
@@ -314,7 +314,7 @@ fn install_test_published_producer(
         .user_connection_id(user_id)
         .expect("publisher user should have a connection id");
     let routed_producer_id = state
-        .topology
+        .routing
         .add_producer(user_id, RouterMediaKind::Video)
         .unwrap_or_else(|error| panic!("failed to create test producer route: {error:?}"));
     install_test_published_producer_with_route(
@@ -339,7 +339,7 @@ fn install_test_consumable_video_producer(
         .user_connection_id(user_id)
         .expect("publisher should have a connection id");
     let routed_producer_id = state
-        .topology
+        .routing
         .add_producer(user_id, RouterMediaKind::Video)
         .expect("publisher route should be added");
     let consumable_rtp_parameters = derive_consumable_rtp_parameters(
@@ -890,7 +890,7 @@ fn unpublish_track_repairs_missing_topology_router_and_clears_state() {
         transport_media_id,
         43_000,
     ));
-    state.topology.remove_router_for_test(RouterId(1));
+    state.routing.remove_router_for_test(RouterId(1));
     assert!(
         state
             .unpublish_track(

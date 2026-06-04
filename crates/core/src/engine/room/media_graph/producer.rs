@@ -18,7 +18,7 @@ use tracing::{error, warn};
 
 use super::{
     super::{
-        TrackBindingUpdate, outbound::OutboundSender, state::RoomState, topology::RoutedProducerId,
+        TrackBindingUpdate, outbound::OutboundSender, routing::RoutedProducerId, state::RoomState,
     },
     ConsumerKey, ProducerRouteTarget, ProducerRuntimeId, PublishedProducer, PublishedSourceInstall,
     SourceTransportMediaIndexEntry, TransportMediaRemoval,
@@ -221,7 +221,7 @@ impl RoomState {
         pending: &PreparedPublishedTrack,
     ) -> Option<RoutedProducerId> {
         match self
-            .topology
+            .routing
             .add_producer(&pending.owner_user_id, pending.media_kind)
         {
             Ok(producer_id) => Some(producer_id),
@@ -361,7 +361,7 @@ impl RoomState {
             .media
             .routed_consumer_ids_for_source(producer_target.source_id());
         if self
-            .topology
+            .routing
             .remove_producer(producer_target.routed_producer_id(), affected_consumers)
             .is_err()
         {
@@ -408,7 +408,7 @@ impl RoomState {
             ProducerRouteState::Paused
         };
         if self
-            .topology
+            .routing
             .set_producer_route_state(producer_target.routed_producer_id(), route_state)
             .is_err()
         {

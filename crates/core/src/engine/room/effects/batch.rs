@@ -7,23 +7,23 @@ use tracing::warn;
 use crate::{
     TransportEffectOutcome,
     engine::{
-        ConnectionId, UserId,
+        ConnectionId, MediaWorkerId, UserId,
         diagnostics::DiagnosticsEventData,
         media_transport::{
-            ConsumerActivity, MediaTransport, ProducerActivity, TransportMediaId,
-            TransportRelayRouteAction, TransportRelayRouteEffect, TransportSourceKey,
+            ConsumerActivity, MediaTransport, ProducerActivity, TransportConsumerRoute,
+            TransportMediaId, TransportRelayRouteAction, TransportRelayRouteEffect,
+            TransportSessionKey, TransportSourceKey,
         },
         room::{
             RemoteTrackBootstrap, Room, RoomMediaCounts, SourcePolicyEvent, TrackBindingUpdate,
             UserOutbound,
             cleanup::TransportCleanupOperation,
             media_graph::{
-                ConsumerBootstrapOrigin, ConsumerRouteTransportRef, ConsumerRouteUpdate,
-                PendingConsumerBootstrapTarget, PlannedConsumerBootstrap,
-                PreparedConsumerBootstrap, RelayRouteEffect, TransportMediaRemoval,
+                ConsumerBootstrapOrigin, ConsumerRouteUpdate, PendingConsumerBootstrapTarget,
+                PlannedConsumerBootstrap, PreparedConsumerBootstrap, ResolvedRelayRouteEffect,
             },
             outbound::OutboundSender,
-            state::LifecycleEffects,
+            state::{LifecycleEffects, RoomState},
         },
         source_model::UserStreamId,
     },
@@ -80,7 +80,7 @@ impl MediaCountDelta {
 pub struct RoomCommit {
     users: Option<UserCountDelta>,
     media: Vec<MediaCountDelta>,
-    relays: Vec<RelayRouteEffect>,
+    relays: Vec<ResolvedRelayRouteEffect>,
     cleanup: RoomCleanup,
     producers: Vec<ProducerActivityEffect>,
     source_policy: Option<SourcePolicyEvent>,
@@ -99,7 +99,7 @@ struct UserCountDelta {
 
 #[derive(Debug)]
 struct ConsumerRouteActivity {
-    route: ConsumerRouteTransportRef,
+    route: TransportConsumerRoute,
     stream: UserStreamId,
     kind: MediaKind,
     active: bool,
@@ -110,6 +110,11 @@ struct ConsumerRouteActivity {
 struct ConsumerBootstrapLease {
     bootstrap: PlannedConsumerBootstrap,
     origin: ConsumerBootstrapOrigin,
+}
+
+struct DeclaredConsumerMedia {
+    consumer_session_key: TransportSessionKey,
+    consumer_media: TransportMediaId,
 }
 
 #[derive(Debug, Default)]
@@ -176,42 +181,29 @@ impl RoomCommit {
 
     pub fn with_relay_effects(
         mut self,
-        effects: impl IntoIterator<Item = RelayRouteEffect>,
+        effects: impl IntoIterator<Item = ResolvedRelayRouteEffect>,
     ) -> Self {
         self.relays.extend(effects);
         self
     }
 
-    pub fn with_transport_removals(
+    pub fn with_pre_close_transport_cleanup(
         mut self,
-        room: &Room,
-        removals: impl IntoIterator<Item = TransportMediaRemoval>,
+        operations: impl IntoIterator<Item = TransportCleanupOperation>,
     ) -> Self {
-        self.cleanup
-            .before_close
-            .extend(removals.into_iter().map(|removal| {
-                let connection_id = removal.connection();
-                TransportCleanupOperation::RemoveMedia {
-                    session_key: room.transport_user_key(removal.user(), connection_id),
-                    connection_id,
-                    transport_media_id: removal.transport_media(),
-                }
-            }));
+        self.cleanup.before_close.extend(operations);
         self
     }
 
-    pub fn with_transport_user_close(
+    pub fn with_transport_user_close_cleanup(
         mut self,
-        room: &Room,
-        user_id: &UserId,
-        connection_id: ConnectionId,
+        operation: TransportCleanupOperation,
     ) -> Self {
-        self.cleanup
-            .close_users
-            .push(TransportCleanupOperation::CloseUser {
-                session_key: room.transport_user_key(user_id, connection_id),
-                connection_id,
-            });
+        debug_assert!(matches!(
+            &operation,
+            TransportCleanupOperation::CloseUser { .. }
+        ));
+        self.cleanup.close_users.push(operation);
         self
     }
 
@@ -253,14 +245,13 @@ impl RoomCommit {
 
     pub fn with_route_updates(
         mut self,
+        state: &RoomState,
         room: &Room,
         user_id: &UserId,
         connection_id: ConnectionId,
+        media_worker_id: MediaWorkerId,
         updates: Vec<ConsumerRouteUpdate>,
     ) -> Self {
-        let media_worker_id = room
-            .transport_user_key(user_id, connection_id)
-            .media_worker_id();
         self.routes.extend(updates.into_iter().map(|update| {
             let ConsumerRouteUpdate {
                 route,
@@ -268,6 +259,7 @@ impl RoomCommit {
                 kind,
                 active,
             } = update;
+            let transport_route = state.transport_consumer_route(&route);
             let diagnostics = DiagnosticsEventData::for_user(
                 room.uuid(),
                 user_id,
@@ -284,7 +276,7 @@ impl RoomCommit {
             .insert_field("source_transport_media_id", route.source_media().as_u64())
             .insert_field("stream_id", stream.to_string());
             ConsumerRouteActivity {
-                route,
+                route: transport_route,
                 stream,
                 kind,
                 active,
@@ -372,9 +364,8 @@ impl RoomCommit {
         };
         for op in routes {
             let route = &op.route;
-            let transport_route = room.transport_consumer_route(route);
             if media_transport
-                .set_consumer_active(&transport_route, ConsumerActivity::from_active(op.active))
+                .set_consumer_active(route, ConsumerActivity::from_active(op.active))
                 .await
                 .is_err()
             {
@@ -387,7 +378,7 @@ impl RoomCommit {
             } else if op.active
                 && op.kind == MediaKind::Video
                 && media_transport
-                    .request_consumer_keyframe(&transport_route)
+                    .request_consumer_keyframe(route)
                     .await
                     .is_err()
             {
@@ -517,7 +508,7 @@ impl ConsumerBootstrapLease {
             return;
         }
         let activity = ConsumerActivity::from_active(pending.consumer_active());
-        let Some((consumer_media, mid)) = Self::declare_transport_media(
+        let Some((declared, mid)) = Self::declare_transport_media(
             &target,
             &prepared,
             activity,
@@ -532,7 +523,7 @@ impl ConsumerBootstrapLease {
         let (before, outbound, after) = {
             let mut state = room.state.write().await;
             let before = state.media_counts();
-            let outbound = state.commit_bootstrap(&target, pending, consumer_media, mid);
+            let outbound = state.commit_bootstrap(&target, pending, declared.consumer_media, mid);
             let after = state.media_counts();
             drop(state);
             (before, outbound, after)
@@ -542,7 +533,7 @@ impl ConsumerBootstrapLease {
             media_transport,
             &target,
             origin,
-            consumer_media,
+            declared,
             MediaCountDelta::new(before, after),
             outbound,
         )
@@ -556,11 +547,35 @@ impl ConsumerBootstrapLease {
         origin: ConsumerBootstrapOrigin,
         room: &Room,
         media_transport: &MediaTransport,
-    ) -> Option<(TransportMediaId, Option<String>)> {
-        let consumer_session =
-            room.transport_user_key(target.consumer_user_id(), target.consumer_connection_id());
-        let producer_session =
-            room.transport_user_key(target.producer_user_id(), target.producer_connection_id());
+    ) -> Option<(DeclaredConsumerMedia, Option<String>)> {
+        let (consumer_session, producer_session) = {
+            let state = room.state.read().await;
+            (
+                state.committed_transport_user_key(
+                    target.consumer_user_id(),
+                    target.consumer_connection_id(),
+                ),
+                state.committed_transport_user_key(
+                    target.producer_user_id(),
+                    target.producer_connection_id(),
+                ),
+            )
+        };
+        let Some((consumer_session, producer_session)) = consumer_session.zip(producer_session)
+        else {
+            release_consumer_bootstrap(room, target, media_transport).await;
+            warn!(
+                consumer_user_id = ?target.consumer_user_id(),
+                consumer_connection_id = ?target.consumer_connection_id(),
+                producer_user_id = ?target.producer_user_id(),
+                producer_connection_id = ?target.producer_connection_id(),
+                source_transport_media_id = ?target.transport_media_id(),
+                consumer_mid = prepared.rtp.mid(),
+                ?origin,
+                "skipping consumer bootstrap because routing no longer owns the target sessions"
+            );
+            return None;
+        };
         match media_transport
             .consume_media(
                 &consumer_session,
@@ -576,7 +591,13 @@ impl ConsumerBootstrapLease {
                 let mid = media_transport
                     .transport_media_mid(&consumer_session, consumer_media)
                     .await;
-                Some((consumer_media, mid))
+                Some((
+                    DeclaredConsumerMedia {
+                        consumer_session_key: consumer_session,
+                        consumer_media,
+                    },
+                    mid,
+                ))
             }
             Err(error) => {
                 release_consumer_bootstrap(room, target, media_transport).await;
@@ -601,7 +622,7 @@ impl ConsumerBootstrapLease {
         media_transport: &MediaTransport,
         target: &PendingConsumerBootstrapTarget,
         origin: ConsumerBootstrapOrigin,
-        consumer_media: TransportMediaId,
+        declared: DeclaredConsumerMedia,
         delta: MediaCountDelta,
         outbound: Option<(OutboundSender, RemoteTrackBootstrap)>,
     ) {
@@ -609,10 +630,9 @@ impl ConsumerBootstrapLease {
             delta.record(room);
             release_consumer_bootstrap(room, target, media_transport).await;
             let cleanup = [TransportCleanupOperation::RemoveMedia {
-                session_key: room
-                    .transport_user_key(target.consumer_user_id(), target.consumer_connection_id()),
+                session_key: declared.consumer_session_key,
                 connection_id: target.consumer_connection_id(),
-                transport_media_id: consumer_media,
+                transport_media_id: declared.consumer_media,
             }];
             room.execute_transport_cleanup_operations(media_transport, &cleanup)
                 .await;
@@ -626,12 +646,8 @@ impl ConsumerBootstrapLease {
                 telemetry_event::SUBSCRIBE_SUCCEEDED,
             )
             .with_connection_id(target.consumer_connection_id().as_u64())
-            .with_media_worker_id(
-                room.transport_user_key(target.consumer_user_id(), target.consumer_connection_id())
-                    .media_worker_id()
-                    .as_usize(),
-            )
-            .with_transport_media_id(consumer_media.as_u64())
+            .with_media_worker_id(declared.consumer_session_key.media_worker_id().as_usize())
+            .with_transport_media_id(declared.consumer_media.as_u64())
             .insert_field(
                 "producer_user_id",
                 serde_json::to_value(target.producer_user_id()).unwrap_or(serde_json::Value::Null),
@@ -658,6 +674,7 @@ async fn release_consumer_bootstrap(
         let mut state = room.state.write().await;
         let before = state.media_counts();
         let relays = state.release_bootstrap(target);
+        let relays = state.resolved_relay_route_effects(relays);
         let after = state.media_counts();
         drop(state);
         (before, after, relays)
@@ -674,14 +691,13 @@ async fn release_consumer_bootstrap(
 async fn execute_relay_route_effects(
     room: &Room,
     media_transport: &MediaTransport,
-    effects: &[RelayRouteEffect],
+    effects: &[ResolvedRelayRouteEffect],
 ) -> bool {
     let mut applied = true;
     for effect in effects {
         if effect.action == TransportRelayRouteAction::Release {
             let operation = [TransportCleanupOperation::ReleaseRelayRoute {
-                source_session_key: room
-                    .transport_user_key(&effect.route.source_user, effect.route.source_connection),
+                source_session_key: effect.source_session_key.clone(),
                 route: effect.route.clone(),
             }];
             if room
@@ -695,7 +711,7 @@ async fn execute_relay_route_effects(
         }
         let transport_effect = TransportRelayRouteEffect {
             source: TransportSourceKey::new(
-                room.transport_user_key(&effect.route.source_user, effect.route.source_connection),
+                effect.source_session_key.clone(),
                 effect.route.source_media,
             ),
             target_media_worker_id: effect.route.target_worker,

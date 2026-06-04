@@ -156,7 +156,7 @@ pub async fn join_user_with_receiver(
     media_transport: &MediaTransport,
 ) -> Result<(ConnectionId, UserOutboundReceiver)> {
     let (sender, receiver) = test_sender();
-    let (_room, connection_id) = manager
+    let session = manager
         .join_user(
             room.uuid(),
             JoinUserRequest {
@@ -169,7 +169,7 @@ pub async fn join_user_with_receiver(
         )
         .await
         .map_err(|error| anyhow!("user should join through manager: {error:?}"))?;
-    Ok((connection_id, receiver))
+    Ok((session.connection_id(), receiver))
 }
 
 pub async fn close_user(
@@ -252,12 +252,12 @@ pub async fn user_connection_id(room: &Room, user_id: &UserId) -> Result<Connect
 pub async fn home_worker(room: &Room, raw_user_id: i64) -> Option<usize> {
     room.test_api()
         .inspect()
-        .topology_home_media_worker_id(&UserId::Integer(raw_user_id))
+        .routing_home_media_worker_id(&UserId::Integer(raw_user_id))
         .await
 }
 
 pub async fn router_count(room: &Room) -> usize {
-    room.test_api().inspect().topology_router_count().await
+    room.test_api().inspect().routing_router_count().await
 }
 
 pub fn test_video_rtp_parameters() -> MediaStream {

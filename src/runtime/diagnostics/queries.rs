@@ -221,6 +221,7 @@ pub(crate) async fn workers_response(
         if users.is_empty() {
             let media_worker_id = room
                 .assigned_primary_media_worker_id()
+                .await
                 .map_or(0, MediaWorkerId::as_usize);
             workers
                 .entry(media_worker_id)
@@ -325,6 +326,7 @@ async fn room_snapshot(
                 media_worker_id: entry
                     .room()
                     .assigned_primary_media_worker_id()
+                    .await
                     .map_or(0, MediaWorkerId::as_usize),
                 publication_count,
                 recording_state: entry.room().recording_state().await,

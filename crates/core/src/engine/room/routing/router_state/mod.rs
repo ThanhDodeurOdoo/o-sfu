@@ -37,7 +37,7 @@ impl From<RouterError> for RoomRouterStateError {
 /// each user. It owns no transport runtime resources. Its job is to make pure
 /// router mutations line up with the room state that already accepted the
 /// signaling transition.
-pub(super) struct RoomRouterState {
+pub(in crate::engine::room) struct RoomRouterState {
     router: Router<RoomRouterObserver>,
     rtp_capabilities: MediaCapabilities,
     sessions_by_user: BTreeMap<UserId, RouterSessionId>,
@@ -111,7 +111,7 @@ impl RoomRouterState {
     ///
     /// Returns the underlying [`RouterError`] when the pure router cannot open
     /// either directional transport for the user.
-    pub(super) fn ensure_session_transports(
+    pub(in crate::engine::room) fn ensure_session_transports(
         &mut self,
         user_id: &UserId,
     ) -> Result<(), RoomRouterStateError> {

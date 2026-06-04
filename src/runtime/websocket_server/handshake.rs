@@ -491,10 +491,13 @@ async fn join_user(
         )
         .await;
     match join_result {
-        Ok((room, connection_id)) => {
+        Ok(session) => {
+            let room = Arc::clone(session.room());
+            let connection_id = session.connection_id();
             let user = User::new(
                 user_id.clone(),
                 connection_id,
+                session.transport_session_key().clone(),
                 Arc::clone(&remote_address),
                 Arc::clone(&room),
                 state.sfu_core.clone(),

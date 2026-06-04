@@ -96,14 +96,12 @@ impl RoomTestMedia<'_> {
             let state = self.room.state.read().await;
             state.validate_publish_descriptor(user_id, publisher_connection_id, intent)?
         };
+        let session_key = self
+            .room
+            .transport_user_key(user_id, publisher_connection_id)
+            .await;
         let transport_media_id = match media_transport
-            .publish_media(
-                &self
-                    .room
-                    .transport_user_key(user_id, publisher_connection_id),
-                media_kind,
-                &producer_rtp_parameters,
-            )
+            .publish_media(&session_key, media_kind, &producer_rtp_parameters)
             .await
         {
             Ok(id) => id,

@@ -44,10 +44,7 @@ impl Room {
         }
 
         let current_state = request_context.recording_state();
-        let media_worker_id = self
-            .placement_state
-            .media_worker_id_for_connection(connection_id)
-            .as_usize();
+        let media_worker_id = self.media_worker_id_for_connection(connection_id).await;
         if current_state.recording == Some(true) {
             if options.audio.is_some() || options.video.is_some() {
                 self.metrics.record_recording_start_rejected();
@@ -180,10 +177,7 @@ impl Room {
         }
         self.metrics.record_recording_stop_accepted();
         self.metrics.add_active_recording_rooms(-1);
-        let media_worker_id = self
-            .placement_state
-            .media_worker_id_for_connection(connection_id)
-            .as_usize();
+        let media_worker_id = self.media_worker_id_for_connection(connection_id).await;
         self.diagnostics.record(
             DiagnosticsEventData::for_user(
                 self.uuid(),
@@ -211,5 +205,13 @@ impl Room {
                 && feature_flags.transcription
                 && permissions.transcription(),
         }
+    }
+
+    async fn media_worker_id_for_connection(&self, connection_id: ConnectionId) -> usize {
+        self.state
+            .read()
+            .await
+            .media_worker_id_for_connection(connection_id)
+            .as_usize()
     }
 }

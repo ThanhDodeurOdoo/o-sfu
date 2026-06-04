@@ -159,13 +159,11 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
     let Some(connection_id) = connection_id else {
         return;
     };
+    let session_key = room.transport_user_key(&core_user_id, connection_id).await;
     server
         .media_transport
         .test_api()
-        .set_session_transport_health(
-            &room.transport_user_key(&core_user_id, connection_id),
-            TransportSessionHealth::Disconnected,
-        );
+        .set_session_transport_health(&session_key, TransportSessionHealth::Disconnected);
 
     let close_code = timeout(Duration::from_secs(1), read_close_code(&mut websocket)).await;
     assert!(
@@ -220,13 +218,11 @@ async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiat
     let Some(connection_id) = connection_id else {
         return;
     };
+    let session_key = room.transport_user_key(&core_user_id, connection_id).await;
     server
         .media_transport
         .test_api()
-        .set_session_transport_health(
-            &room.transport_user_key(&core_user_id, connection_id),
-            TransportSessionHealth::Disconnected,
-        );
+        .set_session_transport_health(&session_key, TransportSessionHealth::Disconnected);
 
     let close_code = timeout(Duration::from_secs(1), read_close_code(&mut websocket)).await;
     assert!(
@@ -478,6 +474,10 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
     let Some(mut first_socket) = first_socket else {
         return;
     };
+    assert!(
+        wait_for_active_transport_users(&server, 1).await.is_some(),
+        "first negotiated socket should create one transport user"
+    );
     let second_socket = setup_negotiated_session(&server, &room, user_id.clone()).await;
     assert!(second_socket.is_some());
     let Some(mut second_socket) = second_socket else {
@@ -489,6 +489,10 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
         Some(CloseCode::Library(4108))
     );
     assert!(
+        wait_for_active_transport_users(&server, 1).await.is_some(),
+        "stale socket close should clean only the replaced transport user"
+    );
+    assert!(
         room.test_api().inspect().has_session(&user_id).await,
         "replacement session should stay live after stale socket cleanup"
     );
@@ -498,6 +502,10 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
     assert!(
         wait_for_session_cleanup(&room, &user_id).await.is_some(),
         "closing the replacement socket should remove the final session"
+    );
+    assert!(
+        wait_for_active_transport_users(&server, 0).await.is_some(),
+        "closing the replacement socket should clean the final transport user"
     );
 }
 
@@ -644,6 +652,19 @@ async fn wait_for_session_cleanup(room: &Room, user_id: &UserId) -> Option<()> {
     timeout(Duration::from_secs(1), async {
         loop {
             if !room.test_api().inspect().has_session(user_id).await {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .ok()
+}
+
+async fn wait_for_active_transport_users(server: &TestServer, expected: i64) -> Option<()> {
+    timeout(Duration::from_secs(1), async {
+        loop {
+            if server.state.metrics.snapshot().active_transport_users() == expected {
                 break;
             }
             sleep(Duration::from_millis(10)).await;

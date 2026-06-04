@@ -401,7 +401,8 @@ async fn source_policy_rejected_transport_gate_does_not_commit_selector_update()
     let receiver_connection_id = user_connection_id(&scenario.room, &UserId::Integer(2)).await;
     let receiver_session_key = scenario
         .room
-        .transport_user_key(&UserId::Integer(2), receiver_connection_id);
+        .transport_user_key(&UserId::Integer(2), receiver_connection_id)
+        .await;
 
     scenario
         .adapter
@@ -430,9 +431,7 @@ async fn source_policy_effect_plan_from_transport_snapshot(
         state
             .transport_user_entries()
             .into_iter()
-            .map(|(user_id, connection_id)| {
-                scenario.room.transport_user_key(&user_id, connection_id)
-            })
+            .map(|(user_id, connection_id)| state.transport_user_key(&user_id, connection_id))
             .collect::<Vec<_>>()
     };
     let receiver_bandwidth_snapshot = scenario.adapter.receiver_bandwidth_snapshot(&session_keys);

@@ -21,11 +21,11 @@ use tracing::{error, warn};
 
 use super::{
     super::{
-        RoomEventRequest, outbound::OutboundSender, state::RoomState, topology::RoutedProducerId,
+        RoomEventRequest, outbound::OutboundSender, routing::RoutedProducerId, state::RoomState,
     },
     ConsumerKey, ConsumerRouteTransportRef, ConsumerRuntimeId, ConsumerState, ProducerRuntimeId,
     PublishedProducer,
-    route_graph::RelayRouteEffect,
+    route_graph::{RelayRouteEffect, ResolvedRelayRouteEffect},
 };
 use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
@@ -64,7 +64,7 @@ pub struct ConsumerKeyframeRefreshTarget {
 pub struct PlannedSubscriptionChange {
     updates: Vec<ConsumerRouteUpdate>,
     bootstraps: Vec<PlannedConsumerBootstrap>,
-    relays: Vec<RelayRouteEffect>,
+    relays: Vec<ResolvedRelayRouteEffect>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,7 +106,7 @@ pub struct PlannedConsumerBootstrap {
     target: PendingConsumerBootstrapTarget,
     prepared: PreparedConsumerBootstrap,
     pending: PendingConsumerBootstrap,
-    relays: Vec<RelayRouteEffect>,
+    relays: Vec<ResolvedRelayRouteEffect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +154,7 @@ impl RoomState {
         self.persist_intents(user_id, target_user_id, intents);
         let (updates, relays) =
             self.apply_route_updates(user_id, connection_id, target_user_id, intents);
+        let relays = self.resolved_relay_route_effects(relays);
         let bootstraps = self.plan_consumers(
             self.missing_targets_for_peer(user_id, connection_id, target_user_id),
             worker_for,
@@ -283,7 +284,7 @@ impl RoomState {
                 RouterConsumerRouteState::Paused
             };
             if self
-                .topology
+                .routing
                 .set_consumer_route_state(routed, state)
                 .is_err()
             {
@@ -420,6 +421,7 @@ impl RoomState {
         self.media.reserve_consumer_bootstrap(key.clone());
         let consumer = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
         let relays = self.reserve_relay_route(target, active, worker_for);
+        let relays = self.resolved_relay_route_effects(relays);
         Some(PlannedConsumerBootstrap {
             target: target.clone(),
             prepared: PreparedConsumerBootstrap { rtp: rtp.clone() },
@@ -579,7 +581,7 @@ impl RoomState {
         } else {
             RouterConsumerRouteState::Paused
         };
-        let routed_consumer_id = match self.topology.add_consumer_with_route_state(
+        let routed_consumer_id = match self.routing.add_consumer_with_route_state(
             &target.user,
             pending.producer.routed?,
             pending.producer.kind,
@@ -613,7 +615,7 @@ impl RoomState {
             },
             selection,
         ) {
-            if let Err(error) = self.topology.remove_consumer(routed_consumer_id) {
+            if let Err(error) = self.routing.remove_consumer(routed_consumer_id) {
                 warn!(
                     consumer_user_id = ?target.user,
                     routed_consumer_id = ?routed_consumer_id,
@@ -720,7 +722,7 @@ impl PlannedSubscriptionChange {
     ) -> (
         Vec<ConsumerRouteUpdate>,
         Vec<PlannedConsumerBootstrap>,
-        Vec<RelayRouteEffect>,
+        Vec<ResolvedRelayRouteEffect>,
     ) {
         (self.updates, self.bootstraps, self.relays)
     }
@@ -785,7 +787,7 @@ impl PlannedConsumerBootstrap {
         PendingConsumerBootstrapTarget,
         PreparedConsumerBootstrap,
         PendingConsumerBootstrap,
-        Vec<RelayRouteEffect>,
+        Vec<ResolvedRelayRouteEffect>,
     ) {
         (self.target, self.prepared, self.pending, self.relays)
     }
