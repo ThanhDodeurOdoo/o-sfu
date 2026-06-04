@@ -69,7 +69,7 @@ use crate::{
                 state::{PacketLoopState, RtcSnapshotState, SharedRtcSocket},
                 test_support::{
                     DebugProbe, DebugProbeRequest, collect_ready_session_keys,
-                    sample_already_relayed_packet, sample_forwarded_packet,
+                    mark_already_relayed, sample_already_relayed_packet, sample_forwarded_packet,
                     sample_forwarded_packet_with_audio_activity, sample_forwarded_packet_with_rid,
                     sample_forwarded_packet_without_mid, sample_local_forwarded_packet,
                     sample_rtp_packet, serialize_stun_message, test_transport_session_key,
@@ -754,6 +754,27 @@ impl PacketLoopHarness {
     }
 }
 
+fn push_relay_audio_and_rid_observations(
+    harness: &mut PacketLoopHarness,
+    session_key: &TransportSessionKey,
+    src_media: TransportMediaId,
+) {
+    let mut audio_packet = sample_forwarded_packet_with_audio_activity(
+        session_key.clone(),
+        "aud-up",
+        Some(true),
+        Some(-18),
+        &[0x10, 0x00],
+    );
+    mark_already_relayed(&mut audio_packet, src_media);
+    harness.buffers.pending_packets.push(audio_packet);
+
+    let mut rid_packet =
+        sample_forwarded_packet_with_rid(session_key.clone(), "cam-up", Some("hi"), &[0x10, 0]);
+    mark_already_relayed(&mut rid_packet, src_media);
+    harness.buffers.pending_packets.push(rid_packet);
+}
+
 fn packet_loop_config_for_test() -> PacketLoopConfig {
     #![allow(
         clippy::panic,
@@ -1144,6 +1165,126 @@ fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() 
             .rid(),
         Some(Rid::from("hi"))
     );
+}
+
+#[test]
+fn record_incoming_stats_ignores_stale_relay_observations_after_source_removal() {
+    let source_session = test_transport_session_key(89, 0, 90, UserId::Integer(91));
+    let src_media = TransportMediaId::new(45_089);
+    let hi = Rid::from("hi");
+    let mut harness = PacketLoopHarness::new();
+    let _control_rx = remote_keyframe_source(
+        &mut harness.state,
+        src_media,
+        &source_session,
+        RelayTargetId::new(17),
+        1,
+    );
+    harness.state.routes.prune_unrouted_remote_src(src_media);
+    let source_policy_signal = SourcePolicySignal::default();
+    let subscription = source_policy_signal.subscribe();
+    let now = Instant::now();
+    push_relay_audio_and_rid_observations(&mut harness, &source_session, src_media);
+    record_incoming_stats(
+        &mut harness.state,
+        &source_policy_signal,
+        &harness.metrics,
+        &harness.rtp_metrics,
+        &mut harness.buffers,
+    );
+
+    assert!(harness.state.routes.active_speaker_sources(now).is_empty());
+    assert!(
+        harness
+            .state
+            .routes
+            .source_activity_snapshot(&[src_media], now, &harness.state.incoming_bitrate_counters)
+            .per_media
+            .is_empty()
+    );
+    assert!(!harness.state.routes.producer_rid_is_ready(
+        src_media,
+        hi,
+        now,
+        Duration::from_secs(1)
+    ));
+    assert!(subscription.take_pending_updates().is_empty());
+}
+
+#[test]
+fn record_incoming_stats_ignores_relay_observations_from_wrong_remote_owner() {
+    let source_session = test_transport_session_key(89, 0, 92, UserId::Integer(93));
+    let wrong_session = test_transport_session_key(89, 0, 94, UserId::Integer(95));
+    let consumer_session = test_transport_session_key(89, 1, 96, UserId::Integer(97));
+    let src_media = TransportMediaId::new(45_090);
+    let hi = Rid::from("hi");
+    let now = Instant::now();
+    let mut harness = PacketLoopHarness::new();
+    let _control_rx = remote_keyframe_source(
+        &mut harness.state,
+        src_media,
+        &source_session,
+        RelayTargetId::new(18),
+        1,
+    );
+    register_consumer_route_fixture(
+        &mut harness.state,
+        &consumer_session,
+        "cam-down",
+        src_media,
+        true,
+        PacketLayerGate::Block,
+        Some(PacketLayerGate::Rid(hi)),
+    );
+    assert_eq!(
+        harness
+            .state
+            .routes
+            .track_kf_req(src_media, Some(hi), KeyframeRequestKind::Pli, now),
+        KeyframeRequestDecision::Forward
+    );
+    let source_policy_signal = SourcePolicySignal::default();
+    let subscription = source_policy_signal.subscribe();
+    push_relay_audio_and_rid_observations(&mut harness, &wrong_session, src_media);
+
+    record_incoming_stats(
+        &mut harness.state,
+        &source_policy_signal,
+        &harness.metrics,
+        &harness.rtp_metrics,
+        &mut harness.buffers,
+    );
+
+    assert_eq!(
+        harness.state.routes.effective_packet_gate(src_media),
+        Some(PacketLayerGate::Block)
+    );
+    assert!(harness.state.routes.active_speaker_sources(now).is_empty());
+    assert!(!harness.state.routes.producer_rid_is_ready(
+        src_media,
+        hi,
+        now,
+        Duration::from_secs(1)
+    ));
+    assert!(
+        harness
+            .state
+            .routes
+            .source_activity_snapshot(&[src_media], now, &harness.state.incoming_bitrate_counters)
+            .per_media
+            .is_empty()
+    );
+    assert!(
+        !harness
+            .state
+            .incoming_bitrate_counters
+            .contains_key(&src_media)
+    );
+    assert_eq!(
+        harness.state.routes.next_kf_deadline(),
+        Some(now + Duration::from_secs(1))
+    );
+    assert!(subscription.take_pending_updates().is_empty());
 }
 
 #[test]

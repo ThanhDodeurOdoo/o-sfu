@@ -361,7 +361,6 @@ impl PacketLoopState {
             session_lookup
                 .producer_mids
                 .insert(*mid, transport_media_id);
-            self.routes.register_local_source(transport_media_id);
         } else if let RegisteredMediaHandle::Consumer {
             session_key,
             mid,
@@ -592,6 +591,27 @@ impl PacketLoopState {
                 );
             }
         }
+    }
+
+    pub(super) fn source_packet_is_current_owner(
+        &self,
+        source: &ForwardedPacketSource,
+        transport_media_id: TransportMediaId,
+    ) -> bool {
+        let Some(src_key) = source.session_key(self) else {
+            return false;
+        };
+        if matches!(
+            self.media_handle(transport_media_id),
+            Some(RegisteredMediaHandle::Producer { session_key, .. }) if session_key == src_key
+        ) {
+            return true;
+        }
+        matches!(source, ForwardedPacketSource::Relayed(_))
+            && self
+                .routes
+                .remote_source(transport_media_id)
+                .is_some_and(|registration| registration.src_key() == src_key)
     }
 
     fn learn_producer_ssrc_from_handle(

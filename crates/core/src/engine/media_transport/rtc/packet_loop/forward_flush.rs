@@ -61,9 +61,9 @@ pub(super) fn record_incoming_stats(
     for packet in &mut pending_packets {
         if let Some(facts) = packet.resolve_facts(state) {
             let transport_media_id = facts.src_media;
-            if packet.route_control_mid().is_some() {
-                // MID proves which producer this packet belongs to. Persist the
-                // SSRC before the browser stops sending MID/RID extensions.
+            let observe_source =
+                state.source_packet_is_current_owner(packet.source(), transport_media_id);
+            if observe_source && packet.route_control_mid().is_some() {
                 state.learn_producer_ssrc_from_pkt(
                     packet.source(),
                     transport_media_id,
@@ -71,33 +71,68 @@ pub(super) fn record_incoming_stats(
                     packet.route_control_rid_extension(),
                 );
             }
-            let audio_policy_changed = state.routes.observe_audio_activity(
-                transport_media_id,
-                facts.voice_activity,
-                facts.audio_level,
-                packet.received_at(),
-            );
-            if facts.decoder_refresh {
-                let cleared = state
-                    .routes
-                    .observe_decoder_refresh(transport_media_id, facts.layer_metadata.rid());
-                for _ in 0..cleared {
-                    metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
-                }
-            }
-            if unlikely(audio_policy_changed) {
-                buffers
-                    .dirty_source_policy_channel_ids
-                    .push(facts.room_instance_id);
-            }
             let packet_rid = facts.layer_metadata.rid();
-            if packet_rid.is_some() || facts.decoder_refresh {
-                state.routes.observe_producer_packet(
+            if observe_source {
+                let audio_policy_changed = state.routes.observe_audio_activity(
                     transport_media_id,
-                    packet_rid,
-                    facts.decoder_refresh,
+                    facts.voice_activity,
+                    facts.audio_level,
                     packet.received_at(),
                 );
+                if facts.decoder_refresh {
+                    let cleared = state
+                        .routes
+                        .observe_decoder_refresh(transport_media_id, packet_rid);
+                    for _ in 0..cleared {
+                        metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
+                    }
+                }
+                if unlikely(audio_policy_changed) {
+                    buffers
+                        .dirty_source_policy_channel_ids
+                        .push(facts.room_instance_id);
+                }
+                if packet_rid.is_some() || facts.decoder_refresh {
+                    state.routes.observe_producer_packet(
+                        transport_media_id,
+                        packet_rid,
+                        facts.decoder_refresh,
+                        packet.received_at(),
+                    );
+                }
+                if let Some(rid) = packet_rid {
+                    buffers.push_rid_readiness(
+                        packet.source(),
+                        transport_media_id,
+                        rid,
+                        facts.decoder_refresh,
+                        packet.received_at(),
+                    );
+                }
+                let first_ingress = state
+                    .record_incoming_bitrate(
+                        transport_media_id,
+                        packet.received_at(),
+                        facts.payload_len,
+                    )
+                    .unwrap_or(false);
+                if unlikely(first_ingress) {
+                    let Some(src_key) = packet.src_key(state) else {
+                        continue;
+                    };
+                    debug!(
+                        user_id = ?src_key.user_id(),
+                        media_worker_id = src_key.media_worker_id().as_usize(),
+                        ?transport_media_id,
+                        payload_bytes = facts.payload_len,
+                        "observed first RTP ingress for published media"
+                    );
+                    buffers.push_first_video_keyframe(
+                        packet.source(),
+                        transport_media_id,
+                        packet.received_at(),
+                    );
+                }
             }
             if facts.decoder_refresh {
                 let scope = if packet_rid.is_some() {
@@ -106,39 +141,6 @@ pub(super) fn record_incoming_stats(
                     RtpDecoderRefreshScope::Source
                 };
                 rtp_metrics.record_decoder_refresh(scope);
-            }
-            if let Some(rid) = packet_rid {
-                buffers.push_rid_readiness(
-                    packet.source(),
-                    transport_media_id,
-                    rid,
-                    facts.decoder_refresh,
-                    packet.received_at(),
-                );
-            }
-            let first_ingress = state
-                .record_incoming_bitrate(
-                    transport_media_id,
-                    packet.received_at(),
-                    facts.payload_len,
-                )
-                .unwrap_or(false);
-            if unlikely(first_ingress) {
-                let Some(src_key) = packet.src_key(state) else {
-                    continue;
-                };
-                debug!(
-                    user_id = ?src_key.user_id(),
-                    media_worker_id = src_key.media_worker_id().as_usize(),
-                    ?transport_media_id,
-                    payload_bytes = facts.payload_len,
-                    "observed first RTP ingress for published media"
-                );
-                buffers.push_first_video_keyframe(
-                    packet.source(),
-                    transport_media_id,
-                    packet.received_at(),
-                );
             }
             rtp_metrics.record_ingress(facts.payload_len);
         }

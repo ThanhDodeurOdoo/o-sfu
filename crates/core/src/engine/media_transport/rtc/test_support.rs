@@ -29,21 +29,21 @@ pub(in crate::engine::media_transport::rtc) use {
     super::forwarded_packet::test_support::sample_forwarded_packet_without_mid,
     packets::serialize_stun_message, route_graph::MediaWorkerScenario,
 };
+#[cfg(test)]
+pub(in crate::engine::media_transport::rtc) use {
+    super::forwarded_packet::test_support::{
+        mark_already_relayed, sample_already_relayed_packet,
+        sample_forwarded_packet_with_audio_activity, sample_forwarded_packet_with_frame_mark,
+        sample_forwarded_packet_with_rid, sample_local_forwarded_packet,
+    },
+    packets::sample_rtp_packet,
+};
 #[cfg(feature = "internal-benchmarks")]
 pub(in crate::engine::media_transport::rtc) use {
     super::forwarded_packet::test_support::{
         reset_packet_resolution, sample_forwarded_packet_with_rid_and_audio_activity,
     },
     packets::sample_rtp_packet_with_len,
-};
-#[cfg(test)]
-pub(in crate::engine::media_transport::rtc) use {
-    super::forwarded_packet::test_support::{
-        sample_already_relayed_packet, sample_forwarded_packet_with_audio_activity,
-        sample_forwarded_packet_with_frame_mark, sample_forwarded_packet_with_rid,
-        sample_local_forwarded_packet,
-    },
-    packets::sample_rtp_packet,
 };
 
 #[cfg(any(test, feature = "internal-benchmarks"))]

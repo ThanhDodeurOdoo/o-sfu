@@ -1,15 +1,27 @@
 use std::time::{Duration, Instant};
 
-use str0m::media::{KeyframeRequestKind, Rid};
+use str0m::media::{
+    KeyframeRequestKind::{Fir, Pli},
+    Rid,
+};
+use tokio::sync::mpsc;
 
 use super::super::{
-    keyframe_tracker::{KeyframeRequestDecision, KeyframeRequestTracker},
+    commands::RemoteSourceControl,
+    demux::MediaRouteDestination,
+    keyframe_tracker::KEYFRAME_RETRY_DRAIN_LIMIT,
     relay_registry::{RelayPacketMailbox, RelayTargetId},
     route_control::{PacketLayerGate, PacketLayerMetadata, PacketRouteDecision},
     route_table::RouteTable,
+    slots::ConsumerStreamHandle,
+    test_support::test_transport_session_key,
 };
-use crate::engine::media_transport::{
-    ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource, TransportMediaId,
+use crate::engine::{
+    UserId,
+    media_transport::{
+        ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
+        TransportMediaId, TransportSourceKey,
+    },
 };
 
 fn assert_active_speaker_ids(state: &RouteTable, now: Instant, expected: &[TransportMediaId]) {
@@ -47,175 +59,89 @@ fn assert_single_active_speaker_diagnostic(
     assert_eq!(diagnostic.reason(), reason);
 }
 
-fn track_source_wide(
-    state: &mut KeyframeRequestTracker,
-    src_media: TransportMediaId,
-    now: Instant,
-) -> KeyframeRequestDecision {
-    state.track(src_media, None, KeyframeRequestKind::Pli, now)
-}
-
 #[test]
-fn keyframe_tracker_absorbs_repeated_requests_while_pending() {
-    let mut state = KeyframeRequestTracker::default();
-    let src_media = TransportMediaId::new(17);
-    let now = Instant::now();
-
-    assert_eq!(
-        track_source_wide(&mut state, src_media, now),
-        KeyframeRequestDecision::Forward
-    );
-    assert_eq!(state.next_deadline(), Some(now + Duration::from_secs(1)));
-    assert_eq!(
-        track_source_wide(&mut state, src_media, now),
-        KeyframeRequestDecision::Absorb
-    );
-}
-
-#[test]
-fn keyframe_tracker_expires_pending_request_without_duplicate_feedback() {
-    let mut state = KeyframeRequestTracker::default();
-    let src_media = TransportMediaId::new(18);
-    let now = Instant::now();
-    let mut retries = Vec::new();
-
-    assert_eq!(
-        track_source_wide(&mut state, src_media, now),
-        KeyframeRequestDecision::Forward
-    );
-    state.drain_due(now + Duration::from_secs(1), &mut retries);
-
-    assert!(retries.is_empty());
-    assert_eq!(state.next_deadline(), None);
-    assert_eq!(
-        track_source_wide(&mut state, src_media, now + Duration::from_secs(1)),
-        KeyframeRequestDecision::Forward
-    );
-}
-
-#[test]
-fn keyframe_tracker_retries_after_duplicate_feedback() {
-    let mut state = KeyframeRequestTracker::default();
-    let src_media = TransportMediaId::new(181);
-    let now = Instant::now();
-    let mut retries = Vec::new();
-
-    assert_eq!(
-        track_source_wide(&mut state, src_media, now),
-        KeyframeRequestDecision::Forward
-    );
-    assert_eq!(
-        state.track(
-            src_media,
-            None,
-            KeyframeRequestKind::Fir,
-            now + Duration::from_millis(100)
-        ),
-        KeyframeRequestDecision::Absorb
-    );
-
-    state.drain_due(now + Duration::from_secs(1), &mut retries);
-
-    assert_eq!(retries.len(), 1);
-    let retry = retries[0];
-    assert_eq!(retry.src_media, src_media);
-    assert_eq!(retry.rid, None);
-    assert_eq!(retry.kind, KeyframeRequestKind::Fir);
-}
-
-#[test]
-fn keyframe_tracker_tracks_explicit_rids_independently() {
-    let mut state = KeyframeRequestTracker::default();
-    let src_media = TransportMediaId::new(118);
-    let now = Instant::now();
-
-    assert_eq!(
-        track_source_wide(&mut state, src_media, now),
-        KeyframeRequestDecision::Forward
-    );
-    assert_eq!(
-        state.track(
-            src_media,
-            Some(Rid::from("hi")),
-            KeyframeRequestKind::Pli,
-            now
-        ),
-        KeyframeRequestDecision::Forward
-    );
-    assert_eq!(
-        state.track(
-            src_media,
-            Some(Rid::from("hi")),
-            KeyframeRequestKind::Pli,
-            now
-        ),
-        KeyframeRequestDecision::Absorb
-    );
-    assert_eq!(
-        state.track(
-            src_media,
-            Some(Rid::from("lo")),
-            KeyframeRequestKind::Pli,
-            now
-        ),
-        KeyframeRequestDecision::Forward
-    );
-}
-
-#[test]
-fn keyframe_tracker_decoder_refresh_clears_matching_pending_request() {
-    let mut state = KeyframeRequestTracker::default();
-    let src_media = TransportMediaId::new(182);
+fn route_control_source_teardown_clears_source_owned_state() {
+    let mut state = RouteTable::default();
+    let src_media = TransportMediaId::new(184);
+    let dst_media = TransportMediaId::new(185);
     let now = Instant::now();
     let hi = Rid::from("hi");
-    let lo = Rid::from("lo");
+    let target_id = RelayTargetId::new(3);
+    let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
+    let (control_tx, _control_rx) = mpsc::channel(1);
+    let source = TransportSourceKey::new(
+        test_transport_session_key(18, 0, 19, UserId::Integer(20)),
+        src_media,
+    );
+
+    state.add_consumer_route(
+        src_media,
+        MediaRouteDestination {
+            dest_session: test_transport_session_key(18, 0, 21, UserId::Integer(22)),
+            dest_transport_media_id: dst_media,
+            dest_stream: ConsumerStreamHandle::default(),
+            dest_mid: "cam-down".into(),
+            dest_payload_type: None,
+            nackable: true,
+            active: true,
+            packet_gate: PacketLayerGate::Open,
+            pending_gate: None,
+        },
+    );
+    state
+        .register_remote_source(&source, RemoteSourceControl::new(control_tx, target_id))
+        .unwrap();
+    state.add_relay_target(src_media, target_id, relay_mailbox);
+    state.set_relay_pkt_gate(src_media, target_id, PacketLayerGate::Rid(hi));
+    state.observe_audio_activity(src_media, Some(true), Some(-20), now);
+    state.observe_producer_packet(src_media, Some(hi), true, now);
+    state.schedule_rid_refresh(src_media, hi, now + Duration::from_millis(10));
+    state.track_kf_req(src_media, Some(hi), Pli, now);
+    state.track_kf_req(src_media, Some(hi), Fir, now + Duration::from_millis(100));
+
+    assert!(state.take_route(src_media).is_some());
+
+    assert!(state.local_route(src_media).is_none());
+    assert!(state.remote_source(src_media).is_none());
+    assert!(state.relay_packet_gate(src_media, target_id).is_none());
+    assert!(state.active_speaker_sources(now).is_empty());
+    assert!(!state.producer_rid_is_ready(src_media, hi, now, Duration::from_secs(1)));
+    assert_eq!(state.next_rid_refresh_deadline(), None);
+    assert_eq!(state.next_kf_deadline(), None);
+
     let mut retries = Vec::new();
+    state.drain_due_kf_reqs(now + Duration::from_secs(1), &mut retries);
+    assert!(retries.is_empty());
 
-    assert_eq!(
-        state.track(src_media, Some(hi), KeyframeRequestKind::Pli, now),
-        KeyframeRequestDecision::Forward
-    );
-    assert_eq!(
-        state.track(src_media, Some(lo), KeyframeRequestKind::Pli, now),
-        KeyframeRequestDecision::Forward
-    );
-    assert_eq!(
-        state.track(
-            src_media,
-            Some(hi),
-            KeyframeRequestKind::Pli,
-            now + Duration::from_millis(100)
-        ),
-        KeyframeRequestDecision::Absorb
-    );
-
-    assert_eq!(state.observe_refresh(src_media, Some(lo)), 1);
-    state.drain_due(now + Duration::from_secs(1), &mut retries);
-
-    assert_eq!(retries.len(), 1);
-    assert_eq!(retries[0].rid, Some(hi));
+    state.remove_relay_target(src_media, target_id);
+    assert!(!state.has_sources());
 }
 
 #[test]
-fn keyframe_tracker_decoder_refresh_clears_source_wide_pending_request() {
-    let mut state = KeyframeRequestTracker::default();
-    let src_media = TransportMediaId::new(183);
+fn route_control_stale_keyframe_deadlines_are_pruned_incrementally() {
+    let mut state = RouteTable::default();
     let now = Instant::now();
+    let retry_at = now + Duration::from_secs(1);
+    let stale_deadlines = KEYFRAME_RETRY_DRAIN_LIMIT * 2;
+
+    for source_index in (1_000_u64..).take(stale_deadlines) {
+        let source_id = TransportMediaId::new(source_index);
+        state.track_kf_req(source_id, None, Pli, now);
+        assert_eq!(state.observe_decoder_refresh(source_id, None), 1);
+    }
+
+    let live_source_id = TransportMediaId::new(2_000);
+    state.track_kf_req(live_source_id, None, Pli, now);
+    state.track_kf_req(live_source_id, None, Pli, now + Duration::from_millis(1));
+
+    assert_eq!(state.next_kf_deadline(), Some(retry_at));
+
     let mut retries = Vec::new();
-
-    assert_eq!(
-        track_source_wide(&mut state, src_media, now),
-        KeyframeRequestDecision::Forward
-    );
-    assert_eq!(
-        track_source_wide(&mut state, src_media, now + Duration::from_millis(100)),
-        KeyframeRequestDecision::Absorb
-    );
-    assert_eq!(state.observe_refresh(src_media, Some(Rid::from("hi"))), 1);
-
-    state.drain_due(now + Duration::from_secs(1), &mut retries);
-
+    state.drain_due_kf_reqs(retry_at, &mut retries);
     assert!(retries.is_empty());
+
+    state.drain_due_kf_reqs(retry_at, &mut retries);
+    assert_eq!(retries.len(), 1);
 }
 
 #[test]

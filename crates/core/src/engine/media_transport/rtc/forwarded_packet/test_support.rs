@@ -36,9 +36,17 @@ pub(in crate::engine::media_transport::rtc) fn sample_already_relayed_packet(
     payload: &[u8],
 ) -> ForwardedPacket {
     let mut packet = sample_forwarded_packet(src_key, mid, payload);
+    mark_already_relayed(&mut packet, src_media);
+    packet
+}
+
+#[cfg(test)]
+pub(in crate::engine::media_transport::rtc) fn mark_already_relayed(
+    packet: &mut ForwardedPacket,
+    src_media: TransportMediaId,
+) {
     packet.src_media = Some(src_media);
     packet.visits_origin_sinks = false;
-    packet
 }
 
 #[cfg(test)]
