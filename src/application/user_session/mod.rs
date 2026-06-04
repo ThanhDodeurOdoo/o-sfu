@@ -35,7 +35,9 @@ mod state;
 mod subscribe;
 
 pub use output::{UserOutput, UserSignal};
+pub use publish::PublishIntent;
 use state::UserState;
+pub use subscribe::SubscribeIntent;
 
 /// User-loop exit reason derived from media endpoint health.
 ///

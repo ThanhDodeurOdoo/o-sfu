@@ -15,7 +15,8 @@ async fn websocket_sends_ping_frames_and_accepts_pongs() {
         return;
     };
     let room = create_room(&server, "issuer-ping", CreateRoomQuery::default()).await;
-    let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(410));
+    let user_id = UserId::Integer(410);
+    let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), user_id.clone());
     assert!(token.is_some());
     let Some(token) = token else {
         return;
@@ -49,6 +50,11 @@ async fn websocket_sends_ping_frames_and_accepts_pongs() {
     assert!(
         no_close.is_err(),
         "user should remain open after answering ping"
+    );
+    assert!(
+        close_socket_and_wait_for_session_cleanup(&mut websocket, &room, &user_id)
+            .await
+            .is_some()
     );
 }
 
@@ -388,7 +394,11 @@ async fn replacement_close_rolls_back_staged_publish_before_room_cleanup() {
             .is_some(),
         "replacement close should roll back staged publishes from the stale socket"
     );
-    assert!(replacement_socket.close(None).await.is_ok());
+    assert!(
+        close_socket_and_wait_for_session_cleanup(&mut replacement_socket, &room, &user_id)
+            .await
+            .is_some()
+    );
 }
 
 #[tokio::test]
@@ -549,6 +559,11 @@ async fn disconnect_cleanup_still_closes_media_transport_user_state() {
             .is_some(),
         "disconnect cleanup should remove the target room session"
     );
+    assert!(
+        close_socket_and_wait_for_session_cleanup(bob, &room, &UserId::Integer(2))
+            .await
+            .is_some()
+    );
 }
 
 #[tokio::test]
@@ -659,6 +674,15 @@ async fn wait_for_session_cleanup(room: &Room, user_id: &UserId) -> Option<()> {
     })
     .await
     .ok()
+}
+
+async fn close_socket_and_wait_for_session_cleanup(
+    websocket: &mut TestWebSocket,
+    room: &Room,
+    user_id: &UserId,
+) -> Option<()> {
+    websocket.close(None).await.ok()?;
+    wait_for_session_cleanup(room, user_id).await
 }
 
 async fn wait_for_active_transport_users(server: &TestServer, expected: i64) -> Option<()> {
