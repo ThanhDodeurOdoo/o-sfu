@@ -3,9 +3,11 @@ use o_sfu_router::MediaStream as RouterRtpParameters;
 use {
     super::{PendingPublishTransactions, Room},
     crate::engine::{
-        ConnectionId, TestSourceKind, UserId, media_transport::TransportMediaId,
+        ConnectionId, TestSourceKind, UserId,
+        media_transport::{TransportMediaId, TransportSessionKey},
         room::media_graph::ValidatedPublishDescriptor,
-        source_model::test_support::stream_id_for_source, sync::lock_unpoisoned,
+        source_model::test_support::stream_id_for_source,
+        sync::lock_unpoisoned,
     },
 };
 
@@ -73,6 +75,7 @@ impl Room {
     pub(super) fn inject_next_duplicate_for_test(
         &self,
         descriptor: &ValidatedPublishDescriptor,
+        session_key: TransportSessionKey,
         cleanup_target: TransportMediaId,
     ) {
         let Some(staged_transport_media_id) =
@@ -81,7 +84,8 @@ impl Room {
             return;
         };
         *lock_unpoisoned(&self.duplicate_staged_publish_cleanup_target) = Some(cleanup_target);
-        let transaction = ReservedPublish::new(descriptor.clone(), staged_transport_media_id);
+        let transaction =
+            ReservedPublish::new(descriptor.clone(), session_key, staged_transport_media_id);
         let key = transaction.key();
         let mut pending_publish_transactions = lock_unpoisoned(&self.pending_publish_transactions);
         assert!(

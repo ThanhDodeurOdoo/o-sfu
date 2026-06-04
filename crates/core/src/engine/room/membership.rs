@@ -587,10 +587,21 @@ impl Room {
         count_delta: MembershipCountDelta,
         context: RoomEffectContext<'_>,
     ) -> UserTransitionResult {
+        let staged_cleanup = outcome
+            .disconnected_users
+            .iter()
+            .flat_map(|session| {
+                self.drain_staged_publish_cleanup_operations(
+                    &session.user_id,
+                    session.connection_id,
+                )
+            })
+            .collect::<Vec<_>>();
         let mut commit = RoomCommit::new()
             .with_user_count_delta(count_delta.users_before, count_delta.users_after)
             .with_media_count_delta(count_delta.media_before, count_delta.media_after)
             .with_relay_effects(outcome.relay_effects)
+            .with_pre_close_transport_cleanup(staged_cleanup)
             .with_pre_close_transport_cleanup(outcome.transport_cleanup)
             .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged)
             .with_lifecycle_effects(outcome.effects);

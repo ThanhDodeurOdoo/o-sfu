@@ -453,7 +453,7 @@ async fn protocol_core_unpublish_round_trips_through_real_rtc_after_publish_comm
     reason = "the regression keeps the full queued-removal rtc flow explicit in one place for reviewability"
 )]
 async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_answer_lands() {
-    let Some((_server, _channel, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
+    let Some((_server, room, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
         "issuer-protocol-rtc-unpublish-removal-queue",
         UserId::Integer(79),
         UserId::Integer(80),
@@ -477,7 +477,7 @@ async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_a
     );
 
     let Some(initial_track_bindings) = read_track_snapshot(&mut bob).await else {
-        return;
+        panic!("missing initial track snapshot");
     };
     assert_eq!(initial_track_bindings.len(), 1);
     assert_track_snapshot_contains(
@@ -489,6 +489,13 @@ async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_a
         bob.read_server_frame().await.is_some(),
         "subscriber should answer the first rtc renegotiation so the initial consumer is committed"
     );
+    let Some(ServerMessage::PeerInfo(first_publish_info)) =
+        read_single_protocol_server_message(&mut bob).await
+    else {
+        panic!("subscriber should receive the camera publish peer-info update");
+    };
+    assert_eq!(first_publish_info.user_id, ProtocolSessionId::Integer(79));
+    assert_eq!(first_publish_info.info.is_camera_on, Some(true));
 
     assert!(
         alice
@@ -497,13 +504,21 @@ async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_a
             .is_some()
     );
     assert!(
-        alice.read_server_frame().await.is_some(),
+        read_until_server_request(&mut alice).await.is_some(),
         "publisher should answer the second rtc-backed publish renegotiation"
     );
 
-    let Some(updated_track_bindings) = read_track_snapshot(&mut bob).await else {
-        return;
+    bob.auto_answer_negotiation = false;
+    let Some(updated_track_bindings) =
+        read_track_snapshot_with_pending_negotiation(&mut bob, 1).await
+    else {
+        panic!("missing updated track snapshot");
     };
+    assert_eq!(
+        bob.pending_negotiations.len(),
+        1,
+        "subscriber should keep the second renegotiation pending until the harness answers it"
+    );
     assert_eq!(updated_track_bindings.len(), 2);
     assert_track_snapshot_contains(
         &updated_track_bindings,
@@ -516,17 +531,6 @@ async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_a
         ProtocolStreamType::Screen,
     );
 
-    bob.auto_answer_negotiation = false;
-    assert!(
-        bob.read_server_frame().await.is_some(),
-        "subscriber should receive the second rtc renegotiation request while the first consumer is already committed"
-    );
-    assert_eq!(
-        bob.pending_negotiations.len(),
-        1,
-        "subscriber should keep the second renegotiation pending until the harness answers it"
-    );
-
     assert!(
         alice
             .publish(ProtocolStreamType::Camera, false)
@@ -537,8 +541,10 @@ async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_a
         alice.read_server_frame().await.is_some(),
         "publisher should answer the unpublish renegotiation while the subscriber still has the later addition offer pending"
     );
-    let Some(removed_track_bindings) = read_track_snapshot(&mut bob).await else {
-        return;
+    let Some(removed_track_bindings) =
+        read_track_snapshot_with_pending_negotiation(&mut bob, 1).await
+    else {
+        panic!("missing removed track snapshot");
     };
     assert_eq!(removed_track_bindings.len(), 1);
     assert_track_snapshot_contains(
@@ -551,34 +557,26 @@ async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_a
         1,
         "subscriber removal should not create an overlapping renegotiation while the later addition answer is pending"
     );
-    let Some(bob_websocket) = bob.websocket.as_mut() else {
-        return;
+    let unpublish_info = ProtocolSessionInfo {
+        is_camera_on: Some(false),
+        is_screen_sharing_on: Some(true),
+        ..ProtocolSessionInfo::snapshot_defaults()
     };
-    let Some(peer_info_payload) =
-        timeout(Duration::from_millis(150), read_text_message(bob_websocket))
-            .await
-            .ok()
-            .flatten()
-    else {
-        panic!(
+    let unpublish_update = BundleUpdate::SessionInfoChange(BTreeMap::from([(
+        bundle_session_info_key(&ProtocolSessionId::Integer(79)),
+        unpublish_info.clone(),
+    )]));
+    if bob.updates.last() != Some(&unpublish_update) {
+        assert!(
+            consume_peer_info_update(&mut bob, ProtocolSessionId::Integer(79), unpublish_info)
+                .await
+                .is_some(),
             "subscriber should receive the translated peer-info update for the unpublished track"
         );
-    };
-    let peer_info_commands = bob.core.on_ws_message(&peer_info_payload);
-    assert!(
-        bob.run_commands(peer_info_commands).await.is_some(),
-        "subscriber should consume the queued-unpublish peer-info update"
-    );
+    }
     assert_eq!(
         bob.updates.last(),
-        Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
-            bundle_session_info_key(&ProtocolSessionId::Integer(79)),
-            ProtocolSessionInfo {
-                is_camera_on: Some(false),
-                is_screen_sharing_on: Some(true),
-                ..ProtocolSessionInfo::snapshot_defaults()
-            },
-        )]))),
+        Some(&unpublish_update),
         "queued removal should immediately update the publisher's observable stream info"
     );
     assert!(
@@ -606,5 +604,17 @@ async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_a
     assert!(
         no_server_frame(&mut bob, Duration::from_millis(150)).await,
         "queued subscriber removal should not leave more websocket frames after the removal answer"
+    );
+    assert!(
+        close_peer_and_wait_for_room_cleanup(&mut alice, &room, &UserId::Integer(79))
+            .await
+            .is_some(),
+        "publisher websocket should close cleanly before the test server is dropped"
+    );
+    assert!(
+        close_peer_and_wait_for_room_cleanup(&mut bob, &room, &UserId::Integer(80))
+            .await
+            .is_some(),
+        "subscriber websocket should close cleanly before the test server is dropped"
     );
 }

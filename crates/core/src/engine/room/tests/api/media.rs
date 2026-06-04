@@ -38,13 +38,21 @@ impl RoomTestMedia<'_> {
             let state = self.room.state.read().await;
             state.validate_publish_descriptor(user_id, publish.connection_id, &intent)?
         };
-        ReservedPublish::new(validated_descriptor, publish.transport_media_id)
-            .commit_with_parameters(
-                self.room
-                    .user_operation(user_id, publish.connection_id, media_transport),
-                publish.consumable_rtp_parameters,
-            )
-            .await
+        let session_key = self
+            .room
+            .transport_user_key(user_id, publish.connection_id)
+            .await;
+        ReservedPublish::new(
+            validated_descriptor,
+            session_key,
+            publish.transport_media_id,
+        )
+        .commit_with_parameters(
+            self.room
+                .user_operation(user_id, publish.connection_id, media_transport),
+            publish.consumable_rtp_parameters,
+        )
+        .await
     }
 
     pub async fn publish_track(
@@ -115,7 +123,7 @@ impl RoomTestMedia<'_> {
                 return None;
             }
         };
-        ReservedPublish::new(validated_descriptor, transport_media_id)
+        ReservedPublish::new(validated_descriptor, session_key, transport_media_id)
             .commit_with_parameters(
                 self.room
                     .user_operation(user_id, publisher_connection_id, media_transport),
