@@ -15,7 +15,10 @@ use std::{
 use o_sfu_router::MediaCapabilities;
 use str0m::media::MediaKind as Str0mMediaKind;
 
-use super::rtc::{RtcWorker, client_rtp_capabilities_from_answer};
+use super::rtc::{
+    ConsumerPacketGateCommand, RtcMediaControlCommand, RtcWorker, RtcWorkerCommand,
+    client_rtp_capabilities_from_answer,
+};
 use crate::engine::{
     MediaWorkerId, RoomInstanceId,
     media_transport::{
@@ -237,11 +240,21 @@ impl MediaTransport {
                 continue;
             };
             let update_count = batch.len();
+            let batch_updates = batch
+                .iter()
+                .filter_map(|index| updates.get(*index))
+                .map(ConsumerPacketGateCommand::from_update)
+                .collect();
             let batch_results = worker
-                .set_consumer_pkt_gates(
-                    &key.source,
-                    batch.iter().filter_map(|index| updates.get(*index)),
-                )
+                .request_worker(|response| {
+                    RtcWorkerCommand::MediaControl(
+                        RtcMediaControlCommand::SetConsumerPacketGateBatch {
+                            source: key.source,
+                            updates: batch_updates,
+                            response,
+                        },
+                    )
+                })
                 .await
                 .unwrap_or_else(|error| vec![Err(error); update_count]);
             for (index, result) in batch.into_iter().zip(batch_results) {
@@ -270,8 +283,16 @@ impl MediaTransport {
                 continue;
             };
             let update_count = batch.len();
+            let batch_updates = batch
+                .iter()
+                .filter_map(|index| updates.get(*index))
+                .cloned()
+                .collect();
             let batch_results = worker
-                .set_receiver_bwe_targets(batch.iter().filter_map(|index| updates.get(*index)))
+                .request_worker(|response| RtcWorkerCommand::SetReceiverBweTargetBatch {
+                    updates: batch_updates,
+                    response,
+                })
                 .await
                 .unwrap_or_else(|error| vec![Err(error); update_count]);
             for (index, result) in batch.into_iter().zip(batch_results) {
@@ -368,12 +389,11 @@ impl MediaTransport {
         client_rtp_capabilities_from_answer(answer_sdp).ok_or(TransportAdapterError::InvalidInput)
     }
 
-    /// Closes all transport state for a session and releases cross-worker relay
-    /// registrations.
+    /// Applies one cross-worker relay-route effect.
     ///
-    /// Session cleanup starts on the owning worker. Any relay cleanup emitted by
-    /// that worker is then replayed on source workers so no remote worker keeps
-    /// forwarding to a closed target.
+    /// Relay installation starts the target worker to obtain its relay mailbox.
+    /// Release and activity updates address existing source-worker relay state
+    /// without booting the target worker.
     pub(super) async fn execute_relay_route_effect(
         &self,
         effect: &TransportRelayRouteEffect,
@@ -384,30 +404,20 @@ impl MediaTransport {
         if Arc::ptr_eq(&source_worker, &target_worker) {
             return Ok(());
         }
-        match effect.action {
+        let request = match effect.action {
             TransportRelayRouteAction::Install => {
-                source_worker
-                    .activate_relay_route(&effect.source, target_worker.as_ref())
-                    .await
+                target_worker.relay_install_request(effect.source.clone())?
             }
             TransportRelayRouteAction::Release => {
-                source_worker
-                    .deactivate_relay_route(
-                        effect.source.transport_media_id(),
-                        target_worker.as_ref(),
-                    )
-                    .await
+                target_worker.relay_release_request(effect.source.transport_media_id())
             }
             TransportRelayRouteAction::SetActivity(activity) => {
-                source_worker
-                    .apply_relay_target_activity(
-                        &effect.source,
-                        target_worker.as_ref(),
-                        activity.is_active(),
-                    )
-                    .await
+                target_worker.relay_activity_request(effect.source.clone(), activity.is_active())
             }
-        }
+        };
+        source_worker
+            .request_worker(|response| RtcWorkerCommand::media_control(request, response))
+            .await
     }
 
     /// Looks up the negotiated MID for a transport media handle.
@@ -422,7 +432,10 @@ impl MediaTransport {
     ) -> Option<String> {
         let worker = self.worker_for_user(session_key)?;
         worker
-            .transport_media_mid(transport_media_id)
+            .request_worker(|response| RtcWorkerCommand::ResolveMediaMid {
+                transport_media_id,
+                response,
+            })
             .await
             .ok()
             .flatten()

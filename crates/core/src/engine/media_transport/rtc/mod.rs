@@ -60,7 +60,11 @@ pub mod test_support;
 mod tests;
 mod worker;
 
+pub(in crate::engine::media_transport) use commands::{
+    ConsumerPacketGateCommand, RouteControlRequest, RtcMediaControlCommand, RtcWorkerCommand,
+    RtcWorkerResponse,
+};
 #[cfg(any(test, feature = "testing-transport"))]
 pub use forwarded_packet::ForwardedPacket;
 pub use negotiated_capabilities::client_rtp_capabilities_from_answer;
-pub(in crate::engine) use worker::{RtcSendMediaSource, RtcWorker};
+pub(in crate::engine) use worker::RtcWorker;

@@ -19,8 +19,8 @@ pub(super) use str0m::media::{MediaKind as Str0mMediaKind, Mid};
 pub(super) use tokio::time::sleep;
 
 pub(super) use super::super::{
-    RtcSendMediaSource, RtcWorker,
     test_support::{DebugPacketGate, test_transport_session_key},
+    worker::RtcWorker,
 };
 pub(super) use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags,

@@ -40,7 +40,10 @@ use crate::{
             rtc::{
                 bitrate::BitrateRegistry,
                 bootstrap,
-                commands::{ConsumerPacketGateCommand, RemoteSourceControl, RouteControlRequest},
+                commands::{
+                    ConsumerPacketGateCommand, RemoteSourceControl, RouteControlRequest,
+                    RtcMediaControlCommand,
+                },
                 keyframe_tracker::KeyframeRequestDecision,
                 media_registry::{
                     ConsumerKeyframeTarget, RegisteredMediaHandle, RemoteSourceRegistration,
@@ -49,7 +52,7 @@ use crate::{
                 route_control::PacketLayerGate,
                 state::PacketLoopState,
                 test_support::{MediaWorkerScenario, test_transport_session_key},
-                worker::{RtcMediaControlCommand, RtcWorkerCommand},
+                worker::RtcWorkerCommand,
             },
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},

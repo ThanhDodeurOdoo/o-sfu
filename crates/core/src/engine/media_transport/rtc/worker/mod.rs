@@ -1,27 +1,26 @@
-//! cold-path API for one RTC transport worker
+//! RTC worker state and mailbox access for media transport
 //!
-//! this module is the narrow backend surface used by the media transport worker
-//! manager after it has selected the worker that owns a session
-//! callers express transport intent directly on the selected worker while the
-//! worker keeps mutable RTC state inside its packet-loop task
+//! this module owns lazy packet-loop boot, worker handle publication, relay
+//! request construction, remote-source control handles and observability reads
 //!
-//! worker methods are cold-path transport calls
-//! they clone typed identifiers, build mailbox commands and await worker
-//! responses
-//! the packet loop remains the only place with mutable WebRTC sessions, media handles,
-//! route-control state and relay fanout
+//! production transport operations build `RtcWorkerCommand` values at the
+//! `MediaTransport` boundary and enqueue them through lifecycle command helpers
+//! packet-loop command handling remains explicit inside `handlers::dispatcher`
 //!
-//! the split stays small:
+//! cfg-gated tests and benchmarks keep a small direct worker harness for setup
+//! paths that would be less readable through the full transport facade
 //!
 //! ```text
-//! media transport worker manager
+//! MediaTransport
 //!   |
 //!   v
-//! selected rtc worker
+//! RtcWorker mailbox
+//!   |
+//!   v
+//! packet-loop dispatcher
 //!   |-- offer and answer state
 //!   |-- producer, consumer and relay mutations
-//!   |-- session teardown and worker draining
-//!   `-- best-effort transport snapshots
+//!   `-- session teardown and worker draining
 //! ```
 //!
 //! [`TransportMediaId`] values allocated by a worker must stay process-wide
@@ -55,30 +54,36 @@ pub(super) use handlers::{
     drain_due_rid_kf_refreshes, handle_worker_command, request_kf_for_target,
 };
 use lifecycle::WorkerHandleSlot;
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use o_sfu_router::MediaStream as RouterRtpParameters;
+#[cfg(any(test, feature = "internal-benchmarks"))]
 use str0m::media::MediaKind;
 use tokio::sync::mpsc;
 
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use super::commands::CloseSessionState;
 use super::{
     bitrate::BitrateRegistry,
-    commands::{
-        CloseSessionState, ConsumerPacketGateCommand, RemoteSourceControl, RouteControlRequest,
-        RtcMediaControlCommand, RtcWorkerCommand,
-    },
+    commands::{RemoteSourceControl, RouteControlRequest, RtcWorkerCommand},
     packet_loop::PacketLoopLagSnapshot,
     relay_registry::{RelayPacketMailbox, RelayTargetId},
     state::RtcSnapshotState,
 };
+#[cfg(test)]
+use crate::engine::media_transport::{
+    AppliedSessionAnswer, ReceiverBweTargetUpdate, SourcePacketGate, TransportConsumerRoute,
+    TransportResult,
+};
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use crate::engine::media_transport::{SessionOffer, TransportSessionKey};
 use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, MediaWorkerId, RtcPortRange, RtcUdpIoBackend,
     VideoBitrateLimits,
     engine::{
         diagnostics::DiagnosticsStore,
         media_transport::{
-            AppliedSessionAnswer, ConsumerPacketGateUpdate, MediaTransportConfig,
-            MediaTransportDeps, ReceiverBweTargetUpdate, SessionOffer, SourcePacketGate,
-            SourcePolicySignal, TransportAdapterError, TransportConsumerRoute, TransportMediaId,
-            TransportResult, TransportSessionKey, TransportSourceKey,
+            MediaTransportConfig, MediaTransportDeps, SourcePolicySignal, TransportAdapterError,
+            TransportMediaId, TransportSourceKey,
         },
         metrics::{RtcMetricsRecorder, RtpMetricsRecorder, RuntimeMetrics},
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -86,21 +91,6 @@ use crate::{
 };
 
 static NEXT_RELAY_TARGET_ID: AtomicU64 = AtomicU64::new(1);
-
-pub(in crate::engine) struct RtcSendMediaSource {
-    pub source: TransportSourceKey,
-    pub remote_source_control: Option<RemoteSourceControl>,
-}
-
-impl RtcSendMediaSource {
-    #[cfg(test)]
-    pub fn local(src_key: &TransportSessionKey, src_media: TransportMediaId) -> Self {
-        Self {
-            source: TransportSourceKey::new(src_key.clone(), src_media),
-            remote_source_control: None,
-        }
-    }
-}
 
 /// published handle for a lazily booted packet-loop worker
 ///
@@ -213,24 +203,8 @@ impl RtcWorker {
 }
 
 impl RtcWorker {
-    /// creates the first transport offer for a worker-local session
-    ///
-    /// this boots the packet loop if needed and asks the worker to create the
-    /// bootstrap offer used for WebRTC setup and capability probing
-    /// the session must not already have registered media or an earlier
-    /// outstanding initial offer
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError::TransportUnavailable`] when the worker
-    /// cannot be booted or addressed
-    ///
-    /// returns [`TransportAdapterError::InvalidInput`] when the session already
-    /// has an unresolved local offer
-    ///
-    /// returns [`TransportAdapterError::UnsupportedFeature`] when the session is
-    /// no longer in the initial negotiation phase
-    pub async fn create_initial_session_offer(
+    #[cfg(any(test, feature = "internal-benchmarks"))]
+    pub(in crate::engine::media_transport::rtc) async fn create_initial_session_offer(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
@@ -241,23 +215,8 @@ impl RtcWorker {
         .await
     }
 
-    /// creates the next local offer after media topology changed
-    ///
-    /// the worker owns the staged offer and the one-outstanding-offer rule
-    /// callers should request this after producer or consumer setup has staged
-    /// sdp work for the session
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError::TransportUnavailable`] when the session
-    /// no longer exists on this worker
-    ///
-    /// returns [`TransportAdapterError::InvalidInput`] when the initial answer
-    /// has not landed or another offer is still awaiting an answer
-    ///
-    /// returns [`TransportAdapterError::UnsupportedFeature`] when no
-    /// renegotiation offer is currently staged
-    pub async fn create_session_renegotiation_offer(
+    #[cfg(test)]
+    pub(in crate::engine::media_transport::rtc) async fn create_session_renegotiation_offer(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
@@ -270,20 +229,8 @@ impl RtcWorker {
         .await
     }
 
-    /// applies the browser answer that matches the current pending local offer
-    ///
-    /// answer application commits worker-local SDP state, refreshes negotiated
-    /// producer parameters and returns the transport-derived facts needed by
-    /// room code to commit staged publications
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError::TransportUnavailable`] when the session
-    /// is gone or the worker cannot be reached
-    ///
-    /// returns [`TransportAdapterError::InvalidInput`] when the SDP cannot be
-    /// parsed or no matching pending offer exists
-    pub async fn apply_session_answer(
+    #[cfg(test)]
+    pub(in crate::engine::media_transport::rtc) async fn apply_session_answer(
         &self,
         session_key: &TransportSessionKey,
         answer_sdp: &str,
@@ -298,50 +245,25 @@ impl RtcWorker {
 }
 
 impl RtcWorker {
-    /// closes a session and reports whether the worker still owns live state
-    ///
-    /// if the packet loop was never started, the session is treated as already
-    /// closed
-    /// when the worker reports [`CloseSessionState::WorkerIdle`], the published
-    /// handle is kept so the idle worker can serve the next session through its
-    /// reusable shared socket
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError::TransportUnavailable`] when the worker
-    /// handle lock is poisoned or the worker mailbox cannot answer
-    pub async fn close_session(
+    #[cfg(any(test, feature = "internal-benchmarks"))]
+    pub(in crate::engine::media_transport::rtc) async fn close_session(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<CloseSessionState, TransportAdapterError> {
         let Some(worker_handle) = self.worker_handle()? else {
             return Ok(CloseSessionState::SessionClosed);
         };
-        let close_state = self
-            .send_worker_command(&worker_handle, |response| RtcWorkerCommand::CloseSession {
-                session_key: session_key.clone(),
-                response,
-            })
-            .await?;
-        Ok(close_state)
+        self.send_worker_command(&worker_handle, |response| RtcWorkerCommand::CloseSession {
+            session_key: session_key.clone(),
+            response,
+        })
+        .await
     }
 }
 
 impl RtcWorker {
-    /// removes one producer or consumer media handle from a session
-    ///
-    /// the worker validates that the handle belongs to the supplied session
-    /// removal may stage SDP cleanup, clear route-control state, drop bitrate
-    /// counters and mark the session dirty for the next packet-loop turn
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError::TransportUnavailable`] when the session
-    /// or media handle is not owned by the worker
-    ///
-    /// returns [`TransportAdapterError::InvalidInput`] when the handle belongs
-    /// to another session or cannot be represented in the current SDP state
-    pub async fn remove_media(
+    #[cfg(any(test, feature = "internal-benchmarks"))]
+    pub(in crate::engine::media_transport::rtc) async fn remove_media(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
@@ -354,17 +276,8 @@ impl RtcWorker {
         .await
     }
 
-    /// reads answer-derived producer RTP parameters in tests
-    ///
-    /// this keeps adapter tests at the transport boundary while still checking
-    /// the negotiated state that production code uses after answer application
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the worker cannot resolve the
-    /// requested producer media
     #[cfg(test)]
-    pub async fn negotiated_producer_parameters(
+    pub(in crate::engine::media_transport) async fn negotiated_producer_parameters(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
@@ -379,21 +292,8 @@ impl RtcWorker {
         .await
     }
 
-    /// registers browser-uploaded media as a worker-local producer
-    ///
-    /// before the initial answer, recv state can be declared directly on the
-    /// worker session
-    /// after negotiation, this stages a recv-only m-section and returns the
-    /// transport media id that room state can bind to its producer
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError::TransportUnavailable`] when the session
-    /// is gone or worker command dispatch fails
-    ///
-    /// returns [`TransportAdapterError::InvalidInput`] when a new offer would
-    /// violate the worker-local one-outstanding-offer rule
-    pub async fn add_recv_media(
+    #[cfg(any(test, feature = "internal-benchmarks"))]
+    pub(in crate::engine::media_transport::rtc) async fn add_recv_media(
         &self,
         session_key: &TransportSessionKey,
         media_kind: MediaKind,
@@ -408,33 +308,20 @@ impl RtcWorker {
         .await
     }
 
-    /// registers browser-downloaded media as a worker-local consumer
-    ///
-    /// the source may be local to the same packet loop or represented by a
-    /// remote-source control handle from another worker
-    /// the command creates the consumer media handle and installs the route that
-    /// lets packet-loop fanout deliver RTP to the consumer session
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError::TransportUnavailable`] when the
-    /// consumer session or source route cannot be resolved
-    ///
-    /// returns [`TransportAdapterError::InvalidInput`] when the requested
-    /// consumer setup violates worker SDP or route ownership rules
-    pub async fn add_send_media(
+    #[cfg(test)]
+    pub(in crate::engine::media_transport::rtc) async fn add_send_media(
         &self,
         consumer_key: &TransportSessionKey,
         media_kind: MediaKind,
-        source: RtcSendMediaSource,
+        source: TransportSourceKey,
         consumer_rtp_parameters: &RouterRtpParameters,
         active: bool,
     ) -> Result<TransportMediaId, TransportAdapterError> {
         self.request_worker(|response| RtcWorkerCommand::AddSendMedia {
             consumer_key: consumer_key.clone(),
             media_kind,
-            source: source.source,
-            remote_source_control: source.remote_source_control,
+            source,
+            remote_source_control: None,
             consumer_rtp_parameters: consumer_rtp_parameters.clone(),
             active,
             response,
@@ -442,26 +329,17 @@ impl RtcWorker {
         .await
     }
 
+    #[cfg(test)]
     async fn request_media_control(
         &self,
         request: RouteControlRequest,
     ) -> Result<(), TransportAdapterError> {
-        self.request_worker(|response| {
-            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
-                request,
-                response: Some(response),
-            })
-        })
-        .await
+        self.request_worker(|response| RtcWorkerCommand::media_control(request, response))
+            .await
     }
 
-    /// updates whether one worker-local producer may forward packets
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the worker cannot receive the
-    /// command or the producer media handle is no longer valid for the session
-    pub async fn set_producer_active(
+    #[cfg(test)]
+    pub(in crate::engine::media_transport::rtc) async fn set_producer_active(
         &self,
         source: &TransportSourceKey,
         active: bool,
@@ -473,13 +351,8 @@ impl RtcWorker {
         .await
     }
 
-    /// updates whether one worker-local consumer destination is active
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the worker cannot receive the
-    /// command or the consumer route no longer resolves to worker-local media
-    pub async fn set_consumer_active(
+    #[cfg(test)]
+    pub(in crate::engine::media_transport::rtc) async fn set_consumer_active(
         &self,
         route: &TransportConsumerRoute,
         active: bool,
@@ -491,169 +364,58 @@ impl RtcWorker {
         .await
     }
 
-    /// updates the packet gate for one worker-local consumer destination
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the worker cannot receive the
-    /// command or the route references stale source or consumer media
-    pub async fn set_consumer_pkt_gate(
+    #[cfg(test)]
+    pub(in crate::engine::media_transport::rtc) async fn set_consumer_pkt_gate(
         &self,
         route: &TransportConsumerRoute,
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
-        let packet_gate = packet_layer_gate(packet_gate);
-        self.request_media_control(RouteControlRequest::SetConsumerPacketGate {
-            route: route.clone(),
-            packet_gate,
-        })
+        self.request_media_control(RouteControlRequest::set_consumer_packet_gate(
+            route.clone(),
+            &packet_gate,
+        ))
         .await
     }
 
-    /// asks the worker to request a keyframe for one consumer route
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the worker cannot receive the
-    /// command or the route no longer resolves to media on this packet loop
-    pub async fn request_consumer_keyframe(
-        &self,
-        route: &TransportConsumerRoute,
-    ) -> Result<(), TransportAdapterError> {
-        self.request_media_control(RouteControlRequest::RequestConsumerKeyframe {
-            route: route.clone(),
-        })
-        .await
-    }
-
-    /// installs a relay target mailbox for one source media handle
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the source worker cannot receive
-    /// the command or the target worker cannot publish its relay mailbox
-    pub async fn activate_relay_route(
+    #[cfg(test)]
+    pub(in crate::engine::media_transport::rtc) async fn activate_relay_route(
         &self,
         source: &TransportSourceKey,
         target: &Self,
     ) -> Result<(), TransportAdapterError> {
-        let mailbox = target.ensure_packet_loop_started()?.relay_mailbox;
-        self.request_media_control(RouteControlRequest::AddRelayTarget {
-            source: source.clone(),
-            target_id: target.relay_target_id,
-            target: mailbox,
-        })
-        .await
+        self.request_media_control(target.relay_install_request(source.clone())?)
+            .await
     }
 
-    /// removes a relay target mailbox from one source media handle
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the source worker cannot receive
-    /// the command or the relay target no longer matches worker-local state
-    pub async fn deactivate_relay_route(
+    #[cfg(test)]
+    pub(in crate::engine::media_transport::rtc) async fn deactivate_relay_route(
         &self,
         src_media: TransportMediaId,
         target: &Self,
     ) -> Result<(), TransportAdapterError> {
-        self.request_media_control(RouteControlRequest::RemoveRelayTarget {
-            src_media,
-            target_id: target.relay_target_id,
-        })
-        .await
+        self.request_media_control(target.relay_release_request(src_media))
+            .await
     }
 
-    /// updates whether a relay target may receive packets for one source
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the source worker cannot receive
-    /// the command or the relay target no longer matches worker-local state
-    pub async fn apply_relay_target_activity(
+    #[cfg(test)]
+    pub(in crate::engine::media_transport::rtc) async fn apply_relay_target_activity(
         &self,
         source: &TransportSourceKey,
         target: &Self,
         active: bool,
     ) -> Result<(), TransportAdapterError> {
-        self.request_media_control(RouteControlRequest::SetRelayTargetActive {
-            source: source.clone(),
-            target_id: target.relay_target_id,
-            active,
-        })
-        .await
+        self.request_media_control(target.relay_activity_request(source.clone(), active))
+            .await
     }
 
-    /// applies several packet gates for one source media id in one worker turn
-    ///
-    /// batching keeps dense-room source-policy changes as one mailbox command
-    /// and one source-gate refresh
-    /// the outer result reports whether the batch reached the worker
-    /// each inner result reports validation for the matching update
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the worker cannot receive or
-    /// answer the batch command
-    pub async fn set_consumer_pkt_gates<'a>(
-        &self,
-        source: &TransportSourceKey,
-        updates: impl IntoIterator<Item = &'a ConsumerPacketGateUpdate>,
-    ) -> Result<Vec<TransportResult<()>>, TransportAdapterError> {
-        let updates = updates
-            .into_iter()
-            .map(|update| {
-                ConsumerPacketGateCommand::new(
-                    update.route().consumer_session_key().clone(),
-                    update.route().consumer_transport_media_id(),
-                    packet_layer_gate(update.packet_gate().clone()),
-                )
-            })
-            .collect();
-        self.request_worker(|response| {
-            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetConsumerPacketGateBatch {
-                source: source.clone(),
-                updates,
-                response,
-            })
-        })
-        .await
-    }
-
-    /// updates receiver-side desired bitrate targets for BWE probing
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError`] when the worker cannot receive or
-    /// answer the batch command
-    pub async fn set_receiver_bwe_targets<'a>(
+    #[cfg(test)]
+    pub(in crate::engine::media_transport::rtc) async fn set_receiver_bwe_targets<'a>(
         &self,
         updates: impl IntoIterator<Item = &'a ReceiverBweTargetUpdate>,
     ) -> Result<Vec<TransportResult<()>>, TransportAdapterError> {
         let updates = updates.into_iter().cloned().collect();
         self.request_worker(|response| RtcWorkerCommand::SetReceiverBweTargetBatch {
             updates,
-            response,
-        })
-        .await
-    }
-
-    /// resolves the browser-visible MID for a transport media id
-    ///
-    /// this is a best-effort compatibility and diagnostic lookup
-    /// `Ok(None)` can mean the media id is unknown, already removed or not yet
-    /// negotiated
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError::TransportUnavailable`] when the worker
-    /// command path cannot answer
-    pub async fn transport_media_mid(
-        &self,
-        transport_media_id: TransportMediaId,
-    ) -> Result<Option<String>, TransportAdapterError> {
-        self.request_worker(|response| RtcWorkerCommand::ResolveMediaMid {
-            transport_media_id,
             response,
         })
         .await
@@ -681,25 +443,37 @@ impl RtcWorker {
             Arc::clone(&target.rtc_metrics),
         ))
     }
-}
 
-/// translates public source-selection policy into packet-loop route-control policy
-///
-/// the conversion stays at this boundary so room and media-transport code do
-/// not import worker-private route-control types
-fn packet_layer_gate(packet_gate: SourcePacketGate) -> super::route_control::PacketLayerGate {
-    match packet_gate {
-        SourcePacketGate::Open => super::route_control::PacketLayerGate::Open,
-        SourcePacketGate::Rid(rid) => {
-            super::route_control::PacketLayerGate::Rid(rid.as_str().into())
+    pub(in crate::engine::media_transport) fn relay_install_request(
+        &self,
+        source: TransportSourceKey,
+    ) -> Result<RouteControlRequest, TransportAdapterError> {
+        Ok(RouteControlRequest::AddRelayTarget {
+            source,
+            target_id: self.relay_target_id,
+            target: self.ensure_packet_loop_started()?.relay_mailbox,
+        })
+    }
+
+    pub(in crate::engine::media_transport) fn relay_release_request(
+        &self,
+        src_media: TransportMediaId,
+    ) -> RouteControlRequest {
+        RouteControlRequest::RemoveRelayTarget {
+            src_media,
+            target_id: self.relay_target_id,
         }
-        SourcePacketGate::OperatingPoint(operating_point) => {
-            super::route_control::PacketLayerGate::OperatingPoint(
-                super::route_control::PacketOperatingPointGate::new(
-                    operating_point.rid().map(Into::into),
-                    operating_point.max_temporal_layer_id(),
-                ),
-            )
+    }
+
+    pub(in crate::engine::media_transport) fn relay_activity_request(
+        &self,
+        source: TransportSourceKey,
+        active: bool,
+    ) -> RouteControlRequest {
+        RouteControlRequest::SetRelayTargetActive {
+            source,
+            target_id: self.relay_target_id,
+            active,
         }
     }
 }

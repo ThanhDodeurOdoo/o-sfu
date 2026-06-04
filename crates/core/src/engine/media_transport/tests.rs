@@ -17,12 +17,14 @@ use crate::{
     engine::{
         ConnectionId, RoomInstanceId, UserId,
         media_transport::{
-            ConsumerActivity, RelayRouteActivity, SessionOffer, TransportAdapterError,
-            TransportConsumerRoute, TransportMediaId, TransportRelayRouteAction,
-            TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey,
+            ConsumerActivity, RelayRouteActivity, SessionOffer, SourcePacketGate,
+            TransportAdapterError, TransportConsumerRoute, TransportMediaId,
+            TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionKey,
+            TransportSourceKey,
             rtc::RtcWorker,
-            test_support::{test_media_transport_builder, test_rtc_port_range},
+            test_support::{DebugPacketGate, test_media_transport_builder, test_rtc_port_range},
         },
+        metrics::test_support::RuntimeMetricsSnapshotTestExt,
     },
 };
 #[cfg(not(target_os = "linux"))]
@@ -58,7 +60,7 @@ fn sample_capabilities() -> RouterRtpCapabilities {
     )
 }
 
-fn sample_audio_rtp_parameters(mid: &str, ssrc: u32) -> MediaStream {
+fn sample_rtp_parameters(mid: &str, ssrc: u32) -> MediaStream {
     MediaStream::new(vec![], vec![], vec![StreamBinding::new().with_ssrc(ssrc)])
         .with_mid(String::from(mid))
 }
@@ -278,6 +280,77 @@ fn media_transport_builder_uses_one_worker_by_default() {
     assert!(result.is_ok());
 }
 
+#[tokio::test]
+async fn media_transport_close_session_without_packet_loop_does_not_start_worker() {
+    let adapter = test_media_transport(1, test_rtc_range(1));
+    let session_key = test_session_key(1, 0, 11, UserId::Integer(11));
+    let worker = expect_worker_for_user(&adapter, &session_key);
+
+    assert!(!worker.packet_loop_started());
+    assert!(adapter.close_session(&session_key).await.is_ok());
+    assert!(!worker.packet_loop_started());
+}
+
+#[tokio::test]
+async fn media_transport_route_control_commands_update_source_route() {
+    let adapter = test_media_transport(1, test_rtc_range(1));
+    let source_session = test_session_key(60, 0, 1, UserId::Integer(1));
+    let consumer_session = test_session_key(60, 0, 2, UserId::Integer(2));
+    let source_rtp_parameters = sample_rtp_parameters("cam-up", 81_000);
+    let consumer_rtp_parameters = sample_rtp_parameters("cam-down", 82_000);
+
+    prepare_rtc_sessions(&adapter, &[&source_session, &consumer_session]).await;
+
+    let source_media_id = adapter
+        .publish_media(&source_session, MediaKind::Video, &source_rtp_parameters)
+        .await
+        .unwrap_or_else(|error| panic!("test video publication should succeed: {error:?}"));
+    let consumer_media_id = adapter
+        .consume_media(
+            &consumer_session,
+            MediaKind::Video,
+            &source_session,
+            source_media_id,
+            &consumer_rtp_parameters,
+            ConsumerActivity::Active,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("test video consumption should succeed: {error:?}"));
+    let route = TransportConsumerRoute::new(
+        consumer_session,
+        consumer_media_id,
+        TransportSourceKey::new(source_session, source_media_id),
+    );
+    let source_worker = expect_worker_for_user(&adapter, route.source_session_key());
+    let forwarded_keyframes = source_worker
+        .metrics
+        .snapshot()
+        .rtc_keyframe_requests_forwarded();
+
+    assert!(adapter.request_consumer_keyframe(&route).await.is_ok());
+    assert_eq!(
+        source_worker
+            .metrics
+            .snapshot()
+            .rtc_keyframe_requests_forwarded(),
+        forwarded_keyframes + 1
+    );
+
+    assert!(
+        adapter
+            .set_consumer_packet_gate(&route, SourcePacketGate::Rid("lo".into()))
+            .await
+            .is_ok()
+    );
+
+    let route_entry = adapter
+        .test_api()
+        .route_entry_by_media_id(route.source_transport_media_id())
+        .await
+        .unwrap_or_else(|| panic!("video route should survive packet gate update"));
+    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
+}
+
 #[test]
 fn media_transport_builder_rejects_invalid_worker_count() {
     let result = test_media_transport_builder(RtcPortRange::new(46_210, 46_211))
@@ -391,8 +464,8 @@ async fn rtc_allocates_disjoint_media_ids_across_workers() {
     let adapter = test_media_transport(2, test_rtc_range(2));
     let first_source = test_session_key(50, 0, 1, UserId::Integer(1));
     let second_source = test_session_key(50, 1, 2, UserId::Integer(2));
-    let first_rtp_parameters = sample_audio_rtp_parameters("first-aud-up", 71_000);
-    let second_rtp_parameters = sample_audio_rtp_parameters("second-aud-up", 72_000);
+    let first_rtp_parameters = sample_rtp_parameters("first-aud-up", 71_000);
+    let second_rtp_parameters = sample_rtp_parameters("second-aud-up", 72_000);
 
     prepare_rtc_sessions(&adapter, &[&first_source, &second_source]).await;
 
@@ -409,8 +482,8 @@ async fn rtc_rejects_stale_session_removal_without_dropping_consumer_handle() {
     let adapter = test_media_transport(1, test_rtc_range(1));
     let source_session = test_session_key(35, 0, 1, UserId::Integer(1));
     let consumer_session = test_session_key(35, 0, 2, UserId::Integer(2));
-    let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 54_000);
-    let consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down", 55_000);
+    let producer_rtp_parameters = sample_rtp_parameters("aud-up", 54_000);
+    let consumer_rtp_parameters = sample_rtp_parameters("aud-down", 55_000);
 
     prepare_rtc_sessions(&adapter, &[&source_session, &consumer_session]).await;
 
@@ -463,9 +536,9 @@ async fn rtc_gates_remote_relay_mailboxes_without_touching_local_routes() {
     let source_session = test_session_key(40, 0, 1, UserId::Integer(1));
     let local_consumer_session = test_session_key(40, 0, 2, UserId::Integer(2));
     let remote_consumer_session = test_session_key(40, 1, 3, UserId::Integer(3));
-    let producer_rtp_parameters = sample_audio_rtp_parameters("aud-up", 61_000);
-    let local_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-local", 62_000);
-    let remote_consumer_rtp_parameters = sample_audio_rtp_parameters("aud-down-remote", 63_000);
+    let producer_rtp_parameters = sample_rtp_parameters("aud-up", 61_000);
+    let local_consumer_rtp_parameters = sample_rtp_parameters("aud-down-local", 62_000);
+    let remote_consumer_rtp_parameters = sample_rtp_parameters("aud-down-remote", 63_000);
 
     let sessions = [
         &source_session,
