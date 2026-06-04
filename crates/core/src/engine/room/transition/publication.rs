@@ -25,7 +25,7 @@ use crate::{
         diagnostics::DiagnosticsEventData,
         media_transport::{
             AppliedSessionAnswer, SessionUploadEncoding, TransportAdapterError, TransportMediaId,
-            TransportSourceKey,
+            TransportSessionKey, TransportSourceKey,
         },
         source_model::{SourcePublishIntent, UserStreamId},
         sync::lock_unpoisoned,
@@ -92,6 +92,7 @@ enum StagedMediaReservationState {
 struct StagedMediaReservation {
     user: UserId,
     connection: ConnectionId,
+    session_key: TransportSessionKey,
     media: TransportMediaId,
     state: StagedMediaReservationState,
 }
@@ -132,18 +133,18 @@ impl PendingPublishTransactions {
 
     /// Attempt to register a new staged publish.
     ///
-    /// If this returns `Err`, the returned transaction is still armed and the
+    /// If this returns `Some`, the returned transaction is still armed and the
     /// caller must consume it through cleanup. This shape lets the caller
     /// reserve transport media outside the registry lock while still keeping
     /// the post-await duplicate race safe.
-    fn stage(&mut self, transaction: ReservedPublish) -> Result<(), ReservedPublish> {
+    fn stage(&mut self, transaction: ReservedPublish) -> Option<ReservedPublish> {
         let key = transaction.key();
         match self.staged.entry(key) {
             Entry::Vacant(entry) => {
                 entry.insert(transaction);
-                Ok(())
+                None
             }
-            Entry::Occupied(_) => Err(transaction),
+            Entry::Occupied(_) => Some(transaction),
         }
     }
 
@@ -195,11 +196,15 @@ impl ReservedPublish {
     /// Creates a staged publish transaction from room validation and a
     /// transport media reservation.
     ///
+    /// `session_key` is the transport identity used for the reservation, so
+    /// rollback does not depend on committed room placement still existing.
     pub fn new(
         descriptor: ValidatedPublishDescriptor,
+        session_key: TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Self {
-        let reservation = StagedMediaReservation::for_descriptor(&descriptor, transport_media_id);
+        let reservation =
+            StagedMediaReservation::for_descriptor(&descriptor, session_key, transport_media_id);
         Self {
             descriptor,
             reservation,
@@ -238,26 +243,39 @@ impl ReservedPublish {
         let connection = self.descriptor.owner_connection_id();
         let stream_id = self.descriptor.stream_id().clone();
         let media = self.reservation.transport_media_id();
-        let answered_publish = match AnsweredPublish::from_reserved(self, applied_answer) {
-            Ok(answered_publish) => answered_publish,
-            Err(reserved_publish) => {
-                reserved_publish
-                    .cleanup_reserved_media(
+        let Some(rtp) = applied_answer
+            .negotiated_producer_parameters(media)
+            .cloned()
+        else {
+            self.cleanup_reserved_media(
                 operation,
                 "media transport failed to remove staged publish media after answered negotiation omitted producer parameters",
             )
-                    .await;
-                warn!(
-                    user_id = ?user,
-                    connection_id = ?connection,
-                    stream_id = %stream_id,
-                    transport_media_id = ?media,
-                    "answered negotiation did not include staged publish parameters during room commit"
-                );
-                return None;
-            }
+            .await;
+            warn!(
+                user_id = ?user,
+                connection_id = ?connection,
+                stream_id = %stream_id,
+                transport_media_id = ?media,
+                "answered negotiation did not include staged publish parameters during room commit"
+            );
+            return None;
         };
-        answered_publish.commit(operation).await
+        let encodings = applied_answer
+            .negotiated_producer_upload_encodings(media)
+            .to_vec();
+        let Self {
+            descriptor,
+            reservation,
+        } = self;
+        AnsweredPublish {
+            descriptor,
+            reservation,
+            rtp,
+            encodings,
+        }
+        .commit(operation)
+        .await
     }
 
     /// Consumes a staged publish that cannot become live.
@@ -271,35 +289,13 @@ impl ReservedPublish {
     ) -> TransportEffectOutcome {
         self.reservation.cleanup(operation, failure_message).await
     }
+
+    fn into_cleanup_operation(mut self) -> TransportCleanupOperation {
+        self.reservation.release_cleanup_operation()
+    }
 }
 
 impl AnsweredPublish {
-    fn from_reserved(
-        reserved_publish: ReservedPublish,
-        applied_answer: &AppliedSessionAnswer,
-    ) -> Result<Self, ReservedPublish> {
-        let media = reserved_publish.reservation.transport_media_id();
-        let Some(rtp) = applied_answer
-            .negotiated_producer_parameters(media)
-            .cloned()
-        else {
-            return Err(reserved_publish);
-        };
-        let encodings = applied_answer
-            .negotiated_producer_upload_encodings(media)
-            .to_vec();
-        let ReservedPublish {
-            descriptor,
-            reservation,
-        } = reserved_publish;
-        Ok(Self {
-            descriptor,
-            reservation,
-            rtp,
-            encodings,
-        })
-    }
-
     async fn commit(self, operation: RoomUserOperation<'_>) -> Option<UserStreamId> {
         let room = operation.room();
         let Self {
@@ -363,21 +359,29 @@ impl AnsweredPublish {
 impl StagedMediaReservation {
     fn for_descriptor(
         descriptor: &ValidatedPublishDescriptor,
+        session_key: TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Self {
         Self::new(
             descriptor.owner_user_id().clone(),
             descriptor.owner_connection_id(),
+            session_key,
             transport_media_id,
         )
     }
 
     /// Arms a reservation for transport media that is not yet live in room
     /// state.
-    fn new(user: UserId, connection: ConnectionId, media: TransportMediaId) -> Self {
+    fn new(
+        user: UserId,
+        connection: ConnectionId,
+        session_key: TransportSessionKey,
+        media: TransportMediaId,
+    ) -> Self {
         Self {
             user,
             connection,
+            session_key,
             media,
             state: StagedMediaReservationState::Reserved,
         }
@@ -398,14 +402,7 @@ impl StagedMediaReservation {
         operation: RoomUserOperation<'_>,
         failure_message: &str,
     ) -> TransportEffectOutcome {
-        let cleanup = [TransportCleanupOperation::RemoveMedia {
-            session_key: operation
-                .room()
-                .transport_user_key(&self.user, self.connection)
-                .await,
-            connection_id: self.connection,
-            transport_media_id: self.media,
-        }];
+        let cleanup = [self.release_cleanup_operation()];
         let outcome = operation
             .room()
             .execute_transport_cleanup_operations(operation.media_transport(), &cleanup)
@@ -418,8 +415,16 @@ impl StagedMediaReservation {
                 "{failure_message}"
             );
         }
-        self.state = StagedMediaReservationState::Released;
         outcome
+    }
+
+    fn release_cleanup_operation(&mut self) -> TransportCleanupOperation {
+        self.state = StagedMediaReservationState::Released;
+        TransportCleanupOperation::RemoveMedia {
+            session_key: self.session_key.clone(),
+            connection_id: self.connection,
+            transport_media_id: self.media,
+        }
     }
 
     /// Transfers ownership from the staged transaction to the committed
@@ -538,11 +543,11 @@ impl RoomUserOperation<'_> {
             }
         };
         #[cfg(test)]
-        room.inject_next_duplicate_for_test(&validated_descriptor, media);
-        let reserved_publish = ReservedPublish::new(validated_descriptor, media);
+        room.inject_next_duplicate_for_test(&validated_descriptor, session_key.clone(), media);
+        let reserved_publish = ReservedPublish::new(validated_descriptor, session_key, media);
         if let Some(staged_publish) = {
             let mut pending_publish_transactions = room.pending_publish_transactions();
-            pending_publish_transactions.stage(reserved_publish).err()
+            pending_publish_transactions.stage(reserved_publish)
         } {
             let cleanup = staged_publish
                 .cleanup_reserved_media(
@@ -740,6 +745,18 @@ impl Room {
         self.pending_publish_transactions()
             .contains(user_id, connection_id, stream_id)
     }
+
+    pub(in crate::engine::room) fn drain_staged_publish_cleanup_operations(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> Vec<TransportCleanupOperation> {
+        self.pending_publish_transactions()
+            .take_for_connection(user_id, connection_id)
+            .into_iter()
+            .map(ReservedPublish::into_cleanup_operation)
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -762,7 +779,9 @@ mod tests {
             ConnectionId, TestSourceKind, UserId, UserPermissions,
             media_transport::{
                 AppliedSessionAnswer, MediaTransport, TransportMediaId,
-                test_support::{test_media_transport_builder, test_rtc_port_range},
+                test_support::{
+                    test_media_transport_builder, test_rtc_port_range, test_transport_session_key,
+                },
             },
             metrics::RuntimeMetrics,
             room::{Room, RoomConfig, RoomManager, UserOutboundSender},
@@ -857,18 +876,22 @@ mod tests {
     #[test]
     #[should_panic(expected = "staged media reservation dropped while still reserved")]
     fn reserved_staged_media_reservation_panics_when_dropped_in_tests() {
+        let user_id = UserId::Integer(1);
         let _reservation = StagedMediaReservation::new(
-            UserId::Integer(1),
+            user_id.clone(),
             ConnectionId::from_raw(1),
+            test_transport_session_key(1, 0, 1, user_id),
             TransportMediaId::new(1),
         );
     }
 
     #[test]
     fn committed_staged_media_reservation_can_drop_in_tests() {
+        let user_id = UserId::Integer(1);
         StagedMediaReservation::new(
-            UserId::Integer(1),
+            user_id.clone(),
             ConnectionId::from_raw(1),
+            test_transport_session_key(1, 0, 1, user_id),
             TransportMediaId::new(1),
         )
         .commit();
