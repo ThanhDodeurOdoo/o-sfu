@@ -26,7 +26,7 @@ use str0m::media::Rid;
 /// by the time a gate reaches this file, "selected thumbnail quality" or
 /// "active speaker audio policy" has already been projected into layer facts
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(in crate::engine::media_transport::rtc) enum PacketLayerGate {
+pub(in crate::engine::media_transport) enum PacketLayerGate {
     /// allow every packet layer for this route
     #[default]
     Open,
@@ -51,7 +51,7 @@ pub(in crate::engine::media_transport::rtc) enum PacketLayerGate {
 /// this lets route control express sources that have temporal layering without
 /// simulcast rid separation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::engine::media_transport::rtc) struct PacketOperatingPointGate {
+pub(in crate::engine::media_transport) struct PacketOperatingPointGate {
     /// optional rid restriction for the selected operating point
     rid: Option<Rid>,
     /// highest temporal layer id that may pass through the gate
@@ -128,7 +128,10 @@ impl PacketLayerGate {
     ///
     /// the packet loop calls this on the forwarding hot path
     /// it must remain a pure metadata predicate with no source-state mutation
-    pub fn permits(&self, metadata: PacketLayerMetadata) -> bool {
+    pub(in crate::engine::media_transport::rtc) fn permits(
+        &self,
+        metadata: PacketLayerMetadata,
+    ) -> bool {
         match self {
             Self::Open => true,
             Self::Block => false,

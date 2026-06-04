@@ -680,7 +680,7 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
         .add_send_media(
             &consumer_key,
             Str0mMediaKind::Video,
-            RtcSendMediaSource::local(&src_key, source_media_id),
+            TransportSourceKey::new(src_key.clone(), source_media_id),
             &sample_router_rtp_parameters("compat-mid", 82_000),
             true,
         )
@@ -733,7 +733,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
         .add_send_media(
             &consumer_key,
             Str0mMediaKind::Video,
-            RtcSendMediaSource::local(&src_key, source_media_id),
+            TransportSourceKey::new(src_key.clone(), source_media_id),
             &sample_router_rtp_parameters("compat-mid-remove", 84_000),
             true,
         )
@@ -983,7 +983,7 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
         .add_send_media(
             &consumer_key,
             Str0mMediaKind::Video,
-            RtcSendMediaSource::local(&src_key, second_source_media_id),
+            TransportSourceKey::new(src_key.clone(), second_source_media_id),
             &sample_router_rtp_parameters("compat-mid-queued-remove-b", 88_000),
             true,
         )
@@ -1258,7 +1258,7 @@ async fn add_negotiated_consumer_media(
         .add_send_media(
             consumer_key,
             Str0mMediaKind::Video,
-            RtcSendMediaSource::local(src_key, source_media_id),
+            TransportSourceKey::new(src_key.clone(), source_media_id),
             &sample_router_rtp_parameters(mid, ssrc),
             true,
         )

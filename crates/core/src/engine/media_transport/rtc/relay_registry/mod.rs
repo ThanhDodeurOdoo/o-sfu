@@ -24,7 +24,7 @@ pub(super) struct RelayEnqueueReport {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct RelayPacketMailbox {
+pub(in crate::engine::media_transport) struct RelayPacketMailbox {
     tx: mpsc::Sender<ForwardedPacket>,
 }
 
@@ -76,7 +76,7 @@ pub(super) fn sender_backlog_depth<T>(tx: &mpsc::Sender<T>) -> usize {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(super) struct RelayTargetId(u64);
+pub(in crate::engine::media_transport) struct RelayTargetId(u64);
 
 impl RelayTargetId {
     pub(super) const fn new(raw: u64) -> Self {

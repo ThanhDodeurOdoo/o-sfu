@@ -1,9 +1,10 @@
 //! lazy lifecycle and mailbox runtime for one RTC transport worker
 //!
 //! this module owns the publication contract for the worker handle and the
-//! request-response helpers used by the worker methods in [`super`]
-//! it is the only place where worker calls boot the packet loop, publish its
-//! mailboxes and translate a closed worker into [`TransportAdapterError`]
+//! request-response helpers used by the media transport command port and
+//! cfg-gated worker harnesses
+//! it is the only place where command dispatch can boot the packet loop, publish
+//! its mailboxes and translate a closed worker into [`TransportAdapterError`]
 //!
 //! the packet loop is started lazily so unused RTC workers do not bind sockets
 //! or allocate worker-local registries
@@ -15,7 +16,7 @@
 //! command dispatch follows one pattern:
 //!
 //! ```text
-//! worker method
+//! transport command port
 //!   |
 //!   v
 //! ensure worker handle exists
@@ -367,7 +368,7 @@ impl RtcWorker {
     ///
     /// returns [`TransportAdapterError::TransportUnavailable`] when worker boot,
     /// command send or response receive fails
-    pub(super) async fn request_worker<T, F>(
+    pub(in crate::engine::media_transport) async fn request_worker<T, F>(
         &self,
         build_command: F,
     ) -> Result<T, TransportAdapterError>
@@ -389,7 +390,7 @@ impl RtcWorker {
     ///
     /// returns [`TransportAdapterError::TransportUnavailable`] when the command
     /// mailbox is closed or the response sender is dropped before answering
-    pub(super) async fn send_worker_command<T, F>(
+    pub(in crate::engine::media_transport) async fn send_worker_command<T, F>(
         &self,
         worker_handle: &RtcWorkerHandle,
         build_command: F,

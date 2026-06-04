@@ -1,7 +1,8 @@
 //! mailbox command contract for the RTC worker engine
 //!
-//! worker API methods translate transport API calls into these values before the
-//! packet-loop task dispatches them while it owns mutable rtc state
+//! `MediaTransport` production paths and cfg-gated worker harnesses translate
+//! transport intent into these values before the packet-loop task dispatches
+//! them while it owns mutable rtc state
 //! request commands carry a oneshot response
 //! fire-and-forget route controls are best-effort because they may target a
 //! worker that has already torn down the corresponding relay or session
@@ -14,14 +15,15 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::{
     relay_registry::{RelayPacketMailbox, RelayTargetId},
-    route_control::PacketLayerGate,
+    route_control::{PacketLayerGate, PacketOperatingPointGate},
 };
 use crate::engine::{
     RoomInstanceId,
     media_transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
-        ReceiverBweTargetUpdate, SessionOffer, TransportConsumerRoute, TransportMediaId,
-        TransportResult, TransportSessionKey, TransportSourceActivitySnapshot, TransportSourceKey,
+        ConsumerPacketGateUpdate, ReceiverBweTargetUpdate, SessionOffer, SourcePacketGate,
+        TransportConsumerRoute, TransportMediaId, TransportResult, TransportSessionKey,
+        TransportSourceActivitySnapshot, TransportSourceKey,
     },
     metrics::{RtcMetricsRecorder, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence},
 };
@@ -163,8 +165,18 @@ pub struct ConsumerPacketGateCommand {
 }
 
 impl ConsumerPacketGateCommand {
+    pub(in crate::engine::media_transport) fn from_update(
+        update: &ConsumerPacketGateUpdate,
+    ) -> Self {
+        Self::new(
+            update.route().consumer_session_key().clone(),
+            update.route().consumer_transport_media_id(),
+            packet_layer_gate(update.packet_gate()),
+        )
+    }
+
     /// builds one consumer update for a source-scoped packet-gate batch
-    pub fn new(
+    pub(in crate::engine::media_transport::rtc) fn new(
         consumer_key: TransportSessionKey,
         consumer_media: TransportMediaId,
         packet_gate: PacketLayerGate,
@@ -177,12 +189,14 @@ impl ConsumerPacketGateCommand {
     }
 
     /// splits the batch entry for worker-side validation and route mutation
-    pub fn into_parts(self) -> (TransportSessionKey, TransportMediaId, PacketLayerGate) {
+    pub(in crate::engine::media_transport::rtc) fn into_parts(
+        self,
+    ) -> (TransportSessionKey, TransportMediaId, PacketLayerGate) {
         (self.consumer_key, self.consumer_media, self.packet_gate)
     }
 }
 
-pub(super) enum RtcMediaControlCommand {
+pub(in crate::engine::media_transport) enum RtcMediaControlCommand {
     Apply {
         request: RouteControlRequest,
         response: Option<RtcWorkerResponse<()>>,
@@ -194,7 +208,7 @@ pub(super) enum RtcMediaControlCommand {
     },
 }
 
-pub(super) enum RouteControlRequest {
+pub(in crate::engine::media_transport) enum RouteControlRequest {
     SetProducerActive {
         source: TransportSourceKey,
         active: bool,
@@ -237,13 +251,38 @@ pub(super) enum RouteControlRequest {
     },
 }
 
+impl RouteControlRequest {
+    pub(in crate::engine::media_transport) fn set_consumer_packet_gate(
+        route: TransportConsumerRoute,
+        packet_gate: &SourcePacketGate,
+    ) -> Self {
+        Self::SetConsumerPacketGate {
+            route,
+            packet_gate: packet_layer_gate(packet_gate),
+        }
+    }
+}
+
+fn packet_layer_gate(packet_gate: &SourcePacketGate) -> PacketLayerGate {
+    match packet_gate {
+        SourcePacketGate::Open => PacketLayerGate::Open,
+        SourcePacketGate::Rid(rid) => PacketLayerGate::Rid(rid.as_str().into()),
+        SourcePacketGate::OperatingPoint(operating_point) => {
+            PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(
+                operating_point.rid().map(Into::into),
+                operating_point.max_temporal_layer_id(),
+            ))
+        }
+    }
+}
+
 /// production command handled by the rtc packet-loop task
 ///
 /// variants are grouped by ownership boundary: negotiation mutates str0m SDP
 /// state, media commands mutate producer or consumer registrations, relay
 /// commands mutate cross-worker fanout and observability commands read
 /// worker-local snapshots
-pub(super) enum RtcWorkerCommand {
+pub(in crate::engine::media_transport) enum RtcWorkerCommand {
     /// bootstrap a session before any media registration exists
     ///
     /// this may bind the shared UDP socket, allocate the worker-local `Rtc`,
@@ -392,4 +431,16 @@ pub(super) enum RtcWorkerCommand {
         response: RtcWorkerResponse<TransportMediaId>,
     },
     MediaControl(RtcMediaControlCommand),
+}
+
+impl RtcWorkerCommand {
+    pub(in crate::engine::media_transport) fn media_control(
+        request: RouteControlRequest,
+        response: RtcWorkerResponse<()>,
+    ) -> Self {
+        Self::MediaControl(RtcMediaControlCommand::Apply {
+            request,
+            response: Some(response),
+        })
+    }
 }

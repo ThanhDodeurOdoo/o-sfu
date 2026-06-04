@@ -263,7 +263,7 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
         .add_send_media(
             &consumer_key,
             Str0mMediaKind::Audio,
-            RtcSendMediaSource::local(&producer_session_key, source_media_id),
+            TransportSourceKey::new(producer_session_key.clone(), source_media_id),
             &consumer_rtp_parameters,
             true,
         )
@@ -329,7 +329,7 @@ async fn rtc_consume_media_can_start_route_inactive() {
         .add_send_media(
             &consumer_key,
             Str0mMediaKind::Audio,
-            RtcSendMediaSource::local(&producer_session_key, source_media_id),
+            TransportSourceKey::new(producer_session_key.clone(), source_media_id),
             &consumer_rtp_parameters,
             false,
         )
@@ -385,7 +385,7 @@ async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate
         .add_send_media(
             &first_consumer_key,
             Str0mMediaKind::Video,
-            RtcSendMediaSource::local(&producer_session_key, source_media_id),
+            TransportSourceKey::new(producer_session_key.clone(), source_media_id),
             &selected_consumer_rtp_parameters,
             true,
         )
@@ -402,7 +402,7 @@ async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate
         .add_send_media(
             &second_consumer_key,
             Str0mMediaKind::Video,
-            RtcSendMediaSource::local(&producer_session_key, source_media_id),
+            TransportSourceKey::new(producer_session_key.clone(), source_media_id),
             &open_consumer_rtp_parameters,
             true,
         )
@@ -446,7 +446,7 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
         .add_send_media(
             &consumer_key,
             Str0mMediaKind::Video,
-            RtcSendMediaSource::local(&producer_session_key, source_media_id),
+            TransportSourceKey::new(producer_session_key.clone(), source_media_id),
             &consumer_rtp_parameters,
             true,
         )
@@ -523,7 +523,7 @@ async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
         .add_send_media(
             &consumer_key,
             Str0mMediaKind::Video,
-            RtcSendMediaSource::local(&producer_session_key, source_media_id),
+            TransportSourceKey::new(producer_session_key.clone(), source_media_id),
             &consumer_rtp_parameters,
             true,
         )
@@ -583,7 +583,7 @@ async fn rtc_route_activity_updates_producer_and_consumer_flags() {
         .add_send_media(
             &consumer_key,
             Str0mMediaKind::Video,
-            RtcSendMediaSource::local(&producer_session_key, source_media_id),
+            TransportSourceKey::new(producer_session_key.clone(), source_media_id),
             &consumer_rtp_parameters,
             true,
         )
