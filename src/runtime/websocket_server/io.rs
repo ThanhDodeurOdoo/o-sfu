@@ -7,7 +7,10 @@
 use std::{future::Future, time::Duration};
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
-use futures_util::{SinkExt, stream::SplitSink};
+use futures_util::{
+    SinkExt,
+    stream::{SplitSink, SplitStream},
+};
 use o_sfu_protocol::wire::{
     ClientEnvelope, Envelope, EnvelopeBatch, EnvelopeBatchDecodeError, EnvelopeDecodeError,
     ServerEnvelope, WebSocketCloseCode, decode_envelope_batch,
@@ -17,6 +20,7 @@ use tokio::time::timeout;
 use crate::application::user_session::{UserOutput, UserSignal};
 
 pub(crate) type WsWriter = SplitSink<WebSocket, Message>;
+pub(crate) type WsReader = SplitStream<WebSocket>;
 
 /// maximum accepted client text frame size before protocol rejection
 pub const MAX_CLIENT_FRAME_BYTES: usize = 256 * 1024;
@@ -132,7 +136,7 @@ pub(super) async fn send_message_bounded(
 ///
 /// callers use this when they already own the cancellation boundary or are
 /// leaving a session after the read half finished
-pub(crate) async fn close_writer(writer: &mut WsWriter, close_code: WebSocketCloseCode) {
+async fn close_writer(writer: &mut WsWriter, close_code: WebSocketCloseCode) {
     let _result = writer
         .send(Message::Close(Some(CloseFrame {
             code: u16::from(close_code),

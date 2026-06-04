@@ -5,9 +5,9 @@
 //! ```text
 //! websocket_server
 //! |- admission        -> pre-auth WebSocket concurrency budget
-//! |- controller       -> upgrade boundary and outer user lifecycle
-//! |- handshake        -> first-frame authentication and room admission
-//! |- session_loop     -> steady-state reader/writer loop after admission
+//! |- controller       -> upgrade boundary
+//! |- handshake        -> first-frame authentication
+//! |- session_loop     -> active socket lifecycle after authentication
 //! `- io               -> socket writer boundary and close helpers
 //! ```
 //!
@@ -26,6 +26,6 @@ pub use io::{
     ClientBatchDecodeError, ClientBatchDecodeFailureKind, MAX_CLIENT_BATCH_ENVELOPES,
     MAX_CLIENT_FRAME_BYTES, decode_client_batch,
 };
-pub(crate) use io::{WsWriter, close_writer};
+pub(crate) use io::{WsReader, WsWriter};
 
 pub(crate) use self::{admission::PreAuthWebSocketAdmission, controller::upgrade};

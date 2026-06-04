@@ -1,21 +1,35 @@
 use std::collections::BTreeMap;
 
-use o_sfu_protocol::wire::{DownloadStates, StreamType, UserId};
+use o_sfu_protocol::wire::{DownloadStates, UserId};
 use tracing::{info, instrument};
 
 use super::{User, UserError, UserOutput};
 use crate::{
-    application::stream_catalog::stream_id_for_stream_type,
-    core::prelude::{SourceSubscriptionIntent, SubscriptionUpdateOutcome},
+    application::stream_catalog::DiscussStream, core::prelude::SubscriptionUpdateOutcome,
     runtime::telemetry::schema::event as telemetry_event,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubscribeIntent {
+    target_user_id: UserId,
+    states: DownloadStates,
+}
+
+impl SubscribeIntent {
+    pub fn new(target_user_id: UserId, states: DownloadStates) -> Self {
+        Self {
+            target_user_id: target_user_id.normalized_for_runtime(),
+            states,
+        }
+    }
+}
 
 impl User {
     /// Persist this user's download intent for another room user.
     ///
     /// The compatibility [`DownloadStates`] payload is projected into core
-    /// source subscription intent before core sees it. The target user id must
-    /// already be normalized by the websocket edge.
+    /// source subscription intent before core sees it. The target user id is
+    /// normalized by [`SubscribeIntent`] before room state sees it.
     ///
     /// # Errors
     ///
@@ -29,14 +43,10 @@ impl User {
             room_id = %self.room.uuid(),
             user_id = ?self.id,
             connection_id = ?self.connection_id,
-            target_session_id = ?target_user_id
+            target_session_id = ?intent.target_user_id
         )
     )]
-    pub async fn subscribe_to(
-        &self,
-        target_user_id: &UserId,
-        states: &DownloadStates,
-    ) -> Result<UserOutput, UserError> {
+    pub async fn subscribe(&self, intent: SubscribeIntent) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
         info!(
             event = telemetry_event::SUBSCRIBE_PREPARED,
@@ -44,24 +54,17 @@ impl User {
             outcome = "request_received",
             "received subscribe intent"
         );
-        let source_intents = [
-            (StreamType::Audio, states.audio, None),
-            (StreamType::Camera, states.camera, states.camera_layout),
-            (StreamType::Screen, states.screen, states.screen_layout),
-        ]
-        .into_iter()
-        .filter(|(_, media, layout)| media.is_some() || layout.is_some())
-        .map(|(stream_type, media, layout)| {
-            (
-                stream_id_for_stream_type(stream_type),
-                SourceSubscriptionIntent::new(media, layout),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
+        let SubscribeIntent {
+            target_user_id,
+            states,
+        } = intent;
+        let source_intents = DiscussStream::all()
+            .filter_map(|stream| stream.subscription_intent_if_requested(&states))
+            .collect::<BTreeMap<_, _>>();
         let outcome = self
             .media()
             .subscription()
-            .update(target_user_id, &source_intents)
+            .update(&target_user_id, &source_intents)
             .await;
         if outcome == SubscriptionUpdateOutcome::StaleConnection {
             return Err(UserError::ProtocolViolation);

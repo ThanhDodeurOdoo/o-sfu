@@ -1,7 +1,6 @@
 //! websocket handshake admission boundary
 //!
-//! this module handles the cold path that turns an upgraded socket into a
-//! [`ConnectedUser`]
+//! this module handles the cold path that authenticates an upgraded socket
 //! the controller handles HTTP upgrade admission
 //! the steady-state session loop handles authenticated signaling
 //! this file covers the narrow interval where the socket is open but not yet
@@ -12,7 +11,7 @@
 //! - receive exactly one first-frame `auth` envelope before the configured auth timeout
 //! - select the candidate room from the explicit auth payload channel or from a JWT room id
 //! - verify the same JWT with the selected room key before trusting claims
-//! - join the room and send the startup output returned by [`User::start`]
+//! - return the authenticated room join intent to the session owner
 //!
 //! the order is security-critical because decoded JWT contents can only select
 //! a candidate room
@@ -37,28 +36,18 @@ use o_sfu_protocol::wire::{
 };
 use serde::Deserialize;
 use tokio::time::timeout;
-use tracing::{Instrument, Span, debug, field, info, instrument, warn};
+use tracing::{debug, info, warn};
 
 use super::{
     WsWriter,
-    admission::PreAuthWebSocketPermit,
-    close_writer,
-    controller::{ConnectedUser, WebSocketServices, WsReader},
-    io::send_user_output_bounded,
+    controller::WebSocketServices,
+    io::{WsReader, close_writer_bounded},
 };
 use crate::{
-    application::user_session::User,
-    core::server::room::{
-        JoinUserRequest, Room, RoomManagerJoinError, UserOutboundQueueLimits, UserOutboundReceiver,
-        UserOutboundSender,
-    },
+    core::server::room::Room,
     runtime::{
-        ConnectionId,
         auth::{self, RegisteredJwtClaims, WebSocketConnectClaims},
-        telemetry::{
-            self,
-            schema::{event as telemetry_event, field as telemetry_field},
-        },
+        telemetry::schema::event as telemetry_event,
         websocket_server::{MAX_CLIENT_FRAME_BYTES, decode_client_batch},
     },
 };
@@ -86,71 +75,23 @@ struct RoomScopedConnectClaims {
     permissions: Option<UserPermissions>,
 }
 
-struct HandshakeAuthentication {
-    room: Arc<Room>,
-    claims: WebSocketConnectClaims,
+pub(super) struct AuthenticatedJoin {
+    pub(super) room: Arc<Room>,
+    pub(super) claims: WebSocketConnectClaims,
 }
 
-/// post-auth handoff from the handshake to the steady-state session loop
+/// authenticate one upgraded socket before room admission
 ///
-/// the room manager has already accepted this user
-/// failures after this point must clean up this connection or hand it to the
-/// caller
-struct JoinedUser {
-    room: Arc<Room>,
-    user_id: UserId,
-    connection_id: ConnectionId,
-    outbound_rx: UserOutboundReceiver,
-    user: User,
-}
-
-impl JoinedUser {
-    fn into_connected(self, remote_address: Arc<str>) -> ConnectedUser {
-        ConnectedUser {
-            room: self.room,
-            user_id: self.user_id,
-            connection_id: self.connection_id,
-            remote_address,
-            outbound_rx: self.outbound_rx,
-            user: self.user,
-        }
-    }
-}
-
-/// admit one upgraded socket into an authenticated room user
-///
-/// auth and join failures send terminal close frames
-/// startup failures clean up the accepted room session before returning `None`
-/// successful handshakes return the typed state consumed by the user loop
-#[o_sfu_telemetry::measure_duration(
-    metrics = "state.metrics",
-    record = "record_ws_handshake_duration"
-)]
-pub(super) async fn establish_user(
+/// auth failures send terminal close frames
+/// successful authentication returns the room and trusted claims consumed by
+/// the active session owner
+pub(super) async fn receive(
     state: &WebSocketServices,
     writer: &mut WsWriter,
     reader: &mut WsReader,
-    remote_address: Arc<str>,
-    pre_auth_permit: PreAuthWebSocketPermit,
-) -> Option<ConnectedUser> {
-    let authentication =
-        receive_and_authenticate(state, writer, reader, remote_address.as_ref()).await?;
-    drop(pre_auth_permit);
-    let mut joined_user =
-        join_user(state, writer, authentication, Arc::clone(&remote_address)).await?;
-    state.metrics.record_ws_user_joined();
-    record_session_span(&joined_user, remote_address.as_ref());
-    let initialization_span = telemetry::activated_span(tracing::info_span!(
-        "user.initialize",
-        room_id = %joined_user.room.uuid(),
-        user_id = ?joined_user.user_id,
-        connection_id = ?joined_user.connection_id,
-        remote_address = %remote_address
-    ));
-    initialize_user(state, writer, &mut joined_user, remote_address.as_ref())
-        .instrument(initialization_span)
-        .await?;
-    Some(joined_user.into_connected(remote_address))
+    remote_address: &str,
+) -> Option<AuthenticatedJoin> {
+    receive_and_authenticate(state, writer, reader, remote_address).await
 }
 
 /// read the first client frame under the authentication timeout
@@ -222,7 +163,7 @@ async fn receive_and_authenticate(
     writer: &mut WsWriter,
     reader: &mut WsReader,
     remote_address: &str,
-) -> Option<HandshakeAuthentication> {
+) -> Option<AuthenticatedJoin> {
     let auth_payload = receive_auth_or_reject(state, writer, reader, remote_address).await?;
     verify_auth_or_reject(state, writer, &auth_payload, remote_address).await
 }
@@ -257,23 +198,6 @@ fn auth_payload_text(message: Message) -> Result<String, WebSocketCloseCode> {
     }
 }
 
-/// decode the first-frame batch and enforce the one-envelope auth contract
-///
-/// steady-state signaling can batch envelopes
-/// auth cannot because no room user exists yet and any extra envelope would be
-/// unauthenticated work
-fn decode_auth_batch(payload: &str) -> Result<Vec<ClientEnvelope>, WebSocketCloseCode> {
-    let batch = decode_client_batch(payload).map_err(|_error| WebSocketCloseCode::ProtocolError)?;
-    if batch.len() != 1 {
-        warn!(
-            batch_len = batch.len(),
-            "authentication batch must contain exactly one envelope"
-        );
-        return Err(WebSocketCloseCode::ProtocolError);
-    }
-    Ok(batch)
-}
-
 /// decodes the first WebSocket authentication frame
 ///
 /// the frame must contain exactly one signaling envelope and that envelope must
@@ -285,13 +209,16 @@ fn decode_auth_batch(payload: &str) -> Result<Vec<ClientEnvelope>, WebSocketClos
 /// returns the close code that the WebSocket edge uses when the frame is not a
 /// valid authentication batch
 pub fn decode_auth_payload_text(payload: &str) -> Result<AuthPayload, WebSocketCloseCode> {
-    let batch = decode_auth_batch(payload)?;
-    extract_auth_envelope(batch)
-}
-
-/// convert the single-envelope batch into the only message allowed pre-auth
-fn extract_auth_envelope(batch: Vec<ClientEnvelope>) -> Result<AuthPayload, WebSocketCloseCode> {
-    let Some(envelope) = batch.into_iter().next() else {
+    let mut batch =
+        decode_client_batch(payload).map_err(|_error| WebSocketCloseCode::ProtocolError)?;
+    if batch.len() != 1 {
+        warn!(
+            batch_len = batch.len(),
+            "authentication batch must contain exactly one envelope"
+        );
+        return Err(WebSocketCloseCode::ProtocolError);
+    }
+    let Some(envelope) = batch.pop() else {
         return Err(WebSocketCloseCode::ProtocolError);
     };
     match envelope {
@@ -316,7 +243,7 @@ async fn verify_auth_payload(
     state: &WebSocketServices,
     auth_payload: &AuthPayload,
     remote_address: &str,
-) -> Result<HandshakeAuthentication, WebSocketCloseCode> {
+) -> Result<AuthenticatedJoin, WebSocketCloseCode> {
     let room = resolve_handshake_room(state, auth_payload).await?;
     let claims = authenticate_room_scoped_claims(
         &auth_payload.jwt,
@@ -324,7 +251,7 @@ async fn verify_auth_payload(
         room.uuid(),
         remote_address,
     )?;
-    Ok(HandshakeAuthentication { room, claims })
+    Ok(AuthenticatedJoin { room, claims })
 }
 
 /// select the candidate room without trusting user claims
@@ -427,7 +354,7 @@ async fn verify_auth_or_reject(
     writer: &mut WsWriter,
     auth_payload: &AuthPayload,
     remote_address: &str,
-) -> Option<HandshakeAuthentication> {
+) -> Option<AuthenticatedJoin> {
     match verify_auth_payload(state, auth_payload, remote_address).await {
         Ok(result) => Some(result),
         Err(code) => {
@@ -449,198 +376,10 @@ async fn verify_auth_or_reject(
     }
 }
 
-#[instrument(
-    name = "room.join",
-    skip_all,
-    fields(room_id = %authentication.room.uuid(), user_id = ?authentication.claims.user_id)
-)]
-/// allocate room membership and the bounded outbound queue
-///
-/// after this succeeds the room owns a live user entry
-/// later startup failure must call `cleanup_failed_session` with the returned
-/// connection id before the socket is abandoned
-async fn join_user(
-    state: &WebSocketServices,
-    writer: &mut WsWriter,
-    authentication: HandshakeAuthentication,
-    remote_address: Arc<str>,
-) -> Option<JoinedUser> {
-    let HandshakeAuthentication { room, claims } = authentication;
-    // the room must never accept a user without a bounded outbound sink
-    // create the queue before join so admission is atomic from the room view
-    let (outbound_tx, outbound_rx) = UserOutboundSender::channel_with_limits(
-        UserOutboundQueueLimits::new(
-            state.user.outbound_queue_capacity,
-            state.user.outbound_queue_byte_capacity,
-        ),
-        Arc::clone(&state.metrics),
-    );
-    let user_id = claims.user_id.clone();
-    let permissions = claims.permissions.unwrap_or_default();
-    let join_result = state
-        .room_manager
-        .join_user(
-            room.uuid(),
-            JoinUserRequest {
-                user_id: user_id.clone(),
-                label: claims.label,
-                permissions,
-                sender: outbound_tx,
-            },
-            &state.media_transport,
-        )
-        .await;
-    match join_result {
-        Ok(session) => {
-            let room = Arc::clone(session.room());
-            let connection_id = session.connection_id();
-            let user = User::new(
-                user_id.clone(),
-                connection_id,
-                session.transport_session_key().clone(),
-                Arc::clone(&remote_address),
-                Arc::clone(&room),
-                state.sfu_core.clone(),
-            );
-            let joined_user = JoinedUser {
-                room,
-                user_id,
-                connection_id,
-                outbound_rx,
-                user,
-            };
-            info!(
-                event = telemetry_event::WS_JOIN_SUCCEEDED,
-                connection_id = ?joined_user.connection_id,
-                "joined websocket user"
-            );
-            Some(joined_user)
-        }
-        Err(error) => {
-            let close_code = match error {
-                RoomManagerJoinError::RoomFull => WebSocketCloseCode::RoomFull,
-                RoomManagerJoinError::MissingRoom | RoomManagerJoinError::RouterState => {
-                    WebSocketCloseCode::AuthFailed
-                }
-            };
-            warn!(
-                event = telemetry_event::WS_JOIN_FAILED,
-                ?user_id,
-                remote_address = remote_address.as_ref(),
-                ?error,
-                close_code = u16::from(close_code),
-                "rejecting websocket because the authenticated user could not join the room"
-            );
-            reject_handshake(
-                state,
-                Some(writer),
-                Some(close_code),
-                remote_address.as_ref(),
-                "rejecting websocket during user join",
-            )
-            .await
-        }
-    }
-}
-
-/// attach authenticated room identity to the active tracing span
-///
-/// the upgrade span starts before authentication knows the room or user
-/// this is the point where later logs can be correlated with the accepted room
-/// user
-fn record_session_span(joined_user: &JoinedUser, remote_address: &str) {
-    let current_span = Span::current();
-    current_span.record("room_id", field::display(joined_user.room.uuid()));
-    current_span.record("user_id", field::debug(&joined_user.user_id));
-    current_span.record("connection_id", field::debug(joined_user.connection_id));
-    current_span.record(
-        telemetry_field::REMOTE_ADDRESS,
-        field::display(remote_address),
-    );
-    info!(
-        event = telemetry_event::WS_USER_ESTABLISHED,
-        connection_id = ?joined_user.connection_id,
-        remote_address,
-        "websocket user established"
-    );
-}
-
-/// sends the startup payload that makes the accepted room user usable
-///
-/// `User::start` returns the welcome state and any initial offer
-/// if startup fails or the socket cannot receive output, this helper closes
-/// application state and removes accepted room membership before returning
-/// `None`
-#[o_sfu_telemetry::measure_duration(
-    metrics = "state.metrics",
-    record = "record_ws_user_initialize_duration"
-)]
-async fn initialize_user(
-    state: &WebSocketServices,
-    writer: &mut WsWriter,
-    joined_user: &mut JoinedUser,
-    remote_address: &str,
-) -> Option<()> {
-    let output = match joined_user.user.start().await {
-        Ok(output) => output,
-        Err(_error) => {
-            warn!(
-                event = telemetry_event::WS_JOIN_FAILED,
-                user_id = ?joined_user.user_id,
-                connection_id = ?joined_user.connection_id,
-                remote_address,
-                outcome = "user_initialize_failed",
-                "failed to initialize websocket user"
-            );
-            state.metrics.record_ws_user_initialize_failure();
-            joined_user.user.close().await;
-            cleanup_failed_session(state, joined_user).await;
-            return None;
-        }
-    };
-    if send_user_output_bounded(writer, output).await.is_err() {
-        debug!(
-            user_id = ?joined_user.user_id,
-            connection_id = ?joined_user.connection_id,
-            "failed to send user startup payload"
-        );
-        state.metrics.record_ws_startup_send_failure();
-        warn!(
-            event = telemetry_event::WS_JOIN_FAILED,
-            user_id = ?joined_user.user_id,
-            connection_id = ?joined_user.connection_id,
-            remote_address,
-            outcome = "startup_send_failed",
-            "failed to send websocket user startup payload"
-        );
-        joined_user.user.close().await;
-        cleanup_failed_session(state, joined_user).await;
-        return None;
-    }
-    Some(())
-}
-
-/// remove a user that joined the room but never reached steady state
-///
-/// cleanup is best effort here because the socket is already failing
-/// later room reconciliation still owns any transport retry work exposed by the
-/// close path
-async fn cleanup_failed_session(state: &WebSocketServices, joined_user: &JoinedUser) {
-    let _ = state
-        .room_manager
-        .close_session(
-            joined_user.room.uuid(),
-            &joined_user.user_id,
-            joined_user.connection_id,
-            &state.media_transport,
-        )
-        .await;
-}
-
 /// record terminal rejection and close the socket when there is a close code
 ///
 /// returning `None` lets call sites use the helper directly in `Option` chains
-async fn reject_handshake<T>(
+pub(super) async fn reject_handshake<T>(
     state: &WebSocketServices,
     writer: Option<&mut WsWriter>,
     close_code: Option<WebSocketCloseCode>,
@@ -656,7 +395,7 @@ async fn reject_handshake<T>(
             "{message}"
         );
         if let Some(writer) = writer {
-            close_writer(writer, code).await;
+            close_writer_bounded(writer, code).await;
         }
     }
     None

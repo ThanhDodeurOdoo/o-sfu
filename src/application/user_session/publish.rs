@@ -1,10 +1,10 @@
-use o_sfu_protocol::wire::{StreamType, UserInfo};
+use o_sfu_protocol::wire::StreamType;
 use tracing::{info, instrument, warn};
 
 use super::{User, UserError, UserOutput};
 use crate::{
     application::stream_catalog::{
-        source_publish_intent_for_stream_type, stream_id_for_stream_type,
+        DiscussStream, source_publish_intent_for_stream_type, stream_id_for_stream_type,
     },
     core::prelude::{
         PublicationActivity, PublicationActivityOutcome, RollbackStagedPublishOutcome,
@@ -12,6 +12,20 @@ use crate::{
     },
     runtime::telemetry::schema::event as telemetry_event,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishIntent {
+    Start(StreamType),
+    Stop(StreamType),
+}
+
+impl PublishIntent {
+    pub const fn stream_type(self) -> StreamType {
+        match self {
+            Self::Start(stream_type) | Self::Stop(stream_type) => stream_type,
+        }
+    }
+}
 
 /// Media-side result of an unpublish request after queued work is removed.
 ///
@@ -32,16 +46,8 @@ impl User {
         stream_type: StreamType,
         active: bool,
     ) -> Result<(), UserError> {
-        let info = match stream_type {
-            StreamType::Audio => return Ok(()),
-            StreamType::Camera => UserInfo {
-                is_camera_on: Some(active),
-                ..UserInfo::default()
-            },
-            StreamType::Screen => UserInfo {
-                is_screen_sharing_on: Some(active),
-                ..UserInfo::default()
-            },
+        let Some(info) = DiscussStream::for_type(stream_type).publication_info(active) else {
+            return Ok(());
         };
         self.media()
             .presence()
@@ -50,17 +56,24 @@ impl User {
         Ok(())
     }
 
-    /// Accept a client intent to publish one compatibility stream.
+    /// Apply a client publish intent for one compatibility stream.
     ///
     /// This method translates the Odoo stream type through
-    /// [`crate::application::stream_catalog`], stages media through core when needed and emits a
-    /// renegotiation request only when a new offer is required. Duplicate
-    /// publish requests are accepted as idempotent no-ops.
+    /// [`crate::application::stream_catalog`] before touching core media state.
     ///
-    /// If the stream is already live, the method only marks its user-visible
-    /// activity as active and updates presence state for camera or screen.
-    /// Publish requests received while another negotiation is pending are
-    /// queued for a follow-up offer after the current answer is applied.
+    /// Start intents stage media when needed and emit a renegotiation request
+    /// only when a new offer is required. Duplicate start intents are accepted
+    /// as idempotent no-ops. If the stream is already live, the method only
+    /// marks its user-visible activity as active and updates presence state for
+    /// camera or screen.
+    ///
+    /// Stop intents first cancel queued or staged publish work for this
+    /// connection. If the stream is already live, core removes the room
+    /// publication and this session requests renegotiation so the browser can
+    /// drop the media section.
+    ///
+    /// Start requests received while another negotiation is pending are queued
+    /// for a follow-up offer after the current answer is applied.
     ///
     /// # Errors
     ///
@@ -74,10 +87,17 @@ impl User {
             room_id = %self.room.uuid(),
             user_id = ?self.id,
             connection_id = ?self.connection_id,
-            stream_type = ?stream_type
+            stream_type = ?intent.stream_type()
         )
     )]
-    pub async fn publish(&mut self, stream_type: StreamType) -> Result<UserOutput, UserError> {
+    pub async fn publish(&mut self, intent: PublishIntent) -> Result<UserOutput, UserError> {
+        match intent {
+            PublishIntent::Start(stream_type) => self.start_publish(stream_type).await,
+            PublishIntent::Stop(stream_type) => self.stop_publish(stream_type).await,
+        }
+    }
+
+    async fn start_publish(&mut self, stream_type: StreamType) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
         let stream_id = stream_id_for_stream_type(stream_type);
         let has_queued_publish = self.state.negotiation_state.has_queued_publish(stream_type);
@@ -99,7 +119,7 @@ impl User {
         }
         if self.state.negotiation_state.awaiting_answer() {
             self.state.negotiation_state.queue_publish_slot(stream_type);
-            let _disposition = self.state.negotiation_state.schedule_renegotiation();
+            self.state.negotiation_state.schedule_renegotiation();
             return Ok(UserOutput::new());
         }
         if !self.stage_publish_slot(stream_type).await? {
@@ -108,19 +128,7 @@ impl User {
         self.renegotiate().await
     }
 
-    /// Accept a client intent to stop publishing one compatibility stream.
-    ///
-    /// The request first cancels queued or staged publish work for this
-    /// connection. If the stream is already live, core removes the room
-    /// publication and this session requests renegotiation so the browser can
-    /// drop the media section.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`UserError::Kicked`] for stale connections and
-    /// [`UserError::InternalError`] when core cannot remove a live publication
-    /// cleanly.
-    pub async fn unpublish(&mut self, stream_type: StreamType) -> Result<UserOutput, UserError> {
+    async fn stop_publish(&mut self, stream_type: StreamType) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
         if self
             .state
@@ -150,7 +158,7 @@ impl User {
         match media_disposition {
             Some(UnpublishMediaDisposition::RolledBackStagedPublish { cleanup }) => {
                 Self::log_staged_publish_rollback(stream_type, cleanup);
-                let _disposition = self.state.negotiation_state.schedule_renegotiation();
+                self.state.negotiation_state.schedule_renegotiation();
                 Ok(UserOutput::new())
             }
             Some(UnpublishMediaDisposition::RemovedLivePublication { cleanup }) => {
