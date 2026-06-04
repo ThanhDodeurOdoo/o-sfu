@@ -633,7 +633,7 @@ impl Room {
     ///
     /// This is called after the transport boundary has accepted the browser
     /// answer and projected the negotiated RTP capabilities. Room state records
-    /// the session as consumer-ready, then any missing consumer bootstrap runs
+    /// the session as consumer-ready, then any missing consumer setup runs
     /// outside the state lock.
     ///
     /// `StaleConnection` means the user was replaced or removed before the

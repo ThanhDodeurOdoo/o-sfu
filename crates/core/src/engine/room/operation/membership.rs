@@ -14,12 +14,6 @@ use crate::{
 };
 
 impl RoomUserOperation<'_> {
-    /// Apply client-visible user info for one live connection.
-    ///
-    /// Room state decides whether the update is still current, then returns a
-    /// fan-out plan that is emitted after the lock is released. A refresh may
-    /// trigger a full projection fan-out and a source selection policy sync
-    /// because layout or presence changes can affect video priority.
     pub(crate) async fn update_user_info(self, info: UserInfo, refresh: UserInfoRefresh) {
         let need_refresh = refresh.is_needed();
         let room = self.room();
@@ -45,12 +39,6 @@ impl RoomUserOperation<'_> {
         }
     }
 
-    /// Commit the answer-derived negotiated capability set for one live session.
-    ///
-    /// This is called after the transport boundary has accepted the browser
-    /// answer and projected the negotiated RTP capabilities. Room state records
-    /// the session as consumer-ready, then any missing consumer bootstrap runs
-    /// outside the state lock.
     pub(crate) async fn apply_session_negotiated(
         self,
         capabilities: MediaCapabilities,
@@ -62,27 +50,16 @@ impl RoomUserOperation<'_> {
         self.apply_negotiation_update(update).await
     }
 
-    /// Refresh consumer-side media after a renegotiation answer.
-    ///
-    /// This does not update the stored RTP capability set. It revalidates that
-    /// the connection is still current, requests keyframes for active video
-    /// consumers and bootstraps any consumers that became possible after the
-    /// renegotiation.
     pub(crate) async fn apply_session_refreshed(self) -> SessionNegotiationOutcome {
         if !self.request_video_keyframes().await {
             return SessionNegotiationOutcome::StaleConnection;
         }
-        if !self.bootstrap_consumers().await {
+        if !self.setup_missing_consumers().await {
             return SessionNegotiationOutcome::StaleConnection;
         }
         SessionNegotiationOutcome::Applied
     }
 
-    /// Apply the side effects that follow a negotiation state change.
-    ///
-    /// Consumer bootstrap is deferred until room state says the session became
-    /// ready to receive. Keyframe refresh requests are best-effort transport
-    /// hints and do not make the negotiation outcome fail.
     async fn apply_negotiation_update(
         self,
         update: UserNegotiationUpdate,
@@ -91,7 +68,7 @@ impl RoomUserOperation<'_> {
             return SessionNegotiationOutcome::StaleConnection;
         }
         if update.became_consumer_ready {
-            if !self.bootstrap_consumers().await {
+            if !self.setup_missing_consumers().await {
                 return SessionNegotiationOutcome::StaleConnection;
             }
             self.request_video_keyframes().await;
@@ -99,11 +76,6 @@ impl RoomUserOperation<'_> {
         SessionNegotiationOutcome::Applied
     }
 
-    /// Request keyframes for active video consumers owned by one live session.
-    ///
-    /// The target list is an authoritative room-state snapshot for the current
-    /// connection. Individual transport request failures are logged but kept
-    /// best-effort because a later media packet or refresh can recover video.
     async fn request_video_keyframes(self) -> bool {
         let room = self.room();
         let keyframe_refresh_targets = {

@@ -1,20 +1,3 @@
-//! the graph is synchronous room state because callers hold the room state lock while
-//! they ask for mutations or read views, collect returned effect inputs then run
-//! transport work after the lock is released
-//!
-//! ownership sketch:
-//!
-//! ```text
-//! owner user + stream -> source id -> source descriptor
-//! source id -> producer id -> published producer
-//! consumer user + source id -> selection / pending bootstrap / consumer state
-//! consumer route -> relay route owners
-//! ```
-//!
-//! query methods return borrowed views or small copied ids while mutation methods
-//! update primary stores and reverse indexes together, so callers should not
-//! rebuild joins across graph maps outside this module
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_router::MediaKind;
@@ -41,35 +24,23 @@ mod route_graph_tests;
 #[cfg(test)]
 mod tests;
 
-pub use self::subscription::{ConsumerRouteState, RemoteTrackBootstrap};
+pub use self::subscription::{ConsumerRouteState, RemoteTrackSetup};
 pub(super) use self::{
     ids::{ConsumerRuntimeId, ProducerRuntimeId},
-    producer::ValidatedPublishDescriptor,
+    producer::ValidatedPublish,
     route_graph::{RelayRouteEffect, RelayRouteKey, ResolvedRelayRouteEffect},
     subscription::{
-        ConsumerBootstrapOrigin, ConsumerRouteUpdate, PendingConsumerBootstrapTarget,
-        PlannedConsumerBootstrap, PreparedConsumerBootstrap,
+        ConsumerRouteUpdate, ConsumerSetupCommit, ConsumerSetupOrigin, ConsumerSetupPlan,
+        ConsumerSetupTarget,
     },
 };
 
-/// room-state facade for source records and receiver-source routes
-///
-/// callers mutate the graph while holding the room state lock, keep the returned
-/// relay effects or transport removals, then run transport work after the lock
-/// is released
-///
-/// this keeps source lookup state and route lookup state behind one API so
-/// cleanup paths do not rebuild joins across maps
 #[derive(Debug, Default)]
 pub(super) struct RoomMediaGraph {
     sources: SourceIndex,
     routes: RouteGraph,
 }
 
-/// stable receiver-source edge key
-///
-/// the same key represents receiver intent before transport work, an in-flight
-/// bootstrap reservation and a committed consumer route
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ConsumerKey {
     pub consumer_user_id: UserId,
@@ -112,10 +83,6 @@ pub(super) struct PublishedSourceInstall {
     pub transport_media_id: TransportMediaId,
 }
 
-/// compact lookup payload for a transport media id
-///
-/// source details stay in [`SourceIndex`] so users of this reverse lookup cannot
-/// accidentally keep stale descriptor data after a republish
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SourceTransportMediaIndexEntry {
     source: PublishedSourceId,
@@ -123,11 +90,6 @@ pub(super) struct SourceTransportMediaIndexEntry {
     stream: UserStreamId,
 }
 
-/// producer-side stale callback guard
-///
-/// callbacks pass this value back before changing producer activity or
-/// unpublishing a source, so replaced sockets and republished streams become
-/// no-ops instead of mutating newer producer state
 #[allow(
     clippy::struct_field_names,
     reason = "postfix _id is intentional because the fields are all identity values"
@@ -200,10 +162,6 @@ pub(super) struct PendingConsumerRouteView<'a> {
     pub selection: Option<ConsumerSourceSelection>,
 }
 
-/// transport identity captured before route effects leave the room lock
-///
-/// follow-up commits compare this value with the current graph route so stale
-/// packet-gate or policy work cannot update a replacement route
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ConsumerRouteTransportRef {
     consumer_user_id: UserId,
@@ -450,12 +408,12 @@ impl RoomMediaGraph {
         true
     }
 
-    pub fn reserve_consumer_bootstrap(&mut self, key: ConsumerKey) {
-        self.routes.reserve_bootstrap(key);
+    pub fn reserve_consumer_setup(&mut self, key: ConsumerKey) {
+        self.routes.reserve_consumer_setup(key);
     }
 
-    pub fn remove_pending_consumer_bootstrap(&mut self, key: &ConsumerKey) {
-        self.routes.remove_pending_bootstrap(key);
+    pub fn release_consumer_setup(&mut self, key: &ConsumerKey) {
+        self.routes.release_consumer_setup(key);
     }
 
     pub fn commit_consumer(
@@ -635,7 +593,7 @@ impl RoomMediaGraph {
 
     pub fn reserve_relay_consumer(
         &mut self,
-        target: &PendingConsumerBootstrapTarget,
+        target: &ConsumerSetupTarget,
         source_connection_id: ConnectionId,
         source_transport_media_id: TransportMediaId,
         target_media_worker_id: MediaWorkerId,
@@ -667,13 +625,13 @@ impl RoomMediaGraph {
 
     pub fn release_pending_relay_target(
         &mut self,
-        target: &PendingConsumerBootstrapTarget,
+        target: &ConsumerSetupTarget,
     ) -> Vec<RelayRouteEffect> {
         self.routes.release_target(target)
     }
 
-    pub fn consumer_bootstrap_exists(&self, consumer_key: &ConsumerKey) -> bool {
-        self.routes.has_bootstrap(consumer_key)
+    pub fn has_consumer_setup_or_route(&self, consumer_key: &ConsumerKey) -> bool {
+        self.routes.has_consumer_setup_or_route(consumer_key)
     }
 
     pub fn contains_consumer(&self, key: &ConsumerKey) -> bool {

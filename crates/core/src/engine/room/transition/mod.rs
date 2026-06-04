@@ -6,6 +6,6 @@
 mod publication;
 mod subscription;
 
-pub(super) use publication::PendingPublishTransactions;
 #[cfg(any(test, feature = "testing-transport"))]
-pub(super) use publication::ReservedPublish;
+pub(super) use publication::StagedPublish;
+pub(super) use publication::StagedPublishRegistry;

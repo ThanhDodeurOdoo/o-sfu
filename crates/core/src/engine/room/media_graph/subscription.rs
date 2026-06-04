@@ -1,15 +1,3 @@
-//! Consumer-side room state transitions.
-//!
-//! This file applies receiver download intent after the application layer has
-//! translated any compatibility shape into source-keyed
-//! [`SourceSubscriptionIntent`] values. The state layer persists those intents
-//! by target user and stream id, then plans route activity changes and
-//! bootstraps for the effect layer.
-//!
-//! The subscription state never decides what "camera" or "screen" means. It
-//! only knows whether a receiver wants a source active and which layout
-//! preference should be associated with that source.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_router::{
@@ -45,6 +33,7 @@ pub(in crate::engine::room) struct ConsumerRouteUpdate {
     pub(in crate::engine::room) active: bool,
 }
 
+/// observable receiver route state for room inspection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsumerRouteState {
     Absent,
@@ -63,19 +52,19 @@ pub struct ConsumerKeyframeRefreshTarget {
 #[derive(Debug, Default)]
 pub struct PlannedSubscriptionChange {
     updates: Vec<ConsumerRouteUpdate>,
-    bootstraps: Vec<PlannedConsumerBootstrap>,
+    setups: Vec<ConsumerSetupPlan>,
     relays: Vec<ResolvedRelayRouteEffect>,
 }
 
 #[derive(Debug, Clone)]
-pub struct PendingConsumerBootstrapTarget {
+pub struct ConsumerSetupTarget {
     user: UserId,
     connection: ConnectionId,
-    producer: ConsumerBootstrapProducerSnapshot,
+    producer: ConsumerSetupProducerSnapshot,
 }
 
 #[derive(Debug, Clone)]
-pub struct ConsumerBootstrapProducerSnapshot {
+pub struct ConsumerSetupProducerSnapshot {
     source_id: PublishedSourceId,
     user: UserId,
     connection: ConnectionId,
@@ -83,34 +72,31 @@ pub struct ConsumerBootstrapProducerSnapshot {
     stream: UserStreamId,
     kind: RouterMediaKind,
     media: TransportMediaId,
-    routed: Option<RoutedProducerId>,
-    active: Option<bool>,
+    routed: RoutedProducerId,
+    active: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct PreparedConsumerBootstrap {
-    pub rtp: RouterRtpParameters,
-}
-
-#[derive(Debug, Clone)]
-pub struct PendingConsumerBootstrap {
+#[derive(Debug)]
+#[must_use = "consumer setup plans reserve route graph state and must be committed or released"]
+pub struct ConsumerSetupPlan {
+    target: ConsumerSetupTarget,
     key: ConsumerKey,
     sender: OutboundSender,
-    track: RemoteTrackBootstrap,
+    track: RemoteTrackSetup,
     selection: ConsumerSourceSelection,
-    producer: ConsumerBootstrapProducerSnapshot,
-}
-
-#[derive(Debug, Clone)]
-pub struct PlannedConsumerBootstrap {
-    target: PendingConsumerBootstrapTarget,
-    prepared: PreparedConsumerBootstrap,
-    pending: PendingConsumerBootstrap,
     relays: Vec<ResolvedRelayRouteEffect>,
 }
 
+#[derive(Debug)]
+pub(in crate::engine::room) struct ConsumerSetupCommit {
+    pub(in crate::engine::room) sender: OutboundSender,
+    pub(in crate::engine::room) track: RemoteTrackSetup,
+    pub(in crate::engine::room) transport_activity_update: Option<bool>,
+}
+
+/// consumer track setup payload sent to the receiver after transport commit
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteTrackBootstrap {
+pub struct RemoteTrackSetup {
     consumer: ConsumerRuntimeId,
     kind: RouterMediaKind,
     mid: String,
@@ -123,13 +109,13 @@ pub struct RemoteTrackBootstrap {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum ConsumerBootstrapOrigin {
+pub enum ConsumerSetupOrigin {
     LateJoin,
     Publish,
     Subscribe,
 }
 
-impl ConsumerBootstrapOrigin {
+impl ConsumerSetupOrigin {
     pub(in crate::engine::room) const fn as_diagnostic_str(self) -> &'static str {
         match self {
             Self::LateJoin => "latejoin",
@@ -155,13 +141,13 @@ impl RoomState {
         let (updates, relays) =
             self.apply_route_updates(user_id, connection_id, target_user_id, intents);
         let relays = self.resolved_relay_route_effects(relays);
-        let bootstraps = self.plan_consumers(
+        let setups = self.plan_consumers(
             self.missing_targets_for_peer(user_id, connection_id, target_user_id),
             worker_for,
         );
         PlannedSubscriptionChange {
             updates,
-            bootstraps,
+            setups,
             relays,
         }
     }
@@ -196,7 +182,7 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
         worker_for: impl Fn(ConnectionId) -> MediaWorkerId,
-    ) -> Option<Vec<PlannedConsumerBootstrap>> {
+    ) -> Option<Vec<ConsumerSetupPlan>> {
         let user = self.users.get(user_id)?;
         if user.connection_id != connection_id {
             return None;
@@ -209,21 +195,21 @@ impl RoomState {
 
     pub fn plan_consumers(
         &mut self,
-        targets: Vec<PendingConsumerBootstrapTarget>,
+        targets: Vec<ConsumerSetupTarget>,
         worker_for: impl Fn(ConnectionId) -> MediaWorkerId,
-    ) -> Vec<PlannedConsumerBootstrap> {
+    ) -> Vec<ConsumerSetupPlan> {
         let mut targets = targets;
         let active_speakers = BTreeSet::new();
-        targets.sort_by_key(|target| self.bootstrap_rank(target, &active_speakers));
+        targets.sort_by_key(|target| self.setup_rank(target, &active_speakers));
         targets
             .into_iter()
-            .filter_map(|target| self.plan_consumer(&target, &worker_for))
+            .filter_map(|target| self.plan_consumer(target, &worker_for))
             .collect()
     }
 
-    fn bootstrap_rank(
+    fn setup_rank(
         &self,
-        target: &PendingConsumerBootstrapTarget,
+        target: &ConsumerSetupTarget,
         active_speakers: &BTreeSet<UserId>,
     ) -> VideoAdmissionRank {
         if target.media_kind() != RouterMediaKind::Video {
@@ -269,6 +255,12 @@ impl RoomState {
             };
             let key = ConsumerKey::new(user_id, source_id);
             self.media.set_consumer_source_selection(&key, active);
+            relays.extend(self.media.set_relay_consumer_active(
+                user_id,
+                connection_id,
+                source_id,
+                RelayRouteActivity::from_active(active),
+            ));
             let Some(route) = self.media.committed_consumer_route_for_key(&key) else {
                 continue;
             };
@@ -302,12 +294,6 @@ impl RoomState {
                 kind,
                 active,
             });
-            relays.extend(self.media.set_relay_consumer_active(
-                user_id,
-                connection_id,
-                source_id,
-                RelayRouteActivity::from_active(active),
-            ));
         }
         (updates, relays)
     }
@@ -316,7 +302,7 @@ impl RoomState {
         &self,
         user_id: &UserId,
         consumer_connection_id: ConnectionId,
-    ) -> Vec<PendingConsumerBootstrapTarget> {
+    ) -> Vec<ConsumerSetupTarget> {
         self.missing_targets_where(user_id, consumer_connection_id, |_| true)
     }
 
@@ -325,7 +311,7 @@ impl RoomState {
         user_id: &UserId,
         consumer_connection_id: ConnectionId,
         target_user_id: &UserId,
-    ) -> Vec<PendingConsumerBootstrapTarget> {
+    ) -> Vec<ConsumerSetupTarget> {
         self.missing_targets_where(user_id, consumer_connection_id, |producer| {
             producer.owner_user_id == *target_user_id
         })
@@ -336,53 +322,45 @@ impl RoomState {
         user_id: &UserId,
         consumer_connection_id: ConnectionId,
         should_include: impl Fn(&PublishedProducer) -> bool,
-    ) -> Vec<PendingConsumerBootstrapTarget> {
+    ) -> Vec<ConsumerSetupTarget> {
         self.media
             .producers()
             .filter_map(|(producer_id, producer)| {
                 if !should_include(producer) {
                     return None;
                 }
-                self.bootstrap_target(user_id, consumer_connection_id, producer_id, producer)
+                self.consumer_setup_target(user_id, consumer_connection_id, producer_id, producer)
             })
             .collect()
     }
 
-    fn bootstrap_target(
+    fn consumer_setup_target(
         &self,
         user_id: &UserId,
         consumer_connection_id: ConnectionId,
         producer_id: ProducerRuntimeId,
         producer: &PublishedProducer,
-    ) -> Option<PendingConsumerBootstrapTarget> {
+    ) -> Option<ConsumerSetupTarget> {
         let transport_media_id = producer.transport_media_id?;
         if producer.owner_user_id == *user_id {
             return None;
         }
         let key = ConsumerKey::new(user_id, producer.source_id);
-        if self.media.consumer_bootstrap_exists(&key) {
+        if self.media.has_consumer_setup_or_route(&key) {
             return None;
         }
-        Some(PendingConsumerBootstrapTarget::new(
+        Some(ConsumerSetupTarget::new(
             user_id.clone(),
             consumer_connection_id,
-            ConsumerBootstrapProducerSnapshot::pending(
-                producer.source_id,
-                producer.owner_user_id.clone(),
-                producer.owner_connection_id,
-                producer_id,
-                producer.stream_id.clone(),
-                producer.media_kind,
-                transport_media_id,
-            ),
+            ConsumerSetupProducerSnapshot::from_producer(producer_id, producer, transport_media_id),
         ))
     }
 
     fn plan_consumer(
         &mut self,
-        target: &PendingConsumerBootstrapTarget,
+        target: ConsumerSetupTarget,
         worker_for: &impl Fn(ConnectionId) -> MediaWorkerId,
-    ) -> Option<PlannedConsumerBootstrap> {
+    ) -> Option<ConsumerSetupPlan> {
         let (sender, client_caps) = {
             let user = self.users.get(&target.user)?;
             if user.connection_id != target.connection || !user.negotiation.can_consume() {
@@ -393,64 +371,55 @@ impl RoomState {
                 user.parsed_client_rtp_capabilities.clone()?,
             )
         };
-        let (producer_active, producer_rtp, snapshot) = {
+        let producer_rtp = {
             let producer = self.media.producer(target.producer.id)?;
-            if !target.producer.matches_pending_producer(producer) {
+            if !target.producer.matches_identity(producer) {
                 return None;
             }
-            (
-                producer.active,
-                producer.consumable_rtp_parameters.clone(),
-                target
-                    .producer
-                    .with_commit_snapshot(producer.routed_producer_id, producer.active),
-            )
+            producer.consumable_rtp_parameters.clone()
         };
         let descriptor = self.media.source(target.producer.source_id)?.clone();
         let key = ConsumerKey::new(&target.user, target.source_id());
-        if self.media.consumer_bootstrap_exists(&key) {
+        if self.media.has_consumer_setup_or_route(&key) {
             return None;
         }
-        let selection = self.bootstrap_selection(target, producer_active);
+        let selection = self.setup_selection(&target, target.producer.active);
         let active = selection.delivery_active();
         if !can_consume(&producer_rtp, &client_caps) {
             return None;
         }
         let rtp = negotiate_consumer_rtp_parameters(&producer_rtp, &client_caps).ok()?;
         self.media.ensure_consumer_source_selection(&key, selection);
-        self.media.reserve_consumer_bootstrap(key.clone());
+        self.media.reserve_consumer_setup(key.clone());
         let consumer = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
-        let relays = self.reserve_relay_route(target, active, worker_for);
+        let relays = self.reserve_relay_route(&target, active, worker_for);
         let relays = self.resolved_relay_route_effects(relays);
-        Some(PlannedConsumerBootstrap {
-            target: target.clone(),
-            prepared: PreparedConsumerBootstrap { rtp: rtp.clone() },
-            pending: PendingConsumerBootstrap {
-                key,
-                sender,
-                track: RemoteTrackBootstrap {
-                    consumer,
-                    kind: snapshot.kind,
-                    mid: rtp
-                        .mid()
-                        .map_or_else(|| consumer.into_wire_id(), ToOwned::to_owned),
-                    producer: snapshot.id,
-                    rtp,
-                    source: descriptor,
-                    user: snapshot.user.clone(),
-                    active: snapshot.active.unwrap_or(true),
-                    stream: snapshot.stream.clone(),
-                },
-                selection,
-                producer: snapshot,
-            },
+        let track = RemoteTrackSetup {
+            consumer,
+            kind: target.producer.kind,
+            mid: rtp
+                .mid()
+                .map_or_else(|| consumer.into_wire_id(), ToOwned::to_owned),
+            producer: target.producer.id,
+            rtp,
+            source: descriptor,
+            user: target.producer.user.clone(),
+            active: target.producer.active,
+            stream: target.producer.stream.clone(),
+        };
+        Some(ConsumerSetupPlan {
+            target,
+            key,
+            sender,
+            track,
+            selection,
             relays,
         })
     }
 
     fn reserve_relay_route(
         &mut self,
-        target: &PendingConsumerBootstrapTarget,
+        target: &ConsumerSetupTarget,
         consumer_active: bool,
         worker_for: &impl Fn(ConnectionId) -> MediaWorkerId,
     ) -> Vec<RelayRouteEffect> {
@@ -469,7 +438,7 @@ impl RoomState {
     }
 
     fn relay_route_for_target(
-        target: &PendingConsumerBootstrapTarget,
+        target: &ConsumerSetupTarget,
         worker_for: &impl Fn(ConnectionId) -> MediaWorkerId,
     ) -> Option<(ConnectionId, TransportMediaId, MediaWorkerId)> {
         let source_worker = worker_for(target.producer_connection_id());
@@ -484,9 +453,9 @@ impl RoomState {
         ))
     }
 
-    fn bootstrap_selection(
+    fn setup_selection(
         &self,
-        target: &PendingConsumerBootstrapTarget,
+        target: &ConsumerSetupTarget,
         producer_active: bool,
     ) -> ConsumerSourceSelection {
         let key = ConsumerKey::new(&target.user, target.source_id());
@@ -505,7 +474,7 @@ impl RoomState {
 
     fn apply_initial_video_download_cap(
         &self,
-        target: &PendingConsumerBootstrapTarget,
+        target: &ConsumerSetupTarget,
         producer_active: bool,
         mut selection: ConsumerSourceSelection,
     ) -> ConsumerSourceSelection {
@@ -556,26 +525,35 @@ impl RoomState {
         committed + pending
     }
 
-    pub fn commit_bootstrap(
+    pub fn commit_consumer_setup(
         &mut self,
-        target: &PendingConsumerBootstrapTarget,
-        mut pending: PendingConsumerBootstrap,
+        setup: ConsumerSetupPlan,
         media: TransportMediaId,
         mid: Option<String>,
-    ) -> Option<(OutboundSender, RemoteTrackBootstrap)> {
-        self.media.remove_pending_consumer_bootstrap(&pending.key);
+    ) -> Option<ConsumerSetupCommit> {
+        let ConsumerSetupPlan {
+            target,
+            key,
+            sender,
+            mut track,
+            selection: planned_selection,
+            relays: _,
+        } = setup;
+        self.media.release_consumer_setup(&key);
         let user = self.users.get(&target.user)?;
         if user.connection_id != target.connection || !user.negotiation.can_consume() {
             return None;
         }
-        let producer = self.media.producer(pending.producer.id)?;
-        if !pending.producer.matches_committed_producer(producer) {
+        let producer = self.media.producer(target.producer.id)?;
+        if !target.producer.matches_identity(producer) {
             return None;
         }
-        if self.media.contains_consumer(&pending.key) {
+        let producer_active = producer.active;
+        if self.media.contains_consumer(&key) {
             return None;
         }
-        let active = pending.selection.delivery_active();
+        let selection = self.setup_selection(&target, producer_active);
+        let active = selection.delivery_active();
         let state = if active {
             RouterConsumerRouteState::Active
         } else {
@@ -583,8 +561,8 @@ impl RoomState {
         };
         let routed_consumer_id = match self.routing.add_consumer_with_route_state(
             &target.user,
-            pending.producer.routed?,
-            pending.producer.kind,
+            target.producer.routed,
+            target.producer.kind,
             ConsumerCapability::Compatible,
             state,
         ) {
@@ -592,7 +570,7 @@ impl RoomState {
             Err(error) => {
                 warn!(
                     consumer_user_id = ?target.user,
-                    producer_id = %pending.producer.id,
+                    producer_id = %target.producer.id,
                     ?error,
                     "router rejected consumer creation"
                 );
@@ -600,16 +578,17 @@ impl RoomState {
             }
         };
         if let Some(mid) = mid {
-            pending.track.mid = mid;
+            track.mid = mid;
         }
-        let key = pending.key;
-        let selection = pending.selection;
+        track.active = producer_active;
+        let transport_activity_update =
+            (active != planned_selection.delivery_active()).then_some(active);
         if !self.media.commit_consumer(
             key,
             ConsumerState {
                 routed_consumer_id,
                 consumer_connection_id: target.connection,
-                source_connection_id: pending.producer.connection,
+                source_connection_id: target.producer.connection,
                 source_media: target.transport_media_id(),
                 consumer_media: media,
             },
@@ -625,15 +604,19 @@ impl RoomState {
             }
             return None;
         }
-        Some((pending.sender, pending.track))
+        Some(ConsumerSetupCommit {
+            sender,
+            track,
+            transport_activity_update,
+        })
     }
 
-    pub fn release_bootstrap(
+    pub fn release_consumer_setup_plan(
         &mut self,
-        target: &PendingConsumerBootstrapTarget,
+        target: &ConsumerSetupTarget,
     ) -> Vec<RelayRouteEffect> {
         let key = ConsumerKey::new(&target.user, target.source_id());
-        self.media.remove_pending_consumer_bootstrap(&key);
+        self.media.release_consumer_setup(&key);
         self.media.release_pending_relay_target(target)
     }
 
@@ -714,25 +697,25 @@ impl RoomState {
 
 impl PlannedSubscriptionChange {
     pub fn touches_route_graph(&self) -> bool {
-        !self.updates.is_empty() || !self.bootstraps.is_empty() || !self.relays.is_empty()
+        !self.updates.is_empty() || !self.setups.is_empty() || !self.relays.is_empty()
     }
 
     pub fn into_parts(
         self,
     ) -> (
         Vec<ConsumerRouteUpdate>,
-        Vec<PlannedConsumerBootstrap>,
+        Vec<ConsumerSetupPlan>,
         Vec<ResolvedRelayRouteEffect>,
     ) {
-        (self.updates, self.bootstraps, self.relays)
+        (self.updates, self.setups, self.relays)
     }
 }
 
-impl PendingConsumerBootstrapTarget {
+impl ConsumerSetupTarget {
     pub fn new(
         consumer_user_id: UserId,
         consumer_connection_id: ConnectionId,
-        producer: ConsumerBootstrapProducerSnapshot,
+        producer: ConsumerSetupProducerSnapshot,
     ) -> Self {
         Self {
             user: consumer_user_id,
@@ -774,93 +757,55 @@ impl PendingConsumerBootstrapTarget {
     }
 }
 
-impl PendingConsumerBootstrap {
+impl ConsumerSetupPlan {
     pub fn consumer_active(&self) -> bool {
         self.selection.delivery_active()
     }
-}
 
-impl PlannedConsumerBootstrap {
-    pub fn into_parts(
-        self,
-    ) -> (
-        PendingConsumerBootstrapTarget,
-        PreparedConsumerBootstrap,
-        PendingConsumerBootstrap,
-        Vec<ResolvedRelayRouteEffect>,
-    ) {
-        (self.target, self.prepared, self.pending, self.relays)
+    pub fn target(&self) -> &ConsumerSetupTarget {
+        &self.target
+    }
+
+    pub fn rtp(&self) -> &RouterRtpParameters {
+        &self.track.rtp
+    }
+
+    pub fn relay_effects(&self) -> &[ResolvedRelayRouteEffect] {
+        &self.relays
     }
 }
 
-impl ConsumerBootstrapProducerSnapshot {
-    pub fn pending(
-        source_id: PublishedSourceId,
-        user: UserId,
-        connection: ConnectionId,
+impl ConsumerSetupProducerSnapshot {
+    pub fn from_producer(
         id: ProducerRuntimeId,
-        stream: UserStreamId,
-        kind: RouterMediaKind,
+        producer: &PublishedProducer,
         media: TransportMediaId,
     ) -> Self {
         Self {
-            source_id,
-            user,
-            connection,
+            source_id: producer.source_id,
+            user: producer.owner_user_id.clone(),
+            connection: producer.owner_connection_id,
             id,
-            stream,
-            kind,
+            stream: producer.stream_id.clone(),
+            kind: producer.media_kind,
             media,
-            routed: None,
-            active: None,
+            routed: producer.routed_producer_id,
+            active: producer.active,
         }
     }
 
-    pub const fn source_id(&self) -> PublishedSourceId {
-        self.source_id
-    }
-
-    pub fn owner_user_id(&self) -> &UserId {
-        &self.user
-    }
-
-    fn with_commit_snapshot(&self, routed: RoutedProducerId, active: bool) -> Self {
-        Self {
-            source_id: self.source_id,
-            user: self.user.clone(),
-            connection: self.connection,
-            id: self.id,
-            stream: self.stream.clone(),
-            kind: self.kind,
-            media: self.media,
-            routed: Some(routed),
-            active: Some(active),
-        }
-    }
-
-    fn matches_pending_producer(&self, producer: &PublishedProducer) -> bool {
+    fn matches_identity(&self, producer: &PublishedProducer) -> bool {
         producer.source_id == self.source_id
             && producer.owner_user_id == self.user
             && producer.owner_connection_id == self.connection
             && producer.stream_id == self.stream
             && producer.media_kind == self.kind
             && producer.transport_media_id == Some(self.media)
-    }
-
-    fn matches_committed_producer(&self, producer: &PublishedProducer) -> bool {
-        let Some(routed) = self.routed else {
-            return false;
-        };
-        let Some(active) = self.active else {
-            return false;
-        };
-        self.matches_pending_producer(producer)
-            && producer.routed_producer_id == routed
-            && producer.active == active
+            && producer.routed_producer_id == self.routed
     }
 }
 
-impl RemoteTrackBootstrap {
+impl RemoteTrackSetup {
     #[must_use]
     pub fn mid(&self) -> &str {
         &self.mid
@@ -893,6 +838,6 @@ impl RemoteTrackBootstrap {
 
     #[must_use]
     pub fn into_room_event_request(self) -> RoomEventRequest {
-        RoomEventRequest::BootstrapRemoteTrack(self)
+        RoomEventRequest::SetupRemoteTrack(self)
     }
 }

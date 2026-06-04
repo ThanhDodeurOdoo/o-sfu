@@ -70,7 +70,7 @@ pub(crate) async fn connect_protocol_peer(
     Ok(peer)
 }
 
-pub(crate) async fn publish_camera_and_bootstrap_subscriber(
+pub(crate) async fn publish_camera_and_setup_subscriber(
     publisher: &mut ProtocolHarnessPeer,
     subscriber: &mut ProtocolHarnessPeer,
     publisher_user_id: &UserId,
@@ -89,10 +89,10 @@ pub(crate) async fn publish_camera_and_bootstrap_subscriber(
         publisher.read_server_frame().await.is_some(),
         "{renegotiation_context}"
     );
-    consume_camera_publish_bootstrap(subscriber, publisher_user_id, snapshot_context).await
+    consume_camera_publish_setup(subscriber, publisher_user_id, snapshot_context).await
 }
 
-pub(crate) async fn consume_camera_publish_bootstrap(
+pub(crate) async fn consume_camera_publish_setup(
     subscriber: &mut ProtocolHarnessPeer,
     publisher_user_id: &UserId,
     snapshot_context: &str,

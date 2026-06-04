@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use super::super::{
     RoomUserOperation, SourcePolicyEvent,
     effects::{RoomCommit, RoomEffectContext},
-    media_graph::ConsumerBootstrapOrigin,
+    media_graph::ConsumerSetupOrigin,
 };
 use crate::{
     SubscriptionUpdateOutcome,
@@ -14,12 +14,12 @@ use crate::{
 };
 
 impl RoomUserOperation<'_> {
-    pub(crate) async fn bootstrap_consumers(self) -> bool {
+    pub(crate) async fn setup_missing_consumers(self) -> bool {
         let room = self.room();
         let mut state = room.state.write().await;
         let before = state.media_counts();
         let worker_lookup = state.worker_lookup();
-        let Some(bootstraps) =
+        let Some(setups) =
             state.plan_missing_consumers(self.user_id(), self.connection_id(), worker_lookup)
         else {
             return false;
@@ -28,7 +28,7 @@ impl RoomUserOperation<'_> {
         drop(state);
         RoomCommit::new()
             .with_media_count_delta(before, after)
-            .with_bootstraps(bootstraps, ConsumerBootstrapOrigin::LateJoin)
+            .with_consumer_setups(setups, ConsumerSetupOrigin::LateJoin)
             .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged)
             .execute(room, RoomEffectContext::runtime(self.media_transport()))
             .await;
@@ -65,7 +65,7 @@ impl RoomUserOperation<'_> {
                 SourcePolicyEvent::ReceiverIntentChanged
             };
             let after = state.media_counts();
-            let (updates, bootstraps, relays) = change.into_parts();
+            let (updates, setups, relays) = change.into_parts();
             let commit = RoomCommit::new()
                 .with_media_count_delta(before, after)
                 .with_relay_effects(relays)
@@ -77,7 +77,7 @@ impl RoomUserOperation<'_> {
                     media_worker_id,
                     updates,
                 )
-                .with_bootstraps(bootstraps, ConsumerBootstrapOrigin::Subscribe)
+                .with_consumer_setups(setups, ConsumerSetupOrigin::Subscribe)
                 .with_source_policy_event(source_policy_event);
             drop(state);
             commit
@@ -278,7 +278,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stored_receiver_intent_applies_to_future_consumer_bootstrap() {
+    async fn stored_receiver_intent_applies_to_future_consumer_setup() {
         let (
             room,
             media_transport,
@@ -374,7 +374,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transport_consume_failure_releases_pending_bootstrap_for_retry() {
+    async fn transport_consume_failure_releases_pending_setup_for_retry() {
         let (
             room,
             media_transport,
@@ -402,7 +402,7 @@ mod tests {
 
         assert!(
             room.user_operation(&subscriber_id, subscriber_connection_id, &media_transport)
-                .bootstrap_consumers()
+                .setup_missing_consumers()
                 .await
         );
         assert_eq!(room.test_api().inspect().consumer_count().await, 1);

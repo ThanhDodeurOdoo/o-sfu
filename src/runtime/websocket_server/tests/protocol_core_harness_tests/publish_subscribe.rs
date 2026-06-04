@@ -55,7 +55,7 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
     let track_mid = track_binding.mid.clone();
     require_some(
         bob.read_server_frame().await,
-        "bob should consume the serialized renegotiation request after track bootstrap",
+        "bob should consume the serialized renegotiation request after track setup",
     )?;
 
     require_some(
@@ -232,14 +232,14 @@ async fn protocol_core_publish_queues_follow_up_renegotiation_until_first_answer
         "publisher should answer the first queued negotiation"
     );
     assert!(
-        consume_camera_publish_bootstrap(
+        consume_camera_publish_setup(
             &mut bob,
             &ProtocolSessionId::Integer(73),
             "subscriber should receive the initial camera track snapshot",
         )
         .await
         .is_some(),
-        "subscriber should consume the committed camera publish bootstrap"
+        "subscriber should consume the committed camera publish setup"
     );
 
     assert!(

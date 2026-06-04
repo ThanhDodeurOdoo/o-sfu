@@ -1,42 +1,32 @@
 use o_sfu_router::MediaStream as RouterRtpParameters;
 #[cfg(test)]
 use {
-    super::{PendingPublishTransactions, Room},
+    super::{Room, StagedPublishRegistry},
     crate::engine::{
         ConnectionId, TestSourceKind, UserId,
         media_transport::{TransportMediaId, TransportSessionKey},
-        room::media_graph::ValidatedPublishDescriptor,
+        room::media_graph::ValidatedPublish,
         source_model::test_support::stream_id_for_source,
         sync::lock_unpoisoned,
     },
 };
 
-use super::{AnsweredPublish, ReservedPublish, RoomUserOperation};
+use super::{RoomUserOperation, StagedPublish};
 use crate::engine::source_model::UserStreamId;
 
-impl ReservedPublish {
+impl StagedPublish {
     pub(crate) async fn commit_with_parameters(
         self,
         operation: RoomUserOperation<'_>,
         rtp: RouterRtpParameters,
     ) -> Option<UserStreamId> {
-        let Self {
-            descriptor,
-            reservation,
-        } = self;
-        AnsweredPublish {
-            descriptor,
-            reservation,
-            rtp,
-            encodings: Vec::new(),
-        }
-        .commit(operation)
-        .await
+        self.commit_with_negotiated_parameters(operation, rtp, Vec::new())
+            .await
     }
 }
 
 #[cfg(test)]
-impl PendingPublishTransactions {
+impl StagedPublishRegistry {
     pub fn staged_count(&self, user_id: &UserId, connection_id: ConnectionId) -> usize {
         self.staged
             .keys()
@@ -74,7 +64,7 @@ impl Room {
 
     pub(super) fn inject_next_duplicate_for_test(
         &self,
-        descriptor: &ValidatedPublishDescriptor,
+        descriptor: &ValidatedPublish,
         session_key: TransportSessionKey,
         cleanup_target: TransportMediaId,
     ) {
@@ -85,14 +75,14 @@ impl Room {
         };
         *lock_unpoisoned(&self.duplicate_staged_publish_cleanup_target) = Some(cleanup_target);
         let transaction =
-            ReservedPublish::new(descriptor.clone(), session_key, staged_transport_media_id);
+            StagedPublish::new(descriptor.clone(), session_key, staged_transport_media_id);
         let key = transaction.key();
-        let mut pending_publish_transactions = lock_unpoisoned(&self.pending_publish_transactions);
+        let mut staged_publish_registry = lock_unpoisoned(&self.staged_publish_registry);
         assert!(
-            !pending_publish_transactions.staged.contains_key(&key),
+            !staged_publish_registry.staged.contains_key(&key),
             "test duplicate staged publish slot should be empty before injection"
         );
-        pending_publish_transactions.staged.insert(key, transaction);
+        staged_publish_registry.staged.insert(key, transaction);
     }
 
     #[allow(
@@ -104,7 +94,7 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> usize {
-        lock_unpoisoned(&self.pending_publish_transactions).staged_count(user_id, connection_id)
+        lock_unpoisoned(&self.staged_publish_registry).staged_count(user_id, connection_id)
     }
 
     #[allow(
@@ -117,7 +107,7 @@ impl Room {
         connection_id: ConnectionId,
         stream_type: TestSourceKind,
     ) -> Option<TransportMediaId> {
-        lock_unpoisoned(&self.pending_publish_transactions).staged_media_id(
+        lock_unpoisoned(&self.staged_publish_registry).staged_media_id(
             user_id,
             connection_id,
             stream_type,

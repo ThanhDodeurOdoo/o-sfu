@@ -302,7 +302,7 @@ impl RoomState {
             }
             let mut deliveries_by_worker = BTreeMap::new();
             for key in self.media.consumer_keys_for_source(source.source_id()) {
-                if !self.media.consumer_bootstrap_exists(&key) {
+                if !self.media.has_consumer_setup_or_route(&key) {
                     continue;
                 }
                 if self

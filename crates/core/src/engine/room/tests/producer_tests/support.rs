@@ -358,18 +358,21 @@ pub(super) async fn bootstrap_real_rtc_user(
         .expect("rtc user should produce an initial offer")
 }
 
-pub(super) fn assert_bootstrap_for_stream(messages: &[UserOutbound], stream_type: TestSourceKind) {
+pub(super) fn assert_remote_track_setup_for_stream(
+    messages: &[UserOutbound],
+    stream_type: TestSourceKind,
+) {
     assert!(
         messages.iter().any(|message| matches!(
             message,
             UserOutbound::Request(request)
                 if matches!(
                     request.as_ref(),
-                    RoomEventRequest::BootstrapRemoteTrack(payload)
+                    RoomEventRequest::SetupRemoteTrack(payload)
                         if payload.stream_id() == &stream_id_for_source(stream_type)
                 )
         )),
-        "expected a bootstrap request for {stream_type:?}"
+        "expected a remote track setup request for {stream_type:?}"
     );
 }
 

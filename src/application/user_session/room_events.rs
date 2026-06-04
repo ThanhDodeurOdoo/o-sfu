@@ -9,19 +9,12 @@ use super::{User, UserError, UserOutput, projection::wire_source_descriptor};
 use crate::{
     application::stream_catalog::stream_type_for_stream_id,
     core::server::source_model::PublishedSourceDescriptor,
-    runtime::room::{RemoteTrackBootstrap, RoomEventMessage, TrackBindingUpdate},
+    runtime::room::{RemoteTrackSetup, RoomEventMessage, TrackBindingUpdate},
 };
 
-/// envelope for ordered server messages produced by one room event
-///
-/// [`UserWireMessages::needs_renegotiation`] is a session-local signal that means this browser's
-/// current track snapshot changed in a way that requires [`User`] to request a
-/// new offer after the compatibility messages are emitted
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::application::user_session) struct UserWireMessages {
-    /// messages to be batched and sent through the websocket
     pub messages: Vec<ServerMessage>,
-    /// whether the event invalidated the browser's current track snapshot
     pub needs_renegotiation: bool,
 }
 
@@ -34,22 +27,12 @@ impl UserWireMessages {
     }
 }
 
-/// per-connection state used to build compatibility server messages
-///
-/// this state keeps the remote track snapshot for one browser because room
-/// events may update presence, remove peers or change publication activity and
-/// those compatibility updates must be reflected locally before the websocket edge
-/// serializes the output
 #[derive(Debug, Default)]
 pub(in crate::application::user_session) struct UserWireState {
     bindings_by_mid: BTreeMap<String, TrackBinding>,
 }
 
 impl UserWireState {
-    /// apply one room message to the local wire state
-    ///
-    /// this method updates the local track snapshot and returns the ordered
-    /// signals that the browser needs to see the transition
     pub fn apply_room_event(&mut self, message: RoomEventMessage) -> UserWireMessages {
         match message {
             RoomEventMessage::Broadcast { sender_id, message } => UserWireMessages::from_messages(
@@ -94,8 +77,7 @@ impl UserWireState {
         }
     }
 
-    /// bootstrap one newly visible remote track for the browser
-    pub fn apply_remote_track_bootstrap(&mut self, track: &RemoteTrackBootstrap) {
+    pub fn apply_remote_track_setup(&mut self, track: &RemoteTrackSetup) {
         let Some(stream_type) = stream_type_for_stream_id(track.stream_id()) else {
             return;
         };
@@ -108,7 +90,6 @@ impl UserWireState {
         );
     }
 
-    /// build a full snapshot of all current track bindings
     pub fn snapshot(&self) -> Vec<TrackBinding> {
         self.bindings_by_mid.values().cloned().collect()
     }
@@ -207,27 +188,17 @@ impl UserWireState {
 }
 
 impl User {
-    /// Bootstrap one newly visible remote track for this websocket user.
-    ///
-    /// The room has already decided that the receiver should see the source.
-    /// This method updates only the user-local compatibility track snapshot and
-    /// then requests renegotiation so the browser can receive the media.
     pub async fn add_remote_track(
         &mut self,
-        track: RemoteTrackBootstrap,
+        track: RemoteTrackSetup,
     ) -> Result<UserOutput, UserError> {
-        self.state.wire_state.apply_remote_track_bootstrap(&track);
+        self.state.wire_state.apply_remote_track_setup(&track);
         let mut output = UserOutput::new()
             .with_signal(ServerMessage::Tracks(self.state.wire_state.snapshot()).into());
         output.extend(self.renegotiate().await?);
         Ok(output)
     }
 
-    /// Apply a room-authored remote track binding delta for this websocket.
-    ///
-    /// Activity updates only refresh the local track snapshot. Removal also
-    /// requests renegotiation because the browser must stop receiving that
-    /// remote media section.
     pub async fn update_remote_track(
         &mut self,
         update: TrackBindingUpdate,
@@ -236,11 +207,6 @@ impl User {
         self.finalize_wire_messages(wire_messages).await
     }
 
-    /// Convert a room-authored notification into this user's websocket output.
-    ///
-    /// Room state has already authorized and applied the transition. This method
-    /// only updates the connection-local wire snapshot before the websocket edge
-    /// serializes the resulting signals.
     pub(crate) async fn apply_room_message(
         &mut self,
         message: RoomEventMessage,

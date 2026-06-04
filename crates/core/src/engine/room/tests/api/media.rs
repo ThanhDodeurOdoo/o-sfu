@@ -3,7 +3,7 @@ use o_sfu_router::{
 };
 use tracing::warn;
 
-use super::super::super::{Room, transition::ReservedPublish};
+use super::super::super::{Room, transition::StagedPublish};
 use crate::engine::{
     ConnectionId, TestSourceKind, UserId,
     media_transport::{MediaTransport, TransportMediaId},
@@ -36,13 +36,13 @@ impl RoomTestMedia<'_> {
         let intent = source_publish_intent_for_source(publish.stream_type);
         let validated_descriptor = {
             let state = self.room.state.read().await;
-            state.validate_publish_descriptor(user_id, publish.connection_id, &intent)?
+            state.validate_publish(user_id, publish.connection_id, &intent)?
         };
         let session_key = self
             .room
             .transport_user_key(user_id, publish.connection_id)
             .await;
-        ReservedPublish::new(
+        StagedPublish::new(
             validated_descriptor,
             session_key,
             publish.transport_media_id,
@@ -102,7 +102,7 @@ impl RoomTestMedia<'_> {
                 .ok()?;
         let validated_descriptor = {
             let state = self.room.state.read().await;
-            state.validate_publish_descriptor(user_id, publisher_connection_id, intent)?
+            state.validate_publish(user_id, publisher_connection_id, intent)?
         };
         let session_key = self
             .room
@@ -123,7 +123,7 @@ impl RoomTestMedia<'_> {
                 return None;
             }
         };
-        ReservedPublish::new(validated_descriptor, session_key, transport_media_id)
+        StagedPublish::new(validated_descriptor, session_key, transport_media_id)
             .commit_with_parameters(
                 self.room
                     .user_operation(user_id, publisher_connection_id, media_transport),

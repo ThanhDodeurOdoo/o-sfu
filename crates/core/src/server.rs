@@ -1,8 +1,3 @@
-//! In-repository server integration paths.
-//!
-//! Use this namespace for concrete room, diagnostics, metrics, packet sink,
-//! recording and transport types that do not belong in [`crate::prelude`].
-
 pub mod diagnostics {
     //! Operator diagnostics storage and DTOs consumed by server HTTP routes.
 
@@ -56,7 +51,7 @@ pub mod room {
             DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
             IncomingBitrateSnapshot, JoinUserRequest, JoinedRoomSession, LocalRoomRouterPlacements,
             LocalRoomRouterPlacementsError, LocalRouterRuntimeContext, MAX_BROADCAST_PAYLOAD_BYTES,
-            RemoteTrackBootstrap, Room, RoomAdmissionPolicy, RoomConfig, RoomEventMessage,
+            RemoteTrackSetup, Room, RoomAdmissionPolicy, RoomConfig, RoomEventMessage,
             RoomEventRequest, RoomJoinError, RoomManager, RoomManagerConfig, RoomManagerDeps,
             RoomManagerJoinError, RoomMediaCounts, RoomRuntimeContext, RoomRuntimePolicy,
             RoomUserPermissions, RoomUserStatsSnapshot, RuntimeRoomDirectorySnapshot,

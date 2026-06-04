@@ -369,7 +369,7 @@ async fn subscription_change_pauses_and_resumes_consumer_silently() -> Result<()
 }
 
 #[tokio::test]
-async fn subscription_change_persists_preference_for_future_consumer_bootstrap() -> Result<()> {
+async fn subscription_change_persists_preference_for_future_consumer_setup() -> Result<()> {
     let mut ready = join_ready_users(&[1, 2]).await?;
     ready.drain_user(1)?;
     ready.drain_user(2)?;

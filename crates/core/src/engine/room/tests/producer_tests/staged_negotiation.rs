@@ -136,7 +136,10 @@ async fn staged_negotiated_publish_commit_moves_through_room_owned_transaction()
             .is_some()
     );
     assert!(scenario.drain_publisher().is_empty());
-    assert_bootstrap_for_stream(&scenario.drain_subscriber(), TestSourceKind::ScalableVideo);
+    assert_remote_track_setup_for_stream(
+        &scenario.drain_subscriber(),
+        TestSourceKind::ScalableVideo,
+    );
 }
 
 #[tokio::test]
