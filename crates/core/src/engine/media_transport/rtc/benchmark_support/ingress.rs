@@ -8,7 +8,10 @@ use str0m::ice::{StunMessage, TransId};
 
 use super::super::{
     bootstrap,
-    packet_loop::{PacketRouteDatagram, route_pkt_to_session_at},
+    packet_loop::{
+        PacketRouteDatagram, UdpIngressBenchHarness, route_pkt_to_session_at,
+        route_queued_ingress_datagrams_for_benchmark,
+    },
     routing_miss::DemuxRecoveryState,
     state::{PacketLoopState, RtcSnapshotState},
     test_support::{
@@ -24,9 +27,11 @@ use crate::{
 };
 
 pub const INGRESS_DEMUX_ATTEMPTS: usize = 256;
+pub const INGRESS_COMPLETED_BURST_DATAGRAMS: usize = 256;
 
 const RTP_HEADER_LEN: usize = 12;
 const LARGE_RTP_PACKET_LEN: usize = 1200;
+const INGRESS_COMPLETED_QUEUE_BURST: usize = 32;
 
 enum IngressRoutingMode {
     CachedAccepted,
@@ -50,6 +55,11 @@ pub struct IngressRoutingBenchFixture {
     candidate_addr: SocketAddr,
     packet: Vec<u8>,
     now: Instant,
+}
+
+pub struct IngressBurstBenchFixture {
+    routing: IngressRoutingBenchFixture,
+    ingress: UdpIngressBenchHarness,
 }
 
 impl IngressRoutingBenchFixture {
@@ -168,6 +178,58 @@ impl IngressRoutingBenchFixture {
                 self.now,
             ),
         );
+    }
+}
+
+impl IngressBurstBenchFixture {
+    #[must_use]
+    pub fn cached_accepted_route() -> Self {
+        Self::from_routing_fixture(IngressRoutingBenchFixture::cached_accepted_route())
+    }
+
+    #[must_use]
+    pub fn repeated_large_unknown_source_miss() -> Self {
+        Self::from_routing_fixture(IngressRoutingBenchFixture::repeated_large_unknown_source_miss())
+    }
+
+    #[must_use]
+    pub fn route_completed_bursts(&mut self) -> usize {
+        let mut routed = 0;
+        for _ in 0..(INGRESS_COMPLETED_BURST_DATAGRAMS / INGRESS_COMPLETED_QUEUE_BURST) {
+            let enqueued = self.enqueue_burst();
+            routed += route_queued_ingress_datagrams_for_benchmark(
+                &mut self.routing.state,
+                &self.routing.snapshot_state,
+                &mut self.routing.demux,
+                &self.routing.rtc_metrics,
+                self.ingress.ingress_mut(),
+                enqueued,
+            );
+        }
+        routed + usize::from(self.routing.state.has_dirty_sessions())
+    }
+
+    fn from_routing_fixture(fixture: IngressRoutingBenchFixture) -> Self {
+        let candidate_addr = fixture.candidate_addr;
+        Self {
+            routing: fixture,
+            ingress: UdpIngressBenchHarness::new(candidate_addr),
+        }
+    }
+
+    fn enqueue_burst(&mut self) -> usize {
+        let mut enqueued = 0;
+        for _ in 0..INGRESS_COMPLETED_QUEUE_BURST {
+            if self.ingress.enqueue_completed_datagram(
+                self.routing.source_addr,
+                self.routing.candidate_addr,
+                self.routing.now,
+                self.routing.packet.as_slice(),
+            ) {
+                enqueued += 1;
+            }
+        }
+        enqueued
     }
 }
 

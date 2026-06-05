@@ -492,24 +492,66 @@ pub(in crate::engine::media_transport::rtc) async fn run_packet_loop(
 }
 
 fn route_received_datagram(context: &mut PacketLoopApplyContext<'_>, datagram: UdpDatagram) {
+    let packet = route_datagram_to_session(
+        context.packet_loop_state,
+        context.snapshot_state,
+        context.demux,
+        &context.config.rtc_metrics,
+        datagram,
+    );
+    if let Some(shared_socket) = context.packet_loop_state.shared_socket.as_ref() {
+        shared_socket.ingress.recycle(packet);
+    }
+}
+
+fn route_datagram_to_session(
+    packet_loop_state: &mut PacketLoopState,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    demux: &mut DemuxRecoveryState,
+    rtc_metrics: &RtcMetricsRecorder,
+    datagram: UdpDatagram,
+) -> Vec<u8> {
     let UdpDatagram {
         source_addr,
         candidate_addr,
         received_at,
         packet,
     } = datagram;
-    // ingress routing owns demux recovery and calls `Rtc::accepts()` before a
-    // packet can mutate a session
     route_pkt_to_session_at(
-        context.packet_loop_state,
-        context.snapshot_state,
-        context.demux,
-        &context.config.rtc_metrics,
+        packet_loop_state,
+        snapshot_state,
+        demux,
+        rtc_metrics,
         PacketRouteDatagram::new(source_addr, candidate_addr, packet.as_slice(), received_at),
     );
-    if let Some(shared_socket) = context.packet_loop_state.shared_socket.as_ref() {
-        shared_socket.ingress.recycle(packet);
+    packet
+}
+
+#[cfg(feature = "internal-benchmarks")]
+pub(in crate::engine::media_transport::rtc) fn route_queued_ingress_datagrams_for_benchmark(
+    packet_loop_state: &mut PacketLoopState,
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    demux: &mut DemuxRecoveryState,
+    rtc_metrics: &RtcMetricsRecorder,
+    ingress: &mut UdpIngress,
+    max_datagrams: usize,
+) -> usize {
+    let mut routed = 0;
+    while routed < max_datagrams {
+        let Some(datagram) = ingress.try_recv() else {
+            break;
+        };
+        let packet = route_datagram_to_session(
+            packet_loop_state,
+            snapshot_state,
+            demux,
+            rtc_metrics,
+            datagram,
+        );
+        ingress.recycle(packet);
+        routed += 1;
     }
+    routed
 }
 
 /// applies control input and forgets cached demux evidence
