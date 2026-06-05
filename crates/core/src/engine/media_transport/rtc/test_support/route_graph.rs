@@ -1,8 +1,8 @@
 use str0m::media::Mid;
 
 use super::super::{
-    demux::MediaRouteDestination, media_registry::RegisteredMediaHandle,
-    route_control::PacketLayerGate, slots::ConsumerStreamHandle, state::PacketLoopState,
+    media_registry::RegisteredMediaHandle, route_control::PacketLayerGate,
+    slots::ConsumerStreamHandle, source_route::MediaRouteDestination, state::PacketLoopState,
 };
 use crate::engine::media_transport::{TransportMediaId, TransportSessionKey};
 

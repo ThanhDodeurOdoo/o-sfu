@@ -120,7 +120,9 @@ fn forwarded_packet_facts_detect_h264_idr_for_decoder_refresh() {
         vec![],
         vec![],
     );
-    state.refresh_src_decoder_codec(transport_media_id, &parameters);
+    state
+        .routes
+        .refresh_decoder_codec(transport_media_id, &parameters);
     let mut packet = sample_forwarded_packet(session_key, "cam-up", &[0x65, 0x88]);
     let facts = packet.resolve_facts(&state);
     assert!(facts.is_some());
@@ -150,7 +152,9 @@ fn forwarded_packet_h264_refresh_detection_uses_packetization_mode() {
         vec![],
         vec![],
     );
-    state.refresh_src_decoder_codec(transport_media_id, &mode_0_parameters);
+    state
+        .routes
+        .refresh_decoder_codec(transport_media_id, &mode_0_parameters);
     let mut mode_0_packet = sample_forwarded_packet(session_key.clone(), "cam-up", stap_a_idr);
     let mode_0_facts = mode_0_packet.resolve_facts(&state);
     assert!(mode_0_facts.is_some());
@@ -167,7 +171,9 @@ fn forwarded_packet_h264_refresh_detection_uses_packetization_mode() {
         vec![],
         vec![],
     );
-    state.refresh_src_decoder_codec(transport_media_id, &mode_1_parameters);
+    state
+        .routes
+        .refresh_decoder_codec(transport_media_id, &mode_1_parameters);
     let mut mode_1_packet = sample_forwarded_packet(session_key, "cam-up", stap_a_idr);
     let mode_1_facts = mode_1_packet.resolve_facts(&state);
     assert!(mode_1_facts.is_some());
@@ -182,7 +188,7 @@ fn forwarded_packet_facts_detect_relayed_h264_idr_from_source_media_id() {
     let session_key = test_transport_session_key(49, 0, 17, UserId::Integer(15));
     let src_media = TransportMediaId::new(23);
     let mut state = PacketLoopState::default();
-    state.refresh_src_decoder_codec(
+    state.routes.refresh_decoder_codec(
         src_media,
         &RouterRtpParameters::new(
             vec![MediaFormat::new(

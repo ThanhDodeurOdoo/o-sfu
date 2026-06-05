@@ -19,10 +19,10 @@
 //!   production/test support entry points.
 //! - `bootstrap`, `commands` and `state`: offer/answer bootstrap, mailbox
 //!   contracts and pure RTC session state.
-//! - `packet_loop`, `demux`, `forwarded_packet`, `forwarding_destination`,
+//! - `packet_loop`, `demux`, `source_route`, `forwarded_packet`, `forwarding_destination`,
 //!   `forwarding_planner` and `local_forwarding`: UDP/RTP
-//!   ingress, routing, fanout planning, local sends, recording packet sinks,
-//!   and zero-copy payload ownership.
+//!   ingress, source route facts, fanout planning, local sends, recording
+//!   packet sinks and zero-copy payload ownership.
 //! - `media_registry`, `relay_registry`, `route_control`, `routing_miss`,
 //!   `bitrate` and `negotiated_capabilities`: transport media ownership,
 //!   relay mailbox and target primitives, packet gates, active-speaker observations,
@@ -53,6 +53,7 @@ mod route_table;
 mod routing_miss;
 mod simulcast;
 mod slots;
+mod source_route;
 mod state;
 #[cfg(any(test, feature = "testing-transport", feature = "internal-benchmarks"))]
 pub mod test_support;

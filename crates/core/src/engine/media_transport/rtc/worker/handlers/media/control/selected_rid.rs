@@ -37,6 +37,7 @@ use crate::engine::{
             media_registry::RegisteredMediaHandle,
             route_control::PacketLayerGate,
             route_table::{RidReadinessRouteUpdate, RidReadinessSelectedGateUpdate},
+            source_route::RemoteSourceRegistration,
             state::{PacketLoopState, RidReadinessScratch},
         },
     },
@@ -306,13 +307,10 @@ fn request_live_rid_kf(
         );
         return;
     }
-    let Some((registered_src, src_control)) =
-        state.routes.remote_source(src_media).map(|registration| {
-            (
-                registration.source().clone(),
-                registration.source_control().clone(),
-            )
-        })
+    let Some((registered_src, src_control)) = state
+        .routes
+        .remote_source(src_media)
+        .map(RemoteSourceRegistration::cloned_control_path)
     else {
         warn!(
             user_id = ?src_key.user_id(),
@@ -415,6 +413,6 @@ fn kf_refresh_src_key(
         Some(RegisteredMediaHandle::Consumer { .. }) | None => state
             .routes
             .remote_source(src_media)
-            .map(|registration| registration.src_key().clone()),
+            .map(|registration| registration.source().session_key().clone()),
     }
 }

@@ -245,11 +245,8 @@ fn resolve_kf_route(
             src_key: session_key.clone(),
         });
     }
-    state
-        .routes
-        .remote_source(src_media)
-        .map(|remote_source| ResolvedKeyframeRoute::Remote {
-            src: remote_source.source().clone(),
-            src_control: remote_source.source_control().clone(),
-        })
+    state.routes.remote_source(src_media).map(|remote_source| {
+        let (src, src_control) = remote_source.cloned_control_path();
+        ResolvedKeyframeRoute::Remote { src, src_control }
+    })
 }
