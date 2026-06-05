@@ -71,9 +71,90 @@ pull a CI-built image on the VM:
 ghcr.io/<owner>/o-sfu:<tag>
 ```
 
-prefer immutable `sha-<commit>` tags for production
+prefer release tags such as `v0.3.1` for production
+
+do not promote suffixed tags such as `v0.3.1-rc.1` or
+`v0.3.1-test.20260605` to production because they are published as prereleases
+and are not marked as the latest GitHub release
+
+use `sha-<commit>` tags for staging and test infrastructure that must track a
+specific commit
 
 use `master` only for staging flows that explicitly track GitHub Actions status
+
+for a fixed production version:
+
+```yaml
+services:
+  o-sfu:
+    image: ghcr.io/<owner>/o-sfu:v0.3.1
+```
+
+or keep the version in the compose `.env` file:
+
+```env
+OSFU_VERSION=v0.3.1
+```
+
+```yaml
+services:
+  o-sfu:
+    image: ghcr.io/<owner>/o-sfu:${OSFU_VERSION}
+```
+
+after changing the version, pull the configured image and recreate the service:
+
+```bash
+docker compose pull o-sfu
+docker compose up -d o-sfu
+```
+
+`docker compose pull o-sfu` pulls the image tag configured for the `o-sfu`
+service. the tag is selected by the `image` value in the compose file after
+environment interpolation, not by the service name.
+
+only release-tag image builds carry Docker provenance, SBOM and GitHub image
+attestations. `master`, commit-addressable `sha-<commit>` images and pull
+request smoke-test images are intentionally not attested.
+
+verify a release image before production promotion:
+
+```bash
+docker login ghcr.io
+gh attestation verify oci://ghcr.io/<owner>/o-sfu:v0.3.1 -R <owner>/o-sfu
+```
+
+## release assets
+
+tag pushes matching `v*` create a GitHub release with:
+
+- `o-sfu-server-<tag>-linux-amd64.tar.gz`
+- `o-sfu-client-<tag>.js`
+- `o-sfu-image-<tag>.sbom.json`
+- `SHA256SUMS`
+
+suffixed tags are generated validation builds with the same assets,
+attestations and version-tag image, while the GitHub release is marked as a
+prerelease and is not marked latest
+
+the server asset contains the release Linux `o-sfu` binary
+
+the client asset is the Odoo-compatible `odoo_sfu.js` bundle with embedded WASM
+
+the SBOM asset is extracted from the version-tag container image SBOM
+
+release artifacts are covered by GitHub artifact attestations. after
+downloading an asset:
+
+```bash
+gh attestation verify <asset> -R <owner>/o-sfu
+sha256sum -c SHA256SUMS
+```
+
+prefer release assets for production rollout
+
+keep `ghcr.io/<owner>/o-sfu:sha-<commit>` images for staging and test
+infrastructure that tracks commit-level container packages
 
 ## runtime binding
 

@@ -1,0 +1,247 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      # required to mint the OIDC token used by actions/attest
+      id-token: write
+      # required to create the release and upload release assets
+      contents: write
+      # required to publish the release image and push its attestation
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        # actions/checkout v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Prepare release metadata
+        id: release
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY}"
+          repo_lc="$(printf '%s' "$repo" | tr '[:upper:]' '[:lower:]')"
+          image="${REGISTRY}/${repo_lc}"
+          safe_tag="${GITHUB_REF_NAME//\//-}"
+          prerelease=false
+          if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+[._-] ]]
+          then
+            prerelease=true
+          fi
+          {
+            echo "repo=${repo}"
+            echo "safe_tag=${safe_tag}"
+            echo "prerelease=${prerelease}"
+            echo "image=${image}"
+            echo "image_ref=${image}:${safe_tag}"
+            echo "server_asset=o-sfu-server-${safe_tag}-linux-amd64.tar.gz"
+            echo "client_asset=o-sfu-client-${safe_tag}.js"
+            echo "sbom_asset=o-sfu-image-${safe_tag}.sbom.json"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        # dtolnay/rust-toolchain master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: 1.95.0
+
+      - name: Validate release tag
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if [[ ! "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)([._-][A-Za-z0-9._-]+)?$ ]]
+          then
+            echo "Invalid release tag: $tag" >&2
+            echo "Expected vX.Y.Z with an optional safe suffix" >&2
+            exit 1
+          fi
+          base_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          metadata_file="$(mktemp)"
+          trap 'rm -f "$metadata_file"' EXIT
+          cargo metadata --no-deps --format-version 1 > "$metadata_file"
+          cargo_version="$(python3 - "$metadata_file" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              data = json.load(handle)
+
+          manifest = f'{data["workspace_root"]}/Cargo.toml'
+          for package in data["packages"]:
+              if package["manifest_path"] == manifest:
+                  print(package["version"])
+                  break
+          else:
+              raise SystemExit("workspace root package version not found")
+          PY
+          )"
+          cargo_base_version="${cargo_version%%[-+]*}"
+          if [[ "$base_version" != "$cargo_base_version" ]]
+          then
+            echo "Release tag base version $base_version does not match Cargo base version $cargo_base_version" >&2
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        # docker/setup-buildx-action v4
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5
+
+      - name: Setup Node.js
+        # actions/setup-node v5
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Login to GitHub Container Registry
+        # docker/login-action v4
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        # docker/metadata-action v6
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9
+        with:
+          images: ${{ steps.release.outputs.image }}
+          tags: |
+            type=raw,value=${{ steps.release.outputs.safe_tag }}
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.15.0 --locked
+
+      - name: Install client dependencies
+        run: npm ci
+        working-directory: crates/client
+
+      - name: Build server binary
+        run: cargo build --locked --release -p o-sfu
+
+      - name: Build Odoo bundle
+        run: npm run build:odoo
+        working-directory: crates/client
+
+      - name: Build and publish release image
+        id: image
+        # docker/build-push-action v7
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Package release assets
+        id: assets
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          tar -C target/release -czf "release/${{ steps.release.outputs.server_asset }}" o-sfu
+          cp crates/client/dist/odoo_sfu.js "release/${{ steps.release.outputs.client_asset }}"
+          docker buildx imagetools inspect "${{ steps.release.outputs.image_ref }}" \
+            --format "{{json .SBOM}}" > "release/${{ steps.release.outputs.sbom_asset }}"
+          if [[ ! -s "release/${{ steps.release.outputs.sbom_asset }}" ]] \
+            || grep -qx "null" "release/${{ steps.release.outputs.sbom_asset }}"; then
+            echo "The release image SBOM could not be extracted" >&2
+            exit 1
+          fi
+          (
+            cd release
+            sha256sum \
+              "${{ steps.release.outputs.server_asset }}" \
+              "${{ steps.release.outputs.client_asset }}" \
+              "${{ steps.release.outputs.sbom_asset }}" > SHA256SUMS
+          )
+          {
+            echo "server=release/${{ steps.release.outputs.server_asset }}"
+            echo "client=release/${{ steps.release.outputs.client_asset }}"
+            echo "sbom=release/${{ steps.release.outputs.sbom_asset }}"
+            echo "checksums=release/SHA256SUMS"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate artifact attestations
+        # actions/attest v4
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26
+        with:
+          subject-checksums: ${{ steps.assets.outputs.checksums }}
+
+      - name: Generate image attestation
+        # actions/attest v4
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26
+        with:
+          subject-name: ${{ steps.release.outputs.image }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+      - name: Write release notes
+        run: |
+          set -euo pipefail
+          cat > release/verification.md <<EOF
+          ## verification
+
+          release assets:
+
+          \`\`\`bash
+          gh attestation verify ${{ steps.release.outputs.server_asset }} -R ${{ steps.release.outputs.repo }}
+          gh attestation verify ${{ steps.release.outputs.client_asset }} -R ${{ steps.release.outputs.repo }}
+          gh attestation verify ${{ steps.release.outputs.sbom_asset }} -R ${{ steps.release.outputs.repo }}
+          sha256sum -c SHA256SUMS
+          \`\`\`
+
+          container image:
+
+          \`\`\`bash
+          docker login ghcr.io
+          gh attestation verify oci://${{ steps.release.outputs.image_ref }} -R ${{ steps.release.outputs.repo }}
+          \`\`\`
+
+          the container SBOM is attached to this release as \`${{ steps.release.outputs.sbom_asset }}\`
+
+          EOF
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          notes="$(cat release/verification.md)"
+          release_flags=(--generate-notes --verify-tag)
+          if [[ "$PRERELEASE" == "true" ]]
+          then
+            release_flags+=(--prerelease --latest=false)
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            "${{ steps.assets.outputs.server }}" \
+            "${{ steps.assets.outputs.client }}" \
+            "${{ steps.assets.outputs.sbom }}" \
+            "${{ steps.assets.outputs.checksums }}" \
+            --title "o-sfu ${GITHUB_REF_NAME}" \
+            --notes "$notes" \
+            "${release_flags[@]}"
