@@ -2,7 +2,7 @@
 //!
 //! the setup builds the RTC transport and an empty room outside the measured
 //! function. the measured flow then drives joins, readiness, publication,
-//! subscription, VAD observations, source-policy refreshes and route inspection
+//! subscription, RTP observations, source-policy refreshes and route inspection
 //! through the same core room and media transport boundaries used by runtime code
 
 #![allow(

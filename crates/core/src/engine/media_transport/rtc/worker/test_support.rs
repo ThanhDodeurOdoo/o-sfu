@@ -36,8 +36,9 @@ use super::{
     super::{
         state::TransportSessionHealth,
         test_support::{
-            DebugProbe, DebugRouteEntry, ObserveAudioActivityProbe, ReceiverBweTargetProbe,
-            RouteEntryByConsumerMidProbe, RouteEntryByMediaIdProbe, RouteEntryProbe,
+            DebugProbe, DebugRouteEntry, ObserveAudioActivityProbe, ObserveRtpPacketProbe,
+            ReceiverBweTargetProbe, RouteEntryByConsumerMidProbe, RouteEntryByMediaIdProbe,
+            RouteEntryProbe,
         },
     },
     RtcWorker,
@@ -54,6 +55,8 @@ fn default_test_rtc_port_range() -> RtcPortRange {
 }
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::engine::media_transport::TransportMediaId;
+#[cfg(any(test, feature = "testing-transport"))]
+use crate::engine::media_transport::test_support::TestRtpPacket;
 use crate::engine::{media_transport::TransportSessionKey, metrics};
 
 impl RtcWorker {
@@ -308,6 +311,27 @@ impl RtcWorker {
                 now,
             })
             .await;
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub async fn debug_observe_rtp_packet(
+        &self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+        packet: TestRtpPacket,
+    ) -> usize {
+        self.probe_debug_worker(ObserveRtpPacketProbe {
+            session_key: session_key.clone(),
+            transport_media_id,
+            payload_bytes: packet.payload_bytes(),
+            received_at: packet.received_at(),
+            rid: packet.rid(),
+            keyframe: packet.keyframe(),
+            voice_activity: packet.voice_activity(),
+            audio_level_dbov: packet.audio_level_dbov(),
+        })
+        .await
+        .unwrap_or(0)
     }
 
     #[cfg(test)]

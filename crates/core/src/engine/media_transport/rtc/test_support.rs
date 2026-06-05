@@ -15,9 +15,9 @@ use std::time::Instant;
 pub use probe::{DebugPacketGate, DebugRouteDestination, DebugRouteEntry};
 #[cfg(any(test, feature = "testing-transport"))]
 pub(super) use probe::{
-    DebugProbe, DebugProbeRequest, ObserveAudioActivityProbe, ReceiverBweTargetProbe,
-    RouteEntryByConsumerMidProbe, RouteEntryByMediaIdProbe, RouteEntryProbe,
-    RtcWorkerDebugChannels, RtcWorkerDebugHandle, handle_debug_probe,
+    DebugProbe, DebugProbeRequest, ObserveAudioActivityProbe, ObserveRtpPacketProbe,
+    ReceiverBweTargetProbe, RouteEntryByConsumerMidProbe, RouteEntryByMediaIdProbe,
+    RouteEntryProbe, RtcWorkerDebugChannels, RtcWorkerDebugHandle, handle_debug_probe,
 };
 #[cfg(test)]
 pub(super) use probe::{

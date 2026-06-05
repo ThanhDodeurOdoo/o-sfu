@@ -30,7 +30,7 @@ use std::time::Instant;
 #[cfg(test)]
 use std::{net::SocketAddr, time::Instant};
 
-use str0m::media::Mid;
+use str0m::media::{Mid, Rid};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
@@ -382,19 +382,64 @@ impl DebugProbe for RecordIncomingMediaProbe {
         state: &mut PacketLoopState,
         context: &WorkerCommandContext<'_>,
     ) -> Self::Output {
-        if state
-            .record_incoming_bitrate(self.transport_media_id, self.now, self.payload_bytes)
-            .is_none()
-            && let Ok(mut bitrate) = context.bitrate_registry.lock()
-        {
-            let counter = bitrate.register_incoming_media(
-                &self.session_key,
+        record_incoming_media(
+            state,
+            context,
+            &self.session_key,
+            self.transport_media_id,
+            self.payload_bytes,
+            self.now,
+        );
+    }
+}
+
+#[cfg(any(test, feature = "testing-transport"))]
+pub(in crate::engine::media_transport::rtc) struct ObserveRtpPacketProbe {
+    pub session_key: TransportSessionKey,
+    pub transport_media_id: TransportMediaId,
+    pub payload_bytes: usize,
+    pub received_at: Instant,
+    pub rid: Option<&'static str>,
+    pub keyframe: bool,
+    pub voice_activity: Option<bool>,
+    pub audio_level_dbov: Option<i8>,
+}
+
+#[cfg(any(test, feature = "testing-transport"))]
+impl DebugProbe for ObserveRtpPacketProbe {
+    type Output = usize;
+
+    fn inspect(
+        self,
+        state: &mut PacketLoopState,
+        context: &WorkerCommandContext<'_>,
+    ) -> Self::Output {
+        record_incoming_media(
+            state,
+            context,
+            &self.session_key,
+            self.transport_media_id,
+            self.payload_bytes,
+            self.received_at,
+        );
+        if self.voice_activity.is_some() || self.audio_level_dbov.is_some() {
+            state.routes.observe_audio_activity(
                 self.transport_media_id,
-                self.now,
+                self.voice_activity,
+                self.audio_level_dbov,
+                self.received_at,
             );
-            counter.record(self.now, self.payload_bytes);
-            state.register_incoming_bitrate_counter(self.transport_media_id, counter);
         }
+        if self.rid.is_some() || self.keyframe {
+            state.routes.observe_producer_packet(
+                self.transport_media_id,
+                self.rid.map(Rid::from),
+                self.keyframe,
+                self.received_at,
+            );
+        }
+        debug_route_entry(state, self.transport_media_id)
+            .map_or(0, |entry| entry.active_destination_count)
     }
 }
 
@@ -421,6 +466,25 @@ impl DebugProbe for ObserveAudioActivityProbe {
             self.audio_level_dbov,
             self.now,
         );
+    }
+}
+
+fn record_incoming_media(
+    state: &mut PacketLoopState,
+    context: &WorkerCommandContext<'_>,
+    session_key: &TransportSessionKey,
+    transport_media_id: TransportMediaId,
+    payload_bytes: usize,
+    now: Instant,
+) {
+    if state
+        .record_incoming_bitrate(transport_media_id, now, payload_bytes)
+        .is_none()
+        && let Ok(mut bitrate) = context.bitrate_registry.lock()
+    {
+        let counter = bitrate.register_incoming_media(session_key, transport_media_id, now);
+        counter.record(now, payload_bytes);
+        state.register_incoming_bitrate_counter(transport_media_id, counter);
     }
 }
 

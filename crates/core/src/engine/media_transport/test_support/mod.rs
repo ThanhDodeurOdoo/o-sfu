@@ -53,6 +53,84 @@ pub struct MediaTransportTestApi<'a> {
 }
 
 #[cfg(any(test, feature = "testing-transport"))]
+#[derive(Debug, Clone, Copy)]
+pub struct TestRtpPacket {
+    payload_bytes: usize,
+    received_at: Instant,
+    rid: Option<&'static str>,
+    keyframe: bool,
+    voice_activity: Option<bool>,
+    audio_level_dbov: Option<i8>,
+}
+
+#[cfg(any(test, feature = "testing-transport"))]
+impl TestRtpPacket {
+    #[must_use]
+    pub const fn audio(
+        payload_bytes: usize,
+        voice_activity: bool,
+        audio_level_dbov: i8,
+        received_at: Instant,
+    ) -> Self {
+        Self {
+            payload_bytes,
+            received_at,
+            rid: None,
+            keyframe: false,
+            voice_activity: Some(voice_activity),
+            audio_level_dbov: Some(audio_level_dbov),
+        }
+    }
+
+    #[must_use]
+    pub const fn video(
+        payload_bytes: usize,
+        rid: &'static str,
+        keyframe: bool,
+        received_at: Instant,
+    ) -> Self {
+        Self {
+            payload_bytes,
+            received_at,
+            rid: Some(rid),
+            keyframe,
+            voice_activity: None,
+            audio_level_dbov: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn payload_bytes(self) -> usize {
+        self.payload_bytes
+    }
+
+    #[must_use]
+    pub const fn received_at(self) -> Instant {
+        self.received_at
+    }
+
+    #[must_use]
+    pub const fn rid(self) -> Option<&'static str> {
+        self.rid
+    }
+
+    #[must_use]
+    pub const fn keyframe(self) -> bool {
+        self.keyframe
+    }
+
+    #[must_use]
+    pub const fn voice_activity(self) -> Option<bool> {
+        self.voice_activity
+    }
+
+    #[must_use]
+    pub const fn audio_level_dbov(self) -> Option<i8> {
+        self.audio_level_dbov
+    }
+}
+
+#[cfg(any(test, feature = "testing-transport"))]
 impl MediaTransport {
     #[must_use]
     pub fn test_api(&self) -> MediaTransportTestApi<'_> {
@@ -174,6 +252,20 @@ impl MediaTransportTestApi<'_> {
                 )
                 .await;
         }
+    }
+
+    pub async fn observe_rtp_packet(
+        self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+        packet: TestRtpPacket,
+    ) -> usize {
+        let Some(worker) = self.transport.worker_for_user(session_key) else {
+            return 0;
+        };
+        worker
+            .debug_observe_rtp_packet(session_key, transport_media_id, packet)
+            .await
     }
 }
 

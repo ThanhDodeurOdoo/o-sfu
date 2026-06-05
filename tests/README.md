@@ -68,9 +68,10 @@ worker lifecycle commands at a fixed ratio, so packet-loop publication changes
 can be compared in the regular Callgrind table
 The `general_call_callgrind` target covers a deterministic 10 second synthetic
 Discuss call timeline with 12 total users, 10 active at peak, 4 audio publishers,
-4 camera publishers, VAD observations, room joins, room leaves, publication
-updates, subscription changes, source-policy refreshes and transport route-state
-inspection through the core room flow
+4 camera publishers, 20 ms audio RTP from each audio publisher, 30 fps camera
+RTP from active video publishers, VAD observations, room joins, room leaves,
+publication updates, subscription changes, source-policy refreshes and transport
+route-state inspection through the core room flow
 
 local Callgrind execution requires `gungraun-runner` plus Valgrind. on
 hosts without Valgrind support, use `--no-run` as the local build check and run

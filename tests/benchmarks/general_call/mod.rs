@@ -36,7 +36,8 @@ use o_sfu_core::{
         session::{UserId, UserPermissions, VideoLayoutIntent},
         transport::{
             MediaTransport, MediaTransportConfig, MediaTransportDeps,
-            SourcePolicyUpdateSubscription, TransportMediaId, test_support::test_rtc_port_range,
+            SourcePolicyUpdateSubscription, TransportMediaId, TransportSessionKey,
+            test_support::{TestRtpPacket, test_rtc_port_range},
         },
     },
 };
@@ -48,6 +49,13 @@ const WORKER_COUNT: usize = 4;
 const OUTBOUND_QUEUE_CAPACITY: usize = 1024;
 const MEDIA_TICK_MS: u64 = 20;
 const POLICY_REFRESH_TICKS: usize = 25;
+const AUDIO_RTP_PAYLOAD_BYTES: usize = 160;
+const VIDEO_RTP_PAYLOAD_BYTES: usize = 1_200;
+const VIDEO_RTP_TICK_WINDOW: usize = 5;
+const VIDEO_RTP_TICKS: [usize; 3] = [0, 2, 4];
+const VIDEO_KEYFRAME_INTERVAL: usize = 30;
+const VIDEO_RID: &str = "hi";
+const IDLE_AUDIO_LEVEL_DBOV: i8 = -72;
 const SPEAKER_PATTERN: [RawUserId; 8] = [1, 2, 1, 3, 4, 2, 3, 4];
 
 type RawUserId = i64;
@@ -60,6 +68,9 @@ pub struct GeneralCallStats {
     unpublications: usize,
     subscription_updates: usize,
     audio_observations: usize,
+    rtp_packets: usize,
+    rtp_payload_bytes: usize,
+    rtp_fanout: usize,
     policy_refreshes: usize,
     route_inspections: usize,
     outbound_events: usize,
@@ -78,6 +89,9 @@ impl GeneralCallStats {
             self.unpublications,
             self.subscription_updates,
             self.audio_observations,
+            self.rtp_packets,
+            self.rtp_payload_bytes,
+            self.rtp_fanout,
             self.policy_refreshes,
             self.route_inspections,
             self.outbound_events,
@@ -178,6 +192,12 @@ struct PublishedMedia {
     camera: BTreeMap<RawUserId, TransportMediaId>,
 }
 
+#[derive(Debug, Default)]
+struct RtpCounters {
+    audio: BTreeMap<RawUserId, usize>,
+    camera: BTreeMap<RawUserId, usize>,
+}
+
 struct GeneralCallScenario {
     core: SfuCore,
     live_users: BTreeSet<RawUserId>,
@@ -187,10 +207,12 @@ struct GeneralCallScenario {
     outbound_metrics: Arc<RuntimeMetrics>,
     receivers: BTreeMap<RawUserId, UserOutboundReceiver>,
     room: Arc<Room>,
+    rtp: RtpCounters,
     source_policy_updates: SourcePolicyUpdateSubscription,
     stats: GeneralCallStats,
     synthetic_now: Instant,
     user_connections: BTreeMap<RawUserId, ConnectionId>,
+    user_sessions: BTreeMap<RawUserId, TransportSessionKey>,
 }
 
 impl GeneralCallScenario {
@@ -216,10 +238,12 @@ impl GeneralCallScenario {
             outbound_metrics: Arc::new(RuntimeMetrics::default()),
             receivers: BTreeMap::new(),
             room,
+            rtp: RtpCounters::default(),
             source_policy_updates,
             stats: GeneralCallStats::default(),
             synthetic_now: Instant::now(),
             user_connections: BTreeMap::new(),
+            user_sessions: BTreeMap::new(),
         })
     }
 
@@ -342,6 +366,19 @@ impl GeneralCallScenario {
         {
             return Err(anyhow!("user {raw_user_id} connection already exists"));
         }
+        let session_key = self
+            .room
+            .transport_user_key(&user_id, admission.connection_id())
+            .await;
+        if self
+            .user_sessions
+            .insert(raw_user_id, session_key)
+            .is_some()
+        {
+            return Err(anyhow!(
+                "user {raw_user_id} transport session already exists"
+            ));
+        }
         if self.receivers.insert(raw_user_id, receiver).is_some() {
             return Err(anyhow!("user {raw_user_id} receiver already exists"));
         }
@@ -383,6 +420,7 @@ impl GeneralCallScenario {
         if self.media.audio.insert(raw_user_id, media_id).is_some() {
             return Err(anyhow!("user {raw_user_id} audio media already exists"));
         }
+        self.rtp.audio.insert(raw_user_id, 0);
         self.stats.publications = self.stats.publications.saturating_add(1);
         Ok(())
     }
@@ -420,6 +458,7 @@ impl GeneralCallScenario {
         if self.media.camera.insert(raw_user_id, media_id).is_some() {
             return Err(anyhow!("user {raw_user_id} camera media already exists"));
         }
+        self.rtp.camera.insert(raw_user_id, 0);
         self.stats.publications = self.stats.publications.saturating_add(1);
         Ok(())
     }
@@ -440,6 +479,7 @@ impl GeneralCallScenario {
                 if self.media.camera.remove(&raw_user_id).is_none() {
                     return Err(anyhow!("user {raw_user_id} camera media was not tracked"));
                 }
+                self.rtp.camera.remove(&raw_user_id);
                 self.stats.unpublications = self.stats.unpublications.saturating_add(1);
                 Ok(())
             }
@@ -471,10 +511,17 @@ impl GeneralCallScenario {
             return Err(anyhow!("user {raw_user_id} connection was not tracked"));
         }
         if self.media.audio.remove(&raw_user_id).is_some() {
+            self.rtp.audio.remove(&raw_user_id);
             self.stats.unpublications = self.stats.unpublications.saturating_add(1);
         }
         if self.media.camera.remove(&raw_user_id).is_some() {
+            self.rtp.camera.remove(&raw_user_id);
             self.stats.unpublications = self.stats.unpublications.saturating_add(1);
+        }
+        if self.user_sessions.remove(&raw_user_id).is_none() {
+            return Err(anyhow!(
+                "user {raw_user_id} transport session was not tracked"
+            ));
         }
         if let Some(mut receiver) = self.receivers.remove(&raw_user_id) {
             self.stats.outbound_events = self
@@ -561,31 +608,100 @@ impl GeneralCallScenario {
         let ticks = usize::try_from(duration.as_millis() / u128::from(MEDIA_TICK_MS))
             .map_err(|error| anyhow!("synthetic media tick count overflowed: {error}"))?;
         for tick in 0..ticks {
-            self.observe_vad_tick(tick).await;
+            self.emit_audio_rtp(tick).await?;
+            self.emit_video_rtp(tick).await?;
             if tick % POLICY_REFRESH_TICKS == 0 {
                 self.refresh_source_policy().await;
                 self.inspect_route_state().await;
             }
+            self.synthetic_now += Duration::from_millis(MEDIA_TICK_MS);
         }
         Ok(())
     }
 
-    async fn observe_vad_tick(&mut self, tick: usize) {
-        let pattern_index = tick % SPEAKER_PATTERN.len();
-        if let Some(raw_user_id) = SPEAKER_PATTERN.get(pattern_index).copied()
-            && let Some(media_id) = self.media.audio.get(&raw_user_id).copied()
-        {
-            self.media_transport
-                .test_api()
-                .observe_audio_activity_with_level(
-                    media_id,
-                    audio_level_for_tick(tick),
+    async fn emit_audio_rtp(&mut self, tick: usize) -> Result<()> {
+        let Some(active_speaker) = SPEAKER_PATTERN.get(tick % SPEAKER_PATTERN.len()).copied()
+        else {
+            return Ok(());
+        };
+        let publishers = self
+            .media
+            .audio
+            .iter()
+            .map(|(raw_user_id, media_id)| (*raw_user_id, *media_id))
+            .collect::<Vec<_>>();
+        for (raw_user_id, media_id) in publishers {
+            let speaking = raw_user_id == active_speaker;
+            let audio_level = if speaking {
+                audio_level_for_tick(tick)
+            } else {
+                IDLE_AUDIO_LEVEL_DBOV
+            };
+            self.observe_rtp_packet(
+                raw_user_id,
+                media_id,
+                TestRtpPacket::audio(
+                    AUDIO_RTP_PAYLOAD_BYTES,
+                    speaking,
+                    audio_level,
                     self.synthetic_now,
-                )
-                .await;
+                ),
+            )
+            .await?;
+            *self.rtp.audio.entry(raw_user_id).or_default() += 1;
             self.stats.audio_observations = self.stats.audio_observations.saturating_add(1);
         }
-        self.synthetic_now += Duration::from_millis(MEDIA_TICK_MS);
+        Ok(())
+    }
+
+    async fn emit_video_rtp(&mut self, tick: usize) -> Result<()> {
+        if !VIDEO_RTP_TICKS.contains(&(tick % VIDEO_RTP_TICK_WINDOW)) {
+            return Ok(());
+        }
+        let publishers = self
+            .media
+            .camera
+            .iter()
+            .map(|(raw_user_id, media_id)| (*raw_user_id, *media_id))
+            .collect::<Vec<_>>();
+        for (raw_user_id, media_id) in publishers {
+            let packets = self.rtp.camera.entry(raw_user_id).or_default();
+            let keyframe = (*packets).is_multiple_of(VIDEO_KEYFRAME_INTERVAL);
+            *packets += 1;
+            self.observe_rtp_packet(
+                raw_user_id,
+                media_id,
+                TestRtpPacket::video(
+                    VIDEO_RTP_PAYLOAD_BYTES,
+                    VIDEO_RID,
+                    keyframe,
+                    self.synthetic_now,
+                ),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn observe_rtp_packet(
+        &mut self,
+        raw_user_id: RawUserId,
+        media_id: TransportMediaId,
+        packet: TestRtpPacket,
+    ) -> Result<()> {
+        let session_key = self.source_session(raw_user_id)?.clone();
+        let fanout = self
+            .media_transport
+            .test_api()
+            .observe_rtp_packet(&session_key, media_id, packet)
+            .await;
+        self.stats.rtp_packets = self.stats.rtp_packets.saturating_add(1);
+        self.stats.rtp_payload_bytes = self
+            .stats
+            .rtp_payload_bytes
+            .saturating_add(packet.payload_bytes());
+        self.stats.rtp_fanout = self.stats.rtp_fanout.saturating_add(fanout);
+        Ok(())
     }
 
     async fn refresh_source_policy(&mut self) {
@@ -655,6 +771,12 @@ impl GeneralCallScenario {
             .get(&raw_user_id)
             .copied()
             .ok_or_else(|| anyhow!("user {raw_user_id} connection was missing"))
+    }
+
+    fn source_session(&self, raw_user_id: RawUserId) -> Result<&TransportSessionKey> {
+        self.user_sessions
+            .get(&raw_user_id)
+            .ok_or_else(|| anyhow!("user {raw_user_id} transport session was missing"))
     }
 
     fn drain_outbound_events(&mut self) {
