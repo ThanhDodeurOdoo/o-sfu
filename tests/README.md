@@ -24,27 +24,35 @@ cargo test --locked --workspace --release
 npm --prefix crates/client run verify
 ```
 
-## Packet-loop Callgrind benchmarks
+## Callgrind benchmarks
 
 uses `gungraun` for deterministic instruction-count checks of
-packet-loop hot-path slices
+packet-loop hot-path slices and a representative room-level call flow
 
-Build the target without running Valgrind:
+Build the packet-loop target without running Valgrind:
 
 ```bash
 cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind --no-run
+```
+
+Build the general call target without running Valgrind:
+
+```bash
+cargo bench --locked -p o-sfu-tests --bench general_call_callgrind --no-run
 ```
 
 Save a local baseline on a Valgrind-supported host:
 
 ```bash
 cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind -- --save-baseline=local --save-summary=json
+cargo bench --locked -p o-sfu-tests --bench general_call_callgrind -- --save-baseline=local --save-summary=json
 ```
 
 Compare local changes against that baseline:
 
 ```bash
 cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind -- --baseline=local --save-summary=json
+cargo bench --locked -p o-sfu-tests --bench general_call_callgrind -- --baseline=local --save-summary=json
 ```
 
 profiles and summaries are written under `target/gungraun`. the current scenarios
@@ -58,6 +66,11 @@ request tracking and pending keyframe retry drain
 The `packet_cmd_mix` scenario also covers fanout packet sends interleaved with
 worker lifecycle commands at a fixed ratio, so packet-loop publication changes
 can be compared in the regular Callgrind table
+The `general_call_callgrind` target covers a deterministic 10 second synthetic
+Discuss call timeline with 12 total users, 10 active at peak, 4 audio publishers,
+4 camera publishers, VAD observations, room joins, room leaves, publication
+updates, subscription changes, source-policy refreshes and transport route-state
+inspection through the core room flow
 
 local Callgrind execution requires `gungraun-runner` plus Valgrind. on
 hosts without Valgrind support, use `--no-run` as the local build check and run

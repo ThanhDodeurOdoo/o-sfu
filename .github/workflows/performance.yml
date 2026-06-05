@@ -1,13 +1,15 @@
 name: Performance
 
 on:
-  # keep this expensive Callgrind job scoped to packet routing hot paths and benchmark ownership files
+  # keep this expensive Callgrind job scoped to core call-flow performance and benchmark ownership files
   push:
     branches: [main, master]
     paths:
       - .github/workflows/performance.yml
       - Cargo.lock
       - crates/core/Cargo.toml
+      - crates/core/src/engine/room/**
+      - crates/core/src/engine/source_model/**
       - crates/core/src/engine/media_transport/**
       - crates/core/src/engine/packet_sink_registry.rs
       - crates/core/src/engine/recording/**
@@ -20,6 +22,8 @@ on:
       - .github/workflows/performance.yml
       - Cargo.lock
       - crates/core/Cargo.toml
+      - crates/core/src/engine/room/**
+      - crates/core/src/engine/source_model/**
       - crates/core/src/engine/media_transport/**
       - crates/core/src/engine/packet_sink_registry.rs
       - crates/core/src/engine/recording/**
@@ -195,6 +199,14 @@ jobs:
           # Gungraun stores the named baseline under target/gungraun for the next step in this same job
           git checkout --force "${{ steps.refs.outputs.base-ref }}"
           cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind -- --save-baseline=base --save-summary=json
+          if cargo metadata --locked --no-deps --format-version 1 \
+            | jq -e '.packages[] | select(.name == "o-sfu-tests") | any(.targets[]; .name == "general_call_callgrind" and (.kind | index("bench")))' >/dev/null; then
+            cargo bench --locked -p o-sfu-tests --bench general_call_callgrind -- --save-baseline=base --save-summary=json
+            echo "GENERAL_CALL_BASELINE_AVAILABLE=true" >> "$GITHUB_ENV"
+          else
+            echo "general_call_callgrind is not present on the base ref"
+            echo "GENERAL_CALL_BASELINE_AVAILABLE=false" >> "$GITHUB_ENV"
+          fi
 
       - name: Compare head Callgrind baseline
         run: |
@@ -210,6 +222,11 @@ jobs:
           # the head run loads the saved base baseline and emits JSON summaries with base-versus-head deltas
           git checkout --force "${{ steps.refs.outputs.head-ref }}"
           cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind -- --baseline=base --save-summary=json
+          if [[ "${GENERAL_CALL_BASELINE_AVAILABLE:-false}" == "true" ]]; then
+            cargo bench --locked -p o-sfu-tests --bench general_call_callgrind -- --baseline=base --save-summary=json
+          else
+            cargo bench --locked -p o-sfu-tests --bench general_call_callgrind -- --save-summary=json
+          fi
 
       - name: Run manual worker Callgrind investigation
         if: github.event_name == 'workflow_dispatch' && inputs.worker_investigation
