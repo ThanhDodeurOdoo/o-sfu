@@ -45,6 +45,13 @@ pub(in crate::engine::media_transport::rtc) struct UdpIngress {
     wake_addr: SocketAddr,
 }
 
+#[cfg(feature = "internal-benchmarks")]
+pub(in crate::engine::media_transport::rtc) struct UdpIngressBenchHarness {
+    tx: mpsc::Sender<UdpDatagram>,
+    ingress: UdpIngress,
+    recycle_rx: mpsc::Receiver<Vec<u8>>,
+}
+
 impl RtcUdpSocket {
     pub(in crate::engine::media_transport::rtc) fn from_std(
         socket: StdUdpSocket,
@@ -122,6 +129,48 @@ impl UdpIngress {
         }
         packet.clear();
         let _ = self.recycle_tx.try_send(packet);
+    }
+}
+
+#[cfg(feature = "internal-benchmarks")]
+impl UdpIngressBenchHarness {
+    pub(in crate::engine::media_transport::rtc) fn new(wake_addr: SocketAddr) -> Self {
+        let (tx, rx) = mpsc::channel(INGRESS_QUEUE_CAPACITY);
+        let (recycle_tx, recycle_rx) = mpsc::channel(RECEIVE_BUFFER_POOL_CAPACITY);
+        let ingress = UdpIngress {
+            rx,
+            recycle_tx,
+            shutdown: CancellationToken::new(),
+            wake_addr,
+        };
+        Self {
+            tx,
+            ingress,
+            recycle_rx,
+        }
+    }
+
+    pub(in crate::engine::media_transport::rtc) fn enqueue_completed_datagram(
+        &mut self,
+        source_addr: SocketAddr,
+        candidate_addr: SocketAddr,
+        received_at: Instant,
+        payload: &[u8],
+    ) -> bool {
+        let mut packet = receive_buffer(&mut self.recycle_rx);
+        packet.extend_from_slice(payload);
+        self.tx
+            .try_send(UdpDatagram {
+                source_addr,
+                candidate_addr,
+                received_at,
+                packet,
+            })
+            .is_ok()
+    }
+
+    pub(in crate::engine::media_transport::rtc) fn ingress_mut(&mut self) -> &mut UdpIngress {
+        &mut self.ingress
     }
 }
 

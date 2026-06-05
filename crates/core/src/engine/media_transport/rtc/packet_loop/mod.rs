@@ -117,7 +117,9 @@ pub(in crate::engine::media_transport::rtc) use self::{
         drain_relay_packets, flush_forward_routes, record_incoming_stats_for_benchmark,
     },
     keyframe_requests::{PendingKeyframeRequest, flush_pending_kf_reqs_at},
+    loop_driver::route_queued_ingress_datagrams_for_benchmark,
     session_drain::{SessionDrainContext, drain_ready_sessions},
+    udp::UdpIngressBenchHarness,
 };
 pub(in crate::engine::media_transport::rtc) use self::{
     input::PacketLoopInputReceivers,

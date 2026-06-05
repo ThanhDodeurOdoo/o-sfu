@@ -31,11 +31,11 @@ use gungraun::{
 };
 use o_sfu_core::server::transport::benchmark_support::{
     ActiveSpeakerBenchFixture, ConsumerGateBatchBenchFixture, FanoutBenchTopology,
-    IncomingObservationBenchFixture, IngressRoutingBenchFixture, KeyframeCoalescingBenchFixture,
-    LocalRewriteBenchFixture, PacketSinkFanoutBenchFixture, RelayDrainBenchFixture,
-    RelayPressureBenchFixture, RemoteGateRetryBenchFixture, RidReadinessBenchFixture,
-    SchedulerBenchFixture, SessionDrainBenchFixture, WorkerPacketCommandMixBenchFixture,
-    routing_miss_packet_fingerprint,
+    IncomingObservationBenchFixture, IngressBurstBenchFixture, IngressRoutingBenchFixture,
+    KeyframeCoalescingBenchFixture, LocalRewriteBenchFixture, PacketSinkFanoutBenchFixture,
+    RelayDrainBenchFixture, RelayPressureBenchFixture, RemoteGateRetryBenchFixture,
+    RidReadinessBenchFixture, SchedulerBenchFixture, SessionDrainBenchFixture,
+    WorkerPacketCommandMixBenchFixture, routing_miss_packet_fingerprint,
 };
 
 const ROUTING_MISS_FINGERPRINT_ATTEMPTS: usize = 4096;
@@ -140,6 +140,18 @@ fn relay_mailbox_256(fixture: RelayPressureBenchFixture) -> usize {
 #[bench::unknown_rtp_1200(IngressRoutingBenchFixture::repeated_large_unknown_source_miss())]
 fn ingress_demux_256(mut fixture: IngressRoutingBenchFixture) -> usize {
     black_box(fixture.route_datagrams())
+}
+
+// measures the completed-datagram ingress boundary in front of demux
+//
+// this protects the path where the socket receive task obtains a reusable
+// buffer, enqueues a completed datagram for the packet loop, then the packet
+// loop drains the bounded queue before routing and recycling the packet buffer
+#[library_benchmark(config = callgrind_config(1.0))]
+#[bench::cached_route(IngressBurstBenchFixture::cached_accepted_route())]
+#[bench::unknown_rtp_1200(IngressBurstBenchFixture::repeated_large_unknown_source_miss())]
+fn ingress_completed_burst_256(mut fixture: IngressBurstBenchFixture) -> usize {
+    black_box(fixture.route_completed_bursts())
 }
 
 // measures dirty-session scheduling and lazy stale-timeout cleanup
@@ -286,6 +298,7 @@ library_benchmark_group!(
         incoming_observation_512,
         relay_mailbox_256,
         ingress_demux_256,
+        ingress_completed_burst_256,
         scheduler_churn_128,
         fingerprint_4096,
         packet_sink_512,
