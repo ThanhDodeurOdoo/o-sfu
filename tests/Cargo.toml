@@ -35,7 +35,11 @@ tokio-util.workspace = true
 trybuild = "1.0.116"
 
 [dev-dependencies]
-o-sfu-core = { path = "../crates/core", features = ["internal-benchmarks"] }
+o-sfu-core = { path = "../crates/core", features = [
+    "internal-benchmarks",
+    "testing-transport",
+] }
+o-sfu-router = { path = "../crates/router", features = ["test-support"] }
 
 # the manual worker benchmark uses Callgrind client requests only on the ubuntu runner
 # non-linux developer targets compile the same benchmark with no-op hooks
@@ -51,6 +55,11 @@ workspace = true
 [[bench]]
 name = "packet_loop_callgrind"
 path = "benchmarks/packet_loop_callgrind.rs"
+harness = false
+
+[[bench]]
+name = "general_call_callgrind"
+path = "benchmarks/general_call_callgrind.rs"
 harness = false
 
 [[bench]]
