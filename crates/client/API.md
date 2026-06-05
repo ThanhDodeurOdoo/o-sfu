@@ -3,7 +3,7 @@
 The browser bundle exposes the Odoo-facing SFU client facade:
 
 ```js
-import { CLIENT_UPDATE, SFU_CLIENT_STATE, SfuClient } from "/bundle/odoo_sfu.js";
+import { CLIENT_UPDATE, SFU_CLIENT_STATE, SfuClient, __info__ } from "/bundle/odoo_sfu.js";
 
 const sfu = new SfuClient();
 ```
@@ -13,6 +13,28 @@ The compatibility bundle is built with:
 ```bash
 npm --prefix crates/client run build:odoo
 ```
+
+## Bundle Metadata
+
+the Odoo bundle exports build metadata through `__info__`
+
+```js
+console.log(__info__.version, __info__.hash, __info__.date);
+```
+
+Shape:
+
+```ts
+interface BundleInfo {
+    date: string;
+    hash: string;
+    url: string;
+    version: string;
+}
+```
+
+`version` comes from the root `o-sfu` cargo package
+`hash` is the short git commit hash used when `build:odoo` generated the asset
 
 The bundle is intentionally close to the old Node SFU client API. New code should
 prefer `publish()` and `subscribe()`. The legacy `updateUpload()` and

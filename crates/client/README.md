@@ -5,7 +5,9 @@
 `ProtocolCoreWasm` runtime into `client/generated/` then compiles the
 TypeScript part.
 
-`npm run build:odoo` generates an Odoo-compatible bundle at `client/dist/odoo_sfu.js`.
+`npm run build:odoo` generates an Odoo-compatible bundle at `client/dist/odoo_sfu.js`
+and exports `__info__` with the build date, short git hash, repository URL and
+root `o-sfu` cargo package version
 
 `npm run test:browser` runs the headless Chromium Playwright suite against the built browser
 bundle.
@@ -43,7 +45,8 @@ still heavily logging the sfu_client.ts, maybe need to cleanup at some point
 - `src/internals/pending_requests.ts`: request/response bookkeeping for recording-style async operations.
 - `src/internals/validation.ts`: input validation and cloning helpers.
 - `scripts/odoo_entry.ts`: sync Odoo bundle entrypoint to bootstrap the protocol WASM.
-- `scripts/build_odoo_bundle.mjs`: builds and validates `dist/odoo_sfu.js`
+- `scripts/build_odoo_bundle.mjs`: builds and validates `dist/odoo_sfu.js`,
+  including the exported `__info__` metadata
 - `scripts/build_wasm_runtime.mjs`: regenerates the `client/generated/` WASM package from `protocol/`.
 - `test/`: Node unit tests
 - `playwright/`: full stack tests with playwright

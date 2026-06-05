@@ -1,12 +1,42 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdir, readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { build } from "esbuild";
 
+const repositoryUrl = "https://github.com/ThanhDodeurOdoo/o-sfu";
+const repositoryDirectory = fileURLToPath(new URL("../../..", import.meta.url));
+const repositoryManifestPath = fileURLToPath(new URL("../../../Cargo.toml", import.meta.url));
 const clientDirectory = fileURLToPath(new URL("..", import.meta.url));
 const entryPoint = fileURLToPath(new URL("./odoo_entry.ts", import.meta.url));
 const outputPath = fileURLToPath(new URL("../dist/odoo_sfu.js", import.meta.url));
+
+function commandOutput(command, args) {
+    return execFileSync(command, args, {
+        cwd: repositoryDirectory,
+        encoding: "utf8"
+    }).trim();
+}
+
+function packageVersion() {
+    const metadata = JSON.parse(
+        commandOutput("cargo", ["metadata", "--no-deps", "--format-version", "1"])
+    );
+    const rootPackage = metadata.packages.find(
+        (pkg) => pkg.manifest_path === repositoryManifestPath
+    );
+    assert(rootPackage, "cargo metadata must include the root o-sfu package");
+    assert.equal(typeof rootPackage.version, "string");
+    return rootPackage.version;
+}
+
+const bundleInfo = {
+    date: new Date().toISOString(),
+    hash: commandOutput("git", ["rev-parse", "--short", "HEAD"]),
+    url: repositoryUrl,
+    version: packageVersion()
+};
 
 await mkdir(fileURLToPath(new URL("../dist", import.meta.url)), { recursive: true });
 
@@ -23,6 +53,9 @@ await build({
     target: ["es2020"],
     banner: {
         js: "/* @odoo-module */"
+    },
+    footer: {
+        js: `export const __info__ = ${JSON.stringify(bundleInfo, null, 4)};`
     },
     absWorkingDir: clientDirectory
 });
@@ -49,5 +82,6 @@ const bundleModule = await import(`${pathToFileURL(outputPath).href}?t=${Date.no
 assert.equal(typeof bundleModule.SfuClient, "function");
 assert.equal(bundleModule.SFU_CLIENT_STATE.CONNECTED, "connected");
 assert.equal(bundleModule.createProtocolCore().state, "disconnected");
+assert.deepEqual(bundleModule.__info__, bundleInfo);
 
 console.log(`Built Odoo SFU bundle at ${outputPath}`);
