@@ -5,7 +5,7 @@
 
 use std::{
     cmp::{Ordering as CmpOrdering, Reverse},
-    collections::{BTreeMap, BinaryHeap, btree_map::Entry},
+    collections::{BTreeMap, BinaryHeap, VecDeque, btree_map::Entry},
     mem,
     sync::Arc,
     time::{Duration, Instant},
@@ -43,7 +43,7 @@ pub(super) struct RouteTable {
     sources: BTreeMap<MediaRouteKey, RouteSource>,
     producers: BTreeMap<MediaRouteKey, ProducerPacketState>,
     active: Option<Box<ActiveSpeakerRank>>,
-    remote_gate_queue: Vec<TransportMediaId>,
+    remote_gate_queue: VecDeque<TransportMediaId>,
     keyframe_requests: KeyframeRequestTracker,
     rid_refresh_heap: BinaryHeap<Reverse<RidKeyframeRefresh>>,
     next_rid_refresh_id: u64,
@@ -440,32 +440,50 @@ impl RouteTable {
         source_id: TransportMediaId,
         packet_gate: PacketLayerGate,
     ) {
-        let pending = self
-            .sources
-            .get_mut(&source_id)
-            .and_then(|source| source.remote.as_mut())
-            .is_some_and(|registration| registration.publish_packet_gate(packet_gate));
-        if pending {
-            self.queue_remote_gate(source_id);
+        let queue = {
+            let Some(source) = self.sources.get_mut(&source_id) else {
+                return;
+            };
+            let pending = source
+                .remote
+                .as_mut()
+                .is_some_and(|registration| registration.publish_packet_gate(packet_gate));
+            if pending && !source.remote_gate_queued {
+                source.remote_gate_queued = true;
+                true
+            } else {
+                false
+            }
+        };
+        if queue {
+            self.remote_gate_queue.push_back(source_id);
         }
     }
 
     pub(super) fn flush_remote_pkt_gates(&mut self) {
         let count = self.remote_gate_queue.len();
-        for index in 0..count {
-            let Some(source_id) = self.remote_gate_queue.get(index).copied() else {
+        for _ in 0..count {
+            let Some(source_id) = self.remote_gate_queue.pop_front() else {
                 break;
             };
-            if self
-                .sources
-                .get_mut(&source_id)
-                .and_then(|source| source.remote.as_mut())
-                .is_some_and(RemoteSourceRegistration::flush_pending_gate)
-            {
-                self.remote_gate_queue.push(source_id);
+            let retry = {
+                let Some(source) = self.sources.get_mut(&source_id) else {
+                    continue;
+                };
+                source.remote_gate_queued = false;
+                let pending = source
+                    .remote
+                    .as_mut()
+                    .is_some_and(RemoteSourceRegistration::flush_pending_gate);
+                if pending {
+                    source.remote_gate_queued = true;
+                }
+                pending
+            };
+            if retry {
+                self.remote_gate_queue.push_back(source_id);
             }
         }
-        self.remote_gate_queue.drain(..count);
     }
 
     pub(super) fn prune_unrouted_remote_src(&mut self, source_id: TransportMediaId) {
@@ -939,6 +957,7 @@ impl RouteTable {
     fn remove_remote_source(&mut self, source_id: TransportMediaId) {
         if let Some(source) = self.sources.get_mut(&source_id) {
             source.remote = None;
+            source.remote_gate_queued = false;
         }
         self.forget_packet_state(source_id);
         self.remote_gate_queue.retain(|queued| *queued != source_id);
@@ -948,8 +967,12 @@ impl RouteTable {
     }
 
     fn queue_remote_gate(&mut self, source_id: TransportMediaId) {
-        if !self.remote_gate_queue.contains(&source_id) {
-            self.remote_gate_queue.push(source_id);
+        let Some(source) = self.sources.get_mut(&source_id) else {
+            return;
+        };
+        if !source.remote_gate_queued {
+            source.remote_gate_queued = true;
+            self.remote_gate_queue.push_back(source_id);
         }
     }
 
@@ -1158,6 +1181,7 @@ impl ActiveSpeakerRankEntry {
 struct RouteSource {
     local_route: Option<MediaRouteEntry>,
     remote: Option<RemoteSourceRegistration>,
+    remote_gate_queued: bool,
     relay: Option<RelaySourceRegistration>,
     audio: Option<SourceAudioPolicyState>,
     local_gate: Option<PacketLayerGate>,

@@ -923,6 +923,60 @@ fn pending_remote_packet_gate_flushes_after_mailbox_pressure_clears() {
 }
 
 #[test]
+fn flushed_remote_packet_gate_can_queue_again_under_later_pressure() {
+    let source_session = test_transport_session_key(141, 0, 172, UserId::Integer(173));
+    let mut state = PacketLoopState::default();
+    let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
+    let src_media = TransportMediaId::new(65);
+    let target_id = RelayTargetId::new(22);
+    let mut command_rx = register_saturated_remote_source(
+        &mut state,
+        src_media,
+        &source_session,
+        target_id,
+        Arc::clone(&rtc_metrics),
+    );
+
+    state
+        .routes
+        .publish_remote_pkt_gate(src_media, PacketLayerGate::Block);
+    assert!(command_rx.try_recv().is_ok());
+    state.routes.flush_remote_pkt_gates();
+
+    state
+        .routes
+        .publish_remote_pkt_gate(src_media, PacketLayerGate::Open);
+    assert_remote_packet_gate_command(
+        &mut command_rx,
+        &source_session,
+        src_media,
+        target_id,
+        PacketLayerGate::Block,
+    );
+    state.routes.flush_remote_pkt_gates();
+
+    assert_remote_packet_gate_command(
+        &mut command_rx,
+        &source_session,
+        src_media,
+        target_id,
+        PacketLayerGate::Open,
+    );
+    assert_eq!(
+        state
+            .routes
+            .remote_source(src_media)
+            .and_then(RemoteSourceRegistration::pending_gate),
+        None
+    );
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.rtc_remote_control_packet_gate_drops(), 2);
+    assert_eq!(snapshot.rtc_remote_packet_gate_retries(), 2);
+    assert_eq!(snapshot.rtc_remote_packet_gate_flushes(), 2);
+}
+
+#[test]
 fn remote_source_teardown_drops_pending_gate_state() {
     let source_session = test_transport_session_key(141, 0, 170, UserId::Integer(171));
     let mut state = PacketLoopState::default();
