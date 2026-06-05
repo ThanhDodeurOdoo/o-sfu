@@ -417,6 +417,78 @@ fn route_control_newer_speaker_order_change_dirties_room_policy() {
 }
 
 #[test]
+fn route_control_top_speaker_refresh_keeps_room_policy_clean() {
+    let mut state = RouteTable::default();
+    let first_src_media = TransportMediaId::new(135);
+    let second_src_media = TransportMediaId::new(136);
+    let now = Instant::now();
+
+    assert!(state.observe_audio_activity(first_src_media, Some(true), None, now));
+    assert!(state.observe_audio_activity(
+        second_src_media,
+        Some(true),
+        None,
+        now + Duration::from_millis(10)
+    ));
+
+    assert!(!state.observe_audio_activity(
+        second_src_media,
+        Some(true),
+        None,
+        now + Duration::from_millis(20)
+    ));
+    assert_active_speaker_ids(
+        &state,
+        now + Duration::from_millis(20),
+        &[second_src_media, first_src_media],
+    );
+}
+
+#[test]
+fn route_control_expired_rank_dirties_refresh_after_all_sources_expire() {
+    let mut state = RouteTable::default();
+    let first_src_media = TransportMediaId::new(137);
+    let second_src_media = TransportMediaId::new(138);
+    let now = Instant::now();
+
+    state.observe_audio_activity(first_src_media, Some(true), None, now);
+    state.observe_audio_activity(second_src_media, Some(true), None, now);
+
+    let refresh_at = now + Duration::from_millis(300);
+
+    assert!(state.observe_audio_activity(first_src_media, Some(true), None, refresh_at));
+    assert_active_speaker_ids(&state, refresh_at, &[first_src_media]);
+}
+
+#[test]
+fn route_control_expiry_queries_use_cached_rank_tail() {
+    let mut state = RouteTable::default();
+    let first_src_media = TransportMediaId::new(139);
+    let second_src_media = TransportMediaId::new(140);
+    let now = Instant::now();
+
+    state.observe_audio_activity(first_src_media, Some(true), None, now);
+    state.observe_audio_activity(
+        second_src_media,
+        Some(true),
+        None,
+        now + Duration::from_millis(100),
+    );
+
+    let refresh_at = now + Duration::from_millis(300);
+
+    assert!(!state.observe_audio_activity(second_src_media, Some(true), None, refresh_at));
+    assert_eq!(
+        state.next_active_speaker_deadline(refresh_at),
+        Some(refresh_at + Duration::from_millis(250))
+    );
+    assert_eq!(
+        state.expired_active_speaker_srcs(refresh_at),
+        vec![first_src_media]
+    );
+}
+
+#[test]
 fn route_control_same_timestamp_audio_level_rank_change_dirties_room_policy() {
     let mut state = RouteTable::default();
     let first_src_media = TransportMediaId::new(37);

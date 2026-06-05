@@ -91,10 +91,6 @@ impl SourceAudioPolicyState {
         self.active_until.filter(|deadline| *deadline > now)
     }
 
-    pub(in crate::engine::media_transport::rtc) fn expired_at(&self, now: Instant) -> bool {
-        self.active_until.is_some_and(|deadline| deadline <= now)
-    }
-
     pub(in crate::engine::media_transport::rtc) fn diagnostic(
         &self,
         transport_media_id: TransportMediaId,
