@@ -13,6 +13,7 @@ mod ingress;
 mod local_rewrite;
 mod observation;
 mod relay;
+mod remote_gates;
 mod scheduler;
 mod sinks;
 mod video;
@@ -27,6 +28,7 @@ pub use ingress::{INGRESS_DEMUX_ATTEMPTS, IngressRoutingBenchFixture};
 pub use local_rewrite::LocalRewriteBenchFixture;
 pub use observation::IncomingObservationBenchFixture;
 pub use relay::{RELAY_MAILBOX_ATTEMPTS, RelayPressureBenchFixture};
+pub use remote_gates::{REMOTE_GATE_RETRY_TURNS, RemoteGateRetryBenchFixture};
 pub use scheduler::SchedulerBenchFixture;
 pub use sinks::{PACKET_SINK_FANOUT_TURNS, PacketSinkFanoutBenchFixture};
 pub use video::{

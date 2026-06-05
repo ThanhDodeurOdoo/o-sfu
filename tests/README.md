@@ -52,8 +52,9 @@ cover incoming packet observation, local route-planning fanout, relay-mailbox
 enqueue pressure, cached ingress demux, repeated unknown-source misses,
 large-packet recent-miss cache routing, ready-session scheduler churn,
 routing-miss fingerprinting, packet-sink fanout, consumer packet-gate batches,
-selected-RID readiness, local RTP identity rewriting, active-speaker route
-control, keyframe request tracking and pending keyframe retry drain
+remote packet-gate retry under source-worker mailbox pressure, selected-RID
+readiness, local RTP identity rewriting, active-speaker route control, keyframe
+request tracking and pending keyframe retry drain
 The `packet_cmd_mix` scenario also covers fanout packet sends interleaved with
 worker lifecycle commands at a fixed ratio, so packet-loop publication changes
 can be compared in the regular Callgrind table
