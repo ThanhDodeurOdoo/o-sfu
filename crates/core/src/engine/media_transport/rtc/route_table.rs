@@ -42,6 +42,7 @@ use crate::engine::media_transport::{
 pub(super) struct RouteTable {
     sources: BTreeMap<MediaRouteKey, RouteSource>,
     producers: BTreeMap<MediaRouteKey, ProducerPacketState>,
+    active: Option<Box<ActiveSpeakerRank>>,
     remote_gate_queue: Vec<TransportMediaId>,
     keyframe_requests: KeyframeRequestTracker,
     rid_refresh_heap: BinaryHeap<Reverse<RidKeyframeRefresh>>,
@@ -354,9 +355,7 @@ impl RouteTable {
     }
 
     pub(super) fn unregister_local_source(&mut self, source_id: TransportMediaId) {
-        if let Some(source) = self.sources.get_mut(&source_id) {
-            source.forget_packet_state();
-        }
+        self.forget_packet_state(source_id);
         self.producers.remove(&source_id);
         self.keyframe_requests.forget_source(source_id);
         self.prune_empty(source_id);
@@ -499,9 +498,7 @@ impl RouteTable {
                 continue;
             }
             if !keep_registered {
-                if let Some(source) = self.sources.get_mut(&source_id) {
-                    source.forget_packet_state();
-                }
+                self.forget_packet_state(source_id);
                 self.keyframe_requests.forget_source(source_id);
                 self.producers.remove(&source_id);
             }
@@ -768,11 +765,11 @@ impl RouteTable {
             }
             if !source.is_empty() {
                 entry.insert(source);
+                self.update_active_src(source_id, now);
                 return true;
             }
             return false;
         }
-        let previous_active_speakers = self.ranked_active_speakers(now);
         let previous_packet_gate = self.effective_packet_gate(source_id);
         let Some(source) = self.sources.get_mut(&source_id) else {
             return false;
@@ -781,10 +778,7 @@ impl RouteTable {
             return false;
         }
         previous_packet_gate != self.effective_packet_gate(source_id)
-            || !same_active_speaker_order(
-                &previous_active_speakers,
-                &self.ranked_active_speakers(now),
-            )
+            || self.update_active_src(source_id, now)
     }
 
     pub(super) fn set_relay_pkt_gate(
@@ -810,7 +804,11 @@ impl RouteTable {
     }
 
     pub(super) fn active_speaker_sources(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
-        let mut sources = self.unsorted_active_speakers(now);
+        let mut sources = self
+            .sources
+            .iter()
+            .filter_map(|(source_id, source)| source.active_speaker_source(*source_id, now))
+            .collect::<Vec<_>>();
         sources.sort_unstable_by_key(|source| {
             (
                 Reverse(source.observed_at()),
@@ -831,19 +829,15 @@ impl RouteTable {
     }
 
     pub(super) fn next_active_speaker_deadline(&self, now: Instant) -> Option<Instant> {
-        self.sources
-            .values()
-            .filter_map(|source| source.next_active_speaker_deadline(now))
-            .min()
+        self.active
+            .as_ref()
+            .and_then(|active| active.next_deadline(now))
     }
 
     pub(super) fn expired_active_speaker_srcs(&self, now: Instant) -> Vec<TransportMediaId> {
-        self.sources
-            .iter()
-            .filter_map(|(source_id, source)| {
-                source.expired_active_speaker_at(now).then_some(*source_id)
-            })
-            .collect()
+        self.active
+            .as_ref()
+            .map_or_else(Vec::new, |active| active.expired_srcs(now))
     }
 
     pub(super) fn effective_packet_gate(
@@ -942,30 +936,11 @@ impl RouteTable {
             .map_or(0, RelaySourceRegistration::active_target_count)
     }
 
-    fn unsorted_active_speakers(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
-        self.sources
-            .iter()
-            .filter_map(|(source_id, source)| source.active_speaker_source(*source_id, now))
-            .collect()
-    }
-
-    fn ranked_active_speakers(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
-        let mut sources = self.unsorted_active_speakers(now);
-        sources.sort_unstable_by_key(|source| {
-            (
-                Reverse(source.observed_at()),
-                Reverse(source.last_audio_level_dbov().unwrap_or(i8::MIN)),
-                source.transport_media_id().as_u64(),
-            )
-        });
-        sources
-    }
-
     fn remove_remote_source(&mut self, source_id: TransportMediaId) {
         if let Some(source) = self.sources.get_mut(&source_id) {
             source.remote = None;
-            source.forget_packet_state();
         }
+        self.forget_packet_state(source_id);
         self.remote_gate_queue.retain(|queued| *queued != source_id);
         self.producers.remove(&source_id);
         self.keyframe_requests.forget_source(source_id);
@@ -1006,7 +981,176 @@ impl RouteTable {
             .is_some_and(RouteSource::is_empty)
         {
             self.sources.remove(&source_id);
+            self.drop_active_src(source_id);
         }
+    }
+
+    fn forget_packet_state(&mut self, source_id: TransportMediaId) {
+        if let Some(source) = self.sources.get_mut(&source_id) {
+            source.forget_packet_state();
+        }
+        self.drop_active_src(source_id);
+    }
+
+    fn update_active_src(&mut self, source_id: TransportMediaId, now: Instant) -> bool {
+        let new_entry = self
+            .sources
+            .get(&source_id)
+            .and_then(|source| ActiveSpeakerRankEntry::from_source(source_id, source, now));
+        let Some(active) = &mut self.active else {
+            let Some(entry) = new_entry else {
+                return false;
+            };
+            let mut active = Box::<ActiveSpeakerRank>::default();
+            active.insert_entry(entry);
+            self.active = Some(active);
+            return true;
+        };
+        active.update_src(source_id, new_entry, now)
+    }
+
+    fn drop_active_src(&mut self, source_id: TransportMediaId) {
+        if let Some(active) = &mut self.active {
+            active.drop_src(source_id);
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct ActiveSpeakerRank {
+    entries: Vec<ActiveSpeakerRankEntry>,
+    by_src: BTreeMap<TransportMediaId, usize>,
+}
+
+impl ActiveSpeakerRank {
+    fn update_src(
+        &mut self,
+        source_id: TransportMediaId,
+        new_entry: Option<ActiveSpeakerRankEntry>,
+        now: Instant,
+    ) -> bool {
+        let old_idx = self.idx_for(source_id);
+        let active_len = self.active_len(now);
+        let old_rank_idx = old_idx.filter(|idx| *idx < active_len);
+
+        if let (Some(idx), Some(entry)) = (old_rank_idx, new_entry)
+            && self.can_replace(idx, entry, active_len)
+            && let Some(slot) = self.entries.get_mut(idx)
+        {
+            *slot = entry;
+            return false;
+        }
+
+        if let Some(idx) = old_idx {
+            self.remove_idx(idx);
+        }
+        let new_rank_idx = new_entry.map(|entry| self.insert_entry(entry));
+        old_rank_idx != new_rank_idx
+    }
+
+    fn drop_src(&mut self, source_id: TransportMediaId) {
+        if let Some(idx) = self.idx_for(source_id) {
+            self.remove_idx(idx);
+        }
+    }
+
+    fn next_deadline(&self, now: Instant) -> Option<Instant> {
+        self.entries
+            .iter()
+            .rev()
+            .find_map(|entry| (entry.expires_at > now).then_some(entry.expires_at))
+    }
+
+    fn expired_srcs(&self, now: Instant) -> Vec<TransportMediaId> {
+        self.entries
+            .iter()
+            .rev()
+            .take_while(|entry| entry.expires_at <= now)
+            .map(|entry| entry.source_id)
+            .collect()
+    }
+
+    fn active_len(&self, now: Instant) -> usize {
+        self.entries
+            .iter()
+            .rposition(|entry| entry.expires_at > now)
+            .map_or(0, |idx| idx + 1)
+    }
+
+    fn can_replace(&self, idx: usize, entry: ActiveSpeakerRankEntry, active_len: usize) -> bool {
+        let key = entry.rank_key();
+        let after_prev = idx
+            .checked_sub(1)
+            .and_then(|prev| self.entries.get(prev))
+            .map_or(idx == 0, |prev| prev.rank_key() <= key);
+        let next_idx = idx.saturating_add(1);
+        let before_next = next_idx >= active_len
+            || self
+                .entries
+                .get(next_idx)
+                .is_some_and(|next| key <= next.rank_key());
+        after_prev && before_next
+    }
+
+    fn insert_entry(&mut self, entry: ActiveSpeakerRankEntry) -> usize {
+        let idx = self.insert_idx(entry);
+        self.entries.insert(idx, entry);
+        self.reindex_from(idx);
+        idx
+    }
+
+    fn remove_idx(&mut self, idx: usize) {
+        let entry = self.entries.remove(idx);
+        self.by_src.remove(&entry.source_id);
+        self.reindex_from(idx);
+    }
+
+    fn insert_idx(&self, entry: ActiveSpeakerRankEntry) -> usize {
+        self.entries
+            .binary_search_by_key(&entry.rank_key(), ActiveSpeakerRankEntry::rank_key)
+            .unwrap_or_else(|idx| idx)
+    }
+
+    fn reindex_from(&mut self, idx: usize) {
+        for (idx, entry) in self.entries.iter().enumerate().skip(idx) {
+            self.by_src.insert(entry.source_id, idx);
+        }
+    }
+
+    fn idx_for(&self, source_id: TransportMediaId) -> Option<usize> {
+        self.by_src.get(&source_id).copied()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ActiveSpeakerRankEntry {
+    source_id: TransportMediaId,
+    observed_at: Instant,
+    audio_level_dbov: Option<i8>,
+    expires_at: Instant,
+}
+
+impl ActiveSpeakerRankEntry {
+    fn from_source(
+        source_id: TransportMediaId,
+        source: &RouteSource,
+        now: Instant,
+    ) -> Option<Self> {
+        let active = source.active_speaker_source(source_id, now)?;
+        Some(Self {
+            source_id,
+            observed_at: active.observed_at(),
+            audio_level_dbov: active.last_audio_level_dbov(),
+            expires_at: source.next_active_speaker_deadline(now)?,
+        })
+    }
+
+    fn rank_key(&self) -> (Reverse<Instant>, Reverse<i8>, u64) {
+        (
+            Reverse(self.observed_at),
+            Reverse(self.audio_level_dbov.unwrap_or(i8::MIN)),
+            self.source_id.as_u64(),
+        )
     }
 }
 
@@ -1106,12 +1250,6 @@ impl RouteSource {
         self.audio
             .as_ref()
             .and_then(|audio| audio.active_deadline_after(now))
-    }
-
-    fn expired_active_speaker_at(&self, now: Instant) -> bool {
-        self.audio
-            .as_ref()
-            .is_some_and(|audio| audio.expired_at(now))
     }
 
     fn forget_packet_state(&mut self) {
@@ -1425,10 +1563,4 @@ fn remote_pkt_gate_for_route(
         (_route_entry, Some(packet_gate)) => packet_gate,
         (None | Some(_), None) => PacketLayerGate::Block,
     }
-}
-
-fn same_active_speaker_order(left: &[ActiveSpeakerSource], right: &[ActiveSpeakerSource]) -> bool {
-    left.iter()
-        .map(|source| source.transport_media_id())
-        .eq(right.iter().map(|source| source.transport_media_id()))
 }
