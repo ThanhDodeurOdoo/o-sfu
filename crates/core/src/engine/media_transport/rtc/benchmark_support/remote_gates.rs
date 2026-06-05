@@ -7,9 +7,9 @@ use super::super::{
     commands::{
         RemoteSourceControl, RouteControlRequest, RtcMediaControlCommand, RtcWorkerCommand,
     },
-    media_registry::RemoteSourceRegistration,
     relay_registry::RelayTargetId,
     route_control::PacketLayerGate,
+    source_route::RemoteSourceRegistration,
     state::PacketLoopState,
     test_support::{MediaWorkerScenario, test_transport_session_key},
 };

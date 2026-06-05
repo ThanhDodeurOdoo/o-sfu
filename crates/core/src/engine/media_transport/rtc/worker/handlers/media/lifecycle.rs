@@ -28,11 +28,10 @@ use super::{
     super::{
         super::super::{
             bitrate::BitrateRegistry,
-            media_registry::{
-                DecoderRefreshCodec, RegisteredMediaHandle, RemoteSourceRegistration,
-            },
+            media_registry::RegisteredMediaHandle,
             simulcast,
             slots::ConsumerStreamHandle,
+            source_route::{DecoderRefreshCodec, RemoteSourceRegistration},
             state::{PacketLoopState, PendingRecvStream, RtcSessionState},
         },
         negotiation,
@@ -87,13 +86,13 @@ impl RemoteSourceRollback {
         }
     }
 
-    fn rollback(&self, state: &mut PacketLoopState) {
+    fn rollback(self, state: &mut PacketLoopState) {
         if !self.is_remote_source {
             return;
         }
         state
             .routes
-            .restore_remote_source(self.src_media, self.previous_registration.clone());
+            .restore_remote_source(self.src_media, self.previous_registration);
         state
             .routes
             .set_decoder_refresh_codec(self.src_media, self.previous_decoder_refresh_codec);
@@ -446,7 +445,9 @@ pub(in crate::engine::media_transport::rtc::worker::handlers) fn worker_add_send
             }
         };
     if matches!(route_source, RouteSourceKind::Remote) {
-        state.refresh_src_decoder_codec(src_media, consumer_rtp_parameters);
+        state
+            .routes
+            .refresh_decoder_codec(src_media, consumer_rtp_parameters);
     }
     let Some(session_state) = state.users.get_mut(consumer_key) else {
         remote_source_rollback.rollback(state);

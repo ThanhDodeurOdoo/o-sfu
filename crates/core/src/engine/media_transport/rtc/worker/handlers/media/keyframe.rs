@@ -10,9 +10,12 @@ use tracing::debug;
 
 use super::{
     super::super::super::{
-        commands::RemoteSourceControl, demux::MediaRouteDestination,
-        keyframe_tracker::KeyframeRequestDecision, media_registry::RegisteredMediaHandle,
-        route_control::PacketLayerGate, state::PacketLoopState,
+        commands::RemoteSourceControl,
+        keyframe_tracker::KeyframeRequestDecision,
+        media_registry::RegisteredMediaHandle,
+        route_control::PacketLayerGate,
+        source_route::{MediaRouteDestination, RemoteSourceRegistration},
+        state::PacketLoopState,
     },
     control::{ensure_existing_route_src, ensure_local_producer_mid},
     types::RouteSourceKind,
@@ -213,13 +216,10 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn worker_r
             );
         }
         RouteSourceKind::Remote => {
-            let Some((src, src_control)) =
-                state.routes.remote_source(src_media).map(|registration| {
-                    (
-                        registration.source().clone(),
-                        registration.source_control().clone(),
-                    )
-                })
+            let Some((src, src_control)) = state
+                .routes
+                .remote_source(src_media)
+                .map(RemoteSourceRegistration::cloned_control_path)
             else {
                 return Err(TransportAdapterError::TransportUnavailable);
             };

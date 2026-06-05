@@ -45,11 +45,10 @@ use crate::{
                     RtcMediaControlCommand,
                 },
                 keyframe_tracker::KeyframeRequestDecision,
-                media_registry::{
-                    ConsumerKeyframeTarget, RegisteredMediaHandle, RemoteSourceRegistration,
-                },
+                media_registry::{ConsumerKeyframeTarget, RegisteredMediaHandle},
                 relay_registry::{RelayPacketMailbox, RelayTargetId},
                 route_control::PacketLayerGate,
+                source_route::RemoteSourceRegistration,
                 state::PacketLoopState,
                 test_support::{MediaWorkerScenario, test_transport_session_key},
                 worker::RtcWorkerCommand,

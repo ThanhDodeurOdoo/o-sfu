@@ -9,12 +9,12 @@ use crate::engine::media_transport::{
     TransportSessionKey, TransportSourceKey,
     rtc::{
         commands::{ConsumerPacketGateCommand, RemoteSourceControl},
-        demux::MediaRouteDestination,
         local_send_rewrite::forget_transport_media_stream,
         media_registry::RegisteredMediaHandle,
         route_control::PacketLayerGate,
         simulcast,
         slots::ConsumerStreamHandle,
+        source_route::MediaRouteDestination,
         state::PacketLoopState,
     },
 };
@@ -91,7 +91,9 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn ensure_e
         return Ok(RouteSourceKind::Local);
     }
     match state.routes.remote_source(src_media) {
-        Some(registration) if registration.src_key() == src_key => Ok(RouteSourceKind::Remote),
+        Some(registration) if registration.source().session_key() == src_key => {
+            Ok(RouteSourceKind::Remote)
+        }
         Some(_) => Err(TransportAdapterError::InvalidInput),
         None => Err(TransportAdapterError::TransportUnavailable),
     }

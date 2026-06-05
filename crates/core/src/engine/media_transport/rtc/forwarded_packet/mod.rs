@@ -25,7 +25,7 @@ use str0m::{
 
 use super::{
     local_forwarding::LocalForwardedRtp, local_send_rewrite::Vp8PayloadIdentity,
-    media_registry::DecoderRefreshCodec, route_control::PacketLayerMetadata, slots::SessionHandle,
+    route_control::PacketLayerMetadata, slots::SessionHandle, source_route::DecoderRefreshCodec,
     state::PacketLoopState,
 };
 use crate::engine::{

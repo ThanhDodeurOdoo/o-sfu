@@ -1,10 +1,15 @@
+//! worker-local session media ownership indexes.
+//!
+//! the registry owns session-scoped producer and consumer media lookup
+//! source route entries, remote-source registrations
+//! and decoder-refresh classifiers live in `source_route`
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     mem,
     time::Instant,
 };
 
-use o_sfu_rfc::rtp;
 use str0m::{
     media::{Mid, Rid},
     rtp::Ssrc,
@@ -12,16 +17,14 @@ use str0m::{
 use tracing::{debug, warn};
 
 use super::{
-    commands::RemoteSourceControl,
-    demux::MediaRouteDestination,
     forwarded_packet::ForwardedPacketSource,
-    route_control::PacketLayerGate,
     slots::{MediaStore, SessionHandle},
+    source_route::DestinationKeyframeTarget,
     state::PacketLoopState,
 };
 use crate::engine::{
     RoomInstanceId,
-    media_transport::{TransportMediaId, TransportSessionKey, TransportSourceKey},
+    media_transport::{TransportMediaId, TransportSessionKey},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,138 +63,6 @@ impl RegisteredMediaHandle {
     pub(super) fn mid(&self) -> Mid {
         match self {
             Self::Producer { mid, .. } | Self::Consumer { mid, .. } => *mid,
-        }
-    }
-}
-
-pub(in crate::engine::media_transport::rtc) enum DestinationKeyframeTarget {
-    Current(Option<Rid>),
-    Stale,
-}
-
-pub(in crate::engine::media_transport::rtc) fn dst_kf_target_rid(
-    destination: &MediaRouteDestination,
-    open_rid: Option<Rid>,
-) -> DestinationKeyframeTarget {
-    let target_rid = match destination.packet_gate {
-        PacketLayerGate::Rid(rid) => Some(rid),
-        PacketLayerGate::OperatingPoint(operating_point) => operating_point.rid(),
-        PacketLayerGate::Block => match destination
-            .pending_gate
-            .as_ref()
-            .and_then(PacketLayerGate::selected_rid)
-        {
-            Some(rid) => Some(rid),
-            None => return DestinationKeyframeTarget::Stale,
-        },
-        PacketLayerGate::Open => open_rid,
-    };
-    DestinationKeyframeTarget::Current(target_rid)
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct RemoteSourceRegistration {
-    source: TransportSourceKey,
-    source_control: RemoteSourceControl,
-    pending_gate: Option<PacketLayerGate>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DecoderRefreshCodec {
-    H264(rtp::h264::PacketizationMode),
-    Vp8,
-    Unsupported,
-}
-
-impl DecoderRefreshCodec {
-    fn from_parameters(parameters: &o_sfu_router::MediaStream) -> Option<Self> {
-        let mut has_vp8 = false;
-        let mut has_unsupported_primary = false;
-        for format in parameters.formats() {
-            match format.codec() {
-                &rtp::CodecName::H264 => return Some(Self::from_h264_format(format)),
-                &rtp::CodecName::Vp8 => has_vp8 = true,
-                codec if !codec.is_rtx() => has_unsupported_primary = true,
-                _ => {}
-            }
-        }
-        if has_vp8 {
-            Some(Self::Vp8)
-        } else {
-            has_unsupported_primary.then_some(Self::Unsupported)
-        }
-    }
-
-    fn from_h264_format(format: &o_sfu_router::MediaFormat) -> Self {
-        let packetization_mode = format
-            .settings()
-            .find_map(|setting| match setting {
-                o_sfu_router::CodecSetting::H264PacketizationMode(mode) => Some(*mode),
-                _ => None,
-            })
-            .unwrap_or(rtp::fmtp::H264_DEFAULT_PACKETIZATION_MODE);
-        rtp::h264::PacketizationMode::from_fmtp_value(packetization_mode)
-            .map_or(Self::Unsupported, Self::H264)
-    }
-}
-
-impl RemoteSourceRegistration {
-    pub(in crate::engine::media_transport::rtc) fn new(
-        source: TransportSourceKey,
-        source_control: RemoteSourceControl,
-    ) -> Self {
-        Self {
-            source,
-            source_control,
-            pending_gate: None,
-        }
-    }
-
-    pub(super) fn src_key(&self) -> &TransportSessionKey {
-        self.source.session_key()
-    }
-
-    pub(super) fn source(&self) -> &TransportSourceKey {
-        &self.source
-    }
-
-    pub(super) fn source_control(&self) -> &RemoteSourceControl {
-        &self.source_control
-    }
-
-    #[cfg(test)]
-    pub(super) const fn pending_gate(&self) -> Option<PacketLayerGate> {
-        self.pending_gate
-    }
-
-    pub(in crate::engine::media_transport::rtc) const fn has_pending_gate(&self) -> bool {
-        self.pending_gate.is_some()
-    }
-
-    pub(in crate::engine::media_transport::rtc) fn publish_packet_gate(
-        &mut self,
-        packet_gate: PacketLayerGate,
-    ) -> bool {
-        if self.source_control.set_pkt_gate(&self.source, packet_gate) {
-            self.pending_gate = None;
-            false
-        } else {
-            self.pending_gate = Some(packet_gate);
-            true
-        }
-    }
-
-    pub(in crate::engine::media_transport::rtc) fn flush_pending_gate(&mut self) -> bool {
-        let Some(packet_gate) = self.pending_gate else {
-            return false;
-        };
-        self.source_control.record_pkt_gate_retry();
-        if self.source_control.set_pkt_gate(&self.source, packet_gate) {
-            self.pending_gate = None;
-            self.source_control.record_pkt_gate_flushed();
-            false
-        } else {
-            true
         }
     }
 }
@@ -486,21 +357,6 @@ impl PacketLoopState {
         }
     }
 
-    /// refresh the decoder-refresh classifier from negotiated RTP parameters
-    ///
-    /// returns the previous classifier so route registration rollback can put
-    /// the source metadata back exactly as it was before a failed mutation
-    pub(super) fn refresh_src_decoder_codec(
-        &mut self,
-        src_media: TransportMediaId,
-        parameters: &o_sfu_router::MediaStream,
-    ) -> Option<DecoderRefreshCodec> {
-        let previous = self.routes.decoder_refresh_codec(src_media);
-        self.routes
-            .set_decoder_refresh_codec(src_media, DecoderRefreshCodec::from_parameters(parameters));
-        previous
-    }
-
     pub(super) fn expired_active_speaker_rooms(&self, now: Instant) -> BTreeSet<RoomInstanceId> {
         self.routes
             .expired_active_speaker_srcs(now)
@@ -657,7 +513,7 @@ impl PacketLoopState {
         if !route_entry.source_active || !destination.active {
             return None;
         }
-        let DestinationKeyframeTarget::Current(rid) = dst_kf_target_rid(destination, feedback_rid)
+        let DestinationKeyframeTarget::Current(rid) = destination.keyframe_target_rid(feedback_rid)
         else {
             return None;
         };
@@ -713,7 +569,7 @@ impl PacketLoopState {
             .or_else(|| {
                 self.routes
                     .remote_source(src_media)
-                    .map(|registration| registration.src_key().room_instance_id())
+                    .map(|registration| registration.source().session_key().room_instance_id())
             })
     }
 
@@ -756,7 +612,8 @@ impl PacketLoopState {
             return;
         };
         self.clear_producer_ssrcs(session_key, transport_media_id);
-        self.refresh_src_decoder_codec(transport_media_id, parameters);
+        self.routes
+            .refresh_decoder_codec(transport_media_id, parameters);
         let accepted_ssrcs = parameters
             .bindings()
             .filter_map(|binding| {
@@ -792,8 +649,7 @@ impl PacketLoopState {
             return;
         };
         self.clear_producer_ssrcs(session_key, transport_media_id);
-        self.routes
-            .set_decoder_refresh_codec(transport_media_id, None);
+        self.routes.clear_decoder_codec(transport_media_id);
         self.routes
             .replace_producer_ssrcs(transport_media_id, Vec::new());
     }

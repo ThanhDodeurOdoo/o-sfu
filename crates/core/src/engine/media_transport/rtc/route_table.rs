@@ -1,7 +1,9 @@
 //! worker-local RTC source route table.
 //!
-//! `RouteTable` owns packet-loop route, relay, gate and producer facts keyed by source transport media id.
-//! negotiated browser media lookup remains in `media_registry`.
+//! `RouteTable` owns packet-loop route, relay, gate and producer facts keyed by
+//! source transport media id
+//! source route data types live in `source_route`
+//! negotiated browser media lookup remains in `media_registry`
 
 use std::{
     cmp::{Ordering as CmpOrdering, Reverse},
@@ -22,14 +24,16 @@ use super::route_control::{PacketLayerMetadata, PacketRouteDecision};
 use super::{
     bitrate::MediaBitrateCounter,
     commands::RemoteSourceControl,
-    demux::{MediaRouteDestination, MediaRouteEntry, MediaRouteKey},
     keyframe_tracker::{KeyframeRequestDecision, KeyframeRequestTracker, SourceKeyframeRequest},
-    media_registry::{DecoderRefreshCodec, RemoteSourceRegistration},
     relay_registry::{
         ActiveRelayTarget, RelayPacketMailbox, RelaySourceRegistration, RelayTargetId,
     },
     route_control::{
         PacketLayerGate, SourceAudioPolicyState, aggregate_packet_gates, intersect_packet_gates,
+    },
+    source_route::{
+        DecoderRefreshCodec, DestinationKeyframeTarget, MediaRouteDestination, MediaRouteEntry,
+        RemoteSourceRegistration,
     },
 };
 use crate::engine::media_transport::{
@@ -40,8 +44,8 @@ use crate::engine::media_transport::{
 
 #[derive(Debug, Default)]
 pub(super) struct RouteTable {
-    sources: BTreeMap<MediaRouteKey, RouteSource>,
-    producers: BTreeMap<MediaRouteKey, ProducerPacketState>,
+    sources: BTreeMap<TransportMediaId, RouteSource>,
+    producers: BTreeMap<TransportMediaId, ProducerPacketState>,
     active: Option<Box<ActiveSpeakerRank>>,
     remote_gate_queue: VecDeque<TransportMediaId>,
     keyframe_requests: KeyframeRequestTracker,
@@ -322,9 +326,9 @@ impl RouteTable {
     }
 
     pub(super) fn refresh_src_pkt_gate(&mut self, source_id: TransportMediaId) {
-        let local_packet_gate = self.local_route(source_id).and_then(local_src_pkt_gate);
-        let remote_packet_gate =
-            remote_pkt_gate_for_route(self.local_route(source_id), local_packet_gate);
+        let route = self.local_route(source_id);
+        let local_packet_gate = route.and_then(local_src_pkt_gate);
+        let remote_packet_gate = remote_pkt_gate_for_route(route, local_packet_gate);
         self.set_local_pkt_gate(source_id, local_packet_gate);
         self.publish_remote_pkt_gate(source_id, remote_packet_gate);
     }
@@ -338,11 +342,8 @@ impl RouteTable {
                 && route.destinations.iter().any(|destination| {
                     destination.active
                         && matches!(
-                            super::media_registry::dst_kf_target_rid(
-                                destination,
-                                None
-                            ),
-                            super::media_registry::DestinationKeyframeTarget::Current(target_rid)
+                            destination.keyframe_target_rid(None),
+                            DestinationKeyframeTarget::Current(target_rid)
                                 if target_rid == rid
                         )
                 })
@@ -444,11 +445,10 @@ impl RouteTable {
             let Some(source) = self.sources.get_mut(&source_id) else {
                 return;
             };
-            let pending = source
-                .remote
-                .as_mut()
-                .is_some_and(|registration| registration.publish_packet_gate(packet_gate));
-            if pending && !source.remote_gate_queued {
+            let needs_retry = source.remote.as_mut().is_some_and(|registration| {
+                registration.publish_packet_gate_needs_retry(packet_gate)
+            });
+            if needs_retry && !source.remote_gate_queued {
                 source.remote_gate_queued = true;
                 true
             } else {
@@ -471,14 +471,14 @@ impl RouteTable {
                     continue;
                 };
                 source.remote_gate_queued = false;
-                let pending = source
+                let needs_retry = source
                     .remote
                     .as_mut()
                     .is_some_and(RemoteSourceRegistration::flush_pending_gate);
-                if pending {
+                if needs_retry {
                     source.remote_gate_queued = true;
                 }
-                pending
+                needs_retry
             };
             if retry {
                 self.remote_gate_queue.push_back(source_id);
@@ -543,6 +543,24 @@ impl RouteTable {
         } else if let Some(producer) = self.producers.get_mut(&source_id) {
             producer.decoder = None;
         }
+    }
+
+    /// refreshes decoder-refresh classification from negotiated RTP parameters
+    ///
+    /// returns the previous classifier so route registration rollback can put
+    /// source metadata back exactly as it was before a failed mutation
+    pub(super) fn refresh_decoder_codec(
+        &mut self,
+        source_id: TransportMediaId,
+        parameters: &o_sfu_router::MediaStream,
+    ) -> Option<DecoderRefreshCodec> {
+        let previous = self.decoder_refresh_codec(source_id);
+        self.set_decoder_refresh_codec(source_id, DecoderRefreshCodec::from_parameters(parameters));
+        previous
+    }
+
+    pub(super) fn clear_decoder_codec(&mut self, source_id: TransportMediaId) {
+        self.set_decoder_refresh_codec(source_id, None);
     }
 
     pub(super) fn observe_producer_packet(
