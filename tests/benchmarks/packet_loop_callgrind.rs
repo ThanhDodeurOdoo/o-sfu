@@ -33,8 +33,9 @@ use o_sfu_core::server::transport::benchmark_support::{
     ActiveSpeakerBenchFixture, ConsumerGateBatchBenchFixture, FanoutBenchTopology,
     IncomingObservationBenchFixture, IngressRoutingBenchFixture, KeyframeCoalescingBenchFixture,
     LocalRewriteBenchFixture, PacketSinkFanoutBenchFixture, RelayDrainBenchFixture,
-    RelayPressureBenchFixture, RidReadinessBenchFixture, SchedulerBenchFixture,
-    SessionDrainBenchFixture, WorkerPacketCommandMixBenchFixture, routing_miss_packet_fingerprint,
+    RelayPressureBenchFixture, RemoteGateRetryBenchFixture, RidReadinessBenchFixture,
+    SchedulerBenchFixture, SessionDrainBenchFixture, WorkerPacketCommandMixBenchFixture,
+    routing_miss_packet_fingerprint,
 };
 
 const ROUTING_MISS_FINGERPRINT_ATTEMPTS: usize = 4096;
@@ -193,6 +194,18 @@ fn route_gate_batch(fixture: ConsumerGateBatchBenchFixture) -> usize {
     black_box(fixture.apply_updates())
 }
 
+// measures remote packet-gate retry queue pressure while source-worker control
+// mailboxes stay saturated
+//
+// this protects remote gate convergence from linear queue dedupe and front
+// drain movement when relay pressure prevents immediate control delivery
+#[library_benchmark(config = callgrind_config(1.0))]
+#[bench::sources_64(RemoteGateRetryBenchFixture::sources_64())]
+#[bench::sources_256(RemoteGateRetryBenchFixture::sources_256())]
+fn remote_gate_retry(mut fixture: RemoteGateRetryBenchFixture) -> usize {
+    black_box(fixture.retry_under_pressure())
+}
+
 // measures selected-RID readiness when one observed RID activates many pending
 // route gates
 //
@@ -277,6 +290,7 @@ library_benchmark_group!(
         fingerprint_4096,
         packet_sink_512,
         route_gate_batch,
+        remote_gate_retry,
         rid_readiness_256,
         local_rewrite_4096,
         active_speaker_policy,
