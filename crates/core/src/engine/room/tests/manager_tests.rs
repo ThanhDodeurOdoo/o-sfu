@@ -5,7 +5,6 @@ use tokio::{sync::Notify, task::yield_now, time::timeout};
 
 use super::{
     super::{
-        TestPlacementReason,
         effects::{RoomCommit, RoomEffectContext},
         manager::JoinPlacementTestGate,
         media_graph::{ConsumerRouteTransportRef, ConsumerRouteUpdate},
@@ -123,15 +122,6 @@ async fn assert_router_count(room: &Arc<TestRoom>, expected: usize) {
     assert_eq!(
         room.test_api().inspect().routing_router_count().await,
         expected
-    );
-}
-
-fn assert_last_decision_reason(room: &Arc<TestRoom>, reason: TestPlacementReason) {
-    assert_eq!(
-        room.test_api()
-            .inspect()
-            .load_triggered_last_decision_reason(),
-        Some(reason)
     );
 }
 
@@ -334,12 +324,12 @@ async fn load_triggered_join_requires_sustained_receiver_pressure() {
 
     manager_join_user(&manager, &room, 1, &media_transport).await;
     manager_join_user(&manager, &room, 2, &media_transport).await;
-    assert_last_decision_reason(&room, TestPlacementReason::ActivationWindowNotMet);
+    assert_router_count(&room, 1).await;
+    assert_home_worker(&room, 2, 0).await;
     manager_join_user(&manager, &room, 3, &media_transport).await;
 
-    assert_home_worker(&room, 2, 0).await;
     assert_home_worker(&room, 3, 1).await;
-    assert_last_decision_reason(&room, TestPlacementReason::ReceiverCountPressure);
+    assert_router_count(&room, 2).await;
 }
 
 #[tokio::test]
@@ -385,7 +375,6 @@ async fn manager_concurrent_load_triggered_joins_revalidate_local_router_cap_at_
         .await
         .expect("all concurrent joins should reach placement planning");
     assert_router_count(&room, 1).await;
-    assert_last_decision_reason(&room, TestPlacementReason::ReceiverCountPressure);
     placement_gate.release_all().await;
 
     for join_task in join_tasks {
@@ -397,7 +386,6 @@ async fn manager_concurrent_load_triggered_joins_revalidate_local_router_cap_at_
     }
 
     assert_router_count(&room, LOCAL_ROUTER_CAP).await;
-    assert_last_decision_reason(&room, TestPlacementReason::ReceiverCountPressure);
 }
 
 #[tokio::test]

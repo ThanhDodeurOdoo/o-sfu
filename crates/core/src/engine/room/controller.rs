@@ -172,7 +172,7 @@ impl Room {
     pub(in crate::engine::room) async fn worker_load_contribution(
         &self,
     ) -> RoomWorkerLoadContribution {
-        let (session_entries, consumer_entries) = {
+        let (session_worker_ids, consumer_worker_ids) = {
             let state = self.state.read().await;
             (
                 state
@@ -192,8 +192,8 @@ impl Room {
             )
         };
         RoomWorkerLoadContribution {
-            session_worker_ids: session_entries,
-            consumer_worker_ids: consumer_entries,
+            session_worker_ids,
+            consumer_worker_ids,
         }
     }
 
@@ -205,13 +205,6 @@ impl Room {
         let mut state = self.state.write().await;
         let mut placement = lock_unpoisoned(&self.load_triggered_placement);
         state.reconcile_spillover_routers(spillover, &mut placement);
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub(in crate::engine::room) fn load_triggered_last_decision_reason(
-        &self,
-    ) -> Option<super::placement::RoomPlacementDecisionReason> {
-        lock_unpoisoned(&self.load_triggered_placement).last_decision_reason()
     }
 
     pub async fn consumer_route_state(

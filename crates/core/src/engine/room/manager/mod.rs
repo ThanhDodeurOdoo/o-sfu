@@ -16,23 +16,19 @@ use tokio::sync::RwLock;
 pub(in crate::engine::room) use self::test_support::JoinPlacementTestGate;
 use super::{
     Room, RoomConfig, RoomJoinError, RoomManagerJoinError, RoomRuntimePolicy,
-    RoomUserStatsSnapshot, SourcePolicyEvent, UserOutboundSender,
+    RoomUserStatsSnapshot, UserOutboundSender,
     directory::{RoomDirectory, RoomDirectoryEntry, RoomLifecycleLease},
     effects::RoomEffectContext,
     factory::RoomFactory,
     membership::JoinSessionIntent,
-    placement::{JoinPlacementPlan, RoomPlacementPlanner, WorkerLoadIndex},
+    placement::WorkerLoadIndex,
 };
-use crate::{
-    RoomSpilloverMode,
-    engine::{
-        ConnectionId, RoomInstanceId, UserId, UserPermissions,
-        diagnostics::{self, DiagnosticsEventData, DiagnosticsStore},
-        media_transport::{MediaTransport, TransportSessionKey},
-        metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
-        sync::lock_unpoisoned,
-    },
+use crate::engine::{
+    ConnectionId, RoomInstanceId, UserId, UserPermissions,
+    diagnostics::{self, DiagnosticsEventData, DiagnosticsStore},
+    media_transport::{MediaTransport, TransportSessionKey},
+    metrics::RuntimeMetrics,
+    packet_sink_registry::RoomPacketSinkRegistry,
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
@@ -383,7 +379,8 @@ impl RoomManager {
             .run_current_room_mutation(
                 room_id,
                 |room| async move {
-                    let placement = self.prepare_join_placement(&room, media_transport).await;
+                    let worker_loads = self.worker_load_index(media_transport).await;
+                    let placement = room.plan_join_placement(worker_loads).await;
                     #[cfg(test)]
                     self.wait_after_join_placement_for_test().await;
                     room.join_session_with_cleanup(
@@ -415,32 +412,6 @@ impl RoomManager {
             connection_id: routing_receipt.connection_id(),
             transport_session_key: routing_receipt.transport_session_key().clone(),
         })
-    }
-
-    async fn prepare_join_placement(
-        &self,
-        room: &Arc<Room>,
-        media_transport: &MediaTransport,
-    ) -> JoinPlacementPlan {
-        let room_snapshot = room.placement_usage_snapshot().await;
-        let worker_loads = self.worker_load_index(media_transport).await;
-        let policy = room.room_worker_policy();
-        let planner = RoomPlacementPlanner::new(self.media_worker_count, policy);
-        let decision = match policy.spillover() {
-            RoomSpilloverMode::LoadTriggeredLocalSpillover(_) => {
-                room.handle_source_policy_event(
-                    SourcePolicyEvent::FanoutPressureChanged,
-                    Some(media_transport),
-                )
-                .await;
-                let mut load_state = lock_unpoisoned(&room.load_triggered_placement);
-                planner.choose_with_load_state(&room_snapshot, &worker_loads, &mut load_state)
-            }
-            RoomSpilloverMode::StrictSingleRouter | RoomSpilloverMode::BoundedLocalSpillover => {
-                planner.choose(&room_snapshot, &worker_loads)
-            }
-        };
-        JoinPlacementPlan::planned(decision, worker_loads, policy)
     }
 
     async fn worker_load_index(&self, media_transport: &MediaTransport) -> WorkerLoadIndex {

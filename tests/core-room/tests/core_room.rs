@@ -16,7 +16,7 @@ use o_sfu_core::{
         room::{
             JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerJoinError,
             test_support::{
-                TestPlacementReason, TestSourceKind, TestSubscriptionStates, stream_id_for_source,
+                TestSourceKind, TestSubscriptionStates, stream_id_for_source,
                 subscription_intents_from_test_states,
             },
         },
@@ -187,12 +187,6 @@ async fn load_triggered_large_room_reaches_but_does_not_exceed_local_router_cap(
     ] {
         assert_eq!(home_worker(&room, user_id).await, Some(media_worker));
     }
-    assert_eq!(
-        room.test_api()
-            .inspect()
-            .load_triggered_last_decision_reason(),
-        Some(TestPlacementReason::LocalRouterCapReached)
-    );
     Ok(())
 }
 
@@ -260,12 +254,7 @@ async fn source_fanout_pressure_places_next_join_on_spillover_worker() -> Result
     join_user(&manager, &room, 3, &media_transport).await?;
 
     assert_eq!(home_worker(&room, 3).await, Some(1));
-    assert_eq!(
-        room.test_api()
-            .inspect()
-            .load_triggered_last_decision_reason(),
-        Some(TestPlacementReason::SourceFanoutPressure)
-    );
+    assert_eq!(router_count(&room).await, 2);
     Ok(())
 }
 

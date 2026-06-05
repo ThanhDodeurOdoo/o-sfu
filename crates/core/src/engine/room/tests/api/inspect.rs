@@ -1,6 +1,6 @@
 use o_sfu_router::RouterId;
 
-use super::super::super::{Room, RoomUserPermissions, TestPlacementReason};
+use super::super::super::{Room, RoomUserPermissions};
 #[cfg(test)]
 use crate::engine::source_model::PublishedSourceId;
 use crate::engine::{
@@ -194,12 +194,6 @@ impl RoomTestInspect<'_> {
 
     pub async fn routing_router_count(self) -> usize {
         self.room.state.read().await.routing_router_count()
-    }
-
-    pub fn load_triggered_last_decision_reason(self) -> Option<TestPlacementReason> {
-        self.room
-            .load_triggered_last_decision_reason()
-            .map(TestPlacementReason::from)
     }
 
     #[must_use]

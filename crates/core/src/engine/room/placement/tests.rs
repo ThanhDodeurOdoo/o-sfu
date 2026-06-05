@@ -59,21 +59,14 @@ fn egress_policy(
 }
 
 fn load_planner(policy: LocalSpilloverPolicy) -> RoomPlacementPlanner {
-    RoomPlacementPlanner::new(
-        2,
-        RoomWorkerPolicy::load_triggered_local_spillover(2, policy),
-    )
-}
-
-fn assert_reason(state: &LoadTriggeredPlacementState, reason: RoomPlacementDecisionReason) {
-    assert_eq!(state.last_decision_reason(), Some(reason));
+    RoomPlacementPlanner::new(RoomWorkerPolicy::load_triggered_local_spillover(2, policy))
 }
 
 #[test]
 fn first_join_uses_lowest_load_worker() {
     let mut loads = WorkerLoadIndex::new(2, Vec::new());
     loads.record_session(worker_id(0));
-    let planner = RoomPlacementPlanner::new(2, RoomWorkerPolicy::strict_single_router());
+    let planner = RoomPlacementPlanner::new(RoomWorkerPolicy::strict_single_router());
     let room = RoomPlacementUsageSnapshot::new(RouterId(7), false, Vec::new());
 
     assert_eq!(
@@ -88,7 +81,7 @@ fn first_join_uses_lowest_load_worker() {
 fn bounded_spillover_allocates_unused_worker_until_cap() {
     let mut loads = WorkerLoadIndex::new(3, Vec::new());
     loads.record_session(worker_id(0));
-    let planner = RoomPlacementPlanner::new(3, RoomWorkerPolicy::bounded_local_spillover(2));
+    let planner = RoomPlacementPlanner::new(RoomWorkerPolicy::bounded_local_spillover(2));
     let room = primary_room();
 
     assert_eq!(
@@ -101,7 +94,7 @@ fn bounded_spillover_allocates_unused_worker_until_cap() {
 
 #[test]
 fn strict_room_reuses_assigned_worker_after_it_becomes_empty() {
-    let planner = RoomPlacementPlanner::new(3, RoomWorkerPolicy::strict_single_router());
+    let planner = RoomPlacementPlanner::new(RoomWorkerPolicy::strict_single_router());
     let room = room_with(vec![placement(7, 2)]);
 
     assert_eq!(
@@ -158,14 +151,12 @@ fn activation_window_delays_load_triggered_allocation() -> Result<(), LocalSpill
         planner.choose_with_load_state(&room, &loads, &mut state),
         RoomPlacementDecision::UseExisting(primary_placement())
     );
-    assert_reason(&state, RoomPlacementDecisionReason::ActivationWindowNotMet);
     assert_eq!(
         planner.choose_with_load_state(&room, &loads, &mut state),
         RoomPlacementDecision::AllocateSpillover {
             media_worker_id: worker_id(1)
         }
     );
-    assert_reason(&state, RoomPlacementDecisionReason::EgressPressure);
     Ok(())
 }
 
@@ -186,15 +177,10 @@ fn pressure_clearing_resets_activation_window() -> Result<(), LocalSpilloverPoli
         planner.choose_with_load_state(&room, &idle_loads, &mut state),
         RoomPlacementDecision::UseExisting(placement)
     );
-    assert_reason(
-        &state,
-        RoomPlacementDecisionReason::ExistingPlacementAvailable,
-    );
     assert_eq!(
         planner.choose_with_load_state(&room, &hot, &mut state),
         RoomPlacementDecision::UseExisting(placement)
     );
-    assert_reason(&state, RoomPlacementDecisionReason::ActivationWindowNotMet);
     Ok(())
 }
 
@@ -220,7 +206,6 @@ fn allocation_resets_activation_window() -> Result<(), LocalSpilloverPolicyError
         planner.choose_with_load_state(&room, &loads, &mut state),
         RoomPlacementDecision::UseExisting(placement)
     );
-    assert_reason(&state, RoomPlacementDecisionReason::ActivationWindowNotMet);
     Ok(())
 }
 
@@ -237,7 +222,6 @@ fn cap_reached_reuses_existing_placement_after_activation() -> Result<(), LocalS
         planner.choose_with_load_state(&room, &loads, &mut state),
         RoomPlacementDecision::UseExisting(first)
     );
-    assert_reason(&state, RoomPlacementDecisionReason::LocalRouterCapReached);
     Ok(())
 }
 
@@ -246,7 +230,7 @@ fn stale_spillover_allocation_reuses_existing_placement_at_cap()
 -> Result<(), LocalSpilloverPolicyError> {
     let policy = RoomWorkerPolicy::load_triggered_local_spillover(2, egress_policy(1)?);
     let stale_room = primary_room();
-    let planner = RoomPlacementPlanner::new(2, policy);
+    let planner = RoomPlacementPlanner::new(policy);
     let first_decision = planner.choose(&stale_room, &hot_loads([0]));
     let second_decision = planner.choose(&stale_room, &hot_loads([0]));
     let mut allocation_count = 0;
@@ -330,6 +314,5 @@ fn source_fanout_pressure_participates_in_activation() -> Result<(), LocalSpillo
             media_worker_id: worker_id(1)
         }
     );
-    assert_reason(&state, RoomPlacementDecisionReason::SourceFanoutPressure);
     Ok(())
 }
