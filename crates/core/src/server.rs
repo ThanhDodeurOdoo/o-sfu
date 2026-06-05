@@ -49,16 +49,16 @@ pub mod room {
         engine::room::{
             BroadcastPayload, BroadcastPayloadError, ConsumerRouteState,
             DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
-            IncomingBitrateSnapshot, JoinUserRequest, JoinedRoomSession, LocalRoomRouterPlacements,
+            IncomingBitrateSnapshot, JoinUserRequest, LocalRoomRouterPlacements,
             LocalRoomRouterPlacementsError, LocalRouterRuntimeContext, MAX_BROADCAST_PAYLOAD_BYTES,
             RemoteTrackSetup, Room, RoomAdmissionPolicy, RoomConfig, RoomEventMessage,
             RoomEventRequest, RoomJoinError, RoomManager, RoomManagerConfig, RoomManagerDeps,
             RoomManagerJoinError, RoomMediaCounts, RoomRuntimeContext, RoomRuntimePolicy,
-            RoomUserPermissions, RoomUserStatsSnapshot, RuntimeRoomDirectorySnapshot,
-            RuntimeRoomStatsSnapshot, TrackBindingUpdate, UserCloseReason, UserOutbound,
-            UserOutboundEvent, UserOutboundOverflow, UserOutboundOverflowKind,
-            UserOutboundQueueLimits, UserOutboundReceiver, UserOutboundSendError,
-            UserOutboundSender, rtp_capabilities,
+            RoomUserAdmission, RoomUserPermissions, RoomUserStatsSnapshot,
+            RuntimeRoomDirectorySnapshot, RuntimeRoomStatsSnapshot, TrackBindingUpdate,
+            UserCloseReason, UserOutbound, UserOutboundEvent, UserOutboundOverflow,
+            UserOutboundOverflowKind, UserOutboundQueueLimits, UserOutboundReceiver,
+            UserOutboundSendError, UserOutboundSender, rtp_capabilities,
         },
     };
 }
