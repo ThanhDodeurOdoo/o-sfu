@@ -8,7 +8,6 @@ use super::{
         effects::{RoomCommit, RoomEffectContext},
         manager::JoinPlacementTestGate,
         media_graph::{ConsumerRouteTransportRef, ConsumerRouteUpdate},
-        user_negotiation::UserTransportReady,
     },
     api::NegotiatedPublish,
     fixtures::*,
@@ -143,25 +142,6 @@ fn assert_event_worker(
         })
         .unwrap_or_else(|| panic!("expected recent diagnostics event {event_name}"));
     assert_eq!(event.media_worker_id, Some(media_worker_id));
-}
-
-async fn mark_publish_ready(room: &TestRoom, user_id: &UserId, connection_id: ConnectionId) {
-    let mut state = room.state.write().await;
-    assert!(
-        state
-            .set_transport_ready_for_test(user_id, connection_id, UserTransportReady::Publish)
-            .session_present
-    );
-    assert!(
-        state
-            .set_client_rtp_capabilities_for_test(
-                user_id,
-                connection_id,
-                &test_client_rtp_capabilities(),
-            )
-            .session_present
-    );
-    drop(state);
 }
 
 #[tokio::test]
@@ -398,7 +378,16 @@ async fn spillover_media_diagnostics_use_connection_worker() {
     let publisher_id = UserId::Integer(2);
     let media_worker_id = 1;
     assert_home_worker(&room, 2, media_worker_id).await;
-    mark_publish_ready(&room, &publisher_id, publisher_connection_id).await;
+    let mut state = room.state.write().await;
+    let session_negotiated = state
+        .set_user_negotiated(
+            &publisher_id,
+            publisher_connection_id,
+            test_client_rtp_capabilities(),
+        )
+        .is_some();
+    drop(state);
+    assert!(session_negotiated);
 
     let transport_media_id = TransportMediaId::new(99);
     let stream_id = room
