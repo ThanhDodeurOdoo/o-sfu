@@ -1,20 +1,33 @@
 export type SessionId = number | string;
 
-export type ConnectionState =
-    | "disconnected"
-    | "connecting"
-    | "authenticated"
-    | "connected"
-    | "recovering"
-    | "closed";
+export const SFU_CLIENT_STATE = {
+    DISCONNECTED: "disconnected",
+    CONNECTING: "connecting",
+    AUTHENTICATED: "authenticated",
+    CONNECTED: "connected",
+    RECOVERING: "recovering",
+    CLOSED: "closed"
+} as const;
 
-export type StreamType = "audio" | "camera" | "screen";
+export type ConnectionState = (typeof SFU_CLIENT_STATE)[keyof typeof SFU_CLIENT_STATE];
+
+export const STREAM_TYPES = ["audio", "camera", "screen"] as const;
+
+export type StreamType = (typeof STREAM_TYPES)[number];
 
 export type PublishedSourceId = string;
 
 export type SourceEncodingId = string;
 
-export type VideoLayoutIntent = "featured" | "pinned" | "visible_thumbnail" | "hidden" | "overflow";
+export const VIDEO_LAYOUT_INTENTS = [
+    "featured",
+    "pinned",
+    "visible_thumbnail",
+    "hidden",
+    "overflow"
+] as const;
+
+export type VideoLayoutIntent = (typeof VIDEO_LAYOUT_INTENTS)[number];
 
 export interface ConnectOptions {
     channelUUID?: string;
@@ -29,13 +42,17 @@ export interface DownloadStates {
     screenLayout?: VideoLayoutIntent;
 }
 
+export const SOURCE_ENCODING_POLICY_ROLES = ["featured", "thumbnail", "degradedThumbnail"] as const;
+
+export type SourceEncodingPolicyRole = (typeof SOURCE_ENCODING_POLICY_ROLES)[number];
+
 export interface SourceEncodingDescriptor {
     encodingId: SourceEncodingId;
     rid?: string;
     maxBitrate?: number;
     resolutionScale?: number;
     maxFramerate?: number;
-    policyRole?: "featured" | "thumbnail" | "degradedThumbnail";
+    policyRole?: SourceEncodingPolicyRole;
     maxTemporalLayerId?: number;
 }
 
@@ -109,12 +126,15 @@ export interface SfuStats {
     screen?: RTCStatsReport;
 }
 
-export type RecordingStopCode =
-    | "user_request"
-    | "channel_closed"
-    | "recording_timeout"
-    | "recording_failed"
-    | "disk_space_exhausted";
+export const RECORDING_STOP_CODES = [
+    "user_request",
+    "channel_closed",
+    "recording_timeout",
+    "recording_failed",
+    "disk_space_exhausted"
+] as const;
+
+export type RecordingStopCode = (typeof RECORDING_STOP_CODES)[number];
 
 export const CLIENT_UPDATE = {
     TRACK: "track",
@@ -123,15 +143,6 @@ export const CLIENT_UPDATE = {
     INFO_CHANGE: "info_change",
     BROADCAST: "broadcast",
     CHANNEL_INFO_CHANGE: "channel_info_change"
-} as const;
-
-export const SFU_CLIENT_STATE = {
-    DISCONNECTED: "disconnected",
-    CONNECTING: "connecting",
-    AUTHENTICATED: "authenticated",
-    CONNECTED: "connected",
-    RECOVERING: "recovering",
-    CLOSED: "closed"
 } as const;
 
 export type SfuClientState = ConnectionState;

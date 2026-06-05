@@ -101,7 +101,8 @@ sfu.publish("camera", null);
 `type` must be one of:
 
 ```ts
-type StreamType = "audio" | "camera" | "screen";
+const STREAM_TYPES = ["audio", "camera", "screen"] as const;
+type StreamType = (typeof STREAM_TYPES)[number];
 ```
 
 The supplied track must match the stream type:
@@ -157,12 +158,14 @@ receiver. They are additive policy hints, not new tracks and not mandatory for
 basic audio/video subscription.
 
 ```ts
-type VideoLayoutIntent =
-    | "featured"
-    | "pinned"
-    | "visible_thumbnail"
-    | "hidden"
-    | "overflow";
+const VIDEO_LAYOUT_INTENTS = [
+    "featured",
+    "pinned",
+    "visible_thumbnail",
+    "hidden",
+    "overflow"
+] as const;
+type VideoLayoutIntent = (typeof VIDEO_LAYOUT_INTENTS)[number];
 ```
 
 ### Layout Intent

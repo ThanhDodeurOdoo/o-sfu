@@ -7,6 +7,7 @@
 import {
     CLIENT_UPDATE,
     CLIENT_LOG_LEVEL,
+    STREAM_TYPES,
     type ClientLogDetail,
     type ClientUpdateDetail,
     type ConnectionState,
@@ -679,7 +680,7 @@ export class BrowserRuntime {
 }
 
 function orderedStreamTypes(): StreamType[] {
-    return ["audio", "camera", "screen"];
+    return [...STREAM_TYPES];
 }
 
 function emitRuntimeLog(
