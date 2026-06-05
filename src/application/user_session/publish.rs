@@ -8,7 +8,7 @@ use crate::{
     },
     core::prelude::{
         PublicationActivity, PublicationActivityOutcome, RollbackStagedPublishOutcome,
-        TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
+        TransportEffectOutcome, UnpublishOutcome,
     },
     runtime::telemetry::schema::event as telemetry_event,
 };
@@ -49,10 +49,7 @@ impl User {
         let Some(info) = DiscussStream::for_type(stream_type).publication_info(active) else {
             return Ok(());
         };
-        self.media()
-            .presence()
-            .update_info(info, UserInfoRefresh::NotNeeded)
-            .await;
+        self.media().presence().update_info(info).await;
         Ok(())
     }
 

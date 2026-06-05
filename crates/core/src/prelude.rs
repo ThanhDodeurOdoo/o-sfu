@@ -25,7 +25,7 @@ pub use crate::{
     room::{
         MediaSessionIdentity, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
         RollbackStagedPublishOutcome, SessionNegotiationOutcome, SubscriptionUpdateOutcome,
-        TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
+        TransportEffectOutcome, UnpublishOutcome,
     },
     sfu::{
         InitialOffer, MediaNegotiation, MediaPresence, MediaPublication, MediaSession,

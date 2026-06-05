@@ -21,7 +21,7 @@ use super::fixtures::*;
 use crate::{
     application::stream_catalog::source_publish_intent_for_stream_type,
     core::{
-        prelude::{SessionNegotiationOutcome, UserInfoRefresh},
+        prelude::SessionNegotiationOutcome,
         server::session::{UserId, UserInfo, UserPermissions},
     },
     runtime::{
@@ -260,7 +260,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
             .session(&room, &alice_session_id, alice_connection_id)
             .await
             .presence()
-            .update_info(UserInfo::default(), UserInfoRefresh::NotNeeded)
+            .update_info(UserInfo::default())
             .await;
     }
 

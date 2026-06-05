@@ -5,7 +5,7 @@ use tracing::{debug, error};
 
 use super::{User, UserDisconnectReason, UserError, UserOutput};
 use crate::{
-    core::prelude::{MediaSession, SfuCore, TransportSessionHealth, UserInfoRefresh},
+    core::prelude::{MediaSession, SfuCore, TransportSessionHealth},
     runtime::{ConnectionId, media_transport::TransportSessionKey, room::Room},
 };
 
@@ -108,10 +108,7 @@ impl User {
     /// room broadcast byte limit.
     pub async fn update_info(&self, info: UserInfo) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
-        self.media()
-            .presence()
-            .update_info(info, UserInfoRefresh::NotNeeded)
-            .await;
+        self.media().presence().update_info(info).await;
         Ok(UserOutput::new())
     }
 
