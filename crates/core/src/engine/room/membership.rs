@@ -21,14 +21,6 @@
 
 use o_sfu_router::{MediaCapabilities, RouterId};
 use o_sfu_telemetry::schema::event as telemetry_event;
-#[cfg(any(test, feature = "testing-transport"))]
-use {
-    super::placement::{RoomPlacementPlanner, WorkerLoadIndex},
-    crate::{
-        RoomSpilloverMode,
-        engine::{media_transport::TransportWorkerPressureSnapshot, sync::lock_unpoisoned},
-    },
-};
 
 use super::{
     BroadcastPayloadError, Room, RoomJoinError, RoomMediaCounts, SourcePolicyEvent,
@@ -181,37 +173,6 @@ struct MembershipCountDelta {
 }
 
 impl Room {
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub(in crate::engine::room) async fn local_join_placement_from_worker_pressure(
-        &self,
-        pressure_snapshots: Vec<TransportWorkerPressureSnapshot>,
-    ) -> super::ResolvedPlacement {
-        let room_snapshot = self.placement_usage_snapshot().await;
-        let policy = self.room_worker_policy();
-        let mut load_index = WorkerLoadIndex::new(policy.max_local_routers(), pressure_snapshots);
-        let contribution = self.worker_load_contribution().await;
-        for media_worker_id in contribution.session_worker_ids {
-            load_index.record_session(media_worker_id);
-        }
-        for media_worker_id in contribution.consumer_worker_ids {
-            load_index.record_consumer(media_worker_id);
-        }
-        let planner = RoomPlacementPlanner::new(policy.max_local_routers(), policy);
-        let decision = match policy.spillover() {
-            RoomSpilloverMode::LoadTriggeredLocalSpillover(_) => {
-                self.handle_source_policy_event(SourcePolicyEvent::FanoutPressureChanged, None)
-                    .await;
-                let mut load_state = lock_unpoisoned(&self.load_triggered_placement);
-                planner.choose_with_load_state(&room_snapshot, &load_index, &mut load_state)
-            }
-            RoomSpilloverMode::StrictSingleRouter | RoomSpilloverMode::BoundedLocalSpillover => {
-                planner.choose(&room_snapshot, &load_index)
-            }
-        };
-        JoinPlacementPlan::planned(decision, load_index, policy)
-            .resolve_for_commit(&room_snapshot, || room_snapshot.next_local_router_id())
-    }
-
     /// Run the room join transition with an explicit cleanup policy.
     ///
     /// This method exists so production and test callers share the same join

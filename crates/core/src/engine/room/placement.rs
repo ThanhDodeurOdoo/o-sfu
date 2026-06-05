@@ -1,11 +1,12 @@
 //! join-time placement planning for room-local media workers
 //!
-//! [`crate::engine::room::manager::RoomManager::join_user`] uses this module
-//! after admission has selected a live room but before the membership transition
-//! commits
+//! the room manager gathers process-wide worker pressure after admission has
+//! selected a live room
+//! [`Room::plan_join_placement`] combines that load snapshot with room-local
+//! policy state before the membership transition commits
 //!
 //! the planner ranks workers from committed room state plus transport pressure
-//! snapshots, then returns a decision that the manager resolves into a concrete
+//! snapshots, then returns a decision that membership resolves into a concrete
 //! placement
 //!
 //! this is cold-path control-plane work
@@ -18,7 +19,7 @@
 //! room snapshot -> planned decision -> resolved placement -> committed mapping
 //! ```
 //!
-//! the manager can compute a [`RoomPlacementDecision`] before it takes the room
+//! the room can compute a [`RoomPlacementDecision`] before it takes the room
 //! write lock
 //! [`JoinPlacementPlan::resolve_for_commit`] converts that decision into a
 //! concrete [`ResolvedPlacement`] while the membership transition is being
@@ -30,11 +31,13 @@ use std::{collections::BTreeMap, iter};
 
 use o_sfu_router::RouterId;
 
+use super::{Room, SourcePolicyEvent};
 use crate::{
     LocalSpilloverPolicy, RoomSpilloverMode, RoomWorkerPolicy,
     engine::{
         MediaWorkerId, RoomInstanceId,
         media_transport::{TransportPlacementPressureSnapshot, TransportWorkerPressureSnapshot},
+        sync::lock_unpoisoned,
     },
 };
 
@@ -370,59 +373,6 @@ pub(super) enum JoinPlacementPlan {
     },
 }
 
-#[cfg(any(test, feature = "testing-transport"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::engine::room) enum RoomPlacementDecisionReason {
-    ExistingPlacementAvailable,
-    ReceiverCountPressure,
-    ConsumerPressure,
-    SourceFanoutPressure,
-    EgressPressure,
-    PacketLoopLagPressure,
-    CommandBacklogPressure,
-    RelayMailboxPressure,
-    WorkerPressure,
-    ActivationWindowNotMet,
-    LocalRouterCapReached,
-}
-
-#[cfg(any(test, feature = "testing-transport"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TestPlacementReason {
-    ExistingPlacementAvailable,
-    ReceiverCountPressure,
-    ConsumerPressure,
-    SourceFanoutPressure,
-    EgressPressure,
-    PacketLoopLagPressure,
-    CommandBacklogPressure,
-    RelayMailboxPressure,
-    WorkerPressure,
-    ActivationWindowNotMet,
-    LocalRouterCapReached,
-}
-
-#[cfg(any(test, feature = "testing-transport"))]
-impl From<RoomPlacementDecisionReason> for TestPlacementReason {
-    fn from(reason: RoomPlacementDecisionReason) -> Self {
-        match reason {
-            RoomPlacementDecisionReason::ExistingPlacementAvailable => {
-                Self::ExistingPlacementAvailable
-            }
-            RoomPlacementDecisionReason::ReceiverCountPressure => Self::ReceiverCountPressure,
-            RoomPlacementDecisionReason::ConsumerPressure => Self::ConsumerPressure,
-            RoomPlacementDecisionReason::SourceFanoutPressure => Self::SourceFanoutPressure,
-            RoomPlacementDecisionReason::EgressPressure => Self::EgressPressure,
-            RoomPlacementDecisionReason::PacketLoopLagPressure => Self::PacketLoopLagPressure,
-            RoomPlacementDecisionReason::CommandBacklogPressure => Self::CommandBacklogPressure,
-            RoomPlacementDecisionReason::RelayMailboxPressure => Self::RelayMailboxPressure,
-            RoomPlacementDecisionReason::WorkerPressure => Self::WorkerPressure,
-            RoomPlacementDecisionReason::ActivationWindowNotMet => Self::ActivationWindowNotMet,
-            RoomPlacementDecisionReason::LocalRouterCapReached => Self::LocalRouterCapReached,
-        }
-    }
-}
-
 /// state that adds hysteresis to load-triggered placement
 ///
 /// receiver pressure can fluctuate across adjacent joins
@@ -434,19 +384,11 @@ pub(in crate::engine::room) struct LoadTriggeredPlacementState {
     activation_streak: usize,
     source_fanout_pressure: bool,
     cooldown_by_router: BTreeMap<RouterId, usize>,
-    /// reason surfaced only to tests and explicit testing-transport callers
-    #[cfg(any(test, feature = "testing-transport"))]
-    last_decision_reason: Option<RoomPlacementDecisionReason>,
 }
 
 impl LoadTriggeredPlacementState {
     pub fn set_source_fanout_pressure(&mut self, pressured: bool) {
         self.source_fanout_pressure = pressured;
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    fn record_decision(&mut self, reason: RoomPlacementDecisionReason) {
-        self.last_decision_reason = Some(reason);
     }
 
     fn reset_activation(&mut self) {
@@ -489,10 +431,28 @@ impl LoadTriggeredPlacementState {
             self.cooldown_by_router.remove(router_id);
         }
     }
+}
 
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub const fn last_decision_reason(&self) -> Option<RoomPlacementDecisionReason> {
-        self.last_decision_reason
+impl Room {
+    pub(in crate::engine::room) async fn plan_join_placement(
+        &self,
+        worker_loads: WorkerLoadIndex,
+    ) -> JoinPlacementPlan {
+        let room_snapshot = self.placement_usage_snapshot().await;
+        let policy = self.room_worker_policy();
+        let planner = RoomPlacementPlanner::new(policy);
+        let decision = match policy.spillover() {
+            RoomSpilloverMode::LoadTriggeredLocalSpillover(_) => {
+                self.handle_source_policy_event(SourcePolicyEvent::FanoutPressureChanged, None)
+                    .await;
+                let mut load_state = lock_unpoisoned(&self.load_triggered_placement);
+                planner.choose_with_load_state(&room_snapshot, &worker_loads, &mut load_state)
+            }
+            RoomSpilloverMode::StrictSingleRouter | RoomSpilloverMode::BoundedLocalSpillover => {
+                planner.choose(&room_snapshot, &worker_loads)
+            }
+        };
+        JoinPlacementPlan::planned(decision, worker_loads, policy)
     }
 }
 
@@ -647,43 +607,6 @@ impl WorkerPlacementLoad {
             egress_bitrate: self.pressure.egress_bitrate.as_bps(),
             media_worker_id: self.media_worker_id,
         }
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    fn pressure_reason(self, policy: LocalSpilloverPolicy) -> Option<RoomPlacementDecisionReason> {
-        let policy = policy.parts();
-        if self.session_count.saturating_add(1) >= policy.min_receiver_count {
-            return Some(RoomPlacementDecisionReason::ReceiverCountPressure);
-        }
-        if self.consumer_count >= policy.max_active_consumers_per_router {
-            return Some(RoomPlacementDecisionReason::ConsumerPressure);
-        }
-        if policy.egress_bitrate_threshold > crate::Bitrate::zero()
-            && self.pressure.egress_bitrate >= policy.egress_bitrate_threshold
-        {
-            return Some(RoomPlacementDecisionReason::EgressPressure);
-        }
-        if policy.packet_loop_lag_threshold_ms > 0
-            && self.pressure.packet_loop_lag_ms >= policy.packet_loop_lag_threshold_ms
-        {
-            return Some(RoomPlacementDecisionReason::PacketLoopLagPressure);
-        }
-        if policy.command_backlog_threshold > 0
-            && self.pressure.command_backlog_depth >= policy.command_backlog_threshold
-        {
-            return Some(RoomPlacementDecisionReason::CommandBacklogPressure);
-        }
-        if policy.relay_mailbox_depth_threshold > 0
-            && self.pressure.relay_mailbox_depth >= policy.relay_mailbox_depth_threshold
-        {
-            return Some(RoomPlacementDecisionReason::RelayMailboxPressure);
-        }
-        if policy.worker_pressure_threshold > 0
-            && self.pressure.worker_pressure_score >= policy.worker_pressure_threshold
-        {
-            return Some(RoomPlacementDecisionReason::WorkerPressure);
-        }
-        None
     }
 
     /// whether adding another receiver would cross any spillover trigger
@@ -862,18 +785,14 @@ impl WorkerLoadIndex {
 /// committed placement
 #[derive(Debug, Clone)]
 pub(super) struct RoomPlacementPlanner {
-    media_worker_count: usize,
     policy: RoomWorkerPolicy,
 }
 
 impl RoomPlacementPlanner {
-    /// create a planner for the configured local workers and room policy
+    /// create a planner for one room-worker policy
     #[must_use]
-    pub(super) fn new(media_worker_count: usize, policy: RoomWorkerPolicy) -> Self {
-        Self {
-            media_worker_count: media_worker_count.max(1),
-            policy,
-        }
+    pub(super) const fn new(policy: RoomWorkerPolicy) -> Self {
+        Self { policy }
     }
 
     /// choose the placement for the next session joining a room
@@ -907,7 +826,7 @@ impl RoomPlacementPlanner {
         let placement_cap = self
             .policy
             .max_local_routers()
-            .min(self.media_worker_count)
+            .min(load_index.worker_count())
             .max(1);
         let score_policy = score_policy(self.policy);
         let assigned_placements = room.assigned_placements();
@@ -941,45 +860,20 @@ impl RoomPlacementPlanner {
                 let placement =
                     load_index.least_loaded_placement(assigned_placements, first_assigned, policy);
                 let load = load_index.load_for_worker(placement.media_worker);
-                // testing callers need the dominant reason, production only needs
-                // the boolean overload result to choose the same placement path
-                #[cfg(any(test, feature = "testing-transport"))]
-                let pressure_reason = load.pressure_reason(policy).or_else(|| {
-                    load_state
-                        .source_fanout_pressure
-                        .then_some(RoomPlacementDecisionReason::SourceFanoutPressure)
-                });
-                #[cfg(any(test, feature = "testing-transport"))]
-                if pressure_reason.is_none() {
-                    load_state.reset_activation();
-                    load_state
-                        .record_decision(RoomPlacementDecisionReason::ExistingPlacementAvailable);
-                    return RoomPlacementDecision::UseExisting(placement);
-                }
-                #[cfg(not(any(test, feature = "testing-transport")))]
                 if !load.is_overloaded(policy) && !load_state.source_fanout_pressure {
                     load_state.reset_activation();
                     return RoomPlacementDecision::UseExisting(placement);
                 }
                 if !load_state.record_pressure(policy) {
-                    #[cfg(any(test, feature = "testing-transport"))]
-                    load_state.record_decision(RoomPlacementDecisionReason::ActivationWindowNotMet);
                     return RoomPlacementDecision::UseExisting(placement);
                 }
                 if assigned_placements.len() < placement_cap {
                     load_state.reset_activation();
-                    #[cfg(any(test, feature = "testing-transport"))]
-                    let reason =
-                        pressure_reason.unwrap_or(RoomPlacementDecisionReason::WorkerPressure);
-                    #[cfg(any(test, feature = "testing-transport"))]
-                    load_state.record_decision(reason);
                     return RoomPlacementDecision::AllocateSpillover {
                         media_worker_id: load_index
                             .least_loaded_worker(assigned_placements, policy),
                     };
                 }
-                #[cfg(any(test, feature = "testing-transport"))]
-                load_state.record_decision(RoomPlacementDecisionReason::LocalRouterCapReached);
                 RoomPlacementDecision::UseExisting(placement)
             }
         }

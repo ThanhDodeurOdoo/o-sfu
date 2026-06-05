@@ -2,13 +2,13 @@ use o_sfu_router::{RouterId, test_support::rtp_samples::sample_client_rtp_capabi
 
 use super::super::super::{
     JoinPlacementPlan, JoinSessionIntent, Room, RoomEffectContext, RoomJoinError,
-    UserOutboundSender,
+    UserOutboundSender, placement::WorkerLoadIndex,
 };
 use crate::{
     SessionNegotiationOutcome,
     engine::{
         ConnectionId, UserId, UserPermissions,
-        media_transport::{MediaTransport, TransportAdapterError},
+        media_transport::{MediaTransport, TransportAdapterError, TransportWorkerPressureSnapshot},
     },
 };
 
@@ -31,10 +31,7 @@ impl RoomTestLifecycle<'_> {
         permissions: UserPermissions,
         sender: UserOutboundSender,
     ) -> Result<ConnectionId, RoomJoinError> {
-        let home_placement = self
-            .room
-            .local_join_placement_from_worker_pressure(Vec::new())
-            .await;
+        let placement = state_only_join_plan(self.room, Vec::new()).await;
         self.room
             .join_session_with_cleanup(
                 JoinSessionIntent {
@@ -43,7 +40,7 @@ impl RoomTestLifecycle<'_> {
                     permissions,
                     sender,
                     emit_joined_fanout: false,
-                    placement: JoinPlacementPlan::Resolved(home_placement),
+                    placement,
                 },
                 RoomEffectContext::state_only(None),
                 || RouterId(0),
@@ -66,10 +63,8 @@ impl RoomTestLifecycle<'_> {
         sender: UserOutboundSender,
         media_transport: &MediaTransport,
     ) -> Result<ConnectionId, RoomJoinError> {
-        let home_placement = self
-            .room
-            .local_join_placement_from_worker_pressure(media_transport.worker_pressure_snapshots())
-            .await;
+        let placement =
+            state_only_join_plan(self.room, media_transport.worker_pressure_snapshots()).await;
         self.room
             .join_session_with_cleanup(
                 JoinSessionIntent {
@@ -78,7 +73,7 @@ impl RoomTestLifecycle<'_> {
                     permissions,
                     sender,
                     emit_joined_fanout: false,
-                    placement: JoinPlacementPlan::Resolved(home_placement),
+                    placement,
                 },
                 RoomEffectContext::state_only(Some(media_transport)),
                 || RouterId(0),
@@ -135,4 +130,23 @@ impl RoomTestLifecycle<'_> {
     pub fn pending_cleanup_retry_count(self) -> usize {
         self.room.pending_cleanup_retry_count_for_test()
     }
+}
+
+async fn state_only_join_plan(
+    room: &Room,
+    pressure: Vec<TransportWorkerPressureSnapshot>,
+) -> JoinPlacementPlan {
+    let mut loads = WorkerLoadIndex::new(room.room_worker_policy().max_local_routers(), pressure);
+    let contribution = room.worker_load_contribution().await;
+    for id in contribution.session_worker_ids {
+        loads.record_session(id);
+    }
+    for id in contribution.consumer_worker_ids {
+        loads.record_consumer(id);
+    }
+    let plan = room.plan_join_placement(loads).await;
+    let snapshot = room.placement_usage_snapshot().await;
+    JoinPlacementPlan::Resolved(
+        plan.resolve_for_commit(&snapshot, || snapshot.next_local_router_id()),
+    )
 }

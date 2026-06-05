@@ -46,8 +46,6 @@ pub use outbound::{
     UserOutboundSender,
 };
 pub(in crate::engine::room) use placement::ResolvedPlacement;
-#[cfg(any(test, feature = "testing-transport"))]
-pub use placement::TestPlacementReason;
 pub use placement::{
     LocalRoomRouterPlacements, LocalRoomRouterPlacementsError, LocalRouterRuntimeContext,
     RoomRuntimeContext,
