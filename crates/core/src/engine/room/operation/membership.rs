@@ -6,7 +6,7 @@ use super::{
     RoomUserOperation,
 };
 use crate::{
-    SessionNegotiationOutcome, UserInfoRefresh,
+    SessionNegotiationOutcome,
     engine::{
         UserInfo,
         media_transport::{TransportConsumerRoute, TransportSourceKey},
@@ -14,12 +14,11 @@ use crate::{
 };
 
 impl RoomUserOperation<'_> {
-    pub(crate) async fn update_user_info(self, info: UserInfo, refresh: UserInfoRefresh) {
-        let need_refresh = refresh.is_needed();
+    pub(crate) async fn update_user_info(self, info: UserInfo) {
         let room = self.room();
         let outcome = {
             let mut state = room.state.write().await;
-            state.apply_presence_update(self.user_id(), self.connection_id(), &info, need_refresh)
+            state.apply_presence_update(self.user_id(), self.connection_id(), &info, false)
         };
         if let Some(outcome) = outcome {
             room.handle_source_policy_event(
@@ -33,7 +32,7 @@ impl RoomUserOperation<'_> {
                 user_id = ?self.user_id(),
                 connection_id = ?self.connection_id(),
                 ?info,
-                need_refresh,
+                need_refresh = false,
                 "user info update was rejected by room state"
             );
         }

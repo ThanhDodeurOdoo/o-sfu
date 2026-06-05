@@ -23,7 +23,7 @@ use o_sfu_router::MediaCapabilities;
 use crate::{
     Bitrate, ConnectionId, MediaSessionIdentity, PublicationActivity, PublicationActivityOutcome,
     PublishStageOutcome, RollbackStagedPublishOutcome, SessionNegotiationOutcome,
-    SubscriptionUpdateOutcome, UnpublishOutcome, UserInfoRefresh,
+    SubscriptionUpdateOutcome, UnpublishOutcome,
     engine::{
         UserId, UserInfo,
         media_transport::{
@@ -565,13 +565,9 @@ impl MediaSubscription<'_> {
 impl MediaPresence<'_> {
     /// Update room-visible user information for this connection.
     ///
-    /// Refresh controls whether other users need a full snapshot or a normal
-    /// incremental update. Stale connections are ignored by the room boundary.
-    pub async fn update_info(&self, info: UserInfo, refresh: UserInfoRefresh) {
-        self.0
-            .room_operation()
-            .update_user_info(info, refresh)
-            .await;
+    /// Stale connections are ignored by the room boundary.
+    pub async fn update_info(&self, info: UserInfo) {
+        self.0.room_operation().update_user_info(info).await;
     }
 }
 

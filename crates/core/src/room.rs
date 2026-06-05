@@ -208,31 +208,3 @@ pub enum SubscriptionUpdateOutcome {
     /// The connection is no longer current for the subscribing user.
     StaleConnection,
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Whether a user-info update should trigger a full peer snapshot refresh.
-///
-/// Most presence changes can be emitted incrementally. A refresh is reserved
-/// for updates where peers need to rebuild their room-facing user snapshot.
-pub enum UserInfoRefresh {
-    /// Peers should receive a full refreshed snapshot.
-    Needed,
-    /// Peers can receive the normal incremental update.
-    NotNeeded,
-}
-
-impl UserInfoRefresh {
-    #[must_use]
-    pub const fn from_needed(needed: bool) -> Self {
-        if needed {
-            Self::Needed
-        } else {
-            Self::NotNeeded
-        }
-    }
-
-    #[must_use]
-    pub const fn is_needed(self) -> bool {
-        matches!(self, Self::Needed)
-    }
-}

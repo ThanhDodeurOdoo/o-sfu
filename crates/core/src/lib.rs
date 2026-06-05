@@ -25,7 +25,7 @@ pub(crate) use options::{
 pub(crate) use room::{
     MediaSessionIdentity, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
     RollbackStagedPublishOutcome, SessionNegotiationOutcome, SubscriptionUpdateOutcome,
-    TransportEffectOutcome, UnpublishOutcome, UserInfoRefresh,
+    TransportEffectOutcome, UnpublishOutcome,
 };
 
 /// Media bitrate stored as bits per second (not bytes per second).
