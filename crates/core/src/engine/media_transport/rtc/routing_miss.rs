@@ -17,9 +17,10 @@
 //! # hot-path contract
 //!
 //! repeated unknown-source traffic must not force unbounded scans or allocator
-//! churn. the recent-miss cache is bounded and preserves exact packet bytes, so
-//! it skips only byte-for-byte repeats. the rate limiter is keyed by source
-//! address and bounds varied probe traffic that would bypass the exact cache
+//! churn. the recent-miss cache is a fixed reusable ring that preserves exact
+//! packet bytes, so it skips only byte-for-byte repeats. the rate limiter is
+//! keyed by source address and bounds varied probe traffic that would bypass
+//! the exact cache
 
 mod fingerprint;
 
@@ -94,8 +95,9 @@ pub fn packet_fingerprint_for_benchmark(packet: &[u8]) -> u64 {
 
 /// exact packet bytes for one cached negative route decision
 ///
-/// the packet is stored in a `Vec<u8>` rather than `Box<[u8]>` so evictions can
-/// reuse the old allocation under sustained unknown-source traffic
+/// the packet is stored in a `Vec<u8>` rather than `Box<[u8]>` so evictions and
+/// topology clears can reuse old allocations under sustained unknown-source
+/// traffic
 #[derive(Debug, Clone)]
 struct PacketLoopRoutingMissRecord {
     key: PacketLoopRoutingMissKey,
@@ -127,14 +129,27 @@ impl PacketLoopRoutingMissRecord {
 ///
 /// this cache answers one narrow question for `ingress_routing`: can this exact
 /// datagram skip recovery because it already failed against the current topology
-#[derive(Default)]
 struct PacketLoopRoutingMissCache {
-    entries: VecDeque<PacketLoopRoutingMissRecord>,
+    entries: Vec<PacketLoopRoutingMissRecord>,
+    start: usize,
+    len: usize,
+}
+
+impl Default for PacketLoopRoutingMissCache {
+    fn default() -> Self {
+        Self {
+            entries: Vec::with_capacity(RECENT_MISS_CACHE_LIMIT),
+            start: 0,
+            len: 0,
+        }
+    }
 }
 
 impl PacketLoopRoutingMissCache {
+    /// invalidate active misses while keeping packet buffers available for reuse
     fn clear(&mut self) {
-        self.entries.clear();
+        self.start = 0;
+        self.len = 0;
     }
 
     /// return true only when both the miss key and full packet bytes match
@@ -143,29 +158,46 @@ impl PacketLoopRoutingMissCache {
     /// stay cheap. A collision can cost one comparison but cannot suppress a
     /// different packet
     fn contains(&self, key: PacketLoopRoutingMissKey, packet: &[u8]) -> bool {
-        self.entries
-            .iter()
-            .any(|candidate| candidate.key == key && candidate.packet.as_slice() == packet)
+        (0..self.len).any(|offset| {
+            let Some(candidate) = self.active_record(offset) else {
+                return false;
+            };
+            candidate.key == key && candidate.packet.as_slice() == packet
+        })
     }
 
     /// record a packet that failed fallback routing under the current topology
     ///
-    /// duplicate misses are ignored. a full cache reuses the oldest record so
+    /// duplicate misses are ignored. an inactive slot is overwritten before
+    /// allocating a new record and a full cache overwrites the oldest record, so
     /// sustained unknown-source traffic does not allocate a fresh boxed packet
     /// for every retained negative decision
     fn record(&mut self, key: PacketLoopRoutingMissKey, packet: &[u8]) {
         if self.contains(key, packet) {
             return;
         }
-        if self.entries.len() == RECENT_MISS_CACHE_LIMIT
-            && let Some(mut record) = self.entries.pop_front()
-        {
+        if let Some(index) = self.inactive_index() {
+            let Some(record) = self.entries.get_mut(index) else {
+                debug_assert!(false, "inactive recent-miss slot must exist");
+                return;
+            };
             record.overwrite(key, packet);
-            self.entries.push_back(record);
+            self.len += 1;
             return;
         }
-        self.entries
-            .push_back(PacketLoopRoutingMissRecord::new(key, packet));
+        if self.entries.len() < RECENT_MISS_CACHE_LIMIT {
+            self.entries
+                .push(PacketLoopRoutingMissRecord::new(key, packet));
+            self.len += 1;
+            return;
+        }
+        let entries_len = self.entries.len();
+        let Some(record) = self.entries.get_mut(self.start) else {
+            debug_assert!(false, "oldest recent-miss slot must exist");
+            return;
+        };
+        record.overwrite(key, packet);
+        self.start = (self.start + 1) % entries_len;
     }
 
     /// remove one miss after fallback routing later accepts the same source
@@ -174,14 +206,48 @@ impl PacketLoopRoutingMissCache {
     /// source tuple. Forgetting the matching negative record avoids carrying a
     /// stale "no session accepted this" result next to a fresh source pin
     fn forget(&mut self, key: PacketLoopRoutingMissKey, packet: &[u8]) {
-        let Some(position) = self
-            .entries
-            .iter()
-            .position(|candidate| candidate.key == key && candidate.packet.as_slice() == packet)
-        else {
+        let Some(position) = (0..self.len).position(|offset| {
+            let Some(candidate) = self.active_record(offset) else {
+                return false;
+            };
+            candidate.key == key && candidate.packet.as_slice() == packet
+        }) else {
             return;
         };
-        let _ = self.entries.remove(position);
+        for offset in position..(self.len - 1) {
+            let Some(current) = self.active_index(offset) else {
+                debug_assert!(false, "current recent-miss slot must exist");
+                return;
+            };
+            let Some(next) = self.active_index(offset + 1) else {
+                debug_assert!(false, "next recent-miss slot must exist");
+                return;
+            };
+            self.entries.swap(current, next);
+        }
+        self.len -= 1;
+        if self.len == 0 {
+            self.start = 0;
+        }
+    }
+
+    fn active_record(&self, offset: usize) -> Option<&PacketLoopRoutingMissRecord> {
+        self.active_index(offset)
+            .and_then(|index| self.entries.get(index))
+    }
+
+    fn active_index(&self, offset: usize) -> Option<usize> {
+        if offset >= self.len || self.entries.is_empty() {
+            return None;
+        }
+        Some((self.start + offset) % self.entries.len())
+    }
+
+    fn inactive_index(&self) -> Option<usize> {
+        if self.len == self.entries.len() || self.entries.is_empty() {
+            return None;
+        }
+        Some((self.start + self.len) % self.entries.len())
     }
 }
 
@@ -422,9 +488,106 @@ mod tests {
     };
 
     use super::{
-        DemuxRecoveryState, PacketLoopRoutingMissKey, UNKNOWN_SOURCE_MISS_BURST_LIMIT,
-        UnknownSourceRateLimiter,
+        DemuxRecoveryState, PacketLoopRoutingMissCache, PacketLoopRoutingMissKey,
+        RECENT_MISS_CACHE_LIMIT, UNKNOWN_SOURCE_MISS_BURST_LIMIT, UnknownSourceRateLimiter,
     };
+
+    const RECENT_MISS_CACHE_LIMIT_U16: u16 = 256;
+
+    fn miss_fixture(index: u16) -> (PacketLoopRoutingMissKey, Vec<u8>) {
+        let source_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 44_100));
+        let candidate_addr =
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 45_000u16.saturating_add(index)));
+        let [high_byte, low_byte] = index.to_be_bytes();
+        let packet = vec![0x80, 0x60, high_byte, low_byte];
+
+        (
+            PacketLoopRoutingMissKey::new(source_addr, candidate_addr, &packet),
+            packet,
+        )
+    }
+
+    #[test]
+    fn miss_cache_clear_invalidates_entries_without_dropping_packet_buffers() {
+        let source_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 44_020));
+        let candidate_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 44_021));
+        let mut cache = PacketLoopRoutingMissCache::default();
+        let large_packet = vec![0x90; 1200];
+        let large_key = PacketLoopRoutingMissKey::new(source_addr, candidate_addr, &large_packet);
+
+        cache.record(large_key, &large_packet);
+        let stored_capacity = cache.entries.first().map(|record| record.packet.capacity());
+
+        cache.clear();
+
+        assert!(!cache.contains(large_key, &large_packet));
+        assert_eq!(cache.entries.len(), 1);
+
+        let small_packet = [0x80, 0x60, 0x00, 0x02];
+        let small_key = PacketLoopRoutingMissKey::new(source_addr, candidate_addr, &small_packet);
+
+        cache.record(small_key, &small_packet);
+
+        assert!(cache.contains(small_key, &small_packet));
+        assert_eq!(
+            cache.entries.first().map(|record| record.packet.as_slice()),
+            Some(small_packet.as_slice())
+        );
+        assert_eq!(
+            cache.entries.first().map(|record| record.packet.capacity()),
+            stored_capacity
+        );
+    }
+
+    #[test]
+    fn miss_cache_eviction_preserves_fifo_order() {
+        assert_eq!(
+            RECENT_MISS_CACHE_LIMIT,
+            usize::from(RECENT_MISS_CACHE_LIMIT_U16)
+        );
+        let mut cache = PacketLoopRoutingMissCache::default();
+        let (first_key, first_packet) = miss_fixture(0);
+        let (second_key, second_packet) = miss_fixture(1);
+
+        cache.record(first_key, &first_packet);
+        cache.record(second_key, &second_packet);
+        for index in 2..RECENT_MISS_CACHE_LIMIT_U16 {
+            let (key, packet) = miss_fixture(index);
+            cache.record(key, &packet);
+        }
+
+        let (new_key, new_packet) = miss_fixture(RECENT_MISS_CACHE_LIMIT_U16);
+        cache.record(new_key, &new_packet);
+
+        assert!(!cache.contains(first_key, &first_packet));
+        assert!(cache.contains(second_key, &second_packet));
+        assert!(cache.contains(new_key, &new_packet));
+    }
+
+    #[test]
+    fn miss_cache_forget_removes_only_matching_record() {
+        let mut cache = PacketLoopRoutingMissCache::default();
+        let (first_key, first_packet) = miss_fixture(0);
+        let (forgotten_key, forgotten_packet) = miss_fixture(1);
+        let (third_key, third_packet) = miss_fixture(2);
+
+        cache.record(first_key, &first_packet);
+        cache.record(forgotten_key, &forgotten_packet);
+        cache.record(third_key, &third_packet);
+
+        cache.forget(forgotten_key, &forgotten_packet);
+
+        assert!(cache.contains(first_key, &first_packet));
+        assert!(!cache.contains(forgotten_key, &forgotten_packet));
+        assert!(cache.contains(third_key, &third_packet));
+
+        let (new_key, new_packet) = miss_fixture(3);
+        cache.record(new_key, &new_packet);
+
+        assert!(cache.contains(first_key, &first_packet));
+        assert!(cache.contains(third_key, &third_packet));
+        assert!(cache.contains(new_key, &new_packet));
+    }
 
     #[test]
     fn unknown_source_rate_limiter_blocks_after_burst_and_recovers_after_cooldown() {
