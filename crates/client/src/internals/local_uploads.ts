@@ -6,7 +6,7 @@
  * state transition between desired tracks and negotiated upload slots
  */
 
-import type { StreamType } from "../public_api.js";
+import { STREAM_TYPES, type StreamType } from "../public_api.js";
 import { STREAM_KIND, type ClientPeerConnection, type MediaTrack } from "./browser_types.js";
 import {
     applyUploadPublicationPolicy,
@@ -264,7 +264,7 @@ export class LocalUploads {
 }
 
 function orderedStreamTypes(): StreamType[] {
-    return ["audio", "camera", "screen"];
+    return [...STREAM_TYPES];
 }
 
 function uniqueSenderKindTransceiver(

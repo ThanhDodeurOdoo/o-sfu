@@ -27,8 +27,18 @@ import {
 
 const MIN_TEMPORAL_LAYER_ID = 0;
 const MAX_TEMPORAL_LAYER_ID = 7;
-const FEATURE_BOOLEAN_FIELDS = ["rtc", "transcription", "audioRecording", "videoRecording"];
-const RECORDING_BOOLEAN_FIELDS = ["recording", "audio", "video", "transcription"];
+const FEATURE_BOOLEAN_FIELDS = [
+    "rtc",
+    "transcription",
+    "audioRecording",
+    "videoRecording"
+] as const satisfies readonly (keyof AvailableFeatures)[];
+const RECORDING_BOOLEAN_FIELDS = [
+    "recording",
+    "audio",
+    "video",
+    "transcription"
+] as const satisfies readonly (keyof RecordingState)[];
 const SESSION_INFO_BOOLEAN_FIELDS = [
     "isTalking",
     "isFeatured",
@@ -37,7 +47,7 @@ const SESSION_INFO_BOOLEAN_FIELDS = [
     "isSelfMuted",
     "isDeaf",
     "isRaisingHand"
-];
+] as const satisfies readonly (keyof SessionInfo)[];
 export { NEGOTIATION_KIND, PENDING_REQUEST_KIND };
 
 const NEGOTIATION_KINDS = Object.values(NEGOTIATION_KIND);

@@ -1,5 +1,14 @@
-import type { ConnectOptions, DownloadStates, StreamType } from "../public_api.js";
+import {
+    STREAM_TYPES,
+    VIDEO_LAYOUT_INTENTS,
+    type ConnectOptions,
+    type DownloadStates,
+    type StreamType
+} from "../public_api.js";
 import { STREAM_KIND } from "./browser_types.js";
+
+const STREAM_TYPE_SET = new Set<StreamType>(STREAM_TYPES);
+const VIDEO_LAYOUT_INTENT_SET = new Set(VIDEO_LAYOUT_INTENTS);
 
 export function normalizeWebSocketUrl(url: string): string {
     return url.replace(/^http(s?):/i, (_match, secure) => (secure ? "wss:" : "ws:"));
@@ -46,14 +55,7 @@ export function validateDownloadStates(states: DownloadStates): void {
         ["cameraLayout", states.cameraLayout],
         ["screenLayout", states.screenLayout]
     ] as const) {
-        if (
-            value !== undefined &&
-            value !== "featured" &&
-            value !== "pinned" &&
-            value !== "visible_thumbnail" &&
-            value !== "hidden" &&
-            value !== "overflow"
-        ) {
+        if (value !== undefined && !VIDEO_LAYOUT_INTENT_SET.has(value)) {
             throw new Error(`${name} must be a valid video layout intent when provided`);
         }
     }
@@ -63,6 +65,9 @@ export function validateTrackForStreamType(
     type: StreamType,
     track: MediaStreamTrack | null | undefined
 ): void {
+    if (!STREAM_TYPE_SET.has(type)) {
+        throw new Error("stream type must be audio, camera, or screen");
+    }
     if (track == null) {
         return;
     }

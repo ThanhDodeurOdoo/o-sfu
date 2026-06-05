@@ -9,6 +9,7 @@
 import type { TrackBinding } from "../protocol.js";
 import {
     CLIENT_UPDATE,
+    STREAM_TYPES,
     type ClientUpdateDetail,
     type DownloadStates,
     type SessionId,
@@ -245,7 +246,7 @@ export class RemoteTracks {
         next: DownloadStates
     ): DownloadStates {
         const merged = { ...(previous ?? {}) };
-        for (const streamType of ["audio", "camera", "screen"] as const) {
+        for (const streamType of STREAM_TYPES) {
             if (next[streamType] === undefined) {
                 continue;
             }

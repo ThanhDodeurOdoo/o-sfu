@@ -10,6 +10,7 @@ import type {
     SourceEncodingDescriptor,
     StreamType
 } from "./public_api.js";
+export { RECORDING_STOP_CODES, SOURCE_ENCODING_POLICY_ROLES, STREAM_TYPES } from "./public_api.js";
 
 export type {
     AvailableFeatures,
@@ -21,6 +22,7 @@ export type {
     SessionInfo,
     SourceDescriptor,
     SourceEncodingDescriptor,
+    SourceEncodingPolicyRole,
     StreamType,
     VideoLayoutIntent
 } from "./public_api.js";
@@ -111,23 +113,7 @@ export type RecordingActionResult = {
     ok: boolean;
 };
 
-export const STREAM_TYPES = ["audio", "camera", "screen"] as const satisfies readonly StreamType[];
-
 export const UPLOAD_KINDS = ["audio", "video"] as const satisfies readonly MediaKind[];
-
-export const SOURCE_ENCODING_POLICY_ROLES = [
-    "featured",
-    "thumbnail",
-    "degradedThumbnail"
-] as const satisfies readonly UploadLayerPolicyRole[];
-
-export const RECORDING_STOP_CODES = [
-    "user_request",
-    "channel_closed",
-    "recording_timeout",
-    "recording_failed",
-    "disk_space_exhausted"
-] as const satisfies readonly RecordingStopCode[];
 
 export const NEGOTIATION_KIND = {
     OFFER: "offer",

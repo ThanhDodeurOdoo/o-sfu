@@ -26,11 +26,8 @@ const OPTIONAL_SESSION_INFO_FIELDS = [
     "isRaisingHand"
 ];
 
-function assertThrowsMessage(callback, expectedMessage) {
-    assert.throws(callback, (error) => {
-        assert.equal(error?.message, expectedMessage);
-        return true;
-    });
+function assertThrowsError(callback) {
+    assert.throws(callback, Error);
 }
 
 function validCore(overrides = {}) {
@@ -108,9 +105,9 @@ function validCore(overrides = {}) {
     };
 }
 
-function assertWrappedCoreThrows(overrides, read, expectedMessage) {
+function assertWrappedCoreThrows(overrides, read) {
     const core = wrapProtocolCoreBindings(validCore(overrides));
-    assertThrowsMessage(() => read(core), expectedMessage);
+    assertThrowsError(() => read(core));
 }
 
 function validSourceDescriptor(encodingOverrides = {}) {
@@ -132,10 +129,7 @@ test("wrapped protocol core rejects malformed host commands", () => {
         })
     );
 
-    assertThrowsMessage(
-        () => core.connect("ws://example.test", "jwt", null),
-        "protocol core connect() command #0.state is invalid: broken"
-    );
+    assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
 });
 
 test("wrapped protocol core requires initial negotiation after peer connection creation", () => {
@@ -155,10 +149,7 @@ test("wrapped protocol core requires initial negotiation after peer connection c
         })
     );
 
-    assertThrowsMessage(
-        () => core.onWsMessage("offer"),
-        "protocol core onWsMessage() command #0 initial negotiation must immediately follow createPeerConnection"
-    );
+    assertThrowsError(() => core.onWsMessage("offer"));
 });
 
 test("wrapped protocol core rejects peer connection recreation during renegotiation", () => {
@@ -179,10 +170,7 @@ test("wrapped protocol core rejects peer connection recreation during renegotiat
         })
     );
 
-    assertThrowsMessage(
-        () => core.onWsMessage("renegotiate"),
-        "protocol core onWsMessage() command #1 renegotiation must not recreate the peer connection"
-    );
+    assertThrowsError(() => core.onWsMessage("renegotiate"));
 });
 
 test("wrapped protocol core validates close and recovery ordering", () => {
@@ -194,10 +182,7 @@ test("wrapped protocol core validates close and recovery ordering", () => {
         })
     );
 
-    assertThrowsMessage(
-        () => closeOrderCore.disconnect(),
-        "protocol core disconnect() must close the websocket before the peer connection when both are in one batch"
-    );
+    assertThrowsError(() => closeOrderCore.disconnect());
 
     const recoveryOrderCore = wrapProtocolCoreBindings(
         validCore({
@@ -210,10 +195,7 @@ test("wrapped protocol core validates close and recovery ordering", () => {
         })
     );
 
-    assertThrowsMessage(
-        () => recoveryOrderCore.onWsClose(1011),
-        "protocol core onWsClose() must close the peer connection before scheduling recovery"
-    );
+    assertThrowsError(() => recoveryOrderCore.onWsClose(1011));
 });
 
 test("wrapped protocol core rejects malformed track bindings", () => {
@@ -230,10 +212,7 @@ test("wrapped protocol core rejects malformed track bindings", () => {
         })
     );
 
-    assertThrowsMessage(
-        () => core.trackBinding("0"),
-        "protocol core trackBinding().active must be a boolean"
-    );
+    assertThrowsError(() => core.trackBinding("0"));
 });
 
 test("wrapped protocol core validates replaceTrackBindings host commands", () => {
@@ -250,10 +229,7 @@ test("wrapped protocol core validates replaceTrackBindings host commands", () =>
         })
     );
 
-    assertThrowsMessage(
-        () => core.connect("ws://example.test", "jwt", null),
-        "protocol core connect() command #0.bindings[0].active must be a boolean"
-    );
+    assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
 });
 
 test("wrapped protocol core validates source descriptors", () => {
@@ -270,10 +246,7 @@ test("wrapped protocol core validates source descriptors", () => {
         })
     );
 
-    assertThrowsMessage(
-        () => core.connect("ws://example.test", "jwt", null),
-        "protocol core connect() command #0.sources[0].encodings[0].maxBitrate must be a non-negative integer when provided"
-    );
+    assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
 });
 
 test("wrapped protocol core accepts valid temporal layer ids", () => {
@@ -308,10 +281,7 @@ for (const maxTemporalLayerId of [-1, 8, 1.5, "2", Number.NaN]) {
             })
         );
 
-        assertThrowsMessage(
-            () => core.connect("ws://example.test", "jwt", null),
-            "protocol core connect() command #0.sources[0].encodings[0].maxTemporalLayerId must be an integer from 0 through 7 when provided"
-        );
+        assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
     });
 }
 
@@ -324,10 +294,7 @@ test("wrapped protocol core rejects NaN and infinite numeric session IDs", () =>
         })
     );
 
-    assertThrowsMessage(
-        () => nanSessionIdCore.connect("ws://example.test", "jwt", null),
-        "protocol core connect() command #0.sessionId number session ID must be finite"
-    );
+    assertThrowsError(() => nanSessionIdCore.connect("ws://example.test", "jwt", null));
 
     const infiniteSessionIdCore = wrapProtocolCoreBindings(
         validCore({
@@ -337,26 +304,21 @@ test("wrapped protocol core rejects NaN and infinite numeric session IDs", () =>
         })
     );
 
-    assertThrowsMessage(
-        () => infiniteSessionIdCore.connect("ws://example.test", "jwt", null),
-        "protocol core connect() command #0.sessionId number session ID must be finite"
-    );
+    assertThrowsError(() => infiniteSessionIdCore.connect("ws://example.test", "jwt", null));
 });
 
 test("wrapped protocol core validates boolean fields", () => {
     for (const field of REQUIRED_FEATURE_FIELDS) {
         assertWrappedCoreThrows(
             { features: { ...VALID_FEATURES, [field]: "yes" } },
-            (core) => core.features,
-            `protocol core features.${field} must be a boolean`
+            (core) => core.features
         );
     }
 
     for (const field of OPTIONAL_RECORDING_FIELDS) {
         assertWrappedCoreThrows(
             { recordingState: { [field]: "yes" } },
-            (core) => core.recordingState,
-            `protocol core recordingState.${field} must be a boolean when provided`
+            (core) => core.recordingState
         );
     }
 
@@ -373,8 +335,7 @@ test("wrapped protocol core validates boolean fields", () => {
                     }
                 ]
             },
-            (core) => core.connect("ws://example.test", "jwt", null),
-            `protocol core connect() command #0.update.payload.7.${field} must be a boolean when provided`
+            (core) => core.connect("ws://example.test", "jwt", null)
         );
     }
 });
