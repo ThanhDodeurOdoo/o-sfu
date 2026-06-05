@@ -94,13 +94,13 @@ pub struct JoinUserRequest {
 /// The room manager returns this after the room state has accepted the join and
 /// the routing boundary has committed the connection placement.
 #[derive(Debug, Clone)]
-pub struct JoinedRoomSession {
+pub struct RoomUserAdmission {
     room: Arc<Room>,
     connection_id: ConnectionId,
     transport_session_key: TransportSessionKey,
 }
 
-impl JoinedRoomSession {
+impl RoomUserAdmission {
     #[must_use]
     pub fn room(&self) -> &Arc<Room> {
         &self.room
@@ -378,7 +378,7 @@ impl RoomManager {
         room_id: &str,
         request: JoinUserRequest,
         media_transport: &MediaTransport,
-    ) -> Result<JoinedRoomSession, RoomManagerJoinError> {
+    ) -> Result<RoomUserAdmission, RoomManagerJoinError> {
         let Some((room, join_result)) = self
             .run_current_room_mutation(
                 room_id,
@@ -410,7 +410,7 @@ impl RoomManager {
             RoomJoinError::RoomFull => RoomManagerJoinError::RoomFull,
             RoomJoinError::RouterState => RoomManagerJoinError::RouterState,
         })?;
-        Ok(JoinedRoomSession {
+        Ok(RoomUserAdmission {
             room,
             connection_id: routing_receipt.connection_id(),
             transport_session_key: routing_receipt.transport_session_key().clone(),

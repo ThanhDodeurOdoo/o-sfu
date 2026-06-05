@@ -32,7 +32,7 @@ async fn manager_join_user(
     media_transport: &MediaTransport,
 ) -> ConnectionId {
     let (tx, _rx) = test_sender();
-    let session = manager
+    let admission = manager
         .join_user(
             room.uuid(),
             JoinUserRequest {
@@ -45,7 +45,7 @@ async fn manager_join_user(
         )
         .await
         .expect("user should join through manager");
-    session.connection_id()
+    admission.connection_id()
 }
 
 fn manager_with_room_worker_policy(room_worker_policy: RoomWorkerPolicy) -> RoomManager {

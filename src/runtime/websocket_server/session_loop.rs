@@ -535,13 +535,13 @@ impl AcceptedUser {
             )
             .await;
         match join_result {
-            Ok(session) => {
-                let room = Arc::clone(session.room());
-                let connection_id = session.connection_id();
+            Ok(admission) => {
+                let room = Arc::clone(admission.room());
+                let connection_id = admission.connection_id();
                 let user = User::new(
                     user_id.clone(),
                     connection_id,
-                    session.transport_session_key().clone(),
+                    admission.transport_session_key().clone(),
                     Arc::clone(&remote_address),
                     Arc::clone(&room),
                     state.sfu_core.clone(),

@@ -34,7 +34,7 @@ pub use events::{
 pub use init::{RoomAdmissionPolicy, RoomConfig, RoomRuntimePolicy};
 pub use lifecycle::{RoomUserPermissions, UserCloseReason};
 pub use manager::{
-    JoinUserRequest, JoinedRoomSession, RoomManager, RoomManagerConfig, RoomManagerDeps,
+    JoinUserRequest, RoomManager, RoomManagerConfig, RoomManagerDeps, RoomUserAdmission,
     RuntimeRoomDirectorySnapshot, RuntimeRoomStatsSnapshot,
 };
 pub use media_graph::{ConsumerRouteState, RemoteTrackSetup};
