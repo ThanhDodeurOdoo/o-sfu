@@ -39,8 +39,6 @@ use crate::engine::MediaWorkerId;
 use crate::engine::{ConnectionId, UserId, UserInfo};
 
 #[cfg(test)]
-mod test_support;
-#[cfg(test)]
 mod tests;
 
 /// deferred side effects captured while membership state is authoritative
@@ -478,13 +476,11 @@ impl RoomState {
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        capabilities: &o_sfu_router::MediaCapabilities,
-    ) -> UserNegotiationUpdate {
-        let Some(user) = self.user_mut_for_connection(user_id, connection_id) else {
-            return UserNegotiationUpdate::default();
-        };
-        user.parsed_client_rtp_capabilities = Some(capabilities.clone());
-        user.negotiation.set_user_negotiated()
+        capabilities: o_sfu_router::MediaCapabilities,
+    ) -> Option<UserNegotiationUpdate> {
+        let user = self.user_mut_for_connection(user_id, connection_id)?;
+        user.parsed_client_rtp_capabilities = Some(capabilities);
+        Some(user.negotiation.mark_ready())
     }
 
     /// remove every requested user that is still current in room state

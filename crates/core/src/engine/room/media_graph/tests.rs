@@ -34,7 +34,6 @@ use crate::{
             routing::{RoutedConsumerId, RoutedProducerId},
             rtp_capabilities::router_rtp_capabilities,
             state::RoomState,
-            user_negotiation::UserTransportReady,
         },
         source_model::{
             ConsumerSourceSelection, PolicyPauseReason, PublishedSourceDescriptor,
@@ -90,44 +89,14 @@ fn join_test_user(state: &mut RoomState, user_id: &UserId) {
     );
 }
 
-fn set_test_consumer_ready(state: &mut RoomState, user_id: &UserId) -> ConnectionId {
+fn set_test_user_ready(state: &mut RoomState, user_id: &UserId) -> ConnectionId {
     let connection_id = state
         .user_connection_id(user_id)
-        .expect("consumer should have a connection id");
+        .expect("user should have a connection id");
     assert!(
         state
-            .set_client_rtp_capabilities_for_test(
-                user_id,
-                connection_id,
-                &sample_client_rtp_capabilities(),
-            )
-            .session_present
-    );
-    assert!(
-        state
-            .set_transport_ready_for_test(user_id, connection_id, UserTransportReady::Consume,)
-            .session_present
-    );
-    connection_id
-}
-
-fn set_test_publisher_ready(state: &mut RoomState, user_id: &UserId) -> ConnectionId {
-    let connection_id = state
-        .user_connection_id(user_id)
-        .expect("publisher should have a connection id");
-    assert!(
-        state
-            .set_client_rtp_capabilities_for_test(
-                user_id,
-                connection_id,
-                &sample_client_rtp_capabilities(),
-            )
-            .session_present
-    );
-    assert!(
-        state
-            .set_transport_ready_for_test(user_id, connection_id, UserTransportReady::Publish,)
-            .session_present
+            .set_user_negotiated(user_id, connection_id, sample_client_rtp_capabilities())
+            .is_some()
     );
     connection_id
 }
@@ -437,7 +406,7 @@ fn pending_consumer_setup() -> (
     join_test_user(&mut state, &publisher_user_id);
     join_test_user(&mut state, &subscriber_user_id);
 
-    let subscriber_connection_id = set_test_consumer_ready(&mut state, &subscriber_user_id);
+    let subscriber_connection_id = set_test_user_ready(&mut state, &subscriber_user_id);
     install_test_consumable_video_producer(
         &mut state,
         &publisher_user_id,
@@ -611,7 +580,7 @@ fn subscription_change_reserves_missing_setup_for_existing_publisher() {
     join_test_user(&mut state, &publisher_user_id);
     join_test_user(&mut state, &subscriber_user_id);
 
-    let subscriber_connection_id = set_test_consumer_ready(&mut state, &subscriber_user_id);
+    let subscriber_connection_id = set_test_user_ready(&mut state, &subscriber_user_id);
     let (_, source_id) = install_test_consumable_video_producer(
         &mut state,
         &publisher_user_id,
@@ -721,7 +690,7 @@ fn missing_consumer_setup_applies_video_download_cap_before_effects() {
     join_test_user(&mut state, &publisher_user_id);
     join_test_user(&mut state, &subscriber_user_id);
 
-    let subscriber_connection_id = set_test_consumer_ready(&mut state, &subscriber_user_id);
+    let subscriber_connection_id = set_test_user_ready(&mut state, &subscriber_user_id);
     let (_, scalable_source_id) = install_test_consumable_video_producer(
         &mut state,
         &publisher_user_id,
@@ -789,7 +758,7 @@ fn commit_publish_reservation_populates_transport_media_owner_index() {
     let user_id = UserId::Integer(1);
 
     join_test_user(&mut state, &user_id);
-    let connection_id = set_test_publisher_ready(&mut state, &user_id);
+    let connection_id = set_test_user_ready(&mut state, &user_id);
 
     let consumable_rtp_parameters = derive_consumable_rtp_parameters(
         &sample_video_rtp_parameters(None, 42_000),
@@ -848,7 +817,7 @@ fn commit_publish_reservation_registers_all_source_encodings() {
     let user_id = UserId::Integer(1);
 
     join_test_user(&mut state, &user_id);
-    let connection_id = set_test_publisher_ready(&mut state, &user_id);
+    let connection_id = set_test_user_ready(&mut state, &user_id);
 
     let consumable_rtp_parameters = derive_consumable_rtp_parameters(
         &sample_simulcast_video_rtp_parameters(Some("camera-0")),
@@ -928,7 +897,7 @@ fn unpublish_track_clears_transport_media_owner_index() {
     let user_id = UserId::Integer(1);
 
     join_test_user(&mut state, &user_id);
-    let connection_id = set_test_publisher_ready(&mut state, &user_id);
+    let connection_id = set_test_user_ready(&mut state, &user_id);
 
     let transport_media_id = TransportMediaId::new(100);
 
@@ -976,7 +945,7 @@ fn unpublish_track_repairs_missing_topology_router_and_clears_state() {
     let user_id = UserId::Integer(1);
 
     join_test_user(&mut state, &user_id);
-    let connection_id = set_test_publisher_ready(&mut state, &user_id);
+    let connection_id = set_test_user_ready(&mut state, &user_id);
 
     let transport_media_id = TransportMediaId::new(100);
 

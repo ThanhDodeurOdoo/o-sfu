@@ -19,13 +19,6 @@ impl RoomState {
         self.users.get(user_id).map(|user| user.permissions)
     }
 
-    pub fn session_has_parsed_client_rtp_capabilities(&self, user_id: &UserId) -> bool {
-        self.users
-            .get(user_id)
-            .and_then(|user| user.parsed_client_rtp_capabilities.as_ref())
-            .is_some()
-    }
-
     pub fn session_client_rtp_codec_names(&self, user_id: &UserId) -> Option<Vec<String>> {
         self.users
             .get(user_id)

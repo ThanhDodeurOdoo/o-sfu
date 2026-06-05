@@ -27,14 +27,6 @@ impl RoomTestInspect<'_> {
         self.room.state.read().await.session_permissions(user_id)
     }
 
-    pub async fn session_has_parsed_client_rtp_capabilities(self, user_id: &UserId) -> bool {
-        self.room
-            .state
-            .read()
-            .await
-            .session_has_parsed_client_rtp_capabilities(user_id)
-    }
-
     pub async fn session_client_rtp_codec_names(self, user_id: &UserId) -> Option<Vec<String>> {
         self.room
             .state

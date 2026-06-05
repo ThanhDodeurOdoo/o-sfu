@@ -144,14 +144,17 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
 #[tokio::test]
 async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
     let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
-    assert!(
-        set_client_rtp_capabilities(
-            &room,
-            &UserId::Integer(2),
+    let subscriber_id = UserId::Integer(2);
+    let subscriber_connection_id = user_connection_id(&room, &subscriber_id).await;
+    assert_eq!(
+        room.apply_session_negotiated(
+            &subscriber_id,
+            subscriber_connection_id,
             test_client_rtp_capabilities_without_video_rtx(),
+            &adapter,
         )
-        .await
-        .session_present
+        .await,
+        SessionNegotiationOutcome::Applied
     );
 
     publish_track(

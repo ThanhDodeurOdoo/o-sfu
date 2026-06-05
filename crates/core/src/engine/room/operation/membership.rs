@@ -45,7 +45,7 @@ impl RoomUserOperation<'_> {
     ) -> SessionNegotiationOutcome {
         let update = {
             let mut state = self.room().state.write().await;
-            state.set_user_negotiated(self.user_id(), self.connection_id(), &capabilities)
+            state.set_user_negotiated(self.user_id(), self.connection_id(), capabilities)
         };
         self.apply_negotiation_update(update).await
     }
@@ -62,12 +62,12 @@ impl RoomUserOperation<'_> {
 
     async fn apply_negotiation_update(
         self,
-        update: UserNegotiationUpdate,
+        update: Option<UserNegotiationUpdate>,
     ) -> SessionNegotiationOutcome {
-        if !update.session_present {
+        let Some(update) = update else {
             return SessionNegotiationOutcome::StaleConnection;
-        }
-        if update.became_consumer_ready {
+        };
+        if update == UserNegotiationUpdate::BecameConsumerReady {
             if !self.setup_missing_consumers().await {
                 return SessionNegotiationOutcome::StaleConnection;
             }

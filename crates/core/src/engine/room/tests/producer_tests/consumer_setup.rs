@@ -1,31 +1,24 @@
 use super::support::*;
 
 #[tokio::test]
-async fn client_capabilities_setup_late_join_when_download_connected_first() {
+async fn session_negotiation_sets_up_late_join_consumers_once() {
     let (room, media_transport, mut publisher_rx, mut subscriber_rx) =
         setup_late_join_consumer_setup_scenario().await;
     drain_outbound(&mut publisher_rx);
     drain_outbound(&mut subscriber_rx);
 
-    let download_update = set_consume_transport_ready(&room, &UserId::Integer(2)).await;
-    assert!(download_update.session_present);
-    assert!(!download_update.became_consumer_ready);
+    let user_id = UserId::Integer(2);
+    let connection_id = user_connection_id(&room, &user_id).await;
 
-    assert!(
-        apply_client_rtp_capabilities(
-            &room,
-            &UserId::Integer(2),
-            user_connection_id(&room, &UserId::Integer(2)).await,
+    assert_eq!(
+        room.apply_session_negotiated(
+            &user_id,
+            connection_id,
             test_client_rtp_capabilities(),
             &media_transport,
         )
-        .await
-    );
-    assert!(
-        room.test_api()
-            .inspect()
-            .session_has_parsed_client_rtp_capabilities(&UserId::Integer(2))
-            .await
+        .await,
+        SessionNegotiationOutcome::Applied
     );
 
     assert_remote_track_setup_for_stream(
@@ -33,44 +26,19 @@ async fn client_capabilities_setup_late_join_when_download_connected_first() {
         TestSourceKind::ScalableVideo,
     );
     assert_eq!(room.test_api().inspect().consumer_count().await, 1);
-    assert!(refresh_session_consumers(&room, &UserId::Integer(2), &media_transport).await);
-}
 
-#[tokio::test]
-async fn transport_connect_setup_late_join_when_capabilities_arrive_first() {
-    let (room, media_transport, mut publisher_rx, mut subscriber_rx) =
-        setup_late_join_consumer_setup_scenario().await;
-    drain_outbound(&mut publisher_rx);
-    drain_outbound(&mut subscriber_rx);
-
-    let capabilities_update =
-        set_client_rtp_capabilities(&room, &UserId::Integer(2), test_client_rtp_capabilities())
-            .await;
-    assert!(capabilities_update.session_present);
-    assert!(!capabilities_update.became_consumer_ready);
-    assert!(
-        room.test_api()
-            .inspect()
-            .session_has_parsed_client_rtp_capabilities(&UserId::Integer(2))
-            .await
-    );
-
-    assert!(
-        apply_consume_transport_ready(
-            &room,
-            &UserId::Integer(2),
-            user_connection_id(&room, &UserId::Integer(2)).await,
+    assert_eq!(
+        room.apply_session_negotiated(
+            &user_id,
+            connection_id,
+            test_client_rtp_capabilities(),
             &media_transport,
         )
-        .await
-    );
-
-    assert_remote_track_setup_for_stream(
-        &drain_outbound(&mut subscriber_rx),
-        TestSourceKind::ScalableVideo,
+        .await,
+        SessionNegotiationOutcome::Applied
     );
     assert_eq!(room.test_api().inspect().consumer_count().await, 1);
-    assert!(refresh_session_consumers(&room, &UserId::Integer(2), &media_transport).await);
+    assert!(drain_outbound(&mut subscriber_rx).is_empty());
 }
 
 #[tokio::test]

@@ -19,7 +19,6 @@ pub(super) use super::super::{
     RoomEventRequest, RoomJoinError, RoomManager, UserCloseReason, UserOutbound,
     UserOutboundReceiver, UserOutboundSender, routing::RoomRoutingState,
 };
-use crate::engine::room::user_negotiation::{UserNegotiationUpdate, UserTransportReady};
 pub(super) use crate::{
     PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
     RollbackStagedPublishOutcome, RoomMediaLimits, SessionNegotiationOutcome,
@@ -130,96 +129,6 @@ pub(super) async fn user_connection_id(
         .expect("test fixture requires a live user connection")
 }
 
-pub(super) async fn set_consume_transport_ready(
-    room: &super::super::Room,
-    user_id: &UserId,
-) -> UserNegotiationUpdate {
-    set_transport_ready(room, user_id, UserTransportReady::Consume).await
-}
-
-async fn set_transport_ready(
-    room: &super::super::Room,
-    user_id: &UserId,
-    readiness: UserTransportReady,
-) -> UserNegotiationUpdate {
-    let connection_id = user_connection_id(room, user_id).await;
-    let mut state = room.state.write().await;
-    state.set_transport_ready_for_test(user_id, connection_id, readiness)
-}
-
-pub(super) async fn set_client_rtp_capabilities(
-    room: &super::super::Room,
-    user_id: &UserId,
-    capabilities: MediaCapabilities,
-) -> UserNegotiationUpdate {
-    let connection_id = user_connection_id(room, user_id).await;
-    let mut state = room.state.write().await;
-    state.set_client_rtp_capabilities_for_test(user_id, connection_id, &capabilities)
-}
-
-pub(super) async fn apply_consume_transport_ready(
-    room: &super::super::Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    media_transport: &MediaTransport,
-) -> bool {
-    apply_transport_ready(
-        room,
-        user_id,
-        connection_id,
-        UserTransportReady::Consume,
-        media_transport,
-    )
-    .await
-}
-
-async fn apply_transport_ready(
-    room: &super::super::Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    readiness: UserTransportReady,
-    media_transport: &MediaTransport,
-) -> bool {
-    let update = {
-        let mut state = room.state.write().await;
-        state.set_transport_ready_for_test(user_id, connection_id, readiness)
-    };
-    apply_negotiation_update(room, user_id, connection_id, update, media_transport).await
-}
-
-pub(super) async fn apply_client_rtp_capabilities(
-    room: &super::super::Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    capabilities: MediaCapabilities,
-    media_transport: &MediaTransport,
-) -> bool {
-    let update = {
-        let mut state = room.state.write().await;
-        state.set_client_rtp_capabilities_for_test(user_id, connection_id, &capabilities)
-    };
-    apply_negotiation_update(room, user_id, connection_id, update, media_transport).await
-}
-
-async fn apply_negotiation_update(
-    room: &super::super::Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    update: UserNegotiationUpdate,
-    media_transport: &MediaTransport,
-) -> bool {
-    if !update.session_present {
-        return false;
-    }
-    if update.became_consumer_ready {
-        return room
-            .user_operation(user_id, connection_id, media_transport)
-            .setup_missing_consumers()
-            .await;
-    }
-    true
-}
-
 pub(super) async fn make_session_ready_with_transport(
     room: &super::super::Room,
     user_id: &UserId,
@@ -250,21 +159,6 @@ pub(super) async fn create_transport_session_offer(
         .create_initial_session_offer(&session_key)
         .await
         .expect("real RTC test user should create an initial offer");
-}
-
-pub(super) async fn refresh_session_consumers(
-    room: &super::super::Room,
-    user_id: &UserId,
-    media_transport: &MediaTransport,
-) -> bool {
-    room.user_operation(
-        user_id,
-        user_connection_id(room, user_id).await,
-        media_transport,
-    )
-    .apply_session_refreshed()
-    .await
-        == SessionNegotiationOutcome::Applied
 }
 
 pub(super) struct StagedPublishScenario {
