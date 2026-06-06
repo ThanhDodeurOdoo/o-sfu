@@ -179,7 +179,8 @@ fn plan_forwards_keeps_recording_and_local_rtc_destinations_together() {
     let sink = Arc::new(CountingSink::new());
     let mut scenario = MediaWorkerScenario::new(&mut state);
     let src_media = scenario.source(producer_session.clone(), Mid::from("aud-up"));
-    scenario.destination(src_media, consumer_session, Mid::from("aud-down"));
+    let consumer_media =
+        scenario.destination(src_media, consumer_session.clone(), Mid::from("aud-down"));
     packet_sink_registry.register_room(
         producer_session.room_instance_id(),
         Arc::<CountingSink>::clone(&sink),
@@ -190,7 +191,7 @@ fn plan_forwards_keeps_recording_and_local_rtc_destinations_together() {
         &packet_sink_registry,
         &metrics,
         vec![sample_forwarded_packet(
-            producer_session,
+            producer_session.clone(),
             "aud-up",
             b"payload",
         )],
@@ -207,6 +208,24 @@ fn plan_forwards_keeps_recording_and_local_rtc_destinations_together() {
             ),
         ],
     );
+    assert!(
+        state
+            .routes
+            .remove_consumer_route(src_media, &consumer_session, consumer_media)
+            .is_some()
+    );
+    let forwards = plan_forwards(
+        &state,
+        &packet_sink_registry,
+        &metrics,
+        vec![sample_forwarded_packet(
+            producer_session,
+            "aud-up",
+            b"payload",
+        )],
+    );
+
+    assert_forward_plan(&state, &forwards, &[(0, ExpectedForward::PacketSink)]);
 }
 
 #[test]
