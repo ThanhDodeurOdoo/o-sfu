@@ -35,7 +35,7 @@ impl RoomRoutingState {
 
     #[cfg(test)]
     pub fn user_count(&self) -> u64 {
-        u64::try_from(self.session_home_router.len()).unwrap_or(u64::MAX)
+        u64::try_from(self.sessions.active_connection_by_user.len()).unwrap_or(u64::MAX)
     }
 
     pub fn router_count(&self) -> usize {
@@ -50,7 +50,9 @@ impl RoomRoutingState {
     }
 
     pub fn home_router_id_for_user(&self, user_id: &UserId) -> Option<RouterId> {
-        self.session_home_router.get(user_id).copied()
+        self.sessions
+            .active(user_id)
+            .map(|session| session.runtime.router)
     }
 
     #[cfg(test)]
@@ -60,7 +62,7 @@ impl RoomRoutingState {
 
     #[cfg(test)]
     pub fn remove_session_mapping_for_test(&mut self, user_id: &UserId) {
-        let Some(router_id) = self.session_home_router.get(user_id).copied() else {
+        let Some(router_id) = self.home_router_id_for_user(user_id) else {
             return;
         };
         let Some(router) = self.routers.get_mut(&router_id) else {
@@ -71,7 +73,7 @@ impl RoomRoutingState {
 
     #[cfg(test)]
     pub fn remove_transport_mapping_for_test(&mut self, user_id: &UserId) {
-        let Some(router_id) = self.session_home_router.get(user_id).copied() else {
+        let Some(router_id) = self.home_router_id_for_user(user_id) else {
             return;
         };
         let Some(router) = self.routers.get_mut(&router_id) else {

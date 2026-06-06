@@ -251,10 +251,6 @@ impl ResolvedPlacement {
         Self(placement)
     }
 
-    pub const fn router(self) -> RouterId {
-        self.0.router
-    }
-
     pub const fn into_context(self) -> LocalRouterRuntimeContext {
         self.0
     }

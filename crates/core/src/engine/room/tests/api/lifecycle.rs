@@ -46,7 +46,7 @@ impl RoomTestLifecycle<'_> {
                 || RouterId(0),
             )
             .await
-            .map(|receipt| receipt.connection_id())
+            .map(|receipt| receipt.connection_id)
     }
 
     /// Join one user while keeping transport cleanup outside the lifecycle path.
@@ -79,7 +79,7 @@ impl RoomTestLifecycle<'_> {
                 || RouterId(0),
             )
             .await
-            .map(|receipt| receipt.connection_id())
+            .map(|receipt| receipt.connection_id)
     }
 
     pub async fn force_cleanup_retry_cycle(self, media_transport: &MediaTransport) {

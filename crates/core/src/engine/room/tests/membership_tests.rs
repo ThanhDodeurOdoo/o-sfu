@@ -128,6 +128,114 @@ async fn negotiated_session_rejects_stale_connection() {
 }
 
 #[tokio::test]
+async fn mismatched_stale_close_keeps_other_user_routing() {
+    let manager = RoomManager::for_test();
+    let room = manager
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
+        .await;
+    let alice_id = UserId::Integer(1);
+    let bob_id = UserId::Integer(2);
+    let (alice_tx, _alice_rx) = test_sender();
+    let (bob_tx, _bob_rx) = test_sender();
+    let alice_connection = join_user_with_sender(&room, alice_id.clone(), alice_tx).await;
+    let bob_connection = join_user_with_sender(&room, bob_id.clone(), bob_tx).await;
+
+    assert!(
+        !room
+            .remove_user_with_cleanup(
+                &alice_id,
+                bob_connection,
+                RoomEffectContext::state_only(None),
+            )
+            .await
+    );
+
+    let inspect = room.test_api().inspect();
+    assert_eq!(
+        inspect.user_connection_id(&alice_id).await,
+        Some(alice_connection)
+    );
+    assert_eq!(
+        inspect.user_connection_id(&bob_id).await,
+        Some(bob_connection)
+    );
+    assert!(
+        inspect
+            .routing_home_media_worker_id(&bob_id)
+            .await
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn replacement_join_closes_displaced_transport_user() {
+    let manager = RoomManager::for_test();
+    let room = manager
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
+        .await;
+    let media_transport = real_adapter();
+    let user_id = UserId::Integer(1);
+    let (first_tx, first_rx) = test_sender();
+    let first_admission = manager
+        .join_user(
+            room.uuid(),
+            JoinUserRequest {
+                user_id: user_id.clone(),
+                label: None,
+                permissions: UserPermissions::default(),
+                sender: first_tx,
+            },
+            &media_transport,
+        )
+        .await
+        .expect("first join should succeed");
+    let first_connection = first_admission.connection_id();
+    let first_key = first_admission.transport_session_key().clone();
+    media_transport
+        .create_initial_session_offer(&first_key)
+        .await
+        .expect("first transport user should create an offer");
+    media_transport
+        .test_api()
+        .set_session_transport_health(&first_key, TransportSessionHealth::Disconnected);
+    assert_eq!(
+        media_transport.session_transport_health(&first_key),
+        Some(TransportSessionHealth::Disconnected)
+    );
+    drop(first_rx);
+
+    let (second_tx, _second_rx) = test_sender();
+    let second_connection = manager
+        .join_user(
+            room.uuid(),
+            JoinUserRequest {
+                user_id: user_id.clone(),
+                label: None,
+                permissions: UserPermissions::default(),
+                sender: second_tx,
+            },
+            &media_transport,
+        )
+        .await
+        .expect("replacement join should succeed")
+        .connection_id();
+
+    assert_ne!(first_connection, second_connection);
+    assert_eq!(media_transport.session_transport_health(&first_key), None);
+    assert_eq!(
+        room.test_api().inspect().user_connection_id(&user_id).await,
+        Some(second_connection)
+    );
+    assert!(
+        room.test_api()
+            .inspect()
+            .routing_home_media_worker_id(&user_id)
+            .await
+            .is_some()
+    );
+}
+
+#[tokio::test]
 async fn removing_publisher_clears_media_state_and_transport_routes() {
     let (room, media_transport, mut publisher_rx, mut subscriber_rx) =
         setup_two_ready_users().await;

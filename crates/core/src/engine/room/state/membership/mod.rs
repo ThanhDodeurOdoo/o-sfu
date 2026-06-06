@@ -27,9 +27,9 @@ use super::{
         BroadcastPayload, BroadcastPayloadError, ResolvedPlacement, RoomEventMessage,
         RoomJoinError, RoomUserPermissions, UserCloseReason,
         cleanup::TransportCleanupOperation,
-        media_graph::{ResolvedRelayRouteEffect, TransportMediaRemoval},
+        media_graph::ResolvedRelayRouteEffect,
         outbound::{MessageFanout, OutboundSender},
-        routing::CommittedRoutingReceipt,
+        routing::{CommittedRoutingReceipt, DisplacedRoutingSession},
         user_negotiation::{UserNegotiation, UserNegotiationUpdate},
     },
     shared::{ActiveUser, RoomState},
@@ -176,34 +176,47 @@ impl RoomState {
         connection_id: ConnectionId,
         is_new: bool,
         home_placement: ResolvedPlacement,
-    ) -> Result<CommittedRoutingReceipt, RoomJoinError> {
+    ) -> Result<(CommittedRoutingReceipt, Option<DisplacedRoutingSession>), RoomJoinError> {
+        if !is_new {
+            let Some(previous_connection) = self.users.get(user_id).map(|user| user.connection_id)
+            else {
+                error!(
+                    ?user_id,
+                    "missing previous room user for replacement join routing"
+                );
+                return Err(RoomJoinError::RouterState);
+            };
+            if self
+                .routing
+                .committed_transport_user_key(user_id, previous_connection)
+                .is_none()
+            {
+                error!(
+                    ?user_id,
+                    connection_id = ?previous_connection,
+                    "missing committed routing session for replacement join"
+                );
+                return Err(RoomJoinError::RouterState);
+            }
+        }
         let mut routing = self.routing.clone();
         let affected_consumers = if is_new {
             Vec::new()
         } else {
             self.media.routed_consumer_ids_affected_by_user(user_id)
         };
-        let routing_result = if is_new {
-            routing.apply_client_join_on_placement(user_id, connection_id.as_u64(), home_placement)
-        } else {
-            routing.replace_client_session_on_placement(
-                user_id,
-                connection_id.as_u64(),
-                home_placement,
-                affected_consumers,
-            )
-        };
-        if let Err(error) = routing_result {
-            error!(
-                ?user_id,
-                ?error,
-                "failed to mirror user join into room router"
-            );
-            return Err(RoomJoinError::RouterState);
-        }
-        let receipt = routing.register_committed_placement(user_id, connection_id, home_placement);
+        let commit = routing
+            .commit_session_placement(user_id, connection_id, home_placement, affected_consumers)
+            .map_err(|error| {
+                error!(
+                    ?user_id,
+                    ?error,
+                    "failed to mirror user join into room router"
+                );
+                RoomJoinError::RouterState
+            })?;
         self.routing = routing;
-        Ok(receipt)
+        Ok(commit)
     }
 
     #[cfg(test)]
@@ -212,17 +225,6 @@ impl RoomState {
             router: self.routing.primary_router_id(),
             media_worker: MediaWorkerId::from_raw(0),
         })
-    }
-
-    fn join_transport_removals(
-        &self,
-        user_id: &UserId,
-        is_new: bool,
-    ) -> Vec<TransportMediaRemoval> {
-        if is_new {
-            return Vec::new();
-        }
-        self.collect_user_transport_removals(&BTreeSet::from([user_id.clone()]))
     }
 
     fn install_joined_session(
@@ -305,17 +307,25 @@ impl RoomState {
             return Err(RoomJoinError::RoomFull);
         }
         let connection_id = ConnectionId::allocate(&mut self.next_connection_id);
-        let routing_receipt =
+        let (routing_receipt, displaced_session) =
             self.apply_join_routing(user_id, connection_id, is_new, home_placement)?;
-        let transport_cleanup =
-            self.transport_cleanup_operations(self.join_transport_removals(user_id, is_new));
+        let transport_cleanup = displaced_session.as_ref().map_or_else(Vec::new, |session| {
+            vec![TransportCleanupOperation::CloseUser {
+                session_key: session.transport_session_key.clone(),
+                connection_id: session.connection_id,
+            }]
+        });
 
         let previous_sender =
             self.install_joined_session(user_id, label, permissions, sender, connection_id);
         let had_previous_sender = previous_sender.is_some();
         let relay_effects = if had_previous_sender {
             let relay_effects = self.purge_user_media_state(user_id);
-            self.resolved_relay_route_effects(relay_effects)
+            if let Some(session) = displaced_session.as_ref() {
+                self.resolved_relay_route_effects_with_displaced(relay_effects, user_id, session)
+            } else {
+                self.resolved_relay_route_effects(relay_effects)
+            }
         } else {
             Vec::new()
         };
@@ -373,6 +383,8 @@ impl RoomState {
             self.collect_user_transport_removals(&departing_user_ids),
         );
         let affected_consumers = self.media.routed_consumer_ids_affected_by_user(user_id);
+        let relay_effects = self.purge_user_media_state(user_id);
+        let relay_effects = self.resolved_relay_route_effects(relay_effects);
         let topology_repair = self
             .routing
             .remove_session_repairing(user_id, affected_consumers);
@@ -383,12 +395,7 @@ impl RoomState {
                 "repaired user topology during room teardown"
             );
         }
-        let relay_effects = self.purge_user_media_state(user_id);
-        Some((
-            user,
-            transport_cleanup,
-            self.resolved_relay_route_effects(relay_effects),
-        ))
+        Some((user, transport_cleanup, relay_effects))
     }
 
     /// commit a leave for one current runtime connection
@@ -406,7 +413,6 @@ impl RoomState {
             return None;
         }
         let (user, transport_cleanup, relay_effects) = self.remove_runtime_user(user_id)?;
-        self.routing.unregister_committed_placement(connection_id);
         Some(LeaveUserOutcome {
             effects: LifecycleEffects {
                 close_requests: vec![UserCloseRequest {
@@ -496,17 +502,18 @@ impl RoomState {
         let mut fanouts = Vec::new();
         let mut relay_effects = Vec::new();
         for user_id in user_ids {
+            let Some(connection_id) = self.users.get(user_id).map(|user| user.connection_id) else {
+                continue;
+            };
+            let close_operation = TransportCleanupOperation::CloseUser {
+                session_key: self.transport_user_key(user_id, connection_id),
+                connection_id,
+            };
             let Some((user, user_transport_cleanup, user_relay_effects)) =
                 self.remove_runtime_user(user_id)
             else {
                 continue;
             };
-            let connection_id = user.connection_id;
-            let close_operation = TransportCleanupOperation::CloseUser {
-                session_key: self.transport_user_key(user_id, connection_id),
-                connection_id,
-            };
-            self.routing.unregister_committed_placement(connection_id);
             transport_cleanup.extend(user_transport_cleanup);
             relay_effects.extend(user_relay_effects);
             disconnected_users.push(DisconnectedUser {

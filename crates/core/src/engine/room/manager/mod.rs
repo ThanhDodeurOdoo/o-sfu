@@ -409,8 +409,8 @@ impl RoomManager {
         })?;
         Ok(RoomUserAdmission {
             room,
-            connection_id: routing_receipt.connection_id(),
-            transport_session_key: routing_receipt.transport_session_key().clone(),
+            connection_id: routing_receipt.connection_id,
+            transport_session_key: routing_receipt.transport_session_key,
         })
     }
 
