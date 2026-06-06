@@ -1,14 +1,19 @@
-//! Projection from source-domain selectors to transport packet gates.
+//! Projection from source-domain route decisions to effect updates.
 //!
-//! The budget planner speaks in `SourceSelector` values. This module is the
-//! only room-state boundary that translates that room intent into the
+//! The video planner speaks in `SourceSelector` values. This module is the
+//! only video-policy boundary that translates that room intent into the
 //! packet-facing gate vocabulary consumed by the media transport.
 
-#[cfg(test)]
-use crate::engine::source_model::{SourceEncodingDescriptor, SourceEncodingId};
+use super::{
+    super::action::{BudgetSolverOutcomes, ConsumerPacketSelectionUpdate},
+    planner::{PlannedReceiverRoute, ReceiverRouteDecision, RouteOutcome},
+};
 use crate::engine::{
     media_transport::{SourcePacketGate, SourcePacketOperatingPoint},
-    source_model::{PublishedSourceDescriptor, SourceSelector},
+    source_model::{
+        PolicyPauseReason, PublishedSourceDescriptor, ReceiverVideoBudgetDiagnostics,
+        SourceSelector,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,15 +63,143 @@ pub(super) fn source_packet_gate_for_selector(
     }
 }
 
-#[cfg(test)]
-fn lowest_declared_encoding_id(source: &PublishedSourceDescriptor) -> Option<SourceEncodingId> {
-    if source.selectable_encoding_count() < 2 {
+pub(super) fn consumer_packet_selection_update(
+    route: PlannedReceiverRoute<'_>,
+    decision: ReceiverRouteDecision,
+    budget: ReceiverVideoBudgetDiagnostics,
+) -> Option<ConsumerPacketSelectionUpdate> {
+    let input = route.input();
+    let current_selection = input.current_selection;
+    let fields = selection_fields(decision, current_selection.selector())?;
+    let decision = if fields.selector == current_selection.selector()
+        && fields.policy_pause_reason == current_selection.policy_pause_reason()
+        && budget == current_selection.budget()
+        && fields.pressure_observations == current_selection.pressure_observations()
+        && fields.upgrade_observations == current_selection.upgrade_observations()
+    {
+        ReceiverRouteDecision::Noop
+    } else {
+        decision
+    };
+    if matches!(decision, ReceiverRouteDecision::Noop) {
         return None;
     }
-    source
-        .selectable_encodings()
-        .next()
-        .map(SourceEncodingDescriptor::encoding_id)
+    let packet_gate = if fields.selector == current_selection.selector() {
+        None
+    } else {
+        Some(source_packet_gate_for_selector(input.source, fields.selector).ok()?)
+    };
+    let route_activity_update =
+        fields.policy_pause_reason != current_selection.policy_pause_reason();
+    let request_keyframe = match decision {
+        ReceiverRouteDecision::Send {
+            request_keyframe, ..
+        } => request_keyframe || !current_selection.policy_allows_delivery(),
+        ReceiverRouteDecision::Pause { .. }
+        | ReceiverRouteDecision::Hold { .. }
+        | ReceiverRouteDecision::Noop => false,
+    };
+    let mut outcomes = route_outcomes(&route, decision);
+    if budget.over_budget_exception_reason().is_some() {
+        outcomes = outcomes.with_protected_over_budget();
+    }
+    Some(ConsumerPacketSelectionUpdate {
+        route: input.transport_ref.clone(),
+        source_id: input.source_id(),
+        selector: fields.selector,
+        policy_pause_reason: fields.policy_pause_reason,
+        budget,
+        outcomes,
+        pressure_observations: fields.pressure_observations,
+        upgrade_observations: fields.upgrade_observations,
+        packet_gate,
+        route_activity_update,
+        request_keyframe,
+    })
+}
+
+struct SelectionFields {
+    selector: SourceSelector,
+    policy_pause_reason: Option<PolicyPauseReason>,
+    pressure_observations: u8,
+    upgrade_observations: u8,
+}
+
+fn selection_fields(
+    decision: ReceiverRouteDecision,
+    current_selector: SourceSelector,
+) -> Option<SelectionFields> {
+    match decision {
+        ReceiverRouteDecision::Send {
+            selector,
+            pressure_observations,
+            upgrade_observations,
+            ..
+        } => Some(SelectionFields {
+            selector,
+            policy_pause_reason: None,
+            pressure_observations,
+            upgrade_observations,
+        }),
+        ReceiverRouteDecision::Pause {
+            reason,
+            pressure_observations,
+            upgrade_observations,
+        } => Some(SelectionFields {
+            selector: current_selector,
+            policy_pause_reason: Some(reason),
+            pressure_observations,
+            upgrade_observations,
+        }),
+        ReceiverRouteDecision::Hold {
+            policy_pause_reason,
+            selector,
+            pressure_observations,
+            upgrade_observations,
+        } => Some(SelectionFields {
+            selector,
+            policy_pause_reason,
+            pressure_observations,
+            upgrade_observations,
+        }),
+        ReceiverRouteDecision::Noop => None,
+    }
+}
+
+fn route_outcomes(
+    route: &PlannedReceiverRoute<'_>,
+    decision: ReceiverRouteDecision,
+) -> BudgetSolverOutcomes {
+    match decision {
+        ReceiverRouteDecision::Send { .. }
+            if route
+                .input()
+                .current_selection
+                .policy_pause_reason()
+                .is_some() =>
+        {
+            BudgetSolverOutcomes::resumed()
+        }
+        ReceiverRouteDecision::Pause { reason, .. }
+            if route.input().current_selection.policy_pause_reason() != Some(reason) =>
+        {
+            BudgetSolverOutcomes::paused()
+        }
+        ReceiverRouteDecision::Send { .. }
+        | ReceiverRouteDecision::Pause { .. }
+        | ReceiverRouteDecision::Hold { .. } => route.outcome().into(),
+        ReceiverRouteDecision::Noop => BudgetSolverOutcomes::default(),
+    }
+}
+
+impl From<RouteOutcome> for BudgetSolverOutcomes {
+    fn from(outcome: RouteOutcome) -> Self {
+        match outcome {
+            RouteOutcome::Neutral => Self::default(),
+            RouteOutcome::Degraded => Self::degraded(),
+            RouteOutcome::Paused => Self::paused(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -168,10 +301,8 @@ mod tests {
             ),
         ]);
 
-        let selector = lowest_declared_encoding_id(&source)
-            .map_or(SourceSelector::Open, SourceSelector::Encoding);
+        let selector = SourceSelector::Encoding(low_encoding_id);
 
-        assert_eq!(selector, SourceSelector::Encoding(low_encoding_id));
         assert_eq!(
             source_packet_gate_for_selector(&source, selector),
             Ok(SourcePacketGate::Rid(String::from("lo")))
