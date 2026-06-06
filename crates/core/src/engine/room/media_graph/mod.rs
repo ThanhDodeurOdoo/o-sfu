@@ -4,7 +4,7 @@ use o_sfu_router::MediaKind;
 
 use self::{route_graph::RouteGraph, source_index::SourceIndex};
 use crate::engine::{
-    ConnectionId, MediaWorkerId, UserId,
+    ConnectionId, UserId,
     media_transport::{RelayRouteActivity, TransportMediaId},
     room::routing::{RoutedConsumerId, RoutedProducerId},
     source_model::{
@@ -30,7 +30,7 @@ pub(super) use self::{
     producer::ValidatedPublish,
     route_graph::{RelayRouteEffect, RelayRouteKey, ResolvedRelayRouteEffect},
     subscription::{
-        ConsumerRouteUpdate, ConsumerSetupCommit, ConsumerSetupOrigin, ConsumerSetupPlan,
+        ConsumerRouteUpdate, ConsumerSetupCommitOutcome, ConsumerSetupOrigin, ConsumerSetupPlan,
         ConsumerSetupTarget,
     },
 };
@@ -383,6 +383,7 @@ impl RoomMediaGraph {
         self.routes.selection(key)
     }
 
+    #[cfg(test)]
     pub fn ensure_consumer_source_selection(
         &mut self,
         key: &ConsumerKey,
@@ -408,21 +409,17 @@ impl RoomMediaGraph {
         true
     }
 
-    pub fn reserve_consumer_setup(&mut self, key: ConsumerKey) {
-        self.routes.reserve_consumer_setup(key);
-    }
-
-    pub fn release_consumer_setup(&mut self, key: &ConsumerKey) {
-        self.routes.release_consumer_setup(key);
-    }
-
+    #[cfg(test)]
     pub fn commit_consumer(
         &mut self,
         key: ConsumerKey,
         state: ConsumerState,
         selection: ConsumerSourceSelection,
     ) -> bool {
-        self.routes.commit(key, state, selection)
+        let Some(reservation) = self.routes.reserve_consumer_setup(key, selection) else {
+            return false;
+        };
+        self.routes.commit(&reservation, state, selection)
     }
 
     #[cfg(test)]
@@ -591,23 +588,6 @@ impl RoomMediaGraph {
         self.routes.transport_removals_for_keys(keys)
     }
 
-    pub fn reserve_relay_consumer(
-        &mut self,
-        target: &ConsumerSetupTarget,
-        source_connection_id: ConnectionId,
-        source_transport_media_id: TransportMediaId,
-        target_media_worker_id: MediaWorkerId,
-        active: bool,
-    ) -> Vec<RelayRouteEffect> {
-        self.routes.reserve_relay(
-            target,
-            source_connection_id,
-            source_transport_media_id,
-            target_media_worker_id,
-            active,
-        )
-    }
-
     pub fn set_relay_consumer_active(
         &mut self,
         consumer_user_id: &UserId,
@@ -621,13 +601,6 @@ impl RoomMediaGraph {
             source_id,
             activity,
         )
-    }
-
-    pub fn release_pending_relay_target(
-        &mut self,
-        target: &ConsumerSetupTarget,
-    ) -> Vec<RelayRouteEffect> {
-        self.routes.release_target(target)
     }
 
     pub fn has_consumer_setup_or_route(&self, consumer_key: &ConsumerKey) -> bool {

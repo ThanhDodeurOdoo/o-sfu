@@ -12,7 +12,7 @@ use crate::engine::{
         Room, SourcePolicyEvent, UserOutbound,
         cleanup::TransportCleanupOperation,
         media_graph::{
-            ConsumerSetupCommit, ConsumerSetupOrigin, ConsumerSetupPlan, ConsumerSetupTarget,
+            ConsumerSetupCommitOutcome, ConsumerSetupOrigin, ConsumerSetupPlan, ConsumerSetupTarget,
         },
     },
 };
@@ -33,13 +33,13 @@ impl ConsumerSetupEffect {
         room: &Room,
         media_transport: &MediaTransport,
     ) -> Option<DiagnosticsEventData> {
-        let target = self.setup.target().clone();
         if !execute_relay_route_effects(room, media_transport, self.setup.relay_effects()).await {
-            release_failed_setup(room, &target, media_transport).await;
+            release_failed_setup(room, self.setup, media_transport).await;
             return None;
         }
+        let target = self.setup.target().clone();
         let activity = ConsumerActivity::from_active(self.setup.consumer_active());
-        let (route, mid) = declare_consumer(
+        let Some((route, mid)) = declare_consumer(
             &target,
             self.setup.rtp(),
             activity,
@@ -47,7 +47,11 @@ impl ConsumerSetupEffect {
             room,
             media_transport,
         )
-        .await?;
+        .await
+        else {
+            release_failed_setup(room, self.setup, media_transport).await;
+            return None;
+        };
         let (before, outbound, after) = {
             let mut state = room.state.write().await;
             let before = state.media_counts();
@@ -92,7 +96,6 @@ async fn declare_consumer(
         )
     };
     let Some((consumer_session, producer_session)) = consumer_session.zip(producer_session) else {
-        release_failed_setup(room, target, media_transport).await;
         warn!(
             consumer_user_id = ?target.consumer_user_id(),
             consumer_connection_id = ?target.consumer_connection_id(),
@@ -130,7 +133,6 @@ async fn declare_consumer(
             ))
         }
         Err(error) => {
-            release_failed_setup(room, target, media_transport).await;
             warn!(
                 consumer_user_id = ?target.consumer_user_id(),
                 consumer_connection_id = ?target.consumer_connection_id(),
@@ -154,19 +156,27 @@ async fn finish(
     origin: ConsumerSetupOrigin,
     route: TransportConsumerRoute,
     delta: MediaCountDelta,
-    commit: Option<ConsumerSetupCommit>,
+    outcome: ConsumerSetupCommitOutcome,
 ) -> Option<DiagnosticsEventData> {
-    let Some(commit) = commit else {
-        delta.record(room);
-        release_failed_setup(room, target, media_transport).await;
-        let cleanup = [TransportCleanupOperation::RemoveMedia {
-            session_key: route.consumer_session_key().clone(),
-            connection_id: target.consumer_connection_id(),
-            transport_media_id: route.consumer_transport_media_id(),
-        }];
-        room.execute_transport_cleanup_operations(media_transport, &cleanup)
+    let commit = match outcome {
+        ConsumerSetupCommitOutcome::Committed(commit) => commit,
+        ConsumerSetupCommitOutcome::Released(relays) => {
+            delta.record(room);
+            execute_relay_route_effects(room, media_transport, &relays).await;
+            room.handle_source_policy_event(
+                SourcePolicyEvent::FanoutPressureChanged,
+                Some(media_transport),
+            )
             .await;
-        return None;
+            let cleanup = [TransportCleanupOperation::RemoveMedia {
+                session_key: route.consumer_session_key().clone(),
+                connection_id: target.consumer_connection_id(),
+                transport_media_id: route.consumer_transport_media_id(),
+            }];
+            room.execute_transport_cleanup_operations(media_transport, &cleanup)
+                .await;
+            return None;
+        }
     };
     delta.record(room);
     if let Some(active) = commit.transport_activity_update {
@@ -233,14 +243,13 @@ async fn sync_activity(
 
 async fn release_failed_setup(
     room: &Room,
-    target: &ConsumerSetupTarget,
+    setup: ConsumerSetupPlan,
     media_transport: &MediaTransport,
 ) {
     let (before, after, relays) = {
         let mut state = room.state.write().await;
         let before = state.media_counts();
-        let relays = state.release_consumer_setup_plan(target);
-        let relays = state.resolved_relay_route_effects(relays);
+        let relays = state.release_consumer_setup_plan(setup);
         let after = state.media_counts();
         drop(state);
         (before, after, relays)
