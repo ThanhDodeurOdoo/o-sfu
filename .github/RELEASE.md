@@ -20,9 +20,10 @@ published as GitHub prereleases and are explicitly not marked as the latest
 release
 
 the GitHub release includes the server tarball, Odoo client bundle, image SBOM
-and checksum manifest. the release notes include verification commands generated
-from `GITHUB_REPOSITORY` and `GITHUB_REF_NAME`, so the owner and version are not
-hardcoded in the published release text.
+and checksum manifest. the release notes include the pullable GHCR image
+reference and verification commands generated from `GITHUB_REPOSITORY` and
+`GITHUB_REF_NAME`, so the owner and version are not hardcoded in the published
+release text.
 
 ## updating release lockfiles
 
